@@ -225,16 +225,6 @@ func (in *SimplyBlockStorageClusterSpec) DeepCopyInto(out *SimplyBlockStorageClu
 		*out = new(int32)
 		**out = **in
 	}
-	if in.DistrNdcs != nil {
-		in, out := &in.DistrNdcs, &out.DistrNdcs
-		*out = new(int32)
-		**out = **in
-	}
-	if in.DistrNpcs != nil {
-		in, out := &in.DistrNpcs, &out.DistrNpcs
-		*out = new(int32)
-		**out = **in
-	}
 	if in.DistrBs != nil {
 		in, out := &in.DistrBs, &out.DistrBs
 		*out = new(int32)

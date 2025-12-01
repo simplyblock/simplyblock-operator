@@ -42,6 +42,7 @@ type SimplyBlockStorageClusterSpec struct {
 	PageSizeInBlocks       *int32 `json:"pageSizeInBlocks,omitempty"`
 	MaxQueueSize           *int32 `json:"maxQueueSize,omitempty"`
 	InflightIOThreshold    *int32 `json:"inflightIOThreshold,omitempty"`
+	Fabric                 string `json:"fabric,omitempty"`
 
 	// Updatable
 	QoSClasses             string `json:"qosClasses,omitempty"`

@@ -113,6 +113,8 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			InflightIOThreshold:    utils.IntPtrOrDefault(clusterCR.Spec.InflightIOThreshold, 4),
 			EnableNodeAffinity:     utils.BoolPtrOrFalse(clusterCR.Spec.EnableNodeAffinity),
 			StrictNodeAntiAffinity: utils.BoolPtrOrFalse(clusterCR.Spec.StrictNodeAntiAffinity),
+			IsSingleNode:           utils.BoolPtrOrFalse(clusterCR.Spec.IsSingleNode),
+			Fabric:                 clusterCR.Spec.Fabric,
 		}
 
 		endpoint := "/api/v2/clusters/"
