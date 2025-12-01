@@ -25,7 +25,7 @@ import (
 
 // StorageNodeSpec defines the desired state of StorageNode
 type StorageNodeSpec struct {
-	ClusterUUID              string   `json:"clusterUUID,omitempty"`
+	ClusterName              string   `json:"clusterName,omitempty"`
 	UseSeparateJournalDevice *bool    `json:"useSeparateJournalDevice,omitempty"`
 	MaxLVol                  *int32   `json:"MaxLVol,omitempty"`
 	MaxSize                  string   `json:"MaxSize,omitempty"`
@@ -42,7 +42,7 @@ type StorageNodeSpec struct {
 	NodesPerSocket           *int32   `json:"nodesPerSocket,omitempty"`
 	DataNIC                  []string `json:"dataNIC,omitempty"`
 	HaJmCount                *int32   `json:"haJmCount,omitempty"`
-	Namespace                string   `json:"namespace,omitempty"`
+	WorkerNodes              []string `json:"workerNodes,omitempty"`
 
 	// restart params
 	AddPcieToAllowList    []string `json:"addPcieToAllowList,omitempty"`

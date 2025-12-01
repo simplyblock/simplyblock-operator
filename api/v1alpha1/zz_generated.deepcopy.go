@@ -467,6 +467,11 @@ func (in *StorageNodeSpec) DeepCopyInto(out *StorageNodeSpec) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.WorkerNodes != nil {
+		in, out := &in.WorkerNodes, &out.WorkerNodes
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.AddPcieToAllowList != nil {
 		in, out := &in.AddPcieToAllowList, &out.AddPcieToAllowList
 		*out = make([]string, len(*in))
