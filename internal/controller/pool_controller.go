@@ -60,13 +60,19 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, poolCR.Namespace, poolCR.Spec.ClusterName)
+	if err != nil {
+		log.Error(err, "Failed to get cluster auth")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	apiClient := webapi.NewClient()
 
 	// --- Handle deletion ---
 	if !poolCR.DeletionTimestamp.IsZero() {
 		if utils.ContainsString(poolCR.Finalizers, "simplyblock.finalizer") && poolCR.Status.UUID != "" {
-			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", poolCR.Spec.ClusterUUID, poolCR.Status.UUID)
-			body, status, err := apiClient.Do(ctx, poolCR.Spec.ClusterUUID, http.MethodDelete, endpoint, nil)
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
+			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
 			if err != nil || status >= 300 {
 				log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
 				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
@@ -104,8 +110,8 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			MaxWMB:    utils.IntPtrOrDefault(poolCR.Spec.WLimit, 0),
 		}
 
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", poolCR.Spec.ClusterUUID)
-		body, status, err := apiClient.Do(ctx, poolCR.Spec.ClusterUUID, http.MethodPost, endpoint, params)
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
+		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
 		if err != nil || status >= 300 {
 			log.Error(err, "Pool creation failed", "status", status, "response", string(body))
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
@@ -133,8 +139,8 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		MaxWMB:    utils.IntPtrOrDefault(poolCR.Spec.WLimit, 0),
 	}
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", poolCR.Spec.ClusterUUID, poolCR.Status.UUID)
-	body, status, err := apiClient.Do(ctx, poolCR.Spec.ClusterUUID, http.MethodPut, endpoint, updateParams)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPut, endpoint, updateParams)
 	if err != nil || status >= 300 {
 		log.Error(err, "Pool update failed", "status", status, "response", string(body))
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
