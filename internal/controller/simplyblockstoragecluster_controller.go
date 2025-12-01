@@ -18,13 +18,17 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
@@ -36,6 +40,11 @@ import (
 type SimplyBlockStorageClusterReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+}
+
+type ClusterAPIResponse struct {
+	UUID   string `json:"id"`
+	Secret string `json:"secret"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters,verbs=get;list;watch;create;update;patch;delete
@@ -124,9 +133,39 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}
 
-		// Assume the API returns UUID of the created cluster
-		clusterCR.Status.UUID = string(body)
+		var apiResp ClusterAPIResponse
+		if err := json.Unmarshal(body, &apiResp); err != nil {
+			log.Error(err, "Unable to parse cluster creation response", "raw", string(body))
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
+
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: clusterCR.Namespace,
+			},
+		}
+
+		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+			if secret.Data == nil {
+				secret.Data = map[string][]byte{}
+			}
+			secret.Data["uuid"] = []byte(apiResp.UUID)
+			secret.Data["secret"] = []byte(apiResp.Secret)
+			return nil
+		})
+
+		if err != nil {
+			log.Error(err, "Failed to create/update Secret for cluster")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		clusterCR.Status.UUID = apiResp.UUID
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
+		clusterCR.Status.Configured = true
+
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
 			log.Error(err, "Failed to update cluster status after creation")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
