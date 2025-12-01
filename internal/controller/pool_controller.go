@@ -63,7 +63,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	apiClient := webapi.NewClient()
 
 	// --- Handle deletion ---
-	if !poolCR.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !poolCR.DeletionTimestamp.IsZero() {
 		if utils.ContainsString(poolCR.Finalizers, "simplyblock.finalizer") && poolCR.Status.UUID != "" {
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", poolCR.Spec.ClusterUUID, poolCR.Status.UUID)
 			body, status, err := apiClient.Do(ctx, poolCR.Spec.ClusterUUID, http.MethodDelete, endpoint, nil)
