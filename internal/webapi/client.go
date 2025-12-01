@@ -13,7 +13,7 @@ type Client struct {
 }
 
 func NewClient(baseURL ...string) *Client {
-	url := "http://webapi"
+	url := "http://simplyblock-webappapi"
 	if len(baseURL) > 0 {
 		url = baseURL[0]
 	}
