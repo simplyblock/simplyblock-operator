@@ -36,8 +36,6 @@ type SimplyBlockStorageClusterSpec struct {
 	IsSingleNode           *bool  `json:"isSingleNode,omitempty"`
 	StrictNodeAntiAffinity *bool  `json:"strictNodeAntiAffinity,omitempty"`
 	QpairCount             *int32 `json:"qpairCount,omitempty"`
-	DistrNdcs              *int32 `json:"distrNdcs,omitempty"`
-	DistrNpcs              *int32 `json:"distrNpcs,omitempty"`
 	DistrBs                *int32 `json:"distrBs,omitempty"`
 	DistrChunkBs           *int32 `json:"distrChunkBs,omitempty"`
 	BlkSize                *int32 `json:"blkSize,omitempty"`
@@ -64,6 +62,7 @@ type SimplyBlockStorageClusterSpec struct {
 // SimplyBlockStorageClusterStatus defines the observed state of SimplyBlockStorageCluster.
 type SimplyBlockStorageClusterStatus struct {
 	UUID         string       `json:"UUID,omitempty"`
+	ClusterName  string       `json:"clusterName,omitempty"`
 	Health       *bool        `json:"health,omitempty"`
 	MgmtNodes    *int32       `json:"mgmtNodes,omitempty"`
 	StorageNodes *int32       `json:"storageNodes,omitempty"`

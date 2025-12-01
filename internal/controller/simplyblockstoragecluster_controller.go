@@ -103,8 +103,8 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			CapCrit:                utils.IntPtrOrZero(clusterCR.Spec.CapCrit),
 			ProvCapWarn:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapWarn),
 			ProvCapCrit:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapCrit),
-			DistrNdcs:              utils.IntPtrOrDefault(clusterCR.Spec.DistrNdcs, 1),
-			DistrNpcs:              utils.IntPtrOrDefault(clusterCR.Spec.DistrNpcs, 1),
+			DistrNdcs:              utils.IntPtrOrDefault(clusterCR.Spec.StripeWdata, 1),
+			DistrNpcs:              utils.IntPtrOrDefault(clusterCR.Spec.StripeWparity, 1),
 			DistrBs:                utils.IntPtrOrDefault(clusterCR.Spec.DistrBs, 4096),
 			DistrChunkBs:           utils.IntPtrOrDefault(clusterCR.Spec.DistrChunkBs, 4096),
 			HAType:                 clusterCR.Spec.HAType,
@@ -124,6 +124,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 
 		// Assume the API returns UUID of the created cluster
 		clusterCR.Status.UUID = string(body)
+		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
 			log.Error(err, "Failed to update cluster status after creation")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil

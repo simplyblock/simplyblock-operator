@@ -225,6 +225,46 @@ func (in *SimplyBlockStorageClusterSpec) DeepCopyInto(out *SimplyBlockStorageClu
 		*out = new(int32)
 		**out = **in
 	}
+	if in.DistrNdcs != nil {
+		in, out := &in.DistrNdcs, &out.DistrNdcs
+		*out = new(int32)
+		**out = **in
+	}
+	if in.DistrNpcs != nil {
+		in, out := &in.DistrNpcs, &out.DistrNpcs
+		*out = new(int32)
+		**out = **in
+	}
+	if in.DistrBs != nil {
+		in, out := &in.DistrBs, &out.DistrBs
+		*out = new(int32)
+		**out = **in
+	}
+	if in.DistrChunkBs != nil {
+		in, out := &in.DistrChunkBs, &out.DistrChunkBs
+		*out = new(int32)
+		**out = **in
+	}
+	if in.BlkSize != nil {
+		in, out := &in.BlkSize, &out.BlkSize
+		*out = new(int32)
+		**out = **in
+	}
+	if in.PageSizeInBlocks != nil {
+		in, out := &in.PageSizeInBlocks, &out.PageSizeInBlocks
+		*out = new(int32)
+		**out = **in
+	}
+	if in.MaxQueueSize != nil {
+		in, out := &in.MaxQueueSize, &out.MaxQueueSize
+		*out = new(int32)
+		**out = **in
+	}
+	if in.InflightIOThreshold != nil {
+		in, out := &in.InflightIOThreshold, &out.InflightIOThreshold
+		*out = new(int32)
+		**out = **in
+	}
 	if in.CapWarn != nil {
 		in, out := &in.CapWarn, &out.CapWarn
 		*out = new(int32)
