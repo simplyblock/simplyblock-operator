@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -53,63 +54,109 @@ type SimplyBlockStorageClusterReconciler struct {
 func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	// Fetch CR
+	// Fetch the CR
 	clusterCR := &simplyblockv1alpha1.SimplyBlockStorageCluster{}
 	if err := r.Get(ctx, req.NamespacedName, clusterCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// If already configured, nothing to do
-	if clusterCR.Status.Configured {
+	apiClient := webapi.NewClient()
+
+	// --- Handle deletion ---
+	if !clusterCR.ObjectMeta.DeletionTimestamp.IsZero() {
+		// CR is being deleted
+		if utils.ContainsString(clusterCR.Finalizers, "simplyblock.finalizer") && clusterCR.Status.UUID != "" {
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterCR.Status.UUID)
+			body, status, err := apiClient.Do(ctx, clusterCR.Spec.ContactPoint, http.MethodDelete, endpoint, nil)
+			if err != nil || status >= 300 {
+				log.Error(err, "Failed to delete cluster", "status", status, "response", string(body))
+				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+			}
+
+			// Remove finalizer
+			clusterCR.Finalizers = utils.RemoveString(clusterCR.Finalizers, "simplyblock.finalizer")
+			if err := r.Update(ctx, clusterCR); err != nil {
+				log.Error(err, "Failed to remove finalizer")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+
+			log.Info("Cluster deleted successfully", "name", clusterCR.Name)
+		}
 		return ctrl.Result{}, nil
 	}
 
-	// Build API parameters from Spec
-	params := utils.ClusterAddParams{
-		Name:                   clusterCR.Spec.ClusterName,
-		BlkSize:                utils.IntPtrOrDefault(clusterCR.Spec.BlkSize, 512),
-		PageSizeInBlocks:       utils.IntPtrOrDefault(clusterCR.Spec.PageSizeInBlocks, 2097152),
+	// --- Add finalizer if not present ---
+	if !utils.ContainsString(clusterCR.Finalizers, "simplyblock.finalizer") {
+		clusterCR.Finalizers = append(clusterCR.Finalizers, "simplyblock.finalizer")
+		if err := r.Update(ctx, clusterCR); err != nil {
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+	}
+
+	// --- Handle creation ---
+	if clusterCR.Status.UUID == "" {
+		params := utils.ClusterAddParams{
+			Name:                   clusterCR.Spec.ClusterName,
+			BlkSize:                utils.IntPtrOrDefault(clusterCR.Spec.BlkSize, 512),
+			PageSizeInBlocks:       utils.IntPtrOrDefault(clusterCR.Spec.PageSizeInBlocks, 2097152),
+			CapWarn:                utils.IntPtrOrZero(clusterCR.Spec.CapWarn),
+			CapCrit:                utils.IntPtrOrZero(clusterCR.Spec.CapCrit),
+			ProvCapWarn:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapWarn),
+			ProvCapCrit:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapCrit),
+			DistrNdcs:              utils.IntPtrOrDefault(clusterCR.Spec.DistrNdcs, 1),
+			DistrNpcs:              utils.IntPtrOrDefault(clusterCR.Spec.DistrNpcs, 1),
+			DistrBs:                utils.IntPtrOrDefault(clusterCR.Spec.DistrBs, 4096),
+			DistrChunkBs:           utils.IntPtrOrDefault(clusterCR.Spec.DistrChunkBs, 4096),
+			HAType:                 clusterCR.Spec.HAType,
+			QpairCount:             utils.IntPtrOrDefault(clusterCR.Spec.QpairCount, 256),
+			MaxQueueSize:           utils.IntPtrOrDefault(clusterCR.Spec.MaxQueueSize, 128),
+			InflightIOThreshold:    utils.IntPtrOrDefault(clusterCR.Spec.InflightIOThreshold, 4),
+			EnableNodeAffinity:     utils.BoolPtrOrFalse(clusterCR.Spec.EnableNodeAffinity),
+			StrictNodeAntiAffinity: utils.BoolPtrOrFalse(clusterCR.Spec.StrictNodeAntiAffinity),
+		}
+
+		endpoint := "/api/v2/clusters/"
+		body, status, err := apiClient.Do(ctx, clusterCR.Spec.ContactPoint, http.MethodPost, endpoint, params)
+		if err != nil || status >= 300 {
+			log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
+			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+		}
+
+		// Assume the API returns UUID of the created cluster
+		clusterCR.Status.UUID = string(body)
+		if err := r.Status().Update(ctx, clusterCR); err != nil {
+			log.Error(err, "Failed to update cluster status after creation")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		log.Info("Cluster successfully created", "name", clusterCR.Name)
+		return ctrl.Result{}, nil
+	}
+
+	// --- Handle update ---
+	updateParams := utils.ClusterUpdateParams{
 		CapWarn:                utils.IntPtrOrZero(clusterCR.Spec.CapWarn),
 		CapCrit:                utils.IntPtrOrZero(clusterCR.Spec.CapCrit),
 		ProvCapWarn:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapWarn),
 		ProvCapCrit:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapCrit),
-		DistrNdcs:              utils.IntPtrOrDefault(clusterCR.Spec.DistrNdcs, 1),
-		DistrNpcs:              utils.IntPtrOrDefault(clusterCR.Spec.DistrNpcs, 1),
-		DistrBs:                utils.IntPtrOrDefault(clusterCR.Spec.DistrBs, 4096),
-		DistrChunkBs:           utils.IntPtrOrDefault(clusterCR.Spec.DistrChunkBs, 4096),
-		HAType:                 clusterCR.Spec.HAType,
-		QpairCount:             utils.IntPtrOrDefault(clusterCR.Spec.QpairCount, 256),
-		MaxQueueSize:           utils.IntPtrOrDefault(clusterCR.Spec.MaxQueueSize, 128),
-		InflightIOThreshold:    utils.IntPtrOrDefault(clusterCR.Spec.InflightIOThreshold, 4),
-		EnableNodeAffinity:     utils.BoolPtrOrFalse(clusterCR.Spec.EnableNodeAffinity),
-		StrictNodeAntiAffinity: utils.BoolPtrOrFalse(clusterCR.Spec.StrictNodeAntiAffinity),
+		QoSClasses:             clusterCR.Spec.QoSClasses,
+		LogDelInterval:         clusterCR.Spec.LogDelInterval,
+		MetricsRetentionPeriod: clusterCR.Spec.MetricsRetentionPeriod,
+		ClientQpairCount:       utils.IntPtrOrZero(clusterCR.Spec.ClientQpairCount),
+		IncludeStats:           utils.BoolPtrOrFalse(clusterCR.Spec.IncludeStats),
+		StatsHistoryInSeconds:  utils.IntPtrOrZero(clusterCR.Spec.StatsHistoryInSeconds),
+		IncludeEventLog:        utils.BoolPtrOrFalse(clusterCR.Spec.IncludeEventLog),
+		EventLogEntries:        utils.IntPtrOrZero(clusterCR.Spec.EventLogEntries),
 	}
 
-	endpoint := "/api/v2/clusters/"
-	apiClient := webapi.NewClient()
-
-	body, status, err := apiClient.Do(
-		ctx,
-		clusterCR.Spec.ContactPoint,
-		http.MethodPost,
-		endpoint,
-		params,
-	)
-
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/update", clusterCR.Status.UUID)
+	body, status, err := apiClient.Do(ctx, clusterCR.Spec.ContactPoint, http.MethodPost, endpoint, updateParams)
 	if err != nil || status >= 300 {
-		log.Error(err, "Cluster add failed", "status", status, "response", string(body))
+		log.Error(err, "Cluster update failed", "status", status, "response", string(body))
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	}
 
-	// Success — update status
-	clusterCR.Status.Configured = true
-	if err := r.Status().Update(ctx, clusterCR); err != nil {
-		log.Error(err, "Failed to update status")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	log.Info("Cluster successfully configured", "name", clusterCR.Name)
-
+	log.Info("Cluster updated successfully", "name", clusterCR.Name)
 	return ctrl.Result{}, nil
 }
 

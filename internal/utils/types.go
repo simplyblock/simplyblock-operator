@@ -19,3 +19,18 @@ type ClusterAddParams struct {
 	EnableNodeAffinity     bool   `json:"enable_node_affinity"`
 	StrictNodeAntiAffinity bool   `json:"strict_node_anti_affinity"`
 }
+
+type ClusterUpdateParams struct {
+	CapWarn                int    `json:"cap_warn,omitempty"`
+	CapCrit                int    `json:"cap_crit,omitempty"`
+	ProvCapWarn            int    `json:"prov_cap_warn,omitempty"`
+	ProvCapCrit            int    `json:"prov_cap_crit,omitempty"`
+	QoSClasses             string `json:"qos_classes,omitempty"`
+	LogDelInterval         string `json:"log_del_interval,omitempty"`
+	MetricsRetentionPeriod string `json:"metrics_retention_period,omitempty"`
+	ClientQpairCount       int    `json:"client_qpair_count,omitempty"`
+	IncludeStats           bool   `json:"include_stats,omitempty"`
+	StatsHistoryInSeconds  int    `json:"stats_history_in_seconds,omitempty"`
+	IncludeEventLog        bool   `json:"include_event_log,omitempty"`
+	EventLogEntries        int    `json:"event_log_entries,omitempty"`
+}
