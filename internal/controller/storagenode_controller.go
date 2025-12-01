@@ -18,13 +18,20 @@ package controller
 
 import (
 	"context"
+	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-manager/internal/utils"
 )
 
 // StorageNodeReconciler reconciles a StorageNode object
@@ -47,9 +54,51 @@ type StorageNodeReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
 func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := log.FromContext(ctx)
 
-	// TODO(user): your logic here
+	snCR := &simplyblockv1alpha1.StorageNode{}
+	if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	var cluster simplyblockv1alpha1.SimplyBlockStorageCluster
+	if err := r.Get(ctx, types.NamespacedName{Name: snCR.Spec.ClusterName, Namespace: snCR.Namespace}, &cluster); err != nil {
+		log.Info("Cluster not found yet — requeuing")
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	if err := r.labelWorkerNodes(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	ds := utils.BuildStorageNodeDaemonSet(snCR)
+
+	if err := controllerutil.SetControllerReference(snCR, ds, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	var existing appsv1.DaemonSet
+	err := r.Get(ctx, client.ObjectKey{Name: ds.Name, Namespace: ds.Namespace}, &existing)
+	if err != nil && apierrors.IsNotFound(err) {
+		log.Info("Creating StorageNode DaemonSet", "Name", ds.Name)
+		if err := r.Create(ctx, ds); err != nil {
+			return ctrl.Result{}, err
+		}
+	} else if err == nil {
+		ds.ResourceVersion = existing.ResourceVersion
+		log.Info("Updating StorageNode DaemonSet", "Name", ds.Name)
+		if err := r.Update(ctx, ds); err != nil {
+			return ctrl.Result{}, err
+		}
+	} else {
+		return ctrl.Result{}, err
+	}
+
+	// 6. Update status safely
+	snCR.Status.State = "Ready"
+	if err := r.Status().Update(ctx, snCR); err != nil {
+		log.Error(err, "Failed to update status")
+	}
 
 	return ctrl.Result{}, nil
 }
@@ -60,4 +109,32 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&simplyblockv1alpha1.StorageNode{}).
 		Named("storagenode").
 		Complete(r)
+}
+
+func (r *StorageNodeReconciler) labelWorkerNodes(ctx context.Context, sn *simplyblockv1alpha1.StorageNode) error {
+	for _, nodeName := range sn.Spec.WorkerNodes {
+		var node corev1.Node
+		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
+			return err
+		}
+
+		if node.Labels == nil {
+			node.Labels = map[string]string{}
+		}
+
+		key := "simplyblock.com/storage-node"
+		value := sn.Name
+
+		// Skip if already set
+		if node.Labels[key] == value {
+			continue
+		}
+
+		node.Labels[key] = value
+		if err := r.Update(ctx, &node); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

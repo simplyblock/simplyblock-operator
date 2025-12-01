@@ -26,6 +26,7 @@ import (
 // StorageNodeSpec defines the desired state of StorageNode
 type StorageNodeSpec struct {
 	ClusterName              string   `json:"clusterName,omitempty"`
+	ClusterImage             string   `json:"clusterImage,omitempty"`
 	UseSeparateJournalDevice *bool    `json:"useSeparateJournalDevice,omitempty"`
 	MaxLVol                  *int32   `json:"MaxLVol,omitempty"`
 	MaxSize                  string   `json:"MaxSize,omitempty"`
