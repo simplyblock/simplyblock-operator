@@ -63,7 +63,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 	apiClient := webapi.NewClient()
 
 	// --- Handle deletion ---
-	if !clusterCR.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !clusterCR.DeletionTimestamp.IsZero() {
 		// CR is being deleted
 		if utils.ContainsString(clusterCR.Finalizers, "simplyblock.finalizer") && clusterCR.Status.UUID != "" {
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterCR.Status.UUID)

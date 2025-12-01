@@ -97,7 +97,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		params := utils.PoolAddParams{
 			Name:    poolCR.Spec.Name,
 			PoolMax: utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
-			//VolumeMaxSize: utils.IntPtrOrDefault(poolCR.Spec.CapacityLimitInt(), 0),
+			// VolumeMaxSize: utils.IntPtrOrDefault(poolCR.Spec.CapacityLimitInt(), 0),
 			MaxRwIOPS: utils.IntPtrOrDefault(poolCR.Spec.QoSIOPSLimit, 0),
 			MaxRwMB:   utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
 			MaxRMB:    utils.IntPtrOrDefault(poolCR.Spec.RLimit, 0),
@@ -126,7 +126,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	updateParams := utils.PoolUpdateParams{
 		Name:    poolCR.Spec.Name,
 		PoolMax: utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
-		//VolumeMaxSize: poolCR.Spec.CapacityLimitIntPtr(),
+		// VolumeMaxSize: poolCR.Spec.CapacityLimitIntPtr(),
 		MaxRwIOPS: utils.IntPtrOrDefault(poolCR.Spec.QoSIOPSLimit, 0),
 		MaxRwMB:   utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
 		MaxRMB:    utils.IntPtrOrDefault(poolCR.Spec.RLimit, 0),

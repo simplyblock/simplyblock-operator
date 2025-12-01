@@ -47,7 +47,12 @@ func (c *Client) Do(
 	if err != nil {
 		return nil, 0, fmt.Errorf("http error: %w", err)
 	}
-	defer resp.Body.Close()
+
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			fmt.Printf("warning: failed to close response body: %v\n", cerr)
+		}
+	}()
 
 	// Read raw response body
 	data, err := io.ReadAll(resp.Body)
