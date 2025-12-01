@@ -1,0 +1,6 @@
+## Append samples of your project ##
+resources:
+- simplyblock_v1alpha1_simplyblockstoragecluster.yaml
+- simplyblock_v1alpha1_storagenode.yaml
+- simplyblock_v1alpha1_pool.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

@@ -1,0 +1,9 @@
+apiVersion: simplyblock.simplyblock.io/v1alpha1
+kind: StorageNode
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-manager
+    app.kubernetes.io/managed-by: kustomize
+  name: storagenode-sample
+spec:
+  # TODO(user): Add fields here
