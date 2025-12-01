@@ -34,3 +34,23 @@ type ClusterUpdateParams struct {
 	IncludeEventLog        bool   `json:"include_event_log,omitempty"`
 	EventLogEntries        int    `json:"event_log_entries,omitempty"`
 }
+
+type PoolAddParams struct {
+	Name          string `json:"name"`
+	PoolMax       int    `json:"pool_max"`
+	VolumeMaxSize int    `json:"volume_max_size"`
+	MaxRwIOPS     int    `json:"max_rw_iops"`
+	MaxRwMB       int    `json:"max_rw_mbytes"`
+	MaxRMB        int    `json:"max_r_mbytes"`
+	MaxWMB        int    `json:"max_w_mbytes"`
+}
+
+type PoolUpdateParams struct {
+	Name          string `json:"name,omitempty"`
+	PoolMax       int    `json:"pool_max,omitempty"`
+	VolumeMaxSize int    `json:"lvol_max,omitempty"`
+	MaxRwIOPS     int    `json:"max_rw_iops,omitempty"`
+	MaxRwMB       int    `json:"max_rw_mbytes,omitempty"`
+	MaxRMB        int    `json:"max_r_mbytes,omitempty"`
+	MaxWMB        int    `json:"max_w_mbytes,omitempty"`
+}
