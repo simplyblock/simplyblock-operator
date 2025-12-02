@@ -28,10 +28,17 @@ type StorageNodeSpec struct {
 	ClusterName              string   `json:"clusterName,omitempty"`
 	ClusterImage             string   `json:"clusterImage,omitempty"`
 	UseSeparateJournalDevice *bool    `json:"useSeparateJournalDevice,omitempty"`
-	MaxLVol                  *int32   `json:"MaxLVol,omitempty"`
-	MaxSize                  string   `json:"MaxSize,omitempty"`
+	MaxLVol                  *int32   `json:"maxLVol,omitempty"`
+	MaxSnapshots             *int32   `json:"maxSnapshots,omitempty"`
+	MaxSize                  string   `json:"maxSize,omitempty"`
 	SpdkImage                string   `json:"spdkImage,omitempty"`
 	MgmtIfc                  string   `json:"mgmtIfc,omitempty"`
+	Partitions               *int32   `json:"partitions,omitempty"`
+	JMPercent                *int32   `json:"jmPercent,omitempty"`
+	HAJM                     *bool    `json:"haJM,omitempty"`
+	FullPageUnmap            *bool    `json:"fullPageUnmap,omitempty"`
+	SPDKDebug                *bool    `json:"spdkDebug,omitempty"`
+	TestDevice               *bool    `json:"testDevice,omitempty"`
 	CoreIsolation            *bool    `json:"coreIsolation,omitempty"`
 	CorePercentage           *int32   `json:"corePercentage,omitempty"`
 	CoreMask                 string   `json:"coreMask,omitempty"`
@@ -49,7 +56,6 @@ type StorageNodeSpec struct {
 	// restart params
 	AddPcieToAllowList    []string `json:"addPcieToAllowList,omitempty"`
 	NodeAddr              string   `json:"nodeAddr,omitempty"`
-	NodeIp                string   `json:"nodeIp,omitempty"`
 	Force                 *bool    `json:"force,omitempty"`
 	IncludeStats          *bool    `json:"includeStats,omitempty"`
 	StatsHistoryInSeconds *int32   `json:"statsHistoryInSeconds,omitempty"`
@@ -57,6 +63,10 @@ type StorageNodeSpec struct {
 
 // StorageNodeStatus defines the observed state of StorageNode.
 type StorageNodeStatus struct {
+	Nodes []NodeStatus `json:"nodes,omitempty"`
+}
+
+type NodeStatus struct {
 	UUID   string `json:"uuid,omitempty"`
 	Health string `json:"health,omitempty"`
 	State  string `json:"state,omitempty"`

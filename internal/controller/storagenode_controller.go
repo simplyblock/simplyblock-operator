@@ -18,7 +18,9 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -33,12 +35,19 @@ import (
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-manager/internal/utils"
+	"github.com/simplyblock/simplyblock-manager/internal/webapi"
 )
 
 // StorageNodeReconciler reconciles a StorageNode object
 type StorageNodeReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+}
+
+type SNODEAPIResponse struct {
+	UUID   string `json:"id"`
+	Status string `json:"status"`
+	IP     string `json:"ip"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
@@ -68,12 +77,48 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
+	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
+	if err != nil {
+		log.Error(err, "Failed to get cluster auth")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	apiClient := webapi.NewClient()
+
+	if !snCR.DeletionTimestamp.IsZero() {
+		if utils.ContainsString(snCR.Finalizers, "simplyblock.finalizer") && snCR.Status.UUID != "" {
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, snCR.Status.UUID)
+			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+			if err != nil || status >= 300 {
+				log.Error(err, "Failed to delete storage-node via API", "status", status, "response", string(body))
+				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+			}
+
+			snCR.Finalizers = utils.RemoveString(snCR.Finalizers, "simplyblock.finalizer")
+			if err := r.Update(ctx, snCR); err != nil {
+				log.Error(err, "Failed to remove finalizer after deletion")
+				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+			}
+
+			log.Info("Storage node deleted from cluster API and finalizer removed", "name", snCR.Name)
+		}
+
+		return ctrl.Result{}, nil
+	}
+
+	if !utils.ContainsString(snCR.Finalizers, "simplyblock.finalizer") {
+		snCR.Finalizers = append(snCR.Finalizers, "simplyblock.finalizer")
+		if err := r.Update(ctx, snCR); err != nil {
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+	}
+
 	if err := r.labelWorkerNodes(ctx, snCR); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	sa := utils.BuildStorageNodeServiceAccount(snCR.Namespace)
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error { return nil })
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error { return nil })
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ServiceAccount: %w", err)
 	}
@@ -113,12 +158,77 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	snCR.Status.State = "Ready"
-	if err := r.Status().Update(ctx, snCR); err != nil {
-		log.Error(err, "Failed to update status")
+	for _, nodeName := range snCR.Spec.WorkerNodes {
+		nodeExists := false
+		for _, n := range snCR.Status.Nodes {
+			if n.Hostname == nodeName {
+				nodeExists = true
+				break
+			}
+		}
+		if nodeExists {
+			continue
+		}
+
+		ip, err := getNodeInternalIP(ctx, r.Client, nodeName)
+		if err != nil {
+			log.Error(err, "failed to get internal IP", "node", nodeName)
+			return ctrl.Result{RequeueAfter: time.Second * 10}, nil
+		}
+
+		nodeAddress := fmt.Sprintf("%s:5000", ip)
+		params := utils.StorageNodeAddParams{
+			NodeAddress:   nodeAddress,
+			InterfaceName: snCR.Spec.MgmtIfc,
+			MaxSnapshots:  utils.IntPtrOrDefault(snCR.Spec.MaxSnapshots, 500),
+			HAJM:          utils.BoolPtrOrFalse(snCR.Spec.HAJM),
+			TestDevice:    utils.BoolPtrOrFalse(snCR.Spec.TestDevice),
+			SPDKImage:     snCR.Spec.SpdkImage,
+			SPDKDebug:     utils.BoolPtrOrFalse(snCR.Spec.SPDKDebug),
+			FullPageUnmap: utils.BoolPtrOrFalse(snCR.Spec.FullPageUnmap),
+			DataNics:      snCR.Spec.DataNIC,
+			Namespace:     snCR.Namespace,
+			JMPercent:     utils.IntPtrOrDefault(snCR.Spec.JMPercent, 3),
+			Partitions:    utils.IntPtrOrDefault(snCR.Spec.Partitions, 1),
+			//	IOBufSmallPoolCount: utils.IntPtrOrDefault(snCR.Spec.IOBufSmallPoolCount, 0),
+			//	IOBufLargePoolCount: utils.IntPtrOrDefault(snCR.Spec.IOBufLargePoolCount, 0),
+			HaJMCount: utils.IntPtrOrDefault(snCR.Spec.HaJmCount, 3),
+		}
+
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-node", clusterUUID)
+
+		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
+		if err != nil || status >= 300 {
+			log.Error(err, "StorageNode creation failed", "status", status, "response", string(body))
+			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+		}
+
+		var apiResp SNODEAPIResponse
+		if err := json.Unmarshal(body, &apiResp); err != nil {
+			log.Error(err, "Unable to parse cluster creation response", "raw", string(body))
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
+			Hostname: nodeName,
+			UUID:     apiResp.UUID,
+			MgmtIp:   apiResp.IP,
+			State:    apiResp.Status,
+		})
+
+		if err := r.Status().Update(ctx, snCR); err != nil {
+			log.Error(err, "Failed to update storage node status")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		if err := waitForNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, apiResp.UUID, nodeAddress, nodeName, snCR, r); err != nil {
+			log.Error(err, "Node did not become online in time", "node", nodeName)
+			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+		}
 	}
 
+	log.Info("Storage node created successfully", "node", snCR.Name)
 	return ctrl.Result{}, nil
+
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -154,4 +264,107 @@ func (r *StorageNodeReconciler) labelWorkerNodes(ctx context.Context, sn *simply
 	}
 
 	return nil
+}
+
+func getNodeInternalIP(ctx context.Context, c client.Client, nodeName string) (string, error) {
+	var node corev1.Node
+	if err := c.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
+		return "", fmt.Errorf("failed to get node %s: %w", nodeName, err)
+	}
+
+	for _, addr := range node.Status.Addresses {
+		if addr.Type == corev1.NodeInternalIP {
+			return addr.Address, nil
+		}
+	}
+
+	return "", fmt.Errorf("node %s has no InternalIP", nodeName)
+}
+
+func waitForNodeOnline(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	nodeUUID string,
+	nodeAddress string,
+	nodeName string,
+	snCR *simplyblockv1alpha1.StorageNode,
+	r *StorageNodeReconciler,
+) error {
+	log := log.FromContext(ctx)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
+
+	retries := 60
+	waitInterval := 10 * time.Second
+
+	for attempt := 1; attempt <= retries; attempt++ {
+		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+		if err != nil || status >= 300 {
+			log.Error(err, "Failed to get storage node statuses", "node", nodeName, "status", status)
+		} else {
+			var statusResp struct {
+				Nodes []simplyblockv1alpha1.NodeStatus `json:"nodes,omitempty"`
+			}
+
+			if err := json.Unmarshal(body, &statusResp); err != nil {
+				return fmt.Errorf("failed to unmarshal storage node response for %s: %v", nodeName, err)
+			}
+
+			for _, node := range statusResp.Nodes {
+				if node.MgmtIp == nodeAddress {
+					if node.State == "online" {
+						found := false
+						for i := range snCR.Status.Nodes {
+							if snCR.Status.Nodes[i].Hostname == nodeName {
+								snCR.Status.Nodes[i] = node
+								found = true
+								break
+							}
+						}
+						if !found {
+							snCR.Status.Nodes = append(snCR.Status.Nodes, node)
+						}
+
+						if err := r.Status().Update(ctx, snCR); err != nil {
+							log.Error(err, "Failed to update node status to online", "node", nodeName)
+						}
+
+						log.Info("Node is online", "node", nodeName)
+						return nil
+					}
+				}
+			}
+		}
+
+		log.Info("Node not online yet, retrying...", "node", nodeName, "attempt", attempt)
+		time.Sleep(waitInterval)
+	}
+
+	// Timeout reached
+	log.Error(nil, "Timeout waiting for node to become online", "node", nodeName)
+
+	// Update CR status with timeout state
+	timeoutNode := simplyblockv1alpha1.NodeStatus{
+		Hostname: nodeName,
+		MgmtIp:   nodeAddress,
+		State:    "timeout",
+	}
+	found := false
+	for i := range snCR.Status.Nodes {
+		if snCR.Status.Nodes[i].Hostname == nodeName {
+			snCR.Status.Nodes[i] = timeoutNode
+			found = true
+			break
+		}
+	}
+	if !found {
+		snCR.Status.Nodes = append(snCR.Status.Nodes, timeoutNode)
+	}
+
+	if err := r.Status().Update(ctx, snCR); err != nil {
+		log.Error(err, "Failed to update node status after timeout", "node", nodeName)
+	}
+
+	return fmt.Errorf("node %s did not become online in time", nodeName)
 }
