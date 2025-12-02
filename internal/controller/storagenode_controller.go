@@ -85,26 +85,26 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	apiClient := webapi.NewClient()
 
-	if !snCR.DeletionTimestamp.IsZero() {
-		if utils.ContainsString(snCR.Finalizers, "simplyblock.finalizer") && snCR.Status.UUID != "" {
-			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, snCR.Status.UUID)
-			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
-			if err != nil || status >= 300 {
-				log.Error(err, "Failed to delete storage-node via API", "status", status, "response", string(body))
-				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-			}
+	// if !snCR.DeletionTimestamp.IsZero() {
+	// 	if utils.ContainsString(snCR.Finalizers, "simplyblock.finalizer") && snCR.Status.UUID != "" {
+	// 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, snCR.Status.UUID)
+	// 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+	// 		if err != nil || status >= 300 {
+	// 			log.Error(err, "Failed to delete storage-node via API", "status", status, "response", string(body))
+	// 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+	// 		}
 
-			snCR.Finalizers = utils.RemoveString(snCR.Finalizers, "simplyblock.finalizer")
-			if err := r.Update(ctx, snCR); err != nil {
-				log.Error(err, "Failed to remove finalizer after deletion")
-				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-			}
+	// 		snCR.Finalizers = utils.RemoveString(snCR.Finalizers, "simplyblock.finalizer")
+	// 		if err := r.Update(ctx, snCR); err != nil {
+	// 			log.Error(err, "Failed to remove finalizer after deletion")
+	// 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+	// 		}
 
-			log.Info("Storage node deleted from cluster API and finalizer removed", "name", snCR.Name)
-		}
+	// 		log.Info("Storage node deleted from cluster API and finalizer removed", "name", snCR.Name)
+	// 	}
 
-		return ctrl.Result{}, nil
-	}
+	// 	return ctrl.Result{}, nil
+	// }
 
 	if !utils.ContainsString(snCR.Finalizers, "simplyblock.finalizer") {
 		snCR.Finalizers = append(snCR.Finalizers, "simplyblock.finalizer")
