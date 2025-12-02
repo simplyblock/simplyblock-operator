@@ -31,7 +31,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/log"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-manager/internal/utils"
@@ -64,7 +64,7 @@ type SNODEAPIResponse struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
 func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	log := logf.FromContext(ctx)
 
 	snCR := &simplyblockv1alpha1.StorageNode{}
 	if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
@@ -292,7 +292,7 @@ func waitForNodeOnline(
 	snCR *simplyblockv1alpha1.StorageNode,
 	r *StorageNodeReconciler,
 ) error {
-	log := log.FromContext(ctx)
+	log := logf.FromContext(ctx)
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
 
 	retries := 60

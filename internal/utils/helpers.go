@@ -69,4 +69,3 @@ func Int32PtrToString(ptr *int32) string {
 	}
 	return strconv.FormatInt(int64(*ptr), 10)
 }
-
