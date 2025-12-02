@@ -44,6 +44,7 @@ type StorageNodeSpec struct {
 	DataNIC                  []string `json:"dataNIC,omitempty"`
 	HaJmCount                *int32   `json:"haJmCount,omitempty"`
 	WorkerNodes              []string `json:"workerNodes,omitempty"`
+	OpenShiftCluster         *bool    `json:"openShiftCluster,omitempty"`
 
 	// restart params
 	AddPcieToAllowList    []string `json:"addPcieToAllowList,omitempty"`

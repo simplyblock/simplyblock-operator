@@ -4,6 +4,7 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -154,6 +155,89 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 					},
 				},
 			},
+		},
+	}
+}
+
+func BuildStorageNodeServiceAccount(namespace string) *corev1.ServiceAccount {
+	return &corev1.ServiceAccount{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ServiceAccount",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-storage-node-sa",
+			Namespace: namespace,
+		},
+	}
+}
+
+func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
+	baseRules := []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{""},
+			Resources: []string{"pods", "namespaces", "pods/exec"},
+			Verbs:     []string{"list", "get", "create", "delete", "watch"},
+		},
+		{
+			APIGroups: []string{"apps"},
+			Resources: []string{"deployments"},
+			Verbs:     []string{"create", "delete"},
+		},
+		{
+			APIGroups: []string{"batch"},
+			Resources: []string{"jobs"},
+			Verbs:     []string{"create", "delete", "get", "list", "watch"},
+		},
+	}
+
+	if isOpenShift {
+		baseRules = append(baseRules,
+			rbacv1.PolicyRule{
+				APIGroups: []string{"machineconfiguration.openshift.io"},
+				Resources: []string{"machineconfigs", "machineconfigpools", "kubeletconfigs"},
+				Verbs:     []string{"list", "get", "create", "update", "patch", "watch"},
+			},
+			rbacv1.PolicyRule{
+				APIGroups: []string{""},
+				Resources: []string{"nodes"},
+				Verbs:     []string{"list", "get", "update", "patch", "watch"},
+			},
+		)
+	}
+
+	return &rbacv1.ClusterRole{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ClusterRole",
+			APIVersion: "rbac.authorization.k8s.io/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "simplyblock-storage-node-role",
+		},
+		Rules: baseRules,
+	}
+}
+
+func BuildStorageNodeClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
+	return &rbacv1.ClusterRoleBinding{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ClusterRoleBinding",
+			APIVersion: "rbac.authorization.k8s.io/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "simplyblock-pods-list-sn",
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      "simplyblock-storage-node-sa",
+				Namespace: namespace,
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			Kind:     "ClusterRole",
+			Name:     "simplyblock-storage-node-role",
+			APIGroup: "rbac.authorization.k8s.io",
 		},
 	}
 }

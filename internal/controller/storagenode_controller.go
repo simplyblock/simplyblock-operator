@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -71,6 +72,24 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	sa := utils.BuildStorageNodeServiceAccount(snCR.Namespace)
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error { return nil })
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to apply ServiceAccount: %w", err)
+	}
+
+	cr := utils.BuildStorageNodeClusterRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster))
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error { return nil })
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRole: %w", err)
+	}
+
+	crb := utils.BuildStorageNodeClusterRoleBinding(snCR.Namespace)
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error { return nil })
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
+	}
+
 	ds := utils.BuildStorageNodeDaemonSet(snCR)
 
 	if err := controllerutil.SetControllerReference(snCR, ds, r.Scheme); err != nil {
@@ -78,7 +97,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	var existing appsv1.DaemonSet
-	err := r.Get(ctx, client.ObjectKey{Name: ds.Name, Namespace: ds.Namespace}, &existing)
+	err = r.Get(ctx, client.ObjectKey{Name: ds.Name, Namespace: ds.Namespace}, &existing)
 	if err != nil && apierrors.IsNotFound(err) {
 		log.Info("Creating StorageNode DaemonSet", "Name", ds.Name)
 		if err := r.Create(ctx, ds); err != nil {
@@ -94,7 +113,6 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	// 6. Update status safely
 	snCR.Status.State = "Ready"
 	if err := r.Status().Update(ctx, snCR); err != nil {
 		log.Error(err, "Failed to update status")
@@ -122,10 +140,9 @@ func (r *StorageNodeReconciler) labelWorkerNodes(ctx context.Context, sn *simply
 			node.Labels = map[string]string{}
 		}
 
-		key := "simplyblock.com/storage-node"
-		value := sn.Name
+		key := "io.simplyblock.node-type"
+		value := "simplyblock-storage-plane"
 
-		// Skip if already set
 		if node.Labels[key] == value {
 			continue
 		}
