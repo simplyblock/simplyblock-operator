@@ -126,7 +126,10 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			Fabric:                 clusterCR.Spec.Fabric,
 		}
 
-		endpoint := "/api/v2/clusters/"
+		// endpoint := "/api/v2/clusters/"
+
+		endpoint := "/api/v1/cluster/create_first/"
+
 		body, status, err := apiClient.Do(ctx, clusterCR.Spec.ContactPoint, http.MethodPost, endpoint, params)
 		if err != nil || status >= 300 {
 			log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
