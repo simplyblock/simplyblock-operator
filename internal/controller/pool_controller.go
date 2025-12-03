@@ -120,6 +120,12 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}
 
+		log.Info("Cluster API call",
+			"endpoint", endpoint,
+			"status", status,
+			"response", string(body),
+		)
+		
 		// API returns UUID of the created pool
 		poolCR.Status.UUID = string(body)
 		if err := r.Status().Update(ctx, poolCR); err != nil {
