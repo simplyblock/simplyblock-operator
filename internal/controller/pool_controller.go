@@ -125,7 +125,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			"status", status,
 			"response", string(body),
 		)
-		
+
 		// API returns UUID of the created pool
 		poolCR.Status.UUID = string(body)
 		if err := r.Status().Update(ctx, poolCR); err != nil {
