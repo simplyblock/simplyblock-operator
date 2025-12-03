@@ -32,7 +32,6 @@ type SimplyBlockStorageClusterSpec struct {
 	StripeWparity          *int32 `json:"stripeWparity,omitempty"`
 	HAType                 string `json:"haType,omitempty"`
 	ClusterName            string `json:"clusterName,omitempty"`
-	GrafanaEndpoint        string `json:"grafanaEndpoint,omitempty"`
 	IsSingleNode           *bool  `json:"isSingleNode,omitempty"`
 	StrictNodeAntiAffinity *bool  `json:"strictNodeAntiAffinity,omitempty"`
 	QpairCount             *int32 `json:"qpairCount,omitempty"`
