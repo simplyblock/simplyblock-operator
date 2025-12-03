@@ -52,7 +52,6 @@ type SimplyBlockStorageClusterSpec struct {
 	LogDelInterval         string `json:"logDelInterval,omitempty"`
 	MetricsRetentionPeriod string `json:"metricsRetentionPeriod,omitempty"`
 	ClientQpairCount       *int32 `json:"clientQpairCount,omitempty"`
-	ContactPoint           string `json:"contactPoint,omitempty"`
 	IncludeStats           *bool  `json:"includeStats,omitempty"`
 	StatsHistoryInSeconds  *int32 `json:"statsHistoryInSeconds,omitempty"`
 	IncludeEventLog        *bool  `json:"includeEventLog,omitempty"`

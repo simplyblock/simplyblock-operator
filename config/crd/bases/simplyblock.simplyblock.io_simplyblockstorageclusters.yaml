@@ -54,8 +54,6 @@ spec:
                 type: integer
               clusterName:
                 type: string
-              contactPoint:
-                type: string
               distrBs:
                 format: int32
                 type: integer

@@ -73,10 +73,15 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 
 	// --- Handle deletion ---
 	if !clusterCR.DeletionTimestamp.IsZero() {
+		_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+		if err != nil {
+			log.Error(err, "Failed to get cluster auth")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 		// CR is being deleted
 		if utils.ContainsString(clusterCR.Finalizers, "simplyblock.finalizer") && clusterCR.Status.UUID != "" {
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterCR.Status.UUID)
-			body, status, err := apiClient.Do(ctx, clusterCR.Spec.ContactPoint, http.MethodDelete, endpoint, nil)
+			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
 			if err != nil || status >= 300 {
 				log.Error(err, "Failed to delete cluster", "status", status, "response", string(body))
 				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
@@ -130,7 +135,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 
 		endpoint := "/api/v1/cluster/create_first/"
 
-		body, status, err := apiClient.Do(ctx, clusterCR.Spec.ContactPoint, http.MethodPost, endpoint, params)
+		body, status, err := apiClient.Do(ctx, "", http.MethodPost, endpoint, params)
 		if err != nil || status >= 300 {
 			log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
@@ -195,7 +200,13 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/update", clusterCR.Status.UUID)
-	body, status, err := apiClient.Do(ctx, clusterCR.Spec.ContactPoint, http.MethodPost, endpoint, updateParams)
+	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	if err != nil {
+		log.Error(err, "Failed to get cluster auth")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, updateParams)
 	if err != nil || status >= 300 {
 		log.Error(err, "Cluster update failed", "status", status, "response", string(body))
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
