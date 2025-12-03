@@ -73,13 +73,13 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 
 	// --- Handle deletion ---
 	if !clusterCR.DeletionTimestamp.IsZero() {
-		clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
-		if err != nil {
-			log.Error(err, "Failed to get cluster auth")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
 		// CR is being deleted
 		if utils.ContainsString(clusterCR.Finalizers, "simplyblock.finalizer") && clusterCR.Status.UUID != "" {
+			clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+			if err != nil {
+				log.Error(err, "Failed to get cluster auth")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
 			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
 			if err != nil || status >= 300 {
