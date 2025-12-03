@@ -43,8 +43,10 @@ type SimplyBlockStorageClusterReconciler struct {
 }
 
 type ClusterAPIResponse struct {
-	UUID   string `json:"id"`
-	Secret string `json:"secret"`
+	Results struct {
+		UUID   string `json:"uuid"`
+		Secret string `json:"secret"`
+	} `json:"results"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters,verbs=get;list;watch;create;update;patch;delete
@@ -166,8 +168,8 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			if secret.Data == nil {
 				secret.Data = map[string][]byte{}
 			}
-			secret.Data["uuid"] = []byte(apiResp.UUID)
-			secret.Data["secret"] = []byte(apiResp.Secret)
+			secret.Data["uuid"] = []byte(apiResp.Results.UUID)
+			secret.Data["secret"] = []byte(apiResp.Results.Secret)
 			return nil
 		})
 
@@ -176,7 +178,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
-		clusterCR.Status.UUID = apiResp.UUID
+		clusterCR.Status.UUID = apiResp.Results.UUID
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
 		clusterCR.Status.Configured = true
 
