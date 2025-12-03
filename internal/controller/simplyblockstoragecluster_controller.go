@@ -141,6 +141,12 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}
 
+		log.Info("Cluster API call",
+			"endpoint", endpoint,
+			"status", status,
+			"response", string(body),
+		)
+
 		var apiResp ClusterAPIResponse
 		if err := json.Unmarshal(body, &apiResp); err != nil {
 			log.Error(err, "Unable to parse cluster creation response", "raw", string(body))
