@@ -69,7 +69,7 @@ type SimplyBlockStorageClusterStatus struct {
 	MgmtIp       string       `json:"mgmtIp,omitempty"`
 	State        string       `json:"state,omitempty"`
 	Rebalancing  *bool        `json:"rebalancing,omitempty"`
-	ClusterUUID  string       `json:"clusterUUID,omitempty"`
+	MOD          string       `json:"MOD,omitempty"`
 	SecretName   string       `json:"secretName,omitempty"`
 	Message      string       `json:"message,omitempty"`
 	LastUpdated  *metav1.Time `json:"lastUpdated,omitempty"`

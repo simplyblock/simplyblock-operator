@@ -46,6 +46,8 @@ type ClusterAPIResponse struct {
 	Results struct {
 		UUID   string `json:"uuid"`
 		Secret string `json:"secret"`
+		NDCS   int    `json:"distr_ndcs"`
+		NPCS   int    `json:"distr_npcs"`
 	} `json:"results"`
 }
 
@@ -179,6 +181,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		}
 
 		clusterCR.Status.UUID = apiResp.Results.UUID
+		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.Results.NDCS, apiResp.Results.NPCS)
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
 		clusterCR.Status.Configured = true
 

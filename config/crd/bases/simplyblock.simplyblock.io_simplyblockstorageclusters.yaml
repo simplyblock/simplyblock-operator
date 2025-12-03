@@ -118,13 +118,13 @@ spec:
           status:
             description: status defines the observed state of SimplyBlockStorageCluster
             properties:
+              MOD:
+                type: string
               NQN:
                 type: string
               UUID:
                 type: string
               clusterName:
-                type: string
-              clusterUUID:
                 type: string
               configured:
                 type: boolean
