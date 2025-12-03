@@ -191,37 +191,37 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		return ctrl.Result{}, nil
 	}
 
-	// --- Handle update ---
-	updateParams := utils.ClusterUpdateParams{
-		CapWarn:                utils.IntPtrOrZero(clusterCR.Spec.CapWarn),
-		CapCrit:                utils.IntPtrOrZero(clusterCR.Spec.CapCrit),
-		ProvCapWarn:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapWarn),
-		ProvCapCrit:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapCrit),
-		QoSClasses:             clusterCR.Spec.QoSClasses,
-		LogDelInterval:         clusterCR.Spec.LogDelInterval,
-		MetricsRetentionPeriod: clusterCR.Spec.MetricsRetentionPeriod,
-		ClientQpairCount:       utils.IntPtrOrZero(clusterCR.Spec.ClientQpairCount),
-		IncludeStats:           utils.BoolPtrOrFalse(clusterCR.Spec.IncludeStats),
-		StatsHistoryInSeconds:  utils.IntPtrOrZero(clusterCR.Spec.StatsHistoryInSeconds),
-		IncludeEventLog:        utils.BoolPtrOrFalse(clusterCR.Spec.IncludeEventLog),
-		EventLogEntries:        utils.IntPtrOrZero(clusterCR.Spec.EventLogEntries),
-	}
+	// // --- Handle update ---
+	// updateParams := utils.ClusterUpdateParams{
+	// 	CapWarn:                utils.IntPtrOrZero(clusterCR.Spec.CapWarn),
+	// 	CapCrit:                utils.IntPtrOrZero(clusterCR.Spec.CapCrit),
+	// 	ProvCapWarn:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapWarn),
+	// 	ProvCapCrit:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapCrit),
+	// 	QoSClasses:             clusterCR.Spec.QoSClasses,
+	// 	LogDelInterval:         clusterCR.Spec.LogDelInterval,
+	// 	MetricsRetentionPeriod: clusterCR.Spec.MetricsRetentionPeriod,
+	// 	ClientQpairCount:       utils.IntPtrOrZero(clusterCR.Spec.ClientQpairCount),
+	// 	IncludeStats:           utils.BoolPtrOrFalse(clusterCR.Spec.IncludeStats),
+	// 	StatsHistoryInSeconds:  utils.IntPtrOrZero(clusterCR.Spec.StatsHistoryInSeconds),
+	// 	IncludeEventLog:        utils.BoolPtrOrFalse(clusterCR.Spec.IncludeEventLog),
+	// 	EventLogEntries:        utils.IntPtrOrZero(clusterCR.Spec.EventLogEntries),
+	// }
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
-	if err != nil {
-		log.Error(err, "Failed to get cluster auth")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
+	// clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	// if err != nil {
+	// 	log.Error(err, "Failed to get cluster auth")
+	// 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	// }
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/update", clusterUUID)
+	// endpoint := fmt.Sprintf("/api/v2/clusters/%s/update", clusterUUID)
 
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, updateParams)
-	if err != nil || status >= 300 {
-		log.Error(err, "Cluster update failed", "status", status, "response", string(body))
-		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-	}
+	// body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, updateParams)
+	// if err != nil || status >= 300 {
+	// 	log.Error(err, "Cluster update failed", "status", status, "response", string(body))
+	// 	return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+	// }
 
-	log.Info("Cluster updated successfully", "name", clusterCR.Name)
+	// log.Info("Cluster updated successfully", "name", clusterCR.Name)
 	return ctrl.Result{}, nil
 }
 
