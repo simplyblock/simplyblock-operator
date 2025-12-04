@@ -224,7 +224,8 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 		if err := waitForNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, ip, nodeName, snCR, r); err != nil {
 			log.Error(err, "Node did not become online in time", "node", nodeName)
-			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+			// return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+			return ctrl.Result{}, nil
 		}
 	}
 
