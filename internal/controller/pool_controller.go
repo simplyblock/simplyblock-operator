@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -61,11 +60,11 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	var cluster simplyblockv1alpha1.SimplyBlockStorageCluster
-	if err := r.Get(ctx, types.NamespacedName{Name: poolCR.Spec.ClusterName, Namespace: poolCR.Namespace}, &cluster); err != nil {
-		log.Info("Cluster not found yet — requeuing")
-		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-	}
+	// var cluster simplyblockv1alpha1.SimplyBlockStorageCluster
+	// if err := r.Get(ctx, types.NamespacedName{Name: poolCR.Spec.ClusterName, Namespace: poolCR.Namespace}, &cluster); err != nil {
+	// 	log.Info("Cluster not found yet — requeuing")
+	// 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	// }
 
 	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, poolCR.Namespace, poolCR.Spec.ClusterName)
 	if err != nil {
@@ -104,13 +103,13 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	if poolCR.Status.UUID == "" {
 		params := utils.PoolAddParams{
-			Name:    poolCR.Spec.Name,
-			PoolMax: utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
-			// VolumeMaxSize: utils.IntPtrOrDefault(poolCR.Spec.CapacityLimitInt(), 0),
-			MaxRwIOPS: utils.IntPtrOrDefault(poolCR.Spec.QoSIOPSLimit, 0),
-			MaxRwMB:   utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
-			MaxRMB:    utils.IntPtrOrDefault(poolCR.Spec.RLimit, 0),
-			MaxWMB:    utils.IntPtrOrDefault(poolCR.Spec.WLimit, 0),
+			Name:          poolCR.Spec.Name,
+			PoolMax:       utils.IntPtrOrDefault(utils.ParseSize(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
+			VolumeMaxSize: 0,
+			MaxRwMB:       utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
+			MaxRwIOPS:     utils.IntPtrOrDefault(poolCR.Spec.QoSIOPSLimit, 0),
+			MaxRMB:        utils.IntPtrOrDefault(poolCR.Spec.RLimit, 0),
+			MaxWMB:        utils.IntPtrOrDefault(poolCR.Spec.WLimit, 0),
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)

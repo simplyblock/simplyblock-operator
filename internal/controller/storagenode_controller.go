@@ -27,7 +27,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -71,11 +70,11 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	var cluster simplyblockv1alpha1.SimplyBlockStorageCluster
-	if err := r.Get(ctx, types.NamespacedName{Name: snCR.Spec.ClusterName, Namespace: snCR.Namespace}, &cluster); err != nil {
-		log.Info("Cluster not found yet — requeuing")
-		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-	}
+	// var cluster simplyblockv1alpha1.SimplyBlockStorageCluster
+	// if err := r.Get(ctx, types.NamespacedName{Name: snCR.Spec.ClusterName, Namespace: snCR.Namespace}, &cluster); err != nil {
+	// 	log.Info("Cluster not found yet — requeuing")
+	// 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	// }
 
 	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
 	if err != nil {
