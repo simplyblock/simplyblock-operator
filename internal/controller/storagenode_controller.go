@@ -44,9 +44,11 @@ type StorageNodeReconciler struct {
 }
 
 type SNODEAPIResponse struct {
-	UUID   string `json:"id"`
-	Status string `json:"status"`
-	IP     string `json:"ip"`
+	Results struct {
+		UUID   string `json:"uuid"`
+		Status string `json:"status"`
+		IP     string `json:"ip"`
+	} `json:"results"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
@@ -177,24 +179,24 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 		nodeAddress := fmt.Sprintf("%s:5000", ip)
 		params := utils.StorageNodeAddParams{
-			NodeAddress:   nodeAddress,
-			InterfaceName: snCR.Spec.MgmtIfc,
-			MaxSnapshots:  utils.IntPtrOrDefault(snCR.Spec.MaxSnapshots, 500),
-			HAJM:          utils.BoolPtrOrFalse(snCR.Spec.HAJM),
-			TestDevice:    utils.BoolPtrOrFalse(snCR.Spec.TestDevice),
-			SPDKImage:     snCR.Spec.SpdkImage,
-			SPDKDebug:     utils.BoolPtrOrFalse(snCR.Spec.SPDKDebug),
-			FullPageUnmap: utils.BoolPtrOrFalse(snCR.Spec.FullPageUnmap),
-			DataNics:      snCR.Spec.DataNIC,
-			Namespace:     snCR.Namespace,
-			JMPercent:     utils.IntPtrOrDefault(snCR.Spec.JMPercent, 3),
-			Partitions:    utils.IntPtrOrDefault(snCR.Spec.Partitions, 1),
-			//	IOBufSmallPoolCount: utils.IntPtrOrDefault(snCR.Spec.IOBufSmallPoolCount, 0),
-			//	IOBufLargePoolCount: utils.IntPtrOrDefault(snCR.Spec.IOBufLargePoolCount, 0),
-			HaJMCount: utils.IntPtrOrDefault(snCR.Spec.HaJmCount, 3),
+			NodeAddress:         nodeAddress,
+			InterfaceName:       snCR.Spec.MgmtIfc,
+			MaxSnapshots:        utils.IntPtrOrDefault(snCR.Spec.MaxSnapshots, 500),
+			HAJM:                utils.BoolPtrOrFalse(snCR.Spec.HAJM),
+			TestDevice:          utils.BoolPtrOrFalse(snCR.Spec.TestDevice),
+			SPDKImage:           snCR.Spec.SpdkImage,
+			SPDKDebug:           utils.BoolPtrOrFalse(snCR.Spec.SPDKDebug),
+			FullPageUnmap:       utils.BoolPtrOrFalse(snCR.Spec.FullPageUnmap),
+			DataNics:            snCR.Spec.DataNIC,
+			Namespace:           snCR.Namespace,
+			JMPercent:           utils.IntPtrOrDefault(snCR.Spec.JMPercent, 3),
+			Partitions:          utils.IntPtrOrDefault(snCR.Spec.Partitions, 1),
+			IOBufSmallPoolCount: 0,
+			IOBufLargePoolCount: 0,
+			HaJMCount:           utils.IntPtrOrDefault(snCR.Spec.HaJmCount, 3),
 		}
 
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-node", clusterUUID)
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
 
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
 		if err != nil || status >= 300 {
@@ -216,16 +218,16 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 		snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
 			Hostname: nodeName,
-			UUID:     apiResp.UUID,
-			MgmtIp:   apiResp.IP,
-			State:    apiResp.Status,
+			UUID:     apiResp.Results.UUID,
+			MgmtIp:   apiResp.Results.IP,
+			State:    apiResp.Results.Status,
 		})
 
 		if err := r.Status().Update(ctx, snCR); err != nil {
 			log.Error(err, "Failed to update storage node status")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
-		if err := waitForNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, apiResp.UUID, nodeAddress, nodeName, snCR, r); err != nil {
+		if err := waitForNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, apiResp.Results.UUID, nodeAddress, nodeName, snCR, r); err != nil {
 			log.Error(err, "Node did not become online in time", "node", nodeName)
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}
