@@ -44,10 +44,11 @@ type StorageNodeReconciler struct {
 }
 
 type SNODEAPIResponse struct {
-	Results struct {
+	Results []struct {
 		UUID   string `json:"uuid"`
 		Status string `json:"status"`
-		IP     string `json:"ip"`
+		IP     string `json:"mgmt_ip"`
+		Health string `json:"health_check"`
 	} `json:"results"`
 }
 
@@ -210,24 +211,18 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			"response", string(body),
 		)
 
-		var apiResp SNODEAPIResponse
-		if err := json.Unmarshal(body, &apiResp); err != nil {
-			log.Error(err, "Unable to parse cluster creation response", "raw", string(body))
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
 		snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
 			Hostname: nodeName,
-			UUID:     apiResp.Results.UUID,
-			MgmtIp:   apiResp.Results.IP,
-			State:    apiResp.Results.Status,
+			UUID:     "",
+			MgmtIp:   ip,
+			State:    "in_creation",
 		})
 
 		if err := r.Status().Update(ctx, snCR); err != nil {
 			log.Error(err, "Failed to update storage node status")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
-		if err := waitForNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, apiResp.Results.UUID, nodeAddress, nodeName, snCR, r); err != nil {
+		if err := waitForNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, ip, nodeName, snCR, r); err != nil {
 			log.Error(err, "Node did not become online in time", "node", nodeName)
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}
@@ -293,14 +288,13 @@ func waitForNodeOnline(
 	apiClient *webapi.Client,
 	clusterSecret string,
 	clusterUUID string,
-	nodeUUID string,
-	nodeAddress string,
+	ip string,
 	nodeName string,
 	snCR *simplyblockv1alpha1.StorageNode,
 	r *StorageNodeReconciler,
 ) error {
 	log := logf.FromContext(ctx)
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
 
 	retries := 60
 	waitInterval := 10 * time.Second
@@ -310,27 +304,36 @@ func waitForNodeOnline(
 		if err != nil || status >= 300 {
 			log.Error(err, "Failed to get storage node statuses", "node", nodeName, "status", status)
 		} else {
-			var statusResp struct {
-				Nodes []simplyblockv1alpha1.NodeStatus `json:"nodes,omitempty"`
-			}
 
-			if err := json.Unmarshal(body, &statusResp); err != nil {
+			var apiResp SNODEAPIResponse
+			if err := json.Unmarshal(body, &apiResp); err != nil {
 				return fmt.Errorf("failed to unmarshal storage node response for %s: %v", nodeName, err)
 			}
 
-			for _, node := range statusResp.Nodes {
-				if node.MgmtIp == nodeAddress {
-					if node.State == "online" {
+			for _, res := range apiResp.Results {
+				if res.IP == ip {
+					if res.Status == "online" {
 						found := false
 						for i := range snCR.Status.Nodes {
 							if snCR.Status.Nodes[i].Hostname == nodeName {
-								snCR.Status.Nodes[i] = node
+								snCR.Status.Nodes[i] = simplyblockv1alpha1.NodeStatus{
+									UUID:   res.UUID,
+									Health: res.Health,
+									State:  res.Status,
+									MgmtIp: res.IP,
+								}
 								found = true
 								break
 							}
 						}
 						if !found {
-							snCR.Status.Nodes = append(snCR.Status.Nodes, node)
+							snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
+								Hostname: nodeName,
+								UUID:     res.UUID,
+								Health:   res.Health,
+								State:    res.Status,
+								MgmtIp:   res.IP,
+							})
 						}
 
 						if err := r.Status().Update(ctx, snCR); err != nil {
@@ -354,7 +357,7 @@ func waitForNodeOnline(
 	// Update CR status with timeout state
 	timeoutNode := simplyblockv1alpha1.NodeStatus{
 		Hostname: nodeName,
-		MgmtIp:   nodeAddress,
+		MgmtIp:   ip,
 		State:    "timeout",
 	}
 	found := false
