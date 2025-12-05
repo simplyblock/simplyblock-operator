@@ -106,7 +106,9 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
-	if poolCR.Status.UUID == "" {
+	pool := poolCR.DeepCopy()
+
+	if pool.Status.UUID == "" {
 		params := utils.PoolAddParams{
 			Name:          poolCR.Spec.Name,
 			PoolMax:       utils.IntPtrOrDefault(utils.ParseSize(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
@@ -147,25 +149,25 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, nil
 	}
 
-	// --- Handle update ---
-	updateParams := utils.PoolUpdateParams{
-		Name:    poolCR.Spec.Name,
-		PoolMax: utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
-		// VolumeMaxSize: poolCR.Spec.CapacityLimitIntPtr(),
-		MaxRwIOPS: utils.IntPtrOrDefault(poolCR.Spec.QoSIOPSLimit, 0),
-		MaxRwMB:   utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
-		MaxRMB:    utils.IntPtrOrDefault(poolCR.Spec.RLimit, 0),
-		MaxWMB:    utils.IntPtrOrDefault(poolCR.Spec.WLimit, 0),
-	}
+	// // --- Handle update ---
+	// updateParams := utils.PoolUpdateParams{
+	// 	Name:    poolCR.Spec.Name,
+	// 	PoolMax: utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
+	// 	// VolumeMaxSize: poolCR.Spec.CapacityLimitIntPtr(),
+	// 	MaxRwIOPS: utils.IntPtrOrDefault(poolCR.Spec.QoSIOPSLimit, 0),
+	// 	MaxRwMB:   utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
+	// 	MaxRMB:    utils.IntPtrOrDefault(poolCR.Spec.RLimit, 0),
+	// 	MaxWMB:    utils.IntPtrOrDefault(poolCR.Spec.WLimit, 0),
+	// }
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPut, endpoint, updateParams)
-	if err != nil || status >= 300 {
-		log.Error(err, "Pool update failed", "status", status, "response", string(body))
-		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-	}
+	// endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
+	// body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPut, endpoint, updateParams)
+	// if err != nil || status >= 300 {
+	// 	log.Error(err, "Pool update failed", "status", status, "response", string(body))
+	// 	return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+	// }
 
-	log.Info("Pool updated successfully", "name", poolCR.Name)
+	// log.Info("Pool updated successfully", "name", poolCR.Name)
 	return ctrl.Result{}, nil
 }
 
