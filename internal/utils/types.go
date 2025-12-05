@@ -60,16 +60,16 @@ type PoolUpdateParams struct {
 type StorageNodeAddParams struct {
 	NodeAddress         string   `json:"node_address"`
 	InterfaceName       string   `json:"interface_name"`
-	MaxSnapshots        int      `json:"max_snapshots,omitempty"`
-	HAJM                bool     `json:"ha_jm,omitempty"`
-	TestDevice          bool     `json:"test_device,omitempty"`
+	MaxSnapshots        int      `json:"max_snapshots"`
+	HAJM                bool     `json:"ha_jm"`
+	TestDevice          bool     `json:"test_device"`
 	SPDKImage           string   `json:"spdk_image,omitempty"`
-	SPDKDebug           bool     `json:"spdk_debug,omitempty"`
+	SPDKDebug           bool     `json:"spdk_debug"`
 	FullPageUnmap       bool     `json:"full_page_unmap,omitempty"`
 	DataNics            []string `json:"data_nics,omitempty"`
-	Namespace           string   `json:"namespace,omitempty"`
-	JMPercent           int      `json:"jm_percent,omitempty"`
-	Partitions          int      `json:"partitions,omitempty"`
+	Namespace           string   `json:"namespace"`
+	JMPercent           int      `json:"jm_percent"`
+	Partitions          int      `json:"partitions"`
 	IOBufSmallPoolCount int      `json:"iobuf_small_pool_count,omitempty"`
 	IOBufLargePoolCount int      `json:"iobuf_large_pool_count,omitempty"`
 	HaJMCount           int      `json:"ha_jm_count,omitempty"`
