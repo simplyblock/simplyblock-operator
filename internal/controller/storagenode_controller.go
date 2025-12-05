@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -308,7 +309,7 @@ func waitForNodeOnline(
 			log.Error(err, "Failed to get storage node statuses", "node", nodeName, "status", status)
 		} else {
 
-			if len(body) == 0 {
+			if len(body) == 0 || strings.TrimSpace(string(body)) == "[]" {
 				log.Info("Storage node list is empty, retrying...", "node", nodeName, "attempt", attempt)
 				time.Sleep(waitInterval)
 				continue
