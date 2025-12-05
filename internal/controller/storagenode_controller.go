@@ -303,56 +303,55 @@ func waitForNodeOnline(
 
 	for attempt := 1; attempt <= retries; attempt++ {
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
-		log.Info("SNODE LIST raw API response", "endpoint", endpoint, "status", status, "body", string(body))
+		log.Info("SNODE LIST raw API response", "endpoint", endpoint, "status", status, "body", body)
 
 		if err != nil || status >= 300 {
 			log.Error(err, "Failed to get storage node statuses", "node", nodeName, "status", status)
-		} else {
+		}
 
-			if len(body) == 0 || strings.TrimSpace(string(body)) == "[]" {
-				log.Info("Storage node list is empty, retrying...", "node", nodeName, "attempt", attempt)
-				time.Sleep(waitInterval)
-				continue
-			}
+		if strings.TrimSpace(string(body)) == "[]" {
+			log.Info("Storage node list is empty, retrying...", "node", nodeName, "attempt", attempt)
+			time.Sleep(waitInterval)
+			continue
+		}
 
-			var apiResp SNODEAPIResponse
-			if err := json.Unmarshal(body, &apiResp); err != nil {
-				return fmt.Errorf("failed to unmarshal storage node response for %s: %v", nodeName, err)
-			}
+		var apiResp SNODEAPIResponse
+		if err := json.Unmarshal(body, &apiResp); err != nil {
+			return fmt.Errorf("failed to unmarshal storage node response for %s: %v", nodeName, err)
+		}
 
-			for _, res := range apiResp.Results {
-				if res.IP == ip {
-					if res.Status == "online" {
-						found := false
-						for i := range snCR.Status.Nodes {
-							if snCR.Status.Nodes[i].Hostname == nodeName {
-								snCR.Status.Nodes[i] = simplyblockv1alpha1.NodeStatus{
-									UUID:   res.UUID,
-									Health: res.Health,
-									State:  res.Status,
-									MgmtIp: res.IP,
-								}
-								found = true
-								break
+		for _, res := range apiResp.Results {
+			if res.IP == ip {
+				if res.Status == "online" {
+					found := false
+					for i := range snCR.Status.Nodes {
+						if snCR.Status.Nodes[i].Hostname == nodeName {
+							snCR.Status.Nodes[i] = simplyblockv1alpha1.NodeStatus{
+								UUID:   res.UUID,
+								Health: res.Health,
+								State:  res.Status,
+								MgmtIp: res.IP,
 							}
+							found = true
+							break
 						}
-						if !found {
-							snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
-								Hostname: nodeName,
-								UUID:     res.UUID,
-								Health:   res.Health,
-								State:    res.Status,
-								MgmtIp:   res.IP,
-							})
-						}
-
-						if err := r.Status().Update(ctx, snCR); err != nil {
-							log.Error(err, "Failed to update node status to online", "node", nodeName)
-						}
-
-						log.Info("Node is online", "node", nodeName)
-						return nil
 					}
+					if !found {
+						snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
+							Hostname: nodeName,
+							UUID:     res.UUID,
+							Health:   res.Health,
+							State:    res.Status,
+							MgmtIp:   res.IP,
+						})
+					}
+
+					if err := r.Status().Update(ctx, snCR); err != nil {
+						log.Error(err, "Failed to update node status to online", "node", nodeName)
+					}
+
+					log.Info("Node is online", "node", nodeName)
+					return nil
 				}
 			}
 		}
