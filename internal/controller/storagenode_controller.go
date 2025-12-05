@@ -207,6 +207,16 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
 
+		jsonParams, err := json.MarshalIndent(params, "", "  ")
+		if err != nil {
+			log.Error(err, "Failed to marshal params")
+		} else {
+			log.Info("Sending Storage Node Add Request",
+				"endpoint", endpoint,
+				"request_body", string(jsonParams),
+			)
+		}
+
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
 		if err != nil || status >= 300 {
 			log.Error(err, "StorageNode creation failed", "status", status, "response", string(body))
