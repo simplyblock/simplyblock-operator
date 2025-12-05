@@ -48,7 +48,7 @@ type SNODEAPIResponse struct {
 	UUID   string `json:"uuid"`
 	Status string `json:"status"`
 	IP     string `json:"mgmt_ip"`
-	Health string `json:"health_check"`
+	Health bool   `json:"health_check"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
@@ -326,7 +326,7 @@ func waitForNodeOnline(
 						if snCR.Status.Nodes[i].Hostname == nodeName {
 							snCR.Status.Nodes[i] = simplyblockv1alpha1.NodeStatus{
 								UUID:   res.UUID,
-								Health: res.Health,
+								Health: fmt.Sprintf("%v", res.Health),
 								State:  res.Status,
 								MgmtIp: res.IP,
 							}
@@ -338,7 +338,7 @@ func waitForNodeOnline(
 						snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
 							Hostname: nodeName,
 							UUID:     res.UUID,
-							Health:   res.Health,
+							Health:   fmt.Sprintf("%v", res.Health),
 							State:    res.Status,
 							MgmtIp:   res.IP,
 						})
