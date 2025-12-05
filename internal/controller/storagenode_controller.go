@@ -178,6 +178,16 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{RequeueAfter: time.Second * 10}, nil
 		}
 
+		//log.Info("Number of Partitions", snCR.Spec.Partitions)
+
+		if snCR.Spec.Partitions != nil {
+			log.Info("Number of Partitions", "raw pointer", snCR.Spec.Partitions, "value", *snCR.Spec.Partitions)
+		} else {
+			log.Info("Number of Partitions is nil")
+		}
+
+		log.Info("Number of Partitions after IntPtrOrDefault", utils.IntPtrOrDefault(snCR.Spec.Partitions, 1))
+
 		nodeAddress := fmt.Sprintf("%s:5000", ip)
 		params := utils.StorageNodeAddParams{
 			NodeAddress:         nodeAddress,
