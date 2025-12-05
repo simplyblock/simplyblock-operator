@@ -45,12 +45,10 @@ type StorageNodeReconciler struct {
 }
 
 type SNODEAPIResponse struct {
-	Results []struct {
-		UUID   string `json:"uuid"`
-		Status string `json:"status"`
-		IP     string `json:"mgmt_ip"`
-		Health string `json:"health_check"`
-	} `json:"results"`
+	UUID   string `json:"uuid"`
+	Status string `json:"status"`
+	IP     string `json:"mgmt_ip"`
+	Health string `json:"health_check"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
@@ -315,12 +313,12 @@ func waitForNodeOnline(
 			continue
 		}
 
-		var apiResp SNODEAPIResponse
+		var apiResp []SNODEAPIResponse
 		if err := json.Unmarshal(body, &apiResp); err != nil {
 			return fmt.Errorf("failed to unmarshal storage node response for %s: %v", nodeName, err)
 		}
 
-		for _, res := range apiResp.Results {
+		for _, res := range apiResp {
 			if res.IP == ip {
 				if res.Status == "online" {
 					found := false
