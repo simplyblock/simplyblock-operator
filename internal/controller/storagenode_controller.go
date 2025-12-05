@@ -306,6 +306,11 @@ func waitForNodeOnline(
 			log.Error(err, "Failed to get storage node statuses", "node", nodeName, "status", status)
 		} else {
 
+			log.Info("SNODE LIST API call",
+				"endpoint", endpoint,
+				"status", status,
+				"response", string(body),
+			)
 			var apiResp SNODEAPIResponse
 			if err := json.Unmarshal(body, &apiResp); err != nil {
 				return fmt.Errorf("failed to unmarshal storage node response for %s: %v", nodeName, err)
