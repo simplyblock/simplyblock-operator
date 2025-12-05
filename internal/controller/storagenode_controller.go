@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -326,7 +327,7 @@ func waitForNodeOnline(
 						if snCR.Status.Nodes[i].Hostname == nodeName {
 							snCR.Status.Nodes[i] = simplyblockv1alpha1.NodeStatus{
 								UUID:   res.UUID,
-								Health: fmt.Sprintf("%v", res.Health),
+								Health: strconv.FormatBool(res.Health),
 								State:  res.Status,
 								MgmtIp: res.IP,
 							}
@@ -338,7 +339,7 @@ func waitForNodeOnline(
 						snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
 							Hostname: nodeName,
 							UUID:     res.UUID,
-							Health:   fmt.Sprintf("%v", res.Health),
+							Health:   strconv.FormatBool(res.Health),
 							State:    res.Status,
 							MgmtIp:   res.IP,
 						})
