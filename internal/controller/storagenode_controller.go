@@ -302,6 +302,8 @@ func waitForNodeOnline(
 
 	for attempt := 1; attempt <= retries; attempt++ {
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+		log.Info("SNODE LIST raw API response", "endpoint", endpoint, "status", status, "body", string(body))
+		
 		if err != nil || status >= 300 {
 			log.Error(err, "Failed to get storage node statuses", "node", nodeName, "status", status)
 		} else {

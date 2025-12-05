@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -36,6 +37,10 @@ import (
 type PoolReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+}
+
+type POOLAPIResponse struct {
+	UUID string `json:"uuid"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=pools,verbs=get;list;watch;create;update;patch;delete
@@ -125,8 +130,14 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			"response", string(body),
 		)
 
+		var apiResp POOLAPIResponse
+
+		if err := json.Unmarshal(body, &apiResp); err != nil {
+			log.Error(err, "Failed to parse pool creation response", "raw", string(body))
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 		// API returns UUID of the created pool
-		poolCR.Status.UUID = string(body)
+		poolCR.Status.UUID = apiResp.UUID
 		if err := r.Status().Update(ctx, poolCR); err != nil {
 			log.Error(err, "Failed to update pool status after creation")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
