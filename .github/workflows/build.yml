@@ -41,5 +41,5 @@ jobs:
           echo "Building and pushing multi-arch image: $IMAGE_TAG"
 
           # Use multi-arch Makefile target
-          make docker-buildx IMG=$IMAGE_TAG TARGETARCH="amd64,arm64"
+          make docker-buildx IMG=$IMAGE_TAG PLATFORMS="amd64,arm64"
           
