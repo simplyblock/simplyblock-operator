@@ -327,15 +327,19 @@ func checkNodeInfoReachable(ctx context.Context, ip string) error {
 		return err
 	}
 
-	client := &http.Client{
+	httpClient := &http.Client{
 		Timeout: 3 * time.Second,
 	}
 
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("node info endpoint not reachable: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			fmt.Printf("warning: failed to close response body: %v\n", cerr)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("node info endpoint returned %d", resp.StatusCode)
