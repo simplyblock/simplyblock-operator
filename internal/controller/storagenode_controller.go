@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -229,12 +230,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			"response", string(body),
 		)
 
-		snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
-			Hostname: nodeName,
-			UUID:     "",
-			MgmtIp:   ip,
-			State:    "in_creation",
-		})
+		ensureNodeStatus(snCR, nodeName, ip)
 
 		if err := r.Status().Update(ctx, snCR); err != nil {
 			log.Error(err, "Failed to update storage node status")
@@ -302,6 +298,26 @@ func getNodeInternalIP(ctx context.Context, c client.Client, nodeName string) (s
 	return "", fmt.Errorf("node %s has no InternalIP", nodeName)
 }
 
+func ensureNodeStatus(
+	snCR *simplyblockv1alpha1.StorageNode,
+	nodeName, ip string,
+) *simplyblockv1alpha1.NodeStatus {
+
+	for i := range snCR.Status.Nodes {
+		if snCR.Status.Nodes[i].Hostname == nodeName {
+			return &snCR.Status.Nodes[i]
+		}
+	}
+
+	snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
+		Hostname: nodeName,
+		MgmtIp:   ip,
+		State:    "in_creation",
+	})
+
+	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
+}
+
 func waitForNodeOnline(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -338,41 +354,39 @@ func waitForNodeOnline(
 		}
 
 		for _, res := range apiResp {
-			if res.IP == ip {
-				if res.Status == "online" {
-					found := false
-					for i := range snCR.Status.Nodes {
-						if snCR.Status.Nodes[i].Hostname == nodeName {
-							snCR.Status.Nodes[i] = simplyblockv1alpha1.NodeStatus{
-								UUID:   res.UUID,
-								Health: strconv.FormatBool(res.Health),
-								State:  res.Status,
-								MgmtIp: res.IP,
-							}
-							found = true
-							break
-						}
-					}
-					if !found {
-						snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
+			if res.IP == ip && res.Status == "online" {
+
+				for i := range snCR.Status.Nodes {
+					if snCR.Status.Nodes[i].Hostname == nodeName {
+
+						updated := simplyblockv1alpha1.NodeStatus{
 							Hostname: nodeName,
 							UUID:     res.UUID,
 							Health:   strconv.FormatBool(res.Health),
 							State:    res.Status,
 							MgmtIp:   res.IP,
-						})
-					}
+						}
 
-					if err := r.Status().Update(ctx, snCR); err != nil {
-						log.Error(err, "Failed to update node status to online", "node", nodeName)
-					}
+						if reflect.DeepEqual(snCR.Status.Nodes[i], updated) {
+							log.Info("Node already online, status unchanged", "node", nodeName)
+							return nil
+						}
 
-					log.Info("Node is online", "node", nodeName)
-					return nil
+						snCR.Status.Nodes[i] = updated
+
+						if err := r.Status().Update(ctx, snCR); err != nil {
+							log.Error(err, "Failed to update node status to online", "node", nodeName)
+						}
+
+						log.Info("Node is online", "node", nodeName)
+						return nil
+					}
 				}
+
+				log.Error(nil, "Node missing from status — invariant violated", "node", nodeName)
+				return fmt.Errorf("node %s missing from status", nodeName)
 			}
 		}
-
 		log.Info("Node not online yet, retrying...", "node", nodeName, "attempt", attempt)
 		time.Sleep(waitInterval)
 	}
