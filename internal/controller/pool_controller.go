@@ -126,7 +126,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}
 
-		log.Info("Cluster API call",
+		log.Info("POOL API call",
 			"endpoint", endpoint,
 			"status", status,
 			"response", string(body),

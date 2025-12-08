@@ -179,14 +179,6 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{RequeueAfter: time.Second * 10}, nil
 		}
 
-		if snCR.Spec.Partitions != nil {
-			log.Info("Number of Partitions", "raw pointer", snCR.Spec.Partitions, "value", *snCR.Spec.Partitions)
-		} else {
-			log.Info("Number of Partitions is nil")
-		}
-
-		log.Info("Number of Partitions after IntPtrOrDefault", "value", utils.IntPtrOrDefault(snCR.Spec.Partitions, 1))
-
 		if err := checkNodeInfoReachable(ctx, ip); err != nil {
 			log.Info("Storage node API not reachable yet, requeueing",
 				"node", nodeName,
@@ -234,7 +226,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}
 
-		log.Info("Cluster API call",
+		log.Info("SNODE API call",
 			"endpoint", endpoint,
 			"status", status,
 			"response", string(body),
@@ -248,7 +240,6 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 		if err := waitForNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, ip, nodeName, snCR, r); err != nil {
 			log.Error(err, "Node did not become online in time", "node", nodeName)
-			// return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 			return ctrl.Result{}, nil
 		}
 	}
