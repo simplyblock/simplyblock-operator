@@ -243,4 +243,3 @@ func BuildStorageNodeRoleBinding(namespace string) *rbacv1.RoleBinding {
 		},
 	}
 }
-
