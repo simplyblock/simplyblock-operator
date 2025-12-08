@@ -187,6 +187,16 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 		log.Info("Number of Partitions after IntPtrOrDefault", "value", utils.IntPtrOrDefault(snCR.Spec.Partitions, 1))
 
+		if err := checkNodeInfoReachable(ctx, ip); err != nil {
+			log.Info("Storage node API not reachable yet, requeueing",
+				"node", nodeName,
+				"ip", ip,
+				"error", err.Error(),
+			)
+
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
 		nodeAddress := fmt.Sprintf("%s:5000", ip)
 		params := utils.StorageNodeAddParams{
 			NodeAddress:         nodeAddress,
@@ -316,6 +326,31 @@ func ensureNodeStatus(
 	})
 
 	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
+}
+
+func checkNodeInfoReachable(ctx context.Context, ip string) error {
+	url := fmt.Sprintf("http://%s:5000/snode/info", ip)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("node info endpoint not reachable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("node info endpoint returned %d", resp.StatusCode)
+	}
+
+	return nil
 }
 
 func waitForNodeOnline(
