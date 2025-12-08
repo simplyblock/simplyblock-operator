@@ -111,6 +111,13 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		}
 	}
 
+	endpoint := "/api/v1/health/fdb/"
+	body, status, err := apiClient.Do(ctx, "", http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		log.Error(err, "FDB not ready", "status", status, "response", string(body))
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	// --- Handle creation ---
 	cluster := clusterCR.DeepCopy()
 
@@ -139,9 +146,9 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 
 		// endpoint := "/api/v2/clusters/"
 
-		endpoint := "/api/v1/cluster/create_first/"
+		endpoint = "/api/v1/cluster/create_first/"
 
-		body, status, err := apiClient.Do(ctx, "", http.MethodPost, endpoint, params)
+		body, status, err = apiClient.Do(ctx, "", http.MethodPost, endpoint, params)
 		if err != nil || status >= 300 {
 			log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
