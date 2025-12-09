@@ -161,7 +161,7 @@ func (r *SimplyBlockDeviceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	var newStatus []simplyblockv1alpha1.NodeDevices
+	newStatus := make([]simplyblockv1alpha1.NodeDevices, 0, len(nodeDeviceMap))
 
 	for nodeUUID, devices := range nodeDeviceMap {
 		sort.Slice(devices, func(i, j int) bool {
