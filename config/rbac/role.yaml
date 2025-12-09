@@ -8,6 +8,7 @@ rules:
   - simplyblock.simplyblock.io
   resources:
   - pools
+  - simplyblockdevices
   - simplyblockstorageclusters
   - storagenodes
   verbs:
@@ -22,6 +23,7 @@ rules:
   - simplyblock.simplyblock.io
   resources:
   - pools/finalizers
+  - simplyblockdevices/finalizers
   - simplyblockstorageclusters/finalizers
   - storagenodes/finalizers
   verbs:
@@ -30,6 +32,7 @@ rules:
   - simplyblock.simplyblock.io
   resources:
   - pools/status
+  - simplyblockdevices/status
   - simplyblockstorageclusters/status
   - storagenodes/status
   verbs:

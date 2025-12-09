@@ -5,6 +5,7 @@ resources:
 - bases/simplyblock.simplyblock.io_simplyblockstorageclusters.yaml
 - bases/simplyblock.simplyblock.io_storagenodes.yaml
 - bases/simplyblock.simplyblock.io_pools.yaml
+- bases/simplyblock.simplyblock.io_simplyblockdevices.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
