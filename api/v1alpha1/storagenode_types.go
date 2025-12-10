@@ -25,10 +25,10 @@ import (
 
 // StorageNodeSpec defines the desired state of StorageNode
 type StorageNodeSpec struct {
-	ClusterName              string   `json:"clusterName,omitempty"`
-	ClusterImage             string   `json:"clusterImage,omitempty"`
+	ClusterName              string   `json:"clusterName"`
+	ClusterImage             string   `json:"clusterImage"`
 	UseSeparateJournalDevice *bool    `json:"useSeparateJournalDevice,omitempty"`
-	MaxLVol                  *int32   `json:"maxLVol,omitempty"`
+	MaxLVol                  *int32   `json:"maxLVol"`
 	MaxSnapshots             *int32   `json:"maxSnapshots,omitempty"`
 	MaxSize                  string   `json:"maxSize,omitempty"`
 	SpdkImage                string   `json:"spdkImage,omitempty"`
@@ -50,7 +50,7 @@ type StorageNodeSpec struct {
 	NodesPerSocket           *int32   `json:"nodesPerSocket,omitempty"`
 	DataNIC                  []string `json:"dataNIC,omitempty"`
 	HaJmCount                *int32   `json:"haJmCount,omitempty"`
-	WorkerNodes              []string `json:"workerNodes,omitempty"`
+	WorkerNodes              []string `json:"workerNodes"`
 	OpenShiftCluster         *bool    `json:"openShiftCluster,omitempty"`
 
 	// restart params

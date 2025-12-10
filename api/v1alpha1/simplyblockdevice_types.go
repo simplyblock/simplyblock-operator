@@ -25,7 +25,7 @@ import (
 
 // SimplyBlockDeviceSpec defines the desired state of SimplyBlockDevice
 type SimplyBlockDeviceSpec struct {
-	ClusterName           string `json:"clusterName,omitempty"`
+	ClusterName           string `json:"clusterName"`
 	NodeUUID              string `json:"nodeUUID,omitempty"`
 	IncludeStats          bool   `json:"includeStats,omitempty"`
 	StatsHistoryInSeconds int    `json:"statsHistoryInSeconds,omitempty"`

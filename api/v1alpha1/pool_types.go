@@ -26,7 +26,7 @@ import (
 // PoolSpec defines the desired state of Pool
 type PoolSpec struct {
 	Name          string `json:"name"`
-	ClusterName   string `json:"clusterName,omitempty"`
+	ClusterName   string `json:"clusterName"`
 	Status        string `json:"status,omitempty"`
 	CapacityLimit string `json:"capacityLimit,omitempty"`
 	QoSIOPSLimit  *int32 `json:"qosIOPSLimit,omitempty"`
