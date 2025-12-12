@@ -234,7 +234,6 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 	// }
 
 	// log.Info("Cluster updated successfully", "name", clusterCR.Name)
-
 	return ctrl.Result{}, nil
 }
 
