@@ -78,19 +78,19 @@ func (r *SimplyBlockTaskReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if !taskCR.DeletionTimestamp.IsZero() {
 		if utils.ContainsString(taskCR.Finalizers, "simplyblock.task.finalizer") {
 			// TODO: add any cleanup logic needed before task deletion
-	
+
 			// Remove finalizer
 			taskCR.Finalizers = utils.RemoveString(taskCR.Finalizers, "simplyblock.task.finalizer")
 			if err := r.Update(ctx, taskCR); err != nil {
 				log.Error(err, "Failed to remove finalizer from task", "task", taskCR.Name)
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
-	
+
 			log.Info("Task deleted successfully", "task", taskCR.Name)
 		}
 		return ctrl.Result{}, nil
 	}
-	
+
 	// --- Add finalizer if not present ---
 	if !utils.ContainsString(taskCR.Finalizers, "simplyblock.task.finalizer") {
 		taskCR.Finalizers = append(taskCR.Finalizers, "simplyblock.task.finalizer")
@@ -99,7 +99,7 @@ func (r *SimplyBlockTaskReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 	}
-	
+
 	clusterUUID, clusterSecret, err := utils.GetClusterAuth(
 		ctx,
 		r.Client,
