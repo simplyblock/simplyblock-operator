@@ -140,8 +140,13 @@ func (r *SimplyBlockTaskReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	var apiRespTask ClusterTaskAPIResponse
+	log.Info("ClusterTask API call",
+		"endpoint", endpoint,
+		"status", status,
+		"response", string(body),
+	)
 
+	var apiRespTask ClusterTaskAPIResponse
 	if err := json.Unmarshal(body, &apiRespTask); err != nil {
 		log.Error(err, "Failed to parse task API response", "task", taskCR.Name)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
