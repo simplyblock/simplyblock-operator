@@ -22,6 +22,9 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the simplyblock-manager itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- simplyblocktask_admin_role.yaml
+- simplyblocktask_editor_role.yaml
+- simplyblocktask_viewer_role.yaml
 - simplyblockdevice_admin_role.yaml
 - simplyblockdevice_editor_role.yaml
 - simplyblockdevice_viewer_role.yaml

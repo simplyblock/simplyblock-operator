@@ -25,6 +25,11 @@ func IntPtrOrZero(ptr *int32) int {
 	return 0
 }
 
+func IntToInt32Ptr(val int) *int32 {
+	v := int32(val)
+	return &v
+}
+
 func BoolPtrOrFalse(ptr *bool) bool {
 	if ptr != nil {
 		return *ptr

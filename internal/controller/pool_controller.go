@@ -88,7 +88,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 			}
 
-			poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, "simplyblock.finalizer")
+			poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, "simplyblock.pool.finalizer")
 			if err := r.Update(ctx, poolCR); err != nil {
 				log.Error(err, "Failed to remove finalizer")
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -99,7 +99,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, nil
 	}
 
-	if !utils.ContainsString(poolCR.Finalizers, "simplyblock.finalizer") {
+	if !utils.ContainsString(poolCR.Finalizers, "simplyblock.pool.finalizer") {
 		poolCR.Finalizers = append(poolCR.Finalizers, "simplyblock.finalizer")
 		if err := r.Update(ctx, poolCR); err != nil {
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
