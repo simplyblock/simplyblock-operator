@@ -53,9 +53,9 @@ var _ = Describe("StorageNode Controller", func() {
 						Namespace: "default",
 					},
 					Spec: simplyblockv1alpha1.StorageNodeSpec{
-						MaxLVol:     utils.ToInt32Ptr(100),             // <-- REQUIRED
-						WorkerNodes: []string{"node1"}, // <-- REQUIRED
-					},				}
+						MaxLVol:     utils.ToInt32Ptr(100), // <-- REQUIRED
+						WorkerNodes: []string{"node1"},     // <-- REQUIRED
+					}}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
 		})
