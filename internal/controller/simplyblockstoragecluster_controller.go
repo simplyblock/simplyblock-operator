@@ -67,6 +67,9 @@ type ClusterTaskAPIResponse struct {
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocktasks,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocktasks/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocktasks/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -253,6 +256,31 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	if !taskCR.DeletionTimestamp.IsZero() {
+		if utils.ContainsString(taskCR.Finalizers, "simplyblock.task.finalizer") {
+			// TODO: add any cleanup logic needed before task deletion
+	
+			// Remove finalizer
+			taskCR.Finalizers = utils.RemoveString(taskCR.Finalizers, "simplyblock.task.finalizer")
+			if err := r.Update(ctx, taskCR); err != nil {
+				log.Error(err, "Failed to remove finalizer from task", "task", taskCR.Name)
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+	
+			log.Info("Task deleted successfully", "task", taskCR.Name)
+		}
+		return ctrl.Result{}, nil
+	}
+	
+	// --- Add finalizer if not present ---
+	if !utils.ContainsString(taskCR.Finalizers, "simplyblock.task.finalizer") {
+		taskCR.Finalizers = append(taskCR.Finalizers, "simplyblock.task.finalizer")
+		if err := r.Update(ctx, taskCR); err != nil {
+			log.Error(err, "Failed to add finalizer to task", "task", taskCR.Name)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+	}
+	
 	clusterUUID, clusterSecret, err := utils.GetClusterAuth(
 		ctx,
 		r.Client,
