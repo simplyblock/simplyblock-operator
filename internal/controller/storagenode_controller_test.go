@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-manager/internal/utils"
 )
 
 var _ = Describe("StorageNode Controller", func() {
@@ -51,8 +52,10 @@ var _ = Describe("StorageNode Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
-				}
+					Spec: simplyblockv1alpha1.StorageNodeSpec{
+						MaxLVol:     utils.ToInt32Ptr(100),             // <-- REQUIRED
+						WorkerNodes: []string{"node1"}, // <-- REQUIRED
+					},				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
 		})

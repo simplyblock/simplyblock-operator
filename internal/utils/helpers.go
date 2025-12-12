@@ -76,7 +76,7 @@ func Int32PtrToString(ptr *int32) string {
 	return strconv.FormatInt(int64(*ptr), 10)
 }
 
-func toInt32Ptr(v int64) *int32 {
+func ToInt32Ptr(v int64) *int32 {
 	if v > math.MaxInt32 || v < math.MinInt32 {
 		return nil
 	}
@@ -155,13 +155,13 @@ func ParseSize(input string, mode string, assumeUnit string, strict bool) *int32
 
 	if n, err := strconv.ParseInt(input, 10, 64); err == nil {
 		if assumeUnit == "" {
-			return toInt32Ptr(n)
+			return ToInt32Ptr(n)
 		}
 		base, exp, err := parseUnit(assumeUnit, mode, strict)
 		if err != nil {
 			return nil
 		}
-		return toInt32Ptr(n * int64Pow(base, exp))
+		return ToInt32Ptr(n * int64Pow(base, exp))
 	}
 
 	re := regexp.MustCompile(`^(?P<size>[0-9]+)\s*(?P<unit>\w+)?$`)
@@ -181,7 +181,7 @@ func ParseSize(input string, mode string, assumeUnit string, strict bool) *int32
 		return nil
 	}
 
-	return toInt32Ptr(sizeVal * int64Pow(base, exp))
+	return ToInt32Ptr(sizeVal * int64Pow(base, exp))
 }
 
 func ternary(cond bool, a, b string) string {
