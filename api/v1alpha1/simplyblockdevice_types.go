@@ -28,7 +28,7 @@ type SimplyBlockDeviceSpec struct {
 	ClusterName           string `json:"clusterName"`
 	NodeUUID              string `json:"nodeUUID,omitempty"`
 	IncludeStats          bool   `json:"includeStats,omitempty"`
-	StatsHistoryInSeconds int    `json:"statsHistoryInSeconds,omitempty"`
+	StatsHistoryInSeconds *int32 `json:"statsHistoryInSeconds,omitempty"`
 }
 
 // SimplyBlockDeviceStatus defines the observed state of SimplyBlockDevice.

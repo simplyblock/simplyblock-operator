@@ -4,4 +4,5 @@ resources:
 - simplyblock_v1alpha1_storagenode.yaml
 - simplyblock_v1alpha1_pool.yaml
 - simplyblock_v1alpha1_simplyblockdevice.yaml
+- simplyblock_v1alpha1_simplyblocktask.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
