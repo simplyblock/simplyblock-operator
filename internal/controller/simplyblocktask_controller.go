@@ -39,17 +39,13 @@ type SimplyBlockTaskReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-type ClusterTaskAPIResponse struct {
-	Tasks []struct {
-		UUID     string `json:"id"`
-		TaskType string `json:"function_name"`
-		Status   string `json:"status"`
-		Result   string `json:"function_result"`
-		Canceled bool   `json:"canceled"`
-		//	ParentTask string `json:"parentTask"`
-		//	StartedAt  string `json:"startedAt"`
-		Retried int `json:"retry"`
-	} `json:"tasks"`
+type ClusterTaskAPIResponse []struct {
+	UUID     string `json:"id"`
+	TaskType string `json:"function_name"`
+	Status   string `json:"status"`
+	Result   string `json:"function_result"`
+	Canceled bool   `json:"canceled"`
+	Retried  int    `json:"retry"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocktasks,verbs=get;list;watch;create;update;patch;delete
@@ -153,7 +149,7 @@ func (r *SimplyBlockTaskReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	taskCR.Status.Tasks = nil
-	for _, tentry := range apiRespTask.Tasks {
+	for _, tentry := range apiRespTask {
 		// startedAt := &metav1.Time{}
 		// if tentry.StartedAt != "" {
 		// 	if parsed, err := time.Parse(time.RFC3339, tentry.StartedAt); err == nil {
