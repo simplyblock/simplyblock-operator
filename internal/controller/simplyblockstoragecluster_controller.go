@@ -51,25 +51,9 @@ type ClusterAPIResponse struct {
 	} `json:"results"`
 }
 
-type ClusterTaskAPIResponse struct {
-	Tasks []struct {
-		UUID     string `json:"id"`
-		TaskType string `json:"function_name"`
-		Status   string `json:"status"`
-		Result   string `json:"function_result"`
-		Canceled bool   `json:"canceled"`
-		//	ParentTask string `json:"parentTask"`
-		//	StartedAt  string `json:"startedAt"`
-		Retried int `json:"retry"`
-	} `json:"tasks"`
-}
-
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters/finalizers,verbs=update
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocktasks,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocktasks/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocktasks/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -251,108 +235,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 
 	// log.Info("Cluster updated successfully", "name", clusterCR.Name)
 
-	taskCR := &simplyblockv1alpha1.SimplyBlockTask{}
-	if err := r.Get(ctx, req.NamespacedName, taskCR); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	if !taskCR.DeletionTimestamp.IsZero() {
-		if utils.ContainsString(taskCR.Finalizers, "simplyblock.task.finalizer") {
-			// TODO: add any cleanup logic needed before task deletion
-	
-			// Remove finalizer
-			taskCR.Finalizers = utils.RemoveString(taskCR.Finalizers, "simplyblock.task.finalizer")
-			if err := r.Update(ctx, taskCR); err != nil {
-				log.Error(err, "Failed to remove finalizer from task", "task", taskCR.Name)
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-	
-			log.Info("Task deleted successfully", "task", taskCR.Name)
-		}
-		return ctrl.Result{}, nil
-	}
-	
-	// --- Add finalizer if not present ---
-	if !utils.ContainsString(taskCR.Finalizers, "simplyblock.task.finalizer") {
-		taskCR.Finalizers = append(taskCR.Finalizers, "simplyblock.task.finalizer")
-		if err := r.Update(ctx, taskCR); err != nil {
-			log.Error(err, "Failed to add finalizer to task", "task", taskCR.Name)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-	}
-	
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(
-		ctx,
-		r.Client,
-		taskCR.Namespace,
-		taskCR.Spec.ClusterName,
-	)
-
-	if err != nil {
-		log.Error(err, "Failed to get cluster auth")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	if taskCR.Spec.TaskID != "" {
-		endpoint = fmt.Sprintf(
-			"/api/v2/clusters/%s/tasks/%s/",
-			clusterUUID,
-			taskCR.Spec.TaskID,
-		)
-	} else {
-		endpoint = fmt.Sprintf(
-			"/api/v2/clusters/%s/tasks/",
-			clusterUUID,
-		)
-	}
-
-	body, status, err = apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
-	if status == http.StatusNotFound {
-		taskCR.Status.Tasks = nil
-		if err := r.Status().Update(ctx, taskCR); err != nil {
-			log.Error(err, "Failed to clear task status", "task", taskCR.Name)
-		}
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
-
-	if err != nil || status >= 300 {
-		log.Error(err, "Failed to fetch task(s)", "task", taskCR.Name, "status", status)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	var apiRespTask ClusterTaskAPIResponse
-
-	if err := json.Unmarshal(body, &apiRespTask); err != nil {
-		log.Error(err, "Failed to parse task API response", "task", taskCR.Name)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	taskCR.Status.Tasks = nil
-	for _, tentry := range apiRespTask.Tasks {
-		// startedAt := &metav1.Time{}
-		// if tentry.StartedAt != "" {
-		// 	if parsed, err := time.Parse(time.RFC3339, tentry.StartedAt); err == nil {
-		// 		startedAt = &metav1.Time{Time: parsed}
-		// 	}
-		// }
-
-		taskCR.Status.Tasks = append(taskCR.Status.Tasks, simplyblockv1alpha1.TaskEntry{
-			UUID:       tentry.UUID,
-			TaskType:   tentry.TaskType,
-			TaskStatus: tentry.Status,
-			TaskResult: tentry.Result,
-			Canceled:   tentry.Canceled,
-			// ParentTask: tentry.ParentTask,
-			// StartedAt:  startedAt,
-			Retried: utils.IntToInt32Ptr(tentry.Retried),
-		})
-	}
-
-	if err := r.Status().Update(ctx, taskCR); err != nil {
-		log.Error(err, "Failed to update task status", "task", taskCR.Name)
-	}
-
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

@@ -48,6 +48,7 @@ resources:
 - api:
     crdVersion: v1
     namespaced: true
+  controller: true
   domain: simplyblock.io
   group: simplyblock
   kind: SimplyBlockTask
