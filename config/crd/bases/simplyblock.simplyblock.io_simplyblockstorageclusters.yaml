@@ -133,14 +133,8 @@ spec:
               created:
                 format: date-time
                 type: string
-              health:
-                type: boolean
               lastUpdated:
                 format: date-time
-                type: string
-              message:
-                type: string
-              mgmtIp:
                 type: string
               mgmtNodes:
                 format: int32
@@ -149,11 +143,16 @@ spec:
                 type: boolean
               secretName:
                 type: string
-              state:
+              status:
                 type: string
               storageNodes:
                 format: int32
                 type: integer
+            required:
+            - UUID
+            - clusterName
+            - rebalancing
+            - status
             type: object
         required:
         - spec

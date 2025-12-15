@@ -44,10 +44,13 @@ type SimplyBlockStorageClusterReconciler struct {
 
 type ClusterAPIResponse struct {
 	Results struct {
-		UUID   string `json:"uuid"`
-		Secret string `json:"secret"`
-		NDCS   int    `json:"distr_ndcs"`
-		NPCS   int    `json:"distr_npcs"`
+		UUID        string `json:"uuid"`
+		Secret      string `json:"secret"`
+		NQN         string `json:"nqn"`
+		NDCS        int    `json:"distr_ndcs"`
+		NPCS        int    `json:"distr_npcs"`
+		Rebalancing bool   `json:"is_re_balancing"`
+		Status      string `json:"status"`
 	} `json:"results"`
 }
 
@@ -190,8 +193,12 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		}
 
 		clusterCR.Status.UUID = apiResp.Results.UUID
+		clusterCR.Status.Rebalancing = &apiResp.Results.Rebalancing
+		clusterCR.Status.Status = apiResp.Results.Status
+		clusterCR.Status.NQN = apiResp.Results.NQN
 		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.Results.NDCS, apiResp.Results.NPCS)
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
+		cluster.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
 		clusterCR.Status.Configured = true
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
