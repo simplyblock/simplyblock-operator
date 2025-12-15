@@ -132,72 +132,9 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if snCR.Spec.Action != "" {
-		log.Info("Action requested on storage node",
-			"action", snCR.Spec.Action,
-			"nodeUUID", snCR.Spec.NodeUUID,
-		)
-
-		if snCR.Status.ActionStatus != nil &&
-			snCR.Status.ActionStatus.Action == snCR.Spec.Action &&
-			snCR.Status.ActionStatus.NodeUUID == snCR.Spec.NodeUUID &&
-			snCR.Status.ActionStatus.State == "success" {
-
-			log.Info("Action already completed successfully, skipping",
-				"action", snCR.Spec.Action,
-				"nodeUUID", snCR.Spec.NodeUUID,
-			)
-			return ctrl.Result{}, nil
+		if err := r.handleNodeAction(ctx, apiClient, snCR, clusterUUID, clusterSecret); err != nil {
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
-
-		snCR.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
-			Action:    snCR.Spec.Action,
-			NodeUUID:  snCR.Spec.NodeUUID,
-			State:     "running",
-			UpdatedAt: metav1.Now(),
-		}
-
-		if err := r.Status().Update(ctx, snCR); err != nil {
-			log.Error(err, "Failed to set action status to running")
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		}
-
-		err := r.performNodeAction(
-			ctx,
-			apiClient,
-			clusterUUID,
-			clusterSecret,
-			snCR.Spec.Action,
-			snCR.Spec.NodeUUID,
-		)
-
-		if err != nil {
-			log.Error(err, "Action failed",
-				"action", snCR.Spec.Action,
-				"nodeUUID", snCR.Spec.NodeUUID,
-			)
-
-			snCR.Status.ActionStatus.State = "failed"
-			snCR.Status.ActionStatus.Message = err.Error()
-			snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
-
-			_ = r.Status().Update(ctx, snCR)
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-		}
-
-		log.Info("Action completed successfully",
-			"action", snCR.Spec.Action,
-			"nodeUUID", snCR.Spec.NodeUUID,
-		)
-
-		snCR.Status.ActionStatus.State = "success"
-		snCR.Status.ActionStatus.Message = "Action executed successfully"
-		snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
-
-		if err := r.Status().Update(ctx, snCR); err != nil {
-			log.Error(err, "Failed to update action status")
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		}
-
 		return ctrl.Result{}, nil
 	}
 
@@ -535,6 +472,58 @@ func waitForNodeOnline(
 	}
 
 	return fmt.Errorf("node %s did not become online in time", nodeName)
+}
+
+func (r *StorageNodeReconciler) handleNodeAction(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	snCR *simplyblockv1alpha1.StorageNode,
+	clusterUUID, clusterSecret string,
+) error {
+	log := logf.FromContext(ctx)
+
+	// Skip if already successful
+	if snCR.Status.ActionStatus != nil &&
+		snCR.Status.ActionStatus.Action == snCR.Spec.Action &&
+		snCR.Status.ActionStatus.NodeUUID == snCR.Spec.NodeUUID &&
+		snCR.Status.ActionStatus.State == "success" {
+		log.Info("Action already completed successfully, skipping",
+			"action", snCR.Spec.Action,
+			"nodeUUID", snCR.Spec.NodeUUID,
+		)
+		return nil
+	}
+
+	snCR.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
+		Action:    snCR.Spec.Action,
+		NodeUUID:  snCR.Spec.NodeUUID,
+		State:     "running",
+		UpdatedAt: metav1.Now(),
+	}
+	if err := r.Status().Update(ctx, snCR); err != nil {
+		log.Error(err, "Failed to set action status to running")
+		return err
+	}
+
+	if err := r.performNodeAction(ctx, apiClient, clusterUUID, clusterSecret, snCR.Spec.Action, snCR.Spec.NodeUUID); err != nil {
+		log.Error(err, "Action failed", "action", snCR.Spec.Action, "nodeUUID", snCR.Spec.NodeUUID)
+		snCR.Status.ActionStatus.State = "failed"
+		snCR.Status.ActionStatus.Message = err.Error()
+		snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
+		_ = r.Status().Update(ctx, snCR)
+		return err
+	}
+
+	snCR.Status.ActionStatus.State = "success"
+	snCR.Status.ActionStatus.Message = "Action executed successfully"
+	snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
+	if err := r.Status().Update(ctx, snCR); err != nil {
+		log.Error(err, "Failed to update action status")
+		return err
+	}
+
+	log.Info("Action completed successfully", "action", snCR.Spec.Action, "nodeUUID", snCR.Spec.NodeUUID)
+	return nil
 }
 
 func (r *StorageNodeReconciler) performNodeAction(
