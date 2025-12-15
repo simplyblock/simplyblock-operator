@@ -126,20 +126,30 @@ spec:
                     cpu:
                       format: int32
                       type: integer
+                    devices:
+                      type: string
                     health:
                       type: string
                     hostname:
                       type: string
+                    lvol_port:
+                      format: int32
+                      type: integer
                     memory:
                       format: int32
                       type: integer
                     mgmtIp:
                       type: string
+                    nvmf_port:
+                      format: int32
+                      type: integer
+                    rpc_port:
+                      format: int32
+                      type: integer
                     status:
                       type: string
                     uptime:
-                      description: "\tDevices  *DeviceInfo   `json:\"devices,omitempty\"`\n\tCapacity
-                        *CapacityInfo `json:\"capacity,omitempty\"`"
+                      description: "\tCapacity *CapacityInfo `json:\"capacity,omitempty\"`"
                       type: string
                     uuid:
                       type: string

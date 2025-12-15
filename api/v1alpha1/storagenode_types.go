@@ -71,7 +71,7 @@ type NodeStatus struct {
 	RPC_PORT  *int32 `json:"rpc_port,omitempty"`
 	LVOL_PORT *int32 `json:"lvol_port,omitempty"`
 	NVMF_PORT *int32 `json:"nvmf_port,omitempty"`
-	//	Devices  *DeviceInfo   `json:"devices,omitempty"`
+	Devices   string `json:"devices,omitempty"`
 	//	Capacity *CapacityInfo `json:"capacity,omitempty"`
 	Uptime   string `json:"uptime,omitempty"`
 	Hostname string `json:"hostname,omitempty"`

@@ -52,8 +52,9 @@ type SNODEAPIResponse struct {
 	IP        string `json:"mgmt_ip"`
 	Health    bool   `json:"health_check"`
 	Hostname  string `json:"hostname"`
+	Devices   string `json:"online_devices"`
 	CPU       int    `json:"cpu"`
-	Memory    int    `json:"memory"`
+	Memory    int    `json:"spdk_mem"`
 	Volumes   int    `json:"lvols"`
 	RPC_PORT  int    `json:"rpc_port"`
 	LVOL_PORT int    `json:"lvol_subsys_port"`
@@ -398,6 +399,7 @@ func waitForNodeOnline(
 							Health:    strconv.FormatBool(res.Health),
 							Status:    res.Status,
 							MgmtIp:    res.IP,
+							Devices:   res.Devices,
 							CPU:       utils.IntToInt32Ptr(res.CPU),
 							Memory:    utils.IntToInt32Ptr(res.Memory),
 							Volumes:   utils.IntToInt32Ptr(res.Volumes),
