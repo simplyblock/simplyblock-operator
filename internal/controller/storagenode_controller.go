@@ -47,13 +47,17 @@ type StorageNodeReconciler struct {
 }
 
 type SNODEAPIResponse struct {
-	UUID     string `json:"uuid"`
-	Status   string `json:"status"`
-	IP       string `json:"mgmt_ip"`
-	Health   bool   `json:"health_check"`
-	Hostname string `json:"hostname"`
-	CPU      int    `json:"cpu"`
-	Memory   int    `json:"memory"`
+	UUID      string `json:"uuid"`
+	Status    string `json:"status"`
+	IP        string `json:"mgmt_ip"`
+	Health    bool   `json:"health_check"`
+	Hostname  string `json:"hostname"`
+	CPU       int    `json:"cpu"`
+	Memory    int    `json:"memory"`
+	Volumes   int    `json:"lvols"`
+	RPC_PORT  int    `json:"rpc_port"`
+	LVOL_PORT int    `json:"lvol_subsys_port"`
+	NVMF_PORT int    `json:"nvmf_port"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
@@ -389,13 +393,17 @@ func waitForNodeOnline(
 					if snCR.Status.Nodes[i].Hostname == nodeName {
 
 						updated := simplyblockv1alpha1.NodeStatus{
-							Hostname: res.Hostname,
-							UUID:     res.UUID,
-							Health:   strconv.FormatBool(res.Health),
-							Status:   res.Status,
-							MgmtIp:   res.IP,
-							CPU:      utils.IntToInt32Ptr(res.CPU),
-							Memory:   utils.IntToInt32Ptr(res.Memory),
+							Hostname:  res.Hostname,
+							UUID:      res.UUID,
+							Health:    strconv.FormatBool(res.Health),
+							Status:    res.Status,
+							MgmtIp:    res.IP,
+							CPU:       utils.IntToInt32Ptr(res.CPU),
+							Memory:    utils.IntToInt32Ptr(res.Memory),
+							Volumes:   utils.IntToInt32Ptr(res.Volumes),
+							RPC_PORT:  utils.IntToInt32Ptr(res.RPC_PORT),
+							LVOL_PORT: utils.IntToInt32Ptr(res.LVOL_PORT),
+							NVMF_PORT: utils.IntToInt32Ptr(res.NVMF_PORT),
 						}
 
 						if reflect.DeepEqual(snCR.Status.Nodes[i], updated) {

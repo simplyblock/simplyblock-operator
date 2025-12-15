@@ -62,12 +62,15 @@ type StorageNodeStatus struct {
 }
 
 type NodeStatus struct {
-	UUID    string `json:"uuid,omitempty"`
-	Health  string `json:"health,omitempty"`
-	Status  string `json:"status,omitempty"`
-	CPU     *int32 `json:"cpu,omitempty"`
-	Memory  *int32 `json:"memory,omitempty"`
-	Volumes *int32 `json:"volumes,omitempty"`
+	UUID      string `json:"uuid,omitempty"`
+	Health    string `json:"health,omitempty"`
+	Status    string `json:"status,omitempty"`
+	CPU       *int32 `json:"cpu,omitempty"`
+	Memory    *int32 `json:"memory,omitempty"`
+	Volumes   *int32 `json:"volumes,omitempty"`
+	RPC_PORT  *int32 `json:"rpc_port,omitempty"`
+	LVOL_PORT *int32 `json:"lvol_port,omitempty"`
+	NVMF_PORT *int32 `json:"nvmf_port,omitempty"`
 	//	Devices  *DeviceInfo   `json:"devices,omitempty"`
 	//	Capacity *CapacityInfo `json:"capacity,omitempty"`
 	Uptime   string `json:"uptime,omitempty"`
