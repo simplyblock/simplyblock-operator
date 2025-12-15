@@ -25,10 +25,15 @@ import (
 
 // StorageNodeSpec defines the desired state of StorageNode
 type StorageNodeSpec struct {
-	ClusterName              string   `json:"clusterName"`
-	ClusterImage             string   `json:"clusterImage"`
+	ClusterName  string `json:"clusterName"`
+	ClusterImage string `json:"clusterImage,omitempty"`
+	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume
+	Action string `json:"action,omitempty"`
+	// NodeUUID is required when action is specified
+	NodeUUID string `json:"nodeUUID,omitempty"`
+
 	UseSeparateJournalDevice *bool    `json:"useSeparateJournalDevice,omitempty"`
-	MaxLVol                  *int32   `json:"maxLVol"`
+	MaxLVol                  *int32   `json:"maxLVol,omitempty"`
 	MaxSize                  string   `json:"maxSize,omitempty"`
 	SpdkImage                string   `json:"spdkImage,omitempty"`
 	MgmtIfc                  string   `json:"mgmtIfc,omitempty"`
@@ -47,7 +52,7 @@ type StorageNodeSpec struct {
 	NodesPerSocket           *int32   `json:"nodesPerSocket,omitempty"`
 	DataNIC                  []string `json:"dataNIC,omitempty"`
 	HaJmCount                *int32   `json:"haJmCount,omitempty"`
-	WorkerNodes              []string `json:"workerNodes"`
+	WorkerNodes              []string `json:"workerNodes,omitempty"`
 	OpenShiftCluster         *bool    `json:"openShiftCluster,omitempty"`
 
 	// restart params
@@ -58,7 +63,8 @@ type StorageNodeSpec struct {
 
 // StorageNodeStatus defines the observed state of StorageNode.
 type StorageNodeStatus struct {
-	Nodes []NodeStatus `json:"nodes,omitempty"`
+	Nodes        []NodeStatus  `json:"nodes,omitempty"`
+	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 }
 
 type NodeStatus struct {
@@ -78,9 +84,18 @@ type NodeStatus struct {
 	MgmtIp   string `json:"mgmtIp,omitempty"`
 }
 
+type ActionStatus struct {
+	Action    string      `json:"action,omitempty"`
+	NodeUUID  string      `json:"nodeUUID,omitempty"`
+	State     string      `json:"state,omitempty"` // pending | running | success | failed
+	Message   string      `json:"message,omitempty"`
+	UpdatedAt metav1.Time `json:"updatedAt,omitempty"`
+}
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-
+// +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && (!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\"))",message="nodeUUID is required when action is specified"
+// +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.clusterImage) && self.spec.clusterImage != \"\" && has(self.spec.maxLVol) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)",message="clusterImage, maxLVol, and workerNodes are required when action is not specified"
 // StorageNode is the Schema for the storagenodes API
 type StorageNode struct {
 	metav1.TypeMeta `json:",inline"`

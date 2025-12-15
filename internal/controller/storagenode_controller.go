@@ -29,6 +29,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -59,6 +60,12 @@ type SNODEAPIResponse struct {
 	RPC_PORT  int    `json:"rpc_port"`
 	LVOL_PORT int    `json:"lvol_subsys_port"`
 	NVMF_PORT int    `json:"nvmf_port"`
+}
+
+type NodeStatusResponse struct {
+	UUID   string `json:"id"`
+	Status string `json:"status"`
+	IP     string `json:"ip"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
@@ -122,6 +129,76 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if err := r.Update(ctx, snCR); err != nil {
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
+	}
+
+	if snCR.Spec.Action != "" {
+		log.Info("Action requested on storage node",
+			"action", snCR.Spec.Action,
+			"nodeUUID", snCR.Spec.NodeUUID,
+		)
+
+		if snCR.Status.ActionStatus != nil &&
+			snCR.Status.ActionStatus.Action == snCR.Spec.Action &&
+			snCR.Status.ActionStatus.NodeUUID == snCR.Spec.NodeUUID &&
+			snCR.Status.ActionStatus.State == "success" {
+
+			log.Info("Action already completed successfully, skipping",
+				"action", snCR.Spec.Action,
+				"nodeUUID", snCR.Spec.NodeUUID,
+			)
+			return ctrl.Result{}, nil
+		}
+
+		snCR.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
+			Action:    snCR.Spec.Action,
+			NodeUUID:  snCR.Spec.NodeUUID,
+			State:     "running",
+			UpdatedAt: metav1.Now(),
+		}
+
+		if err := r.Status().Update(ctx, snCR); err != nil {
+			log.Error(err, "Failed to set action status to running")
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+
+		err := r.performNodeAction(
+			ctx,
+			apiClient,
+			clusterUUID,
+			clusterSecret,
+			snCR.Spec.Action,
+			snCR.Spec.NodeUUID,
+		)
+
+		if err != nil {
+			log.Error(err, "Action failed",
+				"action", snCR.Spec.Action,
+				"nodeUUID", snCR.Spec.NodeUUID,
+			)
+
+			snCR.Status.ActionStatus.State = "failed"
+			snCR.Status.ActionStatus.Message = err.Error()
+			snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
+
+			_ = r.Status().Update(ctx, snCR)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+
+		log.Info("Action completed successfully",
+			"action", snCR.Spec.Action,
+			"nodeUUID", snCR.Spec.NodeUUID,
+		)
+
+		snCR.Status.ActionStatus.State = "success"
+		snCR.Status.ActionStatus.Message = "Action executed successfully"
+		snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
+
+		if err := r.Status().Update(ctx, snCR); err != nil {
+			log.Error(err, "Failed to update action status")
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+
+		return ctrl.Result{}, nil
 	}
 
 	if err := r.labelWorkerNodes(ctx, snCR); err != nil {
@@ -458,4 +535,89 @@ func waitForNodeOnline(
 	}
 
 	return fmt.Errorf("node %s did not become online in time", nodeName)
+}
+
+func (r *StorageNodeReconciler) performNodeAction(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID string,
+	clusterSecret string,
+	action string,
+	nodeUUID string,
+) error {
+
+	log := logf.FromContext(ctx)
+
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-nodes/%s/%s",
+		clusterUUID,
+		nodeUUID,
+		action,
+	)
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return err
+	}
+
+	if status >= 300 {
+		return fmt.Errorf("action API failed: status=%d body=%s", status, string(body))
+	}
+
+	log.Info("Node action triggered", "nodeUUID", nodeUUID, "action", action, "response", string(body))
+
+	if err := r.waitForActionCompletion(ctx, apiClient, clusterUUID, clusterSecret, nodeUUID, action); err != nil {
+		return fmt.Errorf("node did not reach expected state after action %s: %w", action, err)
+	}
+
+	log.Info("Node reached expected state", "nodeUUID", nodeUUID, "action", action)
+	return nil
+}
+
+func (r *StorageNodeReconciler) waitForActionCompletion(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID string,
+	clusterSecret string,
+	nodeUUID string,
+	action string,
+) error {
+	log := logf.FromContext(ctx)
+
+	expectedStatus := map[string]string{
+		"suspend":  "suspended",
+		"resume":   "online",
+		"shutdown": "offline",
+		"restart":  "online",
+	}
+
+	targetStatus, ok := expectedStatus[action]
+	if !ok {
+		return fmt.Errorf("unknown action: %s", action)
+	}
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
+	retries := 50
+	waitInterval := 5 * time.Second
+
+	for i := 0; i < retries; i++ {
+		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+		if err != nil || status >= 300 {
+			log.Error(err, "Failed to get node status", "nodeUUID", nodeUUID, "status", status)
+		} else {
+			var resp NodeStatusResponse
+			if err := json.Unmarshal(body, &resp); err == nil {
+				if resp.Status == targetStatus {
+					log.Info("Node reached expected status", "nodeUUID", nodeUUID, "status", resp.Status)
+					return nil
+				}
+			} else {
+				log.Error(err, "Failed to parse node status response", "body", string(body))
+			}
+		}
+
+		time.Sleep(waitInterval)
+	}
+
+	return fmt.Errorf("node %s did not reach expected status %s in time", nodeUUID, targetStatus)
 }

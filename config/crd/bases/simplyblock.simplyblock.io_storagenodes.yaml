@@ -39,6 +39,13 @@ spec:
           spec:
             description: spec defines the desired state of StorageNode
             properties:
+              action:
+                enum:
+                - shutdown
+                - restart
+                - suspend
+                - resume
+                type: string
               addPcieToAllowList:
                 description: restart params
                 items:
@@ -80,6 +87,9 @@ spec:
                 type: string
               nodeAddr:
                 type: string
+              nodeUUID:
+                description: NodeUUID is required when action is specified
+                type: string
               nodesPerSocket:
                 format: int32
                 type: integer
@@ -112,14 +122,25 @@ spec:
                   type: string
                 type: array
             required:
-            - clusterImage
             - clusterName
-            - maxLVol
-            - workerNodes
             type: object
           status:
             description: status defines the observed state of StorageNode
             properties:
+              actionStatus:
+                properties:
+                  action:
+                    type: string
+                  message:
+                    type: string
+                  nodeUUID:
+                    type: string
+                  state:
+                    type: string
+                  updatedAt:
+                    format: date-time
+                    type: string
+                type: object
               nodes:
                 items:
                   properties:
@@ -162,6 +183,15 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: nodeUUID is required when action is specified
+          rule: '!(has(self.spec.action) && self.spec.action != "" && (!has(self.spec.nodeUUID)
+            || self.spec.nodeUUID == ""))'
+        - message: clusterImage, maxLVol, and workerNodes are required when action
+            is not specified
+          rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.clusterImage)
+            && self.spec.clusterImage != "" && has(self.spec.maxLVol) && has(self.spec.workerNodes)
+            && size(self.spec.workerNodes) > 0)
     served: true
     storage: true
     subresources:
