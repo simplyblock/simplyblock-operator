@@ -29,16 +29,13 @@ type StorageNodeSpec struct {
 	ClusterImage             string   `json:"clusterImage"`
 	UseSeparateJournalDevice *bool    `json:"useSeparateJournalDevice,omitempty"`
 	MaxLVol                  *int32   `json:"maxLVol"`
-	MaxSnapshots             *int32   `json:"maxSnapshots,omitempty"`
 	MaxSize                  string   `json:"maxSize,omitempty"`
 	SpdkImage                string   `json:"spdkImage,omitempty"`
 	MgmtIfc                  string   `json:"mgmtIfc,omitempty"`
 	Partitions               *int32   `json:"partitions,omitempty"`
 	JMPercent                *int32   `json:"jmPercent,omitempty"`
 	HAJM                     *bool    `json:"haJM,omitempty"`
-	FullPageUnmap            *bool    `json:"fullPageUnmap,omitempty"`
 	SPDKDebug                *bool    `json:"spdkDebug,omitempty"`
-	TestDevice               *bool    `json:"testDevice,omitempty"`
 	CoreIsolation            *bool    `json:"coreIsolation,omitempty"`
 	CorePercentage           *int32   `json:"corePercentage,omitempty"`
 	CoreMask                 string   `json:"coreMask,omitempty"`
@@ -54,11 +51,9 @@ type StorageNodeSpec struct {
 	OpenShiftCluster         *bool    `json:"openShiftCluster,omitempty"`
 
 	// restart params
-	AddPcieToAllowList    []string `json:"addPcieToAllowList,omitempty"`
-	NodeAddr              string   `json:"nodeAddr,omitempty"`
-	Force                 *bool    `json:"force,omitempty"`
-	IncludeStats          *bool    `json:"includeStats,omitempty"`
-	StatsHistoryInSeconds *int32   `json:"statsHistoryInSeconds,omitempty"`
+	AddPcieToAllowList []string `json:"addPcieToAllowList,omitempty"`
+	NodeAddr           string   `json:"nodeAddr,omitempty"`
+	Force              *bool    `json:"force,omitempty"`
 }
 
 // StorageNodeStatus defines the observed state of StorageNode.
@@ -67,9 +62,12 @@ type StorageNodeStatus struct {
 }
 
 type NodeStatus struct {
-	UUID   string `json:"uuid,omitempty"`
-	Health string `json:"health,omitempty"`
-	State  string `json:"state,omitempty"`
+	UUID    string `json:"uuid,omitempty"`
+	Health  string `json:"health,omitempty"`
+	Status  string `json:"status,omitempty"`
+	CPU     *int32 `json:"cpu,omitempty"`
+	Memory  *int32 `json:"memory,omitempty"`
+	Volumes *int32 `json:"volumes,omitempty"`
 	//	Devices  *DeviceInfo   `json:"devices,omitempty"`
 	//	Capacity *CapacityInfo `json:"capacity,omitempty"`
 	Uptime   string `json:"uptime,omitempty"`

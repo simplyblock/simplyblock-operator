@@ -47,10 +47,13 @@ type StorageNodeReconciler struct {
 }
 
 type SNODEAPIResponse struct {
-	UUID   string `json:"uuid"`
-	Status string `json:"status"`
-	IP     string `json:"mgmt_ip"`
-	Health bool   `json:"health_check"`
+	UUID     string `json:"uuid"`
+	Status   string `json:"status"`
+	IP       string `json:"mgmt_ip"`
+	Health   bool   `json:"health_check"`
+	Hostname string `json:"hostname"`
+	CPU      int    `json:"cpu"`
+	Memory   int    `json:"memory"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
@@ -193,12 +196,8 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		params := utils.StorageNodeAddParams{
 			NodeAddress:         nodeAddress,
 			InterfaceName:       snCR.Spec.MgmtIfc,
-			MaxSnapshots:        utils.IntPtrOrDefault(snCR.Spec.MaxSnapshots, 500),
-			HAJM:                utils.BoolPtrOrFalse(snCR.Spec.HAJM),
-			TestDevice:          utils.BoolPtrOrFalse(snCR.Spec.TestDevice),
 			SPDKImage:           snCR.Spec.SpdkImage,
 			SPDKDebug:           utils.BoolPtrOrFalse(snCR.Spec.SPDKDebug),
-			FullPageUnmap:       utils.BoolPtrOrFalse(snCR.Spec.FullPageUnmap),
 			DataNics:            snCR.Spec.DataNIC,
 			Namespace:           snCR.Namespace,
 			JMPercent:           utils.IntPtrOrDefault(snCR.Spec.JMPercent, 3),
@@ -313,7 +312,7 @@ func ensureNodeStatus(
 	snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
 		Hostname: nodeName,
 		MgmtIp:   ip,
-		State:    "in_creation",
+		Status:   "in_creation",
 	})
 
 	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
@@ -390,11 +389,13 @@ func waitForNodeOnline(
 					if snCR.Status.Nodes[i].Hostname == nodeName {
 
 						updated := simplyblockv1alpha1.NodeStatus{
-							Hostname: nodeName,
+							Hostname: res.Hostname,
 							UUID:     res.UUID,
 							Health:   strconv.FormatBool(res.Health),
-							State:    res.Status,
+							Status:   res.Status,
 							MgmtIp:   res.IP,
+							CPU:      utils.IntToInt32Ptr(res.CPU),
+							Memory:   utils.IntToInt32Ptr(res.Memory),
 						}
 
 						if reflect.DeepEqual(snCR.Status.Nodes[i], updated) {
@@ -428,7 +429,7 @@ func waitForNodeOnline(
 	timeoutNode := simplyblockv1alpha1.NodeStatus{
 		Hostname: nodeName,
 		MgmtIp:   ip,
-		State:    "timeout",
+		Status:   "timeout",
 	}
 	found := false
 	for i := range snCR.Status.Nodes {

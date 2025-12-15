@@ -63,15 +63,11 @@ spec:
                 type: string
               force:
                 type: boolean
-              fullPageUnmap:
-                type: boolean
               haJM:
                 type: boolean
               haJmCount:
                 format: int32
                 type: integer
-              includeStats:
-                type: boolean
               jmPercent:
                 format: int32
                 type: integer
@@ -80,9 +76,6 @@ spec:
                 type: integer
               maxSize:
                 type: string
-              maxSnapshots:
-                format: int32
-                type: integer
               mgmtIfc:
                 type: string
               nodeAddr:
@@ -112,11 +105,6 @@ spec:
                 type: boolean
               spdkImage:
                 type: string
-              statsHistoryInSeconds:
-                format: int32
-                type: integer
-              testDevice:
-                type: boolean
               useSeparateJournalDevice:
                 type: boolean
               workerNodes:
@@ -135,13 +123,19 @@ spec:
               nodes:
                 items:
                   properties:
+                    cpu:
+                      format: int32
+                      type: integer
                     health:
                       type: string
                     hostname:
                       type: string
+                    memory:
+                      format: int32
+                      type: integer
                     mgmtIp:
                       type: string
-                    state:
+                    status:
                       type: string
                     uptime:
                       description: "\tDevices  *DeviceInfo   `json:\"devices,omitempty\"`\n\tCapacity
@@ -149,6 +143,9 @@ spec:
                       type: string
                     uuid:
                       type: string
+                    volumes:
+                      format: int32
+                      type: integer
                   type: object
                 type: array
             type: object
