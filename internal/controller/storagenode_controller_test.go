@@ -53,7 +53,7 @@ var _ = Describe("StorageNode Controller", func() {
 						Namespace: "default",
 					},
 					Spec: simplyblockv1alpha1.StorageNodeSpec{
-						ClusterImage: "",
+						ClusterImage: "public.ecr.aws/simply-block/simplyblock:main",
 						MaxLVol:      utils.ToInt32Ptr(100),
 						WorkerNodes:  []string{"node1"},
 					}}
