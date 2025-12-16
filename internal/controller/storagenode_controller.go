@@ -408,7 +408,7 @@ func waitForNodeOnline(
 					if snCR.Status.Nodes[i].Hostname == nodeName {
 
 						updated := simplyblockv1alpha1.NodeStatus{
-							Hostname:  res.Hostname,
+							Hostname:  nodeName,
 							UUID:      res.UUID,
 							Health:    strconv.FormatBool(res.Health),
 							Status:    res.Status,
