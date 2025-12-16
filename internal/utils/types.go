@@ -60,12 +60,8 @@ type PoolUpdateParams struct {
 type StorageNodeAddParams struct {
 	NodeAddress         string   `json:"node_address"`
 	InterfaceName       string   `json:"interface_name"`
-	MaxSnapshots        int      `json:"max_snapshots"`
-	HAJM                bool     `json:"ha_jm"`
-	TestDevice          bool     `json:"test_device"`
 	SPDKImage           string   `json:"spdk_image,omitempty"`
 	SPDKDebug           bool     `json:"spdk_debug"`
-	FullPageUnmap       bool     `json:"full_page_unmap,omitempty"`
 	DataNics            []string `json:"data_nics,omitempty"`
 	Namespace           string   `json:"namespace"`
 	JMPercent           int      `json:"jm_percent"`

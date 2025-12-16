@@ -44,34 +44,27 @@ type SimplyBlockStorageClusterSpec struct {
 	Fabric                 string `json:"fabric,omitempty"`
 
 	// Updatable
-	QoSClasses             string `json:"qosClasses,omitempty"`
-	CapWarn                *int32 `json:"capWarn,omitempty"`
-	CapCrit                *int32 `json:"capCrit,omitempty"`
-	ProvCapWarn            *int32 `json:"provCapWarn,omitempty"`
-	ProvCapCrit            *int32 `json:"provCapCrit,omitempty"`
-	LogDelInterval         string `json:"logDelInterval,omitempty"`
-	MetricsRetentionPeriod string `json:"metricsRetentionPeriod,omitempty"`
-	ClientQpairCount       *int32 `json:"clientQpairCount,omitempty"`
-	IncludeStats           *bool  `json:"includeStats,omitempty"`
-	StatsHistoryInSeconds  *int32 `json:"statsHistoryInSeconds,omitempty"`
-	IncludeEventLog        *bool  `json:"includeEventLog,omitempty"`
-	EventLogEntries        *int32 `json:"eventLogEntries,omitempty"`
+	QoSClasses       string `json:"qosClasses,omitempty"`
+	CapWarn          *int32 `json:"capWarn,omitempty"`
+	CapCrit          *int32 `json:"capCrit,omitempty"`
+	ProvCapWarn      *int32 `json:"provCapWarn,omitempty"`
+	ProvCapCrit      *int32 `json:"provCapCrit,omitempty"`
+	ClientQpairCount *int32 `json:"clientQpairCount,omitempty"`
+	IncludeEventLog  *bool  `json:"includeEventLog,omitempty"`
+	EventLogEntries  *int32 `json:"eventLogEntries,omitempty"`
 }
 
 // SimplyBlockStorageClusterStatus defines the observed state of SimplyBlockStorageCluster.
 type SimplyBlockStorageClusterStatus struct {
-	UUID         string       `json:"UUID,omitempty"`
-	ClusterName  string       `json:"clusterName,omitempty"`
-	Health       *bool        `json:"health,omitempty"`
+	UUID         string       `json:"UUID"`
+	ClusterName  string       `json:"clusterName"`
 	MgmtNodes    *int32       `json:"mgmtNodes,omitempty"`
 	StorageNodes *int32       `json:"storageNodes,omitempty"`
 	NQN          string       `json:"NQN,omitempty"`
-	MgmtIp       string       `json:"mgmtIp,omitempty"`
-	State        string       `json:"state,omitempty"`
-	Rebalancing  *bool        `json:"rebalancing,omitempty"`
+	Status       string       `json:"status"`
+	Rebalancing  *bool        `json:"rebalancing"`
 	MOD          string       `json:"MOD,omitempty"`
 	SecretName   string       `json:"secretName,omitempty"`
-	Message      string       `json:"message,omitempty"`
 	LastUpdated  *metav1.Time `json:"lastUpdated,omitempty"`
 	Created      *metav1.Time `json:"created,omitempty"`
 	Configured   bool         `json:"configured,omitempty"`

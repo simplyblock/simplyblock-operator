@@ -25,20 +25,22 @@ import (
 
 // StorageNodeSpec defines the desired state of StorageNode
 type StorageNodeSpec struct {
-	ClusterName              string   `json:"clusterName"`
-	ClusterImage             string   `json:"clusterImage"`
+	ClusterName  string `json:"clusterName"`
+	ClusterImage string `json:"clusterImage,omitempty"`
+	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume
+	Action string `json:"action,omitempty"`
+	// NodeUUID is required when action is specified
+	NodeUUID string `json:"nodeUUID,omitempty"`
+
 	UseSeparateJournalDevice *bool    `json:"useSeparateJournalDevice,omitempty"`
-	MaxLVol                  *int32   `json:"maxLVol"`
-	MaxSnapshots             *int32   `json:"maxSnapshots,omitempty"`
+	MaxLVol                  *int32   `json:"maxLVol,omitempty"`
 	MaxSize                  string   `json:"maxSize,omitempty"`
 	SpdkImage                string   `json:"spdkImage,omitempty"`
 	MgmtIfc                  string   `json:"mgmtIfc,omitempty"`
 	Partitions               *int32   `json:"partitions,omitempty"`
 	JMPercent                *int32   `json:"jmPercent,omitempty"`
 	HAJM                     *bool    `json:"haJM,omitempty"`
-	FullPageUnmap            *bool    `json:"fullPageUnmap,omitempty"`
 	SPDKDebug                *bool    `json:"spdkDebug,omitempty"`
-	TestDevice               *bool    `json:"testDevice,omitempty"`
 	CoreIsolation            *bool    `json:"coreIsolation,omitempty"`
 	CorePercentage           *int32   `json:"corePercentage,omitempty"`
 	CoreMask                 string   `json:"coreMask,omitempty"`
@@ -50,36 +52,50 @@ type StorageNodeSpec struct {
 	NodesPerSocket           *int32   `json:"nodesPerSocket,omitempty"`
 	DataNIC                  []string `json:"dataNIC,omitempty"`
 	HaJmCount                *int32   `json:"haJmCount,omitempty"`
-	WorkerNodes              []string `json:"workerNodes"`
+	WorkerNodes              []string `json:"workerNodes,omitempty"`
 	OpenShiftCluster         *bool    `json:"openShiftCluster,omitempty"`
 
 	// restart params
-	AddPcieToAllowList    []string `json:"addPcieToAllowList,omitempty"`
-	NodeAddr              string   `json:"nodeAddr,omitempty"`
-	Force                 *bool    `json:"force,omitempty"`
-	IncludeStats          *bool    `json:"includeStats,omitempty"`
-	StatsHistoryInSeconds *int32   `json:"statsHistoryInSeconds,omitempty"`
+	AddPcieToAllowList []string `json:"addPcieToAllowList,omitempty"`
+	NodeAddr           string   `json:"nodeAddr,omitempty"`
+	Force              *bool    `json:"force,omitempty"`
 }
 
 // StorageNodeStatus defines the observed state of StorageNode.
 type StorageNodeStatus struct {
-	Nodes []NodeStatus `json:"nodes,omitempty"`
+	Nodes        []NodeStatus  `json:"nodes,omitempty"`
+	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 }
 
 type NodeStatus struct {
-	UUID   string `json:"uuid,omitempty"`
-	Health string `json:"health,omitempty"`
-	State  string `json:"state,omitempty"`
-	//	Devices  *DeviceInfo   `json:"devices,omitempty"`
+	UUID      string `json:"uuid,omitempty"`
+	Health    string `json:"health,omitempty"`
+	Status    string `json:"status,omitempty"`
+	CPU       *int32 `json:"cpu,omitempty"`
+	Memory    *int32 `json:"memory,omitempty"`
+	Volumes   *int32 `json:"volumes,omitempty"`
+	RPC_PORT  *int32 `json:"rpc_port,omitempty"`
+	LVOL_PORT *int32 `json:"lvol_port,omitempty"`
+	NVMF_PORT *int32 `json:"nvmf_port,omitempty"`
+	Devices   string `json:"devices,omitempty"`
 	//	Capacity *CapacityInfo `json:"capacity,omitempty"`
 	Uptime   string `json:"uptime,omitempty"`
 	Hostname string `json:"hostname,omitempty"`
 	MgmtIp   string `json:"mgmtIp,omitempty"`
 }
 
+type ActionStatus struct {
+	Action    string      `json:"action,omitempty"`
+	NodeUUID  string      `json:"nodeUUID,omitempty"`
+	State     string      `json:"state,omitempty"` // pending | running | success | failed
+	Message   string      `json:"message,omitempty"`
+	UpdatedAt metav1.Time `json:"updatedAt,omitempty"`
+}
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-
+// +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && (!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\"))",message="nodeUUID is required when action is specified"
+// +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.clusterImage) && self.spec.clusterImage != \"\" && has(self.spec.maxLVol) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)",message="clusterImage, maxLVol, and workerNodes are required when action is not specified"
 // StorageNode is the Schema for the storagenodes API
 type StorageNode struct {
 	metav1.TypeMeta `json:",inline"`
