@@ -44,18 +44,14 @@ type SimplyBlockStorageClusterSpec struct {
 	Fabric                 string `json:"fabric,omitempty"`
 
 	// Updatable
-	QoSClasses             string `json:"qosClasses,omitempty"`
-	CapWarn                *int32 `json:"capWarn,omitempty"`
-	CapCrit                *int32 `json:"capCrit,omitempty"`
-	ProvCapWarn            *int32 `json:"provCapWarn,omitempty"`
-	ProvCapCrit            *int32 `json:"provCapCrit,omitempty"`
-	LogDelInterval         string `json:"logDelInterval,omitempty"`
-	MetricsRetentionPeriod string `json:"metricsRetentionPeriod,omitempty"`
-	ClientQpairCount       *int32 `json:"clientQpairCount,omitempty"`
-	IncludeStats           *bool  `json:"includeStats,omitempty"`
-	StatsHistoryInSeconds  *int32 `json:"statsHistoryInSeconds,omitempty"`
-	IncludeEventLog        *bool  `json:"includeEventLog,omitempty"`
-	EventLogEntries        *int32 `json:"eventLogEntries,omitempty"`
+	QoSClasses       string `json:"qosClasses,omitempty"`
+	CapWarn          *int32 `json:"capWarn,omitempty"`
+	CapCrit          *int32 `json:"capCrit,omitempty"`
+	ProvCapWarn      *int32 `json:"provCapWarn,omitempty"`
+	ProvCapCrit      *int32 `json:"provCapCrit,omitempty"`
+	ClientQpairCount *int32 `json:"clientQpairCount,omitempty"`
+	IncludeEventLog  *bool  `json:"includeEventLog,omitempty"`
+	EventLogEntries  *int32 `json:"eventLogEntries,omitempty"`
 }
 
 // SimplyBlockStorageClusterStatus defines the observed state of SimplyBlockStorageCluster.
