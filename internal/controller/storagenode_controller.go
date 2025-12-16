@@ -537,23 +537,27 @@ func (r *StorageNodeReconciler) performNodeAction(
 
 	log := logf.FromContext(ctx)
 
-	endpoint := fmt.Sprintf(
-		"/api/v2/clusters/%s/storage-nodes/%s/%s",
-		clusterUUID,
-		nodeUUID,
-		action,
-	)
+	var endpoint string
+	var body interface{}
 
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+	if action == "restart" {
+		endpoint = fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/%s", clusterUUID, nodeUUID, action)
+		body = map[string]bool{"force": true}
+	} else {
+		endpoint = fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/%s?force=%t", clusterUUID, nodeUUID, action, true)
+		body = nil
+	}
+
+	respBody, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, body)
 	if err != nil {
 		return err
 	}
 
 	if status >= 300 {
-		return fmt.Errorf("action API failed: status=%d body=%s", status, string(body))
+		return fmt.Errorf("action API failed: status=%d body=%s", status, string(respBody))
 	}
 
-	log.Info("Node action triggered", "nodeUUID", nodeUUID, "action", action, "response", string(body))
+	log.Info("Node action triggered", "nodeUUID", nodeUUID, "action", action, "response", string(respBody))
 
 	if err := r.waitForActionCompletion(ctx, apiClient, clusterUUID, clusterSecret, nodeUUID, action); err != nil {
 		return fmt.Errorf("node did not reach expected state after action %s: %w", action, err)
