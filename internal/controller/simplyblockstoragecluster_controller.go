@@ -199,13 +199,20 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		clusterCR.Status.NQN = apiResp.Results.NQN
 		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.Results.NDCS, apiResp.Results.NPCS)
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
-		clusterCR.Status.Capacity.SizeTotal = apiResp.Results.Capacity.SizeTotal
-		clusterCR.Status.Capacity.SizeProv = apiResp.Results.Capacity.SizeProv
-		clusterCR.Status.Capacity.SizeUsed = apiResp.Results.Capacity.SizeUsed
-		clusterCR.Status.Capacity.SizeFree = apiResp.Results.Capacity.SizeFree
-		clusterCR.Status.Capacity.SizeUtil = apiResp.Results.Capacity.SizeUtil
 		cluster.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
 		clusterCR.Status.Configured = true
+
+		if apiResp.Results.Capacity != nil {
+			if clusterCR.Status.Capacity == nil {
+				clusterCR.Status.Capacity = &simplyblockv1alpha1.CapacityInfo{}
+			}
+
+			clusterCR.Status.Capacity.SizeTotal = apiResp.Results.Capacity.SizeTotal
+			clusterCR.Status.Capacity.SizeProv = apiResp.Results.Capacity.SizeProv
+			clusterCR.Status.Capacity.SizeUsed = apiResp.Results.Capacity.SizeUsed
+			clusterCR.Status.Capacity.SizeFree = apiResp.Results.Capacity.SizeFree
+			clusterCR.Status.Capacity.SizeUtil = apiResp.Results.Capacity.SizeUtil
+		}
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
 			log.Error(err, "Failed to update cluster status after creation")
