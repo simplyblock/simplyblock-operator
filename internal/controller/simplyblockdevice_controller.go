@@ -147,6 +147,12 @@ func (r *SimplyBlockDeviceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			continue
 		}
 
+		log.Info("DEVICE API call",
+			"endpoint", endpoint,
+			"status", status,
+			"response", string(body),
+		)
+
 		var apiDevices []deviceAPIResponse
 		if err := json.Unmarshal(body, &apiDevices); err != nil {
 			log.Error(err, "Failed to unmarshal device list", "nodeUUID", nodeUUID)
