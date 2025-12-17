@@ -44,13 +44,14 @@ type SimplyBlockStorageClusterReconciler struct {
 
 type ClusterAPIResponse struct {
 	Results struct {
-		UUID        string `json:"uuid"`
-		Secret      string `json:"secret"`
-		NQN         string `json:"nqn"`
-		NDCS        int    `json:"distr_ndcs"`
-		NPCS        int    `json:"distr_npcs"`
-		Rebalancing bool   `json:"is_re_balancing"`
-		Status      string `json:"status"`
+		UUID        string        `json:"uuid"`
+		Secret      string        `json:"secret"`
+		NQN         string        `json:"nqn"`
+		NDCS        int           `json:"distr_ndcs"`
+		NPCS        int           `json:"distr_npcs"`
+		Rebalancing bool          `json:"is_re_balancing"`
+		Capacity    *CapacityInfo `json:"capacity,omitempty"`
+		Status      string        `json:"status"`
 	} `json:"results"`
 }
 
@@ -118,7 +119,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 	body, status, err := apiClient.Do(ctx, "", http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		log.Error(err, "FDB not ready", "status", status, "response", string(body))
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	// --- Handle creation ---
@@ -200,6 +201,18 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
 		cluster.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
 		clusterCR.Status.Configured = true
+
+		if apiResp.Results.Capacity != nil {
+			if clusterCR.Status.Capacity == nil {
+				clusterCR.Status.Capacity = &simplyblockv1alpha1.CapacityInfo{}
+			}
+
+			clusterCR.Status.Capacity.SizeTotal = apiResp.Results.Capacity.SizeTotal
+			clusterCR.Status.Capacity.SizeProv = apiResp.Results.Capacity.SizeProv
+			clusterCR.Status.Capacity.SizeUsed = apiResp.Results.Capacity.SizeUsed
+			clusterCR.Status.Capacity.SizeFree = apiResp.Results.Capacity.SizeFree
+			clusterCR.Status.Capacity.SizeUtil = apiResp.Results.Capacity.SizeUtil
+		}
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
 			log.Error(err, "Failed to update cluster status after creation")
