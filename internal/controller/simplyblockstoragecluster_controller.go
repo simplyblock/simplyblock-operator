@@ -119,7 +119,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 	body, status, err := apiClient.Do(ctx, "", http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		log.Error(err, "FDB not ready", "status", status, "response", string(body))
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	// --- Handle creation ---
