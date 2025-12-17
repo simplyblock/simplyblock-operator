@@ -93,11 +93,11 @@ type ActionStatus struct {
 }
 
 type CapacityInfo struct {
-	SizeTotal int64 `json:"sizeTotal,omitempty"`
-	SizeProv  int64 `json:"sizeProv,omitempty"`
-	SizeUsed  int64 `json:"sizeUsed,omitempty"`
-	SizeFree  int64 `json:"sizeFree,omitempty"`
-	SizeUtil  int64 `json:"sizeUtil,omitempty"`
+	SizeTotal int64 `json:"sizeTotal"`
+	SizeProv  int64 `json:"sizeProv"`
+	SizeUsed  int64 `json:"sizeUsed"`
+	SizeFree  int64 `json:"sizeFree"`
+	SizeUtil  int64 `json:"sizeUtil"`
 }
 
 // +kubebuilder:object:root=true
