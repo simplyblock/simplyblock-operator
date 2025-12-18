@@ -40,7 +40,8 @@ type PoolReconciler struct {
 }
 
 type POOLAPIResponse struct {
-	UUID string `json:"uuid"`
+	UUID   string `json:"uuid"`
+	Status string `json:"status"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=pools,verbs=get;list;watch;create;update;patch;delete
@@ -100,7 +101,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	if !utils.ContainsString(poolCR.Finalizers, "simplyblock.pool.finalizer") {
-		poolCR.Finalizers = append(poolCR.Finalizers, "simplyblock.finalizer")
+		poolCR.Finalizers = append(poolCR.Finalizers, "simplyblock.pool.finalizer")
 		if err := r.Update(ctx, poolCR); err != nil {
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
@@ -143,6 +144,8 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 		// API returns UUID of the created pool
 		poolCR.Status.UUID = apiResp.UUID
+		poolCR.Status.Status = apiResp.Status
+
 		if err := r.Status().Update(ctx, poolCR); err != nil {
 			log.Error(err, "Failed to update pool status after creation")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
