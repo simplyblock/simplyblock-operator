@@ -146,6 +146,9 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			StrictNodeAntiAffinity: utils.BoolPtrOrFalse(clusterCR.Spec.StrictNodeAntiAffinity),
 			IsSingleNode:           utils.BoolPtrOrFalse(clusterCR.Spec.IsSingleNode),
 			Fabric:                 clusterCR.Spec.Fabric,
+			CRName:                 clusterCR.Name,
+			CRNameSpace:            clusterCR.Namespace,
+			CRPlural:               "simplyblockstorageclusters",
 		}
 
 		// endpoint := "/api/v2/clusters/"

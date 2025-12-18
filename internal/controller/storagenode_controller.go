@@ -233,6 +233,9 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			IOBufSmallPoolCount: 0,
 			IOBufLargePoolCount: 0,
 			HaJMCount:           utils.IntPtrOrDefault(snCR.Spec.HaJmCount, 3),
+			CRName:              snCR.Name,
+			CRNameSpace:         snCR.Namespace,
+			CRPlural:            "storagenodes",
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)

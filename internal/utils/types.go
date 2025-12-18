@@ -20,6 +20,9 @@ type ClusterAddParams struct {
 	StrictNodeAntiAffinity bool   `json:"strict_node_anti_affinity,omitempty"`
 	IsSingleNode           bool   `json:"is_single_node,omitempty"`
 	Fabric                 string `json:"fabric,omitempty"`
+	CRName                 string `json:"cr_name,omitempty"`
+	CRNameSpace            string `json:"cr_namespace,omitempty"`
+	CRPlural               string `json:"cr_plural,omitempty"`
 }
 
 type ClusterUpdateParams struct {
@@ -45,6 +48,9 @@ type PoolAddParams struct {
 	MaxRwMB       int    `json:"max_rw_mbytes,omitempty"`
 	MaxRMB        int    `json:"max_r_mbytes,omitempty"`
 	MaxWMB        int    `json:"max_w_mbytes,omitempty"`
+	CRName        string `json:"cr_name,omitempty"`
+	CRNameSpace   string `json:"cr_namespace,omitempty"`
+	CRPlural      string `json:"cr_plural,omitempty"`
 }
 
 type PoolUpdateParams struct {
@@ -69,4 +75,7 @@ type StorageNodeAddParams struct {
 	IOBufSmallPoolCount int      `json:"iobuf_small_pool_count,omitempty"`
 	IOBufLargePoolCount int      `json:"iobuf_large_pool_count,omitempty"`
 	HaJMCount           int      `json:"ha_jm_count,omitempty"`
+	CRName              string   `json:"cr_name,omitempty"`
+	CRNameSpace         string   `json:"cr_namespace,omitempty"`
+	CRPlural            string   `json:"cr_plural,omitempty"`
 }

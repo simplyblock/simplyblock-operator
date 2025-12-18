@@ -117,6 +117,9 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			MaxRwIOPS:     utils.IntPtrOrDefault(poolCR.Spec.QoSIOPSLimit, 0),
 			MaxRMB:        utils.IntPtrOrDefault(poolCR.Spec.RLimit, 0),
 			MaxWMB:        utils.IntPtrOrDefault(poolCR.Spec.WLimit, 0),
+			CRName:        poolCR.Name,
+			CRNameSpace:   poolCR.Namespace,
+			CRPlural:      "pools",
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
