@@ -262,6 +262,10 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			"response", string(body),
 		)
 
+		if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		ensureNodeStatus(snCR, nodeName, ip)
 
 		if err := r.Status().Update(ctx, snCR); err != nil {
@@ -451,10 +455,12 @@ func waitForNodeOnline(
 							return nil
 						}
 
+						patch := client.MergeFrom(snCR.DeepCopy())
+
 						snCR.Status.Nodes[i] = updated
 
-						if err := r.Status().Update(ctx, snCR); err != nil {
-							log.Error(err, "Failed to update node status to online", "node", nodeName)
+						if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+							log.Error(err, "Failed to patch node status to online", "node", nodeName)
 						}
 
 						log.Info("Node is online", "node", nodeName)
