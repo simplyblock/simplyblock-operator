@@ -55,7 +55,7 @@ type SNODEAPIResponse struct {
 	Hostname  string        `json:"hostname"`
 	Devices   string        `json:"online_devices"`
 	CPU       int           `json:"cpu"`
-	Memory    int           `json:"spdk_mem"`
+	Memory    int64         `json:"spdk_mem"`
 	Volumes   int           `json:"lvols"`
 	RPC_PORT  int           `json:"rpc_port"`
 	LVOL_PORT int           `json:"lvol_subsys_port"`
@@ -442,7 +442,7 @@ func waitForNodeOnline(
 							MgmtIp:    res.IP,
 							Devices:   res.Devices,
 							CPU:       utils.IntToInt32Ptr(res.CPU),
-							Memory:    utils.IntToInt32Ptr(res.Memory),
+							Memory:    &res.Memory,
 							Volumes:   utils.IntToInt32Ptr(res.Volumes),
 							RPC_PORT:  utils.IntToInt32Ptr(res.RPC_PORT),
 							LVOL_PORT: utils.IntToInt32Ptr(res.LVOL_PORT),
