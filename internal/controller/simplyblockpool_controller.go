@@ -120,7 +120,7 @@ func (r *SimplyBlockPoolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			MaxWMB:        utils.IntPtrOrDefault(poolCR.Spec.WLimit, 0),
 			CRName:        poolCR.Name,
 			CRNameSpace:   poolCR.Namespace,
-			CRPlural:      "pools",
+			CRPlural:      "simplyblockpools",
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)

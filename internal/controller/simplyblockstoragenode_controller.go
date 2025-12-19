@@ -235,7 +235,7 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 			HaJMCount:           utils.IntPtrOrDefault(snCR.Spec.HaJmCount, 3),
 			CRName:              snCR.Name,
 			CRNameSpace:         snCR.Namespace,
-			CRPlural:            "storagenodes",
+			CRPlural:            "simplyblockstoragenodes",
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
