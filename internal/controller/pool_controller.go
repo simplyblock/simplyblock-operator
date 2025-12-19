@@ -80,25 +80,25 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	apiClient := webapi.NewClient()
 
-	if !poolCR.DeletionTimestamp.IsZero() {
-		if utils.ContainsString(poolCR.Finalizers, "simplyblock.finalizer") && poolCR.Status.UUID != "" {
-			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
-			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
-			if err != nil || status >= 300 {
-				log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
-				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-			}
+	// if !poolCR.DeletionTimestamp.IsZero() {
+	// 	if utils.ContainsString(poolCR.Finalizers, "simplyblock.finalizer") && poolCR.Status.UUID != "" {
+	// 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
+	// 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+	// 		if err != nil || status >= 300 {
+	// 			log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
+	// 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+	// 		}
 
-			poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, "simplyblock.pool.finalizer")
-			if err := r.Update(ctx, poolCR); err != nil {
-				log.Error(err, "Failed to remove finalizer")
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
+	// 		poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, "simplyblock.pool.finalizer")
+	// 		if err := r.Update(ctx, poolCR); err != nil {
+	// 			log.Error(err, "Failed to remove finalizer")
+	// 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	// 		}
 
-			log.Info("Pool deleted successfully", "name", poolCR.Name)
-		}
-		return ctrl.Result{}, nil
-	}
+	// 		log.Info("Pool deleted successfully", "name", poolCR.Name)
+	// 	}
+	// 	return ctrl.Result{}, nil
+	// }
 
 	if !utils.ContainsString(poolCR.Finalizers, "simplyblock.pool.finalizer") {
 		poolCR.Finalizers = append(poolCR.Finalizers, "simplyblock.pool.finalizer")
