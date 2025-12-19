@@ -8,7 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.DaemonSet {
+func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *appsv1.DaemonSet {
 
 	labels := map[string]string{
 		"app":                 "storage-node",

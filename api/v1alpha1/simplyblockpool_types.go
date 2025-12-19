@@ -23,8 +23,8 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// PoolSpec defines the desired state of Pool
-type PoolSpec struct {
+// SimplyBlockPoolSpec defines the desired state of Pool
+type SimplyBlockPoolSpec struct {
 	Name          string `json:"name"`
 	ClusterName   string `json:"clusterName"`
 	Status        string `json:"status,omitempty"`
@@ -36,8 +36,8 @@ type PoolSpec struct {
 	Action        string `json:"action,omitempty"`
 }
 
-// PoolStatus defines the observed state of Pool.
-type PoolStatus struct {
+// SimplyBlockPoolStatus defines the observed state of Pool.
+type SimplyBlockPoolStatus struct {
 	UUID   string `json:"uuid,omitempty"`
 	Status string `json:"status,omitempty"`
 }
@@ -45,8 +45,8 @@ type PoolStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 
-// Pool is the Schema for the pools API
-type Pool struct {
+// SimplyBlockPool is the Schema for the pools API
+type SimplyBlockPool struct {
 	metav1.TypeMeta `json:",inline"`
 
 	// metadata is a standard object metadata
@@ -55,22 +55,22 @@ type Pool struct {
 
 	// spec defines the desired state of Pool
 	// +required
-	Spec PoolSpec `json:"spec"`
+	Spec SimplyBlockPoolSpec `json:"spec"`
 
 	// status defines the observed state of Pool
 	// +optional
-	Status PoolStatus `json:"status,omitzero"`
+	Status SimplyBlockPoolStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
 
-// PoolList contains a list of Pool
-type PoolList struct {
+// SimplyBlockPoolList contains a list of Pool
+type SimplyBlockPoolList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`
-	Items           []Pool `json:"items"`
+	Items           []SimplyBlockPool `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&Pool{}, &PoolList{})
+	SchemeBuilder.Register(&SimplyBlockPool{}, &SimplyBlockPoolList{})
 }

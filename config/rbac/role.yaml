@@ -7,11 +7,11 @@ rules:
 - apiGroups:
   - simplyblock.simplyblock.io
   resources:
-  - pools
   - simplyblockdevices
+  - simplyblockpools
   - simplyblockstorageclusters
+  - simplyblockstoragenodes
   - simplyblocktasks
-  - storagenodes
   verbs:
   - create
   - delete
@@ -23,21 +23,21 @@ rules:
 - apiGroups:
   - simplyblock.simplyblock.io
   resources:
-  - pools/finalizers
   - simplyblockdevices/finalizers
+  - simplyblockpools/finalizers
   - simplyblockstorageclusters/finalizers
+  - simplyblockstoragenodes/finalizers
   - simplyblocktasks/finalizers
-  - storagenodes/finalizers
   verbs:
   - update
 - apiGroups:
   - simplyblock.simplyblock.io
   resources:
-  - pools/status
   - simplyblockdevices/status
+  - simplyblockpools/status
   - simplyblockstorageclusters/status
+  - simplyblockstoragenodes/status
   - simplyblocktasks/status
-  - storagenodes/status
   verbs:
   - get
   - patch
