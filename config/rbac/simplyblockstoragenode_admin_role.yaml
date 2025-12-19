@@ -11,17 +11,17 @@ metadata:
   labels:
     app.kubernetes.io/name: simplyblock-manager
     app.kubernetes.io/managed-by: kustomize
-  name: pool-admin-role
+  name: simplyblockstoragenode-admin-role
 rules:
 - apiGroups:
   - simplyblock.simplyblock.io
   resources:
-  - pools
+  - simplyblockstoragenodes
   verbs:
   - '*'
 - apiGroups:
   - simplyblock.simplyblock.io
   resources:
-  - pools/status
+  - simplyblockstoragenodes/status
   verbs:
   - get
