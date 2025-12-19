@@ -3,8 +3,8 @@
 # It should be run by config/default
 resources:
 - bases/simplyblock.simplyblock.io_simplyblockstorageclusters.yaml
-- bases/simplyblock.simplyblock.io_storagenodes.yaml
-- bases/simplyblock.simplyblock.io_pools.yaml
+- bases/simplyblock.simplyblock.io_simplyblockstoragenodes.yaml
+- bases/simplyblock.simplyblock.io_simplyblockpools.yaml
 - bases/simplyblock.simplyblock.io_simplyblockdevices.yaml
 - bases/simplyblock.simplyblock.io_simplyblocktasks.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
