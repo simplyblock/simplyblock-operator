@@ -127,7 +127,7 @@ func (in *NodeStatus) DeepCopyInto(out *NodeStatus) {
 	}
 	if in.Memory != nil {
 		in, out := &in.Memory, &out.Memory
-		*out = new(int32)
+		*out = new(int64)
 		**out = **in
 	}
 	if in.Volumes != nil {

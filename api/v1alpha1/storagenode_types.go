@@ -72,7 +72,7 @@ type NodeStatus struct {
 	Health    string        `json:"health,omitempty"`
 	Status    string        `json:"status,omitempty"`
 	CPU       *int32        `json:"cpu,omitempty"`
-	Memory    *int32        `json:"memory,omitempty"`
+	Memory    *int64        `json:"memory,omitempty"`
 	Volumes   *int32        `json:"volumes,omitempty"`
 	RPC_PORT  *int32        `json:"rpc_port,omitempty"`
 	LVOL_PORT *int32        `json:"lvol_port,omitempty"`

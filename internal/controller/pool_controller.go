@@ -40,7 +40,8 @@ type PoolReconciler struct {
 }
 
 type POOLAPIResponse struct {
-	UUID string `json:"uuid"`
+	UUID   string `json:"uuid"`
+	Status string `json:"status"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=pools,verbs=get;list;watch;create;update;patch;delete
@@ -79,28 +80,28 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	apiClient := webapi.NewClient()
 
-	if !poolCR.DeletionTimestamp.IsZero() {
-		if utils.ContainsString(poolCR.Finalizers, "simplyblock.finalizer") && poolCR.Status.UUID != "" {
-			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
-			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
-			if err != nil || status >= 300 {
-				log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
-				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-			}
+	// if !poolCR.DeletionTimestamp.IsZero() {
+	// 	if utils.ContainsString(poolCR.Finalizers, "simplyblock.finalizer") && poolCR.Status.UUID != "" {
+	// 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
+	// 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+	// 		if err != nil || status >= 300 {
+	// 			log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
+	// 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+	// 		}
 
-			poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, "simplyblock.pool.finalizer")
-			if err := r.Update(ctx, poolCR); err != nil {
-				log.Error(err, "Failed to remove finalizer")
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
+	// 		poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, "simplyblock.pool.finalizer")
+	// 		if err := r.Update(ctx, poolCR); err != nil {
+	// 			log.Error(err, "Failed to remove finalizer")
+	// 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	// 		}
 
-			log.Info("Pool deleted successfully", "name", poolCR.Name)
-		}
-		return ctrl.Result{}, nil
-	}
+	// 		log.Info("Pool deleted successfully", "name", poolCR.Name)
+	// 	}
+	// 	return ctrl.Result{}, nil
+	// }
 
 	if !utils.ContainsString(poolCR.Finalizers, "simplyblock.pool.finalizer") {
-		poolCR.Finalizers = append(poolCR.Finalizers, "simplyblock.finalizer")
+		poolCR.Finalizers = append(poolCR.Finalizers, "simplyblock.pool.finalizer")
 		if err := r.Update(ctx, poolCR); err != nil {
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
@@ -117,6 +118,9 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			MaxRwIOPS:     utils.IntPtrOrDefault(poolCR.Spec.QoSIOPSLimit, 0),
 			MaxRMB:        utils.IntPtrOrDefault(poolCR.Spec.RLimit, 0),
 			MaxWMB:        utils.IntPtrOrDefault(poolCR.Spec.WLimit, 0),
+			CRName:        poolCR.Name,
+			CRNameSpace:   poolCR.Namespace,
+			CRPlural:      "pools",
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
@@ -140,6 +144,8 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 		// API returns UUID of the created pool
 		poolCR.Status.UUID = apiResp.UUID
+		poolCR.Status.Status = apiResp.Status
+
 		if err := r.Status().Update(ctx, poolCR); err != nil {
 			log.Error(err, "Failed to update pool status after creation")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil

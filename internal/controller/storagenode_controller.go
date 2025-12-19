@@ -55,7 +55,7 @@ type SNODEAPIResponse struct {
 	Hostname  string        `json:"hostname"`
 	Devices   string        `json:"online_devices"`
 	CPU       int           `json:"cpu"`
-	Memory    int           `json:"spdk_mem"`
+	Memory    int64         `json:"spdk_mem"`
 	Volumes   int           `json:"lvols"`
 	RPC_PORT  int           `json:"rpc_port"`
 	LVOL_PORT int           `json:"lvol_subsys_port"`
@@ -233,6 +233,9 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			IOBufSmallPoolCount: 0,
 			IOBufLargePoolCount: 0,
 			HaJMCount:           utils.IntPtrOrDefault(snCR.Spec.HaJmCount, 3),
+			CRName:              snCR.Name,
+			CRNameSpace:         snCR.Namespace,
+			CRPlural:            "storagenodes",
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
@@ -258,6 +261,10 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			"status", status,
 			"response", string(body),
 		)
+
+		if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
+			return ctrl.Result{}, err
+		}
 
 		ensureNodeStatus(snCR, nodeName, ip)
 
@@ -435,7 +442,7 @@ func waitForNodeOnline(
 							MgmtIp:    res.IP,
 							Devices:   res.Devices,
 							CPU:       utils.IntToInt32Ptr(res.CPU),
-							Memory:    utils.IntToInt32Ptr(res.Memory),
+							Memory:    &res.Memory,
 							Volumes:   utils.IntToInt32Ptr(res.Volumes),
 							RPC_PORT:  utils.IntToInt32Ptr(res.RPC_PORT),
 							LVOL_PORT: utils.IntToInt32Ptr(res.LVOL_PORT),
@@ -448,10 +455,12 @@ func waitForNodeOnline(
 							return nil
 						}
 
+						patch := client.MergeFrom(snCR.DeepCopy())
+
 						snCR.Status.Nodes[i] = updated
 
-						if err := r.Status().Update(ctx, snCR); err != nil {
-							log.Error(err, "Failed to update node status to online", "node", nodeName)
+						if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+							log.Error(err, "Failed to patch node status to online", "node", nodeName)
 						}
 
 						log.Info("Node is online", "node", nodeName)

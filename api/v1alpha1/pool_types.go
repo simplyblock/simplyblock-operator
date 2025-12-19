@@ -38,7 +38,8 @@ type PoolSpec struct {
 
 // PoolStatus defines the observed state of Pool.
 type PoolStatus struct {
-	UUID string `json:"uuid,omitempty"`
+	UUID   string `json:"uuid,omitempty"`
+	Status string `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
