@@ -225,7 +225,7 @@ func (r *SimplyBlockDeviceReconciler) mapDevices(
 				SizeProv:  utils.HumanBytes(d.Capacity.SizeProv, "iec"),
 				SizeUsed:  utils.HumanBytes(d.Capacity.SizeUsed, "iec"),
 				SizeFree:  utils.HumanBytes(d.Capacity.SizeFree, "iec"),
-				SizeUtil:  fmt.Sprintf("%.1f%%", d.Capacity.SizeUtil),
+				SizeUtil:  fmt.Sprintf("%.1f%%", float64(d.Capacity.SizeUtil)),
 			}
 		}
 		out = append(out, simplyblockv1alpha1.DeviceInfo{

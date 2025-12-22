@@ -430,7 +430,7 @@ func waitForNodeOnline(
 								SizeProv:  utils.HumanBytes(res.Capacity.SizeTotal, "iec"),
 								SizeUsed:  utils.HumanBytes(res.Capacity.SizeTotal, "iec"),
 								SizeFree:  utils.HumanBytes(res.Capacity.SizeTotal, "iec"),
-								SizeUtil:  fmt.Sprintf("%.1f%%", res.Capacity.SizeUtil),
+								SizeUtil:  fmt.Sprintf("%.1f%%", float64(res.Capacity.SizeUtil)),
 							}
 						}
 
