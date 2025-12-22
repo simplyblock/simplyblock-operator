@@ -40,13 +40,13 @@ var _ = Describe("Pool Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		pool := &simplyblockv1alpha1.Pool{}
+		pool := &simplyblockv1alpha1.SimplyBlockPool{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind Pool")
 			err := k8sClient.Get(ctx, typeNamespacedName, pool)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &simplyblockv1alpha1.Pool{
+				resource := &simplyblockv1alpha1.SimplyBlockPool{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,7 +59,7 @@ var _ = Describe("Pool Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &simplyblockv1alpha1.Pool{}
+			resource := &simplyblockv1alpha1.SimplyBlockPool{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -68,7 +68,7 @@ var _ = Describe("Pool Controller", func() {
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &PoolReconciler{
+			controllerReconciler := &SimplyBlockPoolReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}

@@ -185,14 +185,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "SimplyBlockStorageCluster")
 		os.Exit(1)
 	}
-	if err := (&controller.StorageNodeReconciler{
+	if err := (&controller.SimplyBlockStorageNodeReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}
-	if err := (&controller.PoolReconciler{
+	if err := (&controller.SimplyBlockPoolReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {

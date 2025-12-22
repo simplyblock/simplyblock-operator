@@ -41,18 +41,18 @@ var _ = Describe("StorageNode Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		storagenode := &simplyblockv1alpha1.StorageNode{}
+		storagenode := &simplyblockv1alpha1.SimplyBlockStorageNode{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind StorageNode")
 			err := k8sClient.Get(ctx, typeNamespacedName, storagenode)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &simplyblockv1alpha1.StorageNode{
+				resource := &simplyblockv1alpha1.SimplyBlockStorageNode{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					Spec: simplyblockv1alpha1.StorageNodeSpec{
+					Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
 						ClusterImage: "public.ecr.aws/simply-block/simplyblock:main",
 						MaxLVol:      utils.ToInt32Ptr(100),
 						WorkerNodes:  []string{"node1"},
@@ -63,7 +63,7 @@ var _ = Describe("StorageNode Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &simplyblockv1alpha1.StorageNode{}
+			resource := &simplyblockv1alpha1.SimplyBlockStorageNode{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -72,7 +72,7 @@ var _ = Describe("StorageNode Controller", func() {
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &StorageNodeReconciler{
+			controllerReconciler := &SimplyBlockStorageNodeReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}

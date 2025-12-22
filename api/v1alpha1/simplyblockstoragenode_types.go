@@ -23,8 +23,8 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// StorageNodeSpec defines the desired state of StorageNode
-type StorageNodeSpec struct {
+// SimplyBlockStorageNodeSpec defines the desired state of StorageNode
+type SimplyBlockStorageNodeSpec struct {
 	ClusterName  string `json:"clusterName"`
 	ClusterImage string `json:"clusterImage,omitempty"`
 	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume
@@ -61,8 +61,8 @@ type StorageNodeSpec struct {
 	Force              *bool    `json:"force,omitempty"`
 }
 
-// StorageNodeStatus defines the observed state of StorageNode.
-type StorageNodeStatus struct {
+// SimplyBlockStorageNodeStatus defines the observed state of StorageNode.
+type SimplyBlockStorageNodeStatus struct {
 	Nodes        []NodeStatus  `json:"nodes,omitempty"`
 	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 }
@@ -104,8 +104,8 @@ type CapacityInfo struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && (!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\"))",message="nodeUUID is required when action is specified"
 // +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.clusterImage) && self.spec.clusterImage != \"\" && has(self.spec.maxLVol) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)",message="clusterImage, maxLVol, and workerNodes are required when action is not specified"
-// StorageNode is the Schema for the storagenodes API
-type StorageNode struct {
+// SimplyBlockStorageNode is the Schema for the storagenodes API
+type SimplyBlockStorageNode struct {
 	metav1.TypeMeta `json:",inline"`
 
 	// metadata is a standard object metadata
@@ -114,22 +114,22 @@ type StorageNode struct {
 
 	// spec defines the desired state of StorageNode
 	// +required
-	Spec StorageNodeSpec `json:"spec"`
+	Spec SimplyBlockStorageNodeSpec `json:"spec"`
 
 	// status defines the observed state of StorageNode
 	// +optional
-	Status StorageNodeStatus `json:"status,omitzero"`
+	Status SimplyBlockStorageNodeStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
 
-// StorageNodeList contains a list of StorageNode
-type StorageNodeList struct {
+// SimplyBlockStorageNodeList contains a list of StorageNode
+type SimplyBlockStorageNodeList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`
-	Items           []StorageNode `json:"items"`
+	Items           []SimplyBlockStorageNode `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&StorageNode{}, &StorageNodeList{})
+	SchemeBuilder.Register(&SimplyBlockStorageNode{}, &SimplyBlockStorageNodeList{})
 }

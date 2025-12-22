@@ -11,12 +11,12 @@ metadata:
   labels:
     app.kubernetes.io/name: simplyblock-manager
     app.kubernetes.io/managed-by: kustomize
-  name: pool-viewer-role
+  name: simplyblockpool-viewer-role
 rules:
 - apiGroups:
   - simplyblock.simplyblock.io
   resources:
-  - pools
+  - simplyblockpools
   verbs:
   - get
   - list
@@ -24,6 +24,6 @@ rules:
 - apiGroups:
   - simplyblock.simplyblock.io
   resources:
-  - pools/status
+  - simplyblockpools/status
   verbs:
   - get
