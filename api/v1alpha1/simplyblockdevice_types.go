@@ -48,7 +48,6 @@ type DeviceInfo struct {
 	Model       string        `json:"model,omitempty"`
 	Utilization int64         `json:"utilization,omitempty"`
 	Status      string        `json:"status,omitempty"`
-	Capacity    *CapacityInfo `json:"capacity,omitempty"`
 	Stats       []DeviceStats `json:"stats,omitempty"`
 }
 

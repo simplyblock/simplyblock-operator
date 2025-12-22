@@ -44,14 +44,13 @@ type SimplyBlockStorageClusterReconciler struct {
 
 type ClusterAPIResponse struct {
 	Results struct {
-		UUID        string        `json:"uuid"`
-		Secret      string        `json:"secret"`
-		NQN         string        `json:"nqn"`
-		NDCS        int           `json:"distr_ndcs"`
-		NPCS        int           `json:"distr_npcs"`
-		Rebalancing bool          `json:"is_re_balancing"`
-		Capacity    *CapacityInfo `json:"capacity,omitempty"`
-		Status      string        `json:"status"`
+		UUID        string `json:"uuid"`
+		Secret      string `json:"secret"`
+		NQN         string `json:"nqn"`
+		NDCS        int    `json:"distr_ndcs"`
+		NPCS        int    `json:"distr_npcs"`
+		Rebalancing bool   `json:"is_re_balancing"`
+		Status      string `json:"status"`
 	} `json:"results"`
 }
 
@@ -204,18 +203,6 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
 		cluster.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
 		clusterCR.Status.Configured = true
-
-		if apiResp.Results.Capacity != nil {
-			if clusterCR.Status.Capacity == nil {
-				clusterCR.Status.Capacity = &simplyblockv1alpha1.CapacityInfo{}
-			}
-
-			clusterCR.Status.Capacity.SizeTotal = utils.HumanBytes(apiResp.Results.Capacity.SizeTotal, "iec")
-			clusterCR.Status.Capacity.SizeProv = utils.HumanBytes(apiResp.Results.Capacity.SizeProv, "iec")
-			clusterCR.Status.Capacity.SizeUsed = utils.HumanBytes(apiResp.Results.Capacity.SizeUsed, "iec")
-			clusterCR.Status.Capacity.SizeFree = utils.HumanBytes(apiResp.Results.Capacity.SizeFree, "iec")
-			clusterCR.Status.Capacity.SizeUtil = fmt.Sprintf("%.1f%%", float64(apiResp.Results.Capacity.SizeUtil))
-		}
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
 			log.Error(err, "Failed to update cluster status after creation")
