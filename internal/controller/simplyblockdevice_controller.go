@@ -221,11 +221,11 @@ func (r *SimplyBlockDeviceReconciler) mapDevices(
 		var capacity *simplyblockv1alpha1.CapacityInfo
 		if d.Capacity != nil {
 			capacity = &simplyblockv1alpha1.CapacityInfo{
-				SizeTotal: d.Capacity.SizeTotal,
-				SizeProv:  d.Capacity.SizeProv,
-				SizeUsed:  d.Capacity.SizeUsed,
-				SizeFree:  d.Capacity.SizeFree,
-				SizeUtil:  d.Capacity.SizeUtil,
+				SizeTotal: utils.HumanBytes(d.Capacity.SizeTotal, "iec"),
+				SizeProv:  utils.HumanBytes(d.Capacity.SizeProv, "iec"),
+				SizeUsed:  utils.HumanBytes(d.Capacity.SizeUsed, "iec"),
+				SizeFree:  utils.HumanBytes(d.Capacity.SizeFree, "iec"),
+				SizeUtil:  fmt.Sprintf("%.1f%%", d.Capacity.SizeUtil),
 			}
 		}
 		out = append(out, simplyblockv1alpha1.DeviceInfo{

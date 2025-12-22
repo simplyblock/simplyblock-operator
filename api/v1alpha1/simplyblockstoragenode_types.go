@@ -72,7 +72,7 @@ type NodeStatus struct {
 	Health    string        `json:"health,omitempty"`
 	Status    string        `json:"status,omitempty"`
 	CPU       *int32        `json:"cpu,omitempty"`
-	Memory    *int64        `json:"memory,omitempty"`
+	Memory    string        `json:"memory,omitempty"`
 	Volumes   *int32        `json:"volumes,omitempty"`
 	RPC_PORT  *int32        `json:"rpc_port,omitempty"`
 	LVOL_PORT *int32        `json:"lvol_port,omitempty"`
@@ -93,11 +93,11 @@ type ActionStatus struct {
 }
 
 type CapacityInfo struct {
-	SizeTotal int64 `json:"sizeTotal"`
-	SizeProv  int64 `json:"sizeProv"`
-	SizeUsed  int64 `json:"sizeUsed"`
-	SizeFree  int64 `json:"sizeFree"`
-	SizeUtil  int64 `json:"sizeUtil"`
+	SizeTotal string `json:"sizeTotal"`
+	SizeProv  string `json:"sizeProv"`
+	SizeUsed  string `json:"sizeUsed"`
+	SizeFree  string `json:"sizeFree"`
+	SizeUtil  string `json:"sizeUtil"`
 }
 
 // +kubebuilder:object:root=true

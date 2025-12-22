@@ -210,11 +210,11 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 				clusterCR.Status.Capacity = &simplyblockv1alpha1.CapacityInfo{}
 			}
 
-			clusterCR.Status.Capacity.SizeTotal = apiResp.Results.Capacity.SizeTotal
-			clusterCR.Status.Capacity.SizeProv = apiResp.Results.Capacity.SizeProv
-			clusterCR.Status.Capacity.SizeUsed = apiResp.Results.Capacity.SizeUsed
-			clusterCR.Status.Capacity.SizeFree = apiResp.Results.Capacity.SizeFree
-			clusterCR.Status.Capacity.SizeUtil = apiResp.Results.Capacity.SizeUtil
+			clusterCR.Status.Capacity.SizeTotal = utils.HumanBytes(apiResp.Results.Capacity.SizeTotal, "iec")
+			clusterCR.Status.Capacity.SizeProv = utils.HumanBytes(apiResp.Results.Capacity.SizeProv, "iec")
+			clusterCR.Status.Capacity.SizeUsed = utils.HumanBytes(apiResp.Results.Capacity.SizeUsed, "iec")
+			clusterCR.Status.Capacity.SizeFree = utils.HumanBytes(apiResp.Results.Capacity.SizeFree, "iec")
+			clusterCR.Status.Capacity.SizeUtil = fmt.Sprintf("%.1f%%", apiResp.Results.Capacity.SizeUtil)
 		}
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
