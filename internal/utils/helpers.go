@@ -203,3 +203,31 @@ func int64Pow(base, exp int) int64 {
 	}
 	return result
 }
+
+func HumanBytes(size int64, mode string) string {
+	if size <= 0 {
+		return "0 B"
+	}
+
+	var base float64
+	switch mode {
+	case "si":
+		base = 1000
+	default: // "iec"
+		base = 1024
+	}
+
+	exp := int(math.Log(float64(size)) / math.Log(base))
+	if exp >= len(exponentMultipliers) {
+		exp = len(exponentMultipliers) - 1
+	}
+
+	sizeInUnit := float64(size) / math.Pow(base, float64(exp))
+	prefix := exponentMultipliers[exp]
+
+	if mode == "iec" && prefix != "" {
+		prefix += "i"
+	}
+
+	return fmt.Sprintf("%.1f %sB", sizeInUnit, prefix)
+}

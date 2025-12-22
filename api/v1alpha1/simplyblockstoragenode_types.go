@@ -68,20 +68,19 @@ type SimplyBlockStorageNodeStatus struct {
 }
 
 type NodeStatus struct {
-	UUID      string        `json:"uuid,omitempty"`
-	Health    string        `json:"health,omitempty"`
-	Status    string        `json:"status,omitempty"`
-	CPU       *int32        `json:"cpu,omitempty"`
-	Memory    *int64        `json:"memory,omitempty"`
-	Volumes   *int32        `json:"volumes,omitempty"`
-	RPC_PORT  *int32        `json:"rpc_port,omitempty"`
-	LVOL_PORT *int32        `json:"lvol_port,omitempty"`
-	NVMF_PORT *int32        `json:"nvmf_port,omitempty"`
-	Devices   string        `json:"devices,omitempty"`
-	Capacity  *CapacityInfo `json:"capacity,omitempty"`
-	Uptime    string        `json:"uptime,omitempty"`
-	Hostname  string        `json:"hostname,omitempty"`
-	MgmtIp    string        `json:"mgmtIp,omitempty"`
+	UUID      string `json:"uuid,omitempty"`
+	Health    string `json:"health,omitempty"`
+	Status    string `json:"status,omitempty"`
+	CPU       *int32 `json:"cpu,omitempty"`
+	Memory    string `json:"memory,omitempty"`
+	Volumes   *int32 `json:"volumes,omitempty"`
+	RPC_PORT  *int32 `json:"rpc_port,omitempty"`
+	LVOL_PORT *int32 `json:"lvol_port,omitempty"`
+	NVMF_PORT *int32 `json:"nvmf_port,omitempty"`
+	Devices   string `json:"devices,omitempty"`
+	Uptime    string `json:"uptime,omitempty"`
+	Hostname  string `json:"hostname,omitempty"`
+	MgmtIp    string `json:"mgmtIp,omitempty"`
 }
 
 type ActionStatus struct {
@@ -90,14 +89,6 @@ type ActionStatus struct {
 	State     string      `json:"state,omitempty"` // pending | running | success | failed
 	Message   string      `json:"message,omitempty"`
 	UpdatedAt metav1.Time `json:"updatedAt,omitempty"`
-}
-
-type CapacityInfo struct {
-	SizeTotal int64 `json:"sizeTotal"`
-	SizeProv  int64 `json:"sizeProv"`
-	SizeUsed  int64 `json:"sizeUsed"`
-	SizeFree  int64 `json:"sizeFree"`
-	SizeUtil  int64 `json:"sizeUtil"`
 }
 
 // +kubebuilder:object:root=true

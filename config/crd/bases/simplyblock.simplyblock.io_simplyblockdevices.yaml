@@ -60,37 +60,12 @@ spec:
                     devices:
                       items:
                         properties:
-                          capacity:
-                            properties:
-                              sizeFree:
-                                format: int64
-                                type: integer
-                              sizeProv:
-                                format: int64
-                                type: integer
-                              sizeTotal:
-                                format: int64
-                                type: integer
-                              sizeUsed:
-                                format: int64
-                                type: integer
-                              sizeUtil:
-                                format: int64
-                                type: integer
-                            required:
-                            - sizeFree
-                            - sizeProv
-                            - sizeTotal
-                            - sizeUsed
-                            - sizeUtil
-                            type: object
                           health:
                             type: string
                           model:
                             type: string
                           size:
-                            format: int64
-                            type: integer
+                            type: string
                           stats:
                             items:
                               properties:

@@ -48,33 +48,24 @@ type SimplyBlockStorageNodeReconciler struct {
 }
 
 type SNODEAPIResponse struct {
-	UUID      string        `json:"uuid"`
-	Status    string        `json:"status"`
-	IP        string        `json:"mgmt_ip"`
-	Health    bool          `json:"health_check"`
-	Hostname  string        `json:"hostname"`
-	Devices   string        `json:"online_devices"`
-	CPU       int           `json:"cpu"`
-	Memory    int64         `json:"spdk_mem"`
-	Volumes   int           `json:"lvols"`
-	RPC_PORT  int           `json:"rpc_port"`
-	LVOL_PORT int           `json:"lvol_subsys_port"`
-	NVMF_PORT int           `json:"nvmf_port"`
-	Capacity  *CapacityInfo `json:"capacity,omitempty"`
+	UUID      string `json:"uuid"`
+	Status    string `json:"status"`
+	IP        string `json:"mgmt_ip"`
+	Health    bool   `json:"health_check"`
+	Hostname  string `json:"hostname"`
+	Devices   string `json:"online_devices"`
+	CPU       int    `json:"cpu"`
+	Memory    int64  `json:"spdk_mem"`
+	Volumes   int    `json:"lvols"`
+	RPC_PORT  int    `json:"rpc_port"`
+	LVOL_PORT int    `json:"lvol_subsys_port"`
+	NVMF_PORT int    `json:"nvmf_port"`
 }
 
 type NodeStatusResponse struct {
 	UUID   string `json:"id"`
 	Status string `json:"status"`
 	IP     string `json:"ip"`
-}
-
-type CapacityInfo struct {
-	SizeTotal int64 `json:"size_total"`
-	SizeProv  int64 `json:"size_prov"`
-	SizeUsed  int64 `json:"size_used"`
-	SizeFree  int64 `json:"size_free"`
-	SizeUtil  int64 `json:"size_util"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstoragenodes,verbs=get;list;watch;create;update;patch;delete
@@ -423,17 +414,6 @@ func waitForNodeOnline(
 				for i := range snCR.Status.Nodes {
 					if snCR.Status.Nodes[i].Hostname == nodeName {
 
-						var capacity *simplyblockv1alpha1.CapacityInfo
-						if res.Capacity != nil {
-							capacity = &simplyblockv1alpha1.CapacityInfo{
-								SizeTotal: res.Capacity.SizeTotal,
-								SizeProv:  res.Capacity.SizeProv,
-								SizeUsed:  res.Capacity.SizeUsed,
-								SizeFree:  res.Capacity.SizeFree,
-								SizeUtil:  res.Capacity.SizeUtil,
-							}
-						}
-
 						updated := simplyblockv1alpha1.NodeStatus{
 							Hostname:  nodeName,
 							UUID:      res.UUID,
@@ -442,12 +422,11 @@ func waitForNodeOnline(
 							MgmtIp:    res.IP,
 							Devices:   res.Devices,
 							CPU:       utils.IntToInt32Ptr(res.CPU),
-							Memory:    &res.Memory,
+							Memory:    utils.HumanBytes(res.Memory, "iec"),
 							Volumes:   utils.IntToInt32Ptr(res.Volumes),
 							RPC_PORT:  utils.IntToInt32Ptr(res.RPC_PORT),
 							LVOL_PORT: utils.IntToInt32Ptr(res.LVOL_PORT),
 							NVMF_PORT: utils.IntToInt32Ptr(res.NVMF_PORT),
-							Capacity:  capacity,
 						}
 
 						if reflect.DeepEqual(snCR.Status.Nodes[i], updated) {

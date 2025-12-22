@@ -56,19 +56,18 @@ type SimplyBlockStorageClusterSpec struct {
 
 // SimplyBlockStorageClusterStatus defines the observed state of SimplyBlockStorageCluster.
 type SimplyBlockStorageClusterStatus struct {
-	UUID         string        `json:"UUID"`
-	ClusterName  string        `json:"clusterName"`
-	MgmtNodes    *int32        `json:"mgmtNodes,omitempty"`
-	StorageNodes *int32        `json:"storageNodes,omitempty"`
-	NQN          string        `json:"NQN,omitempty"`
-	Status       string        `json:"status"`
-	Rebalancing  *bool         `json:"rebalancing"`
-	MOD          string        `json:"MOD,omitempty"`
-	SecretName   string        `json:"secretName,omitempty"`
-	LastUpdated  *metav1.Time  `json:"lastUpdated,omitempty"`
-	Created      *metav1.Time  `json:"created,omitempty"`
-	Configured   bool          `json:"configured,omitempty"`
-	Capacity     *CapacityInfo `json:"capacity,omitempty"`
+	UUID         string       `json:"UUID"`
+	ClusterName  string       `json:"clusterName"`
+	MgmtNodes    *int32       `json:"mgmtNodes,omitempty"`
+	StorageNodes *int32       `json:"storageNodes,omitempty"`
+	NQN          string       `json:"NQN,omitempty"`
+	Status       string       `json:"status"`
+	Rebalancing  *bool        `json:"rebalancing"`
+	MOD          string       `json:"MOD,omitempty"`
+	SecretName   string       `json:"secretName,omitempty"`
+	LastUpdated  *metav1.Time `json:"lastUpdated,omitempty"`
+	Created      *metav1.Time `json:"created,omitempty"`
+	Configured   bool         `json:"configured,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -43,16 +43,15 @@ type SimplyBlockDeviceReconciler struct {
 }
 
 type deviceAPIResponse struct {
-	ID          string        `json:"id"`
-	Status      string        `json:"status"`
-	HealthCheck bool          `json:"health_check"`
-	Size        int64         `json:"size"`
-	IOError     bool          `json:"io_error"`
-	IsPartition bool          `json:"is_partition"`
-	NvmfIPs     []string      `json:"nvmf_ips"`
-	NvmfNQN     string        `json:"nvmf_nqn"`
-	NvmfPort    int           `json:"nvmf_port"`
-	Capacity    *CapacityInfo `json:"capacity,omitempty"`
+	ID          string   `json:"id"`
+	Status      string   `json:"status"`
+	HealthCheck bool     `json:"health_check"`
+	Size        int64    `json:"size"`
+	IOError     bool     `json:"io_error"`
+	IsPartition bool     `json:"is_partition"`
+	NvmfIPs     []string `json:"nvmf_ips"`
+	NvmfNQN     string   `json:"nvmf_nqn"`
+	NvmfPort    int      `json:"nvmf_port"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockdevices,verbs=get;list;watch;create;update;patch;delete
@@ -218,23 +217,12 @@ func (r *SimplyBlockDeviceReconciler) mapDevices(
 
 	out := make([]simplyblockv1alpha1.DeviceInfo, 0, len(apiDevs))
 	for _, d := range apiDevs {
-		var capacity *simplyblockv1alpha1.CapacityInfo
-		if d.Capacity != nil {
-			capacity = &simplyblockv1alpha1.CapacityInfo{
-				SizeTotal: d.Capacity.SizeTotal,
-				SizeProv:  d.Capacity.SizeProv,
-				SizeUsed:  d.Capacity.SizeUsed,
-				SizeFree:  d.Capacity.SizeFree,
-				SizeUtil:  d.Capacity.SizeUtil,
-			}
-		}
 		out = append(out, simplyblockv1alpha1.DeviceInfo{
-			UUID:     d.ID,
-			Status:   d.Status,
-			Size:     d.Size,
-			Health:   strconv.FormatBool(d.HealthCheck),
-			Model:    "nvme",
-			Capacity: capacity,
+			UUID:   d.ID,
+			Status: d.Status,
+			Size:   utils.HumanBytes(d.Size, "iec"),
+			Health: strconv.FormatBool(d.HealthCheck),
+			Model:  "nvme",
 		})
 	}
 
