@@ -44,7 +44,7 @@ type NodeDevices struct {
 type DeviceInfo struct {
 	UUID        string        `json:"uuid,omitempty"`
 	Health      string        `json:"health,omitempty"`
-	Size        int64         `json:"size,omitempty"`
+	Size        string        `json:"size,omitempty"`
 	Model       string        `json:"model,omitempty"`
 	Utilization int64         `json:"utilization,omitempty"`
 	Status      string        `json:"status,omitempty"`

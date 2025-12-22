@@ -427,9 +427,9 @@ func waitForNodeOnline(
 						if res.Capacity != nil {
 							capacity = &simplyblockv1alpha1.CapacityInfo{
 								SizeTotal: utils.HumanBytes(res.Capacity.SizeTotal, "iec"),
-								SizeProv:  utils.HumanBytes(res.Capacity.SizeTotal, "iec"),
-								SizeUsed:  utils.HumanBytes(res.Capacity.SizeTotal, "iec"),
-								SizeFree:  utils.HumanBytes(res.Capacity.SizeTotal, "iec"),
+								SizeProv:  utils.HumanBytes(res.Capacity.SizeProv, "iec"),
+								SizeUsed:  utils.HumanBytes(res.Capacity.SizeUsed, "iec"),
+								SizeFree:  utils.HumanBytes(res.Capacity.SizeFree, "iec"),
 								SizeUtil:  fmt.Sprintf("%.1f%%", float64(res.Capacity.SizeUtil)),
 							}
 						}

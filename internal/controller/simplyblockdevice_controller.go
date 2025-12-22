@@ -231,7 +231,7 @@ func (r *SimplyBlockDeviceReconciler) mapDevices(
 		out = append(out, simplyblockv1alpha1.DeviceInfo{
 			UUID:     d.ID,
 			Status:   d.Status,
-			Size:     d.Size,
+			Size:     utils.HumanBytes(d.Size, "iec"),
 			Health:   strconv.FormatBool(d.HealthCheck),
 			Model:    "nvme",
 			Capacity: capacity,
