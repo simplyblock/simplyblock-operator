@@ -18,19 +18,58 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"reflect"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-manager/internal/utils"
+	"github.com/simplyblock/simplyblock-manager/internal/webapi"
 )
 
 // SimplyBlockLvolReconciler reconciles a SimplyBlockLvol object
 type SimplyBlockLvolReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+}
+
+type LVOLAPIResponse struct {
+	UUID           string   `json:"uuid"`
+	LvolName       string   `json:"lvol_name"`
+	NodeUUID       []string `json:"nodes,omitempty"`
+	Hostname       string   `json:"hostname,omitempty"`
+	ClonedFromSnap string   `json:"cloned_from_snap,,omitempty"`
+	SnapName       string   `json:"snapshot_name,omitempty"`
+	NQN            string   `json:"nqn,omitempty"`
+	SubsysPort     string   `json:"subsys_port,omitempty"`
+	NamespaceID    string   `json:"ns_id,omitempty"`
+	BlobID         string   `json:"blobid,omitempty"`
+	PoolUUID       string   `json:"pool_uuid,omitempty"`
+	PoolName       string   `json:"pool_name,omitempty"`
+	PvcName        string   `json:"pvc_name,omitempty"`
+	HAType         string   `json:"ha_type,omitempty"`
+	Health         bool     `json:"health_check,omitempty"`
+	IsCrypto       bool     `json:"crypto_bdev,omitempty"`
+	Size           string   `json:"size,omitempty"`
+	Fabric         string   `json:"fabric,omitempty"`
+	StripeWdata    int64    `json:"ndcs,omitempty"`
+	StripeWparity  int64    `json:"npcs,omitempty"`
+	QosIOPS        int64    `json:"rw_ios_per_sec,omitempty"`
+	QosWTP         int64    `json:"w_mbytes_per_sec,omitempty"`
+	QosRTP         int64    `json:"r_mbytes_per_sec,omitempty"`
+	QosRWTP        int64    `json:"rw_mbytes_per_sec,omitempty"`
+	QosClass       int64    `json:"lvol_priority_class,omitempty"`
+	Status         string   `json:"status,omitempty"`
+
+	MaxNamespacesPerSubsystem int64 `json:"max_namespace_per_subsys,omitempty"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocklvols,verbs=get;list;watch;create;update;patch;delete
@@ -47,9 +86,98 @@ type SimplyBlockLvolReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
 func (r *SimplyBlockLvolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	// Fetch the Pool CR
+	lvolCR := &simplyblockv1alpha1.SimplyBlockLvol{}
+	if err := r.Get(ctx, req.NamespacedName, lvolCR); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// var cluster simplyblockv1alpha1.SimplyBlockStorageCluster
+	// if err := r.Get(ctx, types.NamespacedName{Name: poolCR.Spec.ClusterName, Namespace: poolCR.Namespace}, &cluster); err != nil {
+	// 	log.Info("Cluster not found yet — requeuing")
+	// 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	// }
+
+	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, lvolCR.Namespace, lvolCR.Spec.ClusterName)
+	if err != nil {
+		log.Error(err, "Failed to get cluster auth")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	poolUUID, err := ResolvePoolUUID(
+		ctx,
+		r.Client,
+		lvolCR.Namespace,
+		lvolCR.Spec.ClusterName,
+		lvolCR.Spec.PoolName,
+	)
+
+	if err != nil {
+		log.Info("Pool UUID not ready yet, requeuing",
+			"poolName", lvolCR.Spec.PoolName,
+			"cluster", lvolCR.Spec.ClusterName,
+		)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	apiClient := webapi.NewClient()
+
+	if !utils.ContainsString(lvolCR.Finalizers, "simplyblock.lvol.finalizer") {
+		lvolCR.Finalizers = append(lvolCR.Finalizers, "simplyblock.lvol.finalizer")
+		if err := r.Update(ctx, lvolCR); err != nil {
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+	}
+
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/",
+		clusterUUID,
+		poolUUID,
+	)
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		log.Error(err, "Failed to fetch lvols",
+			"poolUUID", poolUUID,
+			"endpoint", endpoint,
+			"status", status,
+			"response", string(body),
+		)
+	}
+
+	log.Info("LVOL API call",
+		"endpoint", endpoint,
+		"status", status,
+		"response", string(body),
+	)
+
+	var apiLvols []LVOLAPIResponse
+	if err := json.Unmarshal(body, &apiLvols); err != nil {
+		log.Error(err, "Failed to unmarshal lvol list", "poolUUID", poolUUID)
+	}
+
+	desiredStatus := lvolStatusListFromAPI(apiLvols)
+
+	if reflect.DeepEqual(lvolCR.Status, desiredStatus) {
+		log.Info("LVOL status already up to date", "lvolCR", lvolCR.Name)
+		return ctrl.Result{}, nil
+	}
+
+	patch := client.MergeFrom(lvolCR.DeepCopy())
+	lvolCR.Status = desiredStatus
+
+	if err := r.Status().Patch(ctx, lvolCR, patch); err != nil {
+		log.Error(err, "Failed to patch LVOL status", "lvol", lvolCR.Name)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	log.Info("LVOL status updated",
+		"lvolCR", lvolCR.Name,
+		"pool", lvolCR.Spec.PoolName,
+		"count", len(desiredStatus.Lvols),
+	)
 
 	return ctrl.Result{}, nil
 }
@@ -60,4 +188,72 @@ func (r *SimplyBlockLvolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&simplyblockv1alpha1.SimplyBlockLvol{}).
 		Named("simplyblocklvol").
 		Complete(r)
+}
+
+func lvolStatusListFromAPI(api []LVOLAPIResponse) simplyblockv1alpha1.SimplyBlockLvolStatus {
+	lvols := make([]simplyblockv1alpha1.LvolStatus, 0, len(api))
+
+	for _, l := range api {
+		lvols = append(lvols, simplyblockv1alpha1.LvolStatus{
+			UUID:           l.UUID,
+			LvolName:       l.LvolName,
+			NodeUUID:       l.NodeUUID,
+			Hostname:       l.Hostname,
+			ClonedFromSnap: l.ClonedFromSnap,
+			SnapName:       l.SnapName,
+			NQN:            l.NQN,
+			SubsysPort:     l.SubsysPort,
+			NamespaceID:    l.NamespaceID,
+			BlobID:         l.BlobID,
+			PoolUUID:       l.PoolUUID,
+			PoolName:       l.PoolName,
+			PvcName:        l.PvcName,
+			Status:         l.Status,
+			HAType:         l.HAType,
+			Health:         l.Health,
+			IsCrypto:       l.IsCrypto,
+			Size:           l.Size,
+			StripeWdata:    l.StripeWdata,
+			StripeWparity:  l.StripeWparity,
+
+			QosIOPS:  l.QosIOPS,
+			QosWTP:   l.QosWTP,
+			QosRTP:   l.QosRTP,
+			QosRWTP:  l.QosRWTP,
+			QosClass: l.QosClass,
+
+			MaxNamespacesPerSubsystem: l.MaxNamespacesPerSubsystem,
+			Fabric:                    l.Fabric,
+
+			UpdateDt: metav1.Now(),
+		})
+	}
+
+	return simplyblockv1alpha1.SimplyBlockLvolStatus{
+		Lvols: lvols,
+	}
+}
+
+func ResolvePoolUUID(
+	ctx context.Context,
+	c client.Client,
+	namespace string,
+	clusterName string,
+	poolName string,
+) (string, error) {
+
+	var pools simplyblockv1alpha1.SimplyBlockPoolList
+	if err := c.List(ctx, &pools, client.InNamespace(namespace)); err != nil {
+		return "", err
+	}
+
+	for _, p := range pools.Items {
+		if p.Spec.ClusterName == clusterName &&
+			p.Spec.Name == poolName &&
+			p.Status.UUID != "" {
+			return p.Status.UUID, nil
+		}
+	}
+
+	return "", fmt.Errorf("pool %q not found or UUID not ready", poolName)
 }

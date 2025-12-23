@@ -50,76 +50,81 @@ spec:
           status:
             description: status defines the observed state of SimplyBlockLvol
             properties:
-              blobID:
-                type: string
-              clonedFromSnap:
-                type: string
-              createDt:
-                format: date-time
-                type: string
-              fabric:
-                type: string
-              haType:
-                type: string
-              health:
-                type: boolean
-              hostname:
-                type: string
-              isCrypto:
-                type: boolean
-              lvolName:
-                type: string
-              maxNamespacesPerSubsystem:
-                format: int64
-                type: integer
-              namespaceID:
-                type: string
-              nodeUUID:
+              nodes:
                 items:
-                  type: string
+                  properties:
+                    blobID:
+                      type: string
+                    clonedFromSnap:
+                      type: string
+                    createDt:
+                      format: date-time
+                      type: string
+                    fabric:
+                      type: string
+                    haType:
+                      type: string
+                    health:
+                      type: boolean
+                    hostname:
+                      type: string
+                    isCrypto:
+                      type: boolean
+                    lvolName:
+                      type: string
+                    maxNamespacesPerSubsystem:
+                      format: int64
+                      type: integer
+                    namespaceID:
+                      type: string
+                    nodeUUID:
+                      items:
+                        type: string
+                      type: array
+                    nqn:
+                      type: string
+                    poolName:
+                      type: string
+                    poolUUID:
+                      type: string
+                    pvcName:
+                      type: string
+                    qosClass:
+                      format: int64
+                      type: integer
+                    qosIOPS:
+                      format: int64
+                      type: integer
+                    qosRTP:
+                      format: int64
+                      type: integer
+                    qosRWTP:
+                      format: int64
+                      type: integer
+                    qosWTP:
+                      format: int64
+                      type: integer
+                    size:
+                      type: string
+                    snapName:
+                      type: string
+                    status:
+                      type: string
+                    stripeWdata:
+                      format: int64
+                      type: integer
+                    stripeWparity:
+                      format: int64
+                      type: integer
+                    subsysPort:
+                      type: string
+                    updateDt:
+                      format: date-time
+                      type: string
+                    uuid:
+                      type: string
+                  type: object
                 type: array
-              nqn:
-                type: string
-              poolName:
-                type: string
-              poolUUID:
-                type: string
-              pvcName:
-                type: string
-              qosClass:
-                format: int64
-                type: integer
-              qosIOPS:
-                format: int64
-                type: integer
-              qosRTP:
-                format: int64
-                type: integer
-              qosRWTP:
-                format: int64
-                type: integer
-              qosWTP:
-                format: int64
-                type: integer
-              size:
-                type: string
-              snapName:
-                type: string
-              status:
-                type: string
-              stripeWdata:
-                format: int64
-                type: integer
-              stripeWparity:
-                format: int64
-                type: integer
-              subsysPort:
-                type: string
-              updateDt:
-                format: date-time
-                type: string
-              uuid:
-                type: string
             type: object
         required:
         - spec

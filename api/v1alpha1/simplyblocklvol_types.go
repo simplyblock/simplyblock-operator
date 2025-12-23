@@ -31,6 +31,10 @@ type SimplyBlockLvolSpec struct {
 
 // SimplyBlockLvolStatus defines the observed state of SimplyBlockLvol.
 type SimplyBlockLvolStatus struct {
+	Lvols []LvolStatus `json:"lvols,omitempty"`
+}
+
+type LvolStatus struct {
 	UUID           string      `json:"uuid,omitempty"`
 	LvolName       string      `json:"lvolName,omitempty"`
 	NodeUUID       []string    `json:"nodeUUID,omitempty"`
@@ -66,6 +70,7 @@ type SimplyBlockLvolStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="LVOLs",type=integer,JSONPath=".status.lvols.length()"
 
 // SimplyBlockLvol is the Schema for the simplyblocklvols API
 type SimplyBlockLvol struct {
