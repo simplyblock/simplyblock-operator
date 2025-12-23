@@ -54,13 +54,16 @@ type PoolAddParams struct {
 }
 
 type PoolUpdateParams struct {
-	Name          string `json:"name,omitempty"`
-	PoolMax       int    `json:"pool_max,omitempty"`
-	VolumeMaxSize int    `json:"lvol_max,omitempty"`
-	MaxRwIOPS     int    `json:"max_rw_iops,omitempty"`
-	MaxRwMB       int    `json:"max_rw_mbytes,omitempty"`
-	MaxRMB        int    `json:"max_r_mbytes,omitempty"`
-	MaxWMB        int    `json:"max_w_mbytes,omitempty"`
+	Name            string `json:"name,omitempty"`
+	PoolMax         int    `json:"pool_max,omitempty"`
+	VolumeMaxSize   int    `json:"lvol_max,omitempty"`
+	MaxRwIOPS       int    `json:"max_rw_iops,omitempty"`
+	MaxRwMB         int    `json:"max_rw_mbytes,omitempty"`
+	MaxRMB          int    `json:"max_r_mbytes,omitempty"`
+	MaxWMB          int    `json:"max_w_mbytes,omitempty"`
+	LvolCRName      string `json:"lvols_cr_name,omitempty"`
+	LvolCRNameSpace string `json:"lvols_cr_namespace,omitempty"`
+	LvolCRPlural    string `json:"lvols_cr_plural,omitempty"`
 }
 
 type StorageNodeAddParams struct {

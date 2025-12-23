@@ -14,7 +14,11 @@ spec:
     singular: simplyblocklvol
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.lvols.length()
+      name: LVOLs
+      type: integer
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: SimplyBlockLvol is the Schema for the simplyblocklvols API
@@ -50,7 +54,9 @@ spec:
           status:
             description: status defines the observed state of SimplyBlockLvol
             properties:
-              nodes:
+              configured:
+                type: boolean
+              lvols:
                 items:
                   properties:
                     blobID:

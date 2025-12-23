@@ -31,7 +31,8 @@ type SimplyBlockLvolSpec struct {
 
 // SimplyBlockLvolStatus defines the observed state of SimplyBlockLvol.
 type SimplyBlockLvolStatus struct {
-	Lvols []LvolStatus `json:"lvols,omitempty"`
+	Lvols      []LvolStatus `json:"lvols,omitempty"`
+	Configured bool         `json:"configured,omitempty"`
 }
 
 type LvolStatus struct {

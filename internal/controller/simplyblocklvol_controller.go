@@ -131,6 +131,38 @@ func (r *SimplyBlockLvolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
+	lvol := lvolCR.DeepCopy()
+
+	if !lvol.Status.Configured {
+		params := utils.PoolUpdateParams{
+			LvolCRName:      lvolCR.Name,
+			LvolCRNameSpace: lvolCR.Namespace,
+			LvolCRPlural:    "simplyblocklvols",
+		}
+
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolUUID)
+		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPut, endpoint, params)
+		if err != nil || status >= 300 {
+			log.Error(err, "Pool Update failed", "status", status, "response", string(body))
+			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+		}
+
+		log.Info("POOL UPDATE API call",
+			"endpoint", endpoint,
+			"status", status,
+			"response", string(body),
+		)
+
+		lvolCR.Status.Configured = true
+
+		if err := r.Status().Update(ctx, lvolCR); err != nil {
+			log.Error(err, "Failed to update lvolCR status after creation")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		log.Info("Pool successfully updated", "lvols_cr_name", lvolCR.Name)
+	}
+
 	endpoint := fmt.Sprintf(
 		"/api/v2/clusters/%s/storage-pools/%s/volumes/",
 		clusterUUID,
