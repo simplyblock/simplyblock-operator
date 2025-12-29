@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
@@ -417,7 +416,7 @@ func waitForNodeOnline(
 						updated := simplyblockv1alpha1.NodeStatus{
 							Hostname:  nodeName,
 							UUID:      res.UUID,
-							Health:    strconv.FormatBool(res.Health),
+							Health:    res.Health,
 							Status:    res.Status,
 							MgmtIp:    res.IP,
 							Devices:   res.Devices,
