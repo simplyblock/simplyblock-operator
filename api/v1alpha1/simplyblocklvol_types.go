@@ -45,7 +45,7 @@ type LvolStatus struct {
 	NQN            string      `json:"nqn,omitempty"`
 	SubsysPort     int64       `json:"subsysPort,omitempty"`
 	NamespaceID    string      `json:"namespaceID,omitempty"`
-	BlobID         string      `json:"blobID,omitempty"`
+	BlobID         int64       `json:"blobID,omitempty"`
 	PoolUUID       string      `json:"poolUUID,omitempty"`
 	PoolName       string      `json:"poolName,omitempty"`
 	PvcName        string      `json:"pvcName,omitempty"`
