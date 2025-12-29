@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"sort"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -190,6 +191,10 @@ func (r *SimplyBlockLvolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	desiredStatus := lvolStatusListFromAPI(apiLvols)
+	desiredStatus.Configured = lvolCR.Status.Configured
+
+	normalizeLvolStatus(&desiredStatus)
+	normalizeLvolStatus(&lvolCR.Status)
 
 	if reflect.DeepEqual(lvolCR.Status, desiredStatus) {
 		log.Info("LVOL status already up to date", "lvolCR", lvolCR.Name)
@@ -285,4 +290,14 @@ func ResolvePoolUUID(
 	}
 
 	return "", fmt.Errorf("pool %q not found or UUID not ready", poolName)
+}
+
+func normalizeLvolStatus(s *simplyblockv1alpha1.SimplyBlockLvolStatus) {
+	sort.SliceStable(s.Lvols, func(i, j int) bool {
+		return s.Lvols[i].UUID < s.Lvols[j].UUID
+	})
+
+	for i := range s.Lvols {
+		sort.Strings(s.Lvols[i].NodeUUID)
+	}
 }
