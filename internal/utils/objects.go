@@ -46,7 +46,7 @@ func ResolveClusterUUID(
 	}
 
 	for _, cluster := range clusters.Items {
-		if cluster.Name == clusterName && cluster.Status.UUID != "" {
+		if cluster.Spec.ClusterName == clusterName && cluster.Status.UUID != "" {
 			return cluster.Status.UUID, nil
 		}
 	}
