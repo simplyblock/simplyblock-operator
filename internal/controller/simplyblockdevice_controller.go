@@ -76,12 +76,21 @@ func (r *SimplyBlockDeviceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(
+	clusterUUID, err := utils.ResolveClusterUUID(
 		ctx,
 		r.Client,
 		devCR.Namespace,
 		devCR.Spec.ClusterName,
 	)
+
+	if err != nil {
+		log.Info("Cluster UUID not ready yet, requeuing",
+			"cluster", devCR.Spec.ClusterName,
+		)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, devCR.Namespace, devCR.Spec.ClusterName)
 	if err != nil {
 		log.Error(err, "Failed to get cluster auth")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
