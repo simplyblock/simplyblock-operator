@@ -100,13 +100,27 @@ func (r *SimplyBlockLvolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	// }
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, lvolCR.Namespace, lvolCR.Spec.ClusterName)
+	clusterUUID, err := utils.ResolveClusterUUID(
+		ctx,
+		r.Client,
+		lvolCR.Namespace,
+		lvolCR.Spec.ClusterName,
+	)
+
+	if err != nil {
+		log.Info("Cluster UUID not ready yet, requeuing",
+			"cluster", lvolCR.Spec.ClusterName,
+		)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, lvolCR.Namespace, lvolCR.Spec.ClusterName)
 	if err != nil {
 		log.Error(err, "Failed to get cluster auth")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	poolUUID, err := ResolvePoolUUID(
+	poolUUID, err := utils.ResolvePoolUUID(
 		ctx,
 		r.Client,
 		lvolCR.Namespace,
@@ -266,30 +280,6 @@ func lvolStatusListFromAPI(api []LVOLAPIResponse) simplyblockv1alpha1.SimplyBloc
 	return simplyblockv1alpha1.SimplyBlockLvolStatus{
 		Lvols: lvols,
 	}
-}
-
-func ResolvePoolUUID(
-	ctx context.Context,
-	c client.Client,
-	namespace string,
-	clusterName string,
-	poolName string,
-) (string, error) {
-
-	var pools simplyblockv1alpha1.SimplyBlockPoolList
-	if err := c.List(ctx, &pools, client.InNamespace(namespace)); err != nil {
-		return "", err
-	}
-
-	for _, p := range pools.Items {
-		if p.Spec.ClusterName == clusterName &&
-			p.Spec.Name == poolName &&
-			p.Status.UUID != "" {
-			return p.Status.UUID, nil
-		}
-	}
-
-	return "", fmt.Errorf("pool %q not found or UUID not ready", poolName)
 }
 
 func normalizeLvolStatus(s *simplyblockv1alpha1.SimplyBlockLvolStatus) {

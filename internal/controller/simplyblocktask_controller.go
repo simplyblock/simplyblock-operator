@@ -96,12 +96,25 @@ func (r *SimplyBlockTaskReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(
+	clusterUUID, err := utils.ResolveClusterUUID(
 		ctx,
 		r.Client,
 		taskCR.Namespace,
 		taskCR.Spec.ClusterName,
 	)
+
+	if err != nil {
+		log.Info("Cluster UUID not ready yet, requeuing",
+			"cluster", taskCR.Spec.ClusterName,
+		)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, taskCR.Namespace, taskCR.Spec.ClusterName)
+	if err != nil {
+		log.Error(err, "Failed to get cluster auth")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
 
 	if err != nil {
 		log.Error(err, "Failed to get cluster auth")

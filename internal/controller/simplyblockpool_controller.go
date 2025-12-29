@@ -72,7 +72,21 @@ func (r *SimplyBlockPoolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	// }
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, poolCR.Namespace, poolCR.Spec.ClusterName)
+	clusterUUID, err := utils.ResolveClusterUUID(
+		ctx,
+		r.Client,
+		poolCR.Namespace,
+		poolCR.Spec.ClusterName,
+	)
+
+	if err != nil {
+		log.Info("Cluster UUID not ready yet, requeuing",
+			"cluster", poolCR.Spec.ClusterName,
+		)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, poolCR.Namespace, poolCR.Spec.ClusterName)
 	if err != nil {
 		log.Error(err, "Failed to get cluster auth")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil

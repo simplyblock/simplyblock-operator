@@ -94,7 +94,21 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 	// 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	// }
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
+	clusterUUID, err := utils.ResolveClusterUUID(
+		ctx,
+		r.Client,
+		snCR.Namespace,
+		snCR.Spec.ClusterName,
+	)
+
+	if err != nil {
+		log.Info("Cluster UUID not ready yet, requeuing",
+			"cluster", snCR.Spec.ClusterName,
+		)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
 	if err != nil {
 		log.Error(err, "Failed to get cluster auth")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
