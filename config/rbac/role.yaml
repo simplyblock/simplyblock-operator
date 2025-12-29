@@ -8,6 +8,7 @@ rules:
   - simplyblock.simplyblock.io
   resources:
   - simplyblockdevices
+  - simplyblocklvols
   - simplyblockpools
   - simplyblockstorageclusters
   - simplyblockstoragenodes
@@ -24,6 +25,7 @@ rules:
   - simplyblock.simplyblock.io
   resources:
   - simplyblockdevices/finalizers
+  - simplyblocklvols/finalizers
   - simplyblockpools/finalizers
   - simplyblockstorageclusters/finalizers
   - simplyblockstoragenodes/finalizers
@@ -34,6 +36,7 @@ rules:
   - simplyblock.simplyblock.io
   resources:
   - simplyblockdevices/status
+  - simplyblocklvols/status
   - simplyblockpools/status
   - simplyblockstorageclusters/status
   - simplyblockstoragenodes/status

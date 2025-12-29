@@ -69,7 +69,7 @@ type SimplyBlockStorageNodeStatus struct {
 
 type NodeStatus struct {
 	UUID      string `json:"uuid,omitempty"`
-	Health    string `json:"health,omitempty"`
+	Health    bool   `json:"health,omitempty"`
 	Status    string `json:"status,omitempty"`
 	CPU       *int32 `json:"cpu,omitempty"`
 	Memory    string `json:"memory,omitempty"`
