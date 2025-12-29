@@ -58,7 +58,7 @@ type LVOLAPIResponse struct {
 	HAType         string   `json:"ha_type,omitempty"`
 	Health         bool     `json:"health_check,omitempty"`
 	IsCrypto       bool     `json:"crypto_bdev,omitempty"`
-	Size           string   `json:"size,omitempty"`
+	Size           int64    `json:"size,omitempty"`
 	Fabric         string   `json:"fabric,omitempty"`
 	StripeWdata    int64    `json:"ndcs,omitempty"`
 	StripeWparity  int64    `json:"npcs,omitempty"`
@@ -244,7 +244,7 @@ func lvolStatusListFromAPI(api []LVOLAPIResponse) simplyblockv1alpha1.SimplyBloc
 			HAType:         l.HAType,
 			Health:         l.Health,
 			IsCrypto:       l.IsCrypto,
-			Size:           l.Size,
+			Size:           utils.HumanBytes(l.Size, "iec"),
 			StripeWdata:    l.StripeWdata,
 			StripeWparity:  l.StripeWparity,
 
