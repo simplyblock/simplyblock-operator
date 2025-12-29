@@ -24,7 +24,6 @@ import (
 	"reflect"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -256,8 +255,6 @@ func lvolStatusListFromAPI(api []LVOLAPIResponse) simplyblockv1alpha1.SimplyBloc
 
 			MaxNamespacesPerSubsystem: l.MaxNamespacesPerSubsystem,
 			Fabric:                    l.Fabric,
-
-			UpdateDt: metav1.Now(),
 		})
 	}
 
