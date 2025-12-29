@@ -50,7 +50,7 @@ type LVOLAPIResponse struct {
 	SnapName       string   `json:"snapshot_name,omitempty"`
 	NQN            string   `json:"nqn,omitempty"`
 	SubsysPort     int64    `json:"port,omitempty"`
-	NamespaceID    string   `json:"ns_id,omitempty"`
+	NamespaceID    int64    `json:"ns_id,omitempty"`
 	BlobID         int64    `json:"blobid,omitempty"`
 	PoolUUID       string   `json:"pool_uuid,omitempty"`
 	PoolName       string   `json:"pool_name,omitempty"`
