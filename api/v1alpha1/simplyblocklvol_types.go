@@ -50,7 +50,7 @@ type LvolStatus struct {
 	PoolName       string      `json:"poolName,omitempty"`
 	PvcName        string      `json:"pvcName,omitempty"`
 	Status         string      `json:"status,omitempty"`
-	HAType         string      `json:"haType,omitempty"`
+	HA             bool        `json:"ha,omitempty"`
 	Health         bool        `json:"health,omitempty"`
 	IsCrypto       bool        `json:"isCrypto,omitempty"`
 	Size           string      `json:"size,omitempty"`

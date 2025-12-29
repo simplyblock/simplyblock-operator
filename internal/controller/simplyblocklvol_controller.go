@@ -42,30 +42,30 @@ type SimplyBlockLvolReconciler struct {
 }
 
 type LVOLAPIResponse struct {
-	UUID           string   `json:"uuid"`
-	LvolName       string   `json:"lvol_name"`
+	UUID           string   `json:"id"`
+	LvolName       string   `json:"name"`
 	NodeUUID       []string `json:"nodes,omitempty"`
 	Hostname       string   `json:"hostname,omitempty"`
-	ClonedFromSnap string   `json:"cloned_from_snap,,omitempty"`
+	ClonedFromSnap string   `json:"cloned_from,,omitempty"`
 	SnapName       string   `json:"snapshot_name,omitempty"`
 	NQN            string   `json:"nqn,omitempty"`
-	SubsysPort     string   `json:"subsys_port,omitempty"`
+	SubsysPort     string   `json:"port,omitempty"`
 	NamespaceID    string   `json:"ns_id,omitempty"`
 	BlobID         string   `json:"blobid,omitempty"`
 	PoolUUID       string   `json:"pool_uuid,omitempty"`
 	PoolName       string   `json:"pool_name,omitempty"`
 	PvcName        string   `json:"pvc_name,omitempty"`
-	HAType         string   `json:"ha_type,omitempty"`
+	HA             bool     `json:"high_availability,omitempty"`
 	Health         bool     `json:"health_check,omitempty"`
-	IsCrypto       bool     `json:"crypto_bdev,omitempty"`
+	IsCrypto       *string  `json:"crypto_key,omitempty"`
 	Size           int64    `json:"size,omitempty"`
 	Fabric         string   `json:"fabric,omitempty"`
 	StripeWdata    int64    `json:"ndcs,omitempty"`
 	StripeWparity  int64    `json:"npcs,omitempty"`
-	QosIOPS        int64    `json:"rw_ios_per_sec,omitempty"`
-	QosWTP         int64    `json:"w_mbytes_per_sec,omitempty"`
-	QosRTP         int64    `json:"r_mbytes_per_sec,omitempty"`
-	QosRWTP        int64    `json:"rw_mbytes_per_sec,omitempty"`
+	QosIOPS        int64    `json:"max_rw_iops,omitempty"`
+	QosWTP         int64    `json:"max_w_mbytes,omitempty"`
+	QosRTP         int64    `json:"max_r_mbytes,omitempty"`
+	QosRWTP        int64    `json:"max_rw_mbytes,omitempty"`
 	QosClass       int64    `json:"lvol_priority_class,omitempty"`
 	Status         string   `json:"status,omitempty"`
 
@@ -241,9 +241,9 @@ func lvolStatusListFromAPI(api []LVOLAPIResponse) simplyblockv1alpha1.SimplyBloc
 			PoolName:       l.PoolName,
 			PvcName:        l.PvcName,
 			Status:         l.Status,
-			HAType:         l.HAType,
+			HA:             l.HA,
 			Health:         l.Health,
-			IsCrypto:       l.IsCrypto,
+			IsCrypto:       l.IsCrypto != nil,
 			Size:           utils.HumanBytes(l.Size, "iec"),
 			StripeWdata:    l.StripeWdata,
 			StripeWparity:  l.StripeWparity,
