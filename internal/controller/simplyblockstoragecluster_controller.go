@@ -262,8 +262,10 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		cluster.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
 		clusterCR.Status.Configured = true
 
-		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			log.Error(err, "Failed to update cluster status after creation")
+		patch := client.MergeFrom(clusterCR.DeepCopy())
+
+		if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
+			log.Error(err, "Failed to patch cluster status after creation")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
