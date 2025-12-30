@@ -132,9 +132,9 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 	}
 
 	// --- Handle creation ---
-	// cluster := clusterCR.DeepCopy()
+	cluster := clusterCR.DeepCopy()
 
-	if clusterCR.Status.UUID == "" {
+	if cluster.Status.UUID == "" {
 		params := utils.ClusterAddParams{
 			Name:                   clusterCR.Spec.ClusterName,
 			BlkSize:                utils.IntPtrOrDefault(clusterCR.Spec.BlkSize, 512),
@@ -205,7 +205,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			},
 		}
 
-		original := clusterCR.DeepCopy()
+		// original := clusterCR.DeepCopy()
 
 		if endpoint == "/api/v1/cluster/create_first/" {
 			var apiResp ClusterFIRSTAPIResponse
@@ -264,7 +264,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		clusterCR.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
 		clusterCR.Status.Configured = true
 
-		patch := client.MergeFrom(original)
+		patch := client.MergeFrom(cluster)
 
 		if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
 			log.Error(err, "Failed to patch cluster status after creation")
