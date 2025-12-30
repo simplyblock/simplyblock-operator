@@ -205,6 +205,8 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			},
 		}
 
+		original := clusterCR.DeepCopy()
+
 		if endpoint == "/api/v1/cluster/create_first/" {
 			var apiResp ClusterFIRSTAPIResponse
 			if err := json.Unmarshal(body, &apiResp); err != nil {
@@ -262,7 +264,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		cluster.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
 		clusterCR.Status.Configured = true
 
-		patch := client.MergeFrom(clusterCR.DeepCopy())
+		patch := client.MergeFrom(original)
 
 		if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
 			log.Error(err, "Failed to patch cluster status after creation")
