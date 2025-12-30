@@ -53,3 +53,24 @@ func ResolveClusterUUID(
 
 	return "", fmt.Errorf("cluster %q not found or UUID not ready", clusterName)
 }
+
+func ExistingClusterUUID(
+	ctx context.Context,
+	c client.Client,
+	namespace string,
+) (exists bool, uuid string, clusterName string, err error) {
+
+	var clusters simplyblockv1alpha1.SimplyBlockStorageClusterList
+
+	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
+		return false, "", "", err
+	}
+
+	for _, cluster := range clusters.Items {
+		if cluster.Status.UUID != "" {
+			return true, cluster.Status.UUID, cluster.Spec.ClusterName, nil
+		}
+	}
+
+	return false, "", "", nil
+}

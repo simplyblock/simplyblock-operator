@@ -47,7 +47,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *
 
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-storage-node-ds",
+			Name:      "simplyblock-storage-node-ds-" + sn.Name,
 			Namespace: sn.Namespace,
 			Labels:    labels,
 		},
@@ -63,7 +63,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *
 					ServiceAccountName: "simplyblock-storage-node-sa",
 					HostNetwork:        true,
 					NodeSelector: map[string]string{
-						"io.simplyblock.node-type": "simplyblock-storage-plane",
+						"io.simplyblock.node-type": "simplyblock-storage-plane:" + sn.Name,
 					},
 
 					Volumes: []corev1.Volume{

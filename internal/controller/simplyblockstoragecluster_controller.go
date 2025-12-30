@@ -150,11 +150,30 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			CRPlural:               "simplyblockstorageclusters",
 		}
 
-		// endpoint := "/api/v2/clusters/"
-
 		endpoint = "/api/v1/cluster/create_first/"
+		clusterSecret := ""
 
-		body, status, err = apiClient.Do(ctx, "", http.MethodPost, endpoint, params)
+		exists, clusterUUID, clusterName, err := utils.ExistingClusterUUID(ctx, r.Client, req.Namespace)
+		if err != nil {
+			log.Error(err, "Failed to check existing cluster")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		if exists {
+			endpoint = "/api/v2/clusters/"
+			_, clusterSecret, err = utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterName)
+			if err != nil {
+				log.Error(
+					err,
+					"Failed to get cluster auth",
+					"clusterName", clusterName,
+					"clusterUUID", clusterUUID,
+				)
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+		}
+
+		body, status, err = apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
 		if err != nil || status >= 300 {
 			log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
