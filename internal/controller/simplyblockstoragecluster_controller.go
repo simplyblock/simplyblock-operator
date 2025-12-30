@@ -132,9 +132,9 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 	}
 
 	// --- Handle creation ---
-	cluster := clusterCR.DeepCopy()
+	//cluster := clusterCR.DeepCopy()
 
-	if cluster.Status.UUID == "" {
+	if clusterCR.Status.UUID == "" {
 		params := utils.ClusterAddParams{
 			Name:                   clusterCR.Spec.ClusterName,
 			BlkSize:                utils.IntPtrOrDefault(clusterCR.Spec.BlkSize, 512),
