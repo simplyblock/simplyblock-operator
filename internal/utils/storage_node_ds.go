@@ -63,7 +63,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *
 					ServiceAccountName: "simplyblock-storage-node-sa",
 					HostNetwork:        true,
 					NodeSelector: map[string]string{
-						"io.simplyblock.node-type": "simplyblock-storage-plane:" + sn.Name,
+						"io.simplyblock.node-type": "simplyblock-storage-plane-" + sn.Name,
 					},
 
 					Volumes: []corev1.Volume{
