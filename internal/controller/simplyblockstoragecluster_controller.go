@@ -261,7 +261,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		}
 
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
-		cluster.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
+		clusterCR.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
 		clusterCR.Status.Configured = true
 
 		patch := client.MergeFrom(original)
