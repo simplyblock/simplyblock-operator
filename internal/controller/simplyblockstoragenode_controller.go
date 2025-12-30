@@ -307,7 +307,7 @@ func (r *SimplyBlockStorageNodeReconciler) labelWorkerNodes(ctx context.Context,
 		}
 
 		key := "io.simplyblock.node-type"
-		value := "simplyblock-storage-plane"
+		value := "simplyblock-storage-plane-" + sn.Name
 
 		if node.Labels[key] == value {
 			continue

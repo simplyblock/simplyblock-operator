@@ -42,7 +42,7 @@ type SimplyBlockStorageClusterReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-type ClusterAPIResponse struct {
+type ClusterFIRSTAPIResponse struct {
 	Results struct {
 		UUID        string `json:"uuid"`
 		Secret      string `json:"secret"`
@@ -52,6 +52,16 @@ type ClusterAPIResponse struct {
 		Rebalancing bool   `json:"is_re_balancing"`
 		Status      string `json:"status"`
 	} `json:"results"`
+}
+
+type ClusterAPIResponse struct {
+	UUID        string `json:"uuid"`
+	Secret      string `json:"secret"`
+	NQN         string `json:"nqn"`
+	NDCS        int    `json:"distr_ndcs"`
+	NPCS        int    `json:"distr_npcs"`
+	Rebalancing bool   `json:"is_re_balancing"`
+	Status      string `json:"status"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters,verbs=get;list;watch;create;update;patch;delete
@@ -150,11 +160,31 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			CRPlural:               "simplyblockstorageclusters",
 		}
 
-		// endpoint := "/api/v2/clusters/"
-
 		endpoint = "/api/v1/cluster/create_first/"
+		clusterSecret := ""
 
-		body, status, err = apiClient.Do(ctx, "", http.MethodPost, endpoint, params)
+		exists, clusterUUID, clusterName, err := utils.ExistingClusterUUID(ctx, r.Client, req.Namespace)
+		if err != nil {
+			log.Error(err, "Failed to check existing cluster")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		if exists {
+			endpoint = "/api/v2/clusters/"
+
+			_, clusterSecret, err = utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterName)
+			if err != nil {
+				log.Error(
+					err,
+					"Failed to get cluster auth",
+					"clusterName", clusterName,
+					"clusterUUID", clusterUUID,
+				)
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+		}
+
+		body, status, err = apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
 		if err != nil || status >= 300 {
 			log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
@@ -166,12 +196,6 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			"response", string(body),
 		)
 
-		var apiResp ClusterAPIResponse
-		if err := json.Unmarshal(body, &apiResp); err != nil {
-			log.Error(err, "Unable to parse cluster creation response", "raw", string(body))
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
 		secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
 
 		secret := &corev1.Secret{
@@ -181,31 +205,69 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			},
 		}
 
-		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
-			if secret.Data == nil {
-				secret.Data = map[string][]byte{}
-			}
-			secret.Data["uuid"] = []byte(apiResp.Results.UUID)
-			secret.Data["secret"] = []byte(apiResp.Results.Secret)
-			return nil
-		})
+		// original := clusterCR.DeepCopy()
 
-		if err != nil {
-			log.Error(err, "Failed to create/update Secret for cluster")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		if endpoint == "/api/v1/cluster/create_first/" {
+			var apiResp ClusterFIRSTAPIResponse
+			if err := json.Unmarshal(body, &apiResp); err != nil {
+				log.Error(err, "Unable to parse first cluster creation response", "raw", string(body))
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+			_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+				if secret.Data == nil {
+					secret.Data = map[string][]byte{}
+				}
+				secret.Data["uuid"] = []byte(apiResp.Results.UUID)
+				secret.Data["secret"] = []byte(apiResp.Results.Secret)
+				return nil
+			})
+
+			if err != nil {
+				log.Error(err, "Failed to create/update Secret for cluster")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+
+			clusterCR.Status.UUID = apiResp.Results.UUID
+			clusterCR.Status.Rebalancing = &apiResp.Results.Rebalancing
+			clusterCR.Status.Status = apiResp.Results.Status
+			clusterCR.Status.NQN = apiResp.Results.NQN
+			clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.Results.NDCS, apiResp.Results.NPCS)
+		} else {
+			var apiResp ClusterAPIResponse
+			if err := json.Unmarshal(body, &apiResp); err != nil {
+				log.Error(err, "Unable to parse cluster creation response", "raw", string(body))
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+
+			_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+				if secret.Data == nil {
+					secret.Data = map[string][]byte{}
+				}
+				secret.Data["uuid"] = []byte(apiResp.UUID)
+				secret.Data["secret"] = []byte(apiResp.Secret)
+				return nil
+			})
+
+			if err != nil {
+				log.Error(err, "Failed to create/update Secret for cluster")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+
+			clusterCR.Status.UUID = apiResp.UUID
+			clusterCR.Status.Rebalancing = &apiResp.Rebalancing
+			clusterCR.Status.Status = apiResp.Status
+			clusterCR.Status.NQN = apiResp.NQN
+			clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
 		}
 
-		clusterCR.Status.UUID = apiResp.Results.UUID
-		clusterCR.Status.Rebalancing = &apiResp.Results.Rebalancing
-		clusterCR.Status.Status = apiResp.Results.Status
-		clusterCR.Status.NQN = apiResp.Results.NQN
-		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.Results.NDCS, apiResp.Results.NPCS)
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
-		cluster.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
+		clusterCR.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
 		clusterCR.Status.Configured = true
 
-		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			log.Error(err, "Failed to update cluster status after creation")
+		patch := client.MergeFrom(cluster)
+
+		if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
+			log.Error(err, "Failed to patch cluster status after creation")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
