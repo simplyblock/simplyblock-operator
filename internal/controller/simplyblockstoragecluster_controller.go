@@ -125,7 +125,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 	}
 
 	if clusterCR.Status.UUID != "" {
-		// Cluster already exists → nothing to do
+		// Cluster already exists
 		return ctrl.Result{}, nil
 	}
 
