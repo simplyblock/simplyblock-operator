@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
@@ -88,12 +89,12 @@ func (r *SimplyBlockTaskReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	// --- Add finalizer if not present ---
-	if !utils.ContainsString(taskCR.Finalizers, "simplyblock.task.finalizer") {
-		taskCR.Finalizers = append(taskCR.Finalizers, "simplyblock.task.finalizer")
+	if !controllerutil.ContainsFinalizer(taskCR, "simplyblock.task.finalizer") {
+		controllerutil.AddFinalizer(taskCR, "simplyblock.task.finalizer")
 		if err := r.Update(ctx, taskCR); err != nil {
-			log.Error(err, "Failed to add finalizer to task", "task", taskCR.Name)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			return ctrl.Result{}, err
 		}
+		return ctrl.Result{}, nil
 	}
 
 	clusterUUID, err := utils.ResolveClusterUUID(

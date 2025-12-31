@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
@@ -94,6 +95,14 @@ func (r *SimplyBlockDeviceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err != nil {
 		log.Error(err, "Failed to get cluster auth")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if !controllerutil.ContainsFinalizer(devCR, "simplyblock.device.finalizer") {
+		controllerutil.AddFinalizer(devCR, "simplyblock.device.finalizer")
+		if err := r.Update(ctx, devCR); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	var nodeUUIDs []string

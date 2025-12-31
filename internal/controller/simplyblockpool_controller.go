@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
@@ -114,11 +115,12 @@ func (r *SimplyBlockPoolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// 	return ctrl.Result{}, nil
 	// }
 
-	if !utils.ContainsString(poolCR.Finalizers, "simplyblock.pool.finalizer") {
-		poolCR.Finalizers = append(poolCR.Finalizers, "simplyblock.pool.finalizer")
+	if !controllerutil.ContainsFinalizer(poolCR, "simplyblock.pool.finalizer") {
+		controllerutil.AddFinalizer(poolCR, "simplyblock.pool.finalizer")
 		if err := r.Update(ctx, poolCR); err != nil {
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			return ctrl.Result{}, err
 		}
+		return ctrl.Result{}, nil
 	}
 
 	pool := poolCR.DeepCopy()

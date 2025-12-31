@@ -88,42 +88,48 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 
 	apiClient := webapi.NewClient()
 
-	// --- Handle deletion ---
+	/* -------------------- Deletion -------------------- */
 	if !clusterCR.DeletionTimestamp.IsZero() {
-		// CR is being deleted
-		if utils.ContainsString(clusterCR.Finalizers, "simplyblock.finalizer") && clusterCR.Status.UUID != "" {
-			clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+		if controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") &&
+			clusterCR.Status.UUID != "" {
+
+			clusterUUID, clusterSecret, err :=
+				utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
 			if err != nil {
 				log.Error(err, "Failed to get cluster auth")
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
+
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
-			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+			_, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
 			if err != nil || status >= 300 {
-				log.Error(err, "Failed to delete cluster", "status", status, "response", string(body))
+				log.Error(err, "Failed to delete cluster", "status", status)
 				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 			}
 
-			// Remove finalizer
-			clusterCR.Finalizers = utils.RemoveString(clusterCR.Finalizers, "simplyblock.finalizer")
+			controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
 			if err := r.Update(ctx, clusterCR); err != nil {
-				log.Error(err, "Failed to remove finalizer")
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+				return ctrl.Result{}, err
 			}
-
-			log.Info("Cluster deleted successfully", "name", clusterCR.Name)
 		}
 		return ctrl.Result{}, nil
 	}
 
-	// --- Add finalizer if not present ---
-	if !utils.ContainsString(clusterCR.Finalizers, "simplyblock.finalizer") {
-		clusterCR.Finalizers = append(clusterCR.Finalizers, "simplyblock.finalizer")
+	/* -------------------- Finalizer -------------------- */
+	if !controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
+		controllerutil.AddFinalizer(clusterCR, "simplyblock.cluster.finalizer")
 		if err := r.Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			return ctrl.Result{}, err
 		}
+		return ctrl.Result{}, nil
 	}
 
+	if clusterCR.Status.UUID != "" {
+		// Cluster already exists
+		return ctrl.Result{}, nil
+	}
+
+	/* -------------------- Health Check -------------------- */
 	endpoint := "/api/v1/health/fdb/"
 	body, status, err := apiClient.Do(ctx, "", http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
@@ -131,149 +137,146 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// --- Handle creation ---
+	/* -------------------- Create Cluster -------------------- */
 	cluster := clusterCR.DeepCopy()
 
-	if cluster.Status.UUID == "" {
-		params := utils.ClusterAddParams{
-			Name:                   clusterCR.Spec.ClusterName,
-			BlkSize:                utils.IntPtrOrDefault(clusterCR.Spec.BlkSize, 512),
-			PageSizeInBlocks:       utils.IntPtrOrDefault(clusterCR.Spec.PageSizeInBlocks, 2097152),
-			CapWarn:                utils.IntPtrOrZero(clusterCR.Spec.CapWarn),
-			CapCrit:                utils.IntPtrOrZero(clusterCR.Spec.CapCrit),
-			ProvCapWarn:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapWarn),
-			ProvCapCrit:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapCrit),
-			DistrNdcs:              utils.IntPtrOrDefault(clusterCR.Spec.StripeWdata, 1),
-			DistrNpcs:              utils.IntPtrOrDefault(clusterCR.Spec.StripeWparity, 1),
-			DistrBs:                utils.IntPtrOrDefault(clusterCR.Spec.DistrBs, 4096),
-			DistrChunkBs:           utils.IntPtrOrDefault(clusterCR.Spec.DistrChunkBs, 4096),
-			HAType:                 clusterCR.Spec.HAType,
-			QpairCount:             utils.IntPtrOrDefault(clusterCR.Spec.QpairCount, 256),
-			MaxQueueSize:           utils.IntPtrOrDefault(clusterCR.Spec.MaxQueueSize, 128),
-			InflightIOThreshold:    utils.IntPtrOrDefault(clusterCR.Spec.InflightIOThreshold, 4),
-			EnableNodeAffinity:     utils.BoolPtrOrFalse(clusterCR.Spec.EnableNodeAffinity),
-			StrictNodeAntiAffinity: utils.BoolPtrOrFalse(clusterCR.Spec.StrictNodeAntiAffinity),
-			IsSingleNode:           utils.BoolPtrOrFalse(clusterCR.Spec.IsSingleNode),
-			Fabric:                 clusterCR.Spec.Fabric,
-			CRName:                 clusterCR.Name,
-			CRNameSpace:            clusterCR.Namespace,
-			CRPlural:               "simplyblockstorageclusters",
-		}
-
-		endpoint = "/api/v1/cluster/create_first/"
-		clusterSecret := ""
-
-		exists, clusterUUID, clusterName, err := utils.ExistingClusterUUID(ctx, r.Client, req.Namespace)
-		if err != nil {
-			log.Error(err, "Failed to check existing cluster")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
-		if exists {
-			endpoint = "/api/v2/clusters/"
-
-			_, clusterSecret, err = utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterName)
-			if err != nil {
-				log.Error(
-					err,
-					"Failed to get cluster auth",
-					"clusterName", clusterName,
-					"clusterUUID", clusterUUID,
-				)
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-		}
-
-		body, status, err = apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
-		if err != nil || status >= 300 {
-			log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
-			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-		}
-
-		log.Info("Cluster API call",
-			"endpoint", endpoint,
-			"status", status,
-			"response", string(body),
-		)
-
-		secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
-
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      secretName,
-				Namespace: clusterCR.Namespace,
-			},
-		}
-
-		// original := clusterCR.DeepCopy()
-
-		if endpoint == "/api/v1/cluster/create_first/" {
-			var apiResp ClusterFIRSTAPIResponse
-			if err := json.Unmarshal(body, &apiResp); err != nil {
-				log.Error(err, "Unable to parse first cluster creation response", "raw", string(body))
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-			_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
-				if secret.Data == nil {
-					secret.Data = map[string][]byte{}
-				}
-				secret.Data["uuid"] = []byte(apiResp.Results.UUID)
-				secret.Data["secret"] = []byte(apiResp.Results.Secret)
-				return nil
-			})
-
-			if err != nil {
-				log.Error(err, "Failed to create/update Secret for cluster")
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-
-			clusterCR.Status.UUID = apiResp.Results.UUID
-			clusterCR.Status.Rebalancing = &apiResp.Results.Rebalancing
-			clusterCR.Status.Status = apiResp.Results.Status
-			clusterCR.Status.NQN = apiResp.Results.NQN
-			clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.Results.NDCS, apiResp.Results.NPCS)
-		} else {
-			var apiResp ClusterAPIResponse
-			if err := json.Unmarshal(body, &apiResp); err != nil {
-				log.Error(err, "Unable to parse cluster creation response", "raw", string(body))
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-
-			_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
-				if secret.Data == nil {
-					secret.Data = map[string][]byte{}
-				}
-				secret.Data["uuid"] = []byte(apiResp.UUID)
-				secret.Data["secret"] = []byte(apiResp.Secret)
-				return nil
-			})
-
-			if err != nil {
-				log.Error(err, "Failed to create/update Secret for cluster")
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-
-			clusterCR.Status.UUID = apiResp.UUID
-			clusterCR.Status.Rebalancing = &apiResp.Rebalancing
-			clusterCR.Status.Status = apiResp.Status
-			clusterCR.Status.NQN = apiResp.NQN
-			clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
-		}
-
-		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
-		clusterCR.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
-		clusterCR.Status.Configured = true
-
-		patch := client.MergeFrom(cluster)
-
-		if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
-			log.Error(err, "Failed to patch cluster status after creation")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
-		log.Info("Cluster successfully created", "name", clusterCR.Name)
-		return ctrl.Result{}, nil
+	params := utils.ClusterAddParams{
+		Name:                   clusterCR.Spec.ClusterName,
+		BlkSize:                utils.IntPtrOrDefault(clusterCR.Spec.BlkSize, 512),
+		PageSizeInBlocks:       utils.IntPtrOrDefault(clusterCR.Spec.PageSizeInBlocks, 2097152),
+		CapWarn:                utils.IntPtrOrZero(clusterCR.Spec.CapWarn),
+		CapCrit:                utils.IntPtrOrZero(clusterCR.Spec.CapCrit),
+		ProvCapWarn:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapWarn),
+		ProvCapCrit:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapCrit),
+		DistrNdcs:              utils.IntPtrOrDefault(clusterCR.Spec.StripeWdata, 1),
+		DistrNpcs:              utils.IntPtrOrDefault(clusterCR.Spec.StripeWparity, 1),
+		DistrBs:                utils.IntPtrOrDefault(clusterCR.Spec.DistrBs, 4096),
+		DistrChunkBs:           utils.IntPtrOrDefault(clusterCR.Spec.DistrChunkBs, 4096),
+		HAType:                 clusterCR.Spec.HAType,
+		QpairCount:             utils.IntPtrOrDefault(clusterCR.Spec.QpairCount, 256),
+		MaxQueueSize:           utils.IntPtrOrDefault(clusterCR.Spec.MaxQueueSize, 128),
+		InflightIOThreshold:    utils.IntPtrOrDefault(clusterCR.Spec.InflightIOThreshold, 4),
+		EnableNodeAffinity:     utils.BoolPtrOrFalse(clusterCR.Spec.EnableNodeAffinity),
+		StrictNodeAntiAffinity: utils.BoolPtrOrFalse(clusterCR.Spec.StrictNodeAntiAffinity),
+		IsSingleNode:           utils.BoolPtrOrFalse(clusterCR.Spec.IsSingleNode),
+		Fabric:                 clusterCR.Spec.Fabric,
+		CRName:                 clusterCR.Name,
+		CRNameSpace:            clusterCR.Namespace,
+		CRPlural:               "simplyblockstorageclusters",
 	}
+
+	endpoint = "/api/v1/cluster/create_first/"
+	clusterSecret := ""
+
+	exists, clusterUUID, clusterName, err := utils.ExistingClusterUUID(ctx, r.Client, req.Namespace)
+	if err != nil {
+		log.Error(err, "Failed to check existing cluster")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if exists {
+		endpoint = "/api/v2/clusters/"
+
+		_, clusterSecret, err = utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterName)
+		if err != nil {
+			log.Error(
+				err,
+				"Failed to get cluster auth",
+				"clusterName", clusterName,
+				"clusterUUID", clusterUUID,
+			)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+	}
+
+	body, status, err = apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
+	if err != nil || status >= 300 {
+		log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
+		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+	}
+
+	log.Info("Cluster API call",
+		"endpoint", endpoint,
+		"status", status,
+		"response", string(body),
+	)
+
+	secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: clusterCR.Namespace,
+		},
+	}
+
+	// original := clusterCR.DeepCopy()
+
+	if endpoint == "/api/v1/cluster/create_first/" {
+		var apiResp ClusterFIRSTAPIResponse
+		if err := json.Unmarshal(body, &apiResp); err != nil {
+			log.Error(err, "Unable to parse first cluster creation response", "raw", string(body))
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+			if secret.Data == nil {
+				secret.Data = map[string][]byte{}
+			}
+			secret.Data["uuid"] = []byte(apiResp.Results.UUID)
+			secret.Data["secret"] = []byte(apiResp.Results.Secret)
+			return nil
+		})
+
+		if err != nil {
+			log.Error(err, "Failed to create/update Secret for cluster")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		clusterCR.Status.UUID = apiResp.Results.UUID
+		clusterCR.Status.Rebalancing = &apiResp.Results.Rebalancing
+		clusterCR.Status.Status = apiResp.Results.Status
+		clusterCR.Status.NQN = apiResp.Results.NQN
+		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.Results.NDCS, apiResp.Results.NPCS)
+	} else {
+		var apiResp ClusterAPIResponse
+		if err := json.Unmarshal(body, &apiResp); err != nil {
+			log.Error(err, "Unable to parse cluster creation response", "raw", string(body))
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+			if secret.Data == nil {
+				secret.Data = map[string][]byte{}
+			}
+			secret.Data["uuid"] = []byte(apiResp.UUID)
+			secret.Data["secret"] = []byte(apiResp.Secret)
+			return nil
+		})
+
+		if err != nil {
+			log.Error(err, "Failed to create/update Secret for cluster")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		clusterCR.Status.UUID = apiResp.UUID
+		clusterCR.Status.Rebalancing = &apiResp.Rebalancing
+		clusterCR.Status.Status = apiResp.Status
+		clusterCR.Status.NQN = apiResp.NQN
+		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
+	}
+
+	clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
+	clusterCR.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
+	clusterCR.Status.Configured = true
+
+	patch := client.MergeFrom(cluster)
+
+	if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
+		log.Error(err, "Failed to patch cluster status after creation")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	log.Info("Cluster successfully created", "name", clusterCR.Name)
 
 	// // --- Handle update ---
 	// updateParams := utils.ClusterUpdateParams{

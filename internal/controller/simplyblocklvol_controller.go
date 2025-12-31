@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
@@ -138,11 +139,12 @@ func (r *SimplyBlockLvolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	apiClient := webapi.NewClient()
 
-	if !utils.ContainsString(lvolCR.Finalizers, "simplyblock.lvol.finalizer") {
-		lvolCR.Finalizers = append(lvolCR.Finalizers, "simplyblock.lvol.finalizer")
+	if !controllerutil.ContainsFinalizer(lvolCR, "simplyblock.lvol.finalizer") {
+		controllerutil.AddFinalizer(lvolCR, "simplyblock.lvol.finalizer")
 		if err := r.Update(ctx, lvolCR); err != nil {
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			return ctrl.Result{}, err
 		}
+		return ctrl.Result{}, nil
 	}
 
 	lvol := lvolCR.DeepCopy()

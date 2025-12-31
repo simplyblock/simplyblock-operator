@@ -137,11 +137,12 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 	// 	return ctrl.Result{}, nil
 	// }
 
-	if !utils.ContainsString(snCR.Finalizers, "simplyblock.finalizer") {
-		snCR.Finalizers = append(snCR.Finalizers, "simplyblock.finalizer")
+	if !controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
+		controllerutil.AddFinalizer(snCR, "simplyblock.storagenode.finalizer")
 		if err := r.Update(ctx, snCR); err != nil {
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			return ctrl.Result{}, err
 		}
+		return ctrl.Result{}, nil
 	}
 
 	if snCR.Spec.Action != "" {
