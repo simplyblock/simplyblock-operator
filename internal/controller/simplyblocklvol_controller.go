@@ -145,6 +145,14 @@ func (r *SimplyBlockLvolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
+	// if !controllerutil.ContainsFinalizer(lvolCR, "simplyblock.lvol.finalizer") {
+	// 	controllerutil.AddFinalizer(lvolCR, "simplyblock.lvol.finalizer")
+	// 	if err := r.Update(ctx, lvolCR); err != nil {
+	// 		return ctrl.Result{}, err
+	// 	}
+	// 	return ctrl.Result{}, nil
+	// }
+
 	lvol := lvolCR.DeepCopy()
 
 	if !lvol.Status.Configured {
