@@ -67,6 +67,30 @@ func ResolveClusterUUID(
 	return "", fmt.Errorf("cluster %q not found or UUID not ready", clusterName)
 }
 
+func ResolveClusterCR(
+	ctx context.Context,
+	c client.Client,
+	namespace string,
+	clusterName string,
+) (*simplyblockv1alpha1.SimplyBlockStorageCluster, error) {
+
+	var clusters simplyblockv1alpha1.SimplyBlockStorageClusterList
+	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+
+	for i := range clusters.Items {
+		cluster := &clusters.Items[i]
+
+		if cluster.Spec.ClusterName == clusterName {
+			return cluster, nil
+		}
+	}
+
+	return nil, fmt.Errorf("cluster with spec.clusterName %q not found", clusterName)
+}
+
+
 func ExistingClusterUUID(
 	ctx context.Context,
 	c client.Client,

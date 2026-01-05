@@ -458,15 +458,14 @@ func waitForNodeOnline(
 
 						log.Info("Node is online", "node", nodeName)
 
-						clusterCR := &simplyblockv1alpha1.SimplyBlockStorageCluster{}
-						if err := r.Get(
+						clusterCR, err := utils.ResolveClusterCR(
 							ctx,
-							client.ObjectKey{
-								Name:      snCR.Spec.ClusterName,
-								Namespace: snCR.Namespace,
-							},
-							clusterCR,
-						); err != nil {
+							r.Client,
+							snCR.Namespace,
+							snCR.Spec.ClusterName,
+						)
+
+						if err != nil {
 							log.Info("Cluster not found yet for activation check")
 							return fmt.Errorf("cluster not found yet")
 						}
