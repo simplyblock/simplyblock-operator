@@ -172,7 +172,7 @@ func BuildStorageNodeServiceAccount(namespace string) *corev1.ServiceAccount {
 	}
 }
 
-func BuildStorageNodeRole(isOpenShift bool, namespace string) *rbacv1.Role {
+func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 	baseRules := []rbacv1.PolicyRule{
 		{
 			APIGroups: []string{""},
@@ -206,28 +206,26 @@ func BuildStorageNodeRole(isOpenShift bool, namespace string) *rbacv1.Role {
 		)
 	}
 
-	return &rbacv1.Role{
+	return &rbacv1.ClusterRole{
 		TypeMeta: metav1.TypeMeta{
-			Kind:       "Role",
+			Kind:       "ClusterRole",
 			APIVersion: "rbac.authorization.k8s.io/v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-storage-node-role",
-			Namespace: namespace,
+			Name: "simplyblock-storage-node-role",
 		},
 		Rules: baseRules,
 	}
 }
 
-func BuildStorageNodeRoleBinding(namespace string) *rbacv1.RoleBinding {
-	return &rbacv1.RoleBinding{
+func BuildStorageNodeClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
+	return &rbacv1.ClusterRoleBinding{
 		TypeMeta: metav1.TypeMeta{
-			Kind:       "RoleBinding",
+			Kind:       "ClusterRoleBinding",
 			APIVersion: "rbac.authorization.k8s.io/v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-storage-node-binding",
-			Namespace: namespace,
+			Name: "simplyblock-storage-node-binding",
 		},
 		Subjects: []rbacv1.Subject{
 			{
@@ -237,7 +235,7 @@ func BuildStorageNodeRoleBinding(namespace string) *rbacv1.RoleBinding {
 			},
 		},
 		RoleRef: rbacv1.RoleRef{
-			Kind:     "Role",
+			Kind:     "ClusterRole",
 			Name:     "simplyblock-storage-node-role",
 			APIGroup: "rbac.authorization.k8s.io",
 		},

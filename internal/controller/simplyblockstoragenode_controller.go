@@ -162,13 +162,13 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 		return ctrl.Result{}, fmt.Errorf("failed to apply ServiceAccount: %w", err)
 	}
 
-	cr := utils.BuildStorageNodeRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster), snCR.Namespace)
+	cr := utils.BuildStorageNodeClusterRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster))
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error { return nil })
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRole: %w", err)
 	}
 
-	crb := utils.BuildStorageNodeRoleBinding(snCR.Namespace)
+	crb := utils.BuildStorageNodeClusterRoleBinding(snCR.Namespace)
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error { return nil })
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
