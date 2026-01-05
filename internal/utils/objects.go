@@ -2,12 +2,25 @@ package utils
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
+
+	"github.com/simplyblock/simplyblock-manager/internal/webapi"
 )
+
+type ClusterGetResponse struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
 
 func ResolvePoolUUID(
 	ctx context.Context,
@@ -54,6 +67,29 @@ func ResolveClusterUUID(
 	return "", fmt.Errorf("cluster %q not found or UUID not ready", clusterName)
 }
 
+func ResolveClusterCR(
+	ctx context.Context,
+	c client.Client,
+	namespace string,
+	clusterName string,
+) (*simplyblockv1alpha1.SimplyBlockStorageCluster, error) {
+
+	var clusters simplyblockv1alpha1.SimplyBlockStorageClusterList
+	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+
+	for i := range clusters.Items {
+		cluster := &clusters.Items[i]
+
+		if cluster.Spec.ClusterName == clusterName {
+			return cluster, nil
+		}
+	}
+
+	return nil, fmt.Errorf("cluster with spec.clusterName %q not found", clusterName)
+}
+
 func ExistingClusterUUID(
 	ctx context.Context,
 	c client.Client,
@@ -73,4 +109,185 @@ func ExistingClusterUUID(
 	}
 
 	return false, "", "", nil
+}
+
+func CountOnlineHealthyNodes(
+	nodes []simplyblockv1alpha1.NodeStatus,
+) int {
+	count := 0
+	for _, n := range nodes {
+		if n.Status == "online" && n.Health {
+			count++
+		}
+	}
+	return count
+}
+
+func ShouldActivateCluster(
+	mod int,
+	onlineHealthy int,
+	workerNodes []string,
+) bool {
+
+	required := mod + 1
+
+	return onlineHealthy == len(workerNodes) &&
+		onlineHealthy >= required
+}
+
+func ClusterAlreadyActive(cluster *simplyblockv1alpha1.SimplyBlockStorageCluster) bool {
+	return cluster.Status.Status == "active"
+}
+
+func ActivateCluster(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID string,
+	clusterSecret string,
+) error {
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/activate", clusterUUID)
+
+	body, status, err := apiClient.Do(
+		ctx,
+		clusterSecret,
+		http.MethodPost,
+		endpoint,
+		nil,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	if status >= 300 {
+		return fmt.Errorf(
+			"cluster activation failed: status=%d body=%s",
+			status,
+			string(body),
+		)
+	}
+
+	return nil
+}
+
+func IsClusterActive(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+) (bool, string, error) {
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
+
+	body, status, err := apiClient.Do(
+		ctx,
+		clusterSecret,
+		http.MethodGet,
+		endpoint,
+		nil,
+	)
+	if err != nil {
+		return false, "", err
+	}
+
+	if status >= 300 {
+		return false, "", fmt.Errorf(
+			"failed to get cluster status: status=%d body=%s",
+			status,
+			string(body),
+		)
+	}
+
+	var resp ClusterGetResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return false, "", err
+	}
+
+	return resp.Status == "active", resp.Status, nil
+}
+
+func WaitForClusterActive(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	timeout time.Duration,
+	pollInterval time.Duration,
+) error {
+
+	log := logf.FromContext(ctx)
+	deadline := time.Now().Add(timeout)
+
+	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for cluster %s to become active", clusterUUID)
+		}
+
+		active, status, err := IsClusterActive(
+			ctx,
+			apiClient,
+			clusterSecret,
+			clusterUUID,
+		)
+		if err != nil {
+			log.Error(err, "Failed to check cluster activation status")
+		} else {
+			log.Info("Waiting for cluster activation",
+				"clusterUUID", clusterUUID,
+				"status", status,
+			)
+
+			if active {
+				log.Info("Cluster is now active", "clusterUUID", clusterUUID)
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+func ActivateClusterAndWait(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+) error {
+
+	if err := ActivateCluster(ctx, apiClient, clusterUUID, clusterSecret); err != nil {
+		return err
+	}
+
+	return WaitForClusterActive(
+		ctx,
+		apiClient,
+		clusterSecret,
+		clusterUUID,
+		5*time.Minute,  // total timeout
+		10*time.Second, // poll interval
+	)
+}
+
+func RequiredNodesFromMOD(mod string) (int, error) {
+	parts := strings.Split(mod, "x")
+	if len(parts) != 2 {
+		return 0, fmt.Errorf("invalid MOD format: %s", mod)
+	}
+
+	ndcs, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, err
+	}
+
+	npcs, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, err
+	}
+
+	return ndcs + npcs, nil
 }

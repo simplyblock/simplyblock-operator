@@ -423,7 +423,7 @@ func waitForNodeOnline(
 		}
 
 		for _, res := range apiResp {
-			if res.IP == ip && res.Status == "online" {
+			if res.IP == ip && res.Status == "online" && res.Health {
 
 				for i := range snCR.Status.Nodes {
 					if snCR.Status.Nodes[i].Hostname == nodeName {
@@ -457,6 +457,55 @@ func waitForNodeOnline(
 						}
 
 						log.Info("Node is online", "node", nodeName)
+
+						clusterCR, err := utils.ResolveClusterCR(
+							ctx,
+							r.Client,
+							snCR.Namespace,
+							snCR.Spec.ClusterName,
+						)
+
+						if err != nil {
+							log.Info("Cluster not found yet for activation check")
+							return fmt.Errorf("cluster not found yet")
+						}
+
+						if utils.ClusterAlreadyActive(clusterCR) {
+							log.Info("Cluster already active, skipping activation")
+							return nil
+						}
+
+						onlineHealthy := utils.CountOnlineHealthyNodes(snCR.Status.Nodes)
+
+						log.Info("Evaluating cluster activation conditions",
+							"mod", clusterCR.Status.MOD,
+							"onlineHealthy", onlineHealthy,
+						)
+
+						requiredMod, err := utils.RequiredNodesFromMOD(clusterCR.Status.MOD)
+						if err != nil {
+							log.Error(err, "Invalid MOD value")
+							return err
+						}
+
+						if utils.ShouldActivateCluster(requiredMod, onlineHealthy, snCR.Spec.WorkerNodes) {
+
+							time.Sleep(10 * time.Second)
+							log.Info("Activation conditions met — activating cluster")
+
+							if err := utils.ActivateClusterAndWait(
+								ctx,
+								apiClient,
+								clusterSecret,
+								clusterUUID,
+							); err != nil {
+								log.Error(err, "Cluster activation did not complete")
+								return err
+							}
+
+							log.Info("Cluster successfully activated")
+						}
+
 						return nil
 					}
 				}
