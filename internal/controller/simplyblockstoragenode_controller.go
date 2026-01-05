@@ -493,13 +493,13 @@ func waitForNodeOnline(
 
 							log.Info("Activation conditions met — activating cluster")
 
-							if err := utils.ActivateCluster(
+							if err := utils.ActivateClusterAndWait(
 								ctx,
 								apiClient,
-								clusterUUID,
 								clusterSecret,
+								clusterUUID,
 							); err != nil {
-								log.Error(err, "Cluster activation failed")
+								log.Error(err, "Cluster activation did not complete")
 								return err
 							}
 
