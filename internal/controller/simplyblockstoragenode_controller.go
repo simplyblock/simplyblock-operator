@@ -457,6 +457,60 @@ func waitForNodeOnline(
 						}
 
 						log.Info("Node is online", "node", nodeName)
+
+						clusterCR := &simplyblockv1alpha1.SimplyBlockStorageCluster{}
+						if err := r.Get(
+							ctx,
+							client.ObjectKey{
+								Name:      snCR.Spec.ClusterName,
+								Namespace: snCR.Namespace,
+							},
+							clusterCR,
+						); err != nil {
+							log.Info("Cluster not found yet for activation check")
+							return fmt.Errorf("cluster not found yet")
+						}
+
+						if utils.ClusterAlreadyActive(clusterCR) {
+							log.Info("Cluster already active, skipping activation")
+							return nil
+						}
+
+						onlineHealthy := utils.CountOnlineHealthyNodes(snCR.Status.Nodes)
+
+						log.Info("Evaluating cluster activation conditions",
+							"mod", clusterCR.Status.MOD,
+							"onlineHealthy", onlineHealthy,
+						)
+
+						requiredMod, err := utils.RequiredNodesFromMOD(clusterCR.Status.MOD)
+						if err != nil {
+							log.Error(err, "Invalid MOD value")
+							return err
+						}
+
+						if utils.ShouldActivateCluster(requiredMod, onlineHealthy, snCR.Spec.WorkerNodes) {
+
+							log.Info("Activation conditions met — activating cluster")
+
+							if err := utils.ActivateCluster(
+								ctx,
+								apiClient,
+								clusterUUID,
+								clusterSecret,
+							); err != nil {
+								log.Error(err, "Cluster activation failed")
+								return err
+							}
+
+							if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
+								log.Error(err, "Failed to update cluster phase to Active")
+								return err
+							}
+
+							log.Info("Cluster successfully activated")
+						}
+
 						return nil
 					}
 				}
