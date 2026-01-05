@@ -723,6 +723,8 @@ func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
 
 	log.Info("Node action triggered", "nodeUUID", snCR.Spec.NodeUUID, "action", snCR.Spec.Action, "response", string(respBody))
 
+	time.Sleep(5 * time.Second)
+
 	if err := r.waitForActionCompletion(ctx, apiClient, clusterUUID, clusterSecret, snCR.Spec.NodeUUID, snCR.Spec.Action); err != nil {
 		return fmt.Errorf("node did not reach expected state after action %s: %w", snCR.Spec.Action, err)
 	}
