@@ -686,7 +686,7 @@ func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
 
 		if snCR.Spec.WorkerNode != "" {
 			if err := r.labelWorkerNode(ctx, snCR); err != nil {
-				return fmt.Errorf("Failed to label worker node %s: %w", snCR.Spec.WorkerNode, err)
+				return fmt.Errorf("failed to label worker node %s: %w", snCR.Spec.WorkerNode, err)
 			}
 
 			ip, err := getNodeInternalIP(ctx, r.Client, snCR.Spec.WorkerNode)
