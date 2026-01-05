@@ -162,13 +162,13 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 		return ctrl.Result{}, fmt.Errorf("failed to apply ServiceAccount: %w", err)
 	}
 
-	cr := utils.BuildStorageNodeRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster), snCR.Namespace)
+	cr := utils.BuildStorageNodeClusterRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster))
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error { return nil })
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRole: %w", err)
 	}
 
-	crb := utils.BuildStorageNodeRoleBinding(snCR.Namespace)
+	crb := utils.BuildStorageNodeClusterRoleBinding(snCR.Namespace)
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error { return nil })
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
@@ -308,7 +308,7 @@ func (r *SimplyBlockStorageNodeReconciler) labelWorkerNodes(ctx context.Context,
 		}
 
 		key := "io.simplyblock.node-type"
-		value := "simplyblock-storage-plane-" + sn.Name
+		value := "simplyblock-storage-plane-" + sn.Spec.ClusterName
 
 		if node.Labels[key] == value {
 			continue
@@ -318,6 +318,27 @@ func (r *SimplyBlockStorageNodeReconciler) labelWorkerNodes(ctx context.Context,
 		if err := r.Update(ctx, &node); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+func (r *SimplyBlockStorageNodeReconciler) labelWorkerNode(ctx context.Context, sn *simplyblockv1alpha1.SimplyBlockStorageNode) error {
+	var node corev1.Node
+	if err := r.Get(ctx, client.ObjectKey{Name: sn.Spec.WorkerNode}, &node); err != nil {
+		return err
+	}
+
+	if node.Labels == nil {
+		node.Labels = map[string]string{}
+	}
+
+	key := "io.simplyblock.node-type"
+	value := "simplyblock-storage-plane-" + sn.Spec.ClusterName
+
+	node.Labels[key] = value
+	if err := r.Update(ctx, &node); err != nil {
+		return err
 	}
 
 	return nil
@@ -385,6 +406,54 @@ func checkNodeInfoReachable(ctx context.Context, ip string) error {
 	}
 
 	return nil
+}
+
+func waitForNodeInfoReachable(
+	ctx context.Context,
+	ip string,
+	nodeName string,
+) error {
+
+	const (
+		maxRetries    = 12
+		retryInterval = 10 * time.Second
+	)
+
+	log := logf.FromContext(ctx)
+
+	var lastErr error
+
+	for i := 1; i <= maxRetries; i++ {
+
+		if err := checkNodeInfoReachable(ctx, ip); err == nil {
+			log.Info("Storage node API is reachable",
+				"node", nodeName,
+				"ip", ip,
+				"attempt", i,
+			)
+			return nil
+		} else {
+			lastErr = err
+			log.Info("Storage node API not reachable yet, retrying",
+				"node", nodeName,
+				"ip", ip,
+				"attempt", i,
+				"error", err.Error(),
+			)
+		}
+
+		select {
+		case <-time.After(retryInterval):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	return fmt.Errorf(
+		"storage node API not reachable after %d retries: %w",
+		maxRetries,
+		lastErr,
+	)
 }
 
 func waitForNodeOnline(
@@ -577,7 +646,7 @@ func (r *SimplyBlockStorageNodeReconciler) handleNodeAction(
 		return err
 	}
 
-	if err := r.performNodeAction(ctx, apiClient, clusterUUID, clusterSecret, snCR.Spec.Action, snCR.Spec.NodeUUID); err != nil {
+	if err := r.performNodeAction(ctx, apiClient, clusterUUID, clusterSecret, snCR); err != nil {
 		log.Error(err, "Action failed", "action", snCR.Spec.Action, "nodeUUID", snCR.Spec.NodeUUID)
 		snCR.Status.ActionStatus.State = "failed"
 		snCR.Status.ActionStatus.Message = err.Error()
@@ -603,8 +672,7 @@ func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
 	apiClient *webapi.Client,
 	clusterUUID string,
 	clusterSecret string,
-	action string,
-	nodeUUID string,
+	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
 ) error {
 
 	log := logf.FromContext(ctx)
@@ -612,11 +680,35 @@ func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
 	var endpoint string
 	var body interface{}
 
-	if action == "restart" {
-		endpoint = fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/%s", clusterUUID, nodeUUID, action)
+	if snCR.Spec.Action == "restart" {
+
 		body = map[string]bool{"force": true}
+
+		if snCR.Spec.WorkerNode != "" {
+			if err := r.labelWorkerNode(ctx, snCR); err != nil {
+				return fmt.Errorf("failed to label worker node %s: %w", snCR.Spec.WorkerNode, err)
+			}
+
+			ip, err := getNodeInternalIP(ctx, r.Client, snCR.Spec.WorkerNode)
+			if err != nil {
+				log.Error(err, "failed to get internal IP", "node", snCR.Spec.WorkerNode)
+			}
+
+			if err := waitForNodeInfoReachable(
+				ctx,
+				ip,
+				snCR.Spec.WorkerNode,
+			); err != nil {
+				log.Error(err, "Node never became reachable")
+				return err
+			}
+
+			nodeAddress := fmt.Sprintf("%s:5000", ip)
+			body = map[string]interface{}{"force": true, "node_address": nodeAddress}
+		}
+		endpoint = fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/%s", clusterUUID, snCR.Spec.NodeUUID, snCR.Spec.Action)
 	} else {
-		endpoint = fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/%s?force=%t", clusterUUID, nodeUUID, action, true)
+		endpoint = fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/%s?force=%t", clusterUUID, snCR.Spec.NodeUUID, snCR.Spec.Action, true)
 		body = nil
 	}
 
@@ -629,13 +721,15 @@ func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
 		return fmt.Errorf("action API failed: status=%d body=%s", status, string(respBody))
 	}
 
-	log.Info("Node action triggered", "nodeUUID", nodeUUID, "action", action, "response", string(respBody))
+	log.Info("Node action triggered", "nodeUUID", snCR.Spec.NodeUUID, "action", snCR.Spec.Action, "response", string(respBody))
 
-	if err := r.waitForActionCompletion(ctx, apiClient, clusterUUID, clusterSecret, nodeUUID, action); err != nil {
-		return fmt.Errorf("node did not reach expected state after action %s: %w", action, err)
+	time.Sleep(5 * time.Second)
+
+	if err := r.waitForActionCompletion(ctx, apiClient, clusterUUID, clusterSecret, snCR.Spec.NodeUUID, snCR.Spec.Action); err != nil {
+		return fmt.Errorf("node did not reach expected state after action %s: %w", snCR.Spec.Action, err)
 	}
 
-	log.Info("Node reached expected state", "nodeUUID", nodeUUID, "action", action)
+	log.Info("Node reached expected state", "nodeUUID", snCR.Spec.NodeUUID, "action", snCR.Spec.Action)
 	return nil
 }
 
