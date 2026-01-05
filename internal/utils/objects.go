@@ -90,7 +90,6 @@ func ResolveClusterCR(
 	return nil, fmt.Errorf("cluster with spec.clusterName %q not found", clusterName)
 }
 
-
 func ExistingClusterUUID(
 	ctx context.Context,
 	c client.Client,
