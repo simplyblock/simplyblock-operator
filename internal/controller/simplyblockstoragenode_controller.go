@@ -503,11 +503,6 @@ func waitForNodeOnline(
 								return err
 							}
 
-							if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
-								log.Error(err, "Failed to update cluster phase to Active")
-								return err
-							}
-
 							log.Info("Cluster successfully activated")
 						}
 
