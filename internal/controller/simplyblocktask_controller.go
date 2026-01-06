@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -170,6 +171,11 @@ func (r *SimplyBlockTaskReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// 		startedAt = &metav1.Time{Time: parsed}
 		// 	}
 		// }
+
+		result := strings.ToLower(tentry.Result)
+		if strings.Contains(result, "success") || strings.Contains(result, "done") || tentry.Canceled {
+			continue
+		}
 
 		taskCR.Status.Tasks = append(taskCR.Status.Tasks, simplyblockv1alpha1.TaskEntry{
 			UUID:       tentry.UUID,
