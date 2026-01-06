@@ -41,8 +41,13 @@ type SimplyBlockPoolReconciler struct {
 }
 
 type POOLAPIResponse struct {
-	UUID   string `json:"uuid"`
-	Status string `json:"status"`
+	UUID         string `json:"uuid"`
+	QoSIOPSLimit int64  `json:"max_rw_ios_per_sec"`
+	RWLimit      int64  `json:"max_rw_mbytes_per_sec"`
+	RLimit       int64  `json:"max_r_mbytes_per_sec"`
+	WLimit       int64  `json:"max_w_mbytes_per_sec"`
+	QoSHost      string `json:"qos_host,omitempty"`
+	Status       string `json:"status"`
 }
 
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockpools,verbs=get;list;watch;create;update;patch;delete
@@ -161,6 +166,11 @@ func (r *SimplyBlockPoolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// API returns UUID of the created pool
 		poolCR.Status.UUID = apiResp.UUID
 		poolCR.Status.Status = apiResp.Status
+		poolCR.Status.QoSIOPSLimit = utils.ToInt32Ptr(apiResp.QoSIOPSLimit)
+		poolCR.Status.RWLimit = utils.ToInt32Ptr(apiResp.RWLimit)
+		poolCR.Status.RLimit = utils.ToInt32Ptr(apiResp.RLimit)
+		poolCR.Status.WLimit = utils.ToInt32Ptr(apiResp.WLimit)
+		poolCR.Status.QoSHost = apiResp.QoSHost
 
 		if err := r.Status().Update(ctx, poolCR); err != nil {
 			log.Error(err, "Failed to update pool status after creation")
