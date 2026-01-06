@@ -231,6 +231,7 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 			InterfaceName:       snCR.Spec.MgmtIfc,
 			SPDKImage:           snCR.Spec.SpdkImage,
 			SPDKDebug:           utils.BoolPtrOrFalse(snCR.Spec.SPDKDebug),
+			IdDeviceByNQN:       utils.BoolPtrOrFalse(snCR.Spec.IdDeviceByNQN),
 			DataNics:            snCR.Spec.DataNIC,
 			Namespace:           snCR.Namespace,
 			JMPercent:           utils.IntPtrOrDefault(snCR.Spec.JMPercent, 3),

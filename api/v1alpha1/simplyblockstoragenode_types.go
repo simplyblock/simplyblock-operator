@@ -41,6 +41,7 @@ type SimplyBlockStorageNodeSpec struct {
 	JMPercent                *int32   `json:"jmPercent,omitempty"`
 	HAJM                     *bool    `json:"haJM,omitempty"`
 	SPDKDebug                *bool    `json:"spdkDebug,omitempty"`
+	IdDeviceByNQN            *bool    `json:"idDeviceByNQN,omitempty"`
 	CoreIsolation            *bool    `json:"coreIsolation,omitempty"`
 	CorePercentage           *int32   `json:"corePercentage,omitempty"`
 	CoreMask                 string   `json:"coreMask,omitempty"`
