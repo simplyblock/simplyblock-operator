@@ -784,6 +784,11 @@ func (in *SimplyBlockStorageNodeSpec) DeepCopyInto(out *SimplyBlockStorageNodeSp
 		*out = new(bool)
 		**out = **in
 	}
+	if in.IdDeviceByNQN != nil {
+		in, out := &in.IdDeviceByNQN, &out.IdDeviceByNQN
+		*out = new(bool)
+		**out = **in
+	}
 	if in.CoreIsolation != nil {
 		in, out := &in.CoreIsolation, &out.CoreIsolation
 		*out = new(bool)
