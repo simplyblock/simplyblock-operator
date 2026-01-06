@@ -38,8 +38,13 @@ type SimplyBlockPoolSpec struct {
 
 // SimplyBlockPoolStatus defines the observed state of Pool.
 type SimplyBlockPoolStatus struct {
-	UUID   string `json:"uuid,omitempty"`
-	Status string `json:"status,omitempty"`
+	UUID         string `json:"uuid,omitempty"`
+	Status       string `json:"status,omitempty"`
+	QoSIOPSLimit *int32 `json:"qosIOPSLimit,omitempty"`
+	RWLimit      *int32 `json:"rwLimit,omitempty"`
+	RLimit       *int32 `json:"rLimit,omitempty"`
+	WLimit       *int32 `json:"wLimit,omitempty"`
+	QoSHost      string `json:"qosHost,omitempty"`
 }
 
 // +kubebuilder:object:root=true

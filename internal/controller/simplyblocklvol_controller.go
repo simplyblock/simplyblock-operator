@@ -47,7 +47,7 @@ type LVOLAPIResponse struct {
 	LvolName       string   `json:"name"`
 	NodeUUID       []string `json:"nodes,omitempty"`
 	Hostname       string   `json:"hostname,omitempty"`
-	ClonedFromSnap string   `json:"cloned_from,,omitempty"`
+	ClonedFromSnap string   `json:"cloned_from,omitempty"`
 	SnapName       string   `json:"snapshot_name,omitempty"`
 	NQN            string   `json:"nqn,omitempty"`
 	SubsysPort     int64    `json:"port,omitempty"`
