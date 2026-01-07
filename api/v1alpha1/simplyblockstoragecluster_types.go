@@ -59,13 +59,13 @@ type SimplyBlockStorageClusterSpec struct {
 
 // SimplyBlockStorageClusterStatus defines the observed state of SimplyBlockStorageCluster.
 type SimplyBlockStorageClusterStatus struct {
-	UUID         string        `json:"UUID"`
-	ClusterName  string        `json:"clusterName"`
+	UUID         string        `json:"UUID,omitempty"`
+	ClusterName  string        `json:"clusterName,omitempty"`
 	MgmtNodes    *int32        `json:"mgmtNodes,omitempty"`
 	StorageNodes *int32        `json:"storageNodes,omitempty"`
 	NQN          string        `json:"NQN,omitempty"`
-	Status       string        `json:"status"`
-	Rebalancing  *bool         `json:"rebalancing"`
+	Status       string        `json:"status,omitempty"`
+	Rebalancing  *bool         `json:"rebalancing,omitempty"`
 	MOD          string        `json:"MOD,omitempty"`
 	SecretName   string        `json:"secretName,omitempty"`
 	LastUpdated  *metav1.Time  `json:"lastUpdated,omitempty"`
