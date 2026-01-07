@@ -91,16 +91,13 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 	/* -------------------- Deletion -------------------- */
 	if !clusterCR.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") &&
-			clusterCR.Spec.Action == utils.ClusterActionActivate {
-
-			controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
-			if err := r.Update(ctx, clusterCR); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-
-		if controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") &&
 			clusterCR.Status.UUID != "" {
+			if clusterCR.Spec.Action == utils.ClusterActionActivate {
+				controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+				if err := r.Update(ctx, clusterCR); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
 
 			clusterUUID, clusterSecret, err :=
 				utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
