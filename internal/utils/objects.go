@@ -130,7 +130,7 @@ func ShouldActivateCluster(
 ) bool {
 
 	required := mod + 1
-	
+
 	coreIsolation := false
 	if snCR.Spec.CoreIsolation != nil {
 		coreIsolation = *snCR.Spec.CoreIsolation
