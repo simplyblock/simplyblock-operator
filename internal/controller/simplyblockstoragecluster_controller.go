@@ -409,6 +409,11 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 	if resp.Status == utils.ClusterStatusActive {
 		clusterCR.Status.Status = utils.ClusterStatusActive
 		clusterCR.Status.ActionStatus.State = utils.ActionStateSuccess
+		clusterCR.Status.UUID = resp.UUID
+		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
+		clusterCR.Status.Configured = true
+		clusterCR.Status.Rebalancing = &resp.Rebalancing
+		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
 			return ctrl.Result{}, err
