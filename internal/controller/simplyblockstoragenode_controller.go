@@ -628,7 +628,7 @@ func (r *SimplyBlockStorageNodeReconciler) handleNodeAction(
 	if snCR.Status.ActionStatus != nil &&
 		snCR.Status.ActionStatus.Action == snCR.Spec.Action &&
 		snCR.Status.ActionStatus.NodeUUID == snCR.Spec.NodeUUID &&
-		snCR.Status.ActionStatus.State == "success" {
+		snCR.Status.ActionStatus.State == utils.ActionStateSuccess {
 		log.Info("Action already completed successfully, skipping",
 			"action", snCR.Spec.Action,
 			"nodeUUID", snCR.Spec.NodeUUID,
@@ -639,7 +639,7 @@ func (r *SimplyBlockStorageNodeReconciler) handleNodeAction(
 	snCR.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
 		Action:    snCR.Spec.Action,
 		NodeUUID:  snCR.Spec.NodeUUID,
-		State:     "running",
+		State:     utils.ActionStateRunning,
 		UpdatedAt: metav1.Now(),
 	}
 	if err := r.Status().Update(ctx, snCR); err != nil {
@@ -649,14 +649,14 @@ func (r *SimplyBlockStorageNodeReconciler) handleNodeAction(
 
 	if err := r.performNodeAction(ctx, apiClient, clusterUUID, clusterSecret, snCR); err != nil {
 		log.Error(err, "Action failed", "action", snCR.Spec.Action, "nodeUUID", snCR.Spec.NodeUUID)
-		snCR.Status.ActionStatus.State = "failed"
+		snCR.Status.ActionStatus.State = utils.ActionStateFailed
 		snCR.Status.ActionStatus.Message = err.Error()
 		snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
 		_ = r.Status().Update(ctx, snCR)
 		return err
 	}
 
-	snCR.Status.ActionStatus.State = "success"
+	snCR.Status.ActionStatus.State = utils.ActionStateSuccess
 	snCR.Status.ActionStatus.Message = "Action executed successfully"
 	snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
 	if err := r.Status().Update(ctx, snCR); err != nil {

@@ -124,7 +124,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		return ctrl.Result{}, nil
 	}
 
-	if clusterCR.Spec.Action == "activate" {
+	if clusterCR.Spec.Action == utils.ClusterActionActivate {
 		return r.reconcileActivate(ctx, clusterCR)
 	}
 
@@ -332,26 +332,26 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 	log := logf.FromContext(ctx)
 
 	if clusterCR.Status.ActionStatus != nil &&
-		clusterCR.Status.ActionStatus.Action == "activate" &&
-		clusterCR.Status.ActionStatus.State == "success" &&
+		clusterCR.Status.ActionStatus.Action == utils.ClusterActionActivate &&
+		clusterCR.Status.ActionStatus.State == utils.ActionStateSuccess &&
 		clusterCR.Status.ActionStatus.ObservedGeneration == clusterCR.Generation {
 		return ctrl.Result{}, nil
 	}
 
 	// --- Initialize action ---
 	if clusterCR.Status.ActionStatus == nil ||
-		clusterCR.Status.ActionStatus.Action != "activate" {
+		clusterCR.Status.ActionStatus.Action != utils.ClusterActionActivate {
 
 		clusterCR.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
-			Action: "activate",
-			State:  "running",
+			Action: utils.ClusterActionActivate,
+			State:  utils.ActionStateRunning,
 		}
 
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	if clusterCR.Status.ActionStatus.State == "running" &&
-		clusterCR.Status.Status != "active" {
+	if clusterCR.Status.ActionStatus.State == utils.ActionStateRunning &&
+		clusterCR.Status.Status != utils.ClusterStatusActive {
 
 		clusterUUID, clusterSecret, err :=
 			utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
@@ -406,9 +406,9 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 		return r.failActivate(ctx, clusterCR, err)
 	}
 
-	if resp.Status == "active" {
-		clusterCR.Status.Status = "active"
-		clusterCR.Status.ActionStatus.State = "success"
+	if resp.Status == utils.ClusterStatusActive {
+		clusterCR.Status.Status = utils.ClusterStatusActive
+		clusterCR.Status.ActionStatus.State = utils.ActionStateSuccess
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
 			return ctrl.Result{}, err
@@ -427,7 +427,7 @@ func (r *SimplyBlockStorageClusterReconciler) failActivate(
 	err error,
 ) (ctrl.Result, error) {
 
-	clusterCR.Status.ActionStatus.State = "failed"
+	clusterCR.Status.ActionStatus.State = utils.ActionStateFailed
 	clusterCR.Status.ActionStatus.Message = err.Error()
 
 	_ = r.Status().Update(ctx, clusterCR)
