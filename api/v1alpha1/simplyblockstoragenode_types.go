@@ -87,11 +87,12 @@ type NodeStatus struct {
 }
 
 type ActionStatus struct {
-	Action    string      `json:"action,omitempty"`
-	NodeUUID  string      `json:"nodeUUID,omitempty"`
-	State     string      `json:"state,omitempty"` // pending | running | success | failed
-	Message   string      `json:"message,omitempty"`
-	UpdatedAt metav1.Time `json:"updatedAt,omitempty"`
+	Action             string      `json:"action,omitempty"`
+	NodeUUID           string      `json:"nodeUUID,omitempty"`
+	State              string      `json:"state,omitempty"` // pending | running | success | failed
+	Message            string      `json:"message,omitempty"`
+	UpdatedAt          metav1.Time `json:"updatedAt,omitempty"`
+	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
 }
 
 // +kubebuilder:object:root=true

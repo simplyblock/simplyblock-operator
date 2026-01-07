@@ -26,12 +26,15 @@ import (
 // SimplyBlockStorageClusterSpec defines the desired state of SimplyBlockStorageCluster
 type SimplyBlockStorageClusterSpec struct {
 	// Create-only
-	MgmtIfc                string `json:"mgmtIfc,omitempty"`
-	EnableNodeAffinity     *bool  `json:"enableNodeAffinity,omitempty"`
-	StripeWdata            *int32 `json:"stripeWdata,omitempty"`
-	StripeWparity          *int32 `json:"stripeWparity,omitempty"`
-	HAType                 string `json:"haType,omitempty"`
-	ClusterName            string `json:"clusterName"`
+	MgmtIfc            string `json:"mgmtIfc,omitempty"`
+	EnableNodeAffinity *bool  `json:"enableNodeAffinity,omitempty"`
+	StripeWdata        *int32 `json:"stripeWdata,omitempty"`
+	StripeWparity      *int32 `json:"stripeWparity,omitempty"`
+	HAType             string `json:"haType,omitempty"`
+	ClusterName        string `json:"clusterName"`
+	// +kubebuilder:validation:Enum=activate
+	Action string `json:"action,omitempty"`
+
 	IsSingleNode           *bool  `json:"isSingleNode,omitempty"`
 	StrictNodeAntiAffinity *bool  `json:"strictNodeAntiAffinity,omitempty"`
 	QpairCount             *int32 `json:"qpairCount,omitempty"`
@@ -56,18 +59,19 @@ type SimplyBlockStorageClusterSpec struct {
 
 // SimplyBlockStorageClusterStatus defines the observed state of SimplyBlockStorageCluster.
 type SimplyBlockStorageClusterStatus struct {
-	UUID         string       `json:"UUID"`
-	ClusterName  string       `json:"clusterName"`
-	MgmtNodes    *int32       `json:"mgmtNodes,omitempty"`
-	StorageNodes *int32       `json:"storageNodes,omitempty"`
-	NQN          string       `json:"NQN,omitempty"`
-	Status       string       `json:"status"`
-	Rebalancing  *bool        `json:"rebalancing"`
-	MOD          string       `json:"MOD,omitempty"`
-	SecretName   string       `json:"secretName,omitempty"`
-	LastUpdated  *metav1.Time `json:"lastUpdated,omitempty"`
-	Created      *metav1.Time `json:"created,omitempty"`
-	Configured   bool         `json:"configured,omitempty"`
+	UUID         string        `json:"UUID"`
+	ClusterName  string        `json:"clusterName"`
+	MgmtNodes    *int32        `json:"mgmtNodes,omitempty"`
+	StorageNodes *int32        `json:"storageNodes,omitempty"`
+	NQN          string        `json:"NQN,omitempty"`
+	Status       string        `json:"status"`
+	Rebalancing  *bool         `json:"rebalancing"`
+	MOD          string        `json:"MOD,omitempty"`
+	SecretName   string        `json:"secretName,omitempty"`
+	LastUpdated  *metav1.Time  `json:"lastUpdated,omitempty"`
+	Created      *metav1.Time  `json:"created,omitempty"`
+	Configured   bool          `json:"configured,omitempty"`
+	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 }
 
 // +kubebuilder:object:root=true
