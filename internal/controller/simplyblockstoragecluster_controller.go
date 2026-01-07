@@ -407,6 +407,12 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 		return r.failActivate(ctx, clusterCR, err)
 	}
 
+	log.Info("Cluster API Activate call",
+		"endpoint", endpoint,
+		"status", status,
+		"response", string(body),
+	)
+
 	var resp ClusterAPIResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return r.failActivate(ctx, clusterCR, err)
