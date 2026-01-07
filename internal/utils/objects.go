@@ -126,13 +126,19 @@ func CountOnlineHealthyNodes(
 func ShouldActivateCluster(
 	mod int,
 	onlineHealthy int,
-	workerNodes []string,
+	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
 ) bool {
 
 	required := mod + 1
 
-	return onlineHealthy == len(workerNodes) &&
-		onlineHealthy >= required
+	coreIsolation := false
+	if snCR.Spec.CoreIsolation != nil {
+		coreIsolation = *snCR.Spec.CoreIsolation
+	}
+
+	return onlineHealthy == len(snCR.Spec.WorkerNodes) &&
+		onlineHealthy >= required &&
+		!coreIsolation
 }
 
 func ClusterAlreadyActive(cluster *simplyblockv1alpha1.SimplyBlockStorageCluster) bool {
