@@ -421,6 +421,7 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 	if resp.Status == utils.ClusterStatusActive {
 		clusterCR.Status.Status = utils.ClusterStatusActive
 		clusterCR.Status.ActionStatus.State = utils.ActionStateSuccess
+		clusterCR.Status.ActionStatus.Message = "Cluster activated successfully"
 		clusterCR.Status.UUID = resp.UUID
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
 		clusterCR.Status.Configured = true
