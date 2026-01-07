@@ -97,6 +97,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 				if err := r.Update(ctx, clusterCR); err != nil {
 					return ctrl.Result{}, err
 				}
+				return ctrl.Result{}, nil
 			}
 
 			clusterUUID, clusterSecret, err :=
