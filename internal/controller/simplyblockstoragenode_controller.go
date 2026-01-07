@@ -558,7 +558,7 @@ func waitForNodeOnline(
 							return err
 						}
 
-						if utils.ShouldActivateCluster(requiredMod, onlineHealthy, snCR.Spec.WorkerNodes) {
+						if utils.ShouldActivateCluster(requiredMod, onlineHealthy, snCR) {
 
 							time.Sleep(10 * time.Second)
 							log.Info("Activation conditions met — activating cluster")
