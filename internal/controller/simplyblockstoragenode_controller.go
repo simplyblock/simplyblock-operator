@@ -792,6 +792,7 @@ func (r *SimplyBlockStorageNodeReconciler) waitForActionCompletion(
 	nodeUUID string,
 	action string,
 ) error {
+
 	log := logf.FromContext(ctx)
 
 	expectedStatus := map[string]string{
@@ -807,28 +808,62 @@ func (r *SimplyBlockStorageNodeReconciler) waitForActionCompletion(
 		return fmt.Errorf("unknown action: %s", action)
 	}
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
-	retries := 50
-	waitInterval := 5 * time.Second
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-nodes/%s", 
+		clusterUUID,
+		nodeUUID,
+	)
+
+	const (
+		retries      = 50
+		waitInterval = 5 * time.Second
+	)
 
 	for i := 0; i < retries; i++ {
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+
+		if action == "remove" && status == http.StatusNotFound {
+			log.Info(
+				"Node successfully removed (404 returned)",
+				"nodeUUID", nodeUUID,
+			)
+			return nil
+		}
+
 		if err != nil || status >= 300 {
-			log.Error(err, "Failed to get node status", "nodeUUID", nodeUUID, "status", status)
-		} else {
-			var resp NodeStatusResponse
-			if err := json.Unmarshal(body, &resp); err == nil {
-				if resp.Status == targetStatus {
-					log.Info("Node reached expected status", "nodeUUID", nodeUUID, "status", resp.Status)
-					return nil
-				}
-			} else {
-				log.Error(err, "Failed to parse node status response", "body", string(body))
-			}
+			log.Error(
+				err,
+				"Failed to get node status",
+				"nodeUUID", nodeUUID,
+				"status", status,
+			)
+			time.Sleep(waitInterval)
+			continue
+		}
+
+		var resp NodeStatusResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			log.Error(err, "Failed to parse node status response", "body", string(body))
+			time.Sleep(waitInterval)
+			continue
+		}
+
+		if resp.Status == targetStatus {
+			log.Info(
+				"Node reached expected status",
+				"nodeUUID", nodeUUID,
+				"status", resp.Status,
+			)
+			return nil
 		}
 
 		time.Sleep(waitInterval)
 	}
 
-	return fmt.Errorf("node %s did not reach expected status %s in time", nodeUUID, targetStatus)
+	return fmt.Errorf(
+		"node %s did not reach expected status %q after action %q",
+		nodeUUID,
+		targetStatus,
+		action,
+	)
 }
