@@ -27,7 +27,7 @@ import (
 type SimplyBlockStorageNodeSpec struct {
 	ClusterName  string `json:"clusterName"`
 	ClusterImage string `json:"clusterImage,omitempty"`
-	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume
+	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume;remove
 	Action string `json:"action,omitempty"`
 	// NodeUUID is required when action is specified
 	NodeUUID string `json:"nodeUUID,omitempty"`
