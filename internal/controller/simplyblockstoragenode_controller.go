@@ -809,7 +809,7 @@ func (r *SimplyBlockStorageNodeReconciler) waitForActionCompletion(
 	}
 
 	endpoint := fmt.Sprintf(
-		"/api/v2/clusters/%s/storage-nodes/%s", 
+		"/api/v2/clusters/%s/storage-nodes/%s",
 		clusterUUID,
 		nodeUUID,
 	)
