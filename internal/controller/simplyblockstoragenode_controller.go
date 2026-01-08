@@ -727,7 +727,7 @@ func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
 		method = http.MethodDelete
 		body = nil
 		endpoint = fmt.Sprintf(
-			"/api/v2/clusters/%s/storage-nodes/%s/remove?force_remove=true&force_delete=true",
+			"/api/v2/clusters/%s/storage-nodes/%s?force_remove=true&force_delete=true",
 			clusterUUID,
 			snCR.Spec.NodeUUID,
 		)
