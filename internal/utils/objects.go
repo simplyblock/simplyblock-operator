@@ -145,6 +145,10 @@ func ClusterAlreadyActive(cluster *simplyblockv1alpha1.SimplyBlockStorageCluster
 	return cluster.Status.Status == "active"
 }
 
+func ClusterInExpansion(cluster *simplyblockv1alpha1.SimplyBlockStorageCluster) bool {
+	return cluster.Status.Status == "in_expansion"
+}
+
 func ActivateCluster(
 	ctx context.Context,
 	apiClient *webapi.Client,

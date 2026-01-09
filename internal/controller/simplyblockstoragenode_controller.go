@@ -545,6 +545,11 @@ func waitForNodeOnline(
 							return nil
 						}
 
+						if utils.ClusterInExpansion(clusterCR) {
+							log.Info("Cluster In expansion, skipping activation")
+							return nil
+						}
+
 						onlineHealthy := utils.CountOnlineHealthyNodes(snCR.Status.Nodes)
 
 						log.Info("Evaluating cluster activation conditions",
