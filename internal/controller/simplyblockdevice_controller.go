@@ -301,12 +301,12 @@ func (r *SimplyBlockDeviceReconciler) reconcileDeviceAction(
 		case utils.DeviceActionRemove:
 			endpoint = fmt.Sprintf(
 				"/api/v2/clusters/%s/storage-nodes/%s/devices/%s/%s?force=true",
-				clusterUUID, nodeUUID, deviceID, devCR.Spec.Action,
+				clusterUUID, nodeUUID, deviceID, action,
 			)
 		case utils.DeviceActionRestart:
 			endpoint = fmt.Sprintf(
 				"/api/v2/clusters/%s/storage-nodes/%s/devices/%s/%s?force=true",
-				clusterUUID, nodeUUID, deviceID, devCR.Spec.Action,
+				clusterUUID, nodeUUID, deviceID, action,
 			)
 		default:
 			return ctrl.Result{}, fmt.Errorf("unsupported device action: %s", action)
