@@ -332,7 +332,6 @@ func (r *SimplyBlockDeviceReconciler) reconcileDeviceAction(
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	// ---- Poll device status ----
 	endpoint := fmt.Sprintf(
 		"/api/v2/clusters/%s/storage-nodes/%s/devices/%s",
 		clusterUUID, nodeUUID, deviceID,
@@ -348,7 +347,6 @@ func (r *SimplyBlockDeviceReconciler) reconcileDeviceAction(
 		return r.failDeviceAction(ctx, devCR, err)
 	}
 
-	// ---- Terminal conditions ----
 	if r.deviceActionCompleted(action, resp.Status) {
 
 		devCR.Status.ActionStatus.State = utils.ActionStateSuccess
