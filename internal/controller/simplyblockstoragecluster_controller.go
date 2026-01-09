@@ -86,53 +86,22 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	apiClient := webapi.NewClient()
-
 	/* -------------------- Deletion -------------------- */
-	if !clusterCR.DeletionTimestamp.IsZero() {
-		if controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") &&
-			clusterCR.Status.UUID != "" {
-			if clusterCR.Spec.Action == utils.ClusterActionActivate {
-				controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
-				if err := r.Update(ctx, clusterCR); err != nil {
-					return ctrl.Result{}, err
-				}
-				return ctrl.Result{}, nil
-			}
-
-			clusterUUID, clusterSecret, err :=
-				utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
-			if err != nil {
-				log.Error(err, "Failed to get cluster auth")
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-
-			endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
-			_, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
-			if err != nil || status >= 300 {
-				log.Error(err, "Failed to delete cluster", "status", status)
-				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-			}
-
-			controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
-			if err := r.Update(ctx, clusterCR); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-		return ctrl.Result{}, nil
+	if res, done, err := r.handleDeletion(ctx, clusterCR); done {
+		return res, err
 	}
 
 	/* -------------------- Finalizer -------------------- */
-	if !controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
-		controllerutil.AddFinalizer(clusterCR, "simplyblock.cluster.finalizer")
-		if err := r.Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
+	if updated, err := r.ensureFinalizer(ctx, clusterCR); updated || err != nil {
+		return ctrl.Result{}, err
 	}
 
-	if clusterCR.Spec.Action == utils.ClusterActionActivate {
+	switch clusterCR.Spec.Action {
+	case utils.ClusterActionActivate:
 		return r.reconcileActivate(ctx, clusterCR)
+
+	case utils.ClusterActionExpand:
+		return r.reconcileExpand(ctx, clusterCR)
 	}
 
 	if clusterCR.Status.UUID != "" {
@@ -140,6 +109,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		return ctrl.Result{}, nil
 	}
 
+	apiClient := webapi.NewClient()
 	/* -------------------- Health Check -------------------- */
 	endpoint := "/api/v1/health/fdb/"
 	body, status, err := apiClient.Do(ctx, "", http.MethodGet, endpoint, nil)
@@ -331,6 +301,60 @@ func (r *SimplyBlockStorageClusterReconciler) SetupWithManager(mgr ctrl.Manager)
 		Complete(r)
 }
 
+func (r *SimplyBlockStorageClusterReconciler) handleDeletion(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+) (ctrl.Result, bool, error) {
+
+	if clusterCR.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, false, nil
+	}
+
+	if !controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
+		return ctrl.Result{}, true, nil
+	}
+
+	if clusterCR.Spec.Action == utils.ClusterActionActivate {
+		controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+		return ctrl.Result{}, true, r.Update(ctx, clusterCR)
+	}
+
+	if clusterCR.Status.UUID == "" {
+		controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+		return ctrl.Result{}, true, r.Update(ctx, clusterCR)
+	}
+
+	clusterUUID, clusterSecret, err :=
+		utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
+	}
+
+	apiClient := webapi.NewClient()
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
+
+	_, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+	if err != nil || status >= 300 {
+		return ctrl.Result{RequeueAfter: 20 * time.Second}, true, nil
+	}
+
+	controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+	return ctrl.Result{}, true, r.Update(ctx, clusterCR)
+}
+
+func (r *SimplyBlockStorageClusterReconciler) ensureFinalizer(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+) (bool, error) {
+
+	if controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
+		return false, nil
+	}
+
+	controllerutil.AddFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+	return true, r.Update(ctx, clusterCR)
+}
+
 func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
@@ -358,7 +382,7 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 	}
 
 	if clusterCR.Status.ActionStatus.State == utils.ActionStateRunning &&
-		clusterCR.Status.Status != utils.ClusterStatusActive {
+		!clusterCR.Status.ActionStatus.Triggered {
 
 		clusterUUID, clusterSecret, err :=
 			utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
@@ -376,6 +400,11 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 		}
 
 		log.Info("Cluster activate API called", "cluster", clusterCR.Name)
+
+		clusterCR.Status.ActionStatus.Triggered = true
+		if err := r.Status().Update(ctx, clusterCR); err != nil {
+			return ctrl.Result{}, err
+		}
 
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
@@ -437,10 +466,111 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 		return ctrl.Result{}, nil
 	}
 
-	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+func (r *SimplyBlockStorageClusterReconciler) reconcileExpand(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+) (ctrl.Result, error) {
+
+	log := logf.FromContext(ctx)
+
+	if clusterCR.Status.ActionStatus != nil &&
+		clusterCR.Status.ActionStatus.Action == utils.ClusterActionExpand &&
+		clusterCR.Status.ActionStatus.State == utils.ActionStateSuccess &&
+		clusterCR.Status.ActionStatus.ObservedGeneration == clusterCR.Generation {
+		return ctrl.Result{}, nil
+	}
+
+	if clusterCR.Status.ActionStatus == nil ||
+		clusterCR.Status.ActionStatus.Action != utils.ClusterActionExpand {
+
+		clusterCR.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
+			Action:             utils.ClusterActionExpand,
+			State:              utils.ActionStateRunning,
+			ObservedGeneration: clusterCR.Generation,
+		}
+
+		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
+	}
+
+	clusterUUID, clusterSecret, err :=
+		utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	if err != nil {
+		return r.failExpand(ctx, clusterCR, err)
+	}
+
+	apiClient := webapi.NewClient()
+
+	if clusterCR.Status.ActionStatus.State == utils.ActionStateRunning &&
+		!clusterCR.Status.ActionStatus.Triggered {
+
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/expand", clusterUUID)
+
+		_, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		if err != nil || status >= 300 {
+			return r.failExpand(ctx, clusterCR,
+				fmt.Errorf("expand API failed: status=%d err=%v", status, err))
+		}
+
+		log.Info("Cluster expand API called", "cluster", clusterCR.Name)
+
+		clusterCR.Status.ActionStatus.Triggered = true
+		if err := r.Status().Update(ctx, clusterCR); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return r.failExpand(ctx, clusterCR, err)
+	}
+
+	var resp ClusterAPIResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return r.failExpand(ctx, clusterCR, err)
+	}
+
+	if resp.Status == utils.ClusterStatusActive {
+		clusterCR.Status.Status = utils.ClusterStatusActive
+		clusterCR.Status.ActionStatus.State = utils.ActionStateSuccess
+		clusterCR.Status.ActionStatus.Message = "Cluster expanded successfully"
+		clusterCR.Status.UUID = resp.UUID
+		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
+		clusterCR.Status.Configured = true
+		clusterCR.Status.Rebalancing = &resp.Rebalancing
+		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
+
+		if err := r.Status().Update(ctx, clusterCR); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		log.Info("Cluster expansion completed", "cluster", clusterCR.Name)
+		return ctrl.Result{}, nil
+	}
+
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
 func (r *SimplyBlockStorageClusterReconciler) failActivate(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+	err error,
+) (ctrl.Result, error) {
+
+	clusterCR.Status.ActionStatus.State = utils.ActionStateFailed
+	clusterCR.Status.ActionStatus.Message = err.Error()
+
+	_ = r.Status().Update(ctx, clusterCR)
+
+	return ctrl.Result{}, nil
+}
+
+func (r *SimplyBlockStorageClusterReconciler) failExpand(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
 	err error,

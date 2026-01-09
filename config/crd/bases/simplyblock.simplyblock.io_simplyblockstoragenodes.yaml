@@ -45,6 +45,7 @@ spec:
                 - restart
                 - suspend
                 - resume
+                - remove
                 type: string
               addPcieToAllowList:
                 description: restart params
@@ -144,6 +145,8 @@ spec:
                     type: integer
                   state:
                     type: string
+                  triggered:
+                    type: boolean
                   updatedAt:
                     format: date-time
                     type: string

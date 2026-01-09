@@ -27,7 +27,7 @@ import (
 type SimplyBlockStorageNodeSpec struct {
 	ClusterName  string `json:"clusterName"`
 	ClusterImage string `json:"clusterImage,omitempty"`
-	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume
+	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume;remove
 	Action string `json:"action,omitempty"`
 	// NodeUUID is required when action is specified
 	NodeUUID string `json:"nodeUUID,omitempty"`
@@ -93,6 +93,7 @@ type ActionStatus struct {
 	Message            string      `json:"message,omitempty"`
 	UpdatedAt          metav1.Time `json:"updatedAt,omitempty"`
 	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
+	Triggered          bool        `json:"triggered,omitempty"`
 }
 
 // +kubebuilder:object:root=true

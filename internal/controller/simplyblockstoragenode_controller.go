@@ -545,6 +545,11 @@ func waitForNodeOnline(
 							return nil
 						}
 
+						if utils.ClusterInExpansion(clusterCR) {
+							log.Info("Cluster In expansion, skipping activation")
+							return nil
+						}
+
 						onlineHealthy := utils.CountOnlineHealthyNodes(snCR.Status.Nodes)
 
 						log.Info("Evaluating cluster activation conditions",
@@ -678,12 +683,18 @@ func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
 
 	log := logf.FromContext(ctx)
 
-	var endpoint string
-	var body interface{}
+	var (
+		endpoint string
+		method   = http.MethodPost
+		body     any
+	)
 
-	if snCR.Spec.Action == "restart" {
+	switch snCR.Spec.Action {
 
-		body = map[string]bool{"force": true}
+	case "restart":
+		payload := map[string]bool{
+			"force": true,
+		}
 
 		if snCR.Spec.WorkerNode != "" {
 			if err := r.labelWorkerNode(ctx, snCR); err != nil {
@@ -693,27 +704,50 @@ func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
 			ip, err := getNodeInternalIP(ctx, r.Client, snCR.Spec.WorkerNode)
 			if err != nil {
 				log.Error(err, "failed to get internal IP", "node", snCR.Spec.WorkerNode)
+				return err
 			}
 
-			if err := waitForNodeInfoReachable(
-				ctx,
-				ip,
-				snCR.Spec.WorkerNode,
-			); err != nil {
-				log.Error(err, "Node never became reachable")
+			if err := waitForNodeInfoReachable(ctx, ip, snCR.Spec.WorkerNode); err != nil {
+				log.Error(err, "node never became reachable")
 				return err
 			}
 
 			nodeAddress := fmt.Sprintf("%s:5000", ip)
-			body = map[string]interface{}{"force": true, "node_address": nodeAddress}
+
+			body = map[string]any{
+				"force":        true,
+				"node_address": nodeAddress,
+			}
+		} else {
+			body = payload
 		}
-		endpoint = fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/%s", clusterUUID, snCR.Spec.NodeUUID, snCR.Spec.Action)
-	} else {
-		endpoint = fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/%s?force=%t", clusterUUID, snCR.Spec.NodeUUID, snCR.Spec.Action, true)
+
+		endpoint = fmt.Sprintf(
+			"/api/v2/clusters/%s/storage-nodes/%s/restart",
+			clusterUUID,
+			snCR.Spec.NodeUUID,
+		)
+
+	case "remove":
+		method = http.MethodDelete
 		body = nil
+		endpoint = fmt.Sprintf(
+			"/api/v2/clusters/%s/storage-nodes/%s?force_remove=true&force_delete=true",
+			clusterUUID,
+			snCR.Spec.NodeUUID,
+		)
+
+	default:
+		body = nil
+		endpoint = fmt.Sprintf(
+			"/api/v2/clusters/%s/storage-nodes/%s/%s?force=true",
+			clusterUUID,
+			snCR.Spec.NodeUUID,
+			snCR.Spec.Action,
+		)
 	}
 
-	respBody, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, body)
+	respBody, status, err := apiClient.Do(ctx, clusterSecret, method, endpoint, body)
 	if err != nil {
 		return err
 	}
@@ -722,15 +756,36 @@ func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
 		return fmt.Errorf("action API failed: status=%d body=%s", status, string(respBody))
 	}
 
-	log.Info("Node action triggered", "nodeUUID", snCR.Spec.NodeUUID, "action", snCR.Spec.Action, "response", string(respBody))
+	log.Info(
+		"Node action triggered",
+		"nodeUUID", snCR.Spec.NodeUUID,
+		"action", snCR.Spec.Action,
+		"response", string(respBody),
+	)
 
 	time.Sleep(5 * time.Second)
 
-	if err := r.waitForActionCompletion(ctx, apiClient, clusterUUID, clusterSecret, snCR.Spec.NodeUUID, snCR.Spec.Action); err != nil {
-		return fmt.Errorf("node did not reach expected state after action %s: %w", snCR.Spec.Action, err)
+	if err := r.waitForActionCompletion(
+		ctx,
+		apiClient,
+		clusterUUID,
+		clusterSecret,
+		snCR.Spec.NodeUUID,
+		snCR.Spec.Action,
+	); err != nil {
+		return fmt.Errorf(
+			"node did not reach expected state after action %s: %w",
+			snCR.Spec.Action,
+			err,
+		)
 	}
 
-	log.Info("Node reached expected state", "nodeUUID", snCR.Spec.NodeUUID, "action", snCR.Spec.Action)
+	log.Info(
+		"Node reached expected state",
+		"nodeUUID", snCR.Spec.NodeUUID,
+		"action", snCR.Spec.Action,
+	)
+
 	return nil
 }
 
@@ -742,6 +797,7 @@ func (r *SimplyBlockStorageNodeReconciler) waitForActionCompletion(
 	nodeUUID string,
 	action string,
 ) error {
+
 	log := logf.FromContext(ctx)
 
 	expectedStatus := map[string]string{
@@ -749,6 +805,7 @@ func (r *SimplyBlockStorageNodeReconciler) waitForActionCompletion(
 		"resume":   "online",
 		"shutdown": "offline",
 		"restart":  "online",
+		"remove":   "removed",
 	}
 
 	targetStatus, ok := expectedStatus[action]
@@ -756,28 +813,62 @@ func (r *SimplyBlockStorageNodeReconciler) waitForActionCompletion(
 		return fmt.Errorf("unknown action: %s", action)
 	}
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
-	retries := 50
-	waitInterval := 5 * time.Second
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-nodes/%s",
+		clusterUUID,
+		nodeUUID,
+	)
+
+	const (
+		retries      = 50
+		waitInterval = 5 * time.Second
+	)
 
 	for i := 0; i < retries; i++ {
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+
+		if action == "remove" && status == http.StatusNotFound {
+			log.Info(
+				"Node successfully removed (404 returned)",
+				"nodeUUID", nodeUUID,
+			)
+			return nil
+		}
+
 		if err != nil || status >= 300 {
-			log.Error(err, "Failed to get node status", "nodeUUID", nodeUUID, "status", status)
-		} else {
-			var resp NodeStatusResponse
-			if err := json.Unmarshal(body, &resp); err == nil {
-				if resp.Status == targetStatus {
-					log.Info("Node reached expected status", "nodeUUID", nodeUUID, "status", resp.Status)
-					return nil
-				}
-			} else {
-				log.Error(err, "Failed to parse node status response", "body", string(body))
-			}
+			log.Error(
+				err,
+				"Failed to get node status",
+				"nodeUUID", nodeUUID,
+				"status", status,
+			)
+			time.Sleep(waitInterval)
+			continue
+		}
+
+		var resp NodeStatusResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			log.Error(err, "Failed to parse node status response", "body", string(body))
+			time.Sleep(waitInterval)
+			continue
+		}
+
+		if resp.Status == targetStatus {
+			log.Info(
+				"Node reached expected status",
+				"nodeUUID", nodeUUID,
+				"status", resp.Status,
+			)
+			return nil
 		}
 
 		time.Sleep(waitInterval)
 	}
 
-	return fmt.Errorf("node %s did not reach expected status %s in time", nodeUUID, targetStatus)
+	return fmt.Errorf(
+		"node %s did not reach expected status %q after action %q",
+		nodeUUID,
+		targetStatus,
+		action,
+	)
 }

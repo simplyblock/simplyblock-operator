@@ -32,7 +32,7 @@ type SimplyBlockStorageClusterSpec struct {
 	StripeWparity      *int32 `json:"stripeWparity,omitempty"`
 	HAType             string `json:"haType,omitempty"`
 	ClusterName        string `json:"clusterName"`
-	// +kubebuilder:validation:Enum=activate
+	// +kubebuilder:validation:Enum=activate;expand
 	Action string `json:"action,omitempty"`
 
 	IsSingleNode           *bool  `json:"isSingleNode,omitempty"`
