@@ -93,6 +93,7 @@ type ActionStatus struct {
 	Message            string      `json:"message,omitempty"`
 	UpdatedAt          metav1.Time `json:"updatedAt,omitempty"`
 	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
+	Triggered          bool        `json:"triggered,omitempty"`
 }
 
 // +kubebuilder:object:root=true
