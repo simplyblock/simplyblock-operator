@@ -92,8 +92,8 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 	}
 
 	/* -------------------- Finalizer -------------------- */
-	if res, done, err := r.ensureFinalizer(ctx, clusterCR); done {
-		return res, err
+	if updated, err := r.ensureFinalizer(ctx, clusterCR); updated || err != nil {
+		return ctrl.Result{}, err
 	}
 
 	switch clusterCR.Spec.Action {
@@ -345,14 +345,14 @@ func (r *SimplyBlockStorageClusterReconciler) handleDeletion(
 func (r *SimplyBlockStorageClusterReconciler) ensureFinalizer(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
-) (ctrl.Result, bool, error) {
+) (bool, error) {
 
 	if controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
-		return ctrl.Result{}, false, nil
+		return false, nil
 	}
 
 	controllerutil.AddFinalizer(clusterCR, "simplyblock.cluster.finalizer")
-	return ctrl.Result{}, true, r.Update(ctx, clusterCR)
+	return true, r.Update(ctx, clusterCR)
 }
 
 func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
