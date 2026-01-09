@@ -86,49 +86,14 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	apiClient := webapi.NewClient()
-
 	/* -------------------- Deletion -------------------- */
-	if !clusterCR.DeletionTimestamp.IsZero() {
-		if controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") &&
-			clusterCR.Status.UUID != "" {
-			if clusterCR.Spec.Action == utils.ClusterActionActivate {
-				controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
-				if err := r.Update(ctx, clusterCR); err != nil {
-					return ctrl.Result{}, err
-				}
-				return ctrl.Result{}, nil
-			}
-
-			clusterUUID, clusterSecret, err :=
-				utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
-			if err != nil {
-				log.Error(err, "Failed to get cluster auth")
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-
-			endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
-			_, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
-			if err != nil || status >= 300 {
-				log.Error(err, "Failed to delete cluster", "status", status)
-				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-			}
-
-			controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
-			if err := r.Update(ctx, clusterCR); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-		return ctrl.Result{}, nil
+	if res, done, err := r.handleDeletion(ctx, clusterCR); done {
+		return res, err
 	}
 
 	/* -------------------- Finalizer -------------------- */
-	if !controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
-		controllerutil.AddFinalizer(clusterCR, "simplyblock.cluster.finalizer")
-		if err := r.Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
+	if res, done, err := r.ensureFinalizer(ctx, clusterCR); done {
+		return res, err
 	}
 
 	switch clusterCR.Spec.Action {
@@ -144,6 +109,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		return ctrl.Result{}, nil
 	}
 
+	apiClient := webapi.NewClient()
 	/* -------------------- Health Check -------------------- */
 	endpoint := "/api/v1/health/fdb/"
 	body, status, err := apiClient.Do(ctx, "", http.MethodGet, endpoint, nil)
@@ -333,6 +299,60 @@ func (r *SimplyBlockStorageClusterReconciler) SetupWithManager(mgr ctrl.Manager)
 		For(&simplyblockv1alpha1.SimplyBlockStorageCluster{}).
 		Named("simplyblockstoragecluster").
 		Complete(r)
+}
+
+func (r *SimplyBlockStorageClusterReconciler) handleDeletion(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+) (ctrl.Result, bool, error) {
+
+	if clusterCR.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, false, nil
+	}
+
+	if !controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
+		return ctrl.Result{}, true, nil
+	}
+
+	if clusterCR.Spec.Action == utils.ClusterActionActivate {
+		controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+		return ctrl.Result{}, true, r.Update(ctx, clusterCR)
+	}
+
+	if clusterCR.Status.UUID == "" {
+		controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+		return ctrl.Result{}, true, r.Update(ctx, clusterCR)
+	}
+
+	clusterUUID, clusterSecret, err :=
+		utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
+	}
+
+	apiClient := webapi.NewClient()
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
+
+	_, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+	if err != nil || status >= 300 {
+		return ctrl.Result{RequeueAfter: 20 * time.Second}, true, nil
+	}
+
+	controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+	return ctrl.Result{}, true, r.Update(ctx, clusterCR)
+}
+
+func (r *SimplyBlockStorageClusterReconciler) ensureFinalizer(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+) (ctrl.Result, bool, error) {
+
+	if controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
+		return ctrl.Result{}, false, nil
+	}
+
+	controllerutil.AddFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+	return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 }
 
 func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
