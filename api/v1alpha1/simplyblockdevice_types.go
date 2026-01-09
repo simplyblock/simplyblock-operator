@@ -25,15 +25,17 @@ import (
 
 // SimplyBlockDeviceSpec defines the desired state of SimplyBlockDevice
 type SimplyBlockDeviceSpec struct {
-	ClusterName           string `json:"clusterName"`
-	NodeUUID              string `json:"nodeUUID,omitempty"`
-	IncludeStats          bool   `json:"includeStats,omitempty"`
-	StatsHistoryInSeconds *int32 `json:"statsHistoryInSeconds,omitempty"`
+	ClusterName string `json:"clusterName"`
+	NodeUUID    string `json:"nodeUUID,omitempty"`
+	DeviceID    string `json:"deviceID,omitempty"`
+	// +kubebuilder:validation:Enum=remove;restart
+	Action string `json:"action,omitempty"`
 }
 
 // SimplyBlockDeviceStatus defines the observed state of SimplyBlockDevice.
 type SimplyBlockDeviceStatus struct {
-	Nodes []NodeDevices `json:"nodes,omitempty"`
+	Nodes        []NodeDevices `json:"nodes,omitempty"`
+	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 }
 
 type NodeDevices struct {
@@ -61,7 +63,7 @@ type DeviceStats struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-
+// +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && ((!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\") || (!has(self.spec.deviceID) || self.spec.deviceID == \"\")))",message="nodeUUID and deviceID are required when action is specified"
 // SimplyBlockDevice is the Schema for the simplyblockdevices API
 type SimplyBlockDevice struct {
 	metav1.TypeMeta `json:",inline"`

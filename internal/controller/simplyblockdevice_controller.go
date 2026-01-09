@@ -105,6 +105,10 @@ func (r *SimplyBlockDeviceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, nil
 	}
 
+	if devCR.Spec.Action != "" {
+		return r.reconcileDeviceAction(ctx, devCR, clusterUUID, clusterSecret)
+	}
+
 	var nodeUUIDs []string
 
 	if devCR.Spec.NodeUUID != "" {
@@ -249,4 +253,153 @@ func (r *SimplyBlockDeviceReconciler) mapDevices(
 	})
 
 	return out
+}
+
+func (r *SimplyBlockDeviceReconciler) reconcileDeviceAction(
+	ctx context.Context,
+	devCR *simplyblockv1alpha1.SimplyBlockDevice,
+	clusterUUID string,
+	clusterSecret string,
+) (ctrl.Result, error) {
+
+	log := logf.FromContext(ctx)
+
+	action := devCR.Spec.Action
+	deviceID := devCR.Spec.DeviceID
+	nodeUUID := devCR.Spec.NodeUUID
+
+	if deviceID == "" || nodeUUID == "" {
+		return ctrl.Result{}, fmt.Errorf("deviceID and nodeUUID must be set for action %s", action)
+	}
+
+	if devCR.Status.ActionStatus != nil &&
+		devCR.Status.ActionStatus.Action == action &&
+		devCR.Status.ActionStatus.State == utils.ActionStateSuccess &&
+		devCR.Status.ActionStatus.ObservedGeneration == devCR.Generation {
+		return ctrl.Result{}, nil
+	}
+
+	if devCR.Status.ActionStatus == nil ||
+		devCR.Status.ActionStatus.Action != action {
+
+		devCR.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
+			Action:             action,
+			State:              utils.ActionStateRunning,
+			ObservedGeneration: devCR.Generation,
+		}
+
+		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, devCR)
+	}
+
+	apiClient := webapi.NewClient()
+
+	// ---- Trigger API once ----
+	if !devCR.Status.ActionStatus.Triggered {
+
+		var endpoint string
+		switch action {
+		case utils.DeviceActionRemove:
+			endpoint = fmt.Sprintf(
+				"/api/v2/clusters/%s/storage-nodes/%s/devices/%s/remove",
+				clusterUUID, nodeUUID, deviceID,
+			)
+		case utils.DeviceActionRestart:
+			endpoint = fmt.Sprintf(
+				"/api/v2/clusters/%s/storage-nodes/%s/devices/%s/restart",
+				clusterUUID, nodeUUID, deviceID,
+			)
+		default:
+			return ctrl.Result{}, fmt.Errorf("unsupported device action: %s", action)
+		}
+
+		_, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		if err != nil || status >= 300 {
+			return r.failDeviceAction(ctx, devCR,
+				fmt.Errorf("device action %s failed: status=%d err=%v", action, status, err))
+		}
+
+		log.Info("Device action triggered",
+			"action", action,
+			"deviceID", deviceID,
+			"nodeUUID", nodeUUID,
+		)
+
+		devCR.Status.ActionStatus.Triggered = true
+		if err := r.Status().Update(ctx, devCR); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	// ---- Poll device status ----
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-nodes/%s/devices/%s",
+		clusterUUID, nodeUUID, deviceID,
+	)
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return r.failDeviceAction(ctx, devCR, err)
+	}
+
+	var resp deviceAPIResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return r.failDeviceAction(ctx, devCR, err)
+	}
+
+	// ---- Terminal conditions ----
+	if r.deviceActionCompleted(action, resp.Status) {
+
+		devCR.Status.ActionStatus.State = utils.ActionStateSuccess
+		devCR.Status.ActionStatus.Message = fmt.Sprintf(
+			"Device %s %s successfully", deviceID, action,
+		)
+
+		if err := r.Status().Update(ctx, devCR); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		log.Info("Device action completed",
+			"action", action,
+			"deviceID", deviceID,
+			"finalStatus", resp.Status,
+		)
+
+		return ctrl.Result{}, nil
+	}
+
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+func (r *SimplyBlockDeviceReconciler) deviceActionCompleted(
+	action string,
+	deviceStatus string,
+) bool {
+
+	switch action {
+	case utils.DeviceActionRemove:
+		return deviceStatus == utils.DeviceStatusRemoved
+	case utils.DeviceActionRestart:
+		return deviceStatus == utils.DeviceStatusOnline
+	default:
+		return false
+	}
+}
+
+func (r *SimplyBlockDeviceReconciler) failDeviceAction(
+	ctx context.Context,
+	devCR *simplyblockv1alpha1.SimplyBlockDevice,
+	err error,
+) (ctrl.Result, error) {
+
+	log := logf.FromContext(ctx)
+	log.Error(err, "Device action failed")
+
+	devCR.Status.ActionStatus.State = utils.ActionStateFailed
+	devCR.Status.ActionStatus.Message = err.Error()
+
+	_ = r.Status().Update(ctx, devCR)
+
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
