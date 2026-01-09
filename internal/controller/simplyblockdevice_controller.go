@@ -282,10 +282,15 @@ func (r *SimplyBlockDeviceReconciler) reconcileDeviceAction(
 	if devCR.Status.ActionStatus == nil ||
 		devCR.Status.ActionStatus.Action != action {
 
-		devCR.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
-			Action:             action,
-			State:              utils.ActionStateRunning,
-			ObservedGeneration: devCR.Generation,
+		err := r.patchDeviceStatus(ctx, devCR, func(d *simplyblockv1alpha1.SimplyBlockDevice) {
+			d.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
+				Action:             action,
+				State:              utils.ActionStateRunning,
+				ObservedGeneration: devCR.Generation,
+			}
+		})
+		if err != nil {
+			return ctrl.Result{}, err
 		}
 
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, devCR)
@@ -324,8 +329,10 @@ func (r *SimplyBlockDeviceReconciler) reconcileDeviceAction(
 			"nodeUUID", nodeUUID,
 		)
 
-		devCR.Status.ActionStatus.Triggered = true
-		if err := r.Status().Update(ctx, devCR); err != nil {
+		err = r.patchDeviceStatus(ctx, devCR, func(d *simplyblockv1alpha1.SimplyBlockDevice) {
+			d.Status.ActionStatus.Triggered = true
+		})
+		if err != nil {
 			return ctrl.Result{}, err
 		}
 
@@ -349,12 +356,13 @@ func (r *SimplyBlockDeviceReconciler) reconcileDeviceAction(
 
 	if r.deviceActionCompleted(action, resp.Status) {
 
-		devCR.Status.ActionStatus.State = utils.ActionStateSuccess
-		devCR.Status.ActionStatus.Message = fmt.Sprintf(
-			"Device %s %s successfully", deviceID, action,
-		)
-
-		if err := r.Status().Update(ctx, devCR); err != nil {
+		err := r.patchDeviceStatus(ctx, devCR, func(d *simplyblockv1alpha1.SimplyBlockDevice) {
+			d.Status.ActionStatus.State = utils.ActionStateSuccess
+			d.Status.ActionStatus.Message = fmt.Sprintf(
+				"Device %s %s successfully", deviceID, action,
+			)
+		})
+		if err != nil {
 			return ctrl.Result{}, err
 		}
 
@@ -400,4 +408,14 @@ func (r *SimplyBlockDeviceReconciler) failDeviceAction(
 	_ = r.Status().Update(ctx, devCR)
 
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+func (r *SimplyBlockDeviceReconciler) patchDeviceStatus(
+	ctx context.Context,
+	devCR *simplyblockv1alpha1.SimplyBlockDevice,
+	mutate func(*simplyblockv1alpha1.SimplyBlockDevice),
+) error {
+	base := devCR.DeepCopy()
+	mutate(devCR)
+	return r.Status().Patch(ctx, devCR, client.MergeFrom(base))
 }
