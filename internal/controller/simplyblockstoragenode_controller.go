@@ -282,9 +282,10 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 			log.Error(err, "Node did not become online in time", "node", nodeName)
 			return ctrl.Result{}, nil
 		}
+
+		log.Info("Storage node created successfully", "node", nodeName)
 	}
 
-	log.Info("Storage node created successfully", "node", snCR.Name)
 	return ctrl.Result{}, nil
 
 }

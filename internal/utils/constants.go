@@ -9,4 +9,10 @@ const (
 	ActionStateFailed  = "failed"
 
 	ClusterStatusActive = "active"
+
+	DeviceActionRemove  = "remove"
+	DeviceActionRestart = "restart"
+
+	DeviceStatusRemoved = "removed"
+	DeviceStatusOnline  = "online"
 )
