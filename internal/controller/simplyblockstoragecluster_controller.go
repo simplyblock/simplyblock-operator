@@ -64,6 +64,16 @@ type ClusterAPIResponse struct {
 	Status      string `json:"status"`
 }
 
+type CSICredentials struct {
+	Clusters []CSIClusterEntry `json:"clusters"`
+}
+
+type CSIClusterEntry struct {
+	ClusterID       string `json:"cluster_id"`
+	ClusterEndpoint string `json:"cluster_endpoint"`
+	ClusterSecret   string `json:"cluster_secret"`
+}
+
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters/finalizers,verbs=update
@@ -213,6 +223,19 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
+		err := r.upsertCSICredentialsSecret(
+			ctx,
+			clusterCR.Namespace,
+			apiResp.Results.UUID,
+			"http://simplyblock-webappapi:5000",
+			apiResp.Results.Secret,
+		)
+
+		if err != nil {
+			log.Error(err, "Failed to update CSI credentials secret")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
 		clusterCR.Status.UUID = apiResp.Results.UUID
 		clusterCR.Status.Rebalancing = &apiResp.Results.Rebalancing
 		clusterCR.Status.Status = apiResp.Results.Status
@@ -236,6 +259,19 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 
 		if err != nil {
 			log.Error(err, "Failed to create/update Secret for cluster")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		err := r.upsertCSICredentialsSecret(
+			ctx,
+			clusterCR.Namespace,
+			apiResp.UUID,
+			"http://simplyblock-webappapi:5000",
+			apiResp.Secret,
+		)
+
+		if err != nil {
+			log.Error(err, "Failed to update CSI credentials secret")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
@@ -612,4 +648,56 @@ func (r *SimplyBlockStorageClusterReconciler) failExpand(
 	_ = r.Status().Update(ctx, clusterCR)
 
 	return ctrl.Result{}, nil
+}
+
+func (r *SimplyBlockStorageClusterReconciler) upsertCSICredentialsSecret(
+	ctx context.Context,
+	namespace string,
+	clusterID string,
+	clusterEndpoint string,
+	clusterSecret string,
+) error {
+
+	secretName := "simplyblock-csi-secret-v2"
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: namespace,
+		},
+	}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		var creds CSICredentials
+
+		if data, ok := secret.Data["secret.json"]; ok {
+			_ = json.Unmarshal(data, &creds)
+		}
+
+		for _, c := range creds.Clusters {
+			if c.ClusterID == clusterID {
+				return nil
+			}
+		}
+
+		creds.Clusters = append(creds.Clusters, CSIClusterEntry{
+			ClusterID:       clusterID,
+			ClusterEndpoint: clusterEndpoint,
+			ClusterSecret:   clusterSecret,
+		})
+
+		payload, err := json.MarshalIndent(creds, "", "  ")
+		if err != nil {
+			return err
+		}
+
+		if secret.Data == nil {
+			secret.Data = map[string][]byte{}
+		}
+
+		secret.Data["secret.json"] = payload
+		return nil
+	})
+
+	return err
 }
