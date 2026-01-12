@@ -338,6 +338,10 @@ func (r *SimplyBlockStorageClusterReconciler) handleDeletion(
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, true, nil
 	}
 
+	if err := r.deleteClusterSecret(ctx, clusterCR); err != nil {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
+	}
+
 	controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
 	return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 }
@@ -353,6 +357,32 @@ func (r *SimplyBlockStorageClusterReconciler) ensureFinalizer(
 
 	controllerutil.AddFinalizer(clusterCR, "simplyblock.cluster.finalizer")
 	return true, r.Update(ctx, clusterCR)
+}
+
+func (r *SimplyBlockStorageClusterReconciler) deleteClusterSecret(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+) error {
+
+	secretName := clusterCR.Status.SecretName
+	if secretName == "" {
+		secretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: clusterCR.Namespace,
+		},
+	}
+
+	if err := r.Delete(ctx, secret); err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
