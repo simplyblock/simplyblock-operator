@@ -21,6 +21,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"k8s.io/api/core/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -843,6 +844,13 @@ func (in *SimplyBlockStorageNodeSpec) DeepCopyInto(out *SimplyBlockStorageNodeSp
 		in, out := &in.OpenShiftCluster, &out.OpenShiftCluster
 		*out = new(bool)
 		**out = **in
+	}
+	if in.Tolerations != nil {
+		in, out := &in.Tolerations, &out.Tolerations
+		*out = make([]v1.Toleration, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 	if in.AddPcieToAllowList != nil {
 		in, out := &in.AddPcieToAllowList, &out.AddPcieToAllowList
