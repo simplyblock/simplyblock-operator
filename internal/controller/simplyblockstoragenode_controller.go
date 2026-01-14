@@ -115,8 +115,8 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 	}
 
 	/* -------------------- Deletion -------------------- */
-	if res, done, err := r.handleDeletion(ctx, snCR); done {
-		return res, err
+	if updated, err := r.handleDeletion(ctx, snCR); updated || err != nil {
+		return ctrl.Result{}, err
 	}
 
 	/* -------------------- Finalizer -------------------- */
@@ -282,18 +282,18 @@ func (r *SimplyBlockStorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) er
 func (r *SimplyBlockStorageNodeReconciler) handleDeletion(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
-) (ctrl.Result, bool, error) {
+) (bool, error) {
 
 	if snCR.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, false, nil
+		return false, nil
 	}
 
 	if !controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
-		return ctrl.Result{}, true, nil
+		return true, nil
 	}
 
 	controllerutil.RemoveFinalizer(snCR, "simplyblock.storagenode.finalizer")
-	return ctrl.Result{}, true, r.Update(ctx, snCR)
+	return true, r.Update(ctx, snCR)
 }
 
 func (r *SimplyBlockStorageNodeReconciler) ensureFinalizer(
