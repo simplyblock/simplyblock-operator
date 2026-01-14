@@ -114,42 +114,20 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	apiClient := webapi.NewClient()
-
-	// if !snCR.DeletionTimestamp.IsZero() {
-	// 	if utils.ContainsString(snCR.Finalizers, "simplyblock.finalizer") && snCR.Status.UUID != "" {
-	// 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, snCR.Status.UUID)
-	// 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
-	// 		if err != nil || status >= 300 {
-	// 			log.Error(err, "Failed to delete storage-node via API", "status", status, "response", string(body))
-	// 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-	// 		}
-
-	// 		snCR.Finalizers = utils.RemoveString(snCR.Finalizers, "simplyblock.finalizer")
-	// 		if err := r.Update(ctx, snCR); err != nil {
-	// 			log.Error(err, "Failed to remove finalizer after deletion")
-	// 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-	// 		}
-
-	// 		log.Info("Storage node deleted from cluster API and finalizer removed", "name", snCR.Name)
-	// 	}
-
-	// 	return ctrl.Result{}, nil
-	// }
-
-	if !controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
-		controllerutil.AddFinalizer(snCR, "simplyblock.storagenode.finalizer")
-		if err := r.Update(ctx, snCR); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
+	/* -------------------- Deletion -------------------- */
+	if updated, err := r.handleDeletion(ctx, snCR); updated || err != nil {
+		return ctrl.Result{}, err
 	}
 
+	/* -------------------- Finalizer -------------------- */
+	if updated, err := r.ensureFinalizer(ctx, snCR); updated || err != nil {
+		return ctrl.Result{}, err
+	}
+
+	apiClient := webapi.NewClient()
+
 	if snCR.Spec.Action != "" {
-		if err := r.handleNodeAction(ctx, apiClient, snCR, clusterUUID, clusterSecret); err != nil {
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-		return ctrl.Result{}, nil
+		return r.reconcileAction(ctx, snCR, clusterUUID, clusterSecret)
 	}
 
 	if err := r.labelWorkerNodes(ctx, snCR); err != nil {
@@ -174,26 +152,7 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
 	}
 
-	ds := utils.BuildStorageNodeDaemonSet(snCR)
-
-	if err := controllerutil.SetControllerReference(snCR, ds, r.Scheme); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	var existing appsv1.DaemonSet
-	err = r.Get(ctx, client.ObjectKey{Name: ds.Name, Namespace: ds.Namespace}, &existing)
-	if err != nil && apierrors.IsNotFound(err) {
-		log.Info("Creating StorageNode DaemonSet", "Name", ds.Name)
-		if err := r.Create(ctx, ds); err != nil {
-			return ctrl.Result{}, err
-		}
-	} else if err == nil {
-		ds.ResourceVersion = existing.ResourceVersion
-		log.Info("Updating StorageNode DaemonSet", "Name", ds.Name)
-		if err := r.Update(ctx, ds); err != nil {
-			return ctrl.Result{}, err
-		}
-	} else {
+	if err := r.reconcileDaemonSet(ctx, snCR); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -298,6 +257,36 @@ func (r *SimplyBlockStorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Complete(r)
 }
 
+func (r *SimplyBlockStorageNodeReconciler) handleDeletion(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+) (bool, error) {
+
+	if snCR.DeletionTimestamp.IsZero() {
+		return false, nil
+	}
+
+	if !controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
+		return true, nil
+	}
+
+	controllerutil.RemoveFinalizer(snCR, "simplyblock.storagenode.finalizer")
+	return true, r.Update(ctx, snCR)
+}
+
+func (r *SimplyBlockStorageNodeReconciler) ensureFinalizer(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+) (bool, error) {
+
+	if controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
+		return false, nil
+	}
+
+	controllerutil.AddFinalizer(snCR, "simplyblock.storagenode.finalizer")
+	return true, r.Update(ctx, snCR)
+}
+
 func (r *SimplyBlockStorageNodeReconciler) labelWorkerNodes(ctx context.Context, sn *simplyblockv1alpha1.SimplyBlockStorageNode) error {
 	for _, nodeName := range sn.Spec.WorkerNodes {
 		var node corev1.Node
@@ -344,6 +333,30 @@ func (r *SimplyBlockStorageNodeReconciler) labelWorkerNode(ctx context.Context, 
 	}
 
 	return nil
+}
+
+func (r *SimplyBlockStorageNodeReconciler) reconcileDaemonSet(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+) error {
+
+	ds := utils.BuildStorageNodeDaemonSet(snCR)
+
+	if err := controllerutil.SetControllerReference(snCR, ds, r.Scheme); err != nil {
+		return err
+	}
+
+	var existing appsv1.DaemonSet
+	err := r.Get(ctx, client.ObjectKeyFromObject(ds), &existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, ds)
+	}
+	if err != nil {
+		return err
+	}
+
+	ds.ResourceVersion = existing.ResourceVersion
+	return r.Update(ctx, ds)
 }
 
 func getNodeInternalIP(ctx context.Context, c client.Client, nodeName string) (string, error) {
@@ -620,6 +633,28 @@ func waitForNodeOnline(
 	}
 
 	return fmt.Errorf("node %s did not become online in time", nodeName)
+}
+
+func (r *SimplyBlockStorageNodeReconciler) reconcileAction(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+	clusterUUID string,
+	clusterSecret string,
+) (ctrl.Result, error) {
+
+	apiClient := webapi.NewClient()
+
+	if err := r.handleNodeAction(
+		ctx,
+		apiClient,
+		snCR,
+		clusterUUID,
+		clusterSecret,
+	); err != nil {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	return ctrl.Result{}, nil
 }
 
 func (r *SimplyBlockStorageNodeReconciler) handleNodeAction(

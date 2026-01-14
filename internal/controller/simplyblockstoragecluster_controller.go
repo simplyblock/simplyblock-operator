@@ -227,7 +227,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			ctx,
 			clusterCR.Namespace,
 			apiResp.Results.UUID,
-			"http://simplyblock-webappapi:5000",
+			utils.ENDPOINT,
 			apiResp.Results.Secret,
 		)
 
@@ -266,7 +266,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			ctx,
 			clusterCR.Namespace,
 			apiResp.UUID,
-			"http://simplyblock-webappapi:5000",
+			utils.ENDPOINT,
 			apiResp.Secret,
 		)
 
