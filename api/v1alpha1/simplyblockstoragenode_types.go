@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -55,8 +56,9 @@ type SimplyBlockStorageNodeSpec struct {
 	HaJmCount                *int32   `json:"haJmCount,omitempty"`
 	WorkerNodes              []string `json:"workerNodes,omitempty"`
 	WorkerNode               string   `json:"workerNode,omitempty"`
+	OpenShiftCluster         *bool    `json:"openShiftCluster,omitempty"`
 
-	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
 	// restart params
 	AddPcieToAllowList []string `json:"addPcieToAllowList,omitempty"`

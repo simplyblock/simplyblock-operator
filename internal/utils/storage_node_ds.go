@@ -62,6 +62,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "simplyblock-storage-node-sa",
 					HostNetwork:        true,
+					Tolerations: sn.Spec.Tolerations,
 					NodeSelector: map[string]string{
 						"io.simplyblock.node-type": "simplyblock-storage-plane-" + sn.Spec.ClusterName,
 					},
