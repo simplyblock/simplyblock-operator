@@ -114,28 +114,21 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	apiClient := webapi.NewClient()
+	if !snCR.DeletionTimestamp.IsZero() {
+		if utils.ContainsString(snCR.Finalizers, "simplyblock.storagenode.finalizer") {
+			// TODO: add any cleanup logic needed before storagenode CR deletion
 
-	// if !snCR.DeletionTimestamp.IsZero() {
-	// 	if utils.ContainsString(snCR.Finalizers, "simplyblock.finalizer") && snCR.Status.UUID != "" {
-	// 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, snCR.Status.UUID)
-	// 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
-	// 		if err != nil || status >= 300 {
-	// 			log.Error(err, "Failed to delete storage-node via API", "status", status, "response", string(body))
-	// 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-	// 		}
+			// Remove finalizer
+			snCR.Finalizers = utils.RemoveString(snCR.Finalizers, "simplyblock.storagenode.finalizer")
+			if err := r.Update(ctx, snCR); err != nil {
+				log.Error(err, "Failed to remove finalizer from storagenode", "storagenode", snCR.Name)
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
 
-	// 		snCR.Finalizers = utils.RemoveString(snCR.Finalizers, "simplyblock.finalizer")
-	// 		if err := r.Update(ctx, snCR); err != nil {
-	// 			log.Error(err, "Failed to remove finalizer after deletion")
-	// 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-	// 		}
-
-	// 		log.Info("Storage node deleted from cluster API and finalizer removed", "name", snCR.Name)
-	// 	}
-
-	// 	return ctrl.Result{}, nil
-	// }
+			log.Info("StorageNode CR deleted successfully", "task", snCR.Name)
+		}
+		return ctrl.Result{}, nil
+	}
 
 	if !controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
 		controllerutil.AddFinalizer(snCR, "simplyblock.storagenode.finalizer")
@@ -144,6 +137,8 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 		}
 		return ctrl.Result{}, nil
 	}
+
+	apiClient := webapi.NewClient()
 
 	if snCR.Spec.Action != "" {
 		if err := r.handleNodeAction(ctx, apiClient, snCR, clusterUUID, clusterSecret); err != nil {

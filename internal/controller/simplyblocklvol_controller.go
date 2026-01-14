@@ -95,12 +95,6 @@ func (r *SimplyBlockLvolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// var cluster simplyblockv1alpha1.SimplyBlockStorageCluster
-	// if err := r.Get(ctx, types.NamespacedName{Name: poolCR.Spec.ClusterName, Namespace: poolCR.Namespace}, &cluster); err != nil {
-	// 	log.Info("Cluster not found yet — requeuing")
-	// 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-	// }
-
 	clusterUUID, err := utils.ResolveClusterUUID(
 		ctx,
 		r.Client,
@@ -137,7 +131,20 @@ func (r *SimplyBlockLvolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	apiClient := webapi.NewClient()
+	if !lvolCR.DeletionTimestamp.IsZero() {
+		if utils.ContainsString(lvolCR.Finalizers, "simplyblock.lvol.finalizer") {
+			// TODO: add any cleanup logic needed before lvol deletion
+
+			lvolCR.Finalizers = utils.RemoveString(lvolCR.Finalizers, "simplyblock.lvol.finalizer")
+			if err := r.Update(ctx, lvolCR); err != nil {
+				log.Error(err, "Failed to remove finalizer")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+
+			log.Info("Lvol CR deleted successfully", "name", lvolCR.Name)
+		}
+		return ctrl.Result{}, nil
+	}
 
 	if !controllerutil.ContainsFinalizer(lvolCR, "simplyblock.lvol.finalizer") {
 		controllerutil.AddFinalizer(lvolCR, "simplyblock.lvol.finalizer")
@@ -146,6 +153,8 @@ func (r *SimplyBlockLvolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 		return ctrl.Result{}, nil
 	}
+
+	apiClient := webapi.NewClient()
 
 	lvol := lvolCR.DeepCopy()
 

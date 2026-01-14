@@ -72,12 +72,6 @@ func (r *SimplyBlockPoolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// var cluster simplyblockv1alpha1.SimplyBlockStorageCluster
-	// if err := r.Get(ctx, types.NamespacedName{Name: poolCR.Spec.ClusterName, Namespace: poolCR.Namespace}, &cluster); err != nil {
-	// 	log.Info("Cluster not found yet — requeuing")
-	// 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-	// }
-
 	clusterUUID, err := utils.ResolveClusterUUID(
 		ctx,
 		r.Client,
@@ -100,25 +94,25 @@ func (r *SimplyBlockPoolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	apiClient := webapi.NewClient()
 
-	// if !poolCR.DeletionTimestamp.IsZero() {
-	// 	if utils.ContainsString(poolCR.Finalizers, "simplyblock.finalizer") && poolCR.Status.UUID != "" {
-	// 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
-	// 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
-	// 		if err != nil || status >= 300 {
-	// 			log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
-	// 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-	// 		}
+	if !poolCR.DeletionTimestamp.IsZero() {
+		if utils.ContainsString(poolCR.Finalizers, "simplyblock.pool.finalizer") && poolCR.Status.UUID != "" {
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
+			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+			if err != nil || status >= 300 {
+				log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
+				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+			}
 
-	// 		poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, "simplyblock.pool.finalizer")
-	// 		if err := r.Update(ctx, poolCR); err != nil {
-	// 			log.Error(err, "Failed to remove finalizer")
-	// 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	// 		}
+			poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, "simplyblock.pool.finalizer")
+			if err := r.Update(ctx, poolCR); err != nil {
+				log.Error(err, "Failed to remove finalizer")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
 
-	// 		log.Info("Pool deleted successfully", "name", poolCR.Name)
-	// 	}
-	// 	return ctrl.Result{}, nil
-	// }
+			log.Info("Pool deleted successfully", "name", poolCR.Name)
+		}
+		return ctrl.Result{}, nil
+	}
 
 	if !controllerutil.ContainsFinalizer(poolCR, "simplyblock.pool.finalizer") {
 		controllerutil.AddFinalizer(poolCR, "simplyblock.pool.finalizer")

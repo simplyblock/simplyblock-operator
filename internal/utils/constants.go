@@ -15,4 +15,6 @@ const (
 
 	DeviceStatusRemoved = "removed"
 	DeviceStatusOnline  = "online"
+
+	ENDPOINT = "http://simplyblock-webappapi:5000"
 )
