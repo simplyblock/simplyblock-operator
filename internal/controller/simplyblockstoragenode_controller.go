@@ -114,28 +114,14 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	if !snCR.DeletionTimestamp.IsZero() {
-		if utils.ContainsString(snCR.Finalizers, "simplyblock.storagenode.finalizer") {
-			// TODO: add any cleanup logic needed before storagenode CR deletion
-
-			// Remove finalizer
-			snCR.Finalizers = utils.RemoveString(snCR.Finalizers, "simplyblock.storagenode.finalizer")
-			if err := r.Update(ctx, snCR); err != nil {
-				log.Error(err, "Failed to remove finalizer from storagenode", "storagenode", snCR.Name)
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-
-			log.Info("StorageNode CR deleted successfully", "task", snCR.Name)
-		}
-		return ctrl.Result{}, nil
+	/* -------------------- Deletion -------------------- */
+	if res, done, err := r.handleDeletion(ctx, snCR); done {
+		return res, err
 	}
 
-	if !controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
-		controllerutil.AddFinalizer(snCR, "simplyblock.storagenode.finalizer")
-		if err := r.Update(ctx, snCR); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
+	/* -------------------- Finalizer -------------------- */
+	if updated, err := r.ensureFinalizer(ctx, snCR); updated || err != nil {
+		return ctrl.Result{}, err
 	}
 
 	apiClient := webapi.NewClient()
@@ -291,6 +277,36 @@ func (r *SimplyBlockStorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) er
 		For(&simplyblockv1alpha1.SimplyBlockStorageNode{}).
 		Named("storagenode").
 		Complete(r)
+}
+
+func (r *SimplyBlockStorageNodeReconciler) handleDeletion(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+) (ctrl.Result, bool, error) {
+
+	if snCR.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, false, nil
+	}
+
+	if !controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
+		return ctrl.Result{}, true, nil
+	}
+
+	controllerutil.RemoveFinalizer(snCR, "simplyblock.storagenode.finalizer")
+	return ctrl.Result{}, true, r.Update(ctx, snCR)
+}
+
+func (r *SimplyBlockStorageNodeReconciler) ensureFinalizer(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+) (bool, error) {
+
+	if controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
+		return false, nil
+	}
+
+	controllerutil.AddFinalizer(snCR, "simplyblock.storagenode.finalizer")
+	return true, r.Update(ctx, snCR)
 }
 
 func (r *SimplyBlockStorageNodeReconciler) labelWorkerNodes(ctx context.Context, sn *simplyblockv1alpha1.SimplyBlockStorageNode) error {
