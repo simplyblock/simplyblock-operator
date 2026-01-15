@@ -164,13 +164,6 @@ func (r *SimplyBlockTaskReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	taskCR.Status.Tasks = nil
 	for _, tentry := range apiRespTask {
-		// startedAt := &metav1.Time{}
-		// if tentry.StartedAt != "" {
-		// 	if parsed, err := time.Parse(time.RFC3339, tentry.StartedAt); err == nil {
-		// 		startedAt = &metav1.Time{Time: parsed}
-		// 	}
-		// }
-
 		result := strings.ToLower(tentry.Result)
 		if strings.Contains(result, "success") || strings.Contains(result, "done") || tentry.Canceled {
 			continue
@@ -182,9 +175,7 @@ func (r *SimplyBlockTaskReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			TaskStatus: tentry.Status,
 			TaskResult: tentry.Result,
 			Canceled:   tentry.Canceled,
-			// ParentTask: tentry.ParentTask,
-			// StartedAt:  startedAt,
-			Retried: utils.IntToInt32Ptr(tentry.Retried),
+			Retried:    utils.IntToInt32Ptr(tentry.Retried),
 		})
 	}
 
