@@ -88,12 +88,6 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// var cluster simplyblockv1alpha1.SimplyBlockStorageCluster
-	// if err := r.Get(ctx, types.NamespacedName{Name: snCR.Spec.ClusterName, Namespace: snCR.Namespace}, &cluster); err != nil {
-	// 	log.Info("Cluster not found yet — requeuing")
-	// 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-	// }
-
 	clusterUUID, err := utils.ResolveClusterUUID(
 		ctx,
 		r.Client,
