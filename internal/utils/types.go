@@ -40,6 +40,12 @@ type ClusterUpdateParams struct {
 	EventLogEntries        int    `json:"event_log_entries,omitempty"`
 }
 
+type ReplicationAddParams struct {
+	TargetCluster string `json:"snapshot_replication_target_cluster"`
+	Timeout       int    `json:"snapshot_replication_timeout,omitempty"`
+	TargetPool    string `json:"target_pool,omitempty"`
+}
+
 type PoolAddParams struct {
 	Name          string `json:"name"`
 	PoolMax       int    `json:"pool_max,omitempty"`

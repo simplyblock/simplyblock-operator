@@ -10,6 +10,7 @@ rules:
   - simplyblockdevices
   - simplyblocklvols
   - simplyblockpools
+  - simplyblocksnapshotreplications
   - simplyblockstorageclusters
   - simplyblockstoragenodes
   - simplyblocktasks
@@ -27,6 +28,7 @@ rules:
   - simplyblockdevices/finalizers
   - simplyblocklvols/finalizers
   - simplyblockpools/finalizers
+  - simplyblocksnapshotreplications/finalizers
   - simplyblockstorageclusters/finalizers
   - simplyblockstoragenodes/finalizers
   - simplyblocktasks/finalizers
@@ -38,6 +40,7 @@ rules:
   - simplyblockdevices/status
   - simplyblocklvols/status
   - simplyblockpools/status
+  - simplyblocksnapshotreplications/status
   - simplyblockstorageclusters/status
   - simplyblockstoragenodes/status
   - simplyblocktasks/status

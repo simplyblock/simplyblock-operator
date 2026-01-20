@@ -22,6 +22,9 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the simplyblock-manager itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- simplyblocksnapshotreplication_admin_role.yaml
+- simplyblocksnapshotreplication_editor_role.yaml
+- simplyblocksnapshotreplication_viewer_role.yaml
 - simplyblocklvol_admin_role.yaml
 - simplyblocklvol_editor_role.yaml
 - simplyblocklvol_viewer_role.yaml

@@ -8,6 +8,7 @@ resources:
 - bases/simplyblock.simplyblock.io_simplyblockdevices.yaml
 - bases/simplyblock.simplyblock.io_simplyblocktasks.yaml
 - bases/simplyblock.simplyblock.io_simplyblocklvols.yaml
+- bases/simplyblock.simplyblock.io_simplyblocksnapshotreplications.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

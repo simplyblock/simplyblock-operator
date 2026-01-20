@@ -63,4 +63,13 @@ resources:
   kind: SimplyBlockLvol
   path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: simplyblock.io
+  group: simplyblock
+  kind: SimplyBlockSnapshotReplication
+  path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
+  version: v1alpha1
 version: "3"
