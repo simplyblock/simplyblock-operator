@@ -22,6 +22,12 @@ type ClusterGetResponse struct {
 	Status string `json:"status"`
 }
 
+type Lvol struct {
+	UUID        string `json:"uuid"`
+	Name        string `json:"name"`
+	DoReplicate bool   `json:"do_replicate"`
+}
+
 func ResolvePoolUUID(
 	ctx context.Context,
 	c client.Client,
@@ -331,4 +337,45 @@ func RequiredNodesFromMOD(mod string) (int, error) {
 	}
 
 	return ndcs + npcs, nil
+}
+
+func GetPoolUUIDs(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID string) ([]string, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return nil, fmt.Errorf("failed to list pools, status %d: %v, body: %s", status, err, string(body))
+	}
+
+	var pools []struct {
+		UUID string `json:"uuid"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &pools); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal pools: %w", err)
+	}
+
+	uuids := make([]string, 0, len(pools))
+	for _, p := range pools {
+		uuids = append(uuids, p.UUID)
+	}
+	return uuids, nil
+}
+
+func GetLvols(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID, poolUUID string) ([]Lvol, error) {
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/",
+		clusterUUID,
+		poolUUID,
+	)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return nil, fmt.Errorf("failed to list lvols for pool %s, status %d: %v, body: %s", poolUUID, status, err, string(body))
+	}
+
+	var lvols []Lvol
+	if err := json.Unmarshal(body, &lvols); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal lvols: %w", err)
+	}
+
+	return lvols, nil
 }

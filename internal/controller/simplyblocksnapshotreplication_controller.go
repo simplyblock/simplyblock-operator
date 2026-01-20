@@ -150,10 +150,34 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 		}
 
 		log.Info("Snapshot Replication successfully added", "name", snapRepCR.Name)
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	return ctrl.Result{}, nil
+	poolUUIDs, err := utils.GetPoolUUIDs(ctx, apiClient, clusterSecret, clusterUUID)
+	if err != nil {
+		log.Error(err, "Failed to list pools")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	for _, poolUUID := range poolUUIDs {
+		lvols, err := utils.GetLvols(ctx, apiClient, clusterSecret, clusterUUID, poolUUID)
+		if err != nil {
+			log.Error(err, "Failed to list lvols", "poolUUID", poolUUID)
+			continue
+		}
+
+		for _, lvol := range lvols {
+			if lvol.DoReplicate {
+				if err := startReplication(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvol.UUID); err != nil {
+					log.Error(err, "Failed to start replication", "lvol", lvol.Name, "uuid", lvol.UUID)
+					continue
+				}
+				log.Info("Replication started for lvol", "lvol", lvol.Name, "uuid", lvol.UUID)
+			}
+		}
+	}
+
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -192,4 +216,18 @@ func (r *SimplyBlockSnapshotReplicationReconciler) ensureFinalizer(
 
 	controllerutil.AddFinalizer(SnapRepCR, "simplyblock.replication.finalizer")
 	return true, r.Update(ctx, SnapRepCR)
+}
+
+func startReplication(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID, poolUUID, lvolUUID string) error {
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication_start/",
+		clusterUUID,
+		poolUUID,
+		lvolUUID,
+	)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+	if err != nil || status >= 300 {
+		return fmt.Errorf("failed to start replication for lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
+	}
+	return nil
 }
