@@ -10,6 +10,7 @@ import (
 )
 
 var exponentMultipliers = []string{"", "K", "M", "G", "T", "P", "E", "Z"}
+var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 
 func IntPtrOrDefault(ptr *int32, defaultVal int32) int {
 	if ptr != nil {
@@ -230,4 +231,8 @@ func HumanBytes(size int64, mode string) string {
 	}
 
 	return fmt.Sprintf("%.1f %sB", sizeInUnit, prefix)
+}
+
+func IsUUID(s string) bool {
+	return uuidRegex.MatchString(s)
 }

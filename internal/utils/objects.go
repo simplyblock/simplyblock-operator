@@ -67,6 +67,23 @@ func ResolveClusterUUID(
 	return "", fmt.Errorf("cluster %q not found or UUID not ready", clusterName)
 }
 
+func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, namespace, cluster string) (string, error) {
+	if IsUUID(cluster) {
+		return cluster, nil
+	}
+	return ResolveClusterUUID(ctx, k8sClient, namespace, cluster)
+}
+
+func ResolvePoolIdentifier(ctx context.Context, k8sClient client.Client, namespace, cluster, pool string) (string, error) {
+	if pool == "" {
+		return "", nil
+	}
+	if IsUUID(pool) {
+		return pool, nil
+	}
+	return ResolvePoolUUID(ctx, k8sClient, namespace, cluster, pool)
+}
+
 func ResolveClusterCR(
 	ctx context.Context,
 	c client.Client,
@@ -109,6 +126,20 @@ func ExistingClusterUUID(
 	}
 
 	return false, "", "", nil
+}
+
+func GetClusterNameByUUID(ctx context.Context, cli client.Client, namespace, uuid string) (string, error) {
+	clusterList := &simplyblockv1alpha1.SimplyBlockStorageClusterList{}
+	if err := cli.List(ctx, clusterList, client.InNamespace(namespace)); err != nil {
+		return "", fmt.Errorf("failed to list clusters: %w", err)
+	}
+
+	for _, c := range clusterList.Items {
+		if c.Status.UUID == uuid {
+			return c.Status.ClusterName, nil
+		}
+	}
+	return "", fmt.Errorf("no cluster found with UUID %s", uuid)
 }
 
 func CountOnlineHealthyNodes(

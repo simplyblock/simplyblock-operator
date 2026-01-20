@@ -61,7 +61,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	clusterUUID, err := utils.ResolveClusterUUID(
+	clusterUUID, err := utils.ResolveClusterIdentifier(
 		ctx,
 		r.Client,
 		snapRepCR.Namespace,
@@ -97,7 +97,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 
 	if !snapRep.Status.Configured {
 
-		targetClusterUUID, err := utils.ResolveClusterUUID(
+		targetClusterUUID, err := utils.ResolveClusterIdentifier(
 			ctx,
 			r.Client,
 			snapRepCR.Namespace,
@@ -111,23 +111,20 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
-		var poolUUID string
-		if snapRepCR.Spec.TargetPool != "" {
-			poolUUID, err = utils.ResolvePoolUUID(
-				ctx,
-				r.Client,
-				snapRepCR.Namespace,
-				snapRepCR.Spec.TargetCluster,
-				snapRepCR.Spec.TargetPool,
-			)
+		poolUUID, err := utils.ResolvePoolIdentifier(
+			ctx,
+			r.Client,
+			snapRepCR.Namespace,
+			snapRepCR.Spec.TargetCluster,
+			snapRepCR.Spec.TargetPool,
+		)
 
-			if err != nil {
-				log.Info("Pool UUID not found, requeuing",
-					"poolName", snapRepCR.Spec.TargetPool,
-					"cluster", snapRepCR.Spec.TargetCluster,
-				)
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
+		if err != nil {
+			log.Info("Pool UUID not found, requeuing",
+				"poolName", snapRepCR.Spec.TargetPool,
+				"cluster", snapRepCR.Spec.TargetCluster,
+			)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
 		params := utils.ReplicationAddParams{
@@ -143,7 +140,16 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}
 
-		log.Info("Cluster Replication successfully added", "name", snapRepCR.Name)
+		snapRepCR.Status.Configured = true
+
+		patch := client.MergeFrom(snapRep)
+
+		if err := r.Status().Patch(ctx, snapRepCR, patch); err != nil {
+			log.Error(err, "Failed to patch snapshot replication status after creation")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		log.Info("Snapshot Replication successfully added", "name", snapRepCR.Name)
 		return ctrl.Result{}, nil
 	}
 

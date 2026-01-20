@@ -11,9 +11,19 @@ import (
 
 // GetClusterAuth retrieves UUID and secret for a given cluster name.
 // 'cli' is a controller-runtime client (e.g., r.Client from a reconciler)
-func GetClusterAuth(ctx context.Context, cli client.Client, namespace, clusterName string) (string, string, error) {
-	secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterName)
+func GetClusterAuth(ctx context.Context, cli client.Client, namespace, clusterIdentifier string) (string, string, error) {
+	var clusterName string
+	if IsUUID(clusterIdentifier) {
+		name, err := GetClusterNameByUUID(ctx, cli, namespace, clusterIdentifier)
+		if err != nil {
+			return "", "", err
+		}
+		clusterName = name
+	} else {
+		clusterName = clusterIdentifier
+	}
 
+	secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterName)
 	secret := &corev1.Secret{}
 	if err := cli.Get(ctx, types.NamespacedName{
 		Name:      secretName,
