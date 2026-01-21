@@ -369,6 +369,7 @@ func GetPoolUUIDs(ctx context.Context, apiClient *webapi.Client, clusterSecret, 
 }
 
 func GetLvols(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID, poolUUID string) ([]Lvol, error) {
+	log := logf.FromContext(ctx)
 	endpoint := fmt.Sprintf(
 		"/api/v2/clusters/%s/storage-pools/%s/volumes/",
 		clusterUUID,
@@ -378,6 +379,12 @@ func GetLvols(ctx context.Context, apiClient *webapi.Client, clusterSecret, clus
 	if err != nil || status >= 300 {
 		return nil, fmt.Errorf("failed to list lvols for pool %s, status %d: %v, body: %s", poolUUID, status, err, string(body))
 	}
+
+	log.Info("GetLvols API call",
+		"endpoint", endpoint,
+		"status", status,
+		"response", string(body),
+	)
 
 	var lvols []Lvol
 	if err := json.Unmarshal(body, &lvols); err != nil {

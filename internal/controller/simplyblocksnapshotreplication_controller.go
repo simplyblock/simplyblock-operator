@@ -171,7 +171,10 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 			continue
 		}
 
+		log.Info("lvols Info for Replication", "lvols", lvols)
+
 		for _, lvol := range lvols {
+			log.Info("lvol Info for Replication", "poolUUIDs", lvol)
 			if lvol.DoReplicate {
 				if err := startReplication(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvol.UUID); err != nil {
 					log.Error(err, "Failed to start replication", "lvol", lvol.Name, "uuid", lvol.UUID)
