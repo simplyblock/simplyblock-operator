@@ -340,12 +340,19 @@ func RequiredNodesFromMOD(mod string) (int, error) {
 }
 
 func GetPoolUUIDs(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID string) ([]string, error) {
+	log := logf.FromContext(ctx)
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		return nil, fmt.Errorf("failed to list pools, status %d: %v, body: %s", status, err, string(body))
 	}
 
+	log.Info("GetPoolUUIDs API call",
+		"endpoint", endpoint,
+		"status", status,
+		"response", string(body),
+	)
+	
 	var pools []struct {
 		UUID string `json:"uuid"`
 		Name string `json:"name"`
