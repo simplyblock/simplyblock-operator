@@ -352,7 +352,7 @@ func GetPoolUUIDs(ctx context.Context, apiClient *webapi.Client, clusterSecret, 
 		"status", status,
 		"response", string(body),
 	)
-	
+
 	var pools []struct {
 		UUID string `json:"uuid"`
 		Name string `json:"name"`
