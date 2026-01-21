@@ -162,7 +162,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 	log.Info("Pool UUIDs", "poolUUIDs", poolUUIDs)
 	for _, poolUUID := range poolUUIDs {
 		log.Info("POOL UUID",
-			"poolUUID", string(poolUUID),
+			"poolUUID", poolUUID,
 		)
 
 		lvols, err := utils.GetLvols(ctx, apiClient, clusterSecret, clusterUUID, poolUUID)
