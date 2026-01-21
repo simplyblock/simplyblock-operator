@@ -43,7 +43,7 @@ type SimplyBlockLvolReconciler struct {
 }
 
 type LVOLAPIResponse struct {
-	UUID           string   `json:"id"`
+	UUID           string   `json:"uuid"`
 	LvolName       string   `json:"name"`
 	NodeUUID       []string `json:"nodes,omitempty"`
 	Hostname       string   `json:"hostname,omitempty"`
