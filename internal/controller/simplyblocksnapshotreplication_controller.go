@@ -176,7 +176,6 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 		now := time.Now().UTC()
 		for _, lvol := range lvols {
 			if lvol.DoReplicate {
-
 				if !shouldReplicate(lvol, now) {
 					log.Info(
 						"Skipping replication (interval not reached)",
@@ -253,17 +252,17 @@ func startReplication(ctx context.Context, apiClient *webapi.Client, clusterSecr
 }
 
 func shouldReplicate(lvol utils.Lvol, now time.Time) bool {
-    if lvol.ReplicationIntervalSec <= 0 {
-        return false
-    }
+	if lvol.ReplicationIntervalSec <= 0 {
+		return false
+	}
 
-    if lvol.LastSnapshotTime == nil {
-        return true
-    }
+	if lvol.LastSnapshotTime == nil {
+		return true
+	}
 
-    nextRun := lvol.LastSnapshotTime.Add(
-        time.Duration(lvol.ReplicationIntervalSec) * time.Second,
-    )
+	nextRun := lvol.LastSnapshotTime.Add(
+		time.Duration(lvol.ReplicationIntervalSec) * time.Second,
+	)
 
-    return !now.Before(nextRun)
+	return !now.Before(nextRun)
 }
