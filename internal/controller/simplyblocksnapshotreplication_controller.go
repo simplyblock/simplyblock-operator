@@ -173,9 +173,21 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 
 		log.Info("lvols Info for Replication", "lvols", lvols)
 
+		now := time.Now().UTC()
 		for _, lvol := range lvols {
-			log.Info("lvol Info for Replication", "poolUUIDs", lvol)
 			if lvol.DoReplicate {
+
+				if !shouldReplicate(lvol, now) {
+					log.Info(
+						"Skipping replication (interval not reached)",
+						"lvol", lvol.Name,
+						"uuid", lvol.UUID,
+						"lastSnapshot", lvol.LastSnapshotTime,
+						"intervalSec", lvol.ReplicationIntervalSec,
+					)
+					continue
+				}
+
 				if err := startReplication(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvol.UUID); err != nil {
 					log.Error(err, "Failed to start replication", "lvol", lvol.Name, "uuid", lvol.UUID)
 					continue
@@ -238,4 +250,20 @@ func startReplication(ctx context.Context, apiClient *webapi.Client, clusterSecr
 		return fmt.Errorf("failed to start replication for lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
 	}
 	return nil
+}
+
+func shouldReplicate(lvol utils.Lvol, now time.Time) bool {
+    if lvol.ReplicationIntervalSec <= 0 {
+        return false
+    }
+
+    if lvol.LastSnapshotTime == nil {
+        return true
+    }
+
+    nextRun := lvol.LastSnapshotTime.Add(
+        time.Duration(lvol.ReplicationIntervalSec) * time.Second,
+    )
+
+    return !now.Before(nextRun)
 }

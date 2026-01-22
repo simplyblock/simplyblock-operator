@@ -23,9 +23,11 @@ type ClusterGetResponse struct {
 }
 
 type Lvol struct {
-	UUID        string `json:"uuid"`
-	Name        string `json:"name"`
-	DoReplicate bool   `json:"do_replicate"`
+	UUID                   string     `json:"uuid"`
+	Name                   string     `json:"name"`
+	DoReplicate            bool       `json:"do_replicate"`
+	LastSnapshotTime       *time.Time `json:"last_snapshot_time"`
+	ReplicationIntervalSec int64      `json:"replication_interval"`
 }
 
 func ResolvePoolUUID(
