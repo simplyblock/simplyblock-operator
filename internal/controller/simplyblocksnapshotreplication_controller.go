@@ -174,6 +174,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 
 		now := time.Now().UTC()
 
+		interval := utils.IntPtrOrDefault(snapRepCR.Spec.Interval, 60)
 		for _, lvolSummary := range lvols {
 			if !lvolSummary.DoReplicate {
 				continue
@@ -197,13 +198,13 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 				continue
 			}
 
-			if !shouldReplicate(lvolDetail, now) {
+			if !shouldReplicate(lvolDetail, interval, now) {
 				log.Info(
 					"Skipping replication (interval not reached)",
 					"lvol", lvolDetail.Name,
 					"uuid", lvolDetail.UUID,
 					"lastSnapshot", lvolDetail.RepInfo.LastSnapshotUUID,
-					"intervalSec", lvolDetail.RepInfo.LastReplicationDuration,
+					"intervalSec", utils.IntPtrOrDefault(snapRepCR.Spec.Interval, 60),
 				)
 				continue
 			}
@@ -288,8 +289,8 @@ func startReplication(ctx context.Context, apiClient *webapi.Client, clusterSecr
 	return nil
 }
 
-func shouldReplicate(lvol *utils.Lvol, now time.Time) bool {
-	if lvol.RepInfo.LastReplicationDuration <= 0 {
+func shouldReplicate(lvol *utils.Lvol, interval int, now time.Time) bool {
+	if interval <= 0 {
 		return false
 	}
 
@@ -298,7 +299,7 @@ func shouldReplicate(lvol *utils.Lvol, now time.Time) bool {
 	}
 
 	nextRun := lvol.RepInfo.LastReplicationTime.Add(
-		time.Duration(lvol.RepInfo.LastReplicationDuration) * time.Second,
+		time.Duration(interval) * time.Second,
 	)
 
 	return !now.Before(nextRun)
