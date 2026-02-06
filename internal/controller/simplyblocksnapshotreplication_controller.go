@@ -160,10 +160,9 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 	}
 
 	log.Info("Pool UUIDs", "poolUUIDs", poolUUIDs)
+
 	for _, poolUUID := range poolUUIDs {
-		log.Info("POOL UUID",
-			"poolUUID", poolUUID,
-		)
+		log.Info("POOL UUID", "poolUUID", poolUUID)
 
 		lvols, err := utils.GetLvols(ctx, apiClient, clusterSecret, clusterUUID, poolUUID)
 		if err != nil {
@@ -174,25 +173,63 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 		log.Info("lvols Info for Replication", "lvols", lvols)
 
 		now := time.Now().UTC()
-		for _, lvol := range lvols {
-			if lvol.DoReplicate {
-				if !shouldReplicate(lvol, now) {
-					log.Info(
-						"Skipping replication (interval not reached)",
-						"lvol", lvol.Name,
-						"uuid", lvol.UUID,
-						"lastSnapshot", lvol.LastSnapshotTime,
-						"intervalSec", lvol.ReplicationIntervalSec,
-					)
-					continue
-				}
 
-				if err := startReplication(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvol.UUID); err != nil {
-					log.Error(err, "Failed to start replication", "lvol", lvol.Name, "uuid", lvol.UUID)
-					continue
-				}
-				log.Info("Replication started for lvol", "lvol", lvol.Name, "uuid", lvol.UUID)
+		for _, lvolSummary := range lvols {
+			if !lvolSummary.DoReplicate {
+				continue
 			}
+
+			lvolDetail, err := utils.GetLvol(
+				ctx,
+				apiClient,
+				clusterSecret,
+				clusterUUID,
+				poolUUID,
+				lvolSummary.UUID,
+			)
+			if err != nil {
+				log.Error(
+					err,
+					"Failed to get lvol",
+					"poolUUID", poolUUID,
+					"lvolUUID", lvolSummary.UUID,
+				)
+				continue
+			}
+
+			if !shouldReplicate(lvolDetail, now) {
+				log.Info(
+					"Skipping replication (interval not reached)",
+					"lvol", lvolDetail.Name,
+					"uuid", lvolDetail.UUID,
+					"lastSnapshot", lvolDetail.RepInfo.LastSnapshotUUID,
+					"intervalSec", lvolDetail.RepInfo.LastReplicationDuration,
+				)
+				continue
+			}
+
+			if err := startReplication(
+				ctx,
+				apiClient,
+				clusterSecret,
+				clusterUUID,
+				poolUUID,
+				lvolDetail.UUID,
+			); err != nil {
+				log.Error(
+					err,
+					"Failed to start replication",
+					"lvol", lvolDetail.Name,
+					"uuid", lvolDetail.UUID,
+				)
+				continue
+			}
+
+			log.Info(
+				"Replication started for lvol",
+				"lvol", lvolDetail.Name,
+				"uuid", lvolDetail.UUID,
+			)
 		}
 	}
 
@@ -251,17 +288,17 @@ func startReplication(ctx context.Context, apiClient *webapi.Client, clusterSecr
 	return nil
 }
 
-func shouldReplicate(lvol utils.Lvol, now time.Time) bool {
-	if lvol.ReplicationIntervalSec <= 0 {
+func shouldReplicate(lvol *utils.Lvol, now time.Time) bool {
+	if lvol.RepInfo.LastReplicationDuration <= 0 {
 		return false
 	}
 
-	if lvol.LastSnapshotTime == nil {
+	if lvol.RepInfo.LastReplicationTime == nil {
 		return true
 	}
 
-	nextRun := lvol.LastSnapshotTime.Add(
-		time.Duration(lvol.ReplicationIntervalSec) * time.Second,
+	nextRun := lvol.RepInfo.LastReplicationTime.Add(
+		time.Duration(lvol.RepInfo.LastReplicationDuration) * time.Second,
 	)
 
 	return !now.Before(nextRun)

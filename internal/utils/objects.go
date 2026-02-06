@@ -23,11 +23,18 @@ type ClusterGetResponse struct {
 }
 
 type Lvol struct {
-	UUID                   string     `json:"uuid"`
-	Name                   string     `json:"name"`
-	DoReplicate            bool       `json:"do_replicate"`
-	LastSnapshotTime       *time.Time `json:"last_snapshot_time"`
-	ReplicationIntervalSec int64      `json:"replication_interval"`
+	UUID        string `json:"uuid"`
+	Name        string `json:"name"`
+	DoReplicate bool   `json:"do_replicate"`
+
+	RepInfo *ReplicationInfo `json:"rep_info,omitempty"`
+}
+
+type ReplicationInfo struct {
+	LastSnapshotUUID        string     `json:"last_snapshot_id,omitempty"`
+	LastReplicationTime     *time.Time `json:"last_replication_time,omitempty"`
+	LastReplicationDuration int64      `json:"last_replication_duration,omitempty"`
+	ReplicatedCount         int64      `json:"replicated_count,omitempty"`
 }
 
 func ResolvePoolUUID(
@@ -394,4 +401,43 @@ func GetLvols(ctx context.Context, apiClient *webapi.Client, clusterSecret, clus
 	}
 
 	return lvols, nil
+}
+
+func GetLvol(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	poolUUID string,
+	lvolUUID string,
+) (*Lvol, error) {
+	log := logf.FromContext(ctx)
+
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s",
+		clusterUUID,
+		poolUUID,
+		lvolUUID,
+	)
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return nil, fmt.Errorf(
+			"failed to get lvol %s for pool %s, status %d: %v, body: %s",
+			lvolUUID, poolUUID, status, err, string(body),
+		)
+	}
+
+	log.Info("GetLvol API call",
+		"endpoint", endpoint,
+		"status", status,
+		"response", string(body),
+	)
+
+	var lvol Lvol
+	if err := json.Unmarshal(body, &lvol); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal lvol %s: %w", lvolUUID, err)
+	}
+
+	return &lvol, nil
 }
