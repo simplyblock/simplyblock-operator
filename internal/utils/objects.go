@@ -31,10 +31,10 @@ type Lvol struct {
 }
 
 type ReplicationInfo struct {
-	LastSnapshotUUID        string     `json:"last_snapshot_id,omitempty"`
-	LastReplicationTime     *time.Time `json:"last_replication_time,omitempty"`
-	LastReplicationDuration int64      `json:"last_replication_duration,omitempty"`
-	ReplicatedCount         int64      `json:"replicated_count,omitempty"`
+	LastSnapshotUUID        string    `json:"last_snapshot_id,omitempty"`
+	LastReplicationTime     *FlexTime `json:"last_replication_time,omitempty"`
+	LastReplicationDuration int64     `json:"last_replication_duration,omitempty"`
+	ReplicatedCount         int64     `json:"replicated_count,omitempty"`
 }
 
 func ResolvePoolUUID(

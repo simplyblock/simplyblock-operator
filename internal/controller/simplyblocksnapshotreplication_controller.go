@@ -175,6 +175,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 		now := time.Now().UTC()
 
 		interval := utils.IntPtrOrDefault(snapRepCR.Spec.Interval, 60)
+
 		for _, lvolSummary := range lvols {
 			if !lvolSummary.DoReplicate {
 				continue
@@ -298,7 +299,7 @@ func shouldReplicate(lvol *utils.Lvol, interval int, now time.Time) bool {
 		return true
 	}
 
-	nextRun := lvol.RepInfo.LastReplicationTime.Add(
+	nextRun := lvol.RepInfo.LastReplicationTime.Time.Add(
 		time.Duration(interval) * time.Second,
 	)
 
