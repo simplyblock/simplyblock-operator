@@ -299,7 +299,7 @@ func shouldReplicate(lvol *utils.Lvol, interval int, now time.Time) bool {
 		return true
 	}
 
-	nextRun := lvol.RepInfo.LastReplicationTime.Time.Add(
+	nextRun := lvol.RepInfo.LastReplicationTime.Add(
 		time.Duration(interval) * time.Second,
 	)
 
