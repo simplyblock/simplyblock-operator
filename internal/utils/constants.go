@@ -8,7 +8,12 @@ const (
 	ActionStateSuccess = "success"
 	ActionStateFailed  = "failed"
 
-	ClusterStatusActive = "active"
+	ClusterStatusActive    = "active"
+	ClusterStatusSuspended = "suspended"
+
+	NodeStatusOnline      = "online"
+	NodeStatusOffline     = "offline"
+	NodeStatusUnreachable = "unreachable"
 
 	DeviceActionRemove  = "remove"
 	DeviceActionRestart = "restart"

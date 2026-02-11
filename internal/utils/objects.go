@@ -22,6 +22,12 @@ type ClusterGetResponse struct {
 	Status string `json:"status"`
 }
 
+type NodeStatusResponse struct {
+	UUID   string `json:"id"`
+	Status string `json:"status"`
+	IP     string `json:"ip"`
+}
+
 type Lvol struct {
 	UUID        string `json:"uuid"`
 	Name        string `json:"name"`
@@ -329,6 +335,56 @@ func ActivateClusterAndWait(
 	)
 }
 
+func ClusterSuspended(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID string) (bool, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/", clusterUUID)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return false, fmt.Errorf("failed to get cluster %s, status %d: %v, body: %s", clusterUUID, status, err, string(body))
+	}
+
+	var resp ClusterGetResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return false, fmt.Errorf("failed to unmarshal cluster response: %w", err)
+	}
+
+	return strings.EqualFold(resp.Status, ClusterStatusSuspended), nil
+}
+
+func AllStorageNodesUnreachable(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret,
+	clusterUUID string,
+) (bool, error) {
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return false, fmt.Errorf(
+			"failed to list storage nodes for cluster %s, status %d: %v, body: %s",
+			clusterUUID, status, err, string(body),
+		)
+	}
+
+	var nodes []NodeStatusResponse
+	if err := json.Unmarshal(body, &nodes); err != nil {
+		return false, fmt.Errorf("failed to unmarshal storage nodes response: %w", err)
+	}
+
+	if len(nodes) == 0 {
+		return false, nil
+	}
+
+	for _, n := range nodes {
+		if !strings.EqualFold(n.Status, NodeStatusUnreachable) {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
 func RequiredNodesFromMOD(mod string) (int, error) {
 	parts := strings.Split(mod, "x")
 	if len(parts) != 2 {
@@ -440,4 +496,24 @@ func GetLvol(
 	}
 
 	return &lvol, nil
+}
+
+func ShouldFailoverToLastSnapshot(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret,
+	clusterUUID string,
+) (bool, error) {
+
+	suspended, err := ClusterSuspended(ctx, apiClient, clusterSecret, clusterUUID)
+	if err != nil || !suspended {
+		return suspended, err
+	}
+
+	allUnreachable, err := AllStorageNodesUnreachable(ctx, apiClient, clusterSecret, clusterUUID)
+	if err != nil {
+		return false, err
+	}
+
+	return allUnreachable, nil
 }

@@ -235,6 +235,11 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 		}
 	}
 
+	failover, err := utils.ShouldFailoverToLastSnapshot(ctx, apiClient, clusterSecret, clusterUUID)
+	if err != nil {
+	}
+	if failover {
+	}
 	return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
 }
 
