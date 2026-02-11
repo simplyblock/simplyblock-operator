@@ -29,7 +29,7 @@ type NodeStatusResponse struct {
 }
 
 type Lvol struct {
-	UUID        string `json:"uuid"`
+	UUID        string `json:"id"`
 	Name        string `json:"name"`
 	DoReplicate bool   `json:"do_replicate"`
 

@@ -55,7 +55,7 @@ type ClusterFIRSTAPIResponse struct {
 }
 
 type ClusterAPIResponse struct {
-	UUID        string `json:"uuid"`
+	UUID        string `json:"id"`
 	Secret      string `json:"secret"`
 	NQN         string `json:"nqn"`
 	NDCS        int    `json:"distr_ndcs"`
