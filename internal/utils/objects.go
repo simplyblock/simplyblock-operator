@@ -419,7 +419,7 @@ func GetPoolUUIDs(ctx context.Context, apiClient *webapi.Client, clusterSecret, 
 	)
 
 	var pools []struct {
-		UUID string `json:"uuid"`
+		UUID string `json:"id"`
 		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(body, &pools); err != nil {
