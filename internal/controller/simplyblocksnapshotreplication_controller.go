@@ -237,8 +237,13 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 
 	failover, err := utils.ShouldFailoverToLastSnapshot(ctx, apiClient, clusterSecret, clusterUUID)
 	if err != nil {
+		log.Error(err, "Failover pre-check failed", "clusterUUID", clusterUUID)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
+
 	if failover {
+		log.Info("Cluster suspended and all storage nodes unreachable — triggering snapshot promotion",
+			"clusterUUID", clusterUUID)
 	}
 	return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
 }
