@@ -183,7 +183,7 @@ func (r *SimplyBlockTaskReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		log.Error(err, "Failed to update task status", "task", taskCR.Name)
 	}
 
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

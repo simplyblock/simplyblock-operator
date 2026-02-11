@@ -237,7 +237,7 @@ func (r *SimplyBlockDeviceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		"deviceCount", len(newStatus),
 	)
 
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
