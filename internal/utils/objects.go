@@ -498,7 +498,7 @@ func GetLvol(
 	return &lvol, nil
 }
 
-func ShouldFailoverToLastSnapshot(
+func ShouldFailoverToRepCluster(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterSecret,
