@@ -199,17 +199,6 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 				continue
 			}
 
-			if !shouldReplicate(lvolDetail, interval, now) {
-				log.Info(
-					"Skipping replication (interval not reached)",
-					"lvol", lvolDetail.Name,
-					"uuid", lvolDetail.UUID,
-					"lastSnapshot", lvolDetail.RepInfo.LastSnapshotUUID,
-					"intervalSec", interval,
-				)
-				continue
-			}
-
 			if failover {
 				if err := replicateLvol(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolDetail.UUID); err != nil {
 					log.Error(err, "Failed to replicate lvol on target cluster",
@@ -224,6 +213,17 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 					"lvol", lvolDetail.Name,
 					"uuid", lvolDetail.UUID,
 					"targetCluster", snapRepCR.Spec.TargetCluster,
+				)
+				continue
+			}
+
+			if !shouldReplicate(lvolDetail, interval, now) {
+				log.Info(
+					"Skipping replication (interval not reached)",
+					"lvol", lvolDetail.Name,
+					"uuid", lvolDetail.UUID,
+					"lastSnapshot", lvolDetail.RepInfo.LastSnapshotUUID,
+					"intervalSec", interval,
 				)
 				continue
 			}
