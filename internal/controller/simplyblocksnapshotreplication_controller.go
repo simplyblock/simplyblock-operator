@@ -158,34 +158,34 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 		log.Error(err, "Failover pre-check failed", "clusterUUID", clusterUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	
+
 	poolUUIDs, err := utils.GetPoolUUIDs(ctx, apiClient, clusterSecret, clusterUUID)
 	if err != nil {
 		log.Error(err, "Failed to list pools")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	
+
 	log.Info("Pool UUIDs", "poolUUIDs", poolUUIDs)
-	
+
 	now := time.Now().UTC()
 	interval := utils.IntPtrOrDefault(snapRepCR.Spec.Interval, 60)
-	
+
 	for _, poolUUID := range poolUUIDs {
 		log.Info("POOL UUID", "poolUUID", poolUUID)
-	
+
 		lvols, err := utils.GetLvols(ctx, apiClient, clusterSecret, clusterUUID, poolUUID)
 		if err != nil {
 			log.Error(err, "Failed to list lvols", "poolUUID", poolUUID)
 			continue
 		}
-	
+
 		log.Info("lvols Info for Replication", "lvols", lvols)
-	
+
 		for _, lvolSummary := range lvols {
 			if !lvolSummary.DoReplicate {
 				continue
 			}
-	
+
 			lvolDetail, err := utils.GetLvol(
 				ctx,
 				apiClient,
@@ -198,7 +198,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 				log.Error(err, "Failed to get lvol", "poolUUID", poolUUID, "lvolUUID", lvolSummary.UUID)
 				continue
 			}
-	
+
 			if !shouldReplicate(lvolDetail, interval, now) {
 				log.Info(
 					"Skipping replication (interval not reached)",
@@ -209,7 +209,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 				)
 				continue
 			}
-	
+
 			if failover {
 				if err := replicateLvol(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolDetail.UUID); err != nil {
 					log.Error(err, "Failed to replicate lvol on target cluster",
@@ -219,7 +219,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 					)
 					continue
 				}
-	
+
 				log.Info("Started lvol Replication on Target Cluster",
 					"lvol", lvolDetail.Name,
 					"uuid", lvolDetail.UUID,
@@ -227,7 +227,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 				)
 				continue
 			}
-	
+
 			if err := startReplication(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolDetail.UUID); err != nil {
 				log.Error(err, "Failed to start replication",
 					"lvol", lvolDetail.Name,
@@ -235,14 +235,14 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 				)
 				continue
 			}
-	
+
 			log.Info("Replication started for lvol",
 				"lvol", lvolDetail.Name,
 				"uuid", lvolDetail.UUID,
 			)
 		}
 	}
-	
+
 	return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
 }
 
