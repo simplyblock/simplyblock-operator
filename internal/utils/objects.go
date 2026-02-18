@@ -32,6 +32,7 @@ type Lvol struct {
 	UUID        string `json:"id"`
 	Name        string `json:"name"`
 	DoReplicate bool   `json:"do_replicate"`
+	NQN         string `json:"nqn"`
 
 	RepInfo *ReplicationInfo `json:"rep_info,omitempty"`
 }

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -111,7 +112,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
-		poolUUID, err := utils.ResolvePoolIdentifier(
+		targetPoolUUID, err := utils.ResolvePoolIdentifier(
 			ctx,
 			r.Client,
 			snapRepCR.Namespace,
@@ -130,7 +131,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 		params := utils.ReplicationAddParams{
 			TargetCluster: targetClusterUUID,
 			Timeout:       utils.IntPtrOrDefault(snapRepCR.Spec.Timeout, 0),
-			TargetPool:    poolUUID,
+			TargetPool:    targetPoolUUID,
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/addreplication/", clusterUUID)
@@ -157,6 +158,50 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 	if err != nil {
 		log.Error(err, "Failover pre-check failed", "clusterUUID", clusterUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	targetIDs := map[string]struct{}{}
+	if failover {
+		targetClusterUUID, err := utils.ResolveClusterIdentifier(
+			ctx,
+			r.Client,
+			snapRepCR.Namespace,
+			snapRepCR.Spec.TargetCluster,
+		)
+		if err != nil {
+			log.Info("Target cluster UUID not ready yet, requeuing",
+				"cluster", snapRepCR.Spec.TargetCluster,
+			)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		_, targetClusterSecret, err := utils.GetClusterAuth(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
+		if err != nil {
+			log.Error(err, "Failed to get target cluster auth")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		targetPoolUUID, err := utils.ResolvePoolIdentifier(
+			ctx,
+			r.Client,
+			snapRepCR.Namespace,
+			snapRepCR.Spec.TargetCluster,
+			snapRepCR.Spec.TargetPool,
+		)
+		if err != nil {
+			log.Info("Target pool UUID not found, requeuing",
+				"poolName", snapRepCR.Spec.TargetPool,
+				"cluster", snapRepCR.Spec.TargetCluster,
+			)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		ids, err := buildTargetLvolIDSet(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID)
+		if err != nil {
+			log.Error(err, "Failed to build target lvol ID set; will not skip replicate_lvol")
+		} else {
+			targetIDs = ids
+		}
 	}
 
 	poolUUIDs, err := utils.GetPoolUUIDs(ctx, apiClient, clusterSecret, clusterUUID)
@@ -200,6 +245,25 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 			}
 
 			if failover {
+				if id, ok := lvolIDFromNQN(lvolDetail.NQN); ok {
+					if _, exists := targetIDs[id]; exists {
+						log.Info("Skipping replicate_lvol: lvol already exists on target cluster",
+							"lvol", lvolDetail.Name,
+							"uuid", lvolDetail.UUID,
+							"nqn", lvolDetail.NQN,
+							"lvolID", id,
+							"targetCluster", snapRepCR.Spec.TargetCluster,
+						)
+						continue
+					}
+				} else {
+					log.Info("Could not parse lvol ID from NQN; proceeding with replicate_lvol",
+						"lvol", lvolDetail.Name,
+						"uuid", lvolDetail.UUID,
+						"nqn", lvolDetail.NQN,
+					)
+				}
+
 				if err := replicateLvol(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolDetail.UUID); err != nil {
 					log.Error(err, "Failed to replicate lvol on target cluster",
 						"lvol", lvolDetail.Name,
@@ -326,4 +390,50 @@ func replicateLvol(ctx context.Context, apiClient *webapi.Client, clusterSecret,
 		return fmt.Errorf("failed to start replication for lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
 	}
 	return nil
+}
+
+func lvolIDFromNQN(nqn string) (string, bool) {
+	const marker = "lvol:"
+	i := strings.LastIndex(nqn, marker)
+	if i < 0 {
+		return "", false
+	}
+	id := strings.TrimSpace(nqn[i+len(marker):])
+	if id == "" {
+		return "", false
+	}
+	return id, true
+}
+
+func buildTargetLvolIDSet(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	targetClusterSecret string,
+	targetClusterUUID string,
+	targetPoolUUID string,
+) (map[string]struct{}, error) {
+	log := logf.FromContext(ctx)
+
+	targetLvols, err := utils.GetLvols(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID)
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make(map[string]struct{}, len(targetLvols))
+	for _, tl := range targetLvols {
+		if tl.NQN == "" {
+			continue
+		}
+		if id, ok := lvolIDFromNQN(tl.NQN); ok {
+			ids[id] = struct{}{}
+		}
+	}
+
+	log.Info("Built target lvol ID set",
+		"targetClusterUUID", targetClusterUUID,
+		"targetPoolUUID", targetPoolUUID,
+		"count", len(ids),
+	)
+
+	return ids, nil
 }
