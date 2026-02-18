@@ -86,13 +86,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 	}
 
 	// Ensure addreplication is configured once
-	if res, err := r.ensureConfigured(ctx, apiClient, snapRepCR, clusterUUID, clusterSecret); err != nil || res != nil {
-		if err != nil {
-			log.Error(err, "Failed to ensure replication configured")
-		}
-		if res == nil {
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
+	if res := r.ensureConfigured(ctx, apiClient, snapRepCR, clusterUUID, clusterSecret); res != nil {
 		return *res, nil
 	}
 
@@ -167,11 +161,11 @@ func (r *SimplyBlockSnapshotReplicationReconciler) ensureConfigured(
 	snapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
 	sourceClusterUUID string,
 	sourceClusterSecret string,
-) (*ctrl.Result, error) {
+) *ctrl.Result {
 	log := logf.FromContext(ctx)
 
 	if snapRepCR.Status.Configured {
-		return nil, nil
+		return nil
 	}
 
 	targetClusterUUID, err := utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
@@ -180,7 +174,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) ensureConfigured(
 			"cluster", snapRepCR.Spec.TargetCluster,
 		)
 		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return &res, nil
+		return &res
 	}
 
 	targetPoolUUID, err := utils.ResolvePoolIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster, snapRepCR.Spec.TargetPool)
@@ -190,7 +184,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) ensureConfigured(
 			"cluster", snapRepCR.Spec.TargetCluster,
 		)
 		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return &res, nil
+		return &res
 	}
 
 	params := utils.ReplicationAddParams{
@@ -204,7 +198,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) ensureConfigured(
 	if err != nil || status >= 300 {
 		log.Error(err, "Cluster add replication failed", "status", status, "response", string(body))
 		res := ctrl.Result{RequeueAfter: 20 * time.Second}
-		return &res, nil
+		return &res
 	}
 
 	orig := snapRepCR.DeepCopy()
@@ -213,12 +207,12 @@ func (r *SimplyBlockSnapshotReplicationReconciler) ensureConfigured(
 	if err := r.Status().Patch(ctx, snapRepCR, patch); err != nil {
 		log.Error(err, "Failed to patch snapshot replication status after creation")
 		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return &res, nil
+		return &res
 	}
 
 	log.Info("Snapshot Replication successfully added", "name", snapRepCR.Name)
 	res := ctrl.Result{RequeueAfter: 10 * time.Second}
-	return &res, nil
+	return &res
 }
 
 func (r *SimplyBlockSnapshotReplicationReconciler) computeFailoverAndTargetIDs(
