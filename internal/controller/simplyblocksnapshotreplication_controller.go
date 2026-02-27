@@ -99,7 +99,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 		return *res, nil
 	}
 
-	interval := utils.IntPtrOrDefault(snapRepCR.Spec.Interval, 60)
+	interval := utils.IntPtrOrDefault(snapRepCR.Spec.Interval, 300)
 	now := time.Now().UTC()
 
 	if err := r.replicateAcrossPools(ctx, apiClient, snapRepCR, clusterUUID, clusterSecret, failover, targetIDs, interval, now); err != nil {

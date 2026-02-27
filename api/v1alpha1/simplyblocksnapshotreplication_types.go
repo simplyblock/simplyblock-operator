@@ -37,7 +37,7 @@ type SimplyBlockSnapshotReplicationSpec struct {
 	// snapshot replication timeout
 	Timeout *int32 `json:"timeout,omitempty"`
 
-	// snapshot replication interval in seconds (default: 60sec)
+	// snapshot replication interval in seconds (default: 300sec)
 	Interval *int32 `json:"interval,omitempty"`
 
 	// Optional: list of volumes to replicate. Empty means all volumes
