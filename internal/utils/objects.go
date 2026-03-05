@@ -44,6 +44,13 @@ type ReplicationInfo struct {
 	ReplicatedCount         int64     `json:"replicated_count,omitempty"`
 }
 
+type SnapshotTask struct {
+	UUID      string `json:"id"`
+	Status    string `json:"status"`
+	Type      string `json:"type"`
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
 func ResolvePoolUUID(
 	ctx context.Context,
 	c client.Client,
@@ -517,4 +524,54 @@ func ShouldFailoverToRepCluster(
 	}
 
 	return allUnreachable, nil
+}
+
+func GetSnapshotTasks(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	poolUUID string,
+	lvolUUID string,
+) ([]SnapshotTask, error) {
+
+	log := logf.FromContext(ctx)
+
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication-tasks/",
+		clusterUUID,
+		poolUUID,
+		lvolUUID,
+	)
+
+	body, status, err := apiClient.Do(
+		ctx,
+		clusterSecret,
+		http.MethodGet,
+		endpoint,
+		nil,
+	)
+
+	if err != nil || status >= 300 {
+		return nil, fmt.Errorf(
+			"failed to list snapshot tasks for lvol %s, status %d: %v, body: %s",
+			lvolUUID,
+			status,
+			err,
+			string(body),
+		)
+	}
+
+	log.Info("GetSnapshotTasks API call",
+		"endpoint", endpoint,
+		"status", status,
+		"response", string(body),
+	)
+
+	var tasks []SnapshotTask
+	if err := json.Unmarshal(body, &tasks); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal snapshot tasks: %w", err)
+	}
+
+	return tasks, nil
 }
