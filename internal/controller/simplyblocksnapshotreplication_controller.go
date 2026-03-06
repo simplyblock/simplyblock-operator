@@ -405,7 +405,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) handleNormalReplication(
 	}
 
 	if !done {
-		log.Info("skipping replication because previous snapshot task not done",
+		log.Info("skipping replication because previous snapshot replication task not done",
 			"lvolUUID", lvolDetail.UUID,
 			"taskID", task.UUID,
 			"status", task.Status,
