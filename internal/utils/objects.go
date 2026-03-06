@@ -45,10 +45,10 @@ type ReplicationInfo struct {
 }
 
 type SnapshotTask struct {
-	UUID      string `json:"id"`
-	Status    string `json:"status"`
-	Type      string `json:"type"`
-	CreatedAt string `json:"created_at,omitempty"`
+	UUID         string `json:"id"`
+	Status       string `json:"status"`
+	FunctionName string `json:"function_name"`
+	CreatedDT    string `json:"create_dt,omitempty"`
 }
 
 func ResolvePoolUUID(
@@ -538,7 +538,7 @@ func GetSnapshotTasks(
 	log := logf.FromContext(ctx)
 
 	endpoint := fmt.Sprintf(
-		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication-tasks/",
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/list_replication_tasks/",
 		clusterUUID,
 		poolUUID,
 		lvolUUID,
