@@ -400,6 +400,22 @@ func (r *SimplyBlockSnapshotReplicationReconciler) handleNormalReplication(
 		"lvol", lvolDetail.Name,
 		"uuid", lvolDetail.UUID,
 	)
+
+	tasks, err := utils.GetSnapshotTasks(
+		ctx,
+		apiClient,
+		clusterSecret,
+		clusterUUID,
+		poolUUID,
+		lvolDetail.UUID,
+	)
+	if err != nil {
+		return
+	}
+
+	for _, t := range tasks {
+		log.Info("Snapshot task", "id", t.UUID, "status", t.Status)
+	}
 }
 
 /* -------------------- Existing helpers -------------------- */
