@@ -388,6 +388,31 @@ func (r *SimplyBlockSnapshotReplicationReconciler) handleNormalReplication(
 		return
 	}
 
+	done, task, err := utils.GetLastSnapshotTaskDoneStatus(
+		ctx,
+		apiClient,
+		clusterSecret,
+		clusterUUID,
+		poolUUID,
+		lvolDetail.UUID,
+	)
+	if err != nil {
+		log.Error(err, "Failed to check last snapshot replication task",
+			"lvol", lvolDetail.Name,
+			"uuid", lvolDetail.UUID,
+		)
+		return
+	}
+
+	if !done {
+		log.Info("skipping replication because previous snapshot task not done",
+			"lvolUUID", lvolDetail.UUID,
+			"taskID", task.UUID,
+			"status", task.Status,
+		)
+		return
+	}
+
 	if err := startReplication(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolDetail.UUID); err != nil {
 		log.Error(err, "Failed to start replication",
 			"lvol", lvolDetail.Name,
@@ -401,21 +426,6 @@ func (r *SimplyBlockSnapshotReplicationReconciler) handleNormalReplication(
 		"uuid", lvolDetail.UUID,
 	)
 
-	tasks, err := utils.GetSnapshotTasks(
-		ctx,
-		apiClient,
-		clusterSecret,
-		clusterUUID,
-		poolUUID,
-		lvolDetail.UUID,
-	)
-	if err != nil {
-		return
-	}
-
-	for _, t := range tasks {
-		log.Info("Snapshot task", "id", t.UUID, "status", t.Status)
-	}
 }
 
 /* -------------------- Existing helpers -------------------- */

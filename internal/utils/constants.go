@@ -8,6 +8,8 @@ const (
 	ActionStateSuccess = "success"
 	ActionStateFailed  = "failed"
 
+	TaskStateDone = "done"
+
 	ClusterStatusActive    = "active"
 	ClusterStatusSuspended = "suspended"
 

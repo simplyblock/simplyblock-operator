@@ -575,3 +575,32 @@ func GetSnapshotTasks(
 
 	return tasks, nil
 }
+
+func GetLastSnapshotTaskDoneStatus(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	poolUUID string,
+	lvolUUID string,
+) (bool, *SnapshotTask, error) {
+	tasks, err := GetSnapshotTasks(
+		ctx,
+		apiClient,
+		clusterSecret,
+		clusterUUID,
+		poolUUID,
+		lvolUUID,
+	)
+	if err != nil {
+		return false, nil, err
+	}
+
+	if len(tasks) == 0 {
+		return false, nil, nil
+	}
+
+	lastTask := tasks[len(tasks)-1]
+	done := strings.EqualFold(lastTask.Status, TaskStateDone)
+	return done, &lastTask, nil
+}
