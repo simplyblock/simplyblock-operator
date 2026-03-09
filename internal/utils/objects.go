@@ -597,7 +597,9 @@ func GetLastSnapshotTaskDoneStatus(
 	}
 
 	if len(tasks) == 0 {
-		return false, nil, nil
+		return true, &SnapshotTask{
+			Status: "empty",
+		}, nil
 	}
 
 	lastTask := tasks[len(tasks)-1]
