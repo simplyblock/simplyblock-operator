@@ -574,6 +574,16 @@ func (in *SimplyBlockSnapshotReplicationSpec) DeepCopyInto(out *SimplyBlockSnaps
 		*out = new(int32)
 		**out = **in
 	}
+	if in.IncludeVolumeIDs != nil {
+		in, out := &in.IncludeVolumeIDs, &out.IncludeVolumeIDs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.ExcludeVolumeIDs != nil {
+		in, out := &in.ExcludeVolumeIDs, &out.ExcludeVolumeIDs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.VolumeIDs != nil {
 		in, out := &in.VolumeIDs, &out.VolumeIDs
 		*out = make([]string, len(*in))

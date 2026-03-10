@@ -39,6 +39,15 @@ type SimplyBlockSnapshotReplicationSpec struct {
 
 	// snapshot replication interval in seconds (default: 300sec)
 	Interval *int32 `json:"interval,omitempty"`
+	// +kubebuilder:validation:Enum=failback
+	Action string `json:"action,omitempty"`
+
+	// Optional: only these volumes are included in failback.
+	// If empty, all volumes are candidates unless excluded below.
+	IncludeVolumeIDs []string `json:"includeVolumeIDs,omitempty"`
+
+	// Optional: volumes to exclude from failback.
+	ExcludeVolumeIDs []string `json:"excludeVolumeIDs,omitempty"`
 
 	// Optional: list of volumes to replicate. Empty means all volumes
 	VolumeIDs []string `json:"volumeIDs,omitempty"`
@@ -47,6 +56,10 @@ type SimplyBlockSnapshotReplicationSpec struct {
 // SimplyBlockSnapshotReplicationStatus defines the observed state of SimplyBlockSnapshotReplication.
 type SimplyBlockSnapshotReplicationStatus struct {
 	Configured bool `json:"configured,omitempty"`
+
+	// The metadata.generation value for which failback was last processed.
+	ObservedFailbackGeneration int64 `json:"observedFailbackGeneration,omitempty"`
+
 	// Per-volume replication status
 	Volumes []VolumeReplicationStatus `json:"volumes,omitempty"`
 }

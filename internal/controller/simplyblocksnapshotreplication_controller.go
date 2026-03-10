@@ -90,6 +90,42 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 		return *res, nil
 	}
 
+	if snapRepCR.Spec.Action == "failback" {
+		if snapRepCR.Status.ObservedFailbackGeneration == snapRepCR.Generation {
+			log.Info("Failback already processed for current generation, skipping",
+				"name", snapRepCR.Name,
+				"generation", snapRepCR.Generation,
+			)
+			return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
+		}
+
+		res, processed, err := r.handleFailbackAction(
+			ctx,
+			apiClient,
+			snapRepCR,
+			clusterUUID,
+			clusterSecret,
+		)
+		if err != nil {
+			log.Error(err, "Failback failed")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		if res != nil {
+			return *res, nil
+		}
+
+		if processed {
+			orig := snapRepCR.DeepCopy()
+			snapRepCR.Status.ObservedFailbackGeneration = snapRepCR.Generation
+			if err := r.Status().Patch(ctx, snapRepCR, client.MergeFrom(orig)); err != nil {
+				log.Error(err, "Failed to patch failback processed generation")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+		}
+
+		return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
+	}
+
 	failover, targetIDs, res, err := r.computeFailoverAndTargetIDs(ctx, apiClient, snapRepCR, clusterUUID, clusterSecret)
 	if err != nil {
 		log.Error(err, "Failover pre-check failed", "clusterUUID", clusterUUID)
@@ -545,4 +581,169 @@ func buildTargetLvolIDSet(
 	)
 
 	return ids, nil
+}
+
+func (r *SimplyBlockSnapshotReplicationReconciler) handleFailbackAction(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	snapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+	sourceClusterUUID string,
+	sourceClusterSecret string,
+) (*ctrl.Result, bool, error) {
+	log := logf.FromContext(ctx)
+
+	sourceActive, status, err := utils.IsClusterActive(ctx, apiClient, sourceClusterSecret, sourceClusterUUID)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to verify source cluster active state: %w", err)
+	}
+	if !sourceActive {
+		log.Info("Source cluster is not active yet; skipping failback for now",
+			"sourceCluster", snapRepCR.Spec.SourceCluster,
+			"sourceClusterUUID", sourceClusterUUID,
+			"status", status,
+		)
+		res := ctrl.Result{RequeueAfter: 15 * time.Second}
+		return &res, false, nil
+	}
+
+	targetClusterUUID, err := utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
+	if err != nil {
+		log.Info("Target cluster UUID not ready yet, requeuing",
+			"cluster", snapRepCR.Spec.TargetCluster,
+		)
+		res := ctrl.Result{RequeueAfter: 10 * time.Second}
+		return &res, false, nil
+	}
+
+	_, targetClusterSecret, err := utils.GetClusterAuth(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to get target cluster auth: %w", err)
+	}
+
+	targetPoolUUID, err := utils.ResolvePoolIdentifier(
+		ctx,
+		r.Client,
+		snapRepCR.Namespace,
+		snapRepCR.Spec.TargetCluster,
+		snapRepCR.Spec.TargetPool,
+	)
+	if err != nil {
+		log.Info("Target pool UUID not found, requeuing",
+			"poolName", snapRepCR.Spec.TargetPool,
+			"cluster", snapRepCR.Spec.TargetCluster,
+		)
+		res := ctrl.Result{RequeueAfter: 10 * time.Second}
+		return &res, false, nil
+	}
+
+	lvols, err := utils.GetLvols(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to list target lvols for failback: %w", err)
+	}
+
+	includeIDs := snapRepCR.Spec.VolumeIDs
+	excludeIDs := snapRepCR.Spec.ExcludeVolumeIDs
+
+	allSucceeded := true
+
+	for _, lvolSummary := range lvols {
+		lvolDetail, err := utils.GetLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, lvolSummary.UUID)
+		if err != nil {
+			log.Error(err, "Failed to get target lvol for failback",
+				"targetClusterUUID", targetClusterUUID,
+				"targetPoolUUID", targetPoolUUID,
+				"lvolUUID", lvolSummary.UUID,
+			)
+			allSucceeded = false
+			continue
+		}
+
+		filterID := failbackFilterID(lvolDetail)
+
+		if !shouldProcessFailbackVolume(filterID, includeIDs, excludeIDs) {
+			log.Info("Skipping lvol during failback due to include/exclude filters",
+				"lvol", lvolDetail.Name,
+				"lvolUUID", lvolDetail.UUID,
+				"filterID", filterID,
+				"includeVolumeIDs", includeIDs,
+				"excludeVolumeIDs", excludeIDs,
+			)
+			continue
+		}
+
+		if err := failbackLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, lvolDetail.UUID); err != nil {
+			log.Error(err, "Failed to start failback for lvol",
+				"lvol", lvolDetail.Name,
+				"lvolUUID", lvolDetail.UUID,
+				"filterID", filterID,
+			)
+			allSucceeded = false
+			continue
+		}
+
+		log.Info("Started failback for lvol",
+			"lvol", lvolDetail.Name,
+			"lvolUUID", lvolDetail.UUID,
+			"filterID", filterID,
+		)
+	}
+
+	if !allSucceeded {
+		res := ctrl.Result{RequeueAfter: 15 * time.Second}
+		return &res, false, nil
+	}
+
+	return nil, true, nil
+}
+
+func shouldProcessFailbackVolume(volumeID string, includeIDs, excludeIDs []string) bool {
+	includeSet := make(map[string]struct{}, len(includeIDs))
+	for _, id := range includeIDs {
+		includeSet[id] = struct{}{}
+	}
+
+	excludeSet := make(map[string]struct{}, len(excludeIDs))
+	for _, id := range excludeIDs {
+		excludeSet[id] = struct{}{}
+	}
+
+	if len(includeSet) > 0 {
+		if _, ok := includeSet[volumeID]; !ok {
+			return false
+		}
+	}
+
+	if _, ok := excludeSet[volumeID]; ok {
+		return false
+	}
+
+	return true
+}
+
+func failbackFilterID(lvol *utils.Lvol) string {
+	if id, ok := lvolIDFromNQN(lvol.NQN); ok {
+		return id
+	}
+	return lvol.UUID
+}
+
+func failbackLvol(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	poolUUID string,
+	lvolUUID string,
+) error {
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/failback_lvol/",
+		clusterUUID,
+		poolUUID,
+		lvolUUID,
+	)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+	if err != nil || status >= 300 {
+		return fmt.Errorf("failed to start failback for lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
+	}
+	return nil
 }
