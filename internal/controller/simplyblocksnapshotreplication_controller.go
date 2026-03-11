@@ -671,7 +671,14 @@ func (r *SimplyBlockSnapshotReplicationReconciler) handleFailbackAction(
 			continue
 		}
 
-		if err := failbackLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, lvolDetail.UUID); err != nil {
+		if err := failbackLvol(
+			ctx,
+			apiClient,
+			targetClusterSecret,
+			targetClusterUUID,
+			targetPoolUUID,
+			lvolDetail,
+		); err != nil {
 			log.Error(err, "Failed to start failback for lvol",
 				"lvol", lvolDetail.Name,
 				"lvolUUID", lvolDetail.UUID,
@@ -730,20 +737,159 @@ func failbackFilterID(lvol *utils.Lvol) string {
 func failbackLvol(
 	ctx context.Context,
 	apiClient *webapi.Client,
+	targetClusterSecret string,
+	targetClusterUUID string,
+	targetPoolUUID string,
+	targetLvol *utils.Lvol,
+) error {
+	if err := triggerReplication(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
+		return fmt.Errorf("target trigger replication failed for lvol %s: %w", targetLvol.UUID, err)
+	}
+
+	if err := waitForReplicationTaskCompletion(
+		ctx,
+		apiClient,
+		targetClusterSecret,
+		targetClusterUUID,
+		targetPoolUUID,
+		targetLvol.UUID,
+		10*time.Minute,
+		2*time.Second,
+	); err != nil {
+		return fmt.Errorf("waiting for first target replication task failed for lvol %s: %w", targetLvol.UUID, err)
+	}
+
+	if err := suspendLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
+		return fmt.Errorf("suspend target lvol failed for lvol %s: %w", targetLvol.UUID, err)
+	}
+
+	if err := triggerReplication(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
+		return fmt.Errorf("second target trigger replication failed for lvol %s: %w", targetLvol.UUID, err)
+	}
+
+	if err := waitForReplicationTaskCompletion(
+		ctx,
+		apiClient,
+		targetClusterSecret,
+		targetClusterUUID,
+		targetPoolUUID,
+		targetLvol.UUID,
+		10*time.Minute,
+		2*time.Second,
+	); err != nil {
+		return fmt.Errorf("waiting for second target replication task failed for lvol %s: %w", targetLvol.UUID, err)
+	}
+
+	if err := deleteLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
+		return fmt.Errorf("delete target lvol failed for lvol %s: %w", targetLvol.UUID, err)
+	}
+
+	if err := replicateLvolOnSourceCluster(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
+		return fmt.Errorf("replicate lvol on source cluster failed for lvol %s: %w", targetLvol.UUID, err)
+	}
+
+	return nil
+}
+
+func suspendLvol(
+	ctx context.Context,
+	apiClient *webapi.Client,
 	clusterSecret string,
 	clusterUUID string,
 	poolUUID string,
 	lvolUUID string,
 ) error {
 	endpoint := fmt.Sprintf(
-		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/failback_lvol/",
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/suspend/",
 		clusterUUID,
 		poolUUID,
 		lvolUUID,
 	)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
-		return fmt.Errorf("failed to start failback for lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
+		return fmt.Errorf("failed to suspend lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
 	}
 	return nil
+}
+
+func deleteLvol(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	poolUUID string,
+	lvolUUID string,
+) error {
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
+		clusterUUID,
+		poolUUID,
+		lvolUUID,
+	)
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+	if err != nil || status >= 300 {
+		return fmt.Errorf("failed to delete lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
+	}
+	return nil
+}
+
+func replicateLvolOnSourceCluster(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	targetClusterSecret string,
+	targetClusterUUID string,
+	targetPoolUUID string,
+	targetLvolUUID string,
+) error {
+	return replicateLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvolUUID)
+}
+
+func waitForReplicationTaskCompletion(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	poolUUID string,
+	lvolUUID string,
+	timeout time.Duration,
+	pollInterval time.Duration,
+) error {
+	timeoutTimer := time.NewTimer(timeout)
+	defer timeoutTimer.Stop()
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		done, task, err := utils.GetLastSnapshotTaskDoneStatus(
+			ctx,
+			apiClient,
+			clusterSecret,
+			clusterUUID,
+			poolUUID,
+			lvolUUID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to get replication task status for lvol %s: %w", lvolUUID, err)
+		}
+
+		if done {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeoutTimer.C:
+			return fmt.Errorf(
+				"timed out waiting for replication task completion for lvol %s (taskID=%s status=%s)",
+				lvolUUID,
+				task.UUID,
+				task.Status,
+			)
+		case <-ticker.C:
+		}
+	}
 }
