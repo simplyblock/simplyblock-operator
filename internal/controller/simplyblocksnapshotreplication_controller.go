@@ -780,10 +780,6 @@ func failbackLvol(
 		return fmt.Errorf("waiting for second target replication task failed for lvol %s: %w", targetLvol.UUID, err)
 	}
 
-	if err := deleteLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
-		return fmt.Errorf("delete target lvol failed for lvol %s: %w", targetLvol.UUID, err)
-	}
-
 	if err := replicateLvolOnSourceCluster(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
 		return fmt.Errorf("replicate lvol on source cluster failed for lvol %s: %w", targetLvol.UUID, err)
 	}
@@ -813,28 +809,6 @@ func suspendLvol(
 	return nil
 }
 
-func deleteLvol(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	clusterSecret string,
-	clusterUUID string,
-	poolUUID string,
-	lvolUUID string,
-) error {
-	endpoint := fmt.Sprintf(
-		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
-		clusterUUID,
-		poolUUID,
-		lvolUUID,
-	)
-
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
-	if err != nil || status >= 300 {
-		return fmt.Errorf("failed to delete lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
-	}
-	return nil
-}
-
 func replicateLvolOnSourceCluster(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -843,7 +817,18 @@ func replicateLvolOnSourceCluster(
 	targetPoolUUID string,
 	targetLvolUUID string,
 ) error {
-	return replicateLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvolUUID)
+
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replicate_lvol_on_source_cluster/",
+		targetClusterUUID,
+		targetPoolUUID,
+		targetLvolUUID,
+	)
+	body, status, err := apiClient.Do(ctx, targetClusterSecret, http.MethodPost, endpoint, nil)
+	if err != nil || status >= 300 {
+		return fmt.Errorf("failed to start replication for lvol %s, status %d: %v, body: %s", targetLvolUUID, status, err, string(body))
+	}
+	return nil
 }
 
 func waitForReplicationTaskCompletion(
