@@ -143,6 +143,11 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	if err := r.triggerReplicationOnTargetLvols(ctx, apiClient, snapRepCR, interval, now); err != nil {
+		log.Error(err, "Target replication trigger loop failed")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
 }
 
@@ -413,6 +418,28 @@ func (r *SimplyBlockSnapshotReplicationReconciler) handleNormalReplication(
 	now time.Time,
 ) {
 	log := logf.FromContext(ctx)
+
+	activeOnSource, err := utils.GetReplicationActiveSides(
+		ctx,
+		apiClient,
+		clusterSecret,
+		clusterUUID,
+		poolUUID,
+		lvolDetail.UUID,
+	)
+	if err != nil {
+		log.Error(err, "Failed to determine active side for source lvol",
+			"lvolUUID", lvolDetail.UUID,
+		)
+		return
+	}
+
+	if !activeOnSource {
+		log.Info("Skipping source trigger because target side is active",
+			"lvolUUID", lvolDetail.UUID,
+		)
+		return
+	}
 
 	if !shouldReplicate(lvolDetail, interval, now) {
 		log.Info("Skipping replication (interval not reached)",
@@ -780,6 +807,10 @@ func failbackLvol(
 		return fmt.Errorf("waiting for second target replication task failed for lvol %s: %w", targetLvol.UUID, err)
 	}
 
+	if err := deleteLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
+		return fmt.Errorf("delete target lvol failed for lvol %s: %w", targetLvol.UUID, err)
+	}
+
 	if err := replicateLvolOnSourceCluster(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
 		return fmt.Errorf("replicate lvol on source cluster failed for lvol %s: %w", targetLvol.UUID, err)
 	}
@@ -805,6 +836,28 @@ func suspendLvol(
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		return fmt.Errorf("failed to suspend lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
+	}
+	return nil
+}
+
+func deleteLvol(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	poolUUID string,
+	lvolUUID string,
+) error {
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
+		clusterUUID,
+		poolUUID,
+		lvolUUID,
+	)
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+	if err != nil || status >= 300 {
+		return fmt.Errorf("failed to delete lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
 	}
 	return nil
 }
@@ -877,4 +930,120 @@ func waitForReplicationTaskCompletion(
 		case <-ticker.C:
 		}
 	}
+}
+
+func (r *SimplyBlockSnapshotReplicationReconciler) triggerReplicationOnTargetLvols(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	snapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+	interval int,
+	now time.Time,
+) error {
+	log := logf.FromContext(ctx)
+
+	targetClusterUUID, err := utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
+	if err != nil {
+		return err
+	}
+
+	_, targetClusterSecret, err := utils.GetClusterAuth(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
+	if err != nil {
+		return err
+	}
+
+	targetPoolUUID, err := utils.ResolvePoolIdentifier(
+		ctx,
+		r.Client,
+		snapRepCR.Namespace,
+		snapRepCR.Spec.TargetCluster,
+		snapRepCR.Spec.TargetPool,
+	)
+	if err != nil {
+		return err
+	}
+
+	targetLvols, err := utils.GetLvols(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID)
+	if err != nil {
+		return err
+	}
+
+	for _, lvolSummary := range targetLvols {
+		lvolDetail, err := utils.GetLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, lvolSummary.UUID)
+		if err != nil {
+			log.Error(err, "Failed to get target lvol", "lvolUUID", lvolSummary.UUID)
+			continue
+		}
+
+		sourceLvolID, ok := lvolIDFromNQN(lvolDetail.NQN)
+		if !ok {
+			log.Info("Skipping target lvol because source lvol ID could not be derived from NQN",
+				"lvolUUID", lvolDetail.UUID,
+				"nqn", lvolDetail.NQN,
+			)
+			continue
+		}
+
+		activeOnSource, err := utils.GetReplicationActiveSides(
+			ctx,
+			apiClient,
+			targetClusterSecret,
+			targetClusterUUID,
+			targetPoolUUID,
+			lvolDetail.UUID,
+		)
+		if err != nil {
+			log.Error(err, "Failed to determine active side for target lvol",
+				"lvolUUID", lvolDetail.UUID,
+				"sourceLvolID", sourceLvolID,
+			)
+			continue
+		}
+
+		if activeOnSource {
+			continue
+		}
+
+		if !shouldReplicate(lvolDetail, interval, now) {
+			continue
+		}
+
+		done, task, err := utils.GetLastSnapshotTaskDoneStatus(
+			ctx,
+			apiClient,
+			targetClusterSecret,
+			targetClusterUUID,
+			targetPoolUUID,
+			lvolDetail.UUID,
+		)
+		if err != nil {
+			log.Error(err, "Failed to check last replication task on target lvol",
+				"lvolUUID", lvolDetail.UUID,
+			)
+			continue
+		}
+
+		if !done {
+			log.Info("Skipping target trigger because previous task not done",
+				"lvolUUID", lvolDetail.UUID,
+				"taskID", task.UUID,
+				"status", task.Status,
+			)
+			continue
+		}
+
+		if err := triggerReplication(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, lvolDetail.UUID); err != nil {
+			log.Error(err, "Failed to trigger replication on target lvol",
+				"lvolUUID", lvolDetail.UUID,
+				"sourceLvolID", sourceLvolID,
+			)
+			continue
+		}
+
+		log.Info("Triggered replication on target lvol",
+			"lvolUUID", lvolDetail.UUID,
+			"sourceLvolID", sourceLvolID,
+		)
+	}
+
+	return nil
 }

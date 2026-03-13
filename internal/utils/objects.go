@@ -51,6 +51,10 @@ type SnapshotTask struct {
 	CreatedDT    string `json:"create_dt,omitempty"`
 }
 
+type lvolActiveSidesResponse struct {
+	Source bool `json:"from_source"`
+}
+
 func ResolvePoolUUID(
 	ctx context.Context,
 	c client.Client,
@@ -605,4 +609,35 @@ func GetLastSnapshotTaskDoneStatus(
 	lastTask := tasks[len(tasks)-1]
 	done := strings.EqualFold(lastTask.Status, TaskStateDone)
 	return done, &lastTask, nil
+}
+
+func GetReplicationActiveSides(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	poolUUID string,
+	lvolUUID string,
+) (bool, error) {
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
+		clusterUUID,
+		poolUUID,
+		lvolUUID,
+	)
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to get lvol %s: %w", lvolUUID, err)
+	}
+	if status >= 300 {
+		return false, fmt.Errorf("failed to get lvol %s, status %d: %s", lvolUUID, status, string(body))
+	}
+
+	var resp lvolActiveSidesResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return false, fmt.Errorf("failed to unmarshal lvol %s active side fields: %w", lvolUUID, err)
+	}
+
+	return resp.Source, nil
 }
