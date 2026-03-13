@@ -781,7 +781,7 @@ func failbackLvol(
 		targetPoolUUID,
 		targetLvol.UUID,
 		10*time.Minute,
-		2*time.Second,
+		5*time.Second,
 	); err != nil {
 		return fmt.Errorf("waiting for first target replication task failed for lvol %s: %w", targetLvol.UUID, err)
 	}
@@ -802,7 +802,7 @@ func failbackLvol(
 		targetPoolUUID,
 		targetLvol.UUID,
 		10*time.Minute,
-		2*time.Second,
+		5*time.Second,
 	); err != nil {
 		return fmt.Errorf("waiting for second target replication task failed for lvol %s: %w", targetLvol.UUID, err)
 	}
