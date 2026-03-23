@@ -191,6 +191,28 @@ func (r *SimplyBlockSnapshotReplicationReconciler) resolveSourceClusterAuth(
 	return clusterUUID, clusterSecret, nil, nil
 }
 
+func (r *SimplyBlockSnapshotReplicationReconciler) resolveSourcePoolForFreshFailback(
+	ctx context.Context,
+	snapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+) (string, error) {
+	if strings.TrimSpace(snapRepCR.Spec.SourcePool) == "" {
+		return "", fmt.Errorf("spec.sourcePool must be set for failback to a fresh source cluster")
+	}
+
+	sourcePoolUUID, err := utils.ResolvePoolIdentifier(
+		ctx,
+		r.Client,
+		snapRepCR.Namespace,
+		snapRepCR.Spec.SourceCluster,
+		snapRepCR.Spec.SourcePool,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	return sourcePoolUUID, nil
+}
+
 func (r *SimplyBlockSnapshotReplicationReconciler) ensureConfigured(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -693,9 +715,10 @@ func (r *SimplyBlockSnapshotReplicationReconciler) handleFailbackAction(
 			continue
 		}
 
-		sourcePoolUUID, sourceLvolUUID, err := findSourceLvolForFailback(
+		sourcePoolUUID, sourceLvolUUID, err := r.resolveSourceFailbackTarget(
 			ctx,
 			apiClient,
+			snapRepCR,
 			sourceClusterSecret,
 			sourceClusterUUID,
 			lvolDetail,
@@ -1044,4 +1067,48 @@ func findSourceLvolForFailback(
 	}
 
 	return "", "", fmt.Errorf("source lvol not found for target lvol %s (filterID=%s)", targetLvol.UUID, filterID)
+}
+
+func (r *SimplyBlockSnapshotReplicationReconciler) resolveSourceFailbackTarget(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	snapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+	sourceClusterSecret string,
+	sourceClusterUUID string,
+	targetLvol *utils.Lvol,
+) (string, string, error) {
+	log := logf.FromContext(ctx)
+
+	sourcePoolUUID, sourceLvolUUID, err := findSourceLvolForFailback(
+		ctx,
+		apiClient,
+		sourceClusterSecret,
+		sourceClusterUUID,
+		targetLvol,
+	)
+	if err == nil {
+		return sourcePoolUUID, sourceLvolUUID, nil
+	}
+
+	log.Info("Source lvol not found on source cluster, trying fresh-cluster failback fallback",
+		"targetLvolUUID", targetLvol.UUID,
+		"targetLvolNQN", targetLvol.NQN,
+		"reason", err.Error(),
+	)
+
+	sourceLvolUUID = failbackFilterID(targetLvol)
+	if sourceLvolUUID == "" {
+		return "", "", fmt.Errorf("failed to derive source lvol UUID from target lvol %s", targetLvol.UUID)
+	}
+
+	sourcePoolUUID, err = r.resolveSourcePoolForFreshFailback(ctx, snapRepCR)
+	if err != nil {
+		return "", "", fmt.Errorf(
+			"derived source lvol UUID %s from target NQN, but failed to resolve source pool UUID: %w",
+			sourceLvolUUID,
+			err,
+		)
+	}
+
+	return sourcePoolUUID, sourceLvolUUID, nil
 }

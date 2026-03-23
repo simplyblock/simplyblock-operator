@@ -34,6 +34,9 @@ type SimplyBlockSnapshotReplicationSpec struct {
 	// Target cluster pool for replication
 	TargetPool string `json:"targetPool"`
 
+	// required for failback to a fresh source cluster
+	SourcePool string `json:"sourcePool,omitempty"`
+
 	// snapshot replication timeout
 	Timeout *int32 `json:"timeout,omitempty"`
 
