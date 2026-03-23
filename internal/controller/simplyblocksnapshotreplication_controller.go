@@ -890,21 +890,21 @@ func deleteLvol(
 func replicateLvolOnSourceCluster(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	targetClusterSecret string,
-	targetClusterUUID string,
-	targetPoolUUID string,
-	targetLvolUUID string,
+	sourceClusterSecret string,
+	sourceClusterUUID string,
+	sourcePoolUUID string,
+	sourceLvolUUID string,
 ) error {
 
 	endpoint := fmt.Sprintf(
 		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replicate_lvol_on_source_cluster/",
-		targetClusterUUID,
-		targetPoolUUID,
-		targetLvolUUID,
+		sourceClusterUUID,
+		sourcePoolUUID,
+		sourceLvolUUID,
 	)
-	body, status, err := apiClient.Do(ctx, targetClusterSecret, http.MethodPost, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, sourceClusterSecret, http.MethodPost, endpoint, nil)
 	if err != nil || status >= 300 {
-		return fmt.Errorf("failed to start replication for lvol %s, status %d: %v, body: %s", targetLvolUUID, status, err, string(body))
+		return fmt.Errorf("failed to start replication for lvol %s, status %d: %v, body: %s", sourceLvolUUID, status, err, string(body))
 	}
 	return nil
 }
