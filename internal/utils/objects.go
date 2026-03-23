@@ -33,6 +33,7 @@ type Lvol struct {
 	Name        string `json:"name"`
 	DoReplicate bool   `json:"do_replicate"`
 	NQN         string `json:"nqn"`
+	Status      string `json:"status"`
 
 	RepInfo *ReplicationInfo `json:"rep_info,omitempty"`
 }

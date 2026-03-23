@@ -830,6 +830,23 @@ func failbackLvol(
 		return fmt.Errorf("delete target lvol failed for lvol %s: %w", targetLvol.UUID, err)
 	}
 
+	if err := deleteLvol(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, sourcePoolUUID, sourceLvolUUID); err != nil {
+		return fmt.Errorf("delete source lvol failed for lvol %s: %w", sourceLvolUUID, err)
+	}
+
+	if err := waitForLvolDeleted(
+		ctx,
+		apiClient,
+		sourceClusterSecret,
+		sourceClusterUUID,
+		sourcePoolUUID,
+		sourceLvolUUID,
+		10*time.Minute,
+		5*time.Second,
+	); err != nil {
+		return fmt.Errorf("waiting for source lvol %s to reach deleted state failed: %w", sourceLvolUUID, err)
+	}
+
 	if err := replicateLvolOnSourceCluster(
 		ctx,
 		apiClient,
@@ -952,6 +969,43 @@ func waitForReplicationTaskCompletion(
 				task.UUID,
 				task.Status,
 			)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForLvolDeleted(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	poolUUID string,
+	lvolUUID string,
+	timeout time.Duration,
+	pollInterval time.Duration,
+) error {
+	timeoutTimer := time.NewTimer(timeout)
+	defer timeoutTimer.Stop()
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		lvol, err := utils.GetLvol(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolUUID)
+		if err == nil {
+			if strings.EqualFold(strings.TrimSpace(lvol.Status), "deleted") {
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeoutTimer.C:
+			if err != nil {
+				return fmt.Errorf("timed out waiting for lvol %s deletion state; last get error: %w", lvolUUID, err)
+			}
+			return fmt.Errorf("timed out waiting for lvol %s to reach deleted status", lvolUUID)
 		case <-ticker.C:
 		}
 	}
