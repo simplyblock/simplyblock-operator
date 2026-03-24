@@ -913,6 +913,8 @@ func deleteLvol(
 	poolUUID string,
 	lvolUUID string,
 ) error {
+	log := logf.FromContext(ctx)
+
 	endpoint := fmt.Sprintf(
 		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
 		clusterUUID,
@@ -921,9 +923,19 @@ func deleteLvol(
 	)
 
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
-	if err != nil || status >= 300 {
-		return fmt.Errorf("failed to delete lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
+	if err != nil {
+		return fmt.Errorf("failed to delete lvol %s: %w", lvolUUID, err)
 	}
+
+	if status == http.StatusNotFound {
+		log.Info("deleteLvol: lvol %s already deleted (404), ignoring", lvolUUID)
+		return nil
+	}
+
+	if status >= 300 {
+		return fmt.Errorf("failed to delete lvol %s, status %d: body: %s", lvolUUID, status, string(body))
+	}
+
 	return nil
 }
 
