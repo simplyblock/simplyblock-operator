@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"errors"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -55,6 +56,8 @@ type SnapshotTask struct {
 type lvolActiveSidesResponse struct {
 	Source bool `json:"from_source"`
 }
+
+var ErrLvolNotFound = errors.New("lvol not found")
 
 func ResolvePoolUUID(
 	ctx context.Context,
@@ -490,12 +493,24 @@ func GetLvol(
 	)
 
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
-	if err != nil || status >= 300 {
+	if err != nil {
 		return nil, fmt.Errorf(
-			"failed to get lvol %s for pool %s, status %d: %v, body: %s",
-			lvolUUID, poolUUID, status, err, string(body),
+			"failed to get lvol %s for pool %s: %w",
+			lvolUUID, poolUUID, err,
 		)
 	}
+
+	if status == http.StatusNotFound {
+		return nil, fmt.Errorf("%w: lvol %s in pool %s", ErrLvolNotFound, lvolUUID, poolUUID)
+	}
+
+	if status >= 300 {
+		return nil, fmt.Errorf(
+			"failed to get lvol %s for pool %s, status %d: body: %s",
+			lvolUUID, poolUUID, status, string(body),
+		)
+	}
+
 
 	log.Info("GetLvol API call",
 		"endpoint", endpoint,

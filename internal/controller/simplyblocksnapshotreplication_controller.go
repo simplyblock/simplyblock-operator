@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -1025,10 +1026,17 @@ func waitForLvolDeleted(
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
+	var lastErr error
+
 	for {
 		lvol, err := utils.GetLvol(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolUUID)
 		if err == nil {
 			if strings.EqualFold(strings.TrimSpace(lvol.Status), "deleted") {
+				return nil
+			}
+		} else {
+			lastErr = err
+			if errors.Is(err, utils.ErrLvolNotFound) {
 				return nil
 			}
 		}
@@ -1037,8 +1045,8 @@ func waitForLvolDeleted(
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-timeoutTimer.C:
-			if err != nil {
-				return fmt.Errorf("timed out waiting for lvol %s deletion state; last get error: %w", lvolUUID, err)
+			if lastErr != nil {
+				return fmt.Errorf("timed out waiting for lvol %s deletion state; last get error: %w", lvolUUID, lastErr)
 			}
 			return fmt.Errorf("timed out waiting for lvol %s to reach deleted status", lvolUUID)
 		case <-ticker.C:
