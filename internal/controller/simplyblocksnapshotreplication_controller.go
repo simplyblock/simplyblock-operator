@@ -928,7 +928,7 @@ func deleteLvol(
 	}
 
 	if status == http.StatusNotFound {
-		log.Info("deleteLvol: lvol %s already deleted (404), ignoring", lvolUUID)
+		log.Info("deleteLvol: lvol already deleted (404), ignoring", "lvolUUID", lvolUUID)
 		return nil
 	}
 
