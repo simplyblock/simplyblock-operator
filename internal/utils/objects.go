@@ -3,12 +3,12 @@ package utils
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
-	"errors"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -510,7 +510,6 @@ func GetLvol(
 			lvolUUID, poolUUID, status, string(body),
 		)
 	}
-
 
 	log.Info("GetLvol API call",
 		"endpoint", endpoint,
