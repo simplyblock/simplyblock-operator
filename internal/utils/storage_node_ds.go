@@ -30,6 +30,9 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *
 	if len(sn.Spec.PcieDenyList) > 0 {
 		initCmd = append(initCmd, "--pci-blocked="+JoinList(sn.Spec.PcieDenyList))
 	}
+	if len(sn.Spec.DeviceNames) > 0 {
+		initCmd = append(initCmd, "--nvme-devices="+JoinList(sn.Spec.DeviceNames))
+	}
 	if sn.Spec.SocketsToUse != nil {
 		initCmd = append(initCmd, "--sockets-to-use="+Int32PtrToString(sn.Spec.SocketsToUse))
 	}
@@ -44,6 +47,20 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *
 	}
 	if sn.Spec.CorePercentage != nil {
 		initCmd = append(initCmd, "--cores-percentage="+Int32PtrToString(sn.Spec.CorePercentage))
+	}
+
+	mainEnv := []corev1.EnvVar{
+		{Name: "CORE_ISOLATION", Value: BoolPtrToString(sn.Spec.CoreIsolation)},
+		{Name: "UBUNTU_HOST", Value: BoolPtrToString(sn.Spec.UbuntuHost)},
+		{Name: "OPENSHIFT_CLUSTER", Value: BoolPtrToString(sn.Spec.OpenShiftCluster)},
+		{Name: "CPU_TOPOLOGY_ENABLED", Value: BoolPtrToString(sn.Spec.EnableCpuTopology)},
+		{Name: "SKIP_KUBELET_CONFIGURATION", Value: BoolPtrToString(sn.Spec.SkipKubeletConfiguration)},
+		{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+		}},
+	}
+	if sn.Spec.ReservedSystemCPU != "" {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: sn.Spec.ReservedSystemCPU})
 	}
 
 	return &appsv1.DaemonSet{
@@ -160,15 +177,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *
 								InitialDelaySeconds: 10,
 								PeriodSeconds:       5,
 							},
-
-							Env: []corev1.EnvVar{
-								{Name: "CORE_ISOLATION", Value: BoolPtrToString(sn.Spec.CoreIsolation)},
-								{Name: "UBUNTU_HOST", Value: "false"},
-								{Name: "OPENSHIFT_CLUSTER", Value: BoolPtrToString(sn.Spec.OpenShiftCluster)},
-								{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
-									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
-								}},
-							},
+							Env: mainEnv,
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "dev-vol", MountPath: "/dev"},
 								{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
