@@ -57,6 +57,12 @@ type SimplyBlockStorageNodeSpec struct {
 	WorkerNodes              []string `json:"workerNodes,omitempty"`
 	WorkerNode               string   `json:"workerNode,omitempty"`
 	OpenShiftCluster         *bool    `json:"openShiftCluster,omitempty"`
+	DeviceNames              []string `json:"deviceNames,omitempty"`
+	UbuntuHost               *bool    `json:"ubuntuHost,omitempty"`
+	SkipKubeletConfiguration *bool    `json:"skipKubeletConfiguration,omitempty"`
+	Format4K                 *bool    `json:"format4k,omitempty"`
+	EnableCpuTopology        *bool    `json:"enableCpuTopology,omitempty"`
+	ReservedSystemCPU        string   `json:"reservedSystemCPU,omitempty"`
 
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
