@@ -845,6 +845,31 @@ func (in *SimplyBlockStorageNodeSpec) DeepCopyInto(out *SimplyBlockStorageNodeSp
 		*out = new(bool)
 		**out = **in
 	}
+	if in.DeviceNames != nil {
+		in, out := &in.DeviceNames, &out.DeviceNames
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.UbuntuHost != nil {
+		in, out := &in.UbuntuHost, &out.UbuntuHost
+		*out = new(bool)
+		**out = **in
+	}
+	if in.SkipKubeletConfiguration != nil {
+		in, out := &in.SkipKubeletConfiguration, &out.SkipKubeletConfiguration
+		*out = new(bool)
+		**out = **in
+	}
+	if in.Format4K != nil {
+		in, out := &in.Format4K, &out.Format4K
+		*out = new(bool)
+		**out = **in
+	}
+	if in.EnableCpuTopology != nil {
+		in, out := &in.EnableCpuTopology, &out.EnableCpuTopology
+		*out = new(bool)
+		**out = **in
+	}
 	if in.Tolerations != nil {
 		in, out := &in.Tolerations, &out.Tolerations
 		*out = make([]v1.Toleration, len(*in))
