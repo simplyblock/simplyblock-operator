@@ -156,14 +156,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *
 								"python", "simplyblock_web/node_webapp.py", "storage_node_k8s",
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
-							Env: []corev1.EnvVar{
-								{Name: "CORE_ISOLATION", Value: BoolPtrToString(sn.Spec.CoreIsolation)},
-								{Name: "UBUNTU_HOST", Value: "false"},
-								{Name: "OPENSHIFT_CLUSTER", Value: "false"},
-								{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
-									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
-								}},
-							},
+							Env:             mainEnv,
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "dev-vol", MountPath: "/dev"},
 								{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
