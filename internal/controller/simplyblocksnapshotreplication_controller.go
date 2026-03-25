@@ -570,12 +570,16 @@ func shouldReplicate(lvol *utils.Lvol, interval int, now time.Time) bool {
 
 func replicateLvol(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID, poolUUID, lvolUUID string) error {
 	endpoint := fmt.Sprintf(
-		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replicate_lvol/",
+		"/api/v2/clusters/%s/storage-pools/%s/replicate_lvol_on_source_cluster",
 		clusterUUID,
 		poolUUID,
-		lvolUUID,
 	)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+	params := struct {
+		LvolID string `json:"lvol_id"`
+	}{
+		LvolID: lvolUUID,
+	}
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
 	if err != nil || status >= 300 {
 		return fmt.Errorf("failed to start replication for lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
 	}
@@ -950,12 +954,16 @@ func replicateLvolOnSourceCluster(
 ) error {
 
 	endpoint := fmt.Sprintf(
-		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replicate_lvol_on_source_cluster/",
+		"/api/v2/clusters/%s/storage-pools/%s/replicate_lvol_on_source_cluster",
 		sourceClusterUUID,
 		sourcePoolUUID,
-		sourceLvolUUID,
 	)
-	body, status, err := apiClient.Do(ctx, sourceClusterSecret, http.MethodPost, endpoint, nil)
+	params := struct {
+		LvolID string `json:"lvol_id"`
+	}{
+		LvolID: sourceLvolUUID,
+	}
+	body, status, err := apiClient.Do(ctx, sourceClusterSecret, http.MethodPost, endpoint, params)
 	if err != nil || status >= 300 {
 		return fmt.Errorf("failed to start replication for lvol %s, status %d: %v, body: %s", sourceLvolUUID, status, err, string(body))
 	}
