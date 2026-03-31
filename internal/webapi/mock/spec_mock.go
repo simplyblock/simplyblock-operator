@@ -3,6 +3,7 @@ package mock
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,7 +34,15 @@ type SpecServer struct {
 
 	mu     sync.Mutex
 	routes map[routeKey][]RouteResponse
+	reqs   []RecordedRequest
 	server *httptest.Server
+}
+
+type RecordedRequest struct {
+	Method  string
+	Path    string
+	Headers map[string]string
+	Body    []byte
 }
 
 func NewSpecServerFromFile(t *testing.T, specPath string, allowUnknown bool) *SpecServer {
@@ -67,6 +76,15 @@ func (s *SpecServer) URL() string {
 	return s.server.URL
 }
 
+func (s *SpecServer) Requests() []RecordedRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]RecordedRequest, len(s.reqs))
+	copy(out, s.reqs)
+	return out
+}
+
 func (s *SpecServer) Register(method, path string, responses ...RouteResponse) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -83,6 +101,14 @@ func (s *SpecServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	method := strings.ToUpper(r.Method)
 	path := normalizePath(r.URL.Path)
+	body, _ := io.ReadAll(r.Body)
+	_ = r.Body.Close()
+	headers := make(map[string]string, len(r.Header))
+	for k, v := range r.Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
 
 	if !s.allowUnknown && !s.pathInSpec(method, path) {
 		msg := fmt.Sprintf("request %s %s is not defined in openapi spec", method, path)
@@ -94,6 +120,12 @@ func (s *SpecServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	key := routeKey{method: method, path: path}
 
 	s.mu.Lock()
+	s.reqs = append(s.reqs, RecordedRequest{
+		Method:  method,
+		Path:    path,
+		Headers: headers,
+		Body:    body,
+	})
 	responses := s.routes[key]
 	var resp RouteResponse
 	if len(responses) > 0 {
