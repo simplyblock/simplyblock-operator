@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -13,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
+	webapimock "github.com/simplyblock/simplyblock-manager/internal/webapi/mock"
 )
 
 func TestPoolReconcileAddsFinalizer(t *testing.T) {
@@ -121,6 +123,67 @@ func TestPoolReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
 	}
 	if current.Status.UUID != "pool-uuid" {
 		t.Fatalf("status UUID regressed unexpectedly: %q", current.Status.UUID)
+	}
+}
+
+func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	defer mock.Close()
+
+	mock.Register(
+		http.MethodPost,
+		"/api/v2/clusters/cluster-uuid/storage-pools/",
+		webapimock.RouteResponse{
+			Status: http.StatusOK,
+			Body: `{
+				"uuid":"pool-created",
+				"status":"online",
+				"max_rw_ios_per_sec":100,
+				"max_rw_mbytes_per_sec":200,
+				"max_r_mbytes_per_sec":50,
+				"max_w_mbytes_per_sec":50,
+				"qos_host":"qos-node-1"
+			}`,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+		},
+	)
+
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	pool := &simplyblockv1alpha1.SimplyBlockPool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pool-mock",
+			Namespace:  "default",
+			Finalizers: []string{"simplyblock.pool.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockPoolSpec{
+			Name:        "p1",
+			ClusterName: "cluster-a",
+		},
+	}
+
+	r := newPoolStateTestReconciler(t,
+		pool,
+		testCluster("default", "cluster-a", "cluster-uuid"),
+		testClusterSecret("default", "cluster-a", "cluster-uuid", "secret"),
+	)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.Requeue || res.RequeueAfter != 0 {
+		t.Fatalf("expected terminal reconcile after successful pool creation, got %+v", res)
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockPool{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
+		t.Fatalf("failed to get pool: %v", err)
+	}
+	if current.Status.UUID != "pool-created" || current.Status.Status != "online" {
+		t.Fatalf("unexpected status after mocked pool create: %#v", current.Status)
 	}
 }
 

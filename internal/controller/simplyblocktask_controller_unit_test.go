@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -13,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
+	webapimock "github.com/simplyblock/simplyblock-manager/internal/webapi/mock"
 )
 
 func TestTaskReconcileAddsFinalizer(t *testing.T) {
@@ -145,6 +147,61 @@ func TestTaskReconcilePreventsStatusRegressionWhenSecretMissing(t *testing.T) {
 	}
 	if len(current.Status.Tasks) != 1 || current.Status.Tasks[0].UUID != "task-2" {
 		t.Fatalf("status regressed unexpectedly: %#v", current.Status.Tasks)
+	}
+}
+
+func TestTaskReconcileFiltersCompletedTasksViaMock(t *testing.T) {
+	// Task endpoints are not present in the current OpenAPI spec; allow unknown for this controller path.
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	defer mock.Close()
+
+	mock.Register(
+		http.MethodGet,
+		"/api/v2/clusters/cluster-uuid/tasks",
+		webapimock.RouteResponse{
+			Status: http.StatusOK,
+			Body: `[
+				{"id":"t1","function_name":"rebalance","status":"running","function_result":"in progress","canceled":false,"retry":0},
+				{"id":"t2","function_name":"cleanup","status":"done","function_result":"success","canceled":false,"retry":1},
+				{"id":"t3","function_name":"remove","status":"running","function_result":"done","canceled":false,"retry":2}
+			]`,
+			Headers: map[string]string{"Content-Type": "application/json"},
+		},
+	)
+
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	task := &simplyblockv1alpha1.SimplyBlockTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "task-mock",
+			Namespace:  "default",
+			Finalizers: []string{"simplyblock.task.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockTaskSpec{
+			ClusterName: "cluster-a",
+		},
+	}
+
+	r := newTaskStateTestReconciler(t,
+		task,
+		testCluster("default", "cluster-a", "cluster-uuid"),
+		testClusterSecret("default", "cluster-a", "cluster-uuid", "secret"),
+	)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(task)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected periodic requeue for task polling")
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockTask{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(task), current); err != nil {
+		t.Fatalf("failed to get task: %v", err)
+	}
+	if len(current.Status.Tasks) != 1 || current.Status.Tasks[0].UUID != "t1" {
+		t.Fatalf("expected only active task to remain in status, got %#v", current.Status.Tasks)
 	}
 }
 
