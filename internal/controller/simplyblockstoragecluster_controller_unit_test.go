@@ -15,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -563,6 +564,233 @@ func TestUpsertCSICredentialsSecret(t *testing.T) {
 	}
 	if len(creds.Clusters) != 2 {
 		t.Fatalf("expected 2 unique clusters, got %#v", creds.Clusters)
+	}
+}
+
+func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
+	t.Run("adds finalizer on first reconcile", func(t *testing.T) {
+		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "cluster-top-finalizer", Namespace: "default"},
+			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-top-finalizer"},
+		}
+		r := newClusterStateTestReconciler(t, cluster)
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+		if err != nil {
+			t.Fatalf("Reconcile returned error: %v", err)
+		}
+		current := &simplyblockv1alpha1.SimplyBlockStorageCluster{}
+		if err := r.Get(context.Background(), client.ObjectKeyFromObject(cluster), current); err != nil {
+			t.Fatalf("failed to fetch cluster: %v", err)
+		}
+		if !contains(current.Finalizers, "simplyblock.cluster.finalizer") {
+			t.Fatalf("expected finalizer to be added")
+		}
+	})
+
+	t.Run("no-op when cluster UUID already present and no action", func(t *testing.T) {
+		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "cluster-top-noop",
+				Namespace:  "default",
+				Finalizers: []string{"simplyblock.cluster.finalizer"},
+			},
+			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+				ClusterName: "cluster-top-noop",
+			},
+			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+				UUID: "cluster-uuid-top-noop",
+			},
+		}
+		r := newClusterStateTestReconciler(t, cluster)
+
+		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+		if err != nil {
+			t.Fatalf("Reconcile returned error: %v", err)
+		}
+		if res.RequeueAfter != 0 {
+			t.Fatalf("expected no delayed requeue for no-op path, got %+v", res)
+		}
+	})
+}
+
+func TestStorageClusterReconcileActivateViaMock(t *testing.T) {
+	const clusterName = "cluster-activate-mock"
+	const clusterUUID = "cluster-uuid-activate-mock"
+	const clusterSecret = "secret-activate-mock"
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	defer mock.Close()
+	mock.Register(
+		http.MethodPost,
+		"/api/v2/clusters/"+clusterUUID+"/activate",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+	)
+	mock.Register(
+		http.MethodGet,
+		"/api/v2/clusters/"+clusterUUID,
+		webapimock.RouteResponse{
+			Status: http.StatusOK,
+			Body: `{
+				"uuid":"` + clusterUUID + `",
+				"status":"active",
+				"distr_ndcs":2,
+				"distr_npcs":1,
+				"is_re_balancing":false
+			}`,
+			Headers: map[string]string{"Content-Type": "application/json"},
+		},
+	)
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "cluster-activate-mock",
+			Namespace:  "default",
+			Generation: 2,
+			Finalizers: []string{"simplyblock.cluster.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			ClusterName: clusterName,
+			Action:      utils.ClusterActionActivate,
+		},
+		Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+			UUID: clusterUUID,
+		},
+	}
+	authSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster-" + clusterName, Namespace: "default"},
+		Data: map[string][]byte{
+			"uuid":   []byte(clusterUUID),
+			"secret": []byte(clusterSecret),
+		},
+	}
+	r := newClusterStateTestReconciler(t, cluster, authSecret)
+
+	// 1) initialize action status
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)}); err != nil {
+		t.Fatalf("initial activate reconcile returned error: %v", err)
+	}
+
+	// 2) trigger activate API call
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+	if err != nil {
+		t.Fatalf("trigger activate reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected delayed requeue after activate trigger")
+	}
+
+	// 3) observe active cluster and mark success
+	res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+	if err != nil {
+		t.Fatalf("finalize activate reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected terminal result after active status, got %+v", res)
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockStorageCluster{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(cluster), current); err != nil {
+		t.Fatalf("failed to fetch updated cluster: %v", err)
+	}
+	if current.Status.ActionStatus == nil || current.Status.ActionStatus.State != utils.ActionStateSuccess {
+		t.Fatalf("expected activate action to complete successfully, got %#v", current.Status.ActionStatus)
+	}
+	if current.Status.Status != utils.ClusterStatusActive {
+		t.Fatalf("expected cluster status active, got %q", current.Status.Status)
+	}
+	if len(mock.Requests()) < 2 {
+		t.Fatalf("expected activate POST and cluster GET calls, got %#v", mock.Requests())
+	}
+}
+
+func TestStorageClusterReconcileExpandViaMock(t *testing.T) {
+	const clusterName = "cluster-expand-mock"
+	const clusterUUID = "cluster-uuid-expand-mock"
+	const clusterSecret = "secret-expand-mock"
+
+	// expand endpoint is currently missing from openapi.json, so allow unknown paths.
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	defer mock.Close()
+	mock.Register(
+		http.MethodPost,
+		"/api/v2/clusters/"+clusterUUID+"/expand",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+	)
+	mock.Register(
+		http.MethodGet,
+		"/api/v2/clusters/"+clusterUUID,
+		webapimock.RouteResponse{
+			Status: http.StatusOK,
+			Body: `{
+				"uuid":"` + clusterUUID + `",
+				"status":"active",
+				"distr_ndcs":3,
+				"distr_npcs":1,
+				"is_re_balancing":false
+			}`,
+			Headers: map[string]string{"Content-Type": "application/json"},
+		},
+	)
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "cluster-expand-mock",
+			Namespace:  "default",
+			Generation: 3,
+			Finalizers: []string{"simplyblock.cluster.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			ClusterName: clusterName,
+			Action:      utils.ClusterActionExpand,
+		},
+		Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+			UUID: clusterUUID,
+		},
+	}
+	authSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster-" + clusterName, Namespace: "default"},
+		Data: map[string][]byte{
+			"uuid":   []byte(clusterUUID),
+			"secret": []byte(clusterSecret),
+		},
+	}
+	r := newClusterStateTestReconciler(t, cluster, authSecret)
+
+	// 1) initialize action status
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)}); err != nil {
+		t.Fatalf("initial expand reconcile returned error: %v", err)
+	}
+
+	// 2) trigger expand API call
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+	if err != nil {
+		t.Fatalf("trigger expand reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected delayed requeue after expand trigger")
+	}
+
+	// 3) observe active cluster and mark success
+	res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+	if err != nil {
+		t.Fatalf("finalize expand reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected terminal result after expanded active status, got %+v", res)
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockStorageCluster{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(cluster), current); err != nil {
+		t.Fatalf("failed to fetch updated cluster: %v", err)
+	}
+	if current.Status.ActionStatus == nil || current.Status.ActionStatus.State != utils.ActionStateSuccess {
+		t.Fatalf("expected expand action to complete successfully, got %#v", current.Status.ActionStatus)
+	}
+	if len(mock.Requests()) < 2 {
+		t.Fatalf("expected expand POST and cluster GET calls, got %#v", mock.Requests())
 	}
 }
 
