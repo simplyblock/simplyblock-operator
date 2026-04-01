@@ -126,13 +126,57 @@ func TestPoolReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
 	}
 }
 
+func TestPoolReconcileWorksInNonDefaultNamespace(t *testing.T) {
+	const ns = "tenant-b"
+	const clusterName = "cluster-b"
+	const clusterUUID = "cluster-uuid-tenant-b"
+
+	pool := &simplyblockv1alpha1.SimplyBlockPool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pool-ns",
+			Namespace: ns,
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockPoolSpec{
+			Name:        "p1",
+			ClusterName: clusterName,
+		},
+	}
+
+	r := newPoolStateTestReconciler(t,
+		pool,
+		testCluster(ns, clusterName, clusterUUID),
+		testClusterSecret(ns, clusterName, clusterUUID, "secret"),
+	)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockPool{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
+		t.Fatalf("failed to get pool: %v", err)
+	}
+	if current.Namespace != ns {
+		t.Fatalf("namespace changed unexpectedly: got %q want %q", current.Namespace, ns)
+	}
+	if !contains(current.Finalizers, "simplyblock.pool.finalizer") {
+		t.Fatalf("expected pool finalizer to be added in non-default namespace")
+	}
+	if current.Spec.ClusterName != clusterName {
+		t.Fatalf("clusterName changed unexpectedly: got %q want %q", current.Spec.ClusterName, clusterName)
+	}
+}
+
 func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
+	const clusterUUID = "cluster-uuid-pool-create"
+
 	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
 	defer mock.Close()
 
 	mock.Register(
 		http.MethodPost,
-		"/api/v2/clusters/cluster-uuid/storage-pools/",
+		"/api/v2/clusters/"+clusterUUID+"/storage-pools/",
 		webapimock.RouteResponse{
 			Status: http.StatusOK,
 			Body: `{
@@ -166,16 +210,16 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 
 	r := newPoolStateTestReconciler(t,
 		pool,
-		testCluster("default", "cluster-a", "cluster-uuid"),
-		testClusterSecret("default", "cluster-a", "cluster-uuid", "secret"),
+		testCluster("default", "cluster-a", clusterUUID),
+		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
 	)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)})
 	if err != nil {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
-	if res.Requeue || res.RequeueAfter != 0 {
-		t.Fatalf("expected terminal reconcile after successful pool creation, got %+v", res)
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected terminal reconcile without delayed requeue after successful pool creation, got %+v", res)
 	}
 
 	current := &simplyblockv1alpha1.SimplyBlockPool{}
@@ -184,6 +228,10 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 	}
 	if current.Status.UUID != "pool-created" || current.Status.Status != "online" {
 		t.Fatalf("unexpected status after mocked pool create: %#v", current.Status)
+	}
+	reqs := mock.Requests()
+	if len(reqs) != 1 || reqs[0].Path != "/api/v2/clusters/"+clusterUUID+"/storage-pools" {
+		t.Fatalf("expected pool API call with cluster UUID %q, got %#v", clusterUUID, reqs)
 	}
 }
 

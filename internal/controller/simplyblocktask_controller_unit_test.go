@@ -112,6 +112,8 @@ func TestTaskReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
 }
 
 func TestTaskReconcilePreventsStatusRegressionWhenSecretMissing(t *testing.T) {
+	const clusterUUID = "cluster-uuid-missing-secret"
+
 	task := &simplyblockv1alpha1.SimplyBlockTask{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "task-d",
@@ -130,7 +132,7 @@ func TestTaskReconcilePreventsStatusRegressionWhenSecretMissing(t *testing.T) {
 
 	r := newTaskStateTestReconciler(t,
 		task,
-		testCluster("default", "cluster-a", "cluster-uuid"),
+		testCluster("default", "cluster-a", clusterUUID),
 	)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(task)})
@@ -150,14 +152,78 @@ func TestTaskReconcilePreventsStatusRegressionWhenSecretMissing(t *testing.T) {
 	}
 }
 
+func TestTaskReconcileWorksInNonDefaultNamespace(t *testing.T) {
+	const ns = "tenant-a"
+	const clusterName = "cluster-z"
+	const clusterUUID = "cluster-uuid-tenant-a"
+	const clusterSecret = "secret-tenant-a"
+
+	// Task endpoints are not present in current OpenAPI spec, so keep allowUnknown=true.
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	defer mock.Close()
+	mock.Register(
+		http.MethodGet,
+		"/api/v2/clusters/"+clusterUUID+"/tasks",
+		webapimock.RouteResponse{
+			Status:  http.StatusOK,
+			Body:    `[]`,
+			Headers: map[string]string{"Content-Type": "application/json"},
+		},
+	)
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	task := &simplyblockv1alpha1.SimplyBlockTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "task-nondefault",
+			Namespace:  ns,
+			Finalizers: []string{"simplyblock.task.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockTaskSpec{
+			ClusterName: clusterName,
+		},
+	}
+
+	r := newTaskStateTestReconciler(t,
+		task,
+		testCluster(ns, clusterName, clusterUUID),
+		testClusterSecret(ns, clusterName, clusterUUID, clusterSecret),
+	)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(task)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	// API backend is not mocked here, so reconcile should reach API call and requeue.
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected requeue after task API polling failure in non-default namespace")
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockTask{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(task), current); err != nil {
+		t.Fatalf("failed to get task: %v", err)
+	}
+	if current.Namespace != ns {
+		t.Fatalf("namespace changed unexpectedly: got %q want %q", current.Namespace, ns)
+	}
+	if current.Spec.ClusterName != clusterName {
+		t.Fatalf("clusterName changed unexpectedly: got %q want %q", current.Spec.ClusterName, clusterName)
+	}
+	reqs := mock.Requests()
+	if len(reqs) != 1 || reqs[0].Path != "/api/v2/clusters/"+clusterUUID+"/tasks" {
+		t.Fatalf("expected task API call with cluster UUID %q, got %#v", clusterUUID, reqs)
+	}
+}
+
 func TestTaskReconcileFiltersCompletedTasksViaMock(t *testing.T) {
+	const clusterUUID = "cluster-uuid-filter"
+
 	// Task endpoints are not present in the current OpenAPI spec; allow unknown for this controller path.
 	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
 	defer mock.Close()
 
 	mock.Register(
 		http.MethodGet,
-		"/api/v2/clusters/cluster-uuid/tasks",
+		"/api/v2/clusters/"+clusterUUID+"/tasks",
 		webapimock.RouteResponse{
 			Status: http.StatusOK,
 			Body: `[
@@ -184,8 +250,8 @@ func TestTaskReconcileFiltersCompletedTasksViaMock(t *testing.T) {
 
 	r := newTaskStateTestReconciler(t,
 		task,
-		testCluster("default", "cluster-a", "cluster-uuid"),
-		testClusterSecret("default", "cluster-a", "cluster-uuid", "secret"),
+		testCluster("default", "cluster-a", clusterUUID),
+		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
 	)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(task)})
@@ -202,6 +268,10 @@ func TestTaskReconcileFiltersCompletedTasksViaMock(t *testing.T) {
 	}
 	if len(current.Status.Tasks) != 1 || current.Status.Tasks[0].UUID != "t1" {
 		t.Fatalf("expected only active task to remain in status, got %#v", current.Status.Tasks)
+	}
+	reqs := mock.Requests()
+	if len(reqs) != 1 || reqs[0].Path != "/api/v2/clusters/"+clusterUUID+"/tasks" {
+		t.Fatalf("expected task API call with cluster UUID %q, got %#v", clusterUUID, reqs)
 	}
 }
 

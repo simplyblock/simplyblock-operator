@@ -132,13 +132,64 @@ func TestLvolReconcilePreventsStatusRegressionWhenPoolMissing(t *testing.T) {
 	}
 }
 
+func TestLvolReconcileWorksInNonDefaultNamespace(t *testing.T) {
+	const ns = "tenant-c"
+	const clusterName = "cluster-c"
+	const poolName = "pool-b"
+	const clusterUUID = "cluster-uuid-tenant-c"
+	const poolUUID = "pool-uuid-tenant-c"
+
+	lvol := &simplyblockv1alpha1.SimplyBlockLvol{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "lvol-ns",
+			Namespace: ns,
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockLvolSpec{
+			ClusterName: clusterName,
+			PoolName:    poolName,
+		},
+	}
+
+	r := newLvolStateTestReconciler(t,
+		lvol,
+		testCluster(ns, clusterName, clusterUUID),
+		testClusterSecret(ns, clusterName, clusterUUID, "secret"),
+		testPool(ns, poolName, clusterName, poolUUID),
+	)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(lvol)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockLvol{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(lvol), current); err != nil {
+		t.Fatalf("failed to get lvol: %v", err)
+	}
+	if current.Namespace != ns {
+		t.Fatalf("namespace changed unexpectedly: got %q want %q", current.Namespace, ns)
+	}
+	if !contains(current.Finalizers, "simplyblock.lvol.finalizer") {
+		t.Fatalf("expected lvol finalizer to be added in non-default namespace")
+	}
+	if current.Spec.ClusterName != clusterName {
+		t.Fatalf("clusterName changed unexpectedly: got %q want %q", current.Spec.ClusterName, clusterName)
+	}
+	if current.Spec.PoolName != poolName {
+		t.Fatalf("poolName changed unexpectedly: got %q want %q", current.Spec.PoolName, poolName)
+	}
+}
+
 func TestLvolReconcileConfiguredAndStatusRefreshViaOpenAPIMock(t *testing.T) {
+	const clusterUUID = "cluster-uuid-lvol-sync"
+	const poolUUID = "pool-uuid-lvol-sync"
+
 	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
 	defer mock.Close()
 
 	mock.Register(
 		http.MethodPut,
-		"/api/v2/clusters/cluster-uuid/storage-pools/pool-uuid",
+		"/api/v2/clusters/"+clusterUUID+"/storage-pools/"+poolUUID,
 		webapimock.RouteResponse{
 			Status:  http.StatusOK,
 			Body:    `{}`,
@@ -147,7 +198,7 @@ func TestLvolReconcileConfiguredAndStatusRefreshViaOpenAPIMock(t *testing.T) {
 	)
 	mock.Register(
 		http.MethodGet,
-		"/api/v2/clusters/cluster-uuid/storage-pools/pool-uuid/volumes",
+		"/api/v2/clusters/"+clusterUUID+"/storage-pools/"+poolUUID+"/volumes",
 		webapimock.RouteResponse{
 			Status: http.StatusOK,
 			Body: `[
@@ -158,7 +209,7 @@ func TestLvolReconcileConfiguredAndStatusRefreshViaOpenAPIMock(t *testing.T) {
 					"size":1024,
 					"status":"online",
 					"pool_name":"pool-a",
-					"pool_uuid":"pool-uuid"
+					"pool_uuid":"` + poolUUID + `"
 				}
 			]`,
 			Headers: map[string]string{"Content-Type": "application/json"},
@@ -181,17 +232,17 @@ func TestLvolReconcileConfiguredAndStatusRefreshViaOpenAPIMock(t *testing.T) {
 
 	r := newLvolStateTestReconciler(t,
 		lvol,
-		testCluster("default", "cluster-a", "cluster-uuid"),
-		testClusterSecret("default", "cluster-a", "cluster-uuid", "secret"),
-		testPool("default", "pool-a", "cluster-a", "pool-uuid"),
+		testCluster("default", "cluster-a", clusterUUID),
+		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
+		testPool("default", "pool-a", "cluster-a", poolUUID),
 	)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(lvol)})
 	if err != nil {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
-	if res.Requeue || res.RequeueAfter != 0 {
-		t.Fatalf("expected terminal reconcile after successful lvol sync, got %+v", res)
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected terminal reconcile without delayed requeue after successful lvol sync, got %+v", res)
 	}
 
 	current := &simplyblockv1alpha1.SimplyBlockLvol{}
@@ -203,6 +254,17 @@ func TestLvolReconcileConfiguredAndStatusRefreshViaOpenAPIMock(t *testing.T) {
 	}
 	if len(current.Status.Lvols) != 1 || current.Status.Lvols[0].UUID != "lv-1" {
 		t.Fatalf("unexpected lvol status after mocked sync: %#v", current.Status)
+	}
+	if current.Status.Lvols[0].PoolUUID != poolUUID {
+		t.Fatalf("expected lvol pool UUID to match mocked UUID: got %q want %q", current.Status.Lvols[0].PoolUUID, poolUUID)
+	}
+	reqs := mock.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected two lvol API calls, got %#v", reqs)
+	}
+	if reqs[0].Path != "/api/v2/clusters/"+clusterUUID+"/storage-pools/"+poolUUID ||
+		reqs[1].Path != "/api/v2/clusters/"+clusterUUID+"/storage-pools/"+poolUUID+"/volumes" {
+		t.Fatalf("expected lvol API calls to use cluster/pool UUIDs, got %#v", reqs)
 	}
 }
 

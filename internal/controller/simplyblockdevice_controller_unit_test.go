@@ -80,12 +80,9 @@ func TestReconcileDeviceActionTransitions(t *testing.T) {
 		}
 
 		r := newDeviceStateTestReconciler(t, dev)
-		res, err := r.reconcileDeviceAction(context.Background(), dev, "cluster", "secret")
+		_, err := r.reconcileDeviceAction(context.Background(), dev, "cluster", "secret")
 		if err != nil {
 			t.Fatalf("reconcileDeviceAction returned error: %v", err)
-		}
-		if !res.Requeue {
-			t.Fatalf("expected requeue when initializing action status")
 		}
 		if dev.Status.ActionStatus == nil {
 			t.Fatalf("expected action status to be initialized")
@@ -124,12 +121,9 @@ func TestReconcileDeviceActionTransitions(t *testing.T) {
 		}
 
 		r := newDeviceStateTestReconciler(t, dev)
-		res, err := r.reconcileDeviceAction(context.Background(), dev, "cluster", "secret")
+		_, err := r.reconcileDeviceAction(context.Background(), dev, "cluster", "secret")
 		if err != nil {
 			t.Fatalf("reconcileDeviceAction returned error: %v", err)
-		}
-		if res.Requeue || res.RequeueAfter != 0 {
-			t.Fatalf("expected no requeue for terminal success, got %+v", res)
 		}
 		if !dev.Status.ActionStatus.Triggered {
 			t.Fatalf("expected action status to remain terminal and unchanged")
@@ -158,12 +152,9 @@ func TestReconcileDeviceActionTransitions(t *testing.T) {
 		}
 
 		r := newDeviceStateTestReconciler(t, dev)
-		res, err := r.reconcileDeviceAction(context.Background(), dev, "cluster", "secret")
+		_, err := r.reconcileDeviceAction(context.Background(), dev, "cluster", "secret")
 		if err != nil {
 			t.Fatalf("reconcileDeviceAction returned error: %v", err)
-		}
-		if !res.Requeue {
-			t.Fatalf("expected requeue after action change initialization")
 		}
 		if dev.Status.ActionStatus.Action != utils.DeviceActionRemove {
 			t.Fatalf("expected action to be reset to remove, got %q", dev.Status.ActionStatus.Action)

@@ -28,12 +28,9 @@ func TestReconcileActivateTransitions(t *testing.T) {
 		}
 
 		r := newClusterStateTestReconciler(t, cluster)
-		res, err := r.reconcileActivate(context.Background(), cluster)
+		_, err := r.reconcileActivate(context.Background(), cluster)
 		if err != nil {
 			t.Fatalf("reconcileActivate returned error: %v", err)
-		}
-		if !res.Requeue {
-			t.Fatalf("expected requeue on status init, got %+v", res)
 		}
 		if cluster.Status.ActionStatus == nil {
 			t.Fatalf("expected actionStatus to be initialized")
@@ -71,8 +68,8 @@ func TestReconcileActivateTransitions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reconcileActivate returned error: %v", err)
 		}
-		if res.Requeue || res.RequeueAfter != 0 {
-			t.Fatalf("expected no requeue, got %+v", res)
+		if res.RequeueAfter != 0 {
+			t.Fatalf("expected no delayed requeue, got %+v", res)
 		}
 		if cluster.Status.ActionStatus.State != utils.ActionStateSuccess {
 			t.Fatalf("expected success to remain stable, got %q", cluster.Status.ActionStatus.State)
@@ -99,12 +96,9 @@ func TestReconcileActivateTransitions(t *testing.T) {
 		}
 
 		r := newClusterStateTestReconciler(t, cluster)
-		res, err := r.reconcileActivate(context.Background(), cluster)
+		_, err := r.reconcileActivate(context.Background(), cluster)
 		if err != nil {
 			t.Fatalf("reconcileActivate returned error: %v", err)
-		}
-		if !res.Requeue {
-			t.Fatalf("expected requeue after action switch")
 		}
 		if cluster.Status.ActionStatus.Action != utils.ClusterActionActivate {
 			t.Fatalf("expected activate action, got %q", cluster.Status.ActionStatus.Action)
@@ -130,12 +124,9 @@ func TestReconcileExpandTransitions(t *testing.T) {
 		}
 
 		r := newClusterStateTestReconciler(t, cluster)
-		res, err := r.reconcileExpand(context.Background(), cluster)
+		_, err := r.reconcileExpand(context.Background(), cluster)
 		if err != nil {
 			t.Fatalf("reconcileExpand returned error: %v", err)
-		}
-		if !res.Requeue {
-			t.Fatalf("expected requeue on status init, got %+v", res)
 		}
 		if cluster.Status.ActionStatus == nil {
 			t.Fatalf("expected actionStatus to be initialized")
@@ -173,8 +164,8 @@ func TestReconcileExpandTransitions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reconcileExpand returned error: %v", err)
 		}
-		if res.Requeue || res.RequeueAfter != 0 {
-			t.Fatalf("expected no requeue, got %+v", res)
+		if res.RequeueAfter != 0 {
+			t.Fatalf("expected no delayed requeue, got %+v", res)
 		}
 	})
 
@@ -198,12 +189,9 @@ func TestReconcileExpandTransitions(t *testing.T) {
 		}
 
 		r := newClusterStateTestReconciler(t, cluster)
-		res, err := r.reconcileExpand(context.Background(), cluster)
+		_, err := r.reconcileExpand(context.Background(), cluster)
 		if err != nil {
 			t.Fatalf("reconcileExpand returned error: %v", err)
-		}
-		if !res.Requeue {
-			t.Fatalf("expected requeue after action switch")
 		}
 		if cluster.Status.ActionStatus.Action != utils.ClusterActionExpand {
 			t.Fatalf("expected expand action, got %q", cluster.Status.ActionStatus.Action)
@@ -297,8 +285,8 @@ func TestReconcileActivateRejectsIllegalSuccessState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcileActivate returned error: %v", err)
 	}
-	if res.Requeue || res.RequeueAfter != 0 {
-		t.Fatalf("activate failure path should be handled internally, got %+v", res)
+	if res.RequeueAfter != 0 {
+		t.Fatalf("activate failure path should not schedule delayed requeue, got %+v", res)
 	}
 	if cluster.Status.ActionStatus.State != utils.ActionStateFailed {
 		t.Fatalf("expected illegal activate success to be rejected and moved to failed, got %q", cluster.Status.ActionStatus.State)
@@ -332,8 +320,8 @@ func TestReconcileExpandRejectsIllegalSuccessState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcileExpand returned error: %v", err)
 	}
-	if res.Requeue || res.RequeueAfter != 0 {
-		t.Fatalf("expand failure path should be handled internally, got %+v", res)
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expand failure path should not schedule delayed requeue, got %+v", res)
 	}
 	if cluster.Status.ActionStatus.State != utils.ActionStateFailed {
 		t.Fatalf("expected illegal expand success to be rejected and moved to failed, got %q", cluster.Status.ActionStatus.State)

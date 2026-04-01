@@ -15,7 +15,9 @@ func TestSpecServerEnforcesSpecWhenStrict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", resp.StatusCode)
@@ -30,7 +32,9 @@ func TestSpecServerRejectsUnknownPathWhenStrict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected status 400 for unknown strict path, got %d", resp.StatusCode)
