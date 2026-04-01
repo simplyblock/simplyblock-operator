@@ -813,6 +813,21 @@ func failbackLvol(
 	targetPoolUUID string,
 	targetLvol *utils.Lvol,
 ) error {
+	if isFreshCluster {
+		if err := startReplicationOnFreshSource(
+			ctx,
+			apiClient,
+			sourceClusterSecret,
+			sourceClusterUUID,
+			sourcePoolUUID,
+			targetLvol.UUID,
+			10*time.Minute,
+			5*time.Second,
+		); err != nil {
+			return fmt.Errorf("start replication on fresh source cluster failed for target lvol %s: %w", targetLvol.UUID, err)
+		}
+	}
+
 	if err := triggerReplication(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
 		return fmt.Errorf("target trigger replication failed for lvol %s: %w", targetLvol.UUID, err)
 	}
