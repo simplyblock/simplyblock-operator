@@ -97,7 +97,7 @@ func TestDoAgainstStrictSpecMockReturns400ForUnknownPath(t *testing.T) {
 }
 
 func TestDoReturnsMarshalErrorForUnsupportedBody(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	ts := httptest.NewServer(nil)
 	ts.Close()
 	c := NewClient(ts.URL)
 	_, _, err := c.Do(
@@ -116,7 +116,7 @@ func TestDoReturnsMarshalErrorForUnsupportedBody(t *testing.T) {
 }
 
 func TestDoReturnsHTTPErrorForUnreachableServer(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	ts := httptest.NewServer(nil)
 	ts.Close()
 	c := NewClient(ts.URL)
 	_, status, err := c.Do(
