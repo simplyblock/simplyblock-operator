@@ -17,6 +17,8 @@ import (
 	webapimock "github.com/simplyblock/simplyblock-manager/internal/webapi/mock"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -562,6 +564,367 @@ func TestStorageNodeReconcileSecretMissingRequeues(t *testing.T) {
 	}
 }
 
+func TestStorageNodeReconcileNotFoundReturnsNil(t *testing.T) {
+	r := newStorageNodeStateTestReconciler(t)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKey{Name: "missing", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("reconcile returned unexpected error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected no requeue for missing object, got %+v", res)
+	}
+}
+
+func TestStorageNodeReconcileDeletionFlow(t *testing.T) {
+	const namespace = "default"
+	const clusterName = "cluster-del"
+	const clusterUUID = "cluster-uuid-del"
+	now := metav1.NewTime(time.Now())
+
+	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-del", Namespace: namespace},
+		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-cluster-" + clusterName,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			"uuid":   []byte(clusterUUID),
+			"secret": []byte("s3cr3t"),
+		},
+	}
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "sn-delete-flow",
+			Namespace:         namespace,
+			Finalizers:        []string{"simplyblock.storagenode.finalizer"},
+			DeletionTimestamp: &now,
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			ClusterName: clusterName,
+		},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn, cluster, secret)
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected deletion flow to complete without requeue, got %+v", res)
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockStorageNode{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), current); err != nil {
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("failed to fetch storagenode: %v", err)
+		}
+		return
+	}
+	if contains(current.Finalizers, "simplyblock.storagenode.finalizer") {
+		t.Fatalf("expected finalizer to be removed during deletion flow")
+	}
+}
+
+func TestStorageNodeReconcileAddsFinalizer(t *testing.T) {
+	const namespace = "default"
+	const clusterName = "cluster-finalizer"
+	const clusterUUID = "cluster-uuid-finalizer"
+
+	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-finalizer", Namespace: namespace},
+		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-cluster-" + clusterName,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			"uuid":   []byte(clusterUUID),
+			"secret": []byte("s3cr3t"),
+		},
+	}
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sn-finalizer-flow",
+			Namespace: namespace,
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			ClusterName: clusterName,
+		},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn, cluster, secret)
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected finalizer add path to return without requeue, got %+v", res)
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockStorageNode{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), current); err != nil {
+		t.Fatalf("failed to fetch storagenode: %v", err)
+	}
+	if !contains(current.Finalizers, "simplyblock.storagenode.finalizer") {
+		t.Fatalf("expected finalizer to be added by reconcile")
+	}
+}
+
+func TestStorageNodeReconcileActionPath(t *testing.T) {
+	const namespace = "default"
+	const clusterName = "cluster-action"
+	const clusterUUID = "cluster-uuid-action"
+
+	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-action", Namespace: namespace},
+		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-cluster-" + clusterName,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			"uuid":   []byte(clusterUUID),
+			"secret": []byte("s3cr3t"),
+		},
+	}
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "sn-action-flow",
+			Namespace:  namespace,
+			Finalizers: []string{"simplyblock.storagenode.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			ClusterName: clusterName,
+			Action:      "restart",
+			NodeUUID:    "node-action-1",
+		},
+		Status: simplyblockv1alpha1.SimplyBlockStorageNodeStatus{
+			ActionStatus: &simplyblockv1alpha1.ActionStatus{
+				Action:   "restart",
+				NodeUUID: "node-action-1",
+				State:    utils.ActionStateSuccess,
+			},
+		},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn, cluster, secret)
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected action fast-path to avoid delayed requeue, got %+v", res)
+	}
+}
+
+func TestStorageNodeReconcileLabelWorkerNodesFailure(t *testing.T) {
+	const namespace = "default"
+	const clusterName = "cluster-label-fail"
+	const clusterUUID = "cluster-uuid-label-fail"
+
+	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-label-fail", Namespace: namespace},
+		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-cluster-" + clusterName,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			"uuid":   []byte(clusterUUID),
+			"secret": []byte("s3cr3t"),
+		},
+	}
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "sn-label-fail",
+			Namespace:  namespace,
+			Finalizers: []string{"simplyblock.storagenode.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			ClusterName: clusterName,
+			WorkerNodes: []string{"missing-worker"},
+		},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn, cluster, secret)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)})
+	if err == nil {
+		t.Fatalf("expected reconcile to fail when worker node lookup fails")
+	}
+}
+
+func TestStorageNodeReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
+	const namespace = "default"
+	const clusterName = "cluster-known-worker"
+	const clusterUUID = "cluster-uuid-known-worker"
+	const workerName = "node-known"
+
+	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-known-worker", Namespace: namespace},
+		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-cluster-" + clusterName,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			"uuid":   []byte(clusterUUID),
+			"secret": []byte("s3cr3t"),
+		},
+	}
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: workerName},
+	}
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "sn-known-worker",
+			Namespace:  namespace,
+			Finalizers: []string{"simplyblock.storagenode.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			ClusterName: clusterName,
+			WorkerNodes: []string{workerName},
+		},
+		Status: simplyblockv1alpha1.SimplyBlockStorageNodeStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{
+					Hostname: workerName,
+					MgmtIp:   "10.0.0.10",
+					Status:   "online",
+					UUID:     "node-uuid-known",
+				},
+			},
+		},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn, cluster, secret, node)
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected no delayed requeue when worker already known, got %+v", res)
+	}
+}
+
+func TestStorageNodeReconcileMissingInternalIPRequeues(t *testing.T) {
+	const namespace = "default"
+	const clusterName = "cluster-missing-ip"
+	const clusterUUID = "cluster-uuid-missing-ip"
+	const workerName = "node-no-ip"
+
+	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-missing-ip", Namespace: namespace},
+		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-cluster-" + clusterName,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			"uuid":   []byte(clusterUUID),
+			"secret": []byte("s3cr3t"),
+		},
+	}
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: workerName},
+	}
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "sn-missing-ip",
+			Namespace:  namespace,
+			Finalizers: []string{"simplyblock.storagenode.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			ClusterName: clusterName,
+			WorkerNodes: []string{workerName},
+		},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn, cluster, secret, node)
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected delayed requeue when worker has no internal IP")
+	}
+}
+
+func TestStorageNodeReconcileUnreachableNodeInfoRequeues(t *testing.T) {
+	const namespace = "default"
+	const clusterName = "cluster-unreachable-info"
+	const clusterUUID = "cluster-uuid-unreachable-info"
+	const workerName = "node-bad-ip"
+
+	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-unreachable-info", Namespace: namespace},
+		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-cluster-" + clusterName,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			"uuid":   []byte(clusterUUID),
+			"secret": []byte("s3cr3t"),
+		},
+	}
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: workerName},
+		Status: corev1.NodeStatus{
+			Addresses: []corev1.NodeAddress{
+				{
+					Type:    corev1.NodeInternalIP,
+					Address: "bad ip",
+				},
+			},
+		},
+	}
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "sn-unreachable-info",
+			Namespace:  namespace,
+			Finalizers: []string{"simplyblock.storagenode.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			ClusterName: clusterName,
+			WorkerNodes: []string{workerName},
+		},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn, cluster, secret, node)
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected delayed requeue when node info endpoint is unreachable")
+	}
+}
+
 func TestCheckNodeInfoReachable(t *testing.T) {
 	// checkNodeInfoReachable always probes http://<ip>:5000/snode/info.
 	// Use an unroutable test-net address to deterministically exercise error path.
@@ -846,6 +1209,9 @@ func newStorageNodeStateTestReconciler(
 	}
 	if err := appsv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("failed to add appsv1 scheme: %v", err)
+	}
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add rbacv1 scheme: %v", err)
 	}
 
 	cl := fake.NewClientBuilder().
