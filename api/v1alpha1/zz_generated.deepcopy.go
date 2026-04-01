@@ -745,6 +745,26 @@ func (in *SimplyBlockStorageClusterSpec) DeepCopyInto(out *SimplyBlockStorageClu
 		*out = new(int32)
 		**out = **in
 	}
+	if in.MaxFaultTolerance != nil {
+		in, out := &in.MaxFaultTolerance, &out.MaxFaultTolerance
+		*out = new(int32)
+		**out = **in
+	}
+	if in.NvmfBasePort != nil {
+		in, out := &in.NvmfBasePort, &out.NvmfBasePort
+		*out = new(int32)
+		**out = **in
+	}
+	if in.RpcBasePort != nil {
+		in, out := &in.RpcBasePort, &out.RpcBasePort
+		*out = new(int32)
+		**out = **in
+	}
+	if in.SnodeApiPort != nil {
+		in, out := &in.SnodeApiPort, &out.SnodeApiPort
+		*out = new(int32)
+		**out = **in
+	}
 	if in.CapWarn != nil {
 		in, out := &in.CapWarn, &out.CapWarn
 		*out = new(int32)

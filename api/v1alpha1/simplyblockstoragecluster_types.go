@@ -45,6 +45,11 @@ type SimplyBlockStorageClusterSpec struct {
 	MaxQueueSize           *int32 `json:"maxQueueSize,omitempty"`
 	InflightIOThreshold    *int32 `json:"inflightIOThreshold,omitempty"`
 	Fabric                 string `json:"fabric,omitempty"`
+	ClientDataNic          string `json:"clientDataNic,omitempty"`
+	MaxFaultTolerance      *int32 `json:"maxFaultTolerance,omitempty"`
+	NvmfBasePort           *int32 `json:"nvmfBasePort,omitempty"`
+	RpcBasePort            *int32 `json:"rpcBasePort,omitempty"`
+	SnodeApiPort           *int32 `json:"snodeApiPort,omitempty"`
 
 	// Updatable
 	QoSClasses       string `json:"qosClasses,omitempty"`

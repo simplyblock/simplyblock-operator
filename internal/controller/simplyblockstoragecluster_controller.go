@@ -154,6 +154,11 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		CRName:                 clusterCR.Name,
 		CRNameSpace:            clusterCR.Namespace,
 		CRPlural:               "simplyblockstorageclusters",
+		ClientDataNic:          clusterCR.Spec.ClientDataNic,
+		MaxFaultTolerance:      utils.IntPtrOrDefault(clusterCR.Spec.MaxFaultTolerance, 1),
+		NvmfBasePort:           utils.IntPtrOrDefault(clusterCR.Spec.NvmfBasePort, 4420),
+		RpcBasePort:            utils.IntPtrOrDefault(clusterCR.Spec.RpcBasePort, 8080),
+		SnodeApiPort:           utils.IntPtrOrDefault(clusterCR.Spec.SnodeApiPort, 50001),
 	}
 
 	endpoint = "/api/v1/cluster/create_first/"
