@@ -7,12 +7,16 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-manager/internal/utils"
 	"github.com/simplyblock/simplyblock-manager/internal/webapi"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -221,6 +225,340 @@ func TestHandleNodeActionRejectsIllegalSuccessIdentity(t *testing.T) {
 	}
 }
 
+func TestStorageNodeFinalizerLifecycleHelpers(t *testing.T) {
+	now := metav1.NewTime(time.Now())
+
+	t.Run("ensureFinalizer adds finalizer when missing", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "sn-finalizer-add",
+				Namespace: "default",
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+
+		updated, err := r.ensureFinalizer(context.Background(), sn)
+		if err != nil {
+			t.Fatalf("ensureFinalizer returned error: %v", err)
+		}
+		if !updated {
+			t.Fatalf("expected ensureFinalizer to report update")
+		}
+		if !contains(sn.Finalizers, "simplyblock.storagenode.finalizer") {
+			t.Fatalf("expected storagenode finalizer to be set")
+		}
+	})
+
+	t.Run("handleDeletion removes finalizer when deletion timestamp is set", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "sn-finalizer-del",
+				Namespace:         "default",
+				Finalizers:        []string{"simplyblock.storagenode.finalizer"},
+				DeletionTimestamp: &now,
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+
+		updated, err := r.handleDeletion(context.Background(), sn)
+		if err != nil {
+			t.Fatalf("handleDeletion returned error: %v", err)
+		}
+		if !updated {
+			t.Fatalf("expected handleDeletion to report update")
+		}
+		if contains(sn.Finalizers, "simplyblock.storagenode.finalizer") {
+			t.Fatalf("expected storagenode finalizer to be removed")
+		}
+	})
+}
+
+func TestStorageNodeLabelingHelpers(t *testing.T) {
+	t.Run("labelWorkerNodes labels all configured workers", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "sn-label-all",
+				Namespace: "default",
+			},
+			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+				ClusterName: "cluster-a",
+				WorkerNodes: []string{"node-a", "node-b"},
+			},
+		}
+		nodeA := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
+		nodeB := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-b"}}
+		r := newStorageNodeStateTestReconciler(t, sn, nodeA, nodeB)
+
+		if err := r.labelWorkerNodes(context.Background(), sn); err != nil {
+			t.Fatalf("labelWorkerNodes returned error: %v", err)
+		}
+
+		for _, nodeName := range []string{"node-a", "node-b"} {
+			var n corev1.Node
+			if err := r.Get(context.Background(), client.ObjectKey{Name: nodeName}, &n); err != nil {
+				t.Fatalf("failed to fetch node %s: %v", nodeName, err)
+			}
+			got := n.Labels["io.simplyblock.node-type"]
+			want := "simplyblock-storage-plane-cluster-a"
+			if got != want {
+				t.Fatalf("node %s label mismatch: got %q want %q", nodeName, got, want)
+			}
+		}
+	})
+
+	t.Run("labelWorkerNode labels single worker node", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "sn-label-one",
+				Namespace: "default",
+			},
+			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+				ClusterName: "cluster-b",
+				WorkerNode:  "node-one",
+			},
+		}
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-one"}}
+		r := newStorageNodeStateTestReconciler(t, sn, node)
+
+		if err := r.labelWorkerNode(context.Background(), sn); err != nil {
+			t.Fatalf("labelWorkerNode returned error: %v", err)
+		}
+
+		var out corev1.Node
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "node-one"}, &out); err != nil {
+			t.Fatalf("failed to fetch node: %v", err)
+		}
+		if out.Labels["io.simplyblock.node-type"] != "simplyblock-storage-plane-cluster-b" {
+			t.Fatalf("expected worker node label to be set")
+		}
+	})
+}
+
+func TestStorageNodeDaemonSetReconcile(t *testing.T) {
+	t.Run("creates daemonset when missing", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "sn-ds-create",
+				Namespace: "default",
+				UID:       "uid-create",
+			},
+			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+				ClusterName: "cluster-a",
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+
+		if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+			t.Fatalf("reconcileDaemonSet returned error: %v", err)
+		}
+
+		var ds appsv1.DaemonSet
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+			t.Fatalf("daemonset should be created: %v", err)
+		}
+		if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
+			t.Fatalf("expected daemonset to be owned by storagenode")
+		}
+	})
+
+	t.Run("updates existing daemonset", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "sn-ds-update",
+				Namespace: "default",
+				UID:       "uid-update",
+			},
+			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+				ClusterName: "cluster-a",
+			},
+		}
+		existing := &appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "simplyblock-storage-node-ds-cluster-a",
+				Namespace: "default",
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn, existing)
+
+		if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+			t.Fatalf("reconcileDaemonSet returned error: %v", err)
+		}
+
+		var ds appsv1.DaemonSet
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+			t.Fatalf("failed to fetch daemonset: %v", err)
+		}
+		if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
+			t.Fatalf("expected updated daemonset to carry owner reference")
+		}
+	})
+}
+
+func TestGetNodeInternalIP(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-ip"},
+		Status: corev1.NodeStatus{
+			Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeHostName, Address: "node-ip"},
+				{Type: corev1.NodeInternalIP, Address: "10.1.2.3"},
+			},
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, node)
+
+	got, err := getNodeInternalIP(context.Background(), r.Client, "node-ip")
+	if err != nil {
+		t.Fatalf("getNodeInternalIP returned error: %v", err)
+	}
+	if got != "10.1.2.3" {
+		t.Fatalf("expected internal IP 10.1.2.3, got %q", got)
+	}
+}
+
+func TestGetNodeInternalIPNoAddress(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-no-ip"},
+	}
+	r := newStorageNodeStateTestReconciler(t, node)
+
+	_, err := getNodeInternalIP(context.Background(), r.Client, "node-no-ip")
+	if err == nil {
+		t.Fatalf("expected error when node has no internal IP")
+	}
+}
+
+func TestStorageNodeReconcileActionFastPaths(t *testing.T) {
+	t.Run("reconcileAction returns no requeue when action already successful", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-ra-ok", Namespace: "default"},
+			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+				Action:   "restart",
+				NodeUUID: "node-1",
+			},
+			Status: simplyblockv1alpha1.SimplyBlockStorageNodeStatus{
+				ActionStatus: &simplyblockv1alpha1.ActionStatus{
+					Action:   "restart",
+					NodeUUID: "node-1",
+					State:    utils.ActionStateSuccess,
+				},
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+
+		res, err := r.reconcileAction(context.Background(), sn, "cluster", "secret")
+		if err != nil {
+			t.Fatalf("reconcileAction returned error: %v", err)
+		}
+		if res.RequeueAfter != 0 {
+			t.Fatalf("expected no delayed requeue for successful action, got %+v", res)
+		}
+	})
+
+	t.Run("reconcileAction requeues on action failure", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-ra-fail", Namespace: "default"},
+			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+				Action:   "restart",
+				NodeUUID: "node-2",
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+
+		res, err := r.reconcileAction(context.Background(), sn, "cluster", "secret")
+		if err != nil {
+			t.Fatalf("reconcileAction returned unexpected error: %v", err)
+		}
+		if res.RequeueAfter == 0 {
+			t.Fatalf("expected delayed requeue after failed action, got %+v", res)
+		}
+	})
+}
+
+func TestStorageNodeHandleDeletionNoopWithoutDeletionTimestamp(t *testing.T) {
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sn-no-delete",
+			Namespace: "default",
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn)
+
+	updated, err := r.handleDeletion(context.Background(), sn)
+	if err != nil {
+		t.Fatalf("handleDeletion returned error: %v", err)
+	}
+	if updated {
+		t.Fatalf("expected no update when deletion timestamp is zero")
+	}
+}
+
+func TestStorageNodeHandleDeletionDoneWithoutFinalizer(t *testing.T) {
+	now := metav1.NewTime(time.Now())
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "sn-delete-done",
+			Namespace:         "default",
+			DeletionTimestamp: &now,
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t)
+
+	updated, err := r.handleDeletion(context.Background(), sn)
+	if err != nil {
+		t.Fatalf("handleDeletion returned error: %v", err)
+	}
+	if !updated {
+		t.Fatalf("expected deletion flow to be treated as handled without finalizer")
+	}
+}
+
+func TestStorageNodeReconcileClusterUnavailableRequeues(t *testing.T) {
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sn-reconcile-no-cluster",
+			Namespace: "default",
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			ClusterName: "cluster-missing",
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected delayed requeue when cluster UUID is unavailable")
+	}
+}
+
+func TestStorageNodeReconcileSecretMissingRequeues(t *testing.T) {
+	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "default"},
+		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-a"},
+		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: "cluster-uuid-no-secret"},
+	}
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sn-reconcile-no-secret",
+			Namespace: "default",
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			ClusterName: "cluster-a",
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn, cluster)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected delayed requeue when cluster secret is unavailable")
+	}
+}
+
 func newStorageNodeStateTestReconciler(
 	t *testing.T,
 	objects ...client.Object,
@@ -231,10 +569,20 @@ func newStorageNodeStateTestReconciler(
 	if err := simplyblockv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("failed to add API scheme: %v", err)
 	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add corev1 scheme: %v", err)
+	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add appsv1 scheme: %v", err)
+	}
 
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&simplyblockv1alpha1.SimplyBlockStorageNode{}).
+		WithStatusSubresource(
+			&simplyblockv1alpha1.SimplyBlockStorageNode{},
+			&simplyblockv1alpha1.SimplyBlockStorageCluster{},
+			&appsv1.DaemonSet{},
+		).
 		WithObjects(objects...).
 		Build()
 
