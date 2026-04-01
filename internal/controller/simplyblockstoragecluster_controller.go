@@ -205,6 +205,10 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			Namespace: clusterCR.Namespace,
 		},
 	}
+	if err := controllerutil.SetControllerReference(clusterCR, secret, r.Scheme); err != nil {
+		log.Error(err, "Failed to set owner reference on cluster secret")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
 
 	// original := clusterCR.DeepCopy()
 
@@ -445,8 +449,9 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 		clusterCR.Status.ActionStatus.Action != utils.ClusterActionActivate {
 
 		clusterCR.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
-			Action: utils.ClusterActionActivate,
-			State:  utils.ActionStateRunning,
+			Action:             utils.ClusterActionActivate,
+			State:              utils.ActionStateRunning,
+			ObservedGeneration: clusterCR.Generation,
 		}
 
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)

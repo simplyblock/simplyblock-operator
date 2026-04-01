@@ -825,6 +825,57 @@ func TestStorageNodeReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
 	}
 }
 
+func TestStorageNodeReconcileServiceAccountHasOwnerReference(t *testing.T) {
+	const namespace = "default"
+	const clusterName = "cluster-ownerref-sa"
+	const clusterUUID = "cluster-uuid-ownerref-sa"
+
+	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-ownerref-sa", Namespace: namespace},
+		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-cluster-" + clusterName,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			"uuid":   []byte(clusterUUID),
+			"secret": []byte("s3cr3t"),
+		},
+	}
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "sn-ownerref-sa",
+			Namespace:  namespace,
+			Finalizers: []string{"simplyblock.storagenode.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			ClusterName: clusterName,
+			WorkerNodes: []string{},
+		},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn, cluster, secret)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	sa := &corev1.ServiceAccount{}
+	if err := r.Get(context.Background(), client.ObjectKey{
+		Name:      "simplyblock-storage-node-sa",
+		Namespace: namespace,
+	}, sa); err != nil {
+		t.Fatalf("failed to fetch serviceaccount: %v", err)
+	}
+
+	if len(sa.OwnerReferences) == 0 {
+		t.Fatalf("expected ServiceAccount to carry ownerReference to storagenode CR")
+	}
+}
+
 func TestStorageNodeReconcileMissingInternalIPRequeues(t *testing.T) {
 	const namespace = "default"
 	const clusterName = "cluster-missing-ip"
