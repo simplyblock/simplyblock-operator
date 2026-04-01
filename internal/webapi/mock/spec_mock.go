@@ -81,7 +81,25 @@ func (s *SpecServer) Requests() []RecordedRequest {
 	defer s.mu.Unlock()
 
 	out := make([]RecordedRequest, len(s.reqs))
-	copy(out, s.reqs)
+	for i, req := range s.reqs {
+		var copied RecordedRequest
+		copied.Method = req.Method
+		copied.Path = req.Path
+
+		if req.Headers != nil {
+			copied.Headers = make(map[string]string, len(req.Headers))
+			for k, v := range req.Headers {
+				copied.Headers[k] = v
+			}
+		}
+
+		if req.Body != nil {
+			copied.Body = make([]byte, len(req.Body))
+			copy(copied.Body, req.Body)
+		}
+
+		out[i] = copied
+	}
 	return out
 }
 
