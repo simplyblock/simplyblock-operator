@@ -1162,6 +1162,257 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 	})
 }
 
+func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
+	origRetries := waitForNodeOnlineRetries
+	origWait := waitForNodeOnlineWaitInterval
+	origActivationDelay := waitForNodeOnlineActivationDelay
+	origSleepFn := waitForNodeOnlineSleepFn
+	t.Cleanup(func() {
+		waitForNodeOnlineRetries = origRetries
+		waitForNodeOnlineWaitInterval = origWait
+		waitForNodeOnlineActivationDelay = origActivationDelay
+		waitForNodeOnlineSleepFn = origSleepFn
+	})
+
+	waitForNodeOnlineRetries = 1
+	waitForNodeOnlineWaitInterval = 0
+	waitForNodeOnlineActivationDelay = 0
+	waitForNodeOnlineSleepFn = func(time.Duration) {}
+
+	t.Run("returns error on invalid storage-node payload", func(t *testing.T) {
+		const clusterUUID = "cluster-uuid-wfno-invalid-json"
+		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		defer mock.Close()
+		mock.Register(
+			http.MethodGet,
+			"/api/v2/clusters/"+clusterUUID+"/storage-nodes/",
+			webapimock.RouteResponse{
+				Status: http.StatusOK,
+				Body:   `{`,
+				Headers: map[string]string{
+					"Content-Type": "application/json",
+				},
+			},
+		)
+
+		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-wfno-invalid-json", Namespace: "default"},
+			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+				ClusterName: "cluster-a",
+			},
+			Status: simplyblockv1alpha1.SimplyBlockStorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-a", MgmtIp: "10.0.0.1", Status: "in_creation"},
+				},
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+
+		err := waitForNodeOnline(
+			context.Background(),
+			webapi.NewClient(mock.URL()),
+			"secret",
+			clusterUUID,
+			"10.0.0.1",
+			"node-a",
+			sn,
+			r,
+		)
+		if err == nil {
+			t.Fatalf("expected unmarshal error for invalid payload")
+		}
+		if !strings.Contains(err.Error(), "failed to unmarshal") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("returns cluster-not-found when activation precheck cannot resolve cluster CR", func(t *testing.T) {
+		const clusterUUID = "cluster-uuid-wfno-cluster-missing"
+		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		defer mock.Close()
+		mock.Register(
+			http.MethodGet,
+			"/api/v2/clusters/"+clusterUUID+"/storage-nodes/",
+			webapimock.RouteResponse{
+				Status: http.StatusOK,
+				Body: `[
+					{
+						"uuid":"node-uuid-3",
+						"status":"online",
+						"mgmt_ip":"10.0.0.3",
+						"health_check":true,
+						"hostname":"node-c",
+						"online_devices":"nvme1n1",
+						"cpu":4,
+						"spdk_mem":2147483648,
+						"lvols":1,
+						"rpc_port":9200,
+						"lvol_subsys_port":9201,
+						"nvmf_port":9202
+					}
+				]`,
+				Headers: map[string]string{"Content-Type": "application/json"},
+			},
+		)
+
+		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-wfno-cluster-missing", Namespace: "default"},
+			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+				ClusterName: "cluster-missing",
+			},
+			Status: simplyblockv1alpha1.SimplyBlockStorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-c", MgmtIp: "10.0.0.3", Status: "in_creation"},
+				},
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+
+		err := waitForNodeOnline(
+			context.Background(),
+			webapi.NewClient(mock.URL()),
+			"secret",
+			clusterUUID,
+			"10.0.0.3",
+			"node-c",
+			sn,
+			r,
+		)
+		if err == nil {
+			t.Fatalf("expected cluster resolution error")
+		}
+		if !strings.Contains(err.Error(), "cluster not found yet") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("returns timeout and writes timeout node status", func(t *testing.T) {
+		const clusterUUID = "cluster-uuid-wfno-timeout"
+		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		defer mock.Close()
+		mock.Register(
+			http.MethodGet,
+			"/api/v2/clusters/"+clusterUUID+"/storage-nodes/",
+			webapimock.RouteResponse{
+				Status: http.StatusOK,
+				Body:   `[]`,
+				Headers: map[string]string{
+					"Content-Type": "application/json",
+				},
+			},
+		)
+
+		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-wfno-timeout", Namespace: "default"},
+			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+				ClusterName: "cluster-a",
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+
+		err := waitForNodeOnline(
+			context.Background(),
+			webapi.NewClient(mock.URL()),
+			"secret",
+			clusterUUID,
+			"10.0.0.4",
+			"node-timeout",
+			sn,
+			r,
+		)
+		if err == nil {
+			t.Fatalf("expected timeout error")
+		}
+		if !strings.Contains(err.Error(), "did not become online in time") {
+			t.Fatalf("unexpected timeout error: %v", err)
+		}
+		if len(sn.Status.Nodes) != 1 {
+			t.Fatalf("expected timeout status node entry, got %d", len(sn.Status.Nodes))
+		}
+		if sn.Status.Nodes[0].Hostname != "node-timeout" || sn.Status.Nodes[0].Status != "timeout" {
+			t.Fatalf("unexpected timeout node status: %#v", sn.Status.Nodes[0])
+		}
+	})
+}
+
+func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
+	origRetries := waitForActionCompletionRetries
+	origWait := waitForActionCompletionWaitInterval
+	origSleepFn := waitForActionCompletionSleepFn
+	t.Cleanup(func() {
+		waitForActionCompletionRetries = origRetries
+		waitForActionCompletionWaitInterval = origWait
+		waitForActionCompletionSleepFn = origSleepFn
+	})
+
+	waitForActionCompletionRetries = 4
+	waitForActionCompletionWaitInterval = 0
+	waitForActionCompletionSleepFn = func(time.Duration) {}
+
+	t.Run("returns terminal error when target status never reached", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(NodeStatusResponse{
+				Status: "creating",
+			})
+		}))
+		defer srv.Close()
+
+		r := &SimplyBlockStorageNodeReconciler{}
+		err := r.waitForActionCompletion(
+			context.Background(),
+			webapi.NewClient(srv.URL),
+			"cluster-a",
+			"secret",
+			"node-a",
+			"restart",
+		)
+		if err == nil {
+			t.Fatalf("expected terminal status error")
+		}
+		if !strings.Contains(err.Error(), "did not reach expected status") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("recovers from transient API and payload errors before success", func(t *testing.T) {
+		attempts := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			attempts++
+			switch attempts {
+			case 1:
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"error":"temporary"}`))
+			case 2:
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{`))
+			default:
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(NodeStatusResponse{
+					Status: "online",
+				})
+			}
+		}))
+		defer srv.Close()
+
+		r := &SimplyBlockStorageNodeReconciler{}
+		err := r.waitForActionCompletion(
+			context.Background(),
+			webapi.NewClient(srv.URL),
+			"cluster-b",
+			"secret",
+			"node-b",
+			"restart",
+		)
+		if err != nil {
+			t.Fatalf("expected eventual success, got error: %v", err)
+		}
+		if attempts != 3 {
+			t.Fatalf("expected 3 attempts, got %d", attempts)
+		}
+	})
+}
+
 func TestPerformNodeActionRemoveHappyPath(t *testing.T) {
 	const clusterUUID = "cluster-uuid-remove"
 	const nodeUUID = "node-uuid-remove"
@@ -1191,6 +1442,282 @@ func TestPerformNodeActionRemoveHappyPath(t *testing.T) {
 
 	if err := r.performNodeAction(context.Background(), apiClient, clusterUUID, "secret", sn); err != nil {
 		t.Fatalf("performNodeAction(remove) returned error: %v", err)
+	}
+}
+
+func TestPerformNodeActionRestartWorkerNodeLabelFailure(t *testing.T) {
+	const clusterUUID = "cluster-uuid-restart-label-fail"
+	const nodeUUID = "node-uuid-restart-label-fail"
+
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-restart-label-fail", Namespace: "default"},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Action:     "restart",
+			NodeUUID:   nodeUUID,
+			WorkerNode: "missing-node",
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn)
+
+	err := r.performNodeAction(
+		context.Background(),
+		webapi.NewClient("http://127.0.0.1:1"),
+		clusterUUID,
+		"secret",
+		sn,
+	)
+	if err == nil {
+		t.Fatalf("expected restart action to fail when worker node lookup fails")
+	}
+	if !strings.Contains(err.Error(), "failed to label worker node") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPerformNodeActionRestartWorkerNodeMissingInternalIP(t *testing.T) {
+	const clusterUUID = "cluster-uuid-restart-ip-fail"
+	const nodeUUID = "node-uuid-restart-ip-fail"
+	const workerNode = "node-no-ip"
+
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: workerNode},
+	}
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-restart-ip-fail", Namespace: "default"},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Action:      "restart",
+			NodeUUID:    nodeUUID,
+			WorkerNode:  workerNode,
+			ClusterName: "cluster-a",
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn, node)
+
+	err := r.performNodeAction(
+		context.Background(),
+		webapi.NewClient("http://127.0.0.1:1"),
+		clusterUUID,
+		"secret",
+		sn,
+	)
+	if err == nil {
+		t.Fatalf("expected restart action to fail when worker node has no InternalIP")
+	}
+	if !strings.Contains(err.Error(), "has no InternalIP") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPerformNodeActionRestartWorkerNodeReachabilityCanceled(t *testing.T) {
+	const clusterUUID = "cluster-uuid-restart-cancel"
+	const nodeUUID = "node-uuid-restart-cancel"
+	const workerNode = "node-cancel"
+
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: workerNode},
+		Status: corev1.NodeStatus{
+			Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeInternalIP, Address: "10.0.0.99"},
+			},
+		},
+	}
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-restart-cancel", Namespace: "default"},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Action:      "restart",
+			NodeUUID:    nodeUUID,
+			WorkerNode:  workerNode,
+			ClusterName: "cluster-a",
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn, node)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := r.performNodeAction(
+		ctx,
+		webapi.NewClient("http://127.0.0.1:1"),
+		clusterUUID,
+		"secret",
+		sn,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation error from restart reachability path, got %v", err)
+	}
+}
+
+func TestPerformNodeActionAPIFailure(t *testing.T) {
+	t.Run("restart returns API failure on non-2xx", func(t *testing.T) {
+		const clusterUUID = "cluster-uuid-restart-api-fail"
+		const nodeUUID = "node-uuid-restart-api-fail"
+
+		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		defer mock.Close()
+		mock.Register(
+			http.MethodPost,
+			"/api/v2/clusters/"+clusterUUID+"/storage-nodes/"+nodeUUID+"/restart",
+			webapimock.RouteResponse{
+				Status: http.StatusInternalServerError,
+				Body:   `{"error":"boom"}`,
+				Headers: map[string]string{
+					"Content-Type": "application/json",
+				},
+			},
+		)
+
+		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-restart-api-fail", Namespace: "default"},
+			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+				Action:   "restart",
+				NodeUUID: nodeUUID,
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+		err := r.performNodeAction(context.Background(), webapi.NewClient(mock.URL()), clusterUUID, "secret", sn)
+		if err == nil {
+			t.Fatalf("expected restart API failure")
+		}
+		if !strings.Contains(err.Error(), "action API failed") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("default action endpoint returns API failure on non-2xx", func(t *testing.T) {
+		const clusterUUID = "cluster-uuid-default-api-fail"
+		const nodeUUID = "node-uuid-default-api-fail"
+
+		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		defer mock.Close()
+		mock.Register(
+			http.MethodPost,
+			"/api/v2/clusters/"+clusterUUID+"/storage-nodes/"+nodeUUID+"/suspend?force=true",
+			webapimock.RouteResponse{
+				Status: http.StatusBadGateway,
+				Body:   `{"error":"upstream failed"}`,
+				Headers: map[string]string{
+					"Content-Type": "application/json",
+				},
+			},
+		)
+
+		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-default-api-fail", Namespace: "default"},
+			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+				Action:   "suspend",
+				NodeUUID: nodeUUID,
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+		err := r.performNodeAction(context.Background(), webapi.NewClient(mock.URL()), clusterUUID, "secret", sn)
+		if err == nil {
+			t.Fatalf("expected default-action API failure")
+		}
+		if !strings.Contains(err.Error(), "action API failed") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestPerformNodeActionDefaultActionSuccess(t *testing.T) {
+	const clusterUUID = "cluster-uuid-default-success"
+	const nodeUUID = "node-uuid-default-success"
+
+	origDelay := performNodeActionPostTriggerDelay
+	origSleep := performNodeActionSleepFn
+	t.Cleanup(func() {
+		performNodeActionPostTriggerDelay = origDelay
+		performNodeActionSleepFn = origSleep
+	})
+	performNodeActionPostTriggerDelay = 0
+	performNodeActionSleepFn = func(time.Duration) {}
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	defer mock.Close()
+	mock.Register(
+		http.MethodPost,
+		"/api/v2/clusters/"+clusterUUID+"/storage-nodes/"+nodeUUID+"/suspend",
+		webapimock.RouteResponse{
+			Status: http.StatusOK,
+			Body:   `{}`,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+		},
+	)
+	mock.Register(
+		http.MethodGet,
+		"/api/v2/clusters/"+clusterUUID+"/storage-nodes/"+nodeUUID,
+		webapimock.RouteResponse{
+			Status: http.StatusOK,
+			Body:   `{"status":"suspended"}`,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+		},
+	)
+
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-default-success", Namespace: "default"},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Action:   "suspend",
+			NodeUUID: nodeUUID,
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn)
+	if err := r.performNodeAction(context.Background(), webapi.NewClient(mock.URL()), clusterUUID, "secret", sn); err != nil {
+		t.Fatalf("performNodeAction(default suspend) returned error: %v", err)
+	}
+}
+
+func TestHandleNodeActionTransitionsToSuccess(t *testing.T) {
+	const clusterUUID = "cluster-uuid-action-success"
+	const nodeUUID = "node-uuid-action-success"
+
+	origDelay := performNodeActionPostTriggerDelay
+	origSleep := performNodeActionSleepFn
+	t.Cleanup(func() {
+		performNodeActionPostTriggerDelay = origDelay
+		performNodeActionSleepFn = origSleep
+	})
+	performNodeActionPostTriggerDelay = 0
+	performNodeActionSleepFn = func(time.Duration) {}
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	defer mock.Close()
+	mock.Register(
+		http.MethodDelete,
+		"/api/v2/clusters/"+clusterUUID+"/storage-nodes/"+nodeUUID,
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+	)
+	mock.Register(
+		http.MethodGet,
+		"/api/v2/clusters/"+clusterUUID+"/storage-nodes/"+nodeUUID,
+		webapimock.RouteResponse{Status: http.StatusNotFound},
+	)
+
+	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-action-success", Namespace: "default"},
+		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Action:   "remove",
+			NodeUUID: nodeUUID,
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn)
+
+	if err := r.handleNodeAction(context.Background(), webapi.NewClient(mock.URL()), sn, clusterUUID, "secret"); err != nil {
+		t.Fatalf("handleNodeAction returned error: %v", err)
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockStorageNode{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), current); err != nil {
+		t.Fatalf("failed to fetch storagenode: %v", err)
+	}
+	if current.Status.ActionStatus == nil {
+		t.Fatalf("expected action status to be set")
+	}
+	if current.Status.ActionStatus.State != utils.ActionStateSuccess {
+		t.Fatalf("expected success action state, got %q", current.Status.ActionStatus.State)
 	}
 }
 
