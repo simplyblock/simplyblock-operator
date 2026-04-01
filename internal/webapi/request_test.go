@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -96,7 +97,9 @@ func TestDoAgainstStrictSpecMockReturns400ForUnknownPath(t *testing.T) {
 }
 
 func TestDoReturnsMarshalErrorForUnsupportedBody(t *testing.T) {
-	c := NewClient("http://127.0.0.1:1")
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	ts.Close()
+	c := NewClient(ts.URL)
 	_, _, err := c.Do(
 		context.Background(),
 		"secret",
@@ -113,7 +116,9 @@ func TestDoReturnsMarshalErrorForUnsupportedBody(t *testing.T) {
 }
 
 func TestDoReturnsHTTPErrorForUnreachableServer(t *testing.T) {
-	c := NewClient("http://127.0.0.1:1")
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	ts.Close()
+	c := NewClient(ts.URL)
 	_, status, err := c.Do(
 		context.Background(),
 		"secret",
