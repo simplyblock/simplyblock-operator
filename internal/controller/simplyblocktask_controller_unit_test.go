@@ -319,15 +319,6 @@ func testPool(namespace, poolName, clusterName, uuid string) *simplyblockv1alpha
 	}
 }
 
-func contains(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
-}
-
 func newTaskStateTestReconciler(t *testing.T, objects ...client.Object) *SimplyBlockTaskReconciler {
 	t.Helper()
 
