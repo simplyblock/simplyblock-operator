@@ -17,16 +17,31 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 var _ = Describe("SimplyBlockTask Controller", func() {
-	Context("When reconciling a resource", func() {
+	It("should ignore not-found resources and return no requeue", func() {
+		controllerReconciler := &SimplyBlockTaskReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+		}
 
-		It("should successfully reconcile the resource", func() {
-
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
-		})
+		res, err := controllerReconciler.Reconcile(
+			context.Background(),
+			reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      "missing-task",
+					Namespace: "default",
+				},
+			},
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(reconcile.Result{}))
 	})
 })

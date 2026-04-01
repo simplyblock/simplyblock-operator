@@ -275,6 +275,64 @@ func TestTaskReconcileFiltersCompletedTasksViaMock(t *testing.T) {
 	}
 }
 
+func TestTaskReconcileNon2xxTaskAPIRequeuesAndPreservesStatus(t *testing.T) {
+	const clusterUUID = "cluster-uuid-task-non2xx"
+
+	// Task endpoints are not present in current OpenAPI spec; allow unknown for this controller path.
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	defer mock.Close()
+
+	mock.Register(
+		http.MethodGet,
+		"/api/v2/clusters/"+clusterUUID+"/tasks",
+		webapimock.RouteResponse{
+			Status:  http.StatusBadGateway,
+			Body:    `{"error":"upstream unavailable"}`,
+			Headers: map[string]string{"Content-Type": "application/json"},
+		},
+	)
+
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	task := &simplyblockv1alpha1.SimplyBlockTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "task-mock-non2xx",
+			Namespace:  "default",
+			Finalizers: []string{"simplyblock.task.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockTaskSpec{
+			ClusterName: "cluster-a",
+		},
+		Status: simplyblockv1alpha1.SimplyBlockTaskStatus{
+			Tasks: []simplyblockv1alpha1.TaskEntry{
+				{UUID: "existing-task", TaskType: "rebalance", TaskStatus: "running"},
+			},
+		},
+	}
+
+	r := newTaskStateTestReconciler(t,
+		task,
+		testCluster("default", "cluster-a", clusterUUID),
+		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
+	)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(task)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected delayed requeue after non-2xx tasks API response, got %+v", res)
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockTask{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(task), current); err != nil {
+		t.Fatalf("failed to get task: %v", err)
+	}
+	if len(current.Status.Tasks) != 1 || current.Status.Tasks[0].UUID != "existing-task" {
+		t.Fatalf("status regressed unexpectedly after non-2xx API response: %#v", current.Status.Tasks)
+	}
+}
+
 func testCluster(namespace, clusterName, uuid string) *simplyblockv1alpha1.SimplyBlockStorageCluster {
 	return &simplyblockv1alpha1.SimplyBlockStorageCluster{
 		ObjectMeta: metav1.ObjectMeta{

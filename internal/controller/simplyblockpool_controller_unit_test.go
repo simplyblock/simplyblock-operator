@@ -236,6 +236,123 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 	}
 }
 
+func TestPoolReconcileCreatePoolNon2xxRequeues(t *testing.T) {
+	const clusterUUID = "cluster-uuid-pool-create-fail"
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	defer mock.Close()
+
+	mock.Register(
+		http.MethodPost,
+		"/api/v2/clusters/"+clusterUUID+"/storage-pools/",
+		webapimock.RouteResponse{
+			Status: http.StatusBadGateway,
+			Body:   `{"error":"pool create failed"}`,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+		},
+	)
+
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	pool := &simplyblockv1alpha1.SimplyBlockPool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pool-mock-fail",
+			Namespace:  "default",
+			Finalizers: []string{"simplyblock.pool.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockPoolSpec{
+			Name:        "p1",
+			ClusterName: "cluster-a",
+		},
+	}
+
+	r := newPoolStateTestReconciler(t,
+		pool,
+		testCluster("default", "cluster-a", clusterUUID),
+		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
+	)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected delayed requeue after non-2xx pool create, got %+v", res)
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockPool{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
+		t.Fatalf("failed to get pool: %v", err)
+	}
+	if current.Status.UUID != "" {
+		t.Fatalf("expected UUID to remain empty after failed create, got %q", current.Status.UUID)
+	}
+}
+
+func TestPoolReconcileDeleteNon2xxKeepsFinalizerAndRequeues(t *testing.T) {
+	const clusterUUID = "cluster-uuid-pool-delete-fail"
+	const poolUUID = "pool-uuid-delete-fail"
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	defer mock.Close()
+
+	mock.Register(
+		http.MethodDelete,
+		"/api/v2/clusters/"+clusterUUID+"/storage-pools/"+poolUUID,
+		webapimock.RouteResponse{
+			Status: http.StatusInternalServerError,
+			Body:   `{"error":"delete failed"}`,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+		},
+	)
+
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	pool := &simplyblockv1alpha1.SimplyBlockPool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pool-delete-fail",
+			Namespace:  "default",
+			Finalizers: []string{"simplyblock.pool.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockPoolSpec{
+			Name:        "p1",
+			ClusterName: "cluster-a",
+		},
+		Status: simplyblockv1alpha1.SimplyBlockPoolStatus{
+			UUID: poolUUID,
+		},
+	}
+
+	r := newPoolStateTestReconciler(t,
+		pool,
+		testCluster("default", "cluster-a", clusterUUID),
+		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
+	)
+	if err := r.Delete(context.Background(), pool); err != nil {
+		t.Fatalf("failed to trigger deletion: %v", err)
+	}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected delayed requeue after non-2xx pool delete, got %+v", res)
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockPool{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
+		t.Fatalf("failed to get pool: %v", err)
+	}
+	if !contains(current.Finalizers, "simplyblock.pool.finalizer") {
+		t.Fatalf("expected finalizer to remain after failed delete")
+	}
+}
+
 func newPoolStateTestReconciler(t *testing.T, objects ...client.Object) *SimplyBlockPoolReconciler {
 	t.Helper()
 

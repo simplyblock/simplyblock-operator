@@ -268,6 +268,126 @@ func TestLvolReconcileConfiguredAndStatusRefreshViaOpenAPIMock(t *testing.T) {
 	}
 }
 
+func TestLvolReconcilePoolUpdateNon2xxRequeues(t *testing.T) {
+	const clusterUUID = "cluster-uuid-lvol-update-fail"
+	const poolUUID = "pool-uuid-lvol-update-fail"
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	defer mock.Close()
+
+	mock.Register(
+		http.MethodPut,
+		"/api/v2/clusters/"+clusterUUID+"/storage-pools/"+poolUUID,
+		webapimock.RouteResponse{
+			Status: http.StatusBadGateway,
+			Body:   `{"error":"update failed"}`,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+		},
+	)
+
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	lvol := &simplyblockv1alpha1.SimplyBlockLvol{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "lvol-mock-update-fail",
+			Namespace:  "default",
+			Finalizers: []string{"simplyblock.lvol.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockLvolSpec{
+			ClusterName: "cluster-a",
+			PoolName:    "pool-a",
+		},
+	}
+
+	r := newLvolStateTestReconciler(t,
+		lvol,
+		testCluster("default", "cluster-a", clusterUUID),
+		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
+		testPool("default", "pool-a", "cluster-a", poolUUID),
+	)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(lvol)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected delayed requeue after non-2xx pool update, got %+v", res)
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockLvol{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(lvol), current); err != nil {
+		t.Fatalf("failed to get lvol: %v", err)
+	}
+	if current.Status.Configured {
+		t.Fatalf("expected configured=false after failed pool update")
+	}
+}
+
+func TestLvolReconcileVolumesFetchNon2xxNoRegression(t *testing.T) {
+	const clusterUUID = "cluster-uuid-lvol-fetch-fail"
+	const poolUUID = "pool-uuid-lvol-fetch-fail"
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	defer mock.Close()
+
+	mock.Register(
+		http.MethodGet,
+		"/api/v2/clusters/"+clusterUUID+"/storage-pools/"+poolUUID+"/volumes",
+		webapimock.RouteResponse{
+			Status: http.StatusInternalServerError,
+			Body:   `{"error":"fetch failed"}`,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+		},
+	)
+
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	lvol := &simplyblockv1alpha1.SimplyBlockLvol{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "lvol-mock-fetch-fail",
+			Namespace:  "default",
+			Finalizers: []string{"simplyblock.lvol.finalizer"},
+		},
+		Spec: simplyblockv1alpha1.SimplyBlockLvolSpec{
+			ClusterName: "cluster-a",
+			PoolName:    "pool-a",
+		},
+		Status: simplyblockv1alpha1.SimplyBlockLvolStatus{
+			Configured: true,
+		},
+	}
+
+	r := newLvolStateTestReconciler(t,
+		lvol,
+		testCluster("default", "cluster-a", clusterUUID),
+		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
+		testPool("default", "pool-a", "cluster-a", poolUUID),
+	)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(lvol)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("unexpected delayed requeue for volumes fetch non-2xx path, got %+v", res)
+	}
+
+	current := &simplyblockv1alpha1.SimplyBlockLvol{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(lvol), current); err != nil {
+		t.Fatalf("failed to get lvol: %v", err)
+	}
+	if !current.Status.Configured {
+		t.Fatalf("expected configured=true to remain unchanged")
+	}
+	if len(current.Status.Lvols) != 0 {
+		t.Fatalf("expected no lvol entries on failed fetch, got %#v", current.Status.Lvols)
+	}
+}
+
 func newLvolStateTestReconciler(t *testing.T, objects ...client.Object) *SimplyBlockLvolReconciler {
 	t.Helper()
 
