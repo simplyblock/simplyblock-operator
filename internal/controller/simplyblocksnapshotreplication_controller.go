@@ -951,7 +951,7 @@ func replicateLvolOnSourceCluster(
 ) error {
 
 	endpoint := fmt.Sprintf(
-		"/api/v2/clusters/%s/storage-pools/%s/replicate_lvol_on_source_cluster",
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/replicate_lvol_on_source_cluster",
 		sourceClusterUUID,
 		sourcePoolUUID,
 	)
