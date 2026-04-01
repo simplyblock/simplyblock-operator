@@ -717,7 +717,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) handleFailbackAction(
 			continue
 		}
 
-		sourcePoolUUID, sourceLvolUUID, err := r.resolveSourceFailbackTarget(
+		sourcePoolUUID, sourceLvolUUID, isFreshCluster, err := r.resolveSourceFailbackTarget(
 			ctx,
 			apiClient,
 			snapRepCR,
@@ -745,6 +745,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) handleFailbackAction(
 			targetClusterUUID,
 			targetPoolUUID,
 			lvolDetail,
+			isFreshCluster,
 		); err != nil {
 			log.Error(err, "Failed to start failback for lvol",
 				"lvol", lvolDetail.Name,
@@ -812,6 +813,7 @@ func failbackLvol(
 	targetClusterUUID string,
 	targetPoolUUID string,
 	targetLvol *utils.Lvol,
+	isFreshCluster bool,
 ) error {
 	if isFreshCluster {
 		if err := startReplicationOnFreshSource(
@@ -897,6 +899,43 @@ func failbackLvol(
 	); err != nil {
 		return fmt.Errorf("replicate lvol on source cluster failed for source lvol %s: %w", sourceLvolUUID, err)
 	}
+	return nil
+}
+
+func startReplicationOnFreshSource(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	sourceClusterSecret string,
+	sourceClusterUUID string,
+	sourcePoolUUID string,
+	targetLvolUUID string,
+	timeout time.Duration,
+	pollInterval time.Duration,
+) error {
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication_start",
+		sourceClusterUUID,
+		sourcePoolUUID,
+		targetLvolUUID,
+	)
+	body, status, err := apiClient.Do(ctx, sourceClusterSecret, http.MethodPost, endpoint, nil)
+	if err != nil || status >= 300 {
+		return fmt.Errorf("replication_start failed for target lvol %s, status %d: %v, body: %s", targetLvolUUID, status, err, string(body))
+	}
+
+	if err := waitForReplicationTaskCompletion(
+		ctx,
+		apiClient,
+		sourceClusterSecret,
+		sourceClusterUUID,
+		sourcePoolUUID,
+		targetLvolUUID,
+		timeout,
+		pollInterval,
+	); err != nil {
+		return fmt.Errorf("waiting for replication task on fresh source failed for lvol %s: %w", targetLvolUUID, err)
+	}
+
 	return nil
 }
 
@@ -1116,10 +1155,10 @@ func (r *SimplyBlockSnapshotReplicationReconciler) resolveSourceFailbackTarget(
 	sourceClusterSecret string,
 	sourceClusterUUID string,
 	targetLvol *utils.Lvol,
-) (string, string, error) {
+) (sourcePoolUUID string, sourceLvolUUID string, isFreshCluster bool, err error) {
 	log := logf.FromContext(ctx)
 
-	sourcePoolUUID, sourceLvolUUID, err := findSourceLvolForFailback(
+	sourcePoolUUID, sourceLvolUUID, err = findSourceLvolForFailback(
 		ctx,
 		apiClient,
 		sourceClusterSecret,
@@ -1127,7 +1166,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) resolveSourceFailbackTarget(
 		targetLvol,
 	)
 	if err == nil {
-		return sourcePoolUUID, sourceLvolUUID, nil
+		return sourcePoolUUID, sourceLvolUUID, false, nil
 	}
 
 	log.Info("Source lvol not found on source cluster, trying fresh-cluster failback fallback",
@@ -1138,17 +1177,17 @@ func (r *SimplyBlockSnapshotReplicationReconciler) resolveSourceFailbackTarget(
 
 	sourceLvolUUID = failbackFilterID(targetLvol)
 	if sourceLvolUUID == "" {
-		return "", "", fmt.Errorf("failed to derive source lvol UUID from target lvol %s", targetLvol.UUID)
+		return "", "", false, fmt.Errorf("failed to derive source lvol UUID from target lvol %s", targetLvol.UUID)
 	}
 
 	sourcePoolUUID, err = r.resolveSourcePoolForFreshFailback(ctx, snapRepCR)
 	if err != nil {
-		return "", "", fmt.Errorf(
+		return "", "", false, fmt.Errorf(
 			"derived source lvol UUID %s from target NQN, but failed to resolve source pool UUID: %w",
 			sourceLvolUUID,
 			err,
 		)
 	}
 
-	return sourcePoolUUID, sourceLvolUUID, nil
+	return sourcePoolUUID, sourceLvolUUID, true, nil
 }
