@@ -20,10 +20,8 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestEnsureNodeStatus(t *testing.T) {
@@ -1778,29 +1776,18 @@ func newStorageNodeStateTestReconciler(
 ) *SimplyBlockStorageNodeReconciler {
 	t.Helper()
 
-	scheme := runtime.NewScheme()
-	if err := simplyblockv1alpha1.AddToScheme(scheme); err != nil {
-		t.Fatalf("failed to add API scheme: %v", err)
-	}
-	if err := corev1.AddToScheme(scheme); err != nil {
-		t.Fatalf("failed to add corev1 scheme: %v", err)
-	}
-	if err := appsv1.AddToScheme(scheme); err != nil {
-		t.Fatalf("failed to add appsv1 scheme: %v", err)
-	}
-	if err := rbacv1.AddToScheme(scheme); err != nil {
-		t.Fatalf("failed to add rbacv1 scheme: %v", err)
-	}
-
-	cl := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithStatusSubresource(
-			&simplyblockv1alpha1.SimplyBlockStorageNode{},
-			&simplyblockv1alpha1.SimplyBlockStorageCluster{},
-			&appsv1.DaemonSet{},
-		).
-		WithObjects(objects...).
-		Build()
+	scheme := newTestScheme(
+		t,
+		simplyblockv1alpha1.AddToScheme,
+		corev1.AddToScheme,
+		appsv1.AddToScheme,
+		rbacv1.AddToScheme,
+	)
+	cl := newTestClient(t, scheme, []client.Object{
+		&simplyblockv1alpha1.SimplyBlockStorageNode{},
+		&simplyblockv1alpha1.SimplyBlockStorageCluster{},
+		&appsv1.DaemonSet{},
+	}, objects...)
 
 	return &SimplyBlockStorageNodeReconciler{
 		Client: cl,

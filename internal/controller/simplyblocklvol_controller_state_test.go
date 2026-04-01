@@ -8,10 +8,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
 	webapimock "github.com/simplyblock/simplyblock-manager/internal/webapi/mock"
@@ -454,23 +452,12 @@ func TestLvolReconcileVolumesFetchFailurePreservesExistingLvolStatus(t *testing.
 func newLvolStateTestReconciler(t *testing.T, objects ...client.Object) *SimplyBlockLvolReconciler {
 	t.Helper()
 
-	scheme := runtime.NewScheme()
-	if err := simplyblockv1alpha1.AddToScheme(scheme); err != nil {
-		t.Fatalf("failed to add simplyblock scheme: %v", err)
-	}
-	if err := corev1.AddToScheme(scheme); err != nil {
-		t.Fatalf("failed to add corev1 scheme: %v", err)
-	}
-
-	cl := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithStatusSubresource(
-			&simplyblockv1alpha1.SimplyBlockLvol{},
-			&simplyblockv1alpha1.SimplyBlockPool{},
-			&simplyblockv1alpha1.SimplyBlockStorageCluster{},
-		).
-		WithObjects(objects...).
-		Build()
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	cl := newTestClient(t, scheme, []client.Object{
+		&simplyblockv1alpha1.SimplyBlockLvol{},
+		&simplyblockv1alpha1.SimplyBlockPool{},
+		&simplyblockv1alpha1.SimplyBlockStorageCluster{},
+	}, objects...)
 
 	return &SimplyBlockLvolReconciler{
 		Client: cl,

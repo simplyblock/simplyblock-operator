@@ -17,12 +17,7 @@ limitations under the License.
 package controller
 
 import (
-	"context"
-
 	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 var _ = Describe("SimplyBlockTask Controller", func() {
@@ -31,17 +26,6 @@ var _ = Describe("SimplyBlockTask Controller", func() {
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
 		}
-
-		res, err := controllerReconciler.Reconcile(
-			context.Background(),
-			reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      "missing-task",
-					Namespace: "default",
-				},
-			},
-		)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(res).To(Equal(reconcile.Result{}))
+		expectIgnoreNotFoundNoRequeue(controllerReconciler, "missing-task")
 	})
 })
