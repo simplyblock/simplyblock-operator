@@ -169,6 +169,7 @@ func TestPoolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 }
 
 func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
+	const statusOnline = "online"
 	const clusterUUID = "cluster-uuid-pool-create"
 
 	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
@@ -226,7 +227,7 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
-	if current.Status.UUID != "pool-created" || current.Status.Status != "online" {
+	if current.Status.UUID != "pool-created" || current.Status.Status != statusOnline {
 		t.Fatalf("unexpected status after mocked pool create: %#v", current.Status)
 	}
 	reqs := mock.Requests()

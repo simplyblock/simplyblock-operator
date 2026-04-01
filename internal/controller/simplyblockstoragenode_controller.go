@@ -67,6 +67,12 @@ type NodeStatusResponse struct {
 	IP     string `json:"ip"`
 }
 
+var (
+	waitForNodeInfoReachableCheckFn    = checkNodeInfoReachable
+	waitForNodeInfoReachableMaxRetries = 12
+	waitForNodeInfoReachableRetryDelay = 10 * time.Second
+)
+
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstoragenodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstoragenodes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstoragenodes/finalizers,verbs=update
@@ -422,19 +428,13 @@ func waitForNodeInfoReachable(
 	ip string,
 	nodeName string,
 ) error {
-
-	const (
-		maxRetries    = 12
-		retryInterval = 10 * time.Second
-	)
-
 	log := logf.FromContext(ctx)
 
 	var lastErr error
 
-	for i := 1; i <= maxRetries; i++ {
+	for i := 1; i <= waitForNodeInfoReachableMaxRetries; i++ {
 
-		if err := checkNodeInfoReachable(ctx, ip); err == nil {
+		if err := waitForNodeInfoReachableCheckFn(ctx, ip); err == nil {
 			log.Info("Storage node API is reachable",
 				"node", nodeName,
 				"ip", ip,
@@ -452,7 +452,7 @@ func waitForNodeInfoReachable(
 		}
 
 		select {
-		case <-time.After(retryInterval):
+		case <-time.After(waitForNodeInfoReachableRetryDelay):
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -460,7 +460,7 @@ func waitForNodeInfoReachable(
 
 	return fmt.Errorf(
 		"storage node API not reachable after %d retries: %w",
-		maxRetries,
+		waitForNodeInfoReachableMaxRetries,
 		lastErr,
 	)
 }
