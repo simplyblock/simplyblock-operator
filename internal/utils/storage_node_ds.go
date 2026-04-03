@@ -32,8 +32,8 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *
 	if len(sn.Spec.DeviceNames) > 0 {
 		initCmd = append(initCmd, "--nvme-devices="+JoinList(sn.Spec.DeviceNames))
 	}
-	if sn.Spec.SocketsToUse != nil {
-		initCmd = append(initCmd, "--sockets-to-use="+Int32PtrToString(sn.Spec.SocketsToUse))
+	if len(sn.Spec.SocketsToUse) > 0 {
+		initCmd = append(initCmd, "--sockets-to-use="+JoinList(sn.Spec.SocketsToUse))
 	}
 	if sn.Spec.NodesPerSocket != nil {
 		initCmd = append(initCmd, "--nodes-per-socket="+Int32PtrToString(sn.Spec.NodesPerSocket))
