@@ -102,8 +102,10 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 	}
 
 	/* -------------------- Finalizer -------------------- */
-	if updated, err := r.ensureFinalizer(ctx, clusterCR); updated || err != nil {
+	if updated, err := r.ensureFinalizer(ctx, clusterCR); err != nil {
 		return ctrl.Result{}, err
+	} else if updated {
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	switch clusterCR.Spec.Action {

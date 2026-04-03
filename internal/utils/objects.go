@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -106,6 +107,24 @@ func ExistingClusterUUID(
 		if cluster.Status.UUID != "" {
 			return true, cluster.Status.UUID, cluster.Spec.ClusterName, nil
 		}
+	}
+
+	var secrets corev1.SecretList
+	if err := c.List(ctx, &secrets, client.InNamespace(namespace)); err != nil {
+		return false, "", "", err
+	}
+
+	for _, secret := range secrets.Items {
+		if !strings.HasPrefix(secret.Name, "simplyblock-cluster-") {
+			continue
+		}
+
+		clusterSecret, ok := secret.Data["secret"]
+		if !ok || len(clusterSecret) == 0 {
+			continue
+		}
+
+		return true, string(secret.Data["uuid"]), strings.TrimPrefix(secret.Name, "simplyblock-cluster-"), nil
 	}
 
 	return false, "", "", nil
