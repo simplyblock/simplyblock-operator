@@ -124,6 +124,11 @@ spec:
               stripeWparity:
                 format: int32
                 type: integer
+              useBackup:
+                description: Backup configuration payload matching the contents of
+                  backup.json / sbcli --use-backup.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
             required:
             - clusterName
             type: object

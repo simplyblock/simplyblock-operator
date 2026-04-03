@@ -21,7 +21,8 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -628,6 +629,11 @@ func (in *SimplyBlockStorageClusterSpec) DeepCopyInto(out *SimplyBlockStorageClu
 		*out = new(int32)
 		**out = **in
 	}
+	if in.UseBackup != nil {
+		in, out := &in.UseBackup, &out.UseBackup
+		*out = new(v1.JSON)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.CapWarn != nil {
 		in, out := &in.CapWarn, &out.CapWarn
 		*out = new(int32)
@@ -892,7 +898,7 @@ func (in *SimplyBlockStorageNodeSpec) DeepCopyInto(out *SimplyBlockStorageNodeSp
 	}
 	if in.Tolerations != nil {
 		in, out := &in.Tolerations, &out.Tolerations
-		*out = make([]v1.Toleration, len(*in))
+		*out = make([]corev1.Toleration, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}

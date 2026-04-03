@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -50,6 +51,10 @@ type SimplyBlockStorageClusterSpec struct {
 	NvmfBasePort           *int32 `json:"nvmfBasePort,omitempty"`
 	RpcBasePort            *int32 `json:"rpcBasePort,omitempty"`
 	SnodeApiPort           *int32 `json:"snodeApiPort,omitempty"`
+	// Backup configuration payload matching the contents of backup.json / sbcli --use-backup.
+	// +kubebuilder:validation:Type=object
+	// +kubebuilder:pruning:PreserveUnknownFields
+	UseBackup *apiextensionsv1.JSON `json:"useBackup,omitempty"`
 
 	// Updatable
 	QoSClasses       string `json:"qosClasses,omitempty"`

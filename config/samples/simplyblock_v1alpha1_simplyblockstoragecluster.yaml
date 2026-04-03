@@ -6,4 +6,12 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: simplyblockstoragecluster-sample
 spec:
-  # TODO(user): Add fields here
+  clusterName: sample-cluster
+  useBackup:
+    access_key_id: username
+    secret_access_key: password
+    local_endpoint: http://10.10.11.10:9000
+    snapshot_backups: true
+    with_compression: false
+    secondary_target: 0
+    local_testing: true
