@@ -48,6 +48,40 @@ spec:
                 type: string
               blockSize:
                 description: BlockSize defines the logical block size in bytes.
+              backup:
+                properties:
+                  credentialsSecretRef:
+                    description: CredentialsSecretRef points to the Secret holding
+                      access_key_id and secret_access_key.
+                    properties:
+                      name:
+                        description: Name is the name of the Secret in the same namespace
+                          as the cluster CR.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  localEndpoint:
+                    type: string
+                  localTesting:
+                    type: boolean
+                  secondaryTarget:
+                    format: int32
+                    type: integer
+                  snapshotBackups:
+                    type: boolean
+                  withCompression:
+                    type: boolean
+                required:
+                - credentialsSecretRef
+                type: object
+              blkSize:
+                format: int32
+                type: integer
+              capCrit:
+                format: int32
+                type: integer
+              capWarn:
                 format: int32
                 type: integer
               clientDataNic:

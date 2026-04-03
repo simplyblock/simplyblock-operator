@@ -37,6 +37,25 @@ type StripeSpec struct {
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+type BackupCredentialsSecretRef struct {
+	// Name is the name of the Secret in the same namespace as the cluster CR.
+	Name string `json:"name"`
+}
+
+type BackupSpec struct {
+	LocalEndpoint string `json:"localEndpoint,omitempty"`
+	// +optional
+	SnapshotBackups *bool `json:"snapshotBackups,omitempty"`
+	// +optional
+	WithCompression *bool `json:"withCompression,omitempty"`
+	// +optional
+	SecondaryTarget *int32 `json:"secondaryTarget,omitempty"`
+	// +optional
+	LocalTesting *bool `json:"localTesting,omitempty"`
+	// CredentialsSecretRef points to the Secret holding access_key_id and secret_access_key.
+	CredentialsSecretRef BackupCredentialsSecretRef `json:"credentialsSecretRef"`
+}
+
 // SimplyBlockStorageClusterSpec defines the desired state of SimplyBlockStorageCluster
 type SimplyBlockStorageClusterSpec struct {
 	// MgmtIfname is the management network interface name used for cluster communication.
@@ -93,6 +112,8 @@ type SimplyBlockStorageClusterSpec struct {
 	IncludeEventLog *bool `json:"includeEventLog,omitempty"`
 	// EventLogEntries limits the number of event-log entries returned/retained.
 	EventLogEntries *int32 `json:"eventLogEntries,omitempty"`
+	// Backup specifies the specification for backup to S3 configuration
+	Backup *BackupSpec `json:"backup,omitempty"`
 }
 
 // SimplyBlockStorageClusterStatus defines the observed state of SimplyBlockStorageCluster.
