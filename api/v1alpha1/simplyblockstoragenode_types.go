@@ -50,7 +50,7 @@ type SimplyBlockStorageNodeSpec struct {
 	PcieDenyList             []string `json:"pcieDenyList,omitempty"`
 	PcieModel                string   `json:"pcieModel,omitempty"`
 	DriveSizeRange           string   `json:"driveSizeRange,omitempty"`
-	SocketsToUse             *int32   `json:"socketsToUse,omitempty"`
+	SocketsToUse             []string `json:"socketsToUse,omitempty"`
 	NodesPerSocket           *int32   `json:"nodesPerSocket,omitempty"`
 	DataNIC                  []string `json:"dataNIC,omitempty"`
 	HaJmCount                *int32   `json:"haJmCount,omitempty"`

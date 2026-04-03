@@ -974,8 +974,8 @@ func (in *SimplyBlockStorageNodeSpec) DeepCopyInto(out *SimplyBlockStorageNodeSp
 	}
 	if in.SocketsToUse != nil {
 		in, out := &in.SocketsToUse, &out.SocketsToUse
-		*out = new(int32)
-		**out = **in
+		*out = make([]string, len(*in))
+		copy(*out, *in)
 	}
 	if in.NodesPerSocket != nil {
 		in, out := &in.NodesPerSocket, &out.NodesPerSocket
