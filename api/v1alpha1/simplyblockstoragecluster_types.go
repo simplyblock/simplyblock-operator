@@ -23,6 +23,25 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+type BackupCredentialsSecretRef struct {
+	// Name is the name of the Secret in the same namespace as the cluster CR.
+	Name string `json:"name"`
+}
+
+type BackupSpec struct {
+	LocalEndpoint string `json:"localEndpoint,omitempty"`
+	// +optional
+	SnapshotBackups *bool `json:"snapshotBackups,omitempty"`
+	// +optional
+	WithCompression *bool `json:"withCompression,omitempty"`
+	// +optional
+	SecondaryTarget *int32 `json:"secondaryTarget,omitempty"`
+	// +optional
+	LocalTesting *bool `json:"localTesting,omitempty"`
+	// CredentialsSecretRef points to the Secret holding access_key_id and secret_access_key.
+	CredentialsSecretRef BackupCredentialsSecretRef `json:"credentialsSecretRef"`
+}
+
 // SimplyBlockStorageClusterSpec defines the desired state of SimplyBlockStorageCluster
 type SimplyBlockStorageClusterSpec struct {
 	// Create-only
@@ -35,21 +54,22 @@ type SimplyBlockStorageClusterSpec struct {
 	// +kubebuilder:validation:Enum=activate;expand
 	Action string `json:"action,omitempty"`
 
-	IsSingleNode           *bool  `json:"isSingleNode,omitempty"`
-	StrictNodeAntiAffinity *bool  `json:"strictNodeAntiAffinity,omitempty"`
-	QpairCount             *int32 `json:"qpairCount,omitempty"`
-	DistrBs                *int32 `json:"distrBs,omitempty"`
-	DistrChunkBs           *int32 `json:"distrChunkBs,omitempty"`
-	BlkSize                *int32 `json:"blkSize,omitempty"`
-	PageSizeInBlocks       *int32 `json:"pageSizeInBlocks,omitempty"`
-	MaxQueueSize           *int32 `json:"maxQueueSize,omitempty"`
-	InflightIOThreshold    *int32 `json:"inflightIOThreshold,omitempty"`
-	Fabric                 string `json:"fabric,omitempty"`
-	ClientDataNic          string `json:"clientDataNic,omitempty"`
-	MaxFaultTolerance      *int32 `json:"maxFaultTolerance,omitempty"`
-	NvmfBasePort           *int32 `json:"nvmfBasePort,omitempty"`
-	RpcBasePort            *int32 `json:"rpcBasePort,omitempty"`
-	SnodeApiPort           *int32 `json:"snodeApiPort,omitempty"`
+	IsSingleNode           *bool       `json:"isSingleNode,omitempty"`
+	StrictNodeAntiAffinity *bool       `json:"strictNodeAntiAffinity,omitempty"`
+	QpairCount             *int32      `json:"qpairCount,omitempty"`
+	DistrBs                *int32      `json:"distrBs,omitempty"`
+	DistrChunkBs           *int32      `json:"distrChunkBs,omitempty"`
+	BlkSize                *int32      `json:"blkSize,omitempty"`
+	PageSizeInBlocks       *int32      `json:"pageSizeInBlocks,omitempty"`
+	MaxQueueSize           *int32      `json:"maxQueueSize,omitempty"`
+	InflightIOThreshold    *int32      `json:"inflightIOThreshold,omitempty"`
+	Fabric                 string      `json:"fabric,omitempty"`
+	ClientDataNic          string      `json:"clientDataNic,omitempty"`
+	MaxFaultTolerance      *int32      `json:"maxFaultTolerance,omitempty"`
+	NvmfBasePort           *int32      `json:"nvmfBasePort,omitempty"`
+	RpcBasePort            *int32      `json:"rpcBasePort,omitempty"`
+	SnodeApiPort           *int32      `json:"snodeApiPort,omitempty"`
+	Backup                 *BackupSpec `json:"backup,omitempty"`
 
 	// Updatable
 	QoSClasses       string `json:"qosClasses,omitempty"`
