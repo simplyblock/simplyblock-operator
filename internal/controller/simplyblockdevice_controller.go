@@ -158,7 +158,29 @@ func (r *SimplyBlockDeviceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 
 		for _, n := range nodes {
-			nodeUUIDs = append(nodeUUIDs, n.UUID)
+			nodeUUID := n.NodeUUID()
+			if nodeUUID == "" {
+				log.Info("Skipping storage node without UUID",
+					"status", n.Status,
+					"hostname", n.Hostname,
+					"mgmtIP", n.IP,
+				)
+				continue
+			}
+			if n.Status != "online" {
+				log.Info("Skipping non-online storage node while fetching devices",
+					"nodeUUID", nodeUUID,
+					"status", n.Status,
+					"hostname", n.Hostname,
+				)
+				continue
+			}
+			nodeUUIDs = append(nodeUUIDs, nodeUUID)
+		}
+
+		if len(nodeUUIDs) == 0 {
+			log.Info("No online storage nodes found in cluster yet")
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 	}
 
@@ -174,11 +196,12 @@ func (r *SimplyBlockDeviceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 		if err != nil || status >= 300 {
-			log.Error(err, "Failed to fetch devices",
+			log.Info("Skipping device fetch for storage node",
 				"nodeUUID", nodeUUID,
 				"endpoint", endpoint,
 				"status", status,
 				"response", string(body),
+				"error", err,
 			)
 			continue
 		}

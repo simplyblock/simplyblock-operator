@@ -47,6 +47,7 @@ type SimplyBlockStorageNodeReconciler struct {
 }
 
 type SNODEAPIResponse struct {
+	ID        string `json:"id"`
 	UUID      string `json:"uuid"`
 	Status    string `json:"status"`
 	IP        string `json:"mgmt_ip"`
@@ -59,6 +60,13 @@ type SNODEAPIResponse struct {
 	RPC_PORT  int    `json:"rpc_port"`
 	LVOL_PORT int    `json:"lvol_subsys_port"`
 	NVMF_PORT int    `json:"nvmf_port"`
+}
+
+func (r SNODEAPIResponse) NodeUUID() string {
+	if r.UUID != "" {
+		return r.UUID
+	}
+	return r.ID
 }
 
 type NodeStatusResponse struct {
@@ -504,13 +512,14 @@ func waitForNodeOnline(
 
 		for _, res := range apiResp {
 			if res.IP == ip && res.Status == "online" && res.Health {
+				nodeUUID := res.NodeUUID()
 
 				for i := range snCR.Status.Nodes {
 					if snCR.Status.Nodes[i].Hostname == nodeName {
 
 						updated := simplyblockv1alpha1.NodeStatus{
 							Hostname:  nodeName,
-							UUID:      res.UUID,
+							UUID:      nodeUUID,
 							Health:    res.Health,
 							Status:    res.Status,
 							MgmtIp:    res.IP,
