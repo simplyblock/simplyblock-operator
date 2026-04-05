@@ -30,7 +30,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *
 		initCmd = append(initCmd, "--pci-blocked="+JoinList(sn.Spec.PcieDenyList))
 	}
 	if len(sn.Spec.DeviceNames) > 0 {
-		initCmd = append(initCmd, "--nvme-devices="+JoinList(sn.Spec.DeviceNames))
+		initCmd = append(initCmd, "--nvme-names="+JoinList(sn.Spec.DeviceNames))
 	}
 	if len(sn.Spec.SocketsToUse) > 0 {
 		initCmd = append(initCmd, "--sockets-to-use="+JoinList(sn.Spec.SocketsToUse))
@@ -46,6 +46,9 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *
 	}
 	if sn.Spec.CorePercentage != nil {
 		initCmd = append(initCmd, "--cores-percentage="+Int32PtrToString(sn.Spec.CorePercentage))
+	}
+	if BoolPtrOrFalse(sn.Spec.Force) {
+		initCmd = append(initCmd, "--force")
 	}
 
 	mainEnv := []corev1.EnvVar{

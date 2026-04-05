@@ -77,6 +77,7 @@ type PoolUpdateParams struct {
 type StorageNodeAddParams struct {
 	NodeAddress         string   `json:"node_address"`
 	InterfaceName       string   `json:"interface_name"`
+	HaJM                bool     `json:"ha_jm"`
 	SPDKImage           string   `json:"spdk_image,omitempty"`
 	SPDKDebug           bool     `json:"spdk_debug"`
 	IdDeviceByNQN       bool     `json:"id_device_by_nqn"`
@@ -87,6 +88,7 @@ type StorageNodeAddParams struct {
 	IOBufSmallPoolCount int      `json:"iobuf_small_pool_count,omitempty"`
 	IOBufLargePoolCount int      `json:"iobuf_large_pool_count,omitempty"`
 	HaJMCount           int      `json:"ha_jm_count,omitempty"`
+	Format4K            bool     `json:"format_4k"`
 	CRName              string   `json:"cr_name,omitempty"`
 	CRNameSpace         string   `json:"cr_namespace,omitempty"`
 	CRPlural            string   `json:"cr_plural,omitempty"`

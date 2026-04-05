@@ -182,6 +182,7 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 		params := utils.StorageNodeAddParams{
 			NodeAddress:         nodeAddress,
 			InterfaceName:       snCR.Spec.MgmtIfc,
+			HaJM:                utils.BoolPtrOrFalse(snCR.Spec.HAJM),
 			SPDKImage:           snCR.Spec.SpdkImage,
 			SPDKDebug:           utils.BoolPtrOrFalse(snCR.Spec.SPDKDebug),
 			IdDeviceByNQN:       utils.BoolPtrOrFalse(snCR.Spec.IdDeviceByNQN),
@@ -192,6 +193,7 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 			IOBufSmallPoolCount: 0,
 			IOBufLargePoolCount: 0,
 			HaJMCount:           utils.IntPtrOrDefault(snCR.Spec.HaJmCount, 3),
+			Format4K:            utils.BoolPtrOrFalse(snCR.Spec.Format4K),
 			CRName:              snCR.Name,
 			CRNameSpace:         snCR.Namespace,
 			CRPlural:            "simplyblockstoragenodes",
@@ -722,8 +724,13 @@ func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
 	switch snCR.Spec.Action {
 
 	case "restart":
+		force := true
+		if snCR.Spec.Force != nil {
+			force = *snCR.Spec.Force
+		}
+
 		payload := map[string]bool{
-			"force": true,
+			"force": force,
 		}
 
 		if snCR.Spec.WorkerNode != "" {
@@ -745,7 +752,7 @@ func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
 			nodeAddress := fmt.Sprintf("%s:5000", ip)
 
 			body = map[string]any{
-				"force":        true,
+				"force":        force,
 				"node_address": nodeAddress,
 			}
 		} else {
