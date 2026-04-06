@@ -79,6 +79,7 @@ type StorageNodeAddParams struct {
 	InterfaceName       string   `json:"interface_name"`
 	HaJM                bool     `json:"ha_jm"`
 	SPDKImage           string   `json:"spdk_image,omitempty"`
+	SPDKProxyImage      string   `json:"spdk_proxy_image,omitempty"`
 	SPDKDebug           bool     `json:"spdk_debug"`
 	IdDeviceByNQN       bool     `json:"id_device_by_nqn"`
 	DataNics            []string `json:"data_nics,omitempty"`

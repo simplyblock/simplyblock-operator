@@ -37,6 +37,7 @@ type SimplyBlockStorageNodeSpec struct {
 	MaxLVol                  *int32   `json:"maxLVol,omitempty"`
 	MaxSize                  string   `json:"maxSize,omitempty"`
 	SpdkImage                string   `json:"spdkImage,omitempty"`
+	SpdkProxyImage           string   `json:"spdkProxyImage,omitempty"`
 	MgmtIfc                  string   `json:"mgmtIfc,omitempty"`
 	Partitions               *int32   `json:"partitions,omitempty"`
 	JMPercent                *int32   `json:"jmPercent,omitempty"`

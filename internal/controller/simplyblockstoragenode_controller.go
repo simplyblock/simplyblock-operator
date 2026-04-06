@@ -187,11 +187,16 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 		}
 
 		nodeAddress := fmt.Sprintf("%s:5000", ip)
+		spdkProxyImage := snCR.Spec.SpdkProxyImage
+		if spdkProxyImage == "" {
+			spdkProxyImage = snCR.Spec.ClusterImage
+		}
 		params := utils.StorageNodeAddParams{
 			NodeAddress:         nodeAddress,
 			InterfaceName:       snCR.Spec.MgmtIfc,
 			HaJM:                utils.BoolPtrOrFalse(snCR.Spec.HAJM),
 			SPDKImage:           snCR.Spec.SpdkImage,
+			SPDKProxyImage:      spdkProxyImage,
 			SPDKDebug:           utils.BoolPtrOrFalse(snCR.Spec.SPDKDebug),
 			IdDeviceByNQN:       utils.BoolPtrOrFalse(snCR.Spec.IdDeviceByNQN),
 			DataNics:            snCR.Spec.DataNIC,
