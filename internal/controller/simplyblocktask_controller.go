@@ -116,11 +116,6 @@ func (r *SimplyBlockTaskReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	if err != nil {
-		log.Error(err, "Failed to get cluster auth")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
 	var endpoint string
 	if taskCR.Spec.TaskID != "" {
 		endpoint = fmt.Sprintf(

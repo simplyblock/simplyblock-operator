@@ -202,6 +202,7 @@ func (r *SimplyBlockLvolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			"status", status,
 			"response", string(body),
 		)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	log.Info("LVOL API call",
