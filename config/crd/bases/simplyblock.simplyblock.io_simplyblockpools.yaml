@@ -40,27 +40,46 @@ spec:
             description: spec defines the desired state of Pool
             properties:
               action:
+                description: Action triggers an imperative pool operation.
                 type: string
               capacityLimit:
+                description: CapacityLimit is the maximum pool capacity.
                 type: string
               clusterName:
+                description: ClusterName is the target storage cluster name.
                 type: string
               name:
+                description: Name is the backend pool name.
                 type: string
-              qosIOPSLimit:
-                format: int32
-                type: integer
-              rLimit:
-                format: int32
-                type: integer
-              rwLimit:
-                format: int32
-                type: integer
+              qos:
+                description: QoS defines QoS limits for the pool.
+                properties:
+                  iops:
+                    description: IOPS is the IOPS limit for the pool.
+                    format: int32
+                    type: integer
+                  throughput:
+                    description: Throughput contains throughput limits for the pool.
+                    properties:
+                      read:
+                        description: Read is the read throughput limit for the pool.
+                        format: int32
+                        type: integer
+                      readWrite:
+                        description: ReadWrite is the combined read/write throughput
+                          limit for the pool.
+                        format: int32
+                        type: integer
+                      write:
+                        description: Write is the write throughput limit for the pool.
+                        format: int32
+                        type: integer
+                    type: object
+                type: object
               status:
+                description: Status is an optional desired-status hint for backend
+                  workflows.
                 type: string
-              wLimit:
-                format: int32
-                type: integer
             required:
             - clusterName
             - name
@@ -68,24 +87,43 @@ spec:
           status:
             description: status defines the observed state of Pool
             properties:
-              qosHost:
-                type: string
-              qosIOPSLimit:
-                format: int32
-                type: integer
-              rLimit:
-                format: int32
-                type: integer
-              rwLimit:
-                format: int32
-                type: integer
+              qos:
+                description: QoS contains observed/configured QoS values.
+                properties:
+                  host:
+                    description: Host is the backend host handling pool QoS enforcement.
+                    type: string
+                  iops:
+                    description: IOPS is the observed/configured IOPS value.
+                    format: int32
+                    type: integer
+                  throughput:
+                    description: Throughput contains observed/configured throughput
+                      values.
+                    properties:
+                      read:
+                        description: Read is the observed/configured read throughput
+                          value.
+                        format: int32
+                        type: integer
+                      readWrite:
+                        description: ReadWrite is the observed/configured combined
+                          read/write throughput value.
+                        format: int32
+                        type: integer
+                      write:
+                        description: Write is the observed/configured write throughput
+                          value.
+                        format: int32
+                        type: integer
+                    type: object
+                type: object
               status:
+                description: Status is the backend lifecycle status.
                 type: string
               uuid:
+                description: UUID is the backend pool UUID.
                 type: string
-              wLimit:
-                format: int32
-                type: integer
             type: object
         required:
         - spec

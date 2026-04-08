@@ -23,28 +23,68 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+// PoolQoSThroughputSpec defines throughput QoS limits in MiB/s.
+type PoolQoSThroughputSpec struct {
+	// Read is the read throughput limit for the pool.
+	Read *int32 `json:"read,omitempty"`
+	// ReadWrite is the combined read/write throughput limit for the pool.
+	ReadWrite *int32 `json:"readWrite,omitempty"`
+	// Write is the write throughput limit for the pool.
+	Write *int32 `json:"write,omitempty"`
+}
+
+// PoolQoSSpec defines pool QoS limits.
+type PoolQoSSpec struct {
+	// IOPS is the IOPS limit for the pool.
+	IOPS *int32 `json:"iops,omitempty"`
+	// Throughput contains throughput limits for the pool.
+	Throughput *PoolQoSThroughputSpec `json:"throughput,omitempty"`
+}
+
+// PoolQoSThroughputStatus defines observed throughput QoS values in MiB/s.
+type PoolQoSThroughputStatus struct {
+	// Read is the observed/configured read throughput value.
+	Read *int32 `json:"read,omitempty"`
+	// ReadWrite is the observed/configured combined read/write throughput value.
+	ReadWrite *int32 `json:"readWrite,omitempty"`
+	// Write is the observed/configured write throughput value.
+	Write *int32 `json:"write,omitempty"`
+}
+
+// PoolQoSStatus defines observed pool QoS values.
+type PoolQoSStatus struct {
+	// Host is the backend host handling pool QoS enforcement.
+	Host string `json:"host,omitempty"`
+	// IOPS is the observed/configured IOPS value.
+	IOPS *int32 `json:"iops,omitempty"`
+	// Throughput contains observed/configured throughput values.
+	Throughput *PoolQoSThroughputStatus `json:"throughput,omitempty"`
+}
+
 // SimplyBlockPoolSpec defines the desired state of Pool
 type SimplyBlockPoolSpec struct {
-	Name          string `json:"name"`
-	ClusterName   string `json:"clusterName"`
-	Status        string `json:"status,omitempty"`
+	// Name is the backend pool name.
+	Name string `json:"name"`
+	// ClusterName is the target storage cluster name.
+	ClusterName string `json:"clusterName"`
+	// Status is an optional desired-status hint for backend workflows.
+	Status string `json:"status,omitempty"`
+	// CapacityLimit is the maximum pool capacity.
 	CapacityLimit string `json:"capacityLimit,omitempty"`
-	QoSIOPSLimit  *int32 `json:"qosIOPSLimit,omitempty"`
-	RWLimit       *int32 `json:"rwLimit,omitempty"`
-	RLimit        *int32 `json:"rLimit,omitempty"`
-	WLimit        *int32 `json:"wLimit,omitempty"`
-	Action        string `json:"action,omitempty"`
+	// QoS defines QoS limits for the pool.
+	QoS *PoolQoSSpec `json:"qos,omitempty"`
+	// Action triggers an imperative pool operation.
+	Action string `json:"action,omitempty"`
 }
 
 // SimplyBlockPoolStatus defines the observed state of Pool.
 type SimplyBlockPoolStatus struct {
-	UUID         string `json:"uuid,omitempty"`
-	Status       string `json:"status,omitempty"`
-	QoSIOPSLimit *int32 `json:"qosIOPSLimit,omitempty"`
-	RWLimit      *int32 `json:"rwLimit,omitempty"`
-	RLimit       *int32 `json:"rLimit,omitempty"`
-	WLimit       *int32 `json:"wLimit,omitempty"`
-	QoSHost      string `json:"qosHost,omitempty"`
+	// UUID is the backend pool UUID.
+	UUID string `json:"uuid,omitempty"`
+	// Status is the backend lifecycle status.
+	Status string `json:"status,omitempty"`
+	// QoS contains observed/configured QoS values.
+	QoS *PoolQoSStatus `json:"qos,omitempty"`
 }
 
 // +kubebuilder:object:root=true
