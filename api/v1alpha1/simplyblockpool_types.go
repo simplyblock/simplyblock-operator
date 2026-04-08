@@ -23,7 +23,7 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// PoolQoSThroughputSpec defines throughput QoS limits in MiB/s.
+// PoolQoSThroughputSpec defines throughput QosSpec limits in MiB/s.
 type PoolQoSThroughputSpec struct {
 	// Read is the read throughput limit for the pool.
 	Read *int32 `json:"read,omitempty"`
@@ -33,7 +33,7 @@ type PoolQoSThroughputSpec struct {
 	Write *int32 `json:"write,omitempty"`
 }
 
-// PoolQoSSpec defines pool QoS limits.
+// PoolQoSSpec defines pool QosSpec limits.
 type PoolQoSSpec struct {
 	// IOPS is the IOPS limit for the pool.
 	IOPS *int32 `json:"iops,omitempty"`
@@ -41,7 +41,7 @@ type PoolQoSSpec struct {
 	Throughput *PoolQoSThroughputSpec `json:"throughput,omitempty"`
 }
 
-// PoolQoSThroughputStatus defines observed throughput QoS values in MiB/s.
+// PoolQoSThroughputStatus defines observed throughput QosSpec values in MiB/s.
 type PoolQoSThroughputStatus struct {
 	// Read is the observed/configured read throughput value.
 	Read *int32 `json:"read,omitempty"`
@@ -51,9 +51,9 @@ type PoolQoSThroughputStatus struct {
 	Write *int32 `json:"write,omitempty"`
 }
 
-// PoolQoSStatus defines observed pool QoS values.
+// PoolQoSStatus defines observed pool QosSpec values.
 type PoolQoSStatus struct {
-	// Host is the backend host handling pool QoS enforcement.
+	// Host is the backend host handling pool QosSpec enforcement.
 	Host string `json:"host,omitempty"`
 	// IOPS is the observed/configured IOPS value.
 	IOPS *int32 `json:"iops,omitempty"`
@@ -71,8 +71,8 @@ type SimplyBlockPoolSpec struct {
 	Status string `json:"status,omitempty"`
 	// CapacityLimit is the maximum pool capacity.
 	CapacityLimit string `json:"capacityLimit,omitempty"`
-	// QoS defines QoS limits for the pool.
-	QoS *PoolQoSSpec `json:"qos,omitempty"`
+	// QosSpec defines QosSpec limits for the pool.
+	QosSpec *PoolQoSSpec `json:"qosspec,omitempty"`
 	// Action triggers an imperative pool operation.
 	Action string `json:"action,omitempty"`
 }

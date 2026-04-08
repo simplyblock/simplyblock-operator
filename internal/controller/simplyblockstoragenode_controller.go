@@ -645,19 +645,19 @@ func waitForNodeOnline(
 func journalManagerPercentPerDevice(
 	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
 ) int {
-	if snCR.Spec.JournalManager == nil {
+	if snCR.Spec.JournalManagerSpec == nil {
 		return 3
 	}
-	return utils.IntPtrOrDefault(snCR.Spec.JournalManager.PercentPerDevice, 3)
+	return utils.IntPtrOrDefault(snCR.Spec.JournalManagerSpec.PercentPerDevice, 3)
 }
 
 func journalManagerCount(
 	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
 ) int {
-	if snCR.Spec.JournalManager == nil {
+	if snCR.Spec.JournalManagerSpec == nil {
 		return 3
 	}
-	return utils.IntPtrOrDefault(snCR.Spec.JournalManager.Count, 3)
+	return utils.IntPtrOrDefault(snCR.Spec.JournalManagerSpec.Count, 3)
 }
 
 func (r *SimplyBlockStorageNodeReconciler) reconcileAction(

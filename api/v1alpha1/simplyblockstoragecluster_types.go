@@ -80,7 +80,7 @@ type SimplyBlockStorageClusterSpec struct {
 	// SnodeApiPort defines the storage-node API port.
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
 
-	// QoSClasses defines backend QoS class configuration.
+	// QoSClasses defines backend QosSpec class configuration.
 	QoSClasses string `json:"qosClasses,omitempty"`
 	// WarningThresholdSpec defines warning-level capacity thresholds.
 	WarningThresholdSpec *CapacityThresholdSpec `json:"warningThresholdSpec,omitempty"`

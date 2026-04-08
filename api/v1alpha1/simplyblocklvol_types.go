@@ -49,7 +49,7 @@ type LvolQoSThroughput struct {
 }
 
 type LvolQoS struct {
-	// Class is the QoS class identifier.
+	// Class is the QosSpec class identifier.
 	Class int64 `json:"class,omitempty"`
 	// IOPS is the IOPS limit/metric.
 	IOPS int64 `json:"iops,omitempty"`
