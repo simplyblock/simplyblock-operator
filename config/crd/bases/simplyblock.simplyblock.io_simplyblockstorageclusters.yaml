@@ -46,9 +46,8 @@ spec:
                 - activate
                 - expand
                 type: string
-              blockSize:
-                description: BlockSize defines the logical block size in bytes.
               backup:
+                description: Backup specifies the specification for backup to S3 configuration
                 properties:
                   credentialsSecretRef:
                     description: CredentialsSecretRef points to the Secret holding
@@ -75,13 +74,8 @@ spec:
                 required:
                 - credentialsSecretRef
                 type: object
-              blkSize:
-                format: int32
-                type: integer
-              capCrit:
-                format: int32
-                type: integer
-              capWarn:
+              blockSize:
+                description: BlockSize defines the logical block size in bytes.
                 format: int32
                 type: integer
               clientDataNic:
