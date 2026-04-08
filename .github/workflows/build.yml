@@ -15,12 +15,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version-file: go.mod
 
       - name: Log in to DockerHub
         uses: docker/login-action@v2
@@ -37,9 +37,6 @@ jobs:
       - name: Build and push multi-arch Docker image
         run: |
           IMAGE_TAG=${IMAGE_NAME}:${GITHUB_REF_NAME}
-
           echo "Building and pushing multi-arch image: $IMAGE_TAG"
-
           # Use multi-arch Makefile target
           make docker-buildx IMG=$IMAGE_TAG PLATFORMS="amd64,arm64"
-          

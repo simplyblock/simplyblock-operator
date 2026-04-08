@@ -1,0 +1,34 @@
+name: Manifests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  manifests:
+    name: Run on Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install kubeconform
+        run: |
+          curl -fsSL -o kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar -xzf kubeconform.tar.gz kubeconform
+          sudo mv kubeconform /usr/local/bin/kubeconform
+
+      - name: Build manifests
+        run: |
+          make kustomize
+          ./bin/kustomize build config/default > rendered-manifests.yaml
+
+      - name: Validate rendered manifests
+        run: |
+          kubeconform -strict -summary -skip CustomResourceDefinition rendered-manifests.yaml
