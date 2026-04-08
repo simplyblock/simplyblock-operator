@@ -25,25 +25,37 @@ import (
 
 // SimplyBlockTaskSpec defines the desired state of SimplyBlockTask
 type SimplyBlockTaskSpec struct {
+	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`
-	TaskID      string `json:"taskID,omitempty"`
-	Subtasks    bool   `json:"subtasks,omitempty"`
+	// TaskID filters results to a specific backend task when set.
+	TaskID string `json:"taskID,omitempty"`
+	// Subtasks includes related child subtasks when supported by the backend.
+	Subtasks bool `json:"subtasks,omitempty"`
 }
 
 // SimplyBlockTaskStatus defines the observed state of SimplyBlockTask.
 type SimplyBlockTaskStatus struct {
+	// Tasks is the currently reported task list for the query scope.
 	Tasks []TaskEntry `json:"tasks,omitempty"`
 }
 
 type TaskEntry struct {
-	UUID       string       `json:"uuid,omitempty"`
-	TaskType   string       `json:"taskType,omitempty"`
-	TaskStatus string       `json:"taskStatus,omitempty"`
-	TaskResult string       `json:"taskResult,omitempty"`
-	Canceled   bool         `json:"canceled,omitempty"`
-	ParentTask string       `json:"parentTask,omitempty"`
-	StartedAt  *metav1.Time `json:"startedAt,omitempty"`
-	Retried    *int32       `json:"retried,omitempty"`
+	// UUID is the backend task UUID.
+	UUID string `json:"uuid,omitempty"`
+	// TaskType is the backend task function/type name.
+	TaskType string `json:"taskType,omitempty"`
+	// TaskStatus is the backend lifecycle status for the task.
+	TaskStatus string `json:"taskStatus,omitempty"`
+	// TaskResult is the backend result payload/message.
+	TaskResult string `json:"taskResult,omitempty"`
+	// Canceled indicates whether the task was canceled.
+	Canceled bool `json:"canceled,omitempty"`
+	// ParentTask is the parent task UUID when this task is a subtask.
+	ParentTask string `json:"parentTask,omitempty"`
+	// StartedAt is the backend-reported task start timestamp.
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+	// Retried is the number of retry attempts made for the task.
+	Retried *int32 `json:"retried,omitempty"`
 }
 
 // +kubebuilder:object:root=true
