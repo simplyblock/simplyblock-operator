@@ -93,8 +93,8 @@ spec:
                 description: ForceFormat4K forces 4K blocksize formatting of the NVMe
                   device where supported.
                 type: boolean
-              journalManager:
-                description: JournalManager configures journal manager behavior.
+              journalManagerSpec:
+                description: JournalManagerSpec configures journal manager behavior.
                 properties:
                   count:
                     description: Count is the number of journal managers to configure.

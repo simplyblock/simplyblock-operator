@@ -133,7 +133,7 @@ spec:
                       description: QoS contains quality-of-service limits/metrics.
                       properties:
                         class:
-                          description: Class is the QoS class identifier.
+                          description: Class is the QosSpec class identifier.
                           format: int64
                           type: integer
                         iops:

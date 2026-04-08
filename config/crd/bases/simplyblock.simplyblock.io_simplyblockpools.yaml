@@ -51,8 +51,8 @@ spec:
               name:
                 description: Name is the backend pool name.
                 type: string
-              qos:
-                description: QoS defines QoS limits for the pool.
+              qosspec:
+                description: QosSpec defines QosSpec limits for the pool.
                 properties:
                   iops:
                     description: IOPS is the IOPS limit for the pool.
@@ -91,7 +91,7 @@ spec:
                 description: QoS contains observed/configured QoS values.
                 properties:
                   host:
-                    description: Host is the backend host handling pool QoS enforcement.
+                    description: Host is the backend host handling pool QosSpec enforcement.
                     type: string
                   iops:
                     description: IOPS is the observed/configured IOPS value.

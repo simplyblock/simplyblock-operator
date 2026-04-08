@@ -125,7 +125,7 @@ spec:
                 format: int32
                 type: integer
               qosClasses:
-                description: QoSClasses defines backend QoS class configuration.
+                description: QoSClasses defines backend QosSpec class configuration.
                 type: string
               qpairCount:
                 description: QpairCount defines the NVMe queue-pair count used by
