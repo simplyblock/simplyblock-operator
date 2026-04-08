@@ -87,6 +87,7 @@ type SimplyBlockStorageClusterSpec struct {
 	// CriticalThresholdSpec defines critical-level capacity thresholds.
 	CriticalThresholdSpec *CapacityThresholdSpec `json:"criticalThresholdSpec,omitempty"`
 	// ClientQpairCount defines client-side queue-pair count.
+	// FIXME: Unused for now (API update required?)
 	ClientQpairCount *int32 `json:"clientQpairCount,omitempty"`
 	// IncludeEventLog controls whether event logs are included in responses/exports.
 	IncludeEventLog *bool `json:"includeEventLog,omitempty"`

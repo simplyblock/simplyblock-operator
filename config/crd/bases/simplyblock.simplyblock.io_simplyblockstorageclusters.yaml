@@ -54,7 +54,9 @@ spec:
                 description: ClientDataNic defines the client data network interface.
                 type: string
               clientQpairCount:
-                description: ClientQpairCount defines client-side queue-pair count.
+                description: |-
+                  ClientQpairCount defines client-side queue-pair count.
+                  FIXME: Unused for now (API update required?)
                 format: int32
                 type: integer
               clusterName:
@@ -188,19 +190,27 @@ spec:
                   state.
                 properties:
                   action:
+                    description: Action is the requested action name.
                     type: string
                   message:
+                    description: Message is a human-readable action result or error.
                     type: string
                   nodeUUID:
+                    description: NodeUUID is the target node UUID for the action.
                     type: string
                   observedGeneration:
+                    description: ObservedGeneration is the resource generation observed
+                      by this status.
                     format: int64
                     type: integer
                   state:
                     type: string
                   triggered:
+                    description: Triggered indicates whether the underlying backend
+                      action has been fired.
                     type: boolean
                   updatedAt:
+                    description: UpdatedAt is the timestamp of the last status transition.
                     format: date-time
                     type: string
                 type: object

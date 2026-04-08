@@ -202,20 +202,21 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 		nodeAddress := fmt.Sprintf("%s:5000", ip)
 		params := utils.StorageNodeAddParams{
 			NodeAddress:         nodeAddress,
-			InterfaceName:       snCR.Spec.MgmtIfc,
+			InterfaceName:       snCR.Spec.MgmtIfname,
 			SPDKImage:           snCR.Spec.SpdkImage,
-			SPDKDebug:           utils.BoolPtrOrFalse(snCR.Spec.SPDKDebug),
-			IdDeviceByNQN:       utils.BoolPtrOrFalse(snCR.Spec.IdDeviceByNQN),
-			DataNics:            snCR.Spec.DataNIC,
+			SPDKDebug:           false,
+			IdDeviceByNQN:       false,
+			DataNics:            snCR.Spec.DataIfname,
 			Namespace:           snCR.Namespace,
-			JMPercent:           utils.IntPtrOrDefault(snCR.Spec.JMPercent, 3),
+			JMPercent:           journalManagerPercentPerDevice(snCR),
 			Partitions:          utils.IntPtrOrDefault(snCR.Spec.Partitions, 1),
 			IOBufSmallPoolCount: 0,
 			IOBufLargePoolCount: 0,
-			HaJMCount:           utils.IntPtrOrDefault(snCR.Spec.HaJmCount, 3),
+			HaJMCount:           journalManagerCount(snCR),
 			CRName:              snCR.Name,
 			CRNameSpace:         snCR.Namespace,
 			CRPlural:            "simplyblockstoragenodes",
+			Format4K:            utils.BoolPtrOrFalse(snCR.Spec.ForceFormat4K),
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
@@ -519,18 +520,18 @@ func waitForNodeOnline(
 					if snCR.Status.Nodes[i].Hostname == nodeName {
 
 						updated := simplyblockv1alpha1.NodeStatus{
-							Hostname:  nodeName,
-							UUID:      res.UUID,
-							Health:    res.Health,
-							Status:    res.Status,
-							MgmtIp:    res.IP,
-							Devices:   res.Devices,
-							CPU:       utils.IntToInt32Ptr(res.CPU),
-							Memory:    utils.HumanBytes(res.Memory, "iec"),
-							Volumes:   utils.IntToInt32Ptr(res.Volumes),
-							RPC_PORT:  utils.IntToInt32Ptr(res.RPC_PORT),
-							LVOL_PORT: utils.IntToInt32Ptr(res.LVOL_PORT),
-							NVMF_PORT: utils.IntToInt32Ptr(res.NVMF_PORT),
+							Hostname: nodeName,
+							UUID:     res.UUID,
+							Health:   res.Health,
+							Status:   res.Status,
+							MgmtIp:   res.IP,
+							Devices:  res.Devices,
+							CPU:      utils.IntToInt32Ptr(res.CPU),
+							Memory:   utils.HumanBytes(res.Memory, "iec"),
+							Volumes:  utils.IntToInt32Ptr(res.Volumes),
+							RpcPort:  utils.IntToInt32Ptr(res.RPC_PORT),
+							LvolPort: utils.IntToInt32Ptr(res.LVOL_PORT),
+							NvmfPort: utils.IntToInt32Ptr(res.NVMF_PORT),
 						}
 
 						if reflect.DeepEqual(snCR.Status.Nodes[i], updated) {
@@ -639,6 +640,24 @@ func waitForNodeOnline(
 	}
 
 	return fmt.Errorf("node %s did not become online in time", nodeName)
+}
+
+func journalManagerPercentPerDevice(
+	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+) int {
+	if snCR.Spec.JournalManager == nil {
+		return 3
+	}
+	return utils.IntPtrOrDefault(snCR.Spec.JournalManager.PercentPerDevice, 3)
+}
+
+func journalManagerCount(
+	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+) int {
+	if snCR.Spec.JournalManager == nil {
+		return 3
+	}
+	return utils.IntPtrOrDefault(snCR.Spec.JournalManager.Count, 3)
 }
 
 func (r *SimplyBlockStorageNodeReconciler) reconcileAction(
