@@ -868,10 +868,6 @@ func failbackLvol(
 		return fmt.Errorf("waiting for second target replication task failed for lvol %s: %w", targetLvol.UUID, err)
 	}
 
-	if err := deleteLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
-		return fmt.Errorf("delete target lvol failed for lvol %s: %w", targetLvol.UUID, err)
-	}
-
 	if err := deleteLvol(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, sourcePoolUUID, sourceLvolUUID); err != nil {
 		return fmt.Errorf("delete source lvol failed for lvol %s: %w", sourceLvolUUID, err)
 	}
@@ -899,6 +895,24 @@ func failbackLvol(
 	); err != nil {
 		return fmt.Errorf("replicate lvol on source cluster failed for source lvol %s: %w", sourceLvolUUID, err)
 	}
+
+	if err := deleteLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
+		return fmt.Errorf("delete target lvol failed for lvol %s: %w", targetLvol.UUID, err)
+	}
+
+	if err := waitForLvolDeleted(
+		ctx,
+		apiClient,
+		targetClusterSecret,
+		targetClusterUUID,
+		targetPoolUUID,
+		targetLvol.UUID,
+		10*time.Minute,
+		5*time.Second,
+	); err != nil {
+		return fmt.Errorf("waiting for target lvol %s to reach deleted state failed: %w", targetLvol.UUID, err)
+	}
+
 	return nil
 }
 
