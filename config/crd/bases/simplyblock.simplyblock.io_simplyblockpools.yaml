@@ -51,7 +51,7 @@ spec:
               name:
                 description: Name is the backend pool name.
                 type: string
-              qosspec:
+              qos:
                 description: QosSpec defines QosSpec limits for the pool.
                 properties:
                   iops:

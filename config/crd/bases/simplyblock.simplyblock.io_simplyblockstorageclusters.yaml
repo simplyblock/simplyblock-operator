@@ -62,7 +62,7 @@ spec:
               clusterName:
                 description: ClusterName is the user-facing cluster identifier.
                 type: string
-              criticalThresholdSpec:
+              criticalThreshold:
                 description: CriticalThresholdSpec defines critical-level capacity
                   thresholds.
                 properties:
@@ -144,7 +144,7 @@ spec:
                 description: StrictNodeAntiAffinity enforces strict anti-affinity
                   between storage nodes.
                 type: boolean
-              stripeSpec:
+              stripe:
                 description: StripeSpec configures erasure-coding data/parity chunk
                   counts.
                 properties:
@@ -159,7 +159,7 @@ spec:
                     format: int32
                     type: integer
                 type: object
-              warningThresholdSpec:
+              warningThreshold:
                 description: WarningThresholdSpec defines warning-level capacity thresholds.
                 properties:
                   capacity:

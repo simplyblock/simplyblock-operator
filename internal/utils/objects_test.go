@@ -21,7 +21,7 @@ func TestRequiredNodesFromErasureCodingScheme(t *testing.T) {
 	}
 
 	if _, err := RequiredNodesFromErasureCodingScheme("invalid"); err == nil {
-		t.Fatalf("expected error for invalid MOD")
+		t.Fatalf("expected error for invalid erasure coding scheme")
 	}
 }
 

@@ -72,7 +72,7 @@ type SimplyBlockPoolSpec struct {
 	// CapacityLimit is the maximum pool capacity.
 	CapacityLimit string `json:"capacityLimit,omitempty"`
 	// QosSpec defines QosSpec limits for the pool.
-	QosSpec *PoolQoSSpec `json:"qosspec,omitempty"`
+	QosSpec *PoolQoSSpec `json:"qos,omitempty"`
 	// Action triggers an imperative pool operation.
 	Action string `json:"action,omitempty"`
 }

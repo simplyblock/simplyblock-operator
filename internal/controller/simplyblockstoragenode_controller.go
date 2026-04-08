@@ -578,13 +578,13 @@ func waitForNodeOnline(
 							"onlineHealthy", onlineHealthy,
 						)
 
-						requiredMod, err := utils.RequiredNodesFromErasureCodingScheme(clusterCR.Status.ErasureCodingScheme)
+						requiredEc, err := utils.RequiredNodesFromErasureCodingScheme(clusterCR.Status.ErasureCodingScheme)
 						if err != nil {
-							log.Error(err, "Invalid MOD value")
+							log.Error(err, "Invalid erasure coding scheme")
 							return err
 						}
 
-						if utils.ShouldActivateCluster(requiredMod, onlineHealthy, snCR) {
+						if utils.ShouldActivateCluster(requiredEc, onlineHealthy, snCR) {
 
 							waitForNodeOnlineSleepFn(waitForNodeOnlineActivationDelay)
 							log.Info("Activation conditions met — activating cluster")

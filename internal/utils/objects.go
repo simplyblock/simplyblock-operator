@@ -295,7 +295,7 @@ func ActivateClusterAndWait(
 func RequiredNodesFromErasureCodingScheme(scheme string) (int, error) {
 	parts := strings.Split(scheme, "x")
 	if len(parts) != 2 {
-		return 0, fmt.Errorf("invalid erasureCodingScheme format: %s", scheme)
+		return 0, fmt.Errorf("invalid erasureCodingScheme format: expected <dataChunks>x<parityChunks> like %q, got %q", "2x1", scheme)
 	}
 
 	ndcs, err := strconv.Atoi(parts[0])

@@ -44,7 +44,7 @@ type SimplyBlockStorageClusterSpec struct {
 	// EnableNodeAffinity enables node-affinity placement for storage components.
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
 	// StripeSpec configures erasure-coding data/parity chunk counts.
-	StripeSpec *StripeSpec `json:"stripeSpec,omitempty"`
+	StripeSpec *StripeSpec `json:"stripe,omitempty"`
 	// HAType defines the backend high-availability mode.
 	HAType string `json:"haType,omitempty"`
 	// ClusterName is the user-facing cluster identifier.
@@ -83,9 +83,9 @@ type SimplyBlockStorageClusterSpec struct {
 	// QoSClasses defines backend QosSpec class configuration.
 	QoSClasses string `json:"qosClasses,omitempty"`
 	// WarningThresholdSpec defines warning-level capacity thresholds.
-	WarningThresholdSpec *CapacityThresholdSpec `json:"warningThresholdSpec,omitempty"`
+	WarningThresholdSpec *CapacityThresholdSpec `json:"warningThreshold,omitempty"`
 	// CriticalThresholdSpec defines critical-level capacity thresholds.
-	CriticalThresholdSpec *CapacityThresholdSpec `json:"criticalThresholdSpec,omitempty"`
+	CriticalThresholdSpec *CapacityThresholdSpec `json:"criticalThreshold,omitempty"`
 	// ClientQpairCount defines client-side queue-pair count.
 	// FIXME: Unused for now (API update required?)
 	ClientQpairCount *int32 `json:"clientQpairCount,omitempty"`

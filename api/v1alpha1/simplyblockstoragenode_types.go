@@ -57,7 +57,7 @@ type SimplyBlockStorageNodeSpec struct {
 	// Partitions is the number of partitions created per backend storage device.
 	Partitions *int32 `json:"partitions,omitempty"`
 	// JournalManagerSpec configures journal manager behavior.
-	JournalManagerSpec *JournalManagerSpec `json:"journalManagerSpec,omitempty"`
+	JournalManagerSpec *JournalManagerSpec `json:"journalManager,omitempty"`
 	// CoreIsolation enables CPU core isolation mode.
 	CoreIsolation *bool `json:"coreIsolation,omitempty"`
 	// CorePercentage is the percentage of cores to be used for spdk (0-99).
