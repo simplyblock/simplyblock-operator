@@ -116,7 +116,7 @@ type SimplyBlockStorageNodeStatus struct {
 
 type NodeStatus struct {
 	// UUID is the backend node UUID.
-	UUID string `json:"UUID,omitempty"`
+	UUID string `json:"uuid,omitempty"`
 	// Health indicates whether health checks are currently passing.
 	Health bool `json:"health,omitempty"`
 	// Status is the backend lifecycle state for the node.

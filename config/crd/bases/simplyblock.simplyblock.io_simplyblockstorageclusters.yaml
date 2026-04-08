@@ -179,12 +179,6 @@ spec:
           status:
             description: status defines the observed state of SimplyBlockStorageCluster
             properties:
-              NQN:
-                description: NQN is the cluster NVM subsystem qualified name.
-                type: string
-              UUID:
-                description: UUID is the backend cluster UUID.
-                type: string
               actionStatus:
                 description: ActionStatus tracks the most recent action execution
                   state.
@@ -236,6 +230,9 @@ spec:
                 description: MgmtNodes is the number of management nodes.
                 format: int32
                 type: integer
+              nqn:
+                description: NQN is the cluster NVM subsystem qualified name.
+                type: string
               rebalancing:
                 description: Rebalancing indicates whether cluster rebalancing is
                   currently active.
@@ -251,6 +248,9 @@ spec:
                 description: StorageNodes is the number of storage nodes.
                 format: int32
                 type: integer
+              uuid:
+                description: UUID is the backend cluster UUID.
+                type: string
             type: object
         required:
         - spec

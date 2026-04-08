@@ -64,9 +64,6 @@ spec:
                 description: Lvols contains observed logical volume entries.
                 items:
                   properties:
-                    NQN:
-                      description: NQN is the NVMe Qualified Name for the volume.
-                      type: string
                     blobID:
                       description: BlobID is the backend blob identifier.
                       format: int64
@@ -120,6 +117,9 @@ spec:
                       items:
                         type: string
                       type: array
+                    nqn:
+                      description: NQN is the NVMe Qualified Name for the volume.
+                      type: string
                     poolName:
                       description: PoolName is the storage pool name.
                       type: string

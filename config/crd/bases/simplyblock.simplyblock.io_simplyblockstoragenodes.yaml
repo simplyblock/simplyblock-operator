@@ -264,9 +264,6 @@ spec:
                 description: Nodes is the observed state of each managed storage node.
                 items:
                   properties:
-                    UUID:
-                      description: UUID is the backend node UUID.
-                      type: string
                     cpu:
                       description: CPU is the reported CPU allocation/count for the
                         node.
@@ -306,6 +303,9 @@ spec:
                       type: string
                     uptime:
                       description: Uptime is the reported node uptime value.
+                      type: string
+                    uuid:
+                      description: UUID is the backend node UUID.
                       type: string
                     volumes:
                       description: Volumes is the current logical volume count.

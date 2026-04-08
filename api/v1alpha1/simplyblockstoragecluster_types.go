@@ -98,7 +98,7 @@ type SimplyBlockStorageClusterSpec struct {
 // SimplyBlockStorageClusterStatus defines the observed state of SimplyBlockStorageCluster.
 type SimplyBlockStorageClusterStatus struct {
 	// UUID is the backend cluster UUID.
-	UUID string `json:"UUID,omitempty"`
+	UUID string `json:"uuid,omitempty"`
 	// ClusterName is the resolved backend cluster name.
 	ClusterName string `json:"clusterName,omitempty"`
 	// MgmtNodes is the number of management nodes.
@@ -106,7 +106,7 @@ type SimplyBlockStorageClusterStatus struct {
 	// StorageNodes is the number of storage nodes.
 	StorageNodes *int32 `json:"storageNodes,omitempty"`
 	// NQN is the cluster NVM subsystem qualified name.
-	NQN string `json:"NQN,omitempty"`
+	NQN string `json:"nqn,omitempty"`
 	// Status is the backend-reported lifecycle status.
 	Status string `json:"status,omitempty"`
 	// Rebalancing indicates whether cluster rebalancing is currently active.

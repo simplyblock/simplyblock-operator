@@ -71,7 +71,7 @@ type LvolStatus struct {
 	// SourceSnapshotName is the source snapshot name used for this volume.
 	SourceSnapshotName string `json:"sourceSnapshotName,omitempty"`
 	// NQN is the NVMe Qualified Name for the volume.
-	NQN string `json:"NQN,omitempty"`
+	NQN string `json:"nqn,omitempty"`
 	// SubsysPort is the NVMe subsystem/listener port.
 	SubsysPort int64 `json:"subsysPort,omitempty"`
 	// NamespaceID is the NVMe namespace identifier.
