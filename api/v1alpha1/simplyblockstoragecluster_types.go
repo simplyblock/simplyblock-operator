@@ -20,62 +20,107 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+type CapacityThresholdSpec struct {
+	// Capacity defines the absolute capacity threshold value.
+	Capacity *int32 `json:"capacity,omitempty"`
+	// ProvisionedCapacity defines the provisioned-capacity threshold value.
+	ProvisionedCapacity *int32 `json:"provisionedCapacity,omitempty"`
+}
+
+type StripeSpec struct {
+	// DataChunks defines the number of data chunks in the erasure-coding layout.
+	DataChunks *int32 `json:"dataChunks,omitempty"`
+	// ParityChunks defines the number of parity chunks in the erasure-coding layout.
+	ParityChunks *int32 `json:"parityChunks,omitempty"`
+}
+
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // SimplyBlockStorageClusterSpec defines the desired state of SimplyBlockStorageCluster
 type SimplyBlockStorageClusterSpec struct {
-	// Create-only
-	MgmtIfc            string `json:"mgmtIfc,omitempty"`
-	EnableNodeAffinity *bool  `json:"enableNodeAffinity,omitempty"`
-	StripeWdata        *int32 `json:"stripeWdata,omitempty"`
-	StripeWparity      *int32 `json:"stripeWparity,omitempty"`
-	HAType             string `json:"haType,omitempty"`
-	ClusterName        string `json:"clusterName"`
+	// MgmtIfname is the management network interface name used for cluster communication.
+	MgmtIfname string `json:"mgmtIfname,omitempty"`
+	// EnableNodeAffinity enables node-affinity placement for storage components.
+	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
+	// StripeSpec configures erasure-coding data/parity chunk counts.
+	StripeSpec *StripeSpec `json:"stripeSpec,omitempty"`
+	// HAType defines the backend high-availability mode.
+	HAType string `json:"haType,omitempty"`
+	// ClusterName is the user-facing cluster identifier.
+	ClusterName string `json:"clusterName"`
 	// +kubebuilder:validation:Enum=activate;expand
+	// Action triggers a cluster-level action.
 	Action string `json:"action,omitempty"`
 
-	IsSingleNode           *bool  `json:"isSingleNode,omitempty"`
-	StrictNodeAntiAffinity *bool  `json:"strictNodeAntiAffinity,omitempty"`
-	QpairCount             *int32 `json:"qpairCount,omitempty"`
-	DistrBs                *int32 `json:"distrBs,omitempty"`
-	DistrChunkBs           *int32 `json:"distrChunkBs,omitempty"`
-	BlkSize                *int32 `json:"blkSize,omitempty"`
-	PageSizeInBlocks       *int32 `json:"pageSizeInBlocks,omitempty"`
-	MaxQueueSize           *int32 `json:"maxQueueSize,omitempty"`
-	InflightIOThreshold    *int32 `json:"inflightIOThreshold,omitempty"`
-	Fabric                 string `json:"fabric,omitempty"`
-	ClientDataNic          string `json:"clientDataNic,omitempty"`
-	MaxFaultTolerance      *int32 `json:"maxFaultTolerance,omitempty"`
-	NvmfBasePort           *int32 `json:"nvmfBasePort,omitempty"`
-	RpcBasePort            *int32 `json:"rpcBasePort,omitempty"`
-	SnodeApiPort           *int32 `json:"snodeApiPort,omitempty"`
+	// IsSingleNode enables single-node cluster mode.
+	IsSingleNode *bool `json:"isSingleNode,omitempty"`
+	// StrictNodeAntiAffinity enforces strict anti-affinity between storage nodes.
+	StrictNodeAntiAffinity *bool `json:"strictNodeAntiAffinity,omitempty"`
+	// QpairCount defines the NVMe queue-pair count used by the cluster.
+	QpairCount *int32 `json:"qpairCount,omitempty"`
+	// BlockSize defines the logical block size in bytes.
+	BlockSize *int32 `json:"blockSize,omitempty"`
+	// PageSizeInBlocks defines page size expressed in blocks.
+	PageSizeInBlocks *int32 `json:"pageSizeInBlocks,omitempty"`
+	// MaxQueueSize defines the maximum backend queue size.
+	MaxQueueSize *int32 `json:"maxQueueSize,omitempty"`
+	// InflightIOThreshold defines the inflight I/O threshold.
+	InflightIOThreshold *int32 `json:"inflightIOThreshold,omitempty"`
+	// Fabric defines the storage fabric type.
+	Fabric string `json:"fabric,omitempty"`
+	// ClientDataNic defines the client data network interface.
+	ClientDataNic string `json:"clientDataNic,omitempty"`
+	// MaxFaultTolerance defines the maximum tolerated concurrent faults.
+	MaxFaultTolerance *int32 `json:"maxFaultTolerance,omitempty"`
+	// NvmfBasePort defines the base NVMf service port.
+	NvmfBasePort *int32 `json:"nvmfBasePort,omitempty"`
+	// RpcBasePort defines the base RPC service port.
+	RpcBasePort *int32 `json:"rpcBasePort,omitempty"`
+	// SnodeApiPort defines the storage-node API port.
+	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
 
-	// Updatable
-	QoSClasses       string `json:"qosClasses,omitempty"`
-	CapWarn          *int32 `json:"capWarn,omitempty"`
-	CapCrit          *int32 `json:"capCrit,omitempty"`
-	ProvCapWarn      *int32 `json:"provCapWarn,omitempty"`
-	ProvCapCrit      *int32 `json:"provCapCrit,omitempty"`
+	// QoSClasses defines backend QoS class configuration.
+	QoSClasses string `json:"qosClasses,omitempty"`
+	// WarningThresholdSpec defines warning-level capacity thresholds.
+	WarningThresholdSpec *CapacityThresholdSpec `json:"warningThresholdSpec,omitempty"`
+	// CriticalThresholdSpec defines critical-level capacity thresholds.
+	CriticalThresholdSpec *CapacityThresholdSpec `json:"criticalThresholdSpec,omitempty"`
+	// ClientQpairCount defines client-side queue-pair count.
 	ClientQpairCount *int32 `json:"clientQpairCount,omitempty"`
-	IncludeEventLog  *bool  `json:"includeEventLog,omitempty"`
-	EventLogEntries  *int32 `json:"eventLogEntries,omitempty"`
+	// IncludeEventLog controls whether event logs are included in responses/exports.
+	IncludeEventLog *bool `json:"includeEventLog,omitempty"`
+	// EventLogEntries limits the number of event-log entries returned/retained.
+	EventLogEntries *int32 `json:"eventLogEntries,omitempty"`
 }
 
 // SimplyBlockStorageClusterStatus defines the observed state of SimplyBlockStorageCluster.
 type SimplyBlockStorageClusterStatus struct {
-	UUID         string        `json:"UUID,omitempty"`
-	ClusterName  string        `json:"clusterName,omitempty"`
-	MgmtNodes    *int32        `json:"mgmtNodes,omitempty"`
-	StorageNodes *int32        `json:"storageNodes,omitempty"`
-	NQN          string        `json:"NQN,omitempty"`
-	Status       string        `json:"status,omitempty"`
-	Rebalancing  *bool         `json:"rebalancing,omitempty"`
-	MOD          string        `json:"MOD,omitempty"`
-	SecretName   string        `json:"secretName,omitempty"`
-	LastUpdated  *metav1.Time  `json:"lastUpdated,omitempty"`
-	Created      *metav1.Time  `json:"created,omitempty"`
-	Configured   bool          `json:"configured,omitempty"`
+	// UUID is the backend cluster UUID.
+	UUID string `json:"UUID,omitempty"`
+	// ClusterName is the resolved backend cluster name.
+	ClusterName string `json:"clusterName,omitempty"`
+	// MgmtNodes is the number of management nodes.
+	MgmtNodes *int32 `json:"mgmtNodes,omitempty"`
+	// StorageNodes is the number of storage nodes.
+	StorageNodes *int32 `json:"storageNodes,omitempty"`
+	// NQN is the cluster NVM subsystem qualified name.
+	NQN string `json:"NQN,omitempty"`
+	// Status is the backend-reported lifecycle status.
+	Status string `json:"status,omitempty"`
+	// Rebalancing indicates whether cluster rebalancing is currently active.
+	Rebalancing *bool `json:"rebalancing,omitempty"`
+	// ErasureCodingScheme is the active erasure-coding layout, for example "2x1".
+	ErasureCodingScheme string `json:"erasureCodingScheme,omitempty"`
+	// SecretName is the Kubernetes Secret containing cluster credentials.
+	SecretName string `json:"secretName,omitempty"`
+	// LastUpdated is the last backend update timestamp.
+	LastUpdated *metav1.Time `json:"lastUpdated,omitempty"`
+	// Created is the backend creation timestamp.
+	Created *metav1.Time `json:"created,omitempty"`
+	// Configured indicates whether initial cluster setup completed.
+	Configured bool `json:"configured,omitempty"`
+	// ActionStatus tracks the most recent action execution state.
 	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 }
 

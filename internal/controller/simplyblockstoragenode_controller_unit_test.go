@@ -1102,8 +1102,8 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr", Namespace: "default"},
 			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
 			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
-				Status: "active",
-				MOD:    "1x0",
+				Status:              "active",
+				ErasureCodingScheme: "1x0",
 			},
 		}
 		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
@@ -1179,8 +1179,8 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-b", Namespace: "default"},
 			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
 			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
-				Status: "active",
-				MOD:    "1x0",
+				Status:              "active",
+				ErasureCodingScheme: "1x0",
 			},
 		}
 		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{

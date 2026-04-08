@@ -573,11 +573,11 @@ func waitForNodeOnline(
 						onlineHealthy := utils.CountOnlineHealthyNodes(snCR.Status.Nodes)
 
 						log.Info("Evaluating cluster activation conditions",
-							"mod", clusterCR.Status.MOD,
+							"erasureCodingScheme", clusterCR.Status.ErasureCodingScheme,
 							"onlineHealthy", onlineHealthy,
 						)
 
-						requiredMod, err := utils.RequiredNodesFromMOD(clusterCR.Status.MOD)
+						requiredMod, err := utils.RequiredNodesFromErasureCodingScheme(clusterCR.Status.ErasureCodingScheme)
 						if err != nil {
 							log.Error(err, "Invalid MOD value")
 							return err

@@ -11,8 +11,8 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
 )
 
-func TestRequiredNodesFromMOD(t *testing.T) {
-	got, err := RequiredNodesFromMOD("2x1")
+func TestRequiredNodesFromErasureCodingScheme(t *testing.T) {
+	got, err := RequiredNodesFromErasureCodingScheme("2x1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -20,7 +20,7 @@ func TestRequiredNodesFromMOD(t *testing.T) {
 		t.Fatalf("got %d want 3", got)
 	}
 
-	if _, err := RequiredNodesFromMOD("invalid"); err == nil {
+	if _, err := RequiredNodesFromErasureCodingScheme("invalid"); err == nil {
 		t.Fatalf("expected error for invalid MOD")
 	}
 }
