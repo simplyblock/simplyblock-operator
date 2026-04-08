@@ -19,9 +19,11 @@ rules:
 - apiGroups:
   - simplyblock.simplyblock.io
   resources:
+  - simplyblockbackups
   - simplyblockdevices
   - simplyblocklvols
   - simplyblockpools
+  - simplyblockrestores
   - simplyblockstorageclusters
   - simplyblockstoragenodes
   - simplyblocktasks
@@ -36,9 +38,11 @@ rules:
 - apiGroups:
   - simplyblock.simplyblock.io
   resources:
+  - simplyblockbackups/finalizers
   - simplyblockdevices/finalizers
   - simplyblocklvols/finalizers
   - simplyblockpools/finalizers
+  - simplyblockrestores/finalizers
   - simplyblockstorageclusters/finalizers
   - simplyblockstoragenodes/finalizers
   - simplyblocktasks/finalizers
@@ -47,9 +51,11 @@ rules:
 - apiGroups:
   - simplyblock.simplyblock.io
   resources:
+  - simplyblockbackups/status
   - simplyblockdevices/status
   - simplyblocklvols/status
   - simplyblockpools/status
+  - simplyblockrestores/status
   - simplyblockstorageclusters/status
   - simplyblockstoragenodes/status
   - simplyblocktasks/status

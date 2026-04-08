@@ -1,0 +1,123 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: simplyblockbackups.simplyblock.simplyblock.io
+spec:
+  group: simplyblock.simplyblock.io
+  names:
+    kind: SimplyBlockBackup
+    listKind: SimplyBlockBackupList
+    plural: simplyblockbackups
+    singular: simplyblockbackup
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.source.volumeRef.name
+      name: Volume
+      type: string
+    - jsonPath: .status.backupID
+      name: BackupID
+      type: string
+    - jsonPath: .status.snapshotName
+      name: Snapshot
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SimplyBlockBackup is the Schema for the simplyblockbackups API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of SimplyBlockBackup
+            properties:
+              clusterName:
+                type: string
+              poolName:
+                type: string
+              snapshot:
+                properties:
+                  name:
+                    type: string
+                  retain:
+                    type: boolean
+                type: object
+              source:
+                properties:
+                  volumeRef:
+                    properties:
+                      name:
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - volumeRef
+                type: object
+            required:
+            - clusterName
+            - poolName
+            - source
+            type: object
+          status:
+            description: status defines the observed state of SimplyBlockBackup
+            properties:
+              backupID:
+                type: string
+              completedAt:
+                format: date-time
+                type: string
+              createdAt:
+                format: date-time
+                type: string
+              message:
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                type: string
+              previousBackupID:
+                type: string
+              s3ID:
+                format: int64
+                type: integer
+              snapshotDeleted:
+                type: boolean
+              snapshotID:
+                type: string
+              snapshotName:
+                type: string
+              sourceVolumeID:
+                type: string
+              sourceVolumeName:
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

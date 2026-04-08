@@ -1,0 +1,111 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: simplyblockrestores.simplyblock.simplyblock.io
+spec:
+  group: simplyblock.simplyblock.io
+  names:
+    kind: SimplyBlockRestore
+    listKind: SimplyBlockRestoreList
+    plural: simplyblockrestores
+    singular: simplyblockrestore
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.source.backupRef.name
+      name: Backup
+      type: string
+    - jsonPath: .spec.target.volumeName
+      name: Target
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SimplyBlockRestore is the Schema for the simplyblockrestores
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of SimplyBlockRestore
+            properties:
+              clusterName:
+                type: string
+              poolName:
+                type: string
+              source:
+                properties:
+                  backupRef:
+                    properties:
+                      name:
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - backupRef
+                type: object
+              target:
+                properties:
+                  volumeName:
+                    type: string
+                required:
+                - volumeName
+                type: object
+            required:
+            - clusterName
+            - poolName
+            - source
+            - target
+            type: object
+          status:
+            description: status defines the observed state of SimplyBlockRestore
+            properties:
+              backupID:
+                type: string
+              completedAt:
+                format: date-time
+                type: string
+              message:
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                type: string
+              startedAt:
+                format: date-time
+                type: string
+              targetVolumeID:
+                type: string
+              targetVolumeName:
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

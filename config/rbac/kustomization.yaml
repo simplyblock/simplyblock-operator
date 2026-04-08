@@ -25,6 +25,12 @@ resources:
 - simplyblocklvol_admin_role.yaml
 - simplyblocklvol_editor_role.yaml
 - simplyblocklvol_viewer_role.yaml
+- simplyblockbackup_admin_role.yaml
+- simplyblockbackup_editor_role.yaml
+- simplyblockbackup_viewer_role.yaml
+- simplyblockrestore_admin_role.yaml
+- simplyblockrestore_editor_role.yaml
+- simplyblockrestore_viewer_role.yaml
 - simplyblocktask_admin_role.yaml
 - simplyblocktask_editor_role.yaml
 - simplyblocktask_viewer_role.yaml
@@ -40,4 +46,3 @@ resources:
 - simplyblockstoragecluster_admin_role.yaml
 - simplyblockstoragecluster_editor_role.yaml
 - simplyblockstoragecluster_viewer_role.yaml
-

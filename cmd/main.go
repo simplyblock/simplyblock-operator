@@ -220,6 +220,20 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "SimplyBlockLvol")
 		os.Exit(1)
 	}
+	if err := (&controller.SimplyBlockBackupReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SimplyBlockBackup")
+		os.Exit(1)
+	}
+	if err := (&controller.SimplyBlockRestoreReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SimplyBlockRestore")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

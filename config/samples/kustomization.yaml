@@ -6,4 +6,6 @@ resources:
 - simplyblock_v1alpha1_simplyblockdevice.yaml
 - simplyblock_v1alpha1_simplyblocktask.yaml
 - simplyblock_v1alpha1_simplyblocklvol.yaml
+- simplyblock_v1alpha1_simplyblockbackup.yaml
+- simplyblock_v1alpha1_simplyblockrestore.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

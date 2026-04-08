@@ -1,0 +1,15 @@
+apiVersion: simplyblock.simplyblock.io/v1alpha1
+kind: SimplyBlockRestore
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-manager
+    app.kubernetes.io/managed-by: kustomize
+  name: simplyblockrestore-sample
+spec:
+  clusterName: sample-cluster
+  poolName: sample-pool
+  source:
+    backupRef:
+      name: simplyblockbackup-sample
+  target:
+    volumeName: restored-sample-volume

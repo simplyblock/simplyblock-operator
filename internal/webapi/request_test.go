@@ -133,3 +133,38 @@ func TestDoReturnsHTTPErrorForUnreachableServer(t *testing.T) {
 		t.Fatalf("expected status 0 on transport error, got %d", status)
 	}
 }
+
+func TestDoDetailedReturnsHeaders(t *testing.T) {
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	defer mock.Close()
+
+	mock.Register(
+		http.MethodPost,
+		"/api/v2/clusters/cluster-uuid/backups/",
+		webapimock.RouteResponse{
+			Status: http.StatusCreated,
+			Body:   `{}`,
+			Headers: map[string]string{
+				"X-Backup-Id": "backup-123",
+			},
+		},
+	)
+
+	c := NewClient(mock.URL())
+	resp, err := c.DoDetailed(
+		context.Background(),
+		"top-secret",
+		http.MethodPost,
+		"/api/v2/clusters/cluster-uuid/backups/",
+		map[string]any{"snapshot_id": "snap-1"},
+	)
+	if err != nil {
+		t.Fatalf("DoDetailed returned error: %v", err)
+	}
+	if resp.Status != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, resp.Status)
+	}
+	if resp.Headers.Get("X-Backup-Id") != "backup-123" {
+		t.Fatalf("unexpected backup id header: %q", resp.Headers.Get("X-Backup-Id"))
+	}
+}

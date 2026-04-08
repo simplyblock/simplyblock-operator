@@ -11,6 +11,12 @@ import (
 	"net/http"
 )
 
+type DetailedResponse struct {
+	Body    []byte
+	Status  int
+	Headers http.Header
+}
+
 func (c *Client) Do(
 	ctx context.Context,
 	clusterSecret string,
@@ -18,7 +24,21 @@ func (c *Client) Do(
 	endpoint string,
 	body interface{},
 ) ([]byte, int, error) {
+	resp, err := c.DoDetailed(ctx, clusterSecret, method, endpoint, body)
+	if err != nil {
+		return nil, resp.Status, err
+	}
 
+	return resp.Body, resp.Status, nil
+}
+
+func (c *Client) DoDetailed(
+	ctx context.Context,
+	clusterSecret string,
+	method string,
+	endpoint string,
+	body interface{},
+) (DetailedResponse, error) {
 	// Build URL
 	url := fmt.Sprintf("%s%s", c.BaseURL, endpoint)
 
@@ -27,7 +47,7 @@ func (c *Client) Do(
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return nil, 0, fmt.Errorf("marshal body: %w", err)
+			return DetailedResponse{}, fmt.Errorf("marshal body: %w", err)
 		}
 		reqBody = bytes.NewBuffer(b)
 	}
@@ -35,7 +55,7 @@ func (c *Client) Do(
 	// Create HTTP request
 	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 	if err != nil {
-		return nil, 0, fmt.Errorf("create request: %w", err)
+		return DetailedResponse{}, fmt.Errorf("create request: %w", err)
 	}
 
 	// Attach auth header
@@ -45,7 +65,7 @@ func (c *Client) Do(
 	// Execute the request
 	resp, err := c.HttpClient.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("http error: %w", err)
+		return DetailedResponse{}, fmt.Errorf("http error: %w", err)
 	}
 
 	defer func() {
@@ -57,8 +77,12 @@ func (c *Client) Do(
 	// Read raw response body
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("read body: %w", err)
+		return DetailedResponse{Status: resp.StatusCode, Headers: resp.Header.Clone()}, fmt.Errorf("read body: %w", err)
 	}
 
-	return data, resp.StatusCode, nil
+	return DetailedResponse{
+		Body:    data,
+		Status:  resp.StatusCode,
+		Headers: resp.Header.Clone(),
+	}, nil
 }
