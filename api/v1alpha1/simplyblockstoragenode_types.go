@@ -24,90 +24,145 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+// JournalManagerSpec defines journal manager tuning parameters.
+type JournalManagerSpec struct {
+	// Count is the number of journal managers to configure.
+	Count *int32 `json:"count,omitempty"`
+	// PercentPerDevice is the journal manager capacity percentage per device.
+	PercentPerDevice *int32 `json:"percentPerDevice,omitempty"`
+	// UseSeparateJournalDevice enables using separate journal devices.
+	UseSeparateJournalDevice *bool `json:"useSeparateJournalDevice,omitempty"`
+}
+
 // SimplyBlockStorageNodeSpec defines the desired state of StorageNode
 type SimplyBlockStorageNodeSpec struct {
-	ClusterName  string `json:"clusterName"`
+	// ClusterName is the target storage cluster name.
+	ClusterName string `json:"clusterName"`
+	// ClusterImage is the container image used for storage-node workloads.
 	ClusterImage string `json:"clusterImage,omitempty"`
 	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume;remove
+	// Action triggers an imperative node operation.
 	Action string `json:"action,omitempty"`
 	// NodeUUID is required when action is specified
 	NodeUUID string `json:"nodeUUID,omitempty"`
 
-	UseSeparateJournalDevice *bool    `json:"useSeparateJournalDevice,omitempty"`
-	MaxLVol                  *int32   `json:"maxLVol,omitempty"`
-	MaxSize                  string   `json:"maxSize,omitempty"`
-	SpdkImage                string   `json:"spdkImage,omitempty"`
-	MgmtIfc                  string   `json:"mgmtIfc,omitempty"`
-	Partitions               *int32   `json:"partitions,omitempty"`
-	JMPercent                *int32   `json:"jmPercent,omitempty"`
-	HAJM                     *bool    `json:"haJM,omitempty"`
-	SPDKDebug                *bool    `json:"spdkDebug,omitempty"`
-	IdDeviceByNQN            *bool    `json:"idDeviceByNQN,omitempty"`
-	CoreIsolation            *bool    `json:"coreIsolation,omitempty"`
-	CorePercentage           *int32   `json:"corePercentage,omitempty"`
-	CoreMask                 string   `json:"coreMask,omitempty"`
-	PcieAllowList            []string `json:"pcieAllowList,omitempty"`
-	PcieDenyList             []string `json:"pcieDenyList,omitempty"`
-	PcieModel                string   `json:"pcieModel,omitempty"`
-	DriveSizeRange           string   `json:"driveSizeRange,omitempty"`
-	SocketsToUse             []string `json:"socketsToUse,omitempty"`
-	NodesPerSocket           *int32   `json:"nodesPerSocket,omitempty"`
-	DataNIC                  []string `json:"dataNIC,omitempty"`
-	HaJmCount                *int32   `json:"haJmCount,omitempty"`
-	WorkerNodes              []string `json:"workerNodes,omitempty"`
-	WorkerNode               string   `json:"workerNode,omitempty"`
-	OpenShiftCluster         *bool    `json:"openShiftCluster,omitempty"`
-	DeviceNames              []string `json:"deviceNames,omitempty"`
-	UbuntuHost               *bool    `json:"ubuntuHost,omitempty"`
-	SkipKubeletConfiguration *bool    `json:"skipKubeletConfiguration,omitempty"`
-	Format4K                 *bool    `json:"format4k,omitempty"`
-	EnableCpuTopology        *bool    `json:"enableCpuTopology,omitempty"`
-	ReservedSystemCPU        string   `json:"reservedSystemCPU,omitempty"`
+	// MaxLogicalVolumeCount is the maximum number of logical volumes per node.
+	MaxLogicalVolumeCount *int32 `json:"maxLogicalVolumeCount,omitempty"`
+	// MaxSize is the maximum allocatable size of the storage node.
+	MaxSize string `json:"maxSize,omitempty"`
+	// SpdkImage is the SPDK image reference used by node services.
+	SpdkImage string `json:"spdkImage,omitempty"`
+	// MgmtIfname is the management interface name used by storage nodes.
+	MgmtIfname string `json:"mgmtIfname,omitempty"`
+	// Partitions is the number of partitions created per backend storage device.
+	Partitions *int32 `json:"partitions,omitempty"`
+	// JournalManagerSpec configures journal manager behavior.
+	JournalManagerSpec *JournalManagerSpec `json:"journalManager,omitempty"`
+	// CoreIsolation enables CPU core isolation mode.
+	CoreIsolation *bool `json:"coreIsolation,omitempty"`
+	// CorePercentage is the percentage of cores to be used for spdk (0-99).
+	CorePercentage *int32 `json:"corePercentage,omitempty"`
+	// PcieAllowList is the list of PCI addresses allowed for use.
+	PcieAllowList []string `json:"pcieAllowList,omitempty"`
+	// PcieDenyList is the list of PCI addresses excluded from use.
+	PcieDenyList []string `json:"pcieDenyList,omitempty"`
+	// PcieModel filters devices by PCI model.
+	PcieModel string `json:"pcieModel,omitempty"`
+	// DriveSizeRange filters devices by size range.
+	DriveSizeRange string `json:"driveSizeRange,omitempty"`
+	// SocketsToUse restricts deployment to selected NUMA sockets.
+	SocketsToUse []string `json:"socketsToUse,omitempty"`
+	// NodesPerSocket defines how many storage nodes are created per NUMA socket.
+	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+	// DataIfname lists data-plane network interfaces.
+	DataIfname []string `json:"dataIfname,omitempty"`
+	// WorkerNodes is the set of Kubernetes worker nodes to manage.
+	WorkerNodes []string `json:"workerNodes,omitempty"`
+	// WorkerNode is a single worker node used by action flows.
+	WorkerNode string `json:"workerNode,omitempty"`
+	// OpenShiftCluster indicates OpenShift-specific behavior should be enabled.
+	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
+	// DeviceNames explicitly defines a comma separated list of nvme namespace names like nvme0n1,nvme1n1...
+	DeviceNames []string `json:"deviceNames,omitempty"`
+	// UbuntuHost indicates the node host OS is Ubuntu.
+	UbuntuHost *bool `json:"ubuntuHost,omitempty"`
+	// SkipKubeletConfiguration skips kubelet configuration changes.
+	SkipKubeletConfiguration *bool `json:"skipKubeletConfiguration,omitempty"`
+	// ForceFormat4K forces 4K blocksize formatting of the NVMe device where supported.
+	ForceFormat4K *bool `json:"forceFormat4K,omitempty"`
+	// EnableCpuTopology enables topology-aware CPU handling.
+	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
+	// ReservedSystemCPU defines CPUs reserved for system workloads.
+	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
 
+	// Tolerations configures pod tolerations for storage-node pods.
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
-	// restart params
+	// AddPcieToAllowList appends devices to the allow-list during restart actions.
 	AddPcieToAllowList []string `json:"addPcieToAllowList,omitempty"`
-	NodeAddr           string   `json:"nodeAddr,omitempty"`
-	Force              *bool    `json:"force,omitempty"`
+	// NodeAddr is the explicit node address used by action flows.
+	NodeAddr string `json:"nodeAddr,omitempty"`
+	// Force enables forced action execution where supported.
+	Force *bool `json:"force,omitempty"`
 }
 
 // SimplyBlockStorageNodeStatus defines the observed state of StorageNode.
 type SimplyBlockStorageNodeStatus struct {
-	Nodes        []NodeStatus  `json:"nodes,omitempty"`
+	// Nodes is the observed state of each managed storage node.
+	Nodes []NodeStatus `json:"nodes,omitempty"`
+	// ActionStatus tracks the latest action execution status.
 	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 }
 
 type NodeStatus struct {
-	UUID      string `json:"uuid,omitempty"`
-	Health    bool   `json:"health,omitempty"`
-	Status    string `json:"status,omitempty"`
-	CPU       *int32 `json:"cpu,omitempty"`
-	Memory    string `json:"memory,omitempty"`
-	Volumes   *int32 `json:"volumes,omitempty"`
-	RPC_PORT  *int32 `json:"rpc_port,omitempty"`
-	LVOL_PORT *int32 `json:"lvol_port,omitempty"`
-	NVMF_PORT *int32 `json:"nvmf_port,omitempty"`
-	Devices   string `json:"devices,omitempty"`
-	Uptime    string `json:"uptime,omitempty"`
-	Hostname  string `json:"hostname,omitempty"`
-	MgmtIp    string `json:"mgmtIp,omitempty"`
+	// UUID is the backend node UUID.
+	UUID string `json:"uuid,omitempty"`
+	// Health indicates whether health checks are currently passing.
+	Health bool `json:"health,omitempty"`
+	// Status is the backend lifecycle state for the node.
+	Status string `json:"status,omitempty"`
+	// CPU is the reported CPU allocation/count for the node.
+	CPU *int32 `json:"cpu,omitempty"`
+	// Memory is the reported memory value.
+	Memory string `json:"memory,omitempty"`
+	// Volumes is the current logical volume count.
+	Volumes *int32 `json:"volumes,omitempty"`
+	// RpcPort is the node RPC service port.
+	RpcPort *int32 `json:"rpcPort,omitempty"`
+	// LvolPort is the logical-volume subsystem port.
+	LvolPort *int32 `json:"lvolPort,omitempty"`
+	// NvmfPort is the NVMf service port.
+	NvmfPort *int32 `json:"nvmfPort,omitempty"`
+	// Devices is the backend summary of devices on this node.
+	Devices string `json:"devices,omitempty"`
+	// Uptime is the reported node uptime value.
+	Uptime string `json:"uptime,omitempty"`
+	// Hostname is the Kubernetes node hostname.
+	Hostname string `json:"hostname,omitempty"`
+	// MgmtIp is the management IP address for the node.
+	MgmtIp string `json:"mgmtIp,omitempty"`
 }
 
 type ActionStatus struct {
-	Action             string      `json:"action,omitempty"`
-	NodeUUID           string      `json:"nodeUUID,omitempty"`
-	State              string      `json:"state,omitempty"` // pending | running | success | failed
-	Message            string      `json:"message,omitempty"`
-	UpdatedAt          metav1.Time `json:"updatedAt,omitempty"`
-	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
-	Triggered          bool        `json:"triggered,omitempty"`
+	// Action is the requested action name.
+	Action string `json:"action,omitempty"`
+	// NodeUUID is the target node UUID for the action.
+	NodeUUID string `json:"nodeUUID,omitempty"`
+	State    string `json:"state,omitempty"` // pending | running | success | failed
+	// Message is a human-readable action result or error.
+	Message string `json:"message,omitempty"`
+	// UpdatedAt is the timestamp of the last status transition.
+	UpdatedAt metav1.Time `json:"updatedAt,omitempty"`
+	// ObservedGeneration is the resource generation observed by this status.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Triggered indicates whether the underlying backend action has been fired.
+	Triggered bool `json:"triggered,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && (!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\"))",message="nodeUUID is required when action is specified"
-// +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.clusterImage) && self.spec.clusterImage != \"\" && has(self.spec.maxLVol) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)",message="clusterImage, maxLVol, and workerNodes are required when action is not specified"
+// +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.clusterImage) && self.spec.clusterImage != \"\" && has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)",message="clusterImage, maxLogicalVolumeCount, and workerNodes are required when action is not specified"
 // SimplyBlockStorageNode is the Schema for the storagenodes API
 type SimplyBlockStorageNode struct {
 	metav1.TypeMeta `json:",inline"`

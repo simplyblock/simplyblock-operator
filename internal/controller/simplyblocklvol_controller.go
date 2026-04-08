@@ -257,32 +257,34 @@ func lvolStatusListFromAPI(api []LVOLAPIResponse) simplyblockv1alpha1.SimplyBloc
 
 	for _, l := range api {
 		lvols = append(lvols, simplyblockv1alpha1.LvolStatus{
-			UUID:           l.UUID,
-			LvolName:       l.LvolName,
-			NodeUUID:       l.NodeUUID,
-			Hostname:       l.Hostname,
-			ClonedFromSnap: l.ClonedFromSnap,
-			SnapName:       l.SnapName,
-			NQN:            l.NQN,
-			SubsysPort:     l.SubsysPort,
-			NamespaceID:    l.NamespaceID,
-			BlobID:         l.BlobID,
-			PoolUUID:       l.PoolUUID,
-			PoolName:       l.PoolName,
-			PvcName:        l.PvcName,
-			Status:         l.Status,
-			HA:             l.HA,
-			Health:         l.Health,
-			IsCrypto:       l.IsCrypto != nil,
-			Size:           utils.HumanBytes(l.Size, "iec"),
-			StripeWdata:    l.StripeWdata,
-			StripeWparity:  l.StripeWparity,
-
-			QosIOPS:  l.QosIOPS,
-			QosWTP:   l.QosWTP,
-			QosRTP:   l.QosRTP,
-			QosRWTP:  l.QosRWTP,
-			QosClass: l.QosClass,
+			UUID:               l.UUID,
+			LvolName:           l.LvolName,
+			NodeUUID:           l.NodeUUID,
+			Hostname:           l.Hostname,
+			ClonedFromSnapshot: l.ClonedFromSnap,
+			SourceSnapshotName: l.SnapName,
+			NQN:                l.NQN,
+			SubsysPort:         l.SubsysPort,
+			NamespaceID:        l.NamespaceID,
+			BlobID:             l.BlobID,
+			PoolUUID:           l.PoolUUID,
+			PoolName:           l.PoolName,
+			PvcName:            l.PvcName,
+			Status:             l.Status,
+			HA:                 l.HA,
+			Health:             l.Health,
+			IsEncrypted:        l.IsCrypto != nil,
+			Size:               utils.HumanBytes(l.Size, "iec"),
+			QoS: simplyblockv1alpha1.LvolQoS{
+				Class: l.QosClass,
+				IOPS:  l.QosIOPS,
+				Throughput: simplyblockv1alpha1.LvolQoSThroughput{
+					Read:      l.QosRTP,
+					ReadWrite: l.QosRWTP,
+					Write:     l.QosWTP,
+				},
+			},
+			ErasureCodingScheme: erasureCodingScheme(l.StripeWdata, l.StripeWparity),
 
 			MaxNamespacesPerSubsystem: l.MaxNamespacesPerSubsystem,
 			Fabric:                    l.Fabric,
@@ -292,6 +294,13 @@ func lvolStatusListFromAPI(api []LVOLAPIResponse) simplyblockv1alpha1.SimplyBloc
 	return simplyblockv1alpha1.SimplyBlockLvolStatus{
 		Lvols: lvols,
 	}
+}
+
+func erasureCodingScheme(data, parity int64) string {
+	if data <= 0 && parity <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%dx%d", data, parity)
 }
 
 func normalizeLvolStatus(s *simplyblockv1alpha1.SimplyBlockLvolStatus) {

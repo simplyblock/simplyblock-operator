@@ -87,4 +87,5 @@ type StorageNodeAddParams struct {
 	CRName              string   `json:"cr_name,omitempty"`
 	CRNameSpace         string   `json:"cr_namespace,omitempty"`
 	CRPlural            string   `json:"cr_plural,omitempty"`
+	Format4K            bool     `json:"format_4k,omitempty"`
 }

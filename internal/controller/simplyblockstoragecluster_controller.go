@@ -132,17 +132,19 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 	cluster := clusterCR.DeepCopy()
 
 	params := utils.ClusterAddParams{
-		Name:                   clusterCR.Spec.ClusterName,
-		BlkSize:                utils.IntPtrOrDefault(clusterCR.Spec.BlkSize, 512),
-		PageSizeInBlocks:       utils.IntPtrOrDefault(clusterCR.Spec.PageSizeInBlocks, 2097152),
-		CapWarn:                utils.IntPtrOrZero(clusterCR.Spec.CapWarn),
-		CapCrit:                utils.IntPtrOrZero(clusterCR.Spec.CapCrit),
-		ProvCapWarn:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapWarn),
-		ProvCapCrit:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapCrit),
-		DistrNdcs:              utils.IntPtrOrDefault(clusterCR.Spec.StripeWdata, 1),
-		DistrNpcs:              utils.IntPtrOrDefault(clusterCR.Spec.StripeWparity, 1),
-		DistrBs:                utils.IntPtrOrDefault(clusterCR.Spec.DistrBs, 4096),
-		DistrChunkBs:           utils.IntPtrOrDefault(clusterCR.Spec.DistrChunkBs, 4096),
+		Name:             clusterCR.Spec.ClusterName,
+		BlkSize:          utils.IntPtrOrDefault(clusterCR.Spec.BlockSize, 512),
+		PageSizeInBlocks: utils.IntPtrOrDefault(clusterCR.Spec.PageSizeInBlocks, 2097152),
+		CapWarn:          capacityThreshold(clusterCR.Spec.WarningThresholdSpec),
+		CapCrit:          capacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
+		ProvCapWarn:      provisionedCapacityThreshold(clusterCR.Spec.WarningThresholdSpec),
+		ProvCapCrit:      provisionedCapacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
+		DistrNdcs:        stripeDataChunks(clusterCR.Spec.StripeSpec),
+		DistrNpcs:        stripeParityChunks(clusterCR.Spec.StripeSpec),
+		// FIXME: Remove distrBs mapping after backend contract clarification.
+		DistrBs: 4096,
+		// FIXME: Remove distrChunkBs mapping after backend contract clarification.
+		DistrChunkBs:           4096,
 		HAType:                 clusterCR.Spec.HAType,
 		QpairCount:             utils.IntPtrOrDefault(clusterCR.Spec.QpairCount, 256),
 		MaxQueueSize:           utils.IntPtrOrDefault(clusterCR.Spec.MaxQueueSize, 128),
@@ -249,7 +251,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		clusterCR.Status.Rebalancing = &apiResp.Results.Rebalancing
 		clusterCR.Status.Status = apiResp.Results.Status
 		clusterCR.Status.NQN = apiResp.Results.NQN
-		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.Results.NDCS, apiResp.Results.NPCS)
+		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.Results.NDCS, apiResp.Results.NPCS)
 	} else {
 		var apiResp ClusterAPIResponse
 		if err := json.Unmarshal(body, &apiResp); err != nil {
@@ -288,7 +290,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		clusterCR.Status.Rebalancing = &apiResp.Rebalancing
 		clusterCR.Status.Status = apiResp.Status
 		clusterCR.Status.NQN = apiResp.NQN
-		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
+		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
 	}
 
 	clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
@@ -529,10 +531,11 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 		clusterCR.Status.ActionStatus.State = utils.ActionStateSuccess
 		clusterCR.Status.ActionStatus.Message = "Cluster activated successfully"
 		clusterCR.Status.UUID = resp.UUID
+		clusterCR.Status.NQN = resp.NQN
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
 		clusterCR.Status.Configured = true
 		clusterCR.Status.Rebalancing = &resp.Rebalancing
-		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
+		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
 			return ctrl.Result{}, err
@@ -616,10 +619,11 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileExpand(
 		clusterCR.Status.ActionStatus.State = utils.ActionStateSuccess
 		clusterCR.Status.ActionStatus.Message = "Cluster expanded successfully"
 		clusterCR.Status.UUID = resp.UUID
+		clusterCR.Status.NQN = resp.NQN
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
 		clusterCR.Status.Configured = true
 		clusterCR.Status.Rebalancing = &resp.Rebalancing
-		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
+		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
 			return ctrl.Result{}, err
@@ -710,4 +714,32 @@ func (r *SimplyBlockStorageClusterReconciler) upsertCSICredentialsSecret(
 	})
 
 	return err
+}
+
+func capacityThreshold(t *simplyblockv1alpha1.CapacityThresholdSpec) int {
+	if t == nil {
+		return 0
+	}
+	return utils.IntPtrOrZero(t.Capacity)
+}
+
+func provisionedCapacityThreshold(t *simplyblockv1alpha1.CapacityThresholdSpec) int {
+	if t == nil {
+		return 0
+	}
+	return utils.IntPtrOrZero(t.ProvisionedCapacity)
+}
+
+func stripeDataChunks(s *simplyblockv1alpha1.StripeSpec) int {
+	if s == nil {
+		return 1
+	}
+	return utils.IntPtrOrDefault(s.DataChunks, 1)
+}
+
+func stripeParityChunks(s *simplyblockv1alpha1.StripeSpec) int {
+	if s == nil {
+		return 1
+	}
+	return utils.IntPtrOrDefault(s.ParityChunks, 1)
 }
