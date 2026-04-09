@@ -40,4 +40,6 @@ resources:
 - storagecluster_admin_role.yaml
 - storagecluster_editor_role.yaml
 - storagecluster_viewer_role.yaml
-
+- storagebackup_admin_role.yaml
+- storagebackup_editor_role.yaml
+- storagebackup_viewer_role.yaml

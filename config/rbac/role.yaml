@@ -14,6 +14,15 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - persistentvolumeclaims
+  - persistentvolumes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - secrets
   verbs:
   - create
@@ -29,6 +38,8 @@ rules:
   - devices
   - lvols
   - pools
+  - snapshotreplications
+  - storagebackups
   - storageclusters
   - storagenodes
   - tasks
@@ -46,6 +57,8 @@ rules:
   - devices/finalizers
   - lvols/finalizers
   - pools/finalizers
+  - snapshotreplications/finalizers
+  - storagebackups/finalizers
   - storageclusters/finalizers
   - storagenodes/finalizers
   - tasks/finalizers
@@ -57,6 +70,8 @@ rules:
   - devices/status
   - lvols/status
   - pools/status
+  - snapshotreplications/status
+  - storagebackups/status
   - storageclusters/status
   - storagenodes/status
   - tasks/status
