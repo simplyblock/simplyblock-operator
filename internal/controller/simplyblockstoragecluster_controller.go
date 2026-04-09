@@ -43,28 +43,6 @@ type StorageClusterReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-type ClusterFIRSTAPIResponse struct {
-	Results struct {
-		UUID        string `json:"uuid"`
-		Secret      string `json:"secret"`
-		NQN         string `json:"nqn"`
-		NDCS        int    `json:"distr_ndcs"`
-		NPCS        int    `json:"distr_npcs"`
-		Rebalancing bool   `json:"is_re_balancing"`
-		Status      string `json:"status"`
-	} `json:"results"`
-}
-
-type ClusterAPIResponse struct {
-	UUID        string `json:"uuid"`
-	Secret      string `json:"secret"`
-	NQN         string `json:"nqn"`
-	NDCS        int    `json:"distr_ndcs"`
-	NPCS        int    `json:"distr_npcs"`
-	Rebalancing bool   `json:"is_re_balancing"`
-	Status      string `json:"status"`
-}
-
 type CSICredentials struct {
 	Clusters []CSIClusterEntry `json:"clusters"`
 }
@@ -228,18 +206,19 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// original := clusterCR.DeepCopy()
 
+	apiResp, err := webapi.ParseClusterResponse(body)
+	if err != nil {
+		log.Error(err, "Unable to parse cluster creation response", "raw", string(body))
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	if endpoint == "/api/v1/cluster/create_first/" {
-		var apiResp ClusterFIRSTAPIResponse
-		if err := json.Unmarshal(body, &apiResp); err != nil {
-			log.Error(err, "Unable to parse first cluster creation response", "raw", string(body))
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
 		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
 			if secret.Data == nil {
 				secret.Data = map[string][]byte{}
 			}
-			secret.Data["uuid"] = []byte(apiResp.Results.UUID)
-			secret.Data["secret"] = []byte(apiResp.Results.Secret)
+			secret.Data["uuid"] = []byte(apiResp.UUID)
+			secret.Data["secret"] = []byte(apiResp.Secret)
 			return nil
 		})
 
@@ -251,9 +230,9 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		err := r.upsertCSICredentialsSecret(
 			ctx,
 			clusterCR.Namespace,
-			apiResp.Results.UUID,
+			apiResp.UUID,
 			utils.ENDPOINT,
-			apiResp.Results.Secret,
+			apiResp.Secret,
 		)
 
 		if err != nil {
@@ -261,18 +240,12 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
-		clusterCR.Status.UUID = apiResp.Results.UUID
-		clusterCR.Status.Rebalancing = &apiResp.Results.Rebalancing
-		clusterCR.Status.Status = apiResp.Results.Status
-		clusterCR.Status.NQN = apiResp.Results.NQN
-		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.Results.NDCS, apiResp.Results.NPCS)
+		clusterCR.Status.UUID = apiResp.UUID
+		clusterCR.Status.Rebalancing = &apiResp.Rebalancing
+		clusterCR.Status.Status = apiResp.Status
+		clusterCR.Status.NQN = apiResp.NQN
+		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
 	} else {
-		var apiResp ClusterAPIResponse
-		if err := json.Unmarshal(body, &apiResp); err != nil {
-			log.Error(err, "Unable to parse cluster creation response", "raw", string(body))
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
 		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
 			if secret.Data == nil {
 				secret.Data = map[string][]byte{}
@@ -598,8 +571,8 @@ func (r *StorageClusterReconciler) reconcileActivate(
 		"response", string(body),
 	)
 
-	var resp ClusterAPIResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
+	resp, err := webapi.ParseClusterResponse(body)
+	if err != nil {
 		return r.failActivate(ctx, clusterCR, err)
 	}
 
@@ -694,8 +667,8 @@ func (r *StorageClusterReconciler) reconcileExpand(
 		return r.failExpand(ctx, clusterCR, err)
 	}
 
-	var resp ClusterAPIResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
+	resp, err := webapi.ParseClusterResponse(body)
+	if err != nil {
 		return r.failExpand(ctx, clusterCR, err)
 	}
 
