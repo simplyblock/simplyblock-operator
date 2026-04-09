@@ -22,22 +22,22 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the simplyblock-manager itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
-- simplyblocklvol_admin_role.yaml
-- simplyblocklvol_editor_role.yaml
-- simplyblocklvol_viewer_role.yaml
-- simplyblocktask_admin_role.yaml
-- simplyblocktask_editor_role.yaml
-- simplyblocktask_viewer_role.yaml
-- simplyblockdevice_admin_role.yaml
-- simplyblockdevice_editor_role.yaml
-- simplyblockdevice_viewer_role.yaml
-- simplyblockpool_admin_role.yaml
-- simplyblockpool_editor_role.yaml
-- simplyblockpool_viewer_role.yaml
-- simplyblockstoragenode_admin_role.yaml
-- simplyblockstoragenode_editor_role.yaml
-- simplyblockstoragenode_viewer_role.yaml
-- simplyblockstoragecluster_admin_role.yaml
-- simplyblockstoragecluster_editor_role.yaml
-- simplyblockstoragecluster_viewer_role.yaml
+- lvol_admin_role.yaml
+- lvol_editor_role.yaml
+- lvol_viewer_role.yaml
+- task_admin_role.yaml
+- task_editor_role.yaml
+- task_viewer_role.yaml
+- device_admin_role.yaml
+- device_editor_role.yaml
+- device_viewer_role.yaml
+- pool_admin_role.yaml
+- pool_editor_role.yaml
+- pool_viewer_role.yaml
+- storagenode_admin_role.yaml
+- storagenode_editor_role.yaml
+- storagenode_viewer_role.yaml
+- storagecluster_admin_role.yaml
+- storagecluster_editor_role.yaml
+- storagecluster_viewer_role.yaml
 

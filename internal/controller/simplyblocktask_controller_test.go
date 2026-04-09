@@ -20,9 +20,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 )
 
-var _ = Describe("SimplyBlockTask Controller", func() {
+var _ = Describe("Task Controller", func() {
 	It("should ignore not-found resources and return no requeue", func() {
-		controllerReconciler := &SimplyBlockTaskReconciler{
+		controllerReconciler := &TaskReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
 		}

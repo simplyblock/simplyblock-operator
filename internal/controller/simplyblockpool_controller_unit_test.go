@@ -16,12 +16,12 @@ import (
 )
 
 func TestPoolReconcileAddsFinalizer(t *testing.T) {
-	pool := &simplyblockv1alpha1.SimplyBlockPool{
+	pool := &simplyblockv1alpha1.Pool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "pool-a",
 			Namespace: "default",
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockPoolSpec{
+		Spec: simplyblockv1alpha1.PoolSpec{
 			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
@@ -38,7 +38,7 @@ func TestPoolReconcileAddsFinalizer(t *testing.T) {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockPool{}
+	current := &simplyblockv1alpha1.Pool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
@@ -48,13 +48,13 @@ func TestPoolReconcileAddsFinalizer(t *testing.T) {
 }
 
 func TestPoolReconcileDeletionWithoutUUIDDoesNotProgress(t *testing.T) {
-	pool := &simplyblockv1alpha1.SimplyBlockPool{
+	pool := &simplyblockv1alpha1.Pool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-b",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.pool.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockPoolSpec{
+		Spec: simplyblockv1alpha1.PoolSpec{
 			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
@@ -74,7 +74,7 @@ func TestPoolReconcileDeletionWithoutUUIDDoesNotProgress(t *testing.T) {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockPool{}
+	current := &simplyblockv1alpha1.Pool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		if apierrors.IsNotFound(err) {
 			return
@@ -87,7 +87,7 @@ func TestPoolReconcileDeletionWithoutUUIDDoesNotProgress(t *testing.T) {
 }
 
 func TestPoolReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
-	pool := &simplyblockv1alpha1.SimplyBlockPool{
+	pool := &simplyblockv1alpha1.Pool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "pool-c",
 			Namespace: "default",
@@ -95,11 +95,11 @@ func TestPoolReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
 				"simplyblock.pool.finalizer",
 			},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockPoolSpec{
+		Spec: simplyblockv1alpha1.PoolSpec{
 			Name:        "p1",
 			ClusterName: "cluster-missing",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockPoolStatus{
+		Status: simplyblockv1alpha1.PoolStatus{
 			UUID:   "pool-uuid",
 			Status: "online",
 		},
@@ -115,7 +115,7 @@ func TestPoolReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
 		t.Fatalf("expected requeue when cluster UUID is unresolved")
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockPool{}
+	current := &simplyblockv1alpha1.Pool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
@@ -129,12 +129,12 @@ func TestPoolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 	const clusterName = "cluster-b"
 	const clusterUUID = "cluster-uuid-tenant-b"
 
-	pool := &simplyblockv1alpha1.SimplyBlockPool{
+	pool := &simplyblockv1alpha1.Pool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "pool-ns",
 			Namespace: ns,
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockPoolSpec{
+		Spec: simplyblockv1alpha1.PoolSpec{
 			Name:        "p1",
 			ClusterName: clusterName,
 		},
@@ -151,7 +151,7 @@ func TestPoolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockPool{}
+	current := &simplyblockv1alpha1.Pool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
@@ -195,13 +195,13 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	pool := &simplyblockv1alpha1.SimplyBlockPool{
+	pool := &simplyblockv1alpha1.Pool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-mock",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.pool.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockPoolSpec{
+		Spec: simplyblockv1alpha1.PoolSpec{
 			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
@@ -221,7 +221,7 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 		t.Fatalf("expected terminal reconcile without delayed requeue after successful pool creation, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockPool{}
+	current := &simplyblockv1alpha1.Pool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
@@ -254,13 +254,13 @@ func TestPoolReconcileCreatePoolNon2xxRequeues(t *testing.T) {
 
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	pool := &simplyblockv1alpha1.SimplyBlockPool{
+	pool := &simplyblockv1alpha1.Pool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-mock-fail",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.pool.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockPoolSpec{
+		Spec: simplyblockv1alpha1.PoolSpec{
 			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
@@ -280,7 +280,7 @@ func TestPoolReconcileCreatePoolNon2xxRequeues(t *testing.T) {
 		t.Fatalf("expected delayed requeue after non-2xx pool create, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockPool{}
+	current := &simplyblockv1alpha1.Pool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
@@ -310,17 +310,17 @@ func TestPoolReconcileDeleteNon2xxKeepsFinalizerAndRequeues(t *testing.T) {
 
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	pool := &simplyblockv1alpha1.SimplyBlockPool{
+	pool := &simplyblockv1alpha1.Pool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-delete-fail",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.pool.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockPoolSpec{
+		Spec: simplyblockv1alpha1.PoolSpec{
 			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockPoolStatus{
+		Status: simplyblockv1alpha1.PoolStatus{
 			UUID: poolUUID,
 		},
 	}
@@ -342,7 +342,7 @@ func TestPoolReconcileDeleteNon2xxKeepsFinalizerAndRequeues(t *testing.T) {
 		t.Fatalf("expected delayed requeue after non-2xx pool delete, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockPool{}
+	current := &simplyblockv1alpha1.Pool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
@@ -351,16 +351,16 @@ func TestPoolReconcileDeleteNon2xxKeepsFinalizerAndRequeues(t *testing.T) {
 	}
 }
 
-func newPoolStateTestReconciler(t *testing.T, objects ...client.Object) *SimplyBlockPoolReconciler {
+func newPoolStateTestReconciler(t *testing.T, objects ...client.Object) *PoolReconciler {
 	t.Helper()
 
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	cl := newTestClient(t, scheme, []client.Object{
-		&simplyblockv1alpha1.SimplyBlockPool{},
-		&simplyblockv1alpha1.SimplyBlockStorageCluster{},
+		&simplyblockv1alpha1.Pool{},
+		&simplyblockv1alpha1.StorageCluster{},
 	}, objects...)
 
-	return &SimplyBlockPoolReconciler{
+	return &PoolReconciler{
 		Client: cl,
 		Scheme: scheme,
 	}

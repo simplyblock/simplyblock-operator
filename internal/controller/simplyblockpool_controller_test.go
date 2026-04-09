@@ -22,7 +22,7 @@ import (
 
 var _ = Describe("Pool Controller", func() {
 	It("should ignore not-found resources and return no requeue", func() {
-		controllerReconciler := &SimplyBlockPoolReconciler{
+		controllerReconciler := &PoolReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
 		}

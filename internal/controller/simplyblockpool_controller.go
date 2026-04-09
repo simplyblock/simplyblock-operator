@@ -34,8 +34,8 @@ import (
 	"github.com/simplyblock/simplyblock-manager/internal/webapi"
 )
 
-// SimplyBlockPoolReconciler reconciles a SimplyBlockPool object
-type SimplyBlockPoolReconciler struct {
+// PoolReconciler reconciles a Pool object
+type PoolReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
@@ -50,24 +50,24 @@ type POOLAPIResponse struct {
 	Status       string `json:"status"`
 }
 
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockpools,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockpools/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockpools/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the SimplyBlockPool object against the actual cluster state, and then
+// the Pool object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
-func (r *SimplyBlockPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
 	// Fetch the Pool CR
-	poolCR := &simplyblockv1alpha1.SimplyBlockPool{}
+	poolCR := &simplyblockv1alpha1.Pool{}
 	if err := r.Get(ctx, req.NamespacedName, poolCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -135,7 +135,7 @@ func (r *SimplyBlockPoolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			MaxWMB:        poolSpecQoSThroughputWrite(poolCR.Spec.QosSpec),
 			CRName:        poolCR.Name,
 			CRNameSpace:   poolCR.Namespace,
-			CRPlural:      "simplyblockpools",
+			CRPlural:      "pools",
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
@@ -202,9 +202,9 @@ func (r *SimplyBlockPoolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *SimplyBlockPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *PoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.SimplyBlockPool{}).
+		For(&simplyblockv1alpha1.Pool{}).
 		Named("pool").
 		Complete(r)
 }

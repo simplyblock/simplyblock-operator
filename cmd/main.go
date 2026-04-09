@@ -178,46 +178,46 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.SimplyBlockStorageClusterReconciler{
+	if err := (&controller.StorageClusterReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "SimplyBlockStorageCluster")
+		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
 		os.Exit(1)
 	}
-	if err := (&controller.SimplyBlockStorageNodeReconciler{
+	if err := (&controller.StorageNodeReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}
-	if err := (&controller.SimplyBlockPoolReconciler{
+	if err := (&controller.PoolReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Pool")
 		os.Exit(1)
 	}
-	if err := (&controller.SimplyBlockDeviceReconciler{
+	if err := (&controller.DeviceReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "SimplyBlockDevice")
+		setupLog.Error(err, "unable to create controller", "controller", "Device")
 		os.Exit(1)
 	}
-	if err := (&controller.SimplyBlockTaskReconciler{
+	if err := (&controller.TaskReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "SimplyBlockTask")
+		setupLog.Error(err, "unable to create controller", "controller", "Task")
 		os.Exit(1)
 	}
-	if err := (&controller.SimplyBlockLvolReconciler{
+	if err := (&controller.LvolReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "SimplyBlockLvol")
+		setupLog.Error(err, "unable to create controller", "controller", "Lvol")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

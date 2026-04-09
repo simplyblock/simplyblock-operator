@@ -20,9 +20,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 )
 
-var _ = Describe("SimplyBlockStorageCluster Controller", func() {
+var _ = Describe("StorageCluster Controller", func() {
 	It("should ignore not-found resources and return no requeue", func() {
-		controllerReconciler := &SimplyBlockStorageClusterReconciler{
+		controllerReconciler := &StorageClusterReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
 		}

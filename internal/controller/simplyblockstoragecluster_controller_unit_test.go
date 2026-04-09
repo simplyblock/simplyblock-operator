@@ -20,13 +20,13 @@ import (
 
 func TestReconcileActivateTransitions(t *testing.T) {
 	t.Run("initializes running status for activate", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-a",
 				Namespace:  "default",
 				Generation: 9,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				Action:      utils.ClusterActionActivate,
 				ClusterName: "c1",
 			},
@@ -49,17 +49,17 @@ func TestReconcileActivateTransitions(t *testing.T) {
 	})
 
 	t.Run("short-circuits when already successful for current generation", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-b",
 				Namespace:  "default",
 				Generation: 4,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				Action:      utils.ClusterActionActivate,
 				ClusterName: "c1",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+			Status: simplyblockv1alpha1.StorageClusterStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
 					Action:             utils.ClusterActionActivate,
 					State:              utils.ActionStateSuccess,
@@ -82,17 +82,17 @@ func TestReconcileActivateTransitions(t *testing.T) {
 	})
 
 	t.Run("resets state machine when previous action differs", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-c",
 				Namespace:  "default",
 				Generation: 2,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				Action:      utils.ClusterActionActivate,
 				ClusterName: "c1",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+			Status: simplyblockv1alpha1.StorageClusterStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
 					Action: utils.ClusterActionExpand,
 					State:  utils.ActionStateSuccess,
@@ -115,13 +115,13 @@ func TestReconcileActivateTransitions(t *testing.T) {
 }
 
 func TestReconcileActivateInitializesObservedGeneration(t *testing.T) {
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "cluster-activate-observed-generation",
 			Namespace:  "default",
 			Generation: 17,
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			Action:      utils.ClusterActionActivate,
 			ClusterName: "c1",
 		},
@@ -147,13 +147,13 @@ func TestReconcileActivateInitializesObservedGeneration(t *testing.T) {
 
 func TestReconcileExpandTransitions(t *testing.T) {
 	t.Run("initializes running status for expand with observed generation", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-d",
 				Namespace:  "default",
 				Generation: 11,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				Action:      utils.ClusterActionExpand,
 				ClusterName: "c1",
 			},
@@ -176,17 +176,17 @@ func TestReconcileExpandTransitions(t *testing.T) {
 	})
 
 	t.Run("short-circuits when already successful for current generation", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-e",
 				Namespace:  "default",
 				Generation: 3,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				Action:      utils.ClusterActionExpand,
 				ClusterName: "c1",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+			Status: simplyblockv1alpha1.StorageClusterStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
 					Action:             utils.ClusterActionExpand,
 					State:              utils.ActionStateSuccess,
@@ -206,17 +206,17 @@ func TestReconcileExpandTransitions(t *testing.T) {
 	})
 
 	t.Run("resets state machine when previous action differs", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-f",
 				Namespace:  "default",
 				Generation: 6,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				Action:      utils.ClusterActionExpand,
 				ClusterName: "c1",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+			Status: simplyblockv1alpha1.StorageClusterStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
 					Action: utils.ClusterActionActivate,
 					State:  utils.ActionStateSuccess,
@@ -240,12 +240,12 @@ func TestReconcileExpandTransitions(t *testing.T) {
 
 func TestFailActivateAndExpandTransitionToFailed(t *testing.T) {
 	t.Run("activate failure transitions running to failed", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "cluster-g",
 				Namespace: "default",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+			Status: simplyblockv1alpha1.StorageClusterStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
 					Action: utils.ClusterActionActivate,
 					State:  utils.ActionStateRunning,
@@ -267,12 +267,12 @@ func TestFailActivateAndExpandTransitionToFailed(t *testing.T) {
 	})
 
 	t.Run("expand failure transitions running to failed", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "cluster-h",
 				Namespace: "default",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+			Status: simplyblockv1alpha1.StorageClusterStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
 					Action: utils.ClusterActionExpand,
 					State:  utils.ActionStateRunning,
@@ -295,17 +295,17 @@ func TestFailActivateAndExpandTransitionToFailed(t *testing.T) {
 }
 
 func TestReconcileActivateRejectsIllegalSuccessState(t *testing.T) {
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "cluster-illegal-activate",
 			Namespace:  "default",
 			Generation: 8,
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			Action:      utils.ClusterActionActivate,
 			ClusterName: "c1",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+		Status: simplyblockv1alpha1.StorageClusterStatus{
 			// Illegal/stale success: generation gate does not match.
 			ActionStatus: &simplyblockv1alpha1.ActionStatus{
 				Action:             utils.ClusterActionActivate,
@@ -330,17 +330,17 @@ func TestReconcileActivateRejectsIllegalSuccessState(t *testing.T) {
 }
 
 func TestReconcileExpandRejectsIllegalSuccessState(t *testing.T) {
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "cluster-illegal-expand",
 			Namespace:  "default",
 			Generation: 12,
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			Action:      utils.ClusterActionExpand,
 			ClusterName: "c1",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+		Status: simplyblockv1alpha1.StorageClusterStatus{
 			// Illegal/stale success: generation gate does not match.
 			ActionStatus: &simplyblockv1alpha1.ActionStatus{
 				Action:             utils.ClusterActionExpand,
@@ -365,7 +365,7 @@ func TestReconcileExpandRejectsIllegalSuccessState(t *testing.T) {
 }
 
 func TestClusterEnsureFinalizer(t *testing.T) {
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-finalizer", Namespace: "default"},
 	}
 	r := newClusterStateTestReconciler(t, cluster)
@@ -384,10 +384,10 @@ func TestClusterEnsureFinalizer(t *testing.T) {
 
 func TestClusterDeleteClusterSecret(t *testing.T) {
 	t.Run("deletes named status secret", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-secret-delete", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-a"},
-			Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{SecretName: "custom-secret-name"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+			Status:     simplyblockv1alpha1.StorageClusterStatus{SecretName: "custom-secret-name"},
 		}
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "custom-secret-name", Namespace: "default"},
@@ -405,9 +405,9 @@ func TestClusterDeleteClusterSecret(t *testing.T) {
 	})
 
 	t.Run("uses default secret name fallback", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-secret-default", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-b"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-b"},
 		}
 		secretName := "simplyblock-cluster-cluster-b"
 		secret := &corev1.Secret{
@@ -430,7 +430,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 	now := metav1.NewTime(time.Now())
 
 	t.Run("no deletion timestamp is passthrough", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-no-delete", Namespace: "default"},
 		}
 		r := newClusterStateTestReconciler(t, cluster)
@@ -448,14 +448,14 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 	})
 
 	t.Run("activate action removes finalizer without API delete", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "cluster-activate-delete",
 				Namespace:         "default",
 				Finalizers:        []string{"simplyblock.cluster.finalizer"},
 				DeletionTimestamp: &now,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				Action:      utils.ClusterActionActivate,
 				ClusterName: "cluster-a",
 			},
@@ -475,17 +475,17 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 	})
 
 	t.Run("missing auth requeues when uuid exists", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "cluster-auth-missing",
 				Namespace:         "default",
 				Finalizers:        []string{"simplyblock.cluster.finalizer"},
 				DeletionTimestamp: &now,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-auth-missing",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+			Status: simplyblockv1alpha1.StorageClusterStatus{
 				UUID: "cluster-uuid-auth-missing",
 			},
 		}
@@ -519,17 +519,17 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "cluster-delete-ok",
 				Namespace:         "default",
 				Finalizers:        []string{"simplyblock.cluster.finalizer"},
 				DeletionTimestamp: &now,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: clusterName,
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+			Status: simplyblockv1alpha1.StorageClusterStatus{
 				UUID:       clusterUUID,
 				SecretName: "secret-custom-delete-ok",
 			},
@@ -598,9 +598,9 @@ func TestUpsertCSICredentialsSecret(t *testing.T) {
 
 func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
 	t.Run("adds finalizer on first reconcile", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-top-finalizer", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-top-finalizer"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-top-finalizer"},
 		}
 		r := newClusterStateTestReconciler(t, cluster)
 
@@ -608,7 +608,7 @@ func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Reconcile returned error: %v", err)
 		}
-		current := &simplyblockv1alpha1.SimplyBlockStorageCluster{}
+		current := &simplyblockv1alpha1.StorageCluster{}
 		if err := r.Get(context.Background(), client.ObjectKeyFromObject(cluster), current); err != nil {
 			t.Fatalf("failed to fetch cluster: %v", err)
 		}
@@ -618,16 +618,16 @@ func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
 	})
 
 	t.Run("no-op when cluster UUID already present and no action", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-top-noop",
 				Namespace:  "default",
 				Finalizers: []string{"simplyblock.cluster.finalizer"},
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-top-noop",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+			Status: simplyblockv1alpha1.StorageClusterStatus{
 				UUID: "cluster-uuid-top-noop",
 			},
 		}
@@ -672,18 +672,18 @@ func TestStorageClusterReconcileActivateViaMock(t *testing.T) {
 	)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "cluster-activate-mock",
 			Namespace:  "default",
 			Generation: 2,
 			Finalizers: []string{"simplyblock.cluster.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			ClusterName: clusterName,
 			Action:      utils.ClusterActionActivate,
 		},
-		Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+		Status: simplyblockv1alpha1.StorageClusterStatus{
 			UUID: clusterUUID,
 		},
 	}
@@ -719,7 +719,7 @@ func TestStorageClusterReconcileActivateViaMock(t *testing.T) {
 		t.Fatalf("expected terminal result after active status, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockStorageCluster{}
+	current := &simplyblockv1alpha1.StorageCluster{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(cluster), current); err != nil {
 		t.Fatalf("failed to fetch updated cluster: %v", err)
 	}
@@ -764,18 +764,18 @@ func TestStorageClusterReconcileExpandViaMock(t *testing.T) {
 	)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "cluster-expand-mock",
 			Namespace:  "default",
 			Generation: 3,
 			Finalizers: []string{"simplyblock.cluster.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			ClusterName: clusterName,
 			Action:      utils.ClusterActionExpand,
 		},
-		Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+		Status: simplyblockv1alpha1.StorageClusterStatus{
 			UUID: clusterUUID,
 		},
 	}
@@ -811,7 +811,7 @@ func TestStorageClusterReconcileExpandViaMock(t *testing.T) {
 		t.Fatalf("expected terminal result after expanded active status, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockStorageCluster{}
+	current := &simplyblockv1alpha1.StorageCluster{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(cluster), current); err != nil {
 		t.Fatalf("failed to fetch updated cluster: %v", err)
 	}
@@ -847,13 +847,13 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-health-fail",
 				Namespace:  "default",
 				Finalizers: []string{"simplyblock.cluster.finalizer"},
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-health-fail",
 			},
 		}
@@ -877,20 +877,20 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-auth-fail",
 				Namespace:  "default",
 				Finalizers: []string{"simplyblock.cluster.finalizer"},
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-auth-fail",
 			},
 		}
-		existing := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		existing := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-existing", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-existing"},
-			Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: "cluster-existing-uuid"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-existing"},
+			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-existing-uuid"},
 		}
 		r := newClusterStateTestReconciler(t, cluster, existing)
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
@@ -917,13 +917,13 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-create-fail",
 				Namespace:  "default",
 				Finalizers: []string{"simplyblock.cluster.finalizer"},
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-create-fail",
 			},
 		}
@@ -952,13 +952,13 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-create-parse-fail",
 				Namespace:  "default",
 				Finalizers: []string{"simplyblock.cluster.finalizer"},
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-create-parse-fail",
 			},
 		}
@@ -987,20 +987,20 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-v2-parse-fail",
 				Namespace:  "default",
 				Finalizers: []string{"simplyblock.cluster.finalizer"},
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-v2-parse-fail",
 			},
 		}
-		existing := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		existing := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-existing-v2", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-existing-v2"},
-			Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: "cluster-existing-v2-uuid"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-existing-v2"},
+			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-existing-v2-uuid"},
 		}
 		existingSecret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster-cluster-existing-v2", Namespace: "default"},
@@ -1048,13 +1048,13 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-create-first-ok",
 				Namespace:  "default",
 				Finalizers: []string{"simplyblock.cluster.finalizer"},
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-create-first-ok",
 			},
 		}
@@ -1067,7 +1067,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			t.Fatalf("expected terminal result after successful create_first, got %+v", res)
 		}
 
-		current := &simplyblockv1alpha1.SimplyBlockStorageCluster{}
+		current := &simplyblockv1alpha1.StorageCluster{}
 		if err := r.Get(context.Background(), client.ObjectKeyFromObject(cluster), current); err != nil {
 			t.Fatalf("failed to fetch cluster: %v", err)
 		}
@@ -1110,20 +1110,20 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-create-v2-ok",
 				Namespace:  "default",
 				Finalizers: []string{"simplyblock.cluster.finalizer"},
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-create-v2-ok",
 			},
 		}
-		existing := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		existing := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-existing-ok", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-existing-ok"},
-			Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: "cluster-existing-ok-uuid"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-existing-ok"},
+			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-existing-ok-uuid"},
 		}
 		existingSecret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster-cluster-existing-ok", Namespace: "default"},
@@ -1141,7 +1141,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			t.Fatalf("expected terminal result after successful create_v2, got %+v", res)
 		}
 
-		current := &simplyblockv1alpha1.SimplyBlockStorageCluster{}
+		current := &simplyblockv1alpha1.StorageCluster{}
 		if err := r.Get(context.Background(), client.ObjectKeyFromObject(cluster), current); err != nil {
 			t.Fatalf("failed to fetch cluster: %v", err)
 		}
@@ -1187,13 +1187,13 @@ func TestStorageClusterCreateFirstSecretHasOwnerReference(t *testing.T) {
 	)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "cluster-ownerref",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.cluster.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			ClusterName: "cluster-ownerref",
 		},
 	}
@@ -1218,15 +1218,15 @@ func TestStorageClusterCreateFirstSecretHasOwnerReference(t *testing.T) {
 	}
 }
 
-func newClusterStateTestReconciler(t *testing.T, objects ...client.Object) *SimplyBlockStorageClusterReconciler {
+func newClusterStateTestReconciler(t *testing.T, objects ...client.Object) *StorageClusterReconciler {
 	t.Helper()
 
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	cl := newTestClient(t, scheme, []client.Object{
-		&simplyblockv1alpha1.SimplyBlockStorageCluster{},
+		&simplyblockv1alpha1.StorageCluster{},
 	}, objects...)
 
-	return &SimplyBlockStorageClusterReconciler{
+	return &StorageClusterReconciler{
 		Client: cl,
 		Scheme: scheme,
 	}

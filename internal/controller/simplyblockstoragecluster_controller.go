@@ -37,8 +37,8 @@ import (
 	"github.com/simplyblock/simplyblock-manager/internal/webapi"
 )
 
-// SimplyBlockStorageClusterReconciler reconciles a SimplyBlockStorageCluster object
-type SimplyBlockStorageClusterReconciler struct {
+// StorageClusterReconciler reconciles a StorageCluster object
+type StorageClusterReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
@@ -75,25 +75,25 @@ type CSIClusterEntry struct {
 	ClusterSecret   string `json:"cluster_secret"`
 }
 
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the SimplyBlockStorageCluster object against the actual cluster state, and then
+// the StorageCluster object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
-func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
 	// Fetch the CR
-	clusterCR := &simplyblockv1alpha1.SimplyBlockStorageCluster{}
+	clusterCR := &simplyblockv1alpha1.StorageCluster{}
 	if err := r.Get(ctx, req.NamespacedName, clusterCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -162,7 +162,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		Fabric:                 clusterCR.Spec.Fabric,
 		CRName:                 clusterCR.Name,
 		CRNameSpace:            clusterCR.Namespace,
-		CRPlural:               "simplyblockstorageclusters",
+		CRPlural:               "storageclusters",
 		ClientDataNic:          clusterCR.Spec.ClientDataNic,
 		MaxFaultTolerance:      utils.IntPtrOrDefault(clusterCR.Spec.MaxFaultTolerance, 1),
 		NvmfBasePort:           utils.IntPtrOrDefault(clusterCR.Spec.NvmfBasePort, 4420),
@@ -348,9 +348,9 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 	return ctrl.Result{}, nil
 }
 
-func (r *SimplyBlockStorageClusterReconciler) buildBackupConfig(
+func (r *StorageClusterReconciler) buildBackupConfig(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
 ) (*utils.BackupConfig, error) {
 	if clusterCR.Spec.Backup == nil {
 		return nil, nil
@@ -391,16 +391,16 @@ func (r *SimplyBlockStorageClusterReconciler) buildBackupConfig(
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *SimplyBlockStorageClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *StorageClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.SimplyBlockStorageCluster{}).
-		Named("simplyblockstoragecluster").
+		For(&simplyblockv1alpha1.StorageCluster{}).
+		Named("storagecluster").
 		Complete(r)
 }
 
-func (r *SimplyBlockStorageClusterReconciler) handleDeletion(
+func (r *StorageClusterReconciler) handleDeletion(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
 ) (ctrl.Result, bool, error) {
 
 	if clusterCR.DeletionTimestamp.IsZero() {
@@ -443,9 +443,9 @@ func (r *SimplyBlockStorageClusterReconciler) handleDeletion(
 	return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 }
 
-func (r *SimplyBlockStorageClusterReconciler) ensureFinalizer(
+func (r *StorageClusterReconciler) ensureFinalizer(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
 ) (bool, error) {
 
 	if controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
@@ -456,9 +456,9 @@ func (r *SimplyBlockStorageClusterReconciler) ensureFinalizer(
 	return true, r.Update(ctx, clusterCR)
 }
 
-func (r *SimplyBlockStorageClusterReconciler) deleteClusterSecret(
+func (r *StorageClusterReconciler) deleteClusterSecret(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
 ) error {
 
 	secretName := clusterCR.Status.SecretName
@@ -482,9 +482,9 @@ func (r *SimplyBlockStorageClusterReconciler) deleteClusterSecret(
 	return nil
 }
 
-func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
+func (r *StorageClusterReconciler) reconcileActivate(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
 ) (ctrl.Result, error) {
 
 	log := logf.FromContext(ctx)
@@ -598,9 +598,9 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
-func (r *SimplyBlockStorageClusterReconciler) reconcileExpand(
+func (r *StorageClusterReconciler) reconcileExpand(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
 ) (ctrl.Result, error) {
 
 	log := logf.FromContext(ctx)
@@ -686,9 +686,9 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileExpand(
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
-func (r *SimplyBlockStorageClusterReconciler) failActivate(
+func (r *StorageClusterReconciler) failActivate(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
 	err error,
 ) (ctrl.Result, error) {
 
@@ -700,9 +700,9 @@ func (r *SimplyBlockStorageClusterReconciler) failActivate(
 	return ctrl.Result{}, nil
 }
 
-func (r *SimplyBlockStorageClusterReconciler) failExpand(
+func (r *StorageClusterReconciler) failExpand(
 	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
 	err error,
 ) (ctrl.Result, error) {
 
@@ -714,7 +714,7 @@ func (r *SimplyBlockStorageClusterReconciler) failExpand(
 	return ctrl.Result{}, nil
 }
 
-func (r *SimplyBlockStorageClusterReconciler) upsertCSICredentialsSecret(
+func (r *StorageClusterReconciler) upsertCSICredentialsSecret(
 	ctx context.Context,
 	namespace string,
 	clusterID string,

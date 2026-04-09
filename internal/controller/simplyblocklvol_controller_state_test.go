@@ -16,12 +16,12 @@ import (
 )
 
 func TestLvolReconcileAddsFinalizer(t *testing.T) {
-	lvol := &simplyblockv1alpha1.SimplyBlockLvol{
+	lvol := &simplyblockv1alpha1.Lvol{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "lvol-a",
 			Namespace: "default",
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockLvolSpec{
+		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: "cluster-a",
 			PoolName:    "pool-a",
 		},
@@ -39,7 +39,7 @@ func TestLvolReconcileAddsFinalizer(t *testing.T) {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockLvol{}
+	current := &simplyblockv1alpha1.Lvol{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(lvol), current); err != nil {
 		t.Fatalf("failed to get lvol: %v", err)
 	}
@@ -49,13 +49,13 @@ func TestLvolReconcileAddsFinalizer(t *testing.T) {
 }
 
 func TestLvolReconcileDeletionRemovesFinalizer(t *testing.T) {
-	lvol := &simplyblockv1alpha1.SimplyBlockLvol{
+	lvol := &simplyblockv1alpha1.Lvol{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "lvol-b",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.lvol.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockLvolSpec{
+		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: "cluster-a",
 			PoolName:    "pool-a",
 		},
@@ -76,7 +76,7 @@ func TestLvolReconcileDeletionRemovesFinalizer(t *testing.T) {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockLvol{}
+	current := &simplyblockv1alpha1.Lvol{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(lvol), current); err != nil {
 		if apierrors.IsNotFound(err) {
 			return
@@ -89,19 +89,19 @@ func TestLvolReconcileDeletionRemovesFinalizer(t *testing.T) {
 }
 
 func TestLvolReconcilePreventsStatusRegressionWhenPoolMissing(t *testing.T) {
-	lvol := &simplyblockv1alpha1.SimplyBlockLvol{
+	lvol := &simplyblockv1alpha1.Lvol{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "lvol-c",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.lvol.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockLvolSpec{
+		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: "cluster-a",
 			PoolName:    "pool-missing",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockLvolStatus{
+		Status: simplyblockv1alpha1.LvolStatus{
 			Configured: true,
-			Lvols: []simplyblockv1alpha1.LvolStatus{
+			Lvols: []simplyblockv1alpha1.LvolEntry{
 				{UUID: "lv-1", LvolName: "lv-old"},
 			},
 		},
@@ -121,7 +121,7 @@ func TestLvolReconcilePreventsStatusRegressionWhenPoolMissing(t *testing.T) {
 		t.Fatalf("expected requeue when pool UUID is unresolved")
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockLvol{}
+	current := &simplyblockv1alpha1.Lvol{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(lvol), current); err != nil {
 		t.Fatalf("failed to get lvol: %v", err)
 	}
@@ -137,12 +137,12 @@ func TestLvolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 	const clusterUUID = "cluster-uuid-tenant-c"
 	const poolUUID = "pool-uuid-tenant-c"
 
-	lvol := &simplyblockv1alpha1.SimplyBlockLvol{
+	lvol := &simplyblockv1alpha1.Lvol{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "lvol-ns",
 			Namespace: ns,
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockLvolSpec{
+		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: clusterName,
 			PoolName:    poolName,
 		},
@@ -160,7 +160,7 @@ func TestLvolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockLvol{}
+	current := &simplyblockv1alpha1.Lvol{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(lvol), current); err != nil {
 		t.Fatalf("failed to get lvol: %v", err)
 	}
@@ -216,13 +216,13 @@ func TestLvolReconcileConfiguredAndStatusRefreshViaOpenAPIMock(t *testing.T) {
 
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	lvol := &simplyblockv1alpha1.SimplyBlockLvol{
+	lvol := &simplyblockv1alpha1.Lvol{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "lvol-mock",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.lvol.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockLvolSpec{
+		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: "cluster-a",
 			PoolName:    "pool-a",
 		},
@@ -243,7 +243,7 @@ func TestLvolReconcileConfiguredAndStatusRefreshViaOpenAPIMock(t *testing.T) {
 		t.Fatalf("expected terminal reconcile without delayed requeue after successful lvol sync, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockLvol{}
+	current := &simplyblockv1alpha1.Lvol{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(lvol), current); err != nil {
 		t.Fatalf("failed to get lvol: %v", err)
 	}
@@ -287,13 +287,13 @@ func TestLvolReconcilePoolUpdateNon2xxRequeues(t *testing.T) {
 
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	lvol := &simplyblockv1alpha1.SimplyBlockLvol{
+	lvol := &simplyblockv1alpha1.Lvol{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "lvol-mock-update-fail",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.lvol.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockLvolSpec{
+		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: "cluster-a",
 			PoolName:    "pool-a",
 		},
@@ -314,7 +314,7 @@ func TestLvolReconcilePoolUpdateNon2xxRequeues(t *testing.T) {
 		t.Fatalf("expected delayed requeue after non-2xx pool update, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockLvol{}
+	current := &simplyblockv1alpha1.Lvol{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(lvol), current); err != nil {
 		t.Fatalf("failed to get lvol: %v", err)
 	}
@@ -344,17 +344,17 @@ func TestLvolReconcileVolumesFetchNon2xxNoRegression(t *testing.T) {
 
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	lvol := &simplyblockv1alpha1.SimplyBlockLvol{
+	lvol := &simplyblockv1alpha1.Lvol{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "lvol-mock-fetch-fail",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.lvol.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockLvolSpec{
+		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: "cluster-a",
 			PoolName:    "pool-a",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockLvolStatus{
+		Status: simplyblockv1alpha1.LvolStatus{
 			Configured: true,
 		},
 	}
@@ -374,7 +374,7 @@ func TestLvolReconcileVolumesFetchNon2xxNoRegression(t *testing.T) {
 		t.Fatalf("expected delayed requeue for volumes fetch non-2xx path, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockLvol{}
+	current := &simplyblockv1alpha1.Lvol{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(lvol), current); err != nil {
 		t.Fatalf("failed to get lvol: %v", err)
 	}
@@ -407,19 +407,19 @@ func TestLvolReconcileVolumesFetchFailurePreservesExistingLvolStatus(t *testing.
 
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	lvol := &simplyblockv1alpha1.SimplyBlockLvol{
+	lvol := &simplyblockv1alpha1.Lvol{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "lvol-preserve-fail",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.lvol.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockLvolSpec{
+		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: "cluster-a",
 			PoolName:    "pool-a",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockLvolStatus{
+		Status: simplyblockv1alpha1.LvolStatus{
 			Configured: true,
-			Lvols: []simplyblockv1alpha1.LvolStatus{
+			Lvols: []simplyblockv1alpha1.LvolEntry{
 				{UUID: "existing-lvol", LvolName: "existing"},
 			},
 		},
@@ -440,7 +440,7 @@ func TestLvolReconcileVolumesFetchFailurePreservesExistingLvolStatus(t *testing.
 		t.Fatalf("expected delayed requeue after failed volumes fetch")
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockLvol{}
+	current := &simplyblockv1alpha1.Lvol{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(lvol), current); err != nil {
 		t.Fatalf("failed to get lvol: %v", err)
 	}
@@ -449,17 +449,17 @@ func TestLvolReconcileVolumesFetchFailurePreservesExistingLvolStatus(t *testing.
 	}
 }
 
-func newLvolStateTestReconciler(t *testing.T, objects ...client.Object) *SimplyBlockLvolReconciler {
+func newLvolStateTestReconciler(t *testing.T, objects ...client.Object) *LvolReconciler {
 	t.Helper()
 
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	cl := newTestClient(t, scheme, []client.Object{
-		&simplyblockv1alpha1.SimplyBlockLvol{},
-		&simplyblockv1alpha1.SimplyBlockPool{},
-		&simplyblockv1alpha1.SimplyBlockStorageCluster{},
+		&simplyblockv1alpha1.Lvol{},
+		&simplyblockv1alpha1.Pool{},
+		&simplyblockv1alpha1.StorageCluster{},
 	}, objects...)
 
-	return &SimplyBlockLvolReconciler{
+	return &LvolReconciler{
 		Client: cl,
 		Scheme: scheme,
 	}
