@@ -67,6 +67,24 @@ type NodeStatusResponse struct {
 	IP     string `json:"ip"`
 }
 
+var (
+	waitForNodeInfoReachableCheckFn    = checkNodeInfoReachable
+	waitForNodeInfoReachableMaxRetries = 12
+	waitForNodeInfoReachableRetryDelay = 10 * time.Second
+
+	waitForNodeOnlineRetries         = 60
+	waitForNodeOnlineWaitInterval    = 10 * time.Second
+	waitForNodeOnlineActivationDelay = 10 * time.Second
+	waitForNodeOnlineSleepFn         = time.Sleep
+
+	performNodeActionPostTriggerDelay = 5 * time.Second
+	performNodeActionSleepFn          = time.Sleep
+
+	waitForActionCompletionRetries      = 50
+	waitForActionCompletionWaitInterval = 5 * time.Second
+	waitForActionCompletionSleepFn      = time.Sleep
+)
+
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstoragenodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstoragenodes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstoragenodes/finalizers,verbs=update
@@ -129,6 +147,9 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 	}
 
 	sa := utils.BuildStorageNodeServiceAccount(snCR.Namespace)
+	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
+	}
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error { return nil })
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ServiceAccount: %w", err)
@@ -181,20 +202,21 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 		nodeAddress := fmt.Sprintf("%s:5000", ip)
 		params := utils.StorageNodeAddParams{
 			NodeAddress:         nodeAddress,
-			InterfaceName:       snCR.Spec.MgmtIfc,
+			InterfaceName:       snCR.Spec.MgmtIfname,
 			SPDKImage:           snCR.Spec.SpdkImage,
-			SPDKDebug:           utils.BoolPtrOrFalse(snCR.Spec.SPDKDebug),
-			IdDeviceByNQN:       utils.BoolPtrOrFalse(snCR.Spec.IdDeviceByNQN),
-			DataNics:            snCR.Spec.DataNIC,
+			SPDKDebug:           false,
+			IdDeviceByNQN:       false,
+			DataNics:            snCR.Spec.DataIfname,
 			Namespace:           snCR.Namespace,
-			JMPercent:           utils.IntPtrOrDefault(snCR.Spec.JMPercent, 3),
+			JMPercent:           journalManagerPercentPerDevice(snCR),
 			Partitions:          utils.IntPtrOrDefault(snCR.Spec.Partitions, 1),
 			IOBufSmallPoolCount: 0,
 			IOBufLargePoolCount: 0,
-			HaJMCount:           utils.IntPtrOrDefault(snCR.Spec.HaJmCount, 3),
+			HaJMCount:           journalManagerCount(snCR),
 			CRName:              snCR.Name,
 			CRNameSpace:         snCR.Namespace,
 			CRPlural:            "simplyblockstoragenodes",
+			Format4K:            utils.BoolPtrOrFalse(snCR.Spec.ForceFormat4K),
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
@@ -422,19 +444,13 @@ func waitForNodeInfoReachable(
 	ip string,
 	nodeName string,
 ) error {
-
-	const (
-		maxRetries    = 12
-		retryInterval = 10 * time.Second
-	)
-
 	log := logf.FromContext(ctx)
 
 	var lastErr error
 
-	for i := 1; i <= maxRetries; i++ {
+	for i := 1; i <= waitForNodeInfoReachableMaxRetries; i++ {
 
-		if err := checkNodeInfoReachable(ctx, ip); err == nil {
+		if err := waitForNodeInfoReachableCheckFn(ctx, ip); err == nil {
 			log.Info("Storage node API is reachable",
 				"node", nodeName,
 				"ip", ip,
@@ -452,7 +468,7 @@ func waitForNodeInfoReachable(
 		}
 
 		select {
-		case <-time.After(retryInterval):
+		case <-time.After(waitForNodeInfoReachableRetryDelay):
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -460,7 +476,7 @@ func waitForNodeInfoReachable(
 
 	return fmt.Errorf(
 		"storage node API not reachable after %d retries: %w",
-		maxRetries,
+		waitForNodeInfoReachableMaxRetries,
 		lastErr,
 	)
 }
@@ -478,10 +494,7 @@ func waitForNodeOnline(
 	log := logf.FromContext(ctx)
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
 
-	retries := 60
-	waitInterval := 10 * time.Second
-
-	for attempt := 1; attempt <= retries; attempt++ {
+	for attempt := 1; attempt <= waitForNodeOnlineRetries; attempt++ {
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 		log.Info("SNODE LIST raw API response", "endpoint", endpoint, "status", status, "body", string(body))
 
@@ -491,7 +504,7 @@ func waitForNodeOnline(
 
 		if strings.TrimSpace(string(body)) == "[]" {
 			log.Info("Storage node list is empty, retrying...", "node", nodeName, "attempt", attempt)
-			time.Sleep(waitInterval)
+			waitForNodeOnlineSleepFn(waitForNodeOnlineWaitInterval)
 			continue
 		}
 
@@ -507,18 +520,18 @@ func waitForNodeOnline(
 					if snCR.Status.Nodes[i].Hostname == nodeName {
 
 						updated := simplyblockv1alpha1.NodeStatus{
-							Hostname:  nodeName,
-							UUID:      res.UUID,
-							Health:    res.Health,
-							Status:    res.Status,
-							MgmtIp:    res.IP,
-							Devices:   res.Devices,
-							CPU:       utils.IntToInt32Ptr(res.CPU),
-							Memory:    utils.HumanBytes(res.Memory, "iec"),
-							Volumes:   utils.IntToInt32Ptr(res.Volumes),
-							RPC_PORT:  utils.IntToInt32Ptr(res.RPC_PORT),
-							LVOL_PORT: utils.IntToInt32Ptr(res.LVOL_PORT),
-							NVMF_PORT: utils.IntToInt32Ptr(res.NVMF_PORT),
+							Hostname: nodeName,
+							UUID:     res.UUID,
+							Health:   res.Health,
+							Status:   res.Status,
+							MgmtIp:   res.IP,
+							Devices:  res.Devices,
+							CPU:      utils.IntToInt32Ptr(res.CPU),
+							Memory:   utils.HumanBytes(res.Memory, "iec"),
+							Volumes:  utils.IntToInt32Ptr(res.Volumes),
+							RpcPort:  utils.IntToInt32Ptr(res.RPC_PORT),
+							LvolPort: utils.IntToInt32Ptr(res.LVOL_PORT),
+							NvmfPort: utils.IntToInt32Ptr(res.NVMF_PORT),
 						}
 
 						if reflect.DeepEqual(snCR.Status.Nodes[i], updated) {
@@ -561,19 +574,19 @@ func waitForNodeOnline(
 						onlineHealthy := utils.CountOnlineHealthyNodes(snCR.Status.Nodes)
 
 						log.Info("Evaluating cluster activation conditions",
-							"mod", clusterCR.Status.MOD,
+							"erasureCodingScheme", clusterCR.Status.ErasureCodingScheme,
 							"onlineHealthy", onlineHealthy,
 						)
 
-						requiredMod, err := utils.RequiredNodesFromMOD(clusterCR.Status.MOD)
+						requiredEc, err := utils.RequiredNodesFromErasureCodingScheme(clusterCR.Status.ErasureCodingScheme)
 						if err != nil {
-							log.Error(err, "Invalid MOD value")
+							log.Error(err, "Invalid erasure coding scheme")
 							return err
 						}
 
-						if utils.ShouldActivateCluster(requiredMod, onlineHealthy, snCR) {
+						if utils.ShouldActivateCluster(requiredEc, onlineHealthy, snCR) {
 
-							time.Sleep(10 * time.Second)
+							waitForNodeOnlineSleepFn(waitForNodeOnlineActivationDelay)
 							log.Info("Activation conditions met — activating cluster")
 
 							if err := utils.ActivateClusterAndWait(
@@ -598,7 +611,7 @@ func waitForNodeOnline(
 			}
 		}
 		log.Info("Node not online yet, retrying...", "node", nodeName, "attempt", attempt)
-		time.Sleep(waitInterval)
+		waitForNodeOnlineSleepFn(waitForNodeOnlineWaitInterval)
 	}
 
 	// Timeout reached
@@ -627,6 +640,24 @@ func waitForNodeOnline(
 	}
 
 	return fmt.Errorf("node %s did not become online in time", nodeName)
+}
+
+func journalManagerPercentPerDevice(
+	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+) int {
+	if snCR.Spec.JournalManagerSpec == nil {
+		return 3
+	}
+	return utils.IntPtrOrDefault(snCR.Spec.JournalManagerSpec.PercentPerDevice, 3)
+}
+
+func journalManagerCount(
+	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+) int {
+	if snCR.Spec.JournalManagerSpec == nil {
+		return 3
+	}
+	return utils.IntPtrOrDefault(snCR.Spec.JournalManagerSpec.Count, 3)
 }
 
 func (r *SimplyBlockStorageNodeReconciler) reconcileAction(
@@ -793,7 +824,7 @@ func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
 		"response", string(respBody),
 	)
 
-	time.Sleep(5 * time.Second)
+	performNodeActionSleepFn(performNodeActionPostTriggerDelay)
 
 	if err := r.waitForActionCompletion(
 		ctx,
@@ -849,12 +880,7 @@ func (r *SimplyBlockStorageNodeReconciler) waitForActionCompletion(
 		nodeUUID,
 	)
 
-	const (
-		retries      = 50
-		waitInterval = 5 * time.Second
-	)
-
-	for i := 0; i < retries; i++ {
+	for i := 0; i < waitForActionCompletionRetries; i++ {
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 
 		if action == "remove" && status == http.StatusNotFound {
@@ -872,14 +898,14 @@ func (r *SimplyBlockStorageNodeReconciler) waitForActionCompletion(
 				"nodeUUID", nodeUUID,
 				"status", status,
 			)
-			time.Sleep(waitInterval)
+			waitForActionCompletionSleepFn(waitForActionCompletionWaitInterval)
 			continue
 		}
 
 		var resp NodeStatusResponse
 		if err := json.Unmarshal(body, &resp); err != nil {
 			log.Error(err, "Failed to parse node status response", "body", string(body))
-			time.Sleep(waitInterval)
+			waitForActionCompletionSleepFn(waitForActionCompletionWaitInterval)
 			continue
 		}
 
@@ -892,7 +918,7 @@ func (r *SimplyBlockStorageNodeReconciler) waitForActionCompletion(
 			return nil
 		}
 
-		time.Sleep(waitInterval)
+		waitForActionCompletionSleepFn(waitForActionCompletionWaitInterval)
 	}
 
 	return fmt.Errorf(

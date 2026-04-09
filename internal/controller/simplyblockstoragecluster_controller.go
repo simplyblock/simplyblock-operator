@@ -26,6 +26,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -77,6 +78,7 @@ type CSIClusterEntry struct {
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstorageclusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -130,19 +132,26 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 
 	/* -------------------- Create Cluster -------------------- */
 	cluster := clusterCR.DeepCopy()
+	backupConfig, err := r.buildBackupConfig(ctx, clusterCR)
+	if err != nil {
+		log.Error(err, "Failed to resolve backup credentials", "secretName", clusterCR.Spec.Backup.CredentialsSecretRef.Name)
+		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+	}
 
 	params := utils.ClusterAddParams{
-		Name:                   clusterCR.Spec.ClusterName,
-		BlkSize:                utils.IntPtrOrDefault(clusterCR.Spec.BlkSize, 512),
-		PageSizeInBlocks:       utils.IntPtrOrDefault(clusterCR.Spec.PageSizeInBlocks, 2097152),
-		CapWarn:                utils.IntPtrOrZero(clusterCR.Spec.CapWarn),
-		CapCrit:                utils.IntPtrOrZero(clusterCR.Spec.CapCrit),
-		ProvCapWarn:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapWarn),
-		ProvCapCrit:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapCrit),
-		DistrNdcs:              utils.IntPtrOrDefault(clusterCR.Spec.StripeWdata, 1),
-		DistrNpcs:              utils.IntPtrOrDefault(clusterCR.Spec.StripeWparity, 1),
-		DistrBs:                utils.IntPtrOrDefault(clusterCR.Spec.DistrBs, 4096),
-		DistrChunkBs:           utils.IntPtrOrDefault(clusterCR.Spec.DistrChunkBs, 4096),
+		Name:             clusterCR.Spec.ClusterName,
+		BlkSize:          utils.IntPtrOrDefault(clusterCR.Spec.BlockSize, 512),
+		PageSizeInBlocks: utils.IntPtrOrDefault(clusterCR.Spec.PageSizeInBlocks, 2097152),
+		CapWarn:          capacityThreshold(clusterCR.Spec.WarningThresholdSpec),
+		CapCrit:          capacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
+		ProvCapWarn:      provisionedCapacityThreshold(clusterCR.Spec.WarningThresholdSpec),
+		ProvCapCrit:      provisionedCapacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
+		DistrNdcs:        stripeDataChunks(clusterCR.Spec.StripeSpec),
+		DistrNpcs:        stripeParityChunks(clusterCR.Spec.StripeSpec),
+		// FIXME: Remove distrBs mapping after backend contract clarification.
+		DistrBs: 4096,
+		// FIXME: Remove distrChunkBs mapping after backend contract clarification.
+		DistrChunkBs:           4096,
 		HAType:                 clusterCR.Spec.HAType,
 		QpairCount:             utils.IntPtrOrDefault(clusterCR.Spec.QpairCount, 256),
 		MaxQueueSize:           utils.IntPtrOrDefault(clusterCR.Spec.MaxQueueSize, 128),
@@ -159,6 +168,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		NvmfBasePort:           utils.IntPtrOrDefault(clusterCR.Spec.NvmfBasePort, 4420),
 		RpcBasePort:            utils.IntPtrOrDefault(clusterCR.Spec.RpcBasePort, 8080),
 		SnodeApiPort:           utils.IntPtrOrDefault(clusterCR.Spec.SnodeApiPort, 50001),
+		BackupConfig:           backupConfig,
 	}
 
 	endpoint = "/api/v1/cluster/create_first/"
@@ -205,6 +215,10 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 			Namespace: clusterCR.Namespace,
 		},
 	}
+	if err := controllerutil.SetControllerReference(clusterCR, secret, r.Scheme); err != nil {
+		log.Error(err, "Failed to set owner reference on cluster secret")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
 
 	// original := clusterCR.DeepCopy()
 
@@ -245,7 +259,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		clusterCR.Status.Rebalancing = &apiResp.Results.Rebalancing
 		clusterCR.Status.Status = apiResp.Results.Status
 		clusterCR.Status.NQN = apiResp.Results.NQN
-		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.Results.NDCS, apiResp.Results.NPCS)
+		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.Results.NDCS, apiResp.Results.NPCS)
 	} else {
 		var apiResp ClusterAPIResponse
 		if err := json.Unmarshal(body, &apiResp); err != nil {
@@ -284,7 +298,7 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 		clusterCR.Status.Rebalancing = &apiResp.Rebalancing
 		clusterCR.Status.Status = apiResp.Status
 		clusterCR.Status.NQN = apiResp.NQN
-		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
+		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
 	}
 
 	clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
@@ -332,6 +346,48 @@ func (r *SimplyBlockStorageClusterReconciler) Reconcile(ctx context.Context, req
 
 	// log.Info("Cluster updated successfully", "name", clusterCR.Name)
 	return ctrl.Result{}, nil
+}
+
+func (r *SimplyBlockStorageClusterReconciler) buildBackupConfig(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.SimplyBlockStorageCluster,
+) (*utils.BackupConfig, error) {
+	if clusterCR.Spec.Backup == nil {
+		return nil, nil
+	}
+
+	secretName := clusterCR.Spec.Backup.CredentialsSecretRef.Name
+	if secretName == "" {
+		return nil, fmt.Errorf("backup.credentialsSecretRef.name is required")
+	}
+
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      secretName,
+		Namespace: clusterCR.Namespace,
+	}, secret); err != nil {
+		return nil, fmt.Errorf("get backup credentials secret %q: %w", secretName, err)
+	}
+
+	accessKeyID, ok := secret.Data["access_key_id"]
+	if !ok {
+		return nil, fmt.Errorf("secret %q missing key %q", secretName, "access_key_id")
+	}
+
+	secretAccessKey, ok := secret.Data["secret_access_key"]
+	if !ok {
+		return nil, fmt.Errorf("secret %q missing key %q", secretName, "secret_access_key")
+	}
+
+	return &utils.BackupConfig{
+		AccessKeyID:     string(accessKeyID),
+		SecretAccessKey: string(secretAccessKey),
+		LocalEndpoint:   clusterCR.Spec.Backup.LocalEndpoint,
+		SnapshotBackups: clusterCR.Spec.Backup.SnapshotBackups,
+		WithCompression: clusterCR.Spec.Backup.WithCompression,
+		SecondaryTarget: clusterCR.Spec.Backup.SecondaryTarget,
+		LocalTesting:    clusterCR.Spec.Backup.LocalTesting,
+	}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -445,8 +501,9 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 		clusterCR.Status.ActionStatus.Action != utils.ClusterActionActivate {
 
 		clusterCR.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
-			Action: utils.ClusterActionActivate,
-			State:  utils.ActionStateRunning,
+			Action:             utils.ClusterActionActivate,
+			State:              utils.ActionStateRunning,
+			ObservedGeneration: clusterCR.Generation,
 		}
 
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
@@ -524,10 +581,11 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileActivate(
 		clusterCR.Status.ActionStatus.State = utils.ActionStateSuccess
 		clusterCR.Status.ActionStatus.Message = "Cluster activated successfully"
 		clusterCR.Status.UUID = resp.UUID
+		clusterCR.Status.NQN = resp.NQN
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
 		clusterCR.Status.Configured = true
 		clusterCR.Status.Rebalancing = &resp.Rebalancing
-		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
+		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
 			return ctrl.Result{}, err
@@ -611,10 +669,11 @@ func (r *SimplyBlockStorageClusterReconciler) reconcileExpand(
 		clusterCR.Status.ActionStatus.State = utils.ActionStateSuccess
 		clusterCR.Status.ActionStatus.Message = "Cluster expanded successfully"
 		clusterCR.Status.UUID = resp.UUID
+		clusterCR.Status.NQN = resp.NQN
 		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
 		clusterCR.Status.Configured = true
 		clusterCR.Status.Rebalancing = &resp.Rebalancing
-		clusterCR.Status.MOD = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
+		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
 			return ctrl.Result{}, err
@@ -705,4 +764,32 @@ func (r *SimplyBlockStorageClusterReconciler) upsertCSICredentialsSecret(
 	})
 
 	return err
+}
+
+func capacityThreshold(t *simplyblockv1alpha1.CapacityThresholdSpec) int {
+	if t == nil {
+		return 0
+	}
+	return utils.IntPtrOrZero(t.Capacity)
+}
+
+func provisionedCapacityThreshold(t *simplyblockv1alpha1.CapacityThresholdSpec) int {
+	if t == nil {
+		return 0
+	}
+	return utils.IntPtrOrZero(t.ProvisionedCapacity)
+}
+
+func stripeDataChunks(s *simplyblockv1alpha1.StripeSpec) int {
+	if s == nil {
+		return 1
+	}
+	return utils.IntPtrOrDefault(s.DataChunks, 1)
+}
+
+func stripeParityChunks(s *simplyblockv1alpha1.StripeSpec) int {
+	if s == nil {
+		return 1
+	}
+	return utils.IntPtrOrDefault(s.ParityChunks, 1)
 }

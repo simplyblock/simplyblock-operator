@@ -1,8 +1,8 @@
 ## Append samples of your project ##
 resources:
 - simplyblock_v1alpha1_simplyblockstoragecluster.yaml
-- simplyblock_v1alpha1_storagenode.yaml
-- simplyblock_v1alpha1_pool.yaml
+- simplyblock_v1alpha1_simplyblockstoragenode.yaml
+- simplyblock_v1alpha1_simplyblockpool.yaml
 - simplyblock_v1alpha1_simplyblockdevice.yaml
 - simplyblock_v1alpha1_simplyblocktask.yaml
 - simplyblock_v1alpha1_simplyblocklvol.yaml

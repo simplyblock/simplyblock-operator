@@ -1,0 +1,1581 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+    control-plane: controller-manager
+  name: simplyblock-manager-system
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: simplyblockdevices.simplyblock.simplyblock.io
+spec:
+  group: simplyblock.simplyblock.io
+  names:
+    kind: SimplyBlockDevice
+    listKind: SimplyBlockDeviceList
+    plural: simplyblockdevices
+    singular: simplyblockdevice
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SimplyBlockDevice is the Schema for the simplyblockdevices API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of SimplyBlockDevice
+            properties:
+              action:
+                enum:
+                - remove
+                - restart
+                type: string
+              clusterName:
+                type: string
+              deviceID:
+                type: string
+              nodeUUID:
+                type: string
+            required:
+            - clusterName
+            type: object
+          status:
+            description: status defines the observed state of SimplyBlockDevice
+            properties:
+              actionStatus:
+                properties:
+                  action:
+                    type: string
+                  message:
+                    type: string
+                  nodeUUID:
+                    type: string
+                  observedGeneration:
+                    format: int64
+                    type: integer
+                  state:
+                    type: string
+                  triggered:
+                    type: boolean
+                  updatedAt:
+                    format: date-time
+                    type: string
+                type: object
+              nodes:
+                items:
+                  properties:
+                    devices:
+                      items:
+                        properties:
+                          health:
+                            type: string
+                          model:
+                            type: string
+                          size:
+                            type: string
+                          stats:
+                            items:
+                              properties:
+                                capacityUtil:
+                                  format: int64
+                                  type: integer
+                                riops:
+                                  format: int64
+                                  type: integer
+                                rtp:
+                                  format: int64
+                                  type: integer
+                                wiops:
+                                  format: int64
+                                  type: integer
+                                wtp:
+                                  format: int64
+                                  type: integer
+                              type: object
+                            type: array
+                          status:
+                            type: string
+                          utilization:
+                            format: int64
+                            type: integer
+                          uuid:
+                            type: string
+                        type: object
+                      type: array
+                    nodeUUID:
+                      type: string
+                  type: object
+                type: array
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: nodeUUID and deviceID are required when action is specified
+          rule: '!(has(self.spec.action) && self.spec.action != "" && ((!has(self.spec.nodeUUID)
+            || self.spec.nodeUUID == "") || (!has(self.spec.deviceID) || self.spec.deviceID
+            == "")))'
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: simplyblocklvols.simplyblock.simplyblock.io
+spec:
+  group: simplyblock.simplyblock.io
+  names:
+    kind: SimplyBlockLvol
+    listKind: SimplyBlockLvolList
+    plural: simplyblocklvols
+    singular: simplyblocklvol
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.lvols.length()
+      name: LVOLs
+      type: integer
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SimplyBlockLvol is the Schema for the simplyblocklvols API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of SimplyBlockLvol
+            properties:
+              clusterName:
+                type: string
+              poolName:
+                type: string
+            required:
+            - clusterName
+            - poolName
+            type: object
+          status:
+            description: status defines the observed state of SimplyBlockLvol
+            properties:
+              configured:
+                type: boolean
+              lvols:
+                items:
+                  properties:
+                    blobID:
+                      format: int64
+                      type: integer
+                    clonedFromSnap:
+                      type: string
+                    createDt:
+                      format: date-time
+                      type: string
+                    fabric:
+                      type: string
+                    ha:
+                      type: boolean
+                    health:
+                      type: boolean
+                    hostname:
+                      type: string
+                    isCrypto:
+                      type: boolean
+                    lvolName:
+                      type: string
+                    maxNamespacesPerSubsystem:
+                      format: int64
+                      type: integer
+                    namespaceID:
+                      format: int64
+                      type: integer
+                    nodeUUID:
+                      items:
+                        type: string
+                      type: array
+                    nqn:
+                      type: string
+                    poolName:
+                      type: string
+                    poolUUID:
+                      type: string
+                    pvcName:
+                      type: string
+                    qosClass:
+                      format: int64
+                      type: integer
+                    qosIOPS:
+                      format: int64
+                      type: integer
+                    qosRTP:
+                      format: int64
+                      type: integer
+                    qosRWTP:
+                      format: int64
+                      type: integer
+                    qosWTP:
+                      format: int64
+                      type: integer
+                    size:
+                      type: string
+                    snapName:
+                      type: string
+                    status:
+                      type: string
+                    stripeWdata:
+                      format: int64
+                      type: integer
+                    stripeWparity:
+                      format: int64
+                      type: integer
+                    subsysPort:
+                      format: int64
+                      type: integer
+                    updateDt:
+                      format: date-time
+                      type: string
+                    uuid:
+                      type: string
+                  type: object
+                type: array
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: simplyblockpools.simplyblock.simplyblock.io
+spec:
+  group: simplyblock.simplyblock.io
+  names:
+    kind: SimplyBlockPool
+    listKind: SimplyBlockPoolList
+    plural: simplyblockpools
+    singular: simplyblockpool
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SimplyBlockPool is the Schema for the pools API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of Pool
+            properties:
+              action:
+                type: string
+              capacityLimit:
+                type: string
+              clusterName:
+                type: string
+              name:
+                type: string
+              qosIOPSLimit:
+                format: int32
+                type: integer
+              rLimit:
+                format: int32
+                type: integer
+              rwLimit:
+                format: int32
+                type: integer
+              status:
+                type: string
+              wLimit:
+                format: int32
+                type: integer
+            required:
+            - clusterName
+            - name
+            type: object
+          status:
+            description: status defines the observed state of Pool
+            properties:
+              qosHost:
+                type: string
+              qosIOPSLimit:
+                format: int32
+                type: integer
+              rLimit:
+                format: int32
+                type: integer
+              rwLimit:
+                format: int32
+                type: integer
+              status:
+                type: string
+              uuid:
+                type: string
+              wLimit:
+                format: int32
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: simplyblockstorageclusters.simplyblock.simplyblock.io
+spec:
+  group: simplyblock.simplyblock.io
+  names:
+    kind: SimplyBlockStorageCluster
+    listKind: SimplyBlockStorageClusterList
+    plural: simplyblockstorageclusters
+    singular: simplyblockstoragecluster
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SimplyBlockStorageCluster is the Schema for the simplyblockstorageclusters
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of SimplyBlockStorageCluster
+            properties:
+              action:
+                enum:
+                - activate
+                - expand
+                type: string
+              blkSize:
+                format: int32
+                type: integer
+              capCrit:
+                format: int32
+                type: integer
+              capWarn:
+                format: int32
+                type: integer
+              clientQpairCount:
+                format: int32
+                type: integer
+              clusterName:
+                type: string
+              distrBs:
+                format: int32
+                type: integer
+              distrChunkBs:
+                format: int32
+                type: integer
+              enableNodeAffinity:
+                type: boolean
+              eventLogEntries:
+                format: int32
+                type: integer
+              fabric:
+                type: string
+              haType:
+                type: string
+              includeEventLog:
+                type: boolean
+              inflightIOThreshold:
+                format: int32
+                type: integer
+              isSingleNode:
+                type: boolean
+              maxQueueSize:
+                format: int32
+                type: integer
+              mgmtIfc:
+                description: Create-only
+                type: string
+              pageSizeInBlocks:
+                format: int32
+                type: integer
+              provCapCrit:
+                format: int32
+                type: integer
+              provCapWarn:
+                format: int32
+                type: integer
+              qosClasses:
+                description: Updatable
+                type: string
+              qpairCount:
+                format: int32
+                type: integer
+              strictNodeAntiAffinity:
+                type: boolean
+              stripeWdata:
+                format: int32
+                type: integer
+              stripeWparity:
+                format: int32
+                type: integer
+            required:
+            - clusterName
+            type: object
+          status:
+            description: status defines the observed state of SimplyBlockStorageCluster
+            properties:
+              MOD:
+                type: string
+              NQN:
+                type: string
+              UUID:
+                type: string
+              actionStatus:
+                properties:
+                  action:
+                    type: string
+                  message:
+                    type: string
+                  nodeUUID:
+                    type: string
+                  observedGeneration:
+                    format: int64
+                    type: integer
+                  state:
+                    type: string
+                  triggered:
+                    type: boolean
+                  updatedAt:
+                    format: date-time
+                    type: string
+                type: object
+              clusterName:
+                type: string
+              configured:
+                type: boolean
+              created:
+                format: date-time
+                type: string
+              lastUpdated:
+                format: date-time
+                type: string
+              mgmtNodes:
+                format: int32
+                type: integer
+              rebalancing:
+                type: boolean
+              secretName:
+                type: string
+              status:
+                type: string
+              storageNodes:
+                format: int32
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: simplyblockstoragenodes.simplyblock.simplyblock.io
+spec:
+  group: simplyblock.simplyblock.io
+  names:
+    kind: SimplyBlockStorageNode
+    listKind: SimplyBlockStorageNodeList
+    plural: simplyblockstoragenodes
+    singular: simplyblockstoragenode
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SimplyBlockStorageNode is the Schema for the storagenodes API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of StorageNode
+            properties:
+              action:
+                enum:
+                - shutdown
+                - restart
+                - suspend
+                - resume
+                - remove
+                type: string
+              addPcieToAllowList:
+                description: restart params
+                items:
+                  type: string
+                type: array
+              clusterImage:
+                type: string
+              clusterName:
+                type: string
+              coreIsolation:
+                type: boolean
+              coreMask:
+                type: string
+              corePercentage:
+                format: int32
+                type: integer
+              dataNIC:
+                items:
+                  type: string
+                type: array
+              deviceNames:
+                items:
+                  type: string
+                type: array
+              driveSizeRange:
+                type: string
+              enableCpuTopology:
+                type: boolean
+              force:
+                type: boolean
+              format4k:
+                type: boolean
+              haJM:
+                type: boolean
+              haJmCount:
+                format: int32
+                type: integer
+              idDeviceByNQN:
+                type: boolean
+              jmPercent:
+                format: int32
+                type: integer
+              maxLVol:
+                format: int32
+                type: integer
+              maxSize:
+                type: string
+              mgmtIfc:
+                type: string
+              nodeAddr:
+                type: string
+              nodeUUID:
+                description: NodeUUID is required when action is specified
+                type: string
+              nodesPerSocket:
+                format: int32
+                type: integer
+              openShiftCluster:
+                type: boolean
+              partitions:
+                format: int32
+                type: integer
+              pcieAllowList:
+                items:
+                  type: string
+                type: array
+              pcieDenyList:
+                items:
+                  type: string
+                type: array
+              pcieModel:
+                type: string
+              reservedSystemCPU:
+                type: string
+              skipKubeletConfiguration:
+                type: boolean
+              socketsToUse:
+                format: int32
+                type: integer
+              spdkDebug:
+                type: boolean
+              spdkImage:
+                type: string
+              tolerations:
+                items:
+                  description: |-
+                    The pod this Toleration is attached to tolerates any taint that matches
+                    the triple <key,value,effect> using the matching operator <operator>.
+                  properties:
+                    effect:
+                      description: |-
+                        Effect indicates the taint effect to match. Empty means match all taint effects.
+                        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                      type: string
+                    key:
+                      description: |-
+                        Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                      type: string
+                    operator:
+                      description: |-
+                        Operator represents a key's relationship to the value.
+                        Valid operators are Exists and Equal. Defaults to Equal.
+                        Exists is equivalent to wildcard for value, so that a pod can
+                        tolerate all taints of a particular category.
+                      type: string
+                    tolerationSeconds:
+                      description: |-
+                        TolerationSeconds represents the period of time the toleration (which must be
+                        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                        it is not set, which means tolerate the taint forever (do not evict). Zero and
+                        negative values will be treated as 0 (evict immediately) by the system.
+                      format: int64
+                      type: integer
+                    value:
+                      description: |-
+                        Value is the taint value the toleration matches to.
+                        If the operator is Exists, the value should be empty, otherwise just a regular string.
+                      type: string
+                  type: object
+                type: array
+              ubuntuHost:
+                type: boolean
+              useSeparateJournalDevice:
+                type: boolean
+              workerNode:
+                type: string
+              workerNodes:
+                items:
+                  type: string
+                type: array
+            required:
+            - clusterName
+            type: object
+          status:
+            description: status defines the observed state of StorageNode
+            properties:
+              actionStatus:
+                properties:
+                  action:
+                    type: string
+                  message:
+                    type: string
+                  nodeUUID:
+                    type: string
+                  observedGeneration:
+                    format: int64
+                    type: integer
+                  state:
+                    type: string
+                  triggered:
+                    type: boolean
+                  updatedAt:
+                    format: date-time
+                    type: string
+                type: object
+              nodes:
+                items:
+                  properties:
+                    cpu:
+                      format: int32
+                      type: integer
+                    devices:
+                      type: string
+                    health:
+                      type: boolean
+                    hostname:
+                      type: string
+                    lvol_port:
+                      format: int32
+                      type: integer
+                    memory:
+                      type: string
+                    mgmtIp:
+                      type: string
+                    nvmf_port:
+                      format: int32
+                      type: integer
+                    rpc_port:
+                      format: int32
+                      type: integer
+                    status:
+                      type: string
+                    uptime:
+                      type: string
+                    uuid:
+                      type: string
+                    volumes:
+                      format: int32
+                      type: integer
+                  type: object
+                type: array
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: nodeUUID is required when action is specified
+          rule: '!(has(self.spec.action) && self.spec.action != "" && (!has(self.spec.nodeUUID)
+            || self.spec.nodeUUID == ""))'
+        - message: clusterImage, maxLVol, and workerNodes are required when action
+            is not specified
+          rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.clusterImage)
+            && self.spec.clusterImage != "" && has(self.spec.maxLVol) && has(self.spec.workerNodes)
+            && size(self.spec.workerNodes) > 0)
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: simplyblocktasks.simplyblock.simplyblock.io
+spec:
+  group: simplyblock.simplyblock.io
+  names:
+    kind: SimplyBlockTask
+    listKind: SimplyBlockTaskList
+    plural: simplyblocktasks
+    singular: simplyblocktask
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SimplyBlockTask is the Schema for the simplyblocktasks API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of SimplyBlockTask
+            properties:
+              clusterName:
+                type: string
+              subtasks:
+                type: boolean
+              taskID:
+                type: string
+            required:
+            - clusterName
+            type: object
+          status:
+            description: status defines the observed state of SimplyBlockTask
+            properties:
+              tasks:
+                items:
+                  properties:
+                    canceled:
+                      type: boolean
+                    parentTask:
+                      type: string
+                    retried:
+                      format: int32
+                      type: integer
+                    startedAt:
+                      format: date-time
+                      type: string
+                    taskResult:
+                      type: string
+                    taskStatus:
+                      type: string
+                    taskType:
+                      type: string
+                    uuid:
+                      type: string
+                  type: object
+                type: array
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-controller-manager
+  namespace: simplyblock-manager-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-leader-election-role
+  namespace: simplyblock-manager-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-manager-manager-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockdevices
+  - simplyblocklvols
+  - simplyblockpools
+  - simplyblockstorageclusters
+  - simplyblockstoragenodes
+  - simplyblocktasks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockdevices/finalizers
+  - simplyblocklvols/finalizers
+  - simplyblockpools/finalizers
+  - simplyblockstorageclusters/finalizers
+  - simplyblockstoragenodes/finalizers
+  - simplyblocktasks/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockdevices/status
+  - simplyblocklvols/status
+  - simplyblockpools/status
+  - simplyblockstorageclusters/status
+  - simplyblockstoragenodes/status
+  - simplyblocktasks/status
+  verbs:
+  - get
+  - patch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-manager-metrics-auth-role
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-manager-metrics-reader
+rules:
+- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblockdevice-admin-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockdevices
+  verbs:
+  - '*'
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockdevices/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblockdevice-editor-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockdevices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockdevices/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblockdevice-viewer-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockdevices
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockdevices/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblocklvol-admin-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblocklvols
+  verbs:
+  - '*'
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblocklvols/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblocklvol-editor-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblocklvols
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblocklvols/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblocklvol-viewer-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblocklvols
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblocklvols/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblockpool-admin-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockpools
+  verbs:
+  - '*'
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockpools/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblockpool-editor-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockpools
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockpools/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblockpool-viewer-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockpools
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockpools/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblockstoragecluster-admin-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockstorageclusters
+  verbs:
+  - '*'
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockstorageclusters/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblockstoragecluster-editor-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockstorageclusters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockstorageclusters/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblockstoragecluster-viewer-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockstorageclusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockstorageclusters/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblockstoragenode-admin-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockstoragenodes
+  verbs:
+  - '*'
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockstoragenodes/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblockstoragenode-viewer-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockstoragenodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockstoragenodes/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblocktask-admin-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblocktasks
+  verbs:
+  - '*'
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblocktasks/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblocktask-editor-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblocktasks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblocktasks/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-simplyblocktask-viewer-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblocktasks
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblocktasks/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-ssimplyblocktoragenode-editor-role
+rules:
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockstoragenodes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - simplyblock.simplyblock.io
+  resources:
+  - simplyblockstoragenodes/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-leader-election-rolebinding
+  namespace: simplyblock-manager-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: simplyblock-manager-leader-election-role
+subjects:
+- kind: ServiceAccount
+  name: simplyblock-manager-controller-manager
+  namespace: simplyblock-manager-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: simplyblock-manager-manager-role
+subjects:
+- kind: ServiceAccount
+  name: simplyblock-manager-controller-manager
+  namespace: simplyblock-manager-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simplyblock-manager-metrics-auth-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: simplyblock-manager-metrics-auth-role
+subjects:
+- kind: ServiceAccount
+  name: simplyblock-manager-controller-manager
+  namespace: simplyblock-manager-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+    control-plane: controller-manager
+  name: simplyblock-manager-controller-manager-metrics-service
+  namespace: simplyblock-manager-system
+spec:
+  ports:
+  - name: https
+    port: 8443
+    protocol: TCP
+    targetPort: 8443
+  selector:
+    app.kubernetes.io/name: simplyblock-manager
+    control-plane: controller-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+    control-plane: controller-manager
+  name: simplyblock-manager-controller-manager
+  namespace: simplyblock-manager-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: simplyblock-manager
+      control-plane: controller-manager
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        app.kubernetes.io/name: simplyblock-manager
+        control-plane: controller-manager
+    spec:
+      containers:
+      - args:
+        - --metrics-bind-address=:8443
+        - --leader-elect
+        - --health-probe-bind-address=:8081
+        command:
+        - /manager
+        image: controller:latest
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        name: manager
+        ports: []
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts: []
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: simplyblock-manager-controller-manager
+      terminationGracePeriodSeconds: 10
+      volumes: []

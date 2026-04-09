@@ -129,10 +129,10 @@ func (r *SimplyBlockPoolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			Name:          poolCR.Spec.Name,
 			PoolMax:       utils.IntPtrOrDefault(utils.ParseSize(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
 			VolumeMaxSize: 0,
-			MaxRwMB:       utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
-			MaxRwIOPS:     utils.IntPtrOrDefault(poolCR.Spec.QoSIOPSLimit, 0),
-			MaxRMB:        utils.IntPtrOrDefault(poolCR.Spec.RLimit, 0),
-			MaxWMB:        utils.IntPtrOrDefault(poolCR.Spec.WLimit, 0),
+			MaxRwMB:       poolSpecQoSThroughputReadWrite(poolCR.Spec.QosSpec),
+			MaxRwIOPS:     poolSpecQoSIOPS(poolCR.Spec.QosSpec),
+			MaxRMB:        poolSpecQoSThroughputRead(poolCR.Spec.QosSpec),
+			MaxWMB:        poolSpecQoSThroughputWrite(poolCR.Spec.QosSpec),
 			CRName:        poolCR.Name,
 			CRNameSpace:   poolCR.Namespace,
 			CRPlural:      "simplyblockpools",
@@ -160,11 +160,15 @@ func (r *SimplyBlockPoolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// API returns UUID of the created pool
 		poolCR.Status.UUID = apiResp.UUID
 		poolCR.Status.Status = apiResp.Status
-		poolCR.Status.QoSIOPSLimit = utils.ToInt32Ptr(apiResp.QoSIOPSLimit)
-		poolCR.Status.RWLimit = utils.ToInt32Ptr(apiResp.RWLimit)
-		poolCR.Status.RLimit = utils.ToInt32Ptr(apiResp.RLimit)
-		poolCR.Status.WLimit = utils.ToInt32Ptr(apiResp.WLimit)
-		poolCR.Status.QoSHost = apiResp.QoSHost
+		poolCR.Status.QoS = &simplyblockv1alpha1.PoolQoSStatus{
+			Host: apiResp.QoSHost,
+			IOPS: utils.ToInt32Ptr(apiResp.QoSIOPSLimit),
+			Throughput: &simplyblockv1alpha1.PoolQoSThroughputStatus{
+				Read:      utils.ToInt32Ptr(apiResp.RLimit),
+				ReadWrite: utils.ToInt32Ptr(apiResp.RWLimit),
+				Write:     utils.ToInt32Ptr(apiResp.WLimit),
+			},
+		}
 
 		if err := r.Status().Update(ctx, poolCR); err != nil {
 			log.Error(err, "Failed to update pool status after creation")
@@ -203,4 +207,32 @@ func (r *SimplyBlockPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&simplyblockv1alpha1.SimplyBlockPool{}).
 		Named("pool").
 		Complete(r)
+}
+
+func poolSpecQoSIOPS(q *simplyblockv1alpha1.PoolQoSSpec) int {
+	if q == nil {
+		return 0
+	}
+	return utils.IntPtrOrDefault(q.IOPS, 0)
+}
+
+func poolSpecQoSThroughputRead(q *simplyblockv1alpha1.PoolQoSSpec) int {
+	if q == nil || q.Throughput == nil {
+		return 0
+	}
+	return utils.IntPtrOrDefault(q.Throughput.Read, 0)
+}
+
+func poolSpecQoSThroughputReadWrite(q *simplyblockv1alpha1.PoolQoSSpec) int {
+	if q == nil || q.Throughput == nil {
+		return 0
+	}
+	return utils.IntPtrOrDefault(q.Throughput.ReadWrite, 0)
+}
+
+func poolSpecQoSThroughputWrite(q *simplyblockv1alpha1.PoolQoSSpec) int {
+	if q == nil || q.Throughput == nil {
+		return 0
+	}
+	return utils.IntPtrOrDefault(q.Throughput.Write, 0)
 }

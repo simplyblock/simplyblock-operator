@@ -20,7 +20,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *
 	initCmd := []string{
 		"python",
 		"simplyblock_web/node_configure.py",
-		"--max-lvol=" + Int32PtrToString(sn.Spec.MaxLVol),
+		"--max-lvol=" + Int32PtrToString(sn.Spec.MaxLogicalVolumeCount),
 		"--max-size=" + sn.Spec.MaxSize,
 	}
 
