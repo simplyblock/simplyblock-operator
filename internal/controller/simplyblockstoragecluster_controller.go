@@ -126,6 +126,9 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	endpoint := "/api/v1/health/fdb/"
 	body, status, err := apiClient.Do(ctx, "", http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
 		log.Error(err, "FDB not ready", "status", status, "response", string(body))
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
@@ -197,6 +200,9 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	body, status, err = apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
 	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
 		log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	}
@@ -438,6 +444,9 @@ func (r *StorageClusterReconciler) handleDeletion(
 
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
 	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
 		log.Error(err, "Cluster DELETE API call failed, will retry", "name", clusterCR.Name, "status", status, "clusterUUID", clusterUUID, "response", string(body))
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, true, nil
 	}
@@ -531,8 +540,12 @@ func (r *StorageClusterReconciler) reconcileActivate(
 		apiClient := webapi.NewClient()
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/activate", clusterUUID)
 
-		_, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
+			log.Error(err, "Cluster activate API call failed", "cluster", clusterCR.Name, "status", status, "clusterUUID", clusterUUID, "response", string(body))
 			return r.failActivate(ctx, clusterCR,
 				fmt.Errorf("activate API failed: status=%d err=%v", status, err))
 		}
@@ -572,6 +585,10 @@ func (r *StorageClusterReconciler) reconcileActivate(
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
+		log.Error(err, "Cluster GET API call failed during activate poll", "cluster", clusterCR.Name, "status", status, "clusterUUID", clusterUUID, "response", string(body))
 		return r.failActivate(ctx, clusterCR, err)
 	}
 
@@ -647,8 +664,12 @@ func (r *StorageClusterReconciler) reconcileExpand(
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/expand", clusterUUID)
 
-		_, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
+			log.Error(err, "Cluster expand API call failed", "cluster", clusterCR.Name, "status", status, "clusterUUID", clusterUUID, "response", string(body))
 			return r.failExpand(ctx, clusterCR,
 				fmt.Errorf("expand API failed: status=%d err=%v", status, err))
 		}
@@ -666,6 +687,10 @@ func (r *StorageClusterReconciler) reconcileExpand(
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
+		log.Error(err, "Cluster GET API call failed during expand poll", "cluster", clusterCR.Name, "status", status, "clusterUUID", clusterUUID, "response", string(body))
 		return r.failExpand(ctx, clusterCR, err)
 	}
 

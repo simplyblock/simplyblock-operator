@@ -168,6 +168,9 @@ func (r *LvolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolUUID)
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPut, endpoint, params)
 		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
 			log.Error(err, "Pool Update failed", "status", status, "response", string(body))
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}
@@ -196,6 +199,9 @@ func (r *LvolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
 		log.Error(err, "Failed to fetch lvols",
 			"poolUUID", poolUUID,
 			"endpoint", endpoint,

@@ -138,6 +138,9 @@ func (r *DeviceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		apiClient := webapi.NewClient()
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, nodesEndpoint, nil)
 		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
 			log.Error(err, "Failed to fetch storage nodes",
 				"endpoint", nodesEndpoint,
 				"status", status,
@@ -174,6 +177,9 @@ func (r *DeviceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
 			log.Error(err, "Failed to fetch devices",
 				"nodeUUID", nodeUUID,
 				"endpoint", endpoint,
@@ -332,8 +338,12 @@ func (r *DeviceReconciler) reconcileDeviceAction(
 			return ctrl.Result{}, fmt.Errorf("unsupported device action: %s", action)
 		}
 
-		_, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
+			log.Error(err, "Device action API call failed", "action", action, "deviceID", deviceID, "nodeUUID", nodeUUID, "status", status, "response", string(body))
 			return r.failDeviceAction(ctx, devCR,
 				fmt.Errorf("device action %s failed: status=%d err=%v", action, status, err))
 		}
@@ -361,6 +371,10 @@ func (r *DeviceReconciler) reconcileDeviceAction(
 
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
+		log.Error(err, "Device status GET API call failed", "action", action, "deviceID", deviceID, "nodeUUID", nodeUUID, "status", status, "response", string(body))
 		return r.failDeviceAction(ctx, devCR, err)
 	}
 
