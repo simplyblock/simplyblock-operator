@@ -47,7 +47,7 @@ type SimplyBlockStorageNodeReconciler struct {
 }
 
 type SNODEAPIResponse struct {
-	UUID      string `json:"id"`
+	UUID      string `json:"uuid"`
 	Status    string `json:"status"`
 	IP        string `json:"mgmt_ip"`
 	Health    bool   `json:"health_check"`

@@ -41,7 +41,7 @@ type SimplyBlockPoolReconciler struct {
 }
 
 type POOLAPIResponse struct {
-	UUID         string `json:"id"`
+	UUID         string `json:"uuid"`
 	QoSIOPSLimit int64  `json:"max_rw_ios_per_sec"`
 	RWLimit      int64  `json:"max_rw_mbytes_per_sec"`
 	RLimit       int64  `json:"max_r_mbytes_per_sec"`
