@@ -30,7 +30,7 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
 )
 
-var _ = Describe("SimplyBlockSnapshotReplication Controller", func() {
+var _ = Describe("SnapshotReplication Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
 
@@ -40,13 +40,13 @@ var _ = Describe("SimplyBlockSnapshotReplication Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		simplyblocksnapshotreplication := &simplyblockv1alpha1.SimplyBlockSnapshotReplication{}
+		snapshotreplication := &simplyblockv1alpha1.SnapshotReplication{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind SimplyBlockSnapshotReplication")
-			err := k8sClient.Get(ctx, typeNamespacedName, simplyblocksnapshotreplication)
+			By("creating the custom resource for the Kind SnapshotReplication")
+			err := k8sClient.Get(ctx, typeNamespacedName, snapshotreplication)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &simplyblockv1alpha1.SimplyBlockSnapshotReplication{
+				resource := &simplyblockv1alpha1.SnapshotReplication{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,16 +59,16 @@ var _ = Describe("SimplyBlockSnapshotReplication Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &simplyblockv1alpha1.SimplyBlockSnapshotReplication{}
+			resource := &simplyblockv1alpha1.SnapshotReplication{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance SimplyBlockSnapshotReplication")
+			By("Cleanup the specific resource instance SnapshotReplication")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &SimplyBlockSnapshotReplicationReconciler{
+			controllerReconciler := &SnapshotReplicationReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}

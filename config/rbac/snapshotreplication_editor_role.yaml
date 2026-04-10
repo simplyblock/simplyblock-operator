@@ -1,7 +1,7 @@
 # This rule is not used by the project simplyblock-manager itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants permissions to create, update, and delete resources within the simplyblock.simplyblock.io.
+# Grants permissions to create, update, and delete resources within the storage.simplyblock.io.
 # This role is intended for users who need to manage these resources
 # but should not control RBAC or manage permissions for others.
 
@@ -11,12 +11,12 @@ metadata:
   labels:
     app.kubernetes.io/name: simplyblock-manager
     app.kubernetes.io/managed-by: kustomize
-  name: simplyblocksnapshotreplication-editor-role
+  name: snapshotreplication-editor-role
 rules:
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblocksnapshotreplications
+  - snapshotreplications
   verbs:
   - create
   - delete
@@ -26,8 +26,8 @@ rules:
   - update
   - watch
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblocksnapshotreplications/status
+  - snapshotreplications/status
   verbs:
   - get

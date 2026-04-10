@@ -35,26 +35,26 @@ import (
 	"github.com/simplyblock/simplyblock-manager/internal/webapi"
 )
 
-// SimplyBlockSnapshotReplicationReconciler reconciles a SimplyBlockSnapshotReplication object
-type SimplyBlockSnapshotReplicationReconciler struct {
+// SnapshotReplicationReconciler reconciles a SnapshotReplication object
+type SnapshotReplicationReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocksnapshotreplications,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocksnapshotreplications/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocksnapshotreplications/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=snapshotreplications,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=snapshotreplications/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=snapshotreplications/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the SimplyBlockSnapshotReplication object against the actual cluster state, and then
+// the SnapshotReplication object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
-func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *SnapshotReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
 	apiClient := webapi.NewClient()
@@ -148,29 +148,29 @@ func (r *SimplyBlockSnapshotReplicationReconciler) Reconcile(ctx context.Context
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *SimplyBlockSnapshotReplicationReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *SnapshotReplicationReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.SimplyBlockSnapshotReplication{}).
-		Named("simplyblocksnapshotreplication").
+		For(&simplyblockv1alpha1.SnapshotReplication{}).
+		Named("snapshotreplication").
 		Complete(r)
 }
 
 /* -------------------- helpers func to reduce Reconcile complexity -------------------- */
 
-func (r *SimplyBlockSnapshotReplicationReconciler) getSnapRepCR(
+func (r *SnapshotReplicationReconciler) getSnapRepCR(
 	ctx context.Context,
 	req ctrl.Request,
-) (*simplyblockv1alpha1.SimplyBlockSnapshotReplication, error) {
-	snapRepCR := &simplyblockv1alpha1.SimplyBlockSnapshotReplication{}
+) (*simplyblockv1alpha1.SnapshotReplication, error) {
+	snapRepCR := &simplyblockv1alpha1.SnapshotReplication{}
 	if err := r.Get(ctx, req.NamespacedName, snapRepCR); err != nil {
 		return nil, client.IgnoreNotFound(err)
 	}
 	return snapRepCR, nil
 }
 
-func (r *SimplyBlockSnapshotReplicationReconciler) resolveSourceClusterAuth(
+func (r *SnapshotReplicationReconciler) resolveSourceClusterAuth(
 	ctx context.Context,
-	snapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
 ) (clusterUUID string, clusterSecret string, res *ctrl.Result, err error) {
 	log := logf.FromContext(ctx)
 
@@ -192,9 +192,9 @@ func (r *SimplyBlockSnapshotReplicationReconciler) resolveSourceClusterAuth(
 	return clusterUUID, clusterSecret, nil, nil
 }
 
-func (r *SimplyBlockSnapshotReplicationReconciler) resolveSourcePoolForFreshFailback(
+func (r *SnapshotReplicationReconciler) resolveSourcePoolForFreshFailback(
 	ctx context.Context,
-	snapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
 ) (string, error) {
 	if strings.TrimSpace(snapRepCR.Spec.SourcePool) == "" {
 		return "", fmt.Errorf("spec.sourcePool must be set for failback to a fresh source cluster")
@@ -214,10 +214,10 @@ func (r *SimplyBlockSnapshotReplicationReconciler) resolveSourcePoolForFreshFail
 	return sourcePoolUUID, nil
 }
 
-func (r *SimplyBlockSnapshotReplicationReconciler) ensureConfigured(
+func (r *SnapshotReplicationReconciler) ensureConfigured(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	snapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
 	sourceClusterUUID string,
 	sourceClusterSecret string,
 ) *ctrl.Result {
@@ -274,10 +274,10 @@ func (r *SimplyBlockSnapshotReplicationReconciler) ensureConfigured(
 	return &res
 }
 
-func (r *SimplyBlockSnapshotReplicationReconciler) computeFailoverAndTargetIDs(
+func (r *SnapshotReplicationReconciler) computeFailoverAndTargetIDs(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	snapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
 	sourceClusterUUID string,
 	sourceClusterSecret string,
 ) (failover bool, targetIDs map[string]struct{}, res *ctrl.Result, err error) {
@@ -327,10 +327,10 @@ func (r *SimplyBlockSnapshotReplicationReconciler) computeFailoverAndTargetIDs(
 	return true, ids, nil, nil
 }
 
-func (r *SimplyBlockSnapshotReplicationReconciler) replicateAcrossPools(
+func (r *SnapshotReplicationReconciler) replicateAcrossPools(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	snapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
 	sourceClusterUUID string,
 	sourceClusterSecret string,
 	failover bool,
@@ -378,10 +378,10 @@ func (r *SimplyBlockSnapshotReplicationReconciler) replicateAcrossPools(
 	return nil
 }
 
-func (r *SimplyBlockSnapshotReplicationReconciler) handleFailoverReplication(
+func (r *SnapshotReplicationReconciler) handleFailoverReplication(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	snapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
 	clusterUUID string,
 	clusterSecret string,
 	poolUUID string,
@@ -425,7 +425,7 @@ func (r *SimplyBlockSnapshotReplicationReconciler) handleFailoverReplication(
 	)
 }
 
-func (r *SimplyBlockSnapshotReplicationReconciler) handleNormalReplication(
+func (r *SnapshotReplicationReconciler) handleNormalReplication(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
@@ -511,9 +511,9 @@ func (r *SimplyBlockSnapshotReplicationReconciler) handleNormalReplication(
 
 /* -------------------- Existing helpers -------------------- */
 
-func (r *SimplyBlockSnapshotReplicationReconciler) handleDeletion(
+func (r *SnapshotReplicationReconciler) handleDeletion(
 	ctx context.Context,
-	SnapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+	SnapRepCR *simplyblockv1alpha1.SnapshotReplication,
 ) (bool, error) {
 
 	if SnapRepCR.DeletionTimestamp.IsZero() {
@@ -528,9 +528,9 @@ func (r *SimplyBlockSnapshotReplicationReconciler) handleDeletion(
 	return true, r.Update(ctx, SnapRepCR)
 }
 
-func (r *SimplyBlockSnapshotReplicationReconciler) ensureFinalizer(
+func (r *SnapshotReplicationReconciler) ensureFinalizer(
 	ctx context.Context,
-	SnapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+	SnapRepCR *simplyblockv1alpha1.SnapshotReplication,
 ) (bool, error) {
 
 	if controllerutil.ContainsFinalizer(SnapRepCR, "simplyblock.replication.finalizer") {
@@ -629,10 +629,10 @@ func buildLvolIDSet(
 	return ids, nil
 }
 
-func (r *SimplyBlockSnapshotReplicationReconciler) handleFailbackAction(
+func (r *SnapshotReplicationReconciler) handleFailbackAction(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	snapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
 	sourceClusterUUID string,
 	sourceClusterSecret string,
 ) (*ctrl.Result, bool, error) {
@@ -1162,10 +1162,10 @@ func findSourceLvolForFailback(
 	return "", "", fmt.Errorf("source lvol not found for target lvol %s (filterID=%s)", targetLvol.UUID, filterID)
 }
 
-func (r *SimplyBlockSnapshotReplicationReconciler) resolveSourceFailbackTarget(
+func (r *SnapshotReplicationReconciler) resolveSourceFailbackTarget(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	snapRepCR *simplyblockv1alpha1.SimplyBlockSnapshotReplication,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
 	sourceClusterSecret string,
 	sourceClusterUUID string,
 	targetLvol *utils.Lvol,

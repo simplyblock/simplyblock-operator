@@ -23,8 +23,8 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// SimplyBlockSnapshotReplicationSpec defines the desired state of SimplyBlockSnapshotReplication
-type SimplyBlockSnapshotReplicationSpec struct {
+// SnapshotReplicationSpec defines the desired state of SnapshotReplication
+type SnapshotReplicationSpec struct {
 	// Source cluster for the snapshots
 	SourceCluster string `json:"sourceCluster"`
 
@@ -56,8 +56,8 @@ type SimplyBlockSnapshotReplicationSpec struct {
 	VolumeIDs []string `json:"volumeIDs,omitempty"`
 }
 
-// SimplyBlockSnapshotReplicationStatus defines the observed state of SimplyBlockSnapshotReplication.
-type SimplyBlockSnapshotReplicationStatus struct {
+// SnapshotReplicationStatus defines the observed state of SnapshotReplication.
+type SnapshotReplicationStatus struct {
 	Configured bool `json:"configured,omitempty"`
 
 	// The metadata.generation value for which failback was last processed.
@@ -98,32 +98,32 @@ type ReplicationError struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 
-// SimplyBlockSnapshotReplication is the Schema for the simplyblocksnapshotreplications API
-type SimplyBlockSnapshotReplication struct {
+// SnapshotReplication is the Schema for the snapshotreplications API
+type SnapshotReplication struct {
 	metav1.TypeMeta `json:",inline"`
 
 	// metadata is a standard object metadata
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	// spec defines the desired state of SimplyBlockSnapshotReplication
+	// spec defines the desired state of SnapshotReplication
 	// +required
-	Spec SimplyBlockSnapshotReplicationSpec `json:"spec"`
+	Spec SnapshotReplicationSpec `json:"spec"`
 
-	// status defines the observed state of SimplyBlockSnapshotReplication
+	// status defines the observed state of SnapshotReplication
 	// +optional
-	Status SimplyBlockSnapshotReplicationStatus `json:"status,omitzero"`
+	Status SnapshotReplicationStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
 
-// SimplyBlockSnapshotReplicationList contains a list of SimplyBlockSnapshotReplication
-type SimplyBlockSnapshotReplicationList struct {
+// SnapshotReplicationList contains a list of SnapshotReplication
+type SnapshotReplicationList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`
-	Items           []SimplyBlockSnapshotReplication `json:"items"`
+	Items           []SnapshotReplication `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&SimplyBlockSnapshotReplication{}, &SimplyBlockSnapshotReplicationList{})
+	SchemeBuilder.Register(&SnapshotReplication{}, &SnapshotReplicationList{})
 }

@@ -1,7 +1,7 @@
 # This rule is not used by the project simplyblock-manager itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants read-only access to simplyblock.simplyblock.io resources.
+# Grants read-only access to storage.simplyblock.io resources.
 # This role is intended for users who need visibility into these resources
 # without permissions to modify them. It is ideal for monitoring purposes and limited-access viewing.
 
@@ -11,19 +11,19 @@ metadata:
   labels:
     app.kubernetes.io/name: simplyblock-manager
     app.kubernetes.io/managed-by: kustomize
-  name: simplyblocksnapshotreplication-viewer-role
+  name: snapshotreplication-viewer-role
 rules:
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblocksnapshotreplications
+  - snapshotreplications
   verbs:
   - get
   - list
   - watch
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblocksnapshotreplications/status
+  - snapshotreplications/status
   verbs:
   - get
