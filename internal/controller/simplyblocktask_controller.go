@@ -141,7 +141,10 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	if err != nil || status >= 300 {
-		log.Error(err, "Failed to fetch task(s)", "task", taskCR.Name, "status", status)
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
+		log.Error(err, "Failed to fetch task(s)", "task", taskCR.Name, "status", status, "response", string(body))
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 

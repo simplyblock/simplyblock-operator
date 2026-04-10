@@ -233,6 +233,9 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
 		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
 			log.Error(err, "StorageNode creation failed", "status", status, "response", string(body))
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}
@@ -499,7 +502,10 @@ func waitForNodeOnline(
 		log.Info("SNODE LIST raw API response", "endpoint", endpoint, "status", status, "body", string(body))
 
 		if err != nil || status >= 300 {
-			log.Error(err, "Failed to get storage node statuses", "node", nodeName, "status", status)
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
+			log.Error(err, "Failed to get storage node statuses", "node", nodeName, "status", status, "response", string(body))
 		}
 
 		if strings.TrimSpace(string(body)) == "[]" {
@@ -809,12 +815,12 @@ func (r *StorageNodeReconciler) performNodeAction(
 	}
 
 	respBody, status, err := apiClient.Do(ctx, clusterSecret, method, endpoint, body)
-	if err != nil {
-		return err
-	}
-
-	if status >= 300 {
-		return fmt.Errorf("action API failed: status=%d body=%s", status, string(respBody))
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
+		log.Error(err, "Node action API call failed", "action", snCR.Spec.Action, "nodeUUID", snCR.Spec.NodeUUID, "status", status, "response", string(respBody))
+		return fmt.Errorf("action API failed: status=%d err=%v", status, err)
 	}
 
 	log.Info(
@@ -892,11 +898,15 @@ func (r *StorageNodeReconciler) waitForActionCompletion(
 		}
 
 		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
 			log.Error(
 				err,
 				"Failed to get node status",
 				"nodeUUID", nodeUUID,
 				"status", status,
+				"response", string(body),
 			)
 			waitForActionCompletionSleepFn(waitForActionCompletionWaitInterval)
 			continue
