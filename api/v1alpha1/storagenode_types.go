@@ -106,12 +106,43 @@ type StorageNodeSpec struct {
 	Force *bool `json:"force,omitempty"`
 }
 
+// Drain coordination phases for a worker node undergoing a rolling upgrade drain.
+const (
+	// DrainPhaseDetected means the node is cordoned and waiting for a drain slot.
+	DrainPhaseDetected = "detected"
+	// DrainPhaseShutdownCalled means the simplyblock shutdown API has been called.
+	DrainPhaseShutdownCalled = "shutdown_called"
+	// DrainPhaseDraining means shutdown is confirmed and the PDB has been relaxed to allow pod eviction.
+	DrainPhaseDraining = "draining"
+	// DrainPhaseRestartCalled means the node SPDK stack is back and the simplyblock restart API has been called.
+	DrainPhaseRestartCalled = "restart_called"
+	// DrainPhaseComplete means the node is back online in the simplyblock cluster.
+	DrainPhaseComplete = "complete"
+	// DrainPhaseFailed means an unrecoverable error occurred during drain coordination.
+	DrainPhaseFailed = "failed"
+)
+
+// NodeDrainState tracks the upgrade-drain coordination state for a single worker node.
+type NodeDrainState struct {
+	// Hostname is the Kubernetes node name.
+	Hostname string `json:"hostname"`
+	// Phase is the current drain coordination phase.
+	// +kubebuilder:validation:Enum=detected;shutdown_called;draining;restart_called;complete;failed
+	Phase string `json:"phase"`
+	// StartedAt is when drain coordination began for this node.
+	StartedAt metav1.Time `json:"startedAt"`
+	// Message provides additional status detail or error information.
+	Message string `json:"message,omitempty"`
+}
+
 // StorageNodeStatus defines the observed state of StorageNode.
 type StorageNodeStatus struct {
 	// Nodes is the observed state of each managed storage node.
 	Nodes []NodeStatus `json:"nodes,omitempty"`
 	// ActionStatus tracks the latest action execution status.
 	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
+	// DrainCoordination tracks the upgrade-drain state per worker node.
+	DrainCoordination []NodeDrainState `json:"drainCoordination,omitempty"`
 }
 
 type NodeStatus struct {
