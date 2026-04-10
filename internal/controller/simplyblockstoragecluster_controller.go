@@ -403,9 +403,13 @@ func (r *StorageClusterReconciler) handleDeletion(
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 ) (ctrl.Result, bool, error) {
 
+	log := logf.FromContext(ctx)
+
 	if clusterCR.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, false, nil
 	}
+
+	log.Info("Handling deletion", "name", clusterCR.Name)
 
 	if !controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
 		return ctrl.Result{}, true, nil
@@ -417,6 +421,7 @@ func (r *StorageClusterReconciler) handleDeletion(
 	}
 
 	if clusterCR.Status.UUID == "" {
+		log.Info("Cluster has no UUID, removing finalizer without API call", "name", clusterCR.Name)
 		controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
 		return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 	}
@@ -424,6 +429,7 @@ func (r *StorageClusterReconciler) handleDeletion(
 	clusterUUID, clusterSecret, err :=
 		utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
 	if err != nil {
+		log.Error(err, "Failed to get cluster auth during deletion, will retry", "name", clusterCR.Name)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
 	}
 
@@ -432,10 +438,14 @@ func (r *StorageClusterReconciler) handleDeletion(
 
 	_, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
 	if err != nil || status >= 300 {
+		log.Error(err, "Cluster DELETE API call failed, will retry", "name", clusterCR.Name, "status", status, "clusterUUID", clusterUUID)
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, true, nil
 	}
 
+	log.Info("Cluster deleted via API", "name", clusterCR.Name, "clusterUUID", clusterUUID)
+
 	if err := r.deleteClusterSecret(ctx, clusterCR); err != nil {
+		log.Error(err, "Failed to delete cluster secret, will retry", "name", clusterCR.Name)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
 	}
 
