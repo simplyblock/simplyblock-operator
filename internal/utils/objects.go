@@ -166,7 +166,7 @@ func ExistingClusterUUID(
 }
 
 func GetClusterNameByUUID(ctx context.Context, cli client.Client, namespace, uuid string) (string, error) {
-	clusterList := &simplyblockv1alpha1.SimplyBlockStorageClusterList{}
+	clusterList := &simplyblockv1alpha1.StorageClusterList{}
 	if err := cli.List(ctx, clusterList, client.InNamespace(namespace)); err != nil {
 		return "", fmt.Errorf("failed to list clusters: %w", err)
 	}
