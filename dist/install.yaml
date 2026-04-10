@@ -12,20 +12,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: simplyblockdevices.simplyblock.simplyblock.io
+  name: devices.storage.simplyblock.io
 spec:
-  group: simplyblock.simplyblock.io
+  group: storage.simplyblock.io
   names:
-    kind: SimplyBlockDevice
-    listKind: SimplyBlockDeviceList
-    plural: simplyblockdevices
-    singular: simplyblockdevice
+    kind: Device
+    listKind: DeviceList
+    plural: devices
+    singular: device
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: SimplyBlockDevice is the Schema for the simplyblockdevices API
+        description: Device is the Schema for the devices API
         properties:
           apiVersion:
             description: |-
@@ -45,86 +45,143 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of SimplyBlockDevice
+            description: spec defines the desired state of Device
             properties:
               action:
+                description: Action triggers an imperative device operation.
                 enum:
                 - remove
                 - restart
                 type: string
               clusterName:
+                description: ClusterName is the target storage cluster name.
                 type: string
               deviceID:
+                description: DeviceID is the backend device identifier used for actions.
                 type: string
               nodeUUID:
+                description: NodeUUID scopes operations to a single storage node when
+                  set.
                 type: string
             required:
             - clusterName
             type: object
           status:
-            description: status defines the observed state of SimplyBlockDevice
+            description: status defines the observed state of Device
             properties:
               actionStatus:
+                description: ActionStatus tracks the lifecycle of the latest device
+                  action.
                 properties:
                   action:
+                    description: Action is the requested action name.
                     type: string
                   message:
+                    description: Message is a human-readable action result or error.
                     type: string
                   nodeUUID:
+                    description: NodeUUID is the target node UUID for the action.
                     type: string
                   observedGeneration:
+                    description: ObservedGeneration is the resource generation observed
+                      by this status.
                     format: int64
                     type: integer
                   state:
                     type: string
                   triggered:
+                    description: Triggered indicates whether the underlying backend
+                      action has been fired.
                     type: boolean
                   updatedAt:
+                    description: UpdatedAt is the timestamp of the last status transition.
                     format: date-time
                     type: string
                 type: object
               nodes:
+                description: Nodes contains observed devices grouped by storage node.
                 items:
                   properties:
                     devices:
+                      description: Devices is the observed device inventory for the
+                        node.
                       items:
                         properties:
                           health:
+                            description: Health is the backend health indicator for
+                              the device.
                             type: string
                           model:
+                            description: Model is the reported device model.
                             type: string
                           size:
+                            description: Size is the formatted device capacity value.
                             type: string
                           stats:
+                            description: Stats is the time-series/statistics collection
+                              for the device.
                             items:
                               properties:
-                                capacityUtil:
-                                  format: int64
-                                  type: integer
-                                riops:
-                                  format: int64
-                                  type: integer
-                                rtp:
-                                  format: int64
-                                  type: integer
-                                wiops:
-                                  format: int64
-                                  type: integer
-                                wtp:
+                                iops:
+                                  description: |-
+                                    IOPS contains read/write IOPS values.
+                                    FIXME: Unused for now
+                                  properties:
+                                    read:
+                                      description: |-
+                                        Read is the read IOPS metric.
+                                        FIXME: Unused for now
+                                      format: int64
+                                      type: integer
+                                    write:
+                                      description: |-
+                                        Write is the write IOPS metric.
+                                        FIXME: Unused for now
+                                      format: int64
+                                      type: integer
+                                  type: object
+                                throughput:
+                                  description: |-
+                                    Throughput contains read/write throughput values.
+                                    FIXME: Unused for now
+                                  properties:
+                                    read:
+                                      description: |-
+                                        Read is the read throughput metric.
+                                        FIXME: Unused for now
+                                      format: int64
+                                      type: integer
+                                    write:
+                                      description: |-
+                                        Write is the write throughput metric.
+                                        FIXME: Unused for now
+                                      format: int64
+                                      type: integer
+                                  type: object
+                                utilizedCapacity:
+                                  description: |-
+                                    UtilizedCapacity is the used-capacity metric for the device.
+                                    FIXME: Unused for now
                                   format: int64
                                   type: integer
                               type: object
                             type: array
                           status:
+                            description: Status is the backend lifecycle status of
+                              the device.
                             type: string
                           utilization:
+                            description: Utilization is the backend utilization metric.
                             format: int64
                             type: integer
                           uuid:
+                            description: UUID is the backend device UUID.
                             type: string
                         type: object
                       type: array
                     nodeUUID:
+                      description: NodeUUID is the backend node UUID owning the listed
+                        devices.
                       type: string
                   type: object
                 type: array
@@ -147,14 +204,14 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: simplyblocklvols.simplyblock.simplyblock.io
+  name: lvols.storage.simplyblock.io
 spec:
-  group: simplyblock.simplyblock.io
+  group: storage.simplyblock.io
   names:
-    kind: SimplyBlockLvol
-    listKind: SimplyBlockLvolList
-    plural: simplyblocklvols
-    singular: simplyblocklvol
+    kind: Lvol
+    listKind: LvolList
+    plural: lvols
+    singular: lvol
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -164,7 +221,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: SimplyBlockLvol is the Schema for the simplyblocklvols API
+        description: Lvol is the Schema for the lvols API
         properties:
           apiVersion:
             description: |-
@@ -184,96 +241,145 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of SimplyBlockLvol
+            description: spec defines the desired state of Lvol
             properties:
               clusterName:
+                description: ClusterName is the target storage cluster name.
                 type: string
               poolName:
+                description: PoolName is the target storage pool name.
                 type: string
             required:
             - clusterName
             - poolName
             type: object
           status:
-            description: status defines the observed state of SimplyBlockLvol
+            description: status defines the observed state of Lvol
             properties:
               configured:
+                description: Configured indicates whether initial Lvol reconciliation
+                  has completed.
                 type: boolean
               lvols:
+                description: Lvols contains observed logical volume entries.
                 items:
                   properties:
                     blobID:
+                      description: BlobID is the backend blob identifier.
                       format: int64
                       type: integer
-                    clonedFromSnap:
+                    clonedFromSnapshot:
+                      description: ClonedFromSnapshot is the source snapshot name/ID
+                        for clones.
                       type: string
-                    createDt:
+                    created:
+                      description: |-
+                        Created is the backend creation timestamp.
+                        FIXME: Unused for now
                       format: date-time
                       type: string
+                    encrypted:
+                      description: IsEncrypted indicates whether encryption is enabled
+                        for the volume.
+                      type: boolean
+                    erasureCodingScheme:
+                      description: ErasureCodingScheme is the erasure coding layout,
+                        for example "2x1".
+                      type: string
                     fabric:
+                      description: Fabric is the storage fabric/protocol in use.
                       type: string
                     ha:
+                      description: HA indicates whether high availability is enabled.
                       type: boolean
                     health:
+                      description: Health indicates current health-check state.
                       type: boolean
                     hostname:
+                      description: Hostname is the node hostname associated with the
+                        volume.
                       type: string
-                    isCrypto:
-                      type: boolean
                     lvolName:
+                      description: LvolName is the logical volume name.
                       type: string
                     maxNamespacesPerSubsystem:
+                      description: MaxNamespacesPerSubsystem is the max number of
+                        namespaces per subsystem.
                       format: int64
                       type: integer
                     namespaceID:
+                      description: NamespaceID is the NVMe namespace identifier.
                       format: int64
                       type: integer
                     nodeUUID:
+                      description: NodeUUID is the set of node UUIDs associated with
+                        the volume.
                       items:
                         type: string
                       type: array
                     nqn:
+                      description: NQN is the NVMe Qualified Name for the volume.
                       type: string
                     poolName:
+                      description: PoolName is the storage pool name.
                       type: string
                     poolUUID:
+                      description: PoolUUID is the backend storage pool UUID.
                       type: string
                     pvcName:
+                      description: PvcName is the bound Kubernetes PVC name when applicable.
                       type: string
-                    qosClass:
-                      format: int64
-                      type: integer
-                    qosIOPS:
-                      format: int64
-                      type: integer
-                    qosRTP:
-                      format: int64
-                      type: integer
-                    qosRWTP:
-                      format: int64
-                      type: integer
-                    qosWTP:
-                      format: int64
-                      type: integer
+                    qos:
+                      description: QoS contains quality-of-service limits/metrics.
+                      properties:
+                        class:
+                          description: Class is the QosSpec class identifier.
+                          format: int64
+                          type: integer
+                        iops:
+                          description: IOPS is the IOPS limit/metric.
+                          format: int64
+                          type: integer
+                        throughput:
+                          description: Throughput contains throughput limits/metrics.
+                          properties:
+                            read:
+                              description: Read is the read throughput limit/metric.
+                              format: int64
+                              type: integer
+                            readWrite:
+                              description: ReadWrite is the combined read/write throughput
+                                limit/metric.
+                              format: int64
+                              type: integer
+                            write:
+                              description: Write is the write throughput limit/metric.
+                              format: int64
+                              type: integer
+                          type: object
+                      type: object
                     size:
+                      description: Size is the formatted volume size.
                       type: string
-                    snapName:
+                    sourceSnapshotName:
+                      description: SourceSnapshotName is the source snapshot name
+                        used for this volume.
                       type: string
                     status:
+                      description: Status is the backend lifecycle status.
                       type: string
-                    stripeWdata:
-                      format: int64
-                      type: integer
-                    stripeWparity:
-                      format: int64
-                      type: integer
                     subsysPort:
+                      description: SubsysPort is the NVMe subsystem/listener port.
                       format: int64
                       type: integer
-                    updateDt:
+                    updated:
+                      description: |-
+                        Updated is the backend last-update timestamp.
+                        FIXME: Unused for now
                       format: date-time
                       type: string
                     uuid:
+                      description: UUID is the backend logical volume UUID.
                       type: string
                   type: object
                 type: array
@@ -291,20 +397,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: simplyblockpools.simplyblock.simplyblock.io
+  name: pools.storage.simplyblock.io
 spec:
-  group: simplyblock.simplyblock.io
+  group: storage.simplyblock.io
   names:
-    kind: SimplyBlockPool
-    listKind: SimplyBlockPoolList
-    plural: simplyblockpools
-    singular: simplyblockpool
+    kind: Pool
+    listKind: PoolList
+    plural: pools
+    singular: pool
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: SimplyBlockPool is the Schema for the pools API
+        description: Pool is the Schema for the pools API
         properties:
           apiVersion:
             description: |-
@@ -327,27 +433,46 @@ spec:
             description: spec defines the desired state of Pool
             properties:
               action:
+                description: Action triggers an imperative pool operation.
                 type: string
               capacityLimit:
+                description: CapacityLimit is the maximum pool capacity.
                 type: string
               clusterName:
+                description: ClusterName is the target storage cluster name.
                 type: string
               name:
+                description: Name is the backend pool name.
                 type: string
-              qosIOPSLimit:
-                format: int32
-                type: integer
-              rLimit:
-                format: int32
-                type: integer
-              rwLimit:
-                format: int32
-                type: integer
+              qos:
+                description: QosSpec defines QosSpec limits for the pool.
+                properties:
+                  iops:
+                    description: IOPS is the IOPS limit for the pool.
+                    format: int32
+                    type: integer
+                  throughput:
+                    description: Throughput contains throughput limits for the pool.
+                    properties:
+                      read:
+                        description: Read is the read throughput limit for the pool.
+                        format: int32
+                        type: integer
+                      readWrite:
+                        description: ReadWrite is the combined read/write throughput
+                          limit for the pool.
+                        format: int32
+                        type: integer
+                      write:
+                        description: Write is the write throughput limit for the pool.
+                        format: int32
+                        type: integer
+                    type: object
+                type: object
               status:
+                description: Status is an optional desired-status hint for backend
+                  workflows.
                 type: string
-              wLimit:
-                format: int32
-                type: integer
             required:
             - clusterName
             - name
@@ -355,24 +480,43 @@ spec:
           status:
             description: status defines the observed state of Pool
             properties:
-              qosHost:
-                type: string
-              qosIOPSLimit:
-                format: int32
-                type: integer
-              rLimit:
-                format: int32
-                type: integer
-              rwLimit:
-                format: int32
-                type: integer
+              qos:
+                description: QoS contains observed/configured QoS values.
+                properties:
+                  host:
+                    description: Host is the backend host handling pool QosSpec enforcement.
+                    type: string
+                  iops:
+                    description: IOPS is the observed/configured IOPS value.
+                    format: int32
+                    type: integer
+                  throughput:
+                    description: Throughput contains observed/configured throughput
+                      values.
+                    properties:
+                      read:
+                        description: Read is the observed/configured read throughput
+                          value.
+                        format: int32
+                        type: integer
+                      readWrite:
+                        description: ReadWrite is the observed/configured combined
+                          read/write throughput value.
+                        format: int32
+                        type: integer
+                      write:
+                        description: Write is the observed/configured write throughput
+                          value.
+                        format: int32
+                        type: integer
+                    type: object
+                type: object
               status:
+                description: Status is the backend lifecycle status.
                 type: string
               uuid:
+                description: UUID is the backend pool UUID.
                 type: string
-              wLimit:
-                format: int32
-                type: integer
             type: object
         required:
         - spec
@@ -387,21 +531,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: simplyblockstorageclusters.simplyblock.simplyblock.io
+  name: storageclusters.storage.simplyblock.io
 spec:
-  group: simplyblock.simplyblock.io
+  group: storage.simplyblock.io
   names:
-    kind: SimplyBlockStorageCluster
-    listKind: SimplyBlockStorageClusterList
-    plural: simplyblockstorageclusters
-    singular: simplyblockstoragecluster
+    kind: StorageCluster
+    listKind: StorageClusterList
+    plural: storageclusters
+    singular: storagecluster
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: SimplyBlockStorageCluster is the Schema for the simplyblockstorageclusters
-          API
+        description: StorageCluster is the Schema for the storageclusters API
         properties:
           apiVersion:
             description: |-
@@ -421,131 +564,247 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of SimplyBlockStorageCluster
+            description: spec defines the desired state of StorageCluster
             properties:
               action:
+                description: Action triggers a cluster-level action.
                 enum:
                 - activate
                 - expand
                 type: string
-              blkSize:
+              backup:
+                description: Backup specifies the specification for backup to S3 configuration
+                properties:
+                  credentialsSecretRef:
+                    description: CredentialsSecretRef points to the Secret holding
+                      access_key_id and secret_access_key.
+                    properties:
+                      name:
+                        description: Name is the name of the Secret in the same namespace
+                          as the cluster CR.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  localEndpoint:
+                    type: string
+                  localTesting:
+                    type: boolean
+                  secondaryTarget:
+                    format: int32
+                    type: integer
+                  snapshotBackups:
+                    type: boolean
+                  withCompression:
+                    type: boolean
+                required:
+                - credentialsSecretRef
+                type: object
+              blockSize:
+                description: BlockSize defines the logical block size in bytes.
                 format: int32
                 type: integer
-              capCrit:
-                format: int32
-                type: integer
-              capWarn:
-                format: int32
-                type: integer
+              clientDataNic:
+                description: ClientDataNic defines the client data network interface.
+                type: string
               clientQpairCount:
+                description: |-
+                  ClientQpairCount defines client-side queue-pair count.
+                  FIXME: Unused for now (API update required?)
                 format: int32
                 type: integer
               clusterName:
+                description: ClusterName is the user-facing cluster identifier.
                 type: string
-              distrBs:
-                format: int32
-                type: integer
-              distrChunkBs:
-                format: int32
-                type: integer
+              criticalThreshold:
+                description: CriticalThresholdSpec defines critical-level capacity
+                  thresholds.
+                properties:
+                  capacity:
+                    description: Capacity defines the absolute capacity threshold
+                      value.
+                    format: int32
+                    type: integer
+                  provisionedCapacity:
+                    description: ProvisionedCapacity defines the provisioned-capacity
+                      threshold value.
+                    format: int32
+                    type: integer
+                type: object
               enableNodeAffinity:
+                description: EnableNodeAffinity enables node-affinity placement for
+                  storage components.
                 type: boolean
               eventLogEntries:
+                description: EventLogEntries limits the number of event-log entries
+                  returned/retained.
                 format: int32
                 type: integer
               fabric:
+                description: Fabric defines the storage fabric type.
                 type: string
               haType:
+                description: HAType defines the backend high-availability mode.
                 type: string
               includeEventLog:
+                description: IncludeEventLog controls whether event logs are included
+                  in responses/exports.
                 type: boolean
               inflightIOThreshold:
+                description: InflightIOThreshold defines the inflight I/O threshold.
                 format: int32
                 type: integer
               isSingleNode:
+                description: IsSingleNode enables single-node cluster mode.
                 type: boolean
+              maxFaultTolerance:
+                description: MaxFaultTolerance defines the maximum tolerated concurrent
+                  faults.
+                format: int32
+                type: integer
               maxQueueSize:
+                description: MaxQueueSize defines the maximum backend queue size.
                 format: int32
                 type: integer
-              mgmtIfc:
-                description: Create-only
+              mgmtIfname:
+                description: MgmtIfname is the management network interface name used
+                  for cluster communication.
                 type: string
+              nvmfBasePort:
+                description: NvmfBasePort defines the base NVMf service port.
+                format: int32
+                type: integer
               pageSizeInBlocks:
-                format: int32
-                type: integer
-              provCapCrit:
-                format: int32
-                type: integer
-              provCapWarn:
+                description: PageSizeInBlocks defines page size expressed in blocks.
                 format: int32
                 type: integer
               qosClasses:
-                description: Updatable
+                description: QoSClasses defines backend QosSpec class configuration.
                 type: string
               qpairCount:
+                description: QpairCount defines the NVMe queue-pair count used by
+                  the cluster.
+                format: int32
+                type: integer
+              rpcBasePort:
+                description: RpcBasePort defines the base RPC service port.
+                format: int32
+                type: integer
+              snodeApiPort:
+                description: SnodeApiPort defines the storage-node API port.
                 format: int32
                 type: integer
               strictNodeAntiAffinity:
+                description: StrictNodeAntiAffinity enforces strict anti-affinity
+                  between storage nodes.
                 type: boolean
-              stripeWdata:
-                format: int32
-                type: integer
-              stripeWparity:
-                format: int32
-                type: integer
+              stripe:
+                description: StripeSpec configures erasure-coding data/parity chunk
+                  counts.
+                properties:
+                  dataChunks:
+                    description: DataChunks defines the number of data chunks in the
+                      erasure-coding layout.
+                    format: int32
+                    type: integer
+                  parityChunks:
+                    description: ParityChunks defines the number of parity chunks
+                      in the erasure-coding layout.
+                    format: int32
+                    type: integer
+                type: object
+              warningThreshold:
+                description: WarningThresholdSpec defines warning-level capacity thresholds.
+                properties:
+                  capacity:
+                    description: Capacity defines the absolute capacity threshold
+                      value.
+                    format: int32
+                    type: integer
+                  provisionedCapacity:
+                    description: ProvisionedCapacity defines the provisioned-capacity
+                      threshold value.
+                    format: int32
+                    type: integer
+                type: object
             required:
             - clusterName
             type: object
           status:
-            description: status defines the observed state of SimplyBlockStorageCluster
+            description: status defines the observed state of StorageCluster
             properties:
-              MOD:
-                type: string
-              NQN:
-                type: string
-              UUID:
-                type: string
               actionStatus:
+                description: ActionStatus tracks the most recent action execution
+                  state.
                 properties:
                   action:
+                    description: Action is the requested action name.
                     type: string
                   message:
+                    description: Message is a human-readable action result or error.
                     type: string
                   nodeUUID:
+                    description: NodeUUID is the target node UUID for the action.
                     type: string
                   observedGeneration:
+                    description: ObservedGeneration is the resource generation observed
+                      by this status.
                     format: int64
                     type: integer
                   state:
                     type: string
                   triggered:
+                    description: Triggered indicates whether the underlying backend
+                      action has been fired.
                     type: boolean
                   updatedAt:
+                    description: UpdatedAt is the timestamp of the last status transition.
                     format: date-time
                     type: string
                 type: object
               clusterName:
+                description: ClusterName is the resolved backend cluster name.
                 type: string
               configured:
+                description: Configured indicates whether initial cluster setup completed.
                 type: boolean
               created:
+                description: Created is the backend creation timestamp.
                 format: date-time
                 type: string
+              erasureCodingScheme:
+                description: ErasureCodingScheme is the active erasure-coding layout,
+                  for example "2x1".
+                type: string
               lastUpdated:
+                description: LastUpdated is the last backend update timestamp.
                 format: date-time
                 type: string
               mgmtNodes:
+                description: MgmtNodes is the number of management nodes.
                 format: int32
                 type: integer
+              nqn:
+                description: NQN is the cluster NVM subsystem qualified name.
+                type: string
               rebalancing:
+                description: Rebalancing indicates whether cluster rebalancing is
+                  currently active.
                 type: boolean
               secretName:
+                description: SecretName is the Kubernetes Secret containing cluster
+                  credentials.
                 type: string
               status:
+                description: Status is the backend-reported lifecycle status.
                 type: string
               storageNodes:
+                description: StorageNodes is the number of storage nodes.
                 format: int32
                 type: integer
+              uuid:
+                description: UUID is the backend cluster UUID.
+                type: string
             type: object
         required:
         - spec
@@ -560,20 +819,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: simplyblockstoragenodes.simplyblock.simplyblock.io
+  name: storagenodes.storage.simplyblock.io
 spec:
-  group: simplyblock.simplyblock.io
+  group: storage.simplyblock.io
   names:
-    kind: SimplyBlockStorageNode
-    listKind: SimplyBlockStorageNodeList
-    plural: simplyblockstoragenodes
-    singular: simplyblockstoragenode
+    kind: StorageNode
+    listKind: StorageNodeList
+    plural: storagenodes
+    singular: storagenode
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: SimplyBlockStorageNode is the Schema for the storagenodes API
+        description: StorageNode is the Schema for the storagenodes API
         properties:
           apiVersion:
             description: |-
@@ -596,6 +855,7 @@ spec:
             description: spec defines the desired state of StorageNode
             properties:
               action:
+                description: Action triggers an imperative node operation.
                 enum:
                 - shutdown
                 - restart
@@ -604,89 +864,134 @@ spec:
                 - remove
                 type: string
               addPcieToAllowList:
-                description: restart params
+                description: AddPcieToAllowList appends devices to the allow-list
+                  during restart actions.
                 items:
                   type: string
                 type: array
               clusterImage:
+                description: ClusterImage is the container image used for storage-node
+                  workloads.
                 type: string
               clusterName:
+                description: ClusterName is the target storage cluster name.
                 type: string
               coreIsolation:
+                description: CoreIsolation enables CPU core isolation mode.
                 type: boolean
-              coreMask:
-                type: string
               corePercentage:
+                description: CorePercentage is the percentage of cores to be used
+                  for spdk (0-99).
                 format: int32
                 type: integer
-              dataNIC:
+              dataIfname:
+                description: DataIfname lists data-plane network interfaces.
                 items:
                   type: string
                 type: array
               deviceNames:
+                description: DeviceNames explicitly defines a comma separated list
+                  of nvme namespace names like nvme0n1,nvme1n1...
                 items:
                   type: string
                 type: array
               driveSizeRange:
+                description: DriveSizeRange filters devices by size range.
                 type: string
               enableCpuTopology:
+                description: EnableCpuTopology enables topology-aware CPU handling.
                 type: boolean
               force:
+                description: Force enables forced action execution where supported.
                 type: boolean
-              format4k:
+              forceFormat4K:
+                description: ForceFormat4K forces 4K blocksize formatting of the NVMe
+                  device where supported.
                 type: boolean
-              haJM:
-                type: boolean
-              haJmCount:
-                format: int32
-                type: integer
-              idDeviceByNQN:
-                type: boolean
-              jmPercent:
-                format: int32
-                type: integer
-              maxLVol:
+              journalManager:
+                description: JournalManagerSpec configures journal manager behavior.
+                properties:
+                  count:
+                    description: Count is the number of journal managers to configure.
+                    format: int32
+                    type: integer
+                  percentPerDevice:
+                    description: PercentPerDevice is the journal manager capacity
+                      percentage per device.
+                    format: int32
+                    type: integer
+                  useSeparateJournalDevice:
+                    description: UseSeparateJournalDevice enables using separate journal
+                      devices.
+                    type: boolean
+                type: object
+              maxLogicalVolumeCount:
+                description: MaxLogicalVolumeCount is the maximum number of logical
+                  volumes per node.
                 format: int32
                 type: integer
               maxSize:
+                description: MaxSize is the maximum allocatable size of the storage
+                  node.
                 type: string
-              mgmtIfc:
+              mgmtIfname:
+                description: MgmtIfname is the management interface name used by storage
+                  nodes.
                 type: string
               nodeAddr:
+                description: NodeAddr is the explicit node address used by action
+                  flows.
                 type: string
               nodeUUID:
                 description: NodeUUID is required when action is specified
                 type: string
               nodesPerSocket:
+                description: NodesPerSocket defines how many storage nodes are created
+                  per NUMA socket.
                 format: int32
                 type: integer
               openShiftCluster:
+                description: OpenShiftCluster indicates OpenShift-specific behavior
+                  should be enabled.
                 type: boolean
               partitions:
+                description: Partitions is the number of partitions created per backend
+                  storage device.
                 format: int32
                 type: integer
               pcieAllowList:
+                description: PcieAllowList is the list of PCI addresses allowed for
+                  use.
                 items:
                   type: string
                 type: array
               pcieDenyList:
+                description: PcieDenyList is the list of PCI addresses excluded from
+                  use.
                 items:
                   type: string
                 type: array
               pcieModel:
+                description: PcieModel filters devices by PCI model.
                 type: string
               reservedSystemCPU:
+                description: ReservedSystemCPU defines CPUs reserved for system workloads.
                 type: string
               skipKubeletConfiguration:
+                description: SkipKubeletConfiguration skips kubelet configuration
+                  changes.
                 type: boolean
               socketsToUse:
-                format: int32
-                type: integer
-              spdkDebug:
-                type: boolean
+                description: SocketsToUse restricts deployment to selected NUMA sockets.
+                items:
+                  type: string
+                type: array
               spdkImage:
+                description: SpdkImage is the SPDK image reference used by node services.
                 type: string
               tolerations:
+                description: Tolerations configures pod tolerations for storage-node
+                  pods.
                 items:
                   description: |-
                     The pod this Toleration is attached to tolerates any taint that matches
@@ -725,12 +1030,14 @@ spec:
                   type: object
                 type: array
               ubuntuHost:
-                type: boolean
-              useSeparateJournalDevice:
+                description: UbuntuHost indicates the node host OS is Ubuntu.
                 type: boolean
               workerNode:
+                description: WorkerNode is a single worker node used by action flows.
                 type: string
               workerNodes:
+                description: WorkerNodes is the set of Kubernetes worker nodes to
+                  manage.
                 items:
                   type: string
                 type: array
@@ -741,56 +1048,82 @@ spec:
             description: status defines the observed state of StorageNode
             properties:
               actionStatus:
+                description: ActionStatus tracks the latest action execution status.
                 properties:
                   action:
+                    description: Action is the requested action name.
                     type: string
                   message:
+                    description: Message is a human-readable action result or error.
                     type: string
                   nodeUUID:
+                    description: NodeUUID is the target node UUID for the action.
                     type: string
                   observedGeneration:
+                    description: ObservedGeneration is the resource generation observed
+                      by this status.
                     format: int64
                     type: integer
                   state:
                     type: string
                   triggered:
+                    description: Triggered indicates whether the underlying backend
+                      action has been fired.
                     type: boolean
                   updatedAt:
+                    description: UpdatedAt is the timestamp of the last status transition.
                     format: date-time
                     type: string
                 type: object
               nodes:
+                description: Nodes is the observed state of each managed storage node.
                 items:
                   properties:
                     cpu:
+                      description: CPU is the reported CPU allocation/count for the
+                        node.
                       format: int32
                       type: integer
                     devices:
+                      description: Devices is the backend summary of devices on this
+                        node.
                       type: string
                     health:
+                      description: Health indicates whether health checks are currently
+                        passing.
                       type: boolean
                     hostname:
+                      description: Hostname is the Kubernetes node hostname.
                       type: string
-                    lvol_port:
+                    lvolPort:
+                      description: LvolPort is the logical-volume subsystem port.
                       format: int32
                       type: integer
                     memory:
+                      description: Memory is the reported memory value.
                       type: string
                     mgmtIp:
+                      description: MgmtIp is the management IP address for the node.
                       type: string
-                    nvmf_port:
+                    nvmfPort:
+                      description: NvmfPort is the NVMf service port.
                       format: int32
                       type: integer
-                    rpc_port:
+                    rpcPort:
+                      description: RpcPort is the node RPC service port.
                       format: int32
                       type: integer
                     status:
+                      description: Status is the backend lifecycle state for the node.
                       type: string
                     uptime:
+                      description: Uptime is the reported node uptime value.
                       type: string
                     uuid:
+                      description: UUID is the backend node UUID.
                       type: string
                     volumes:
+                      description: Volumes is the current logical volume count.
                       format: int32
                       type: integer
                   type: object
@@ -803,11 +1136,11 @@ spec:
         - message: nodeUUID is required when action is specified
           rule: '!(has(self.spec.action) && self.spec.action != "" && (!has(self.spec.nodeUUID)
             || self.spec.nodeUUID == ""))'
-        - message: clusterImage, maxLVol, and workerNodes are required when action
-            is not specified
+        - message: clusterImage, maxLogicalVolumeCount, and workerNodes are required
+            when action is not specified
           rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.clusterImage)
-            && self.spec.clusterImage != "" && has(self.spec.maxLVol) && has(self.spec.workerNodes)
-            && size(self.spec.workerNodes) > 0)
+            && self.spec.clusterImage != "" && has(self.spec.maxLogicalVolumeCount)
+            && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)
     served: true
     storage: true
     subresources:
@@ -818,20 +1151,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: simplyblocktasks.simplyblock.simplyblock.io
+  name: tasks.storage.simplyblock.io
 spec:
-  group: simplyblock.simplyblock.io
+  group: storage.simplyblock.io
   names:
-    kind: SimplyBlockTask
-    listKind: SimplyBlockTaskList
-    plural: simplyblocktasks
-    singular: simplyblocktask
+    kind: Task
+    listKind: TaskList
+    plural: tasks
+    singular: task
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: SimplyBlockTask is the Schema for the simplyblocktasks API
+        description: Task is the Schema for the tasks API
         properties:
           apiVersion:
             description: |-
@@ -851,40 +1184,58 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of SimplyBlockTask
+            description: spec defines the desired state of Task
             properties:
               clusterName:
+                description: ClusterName is the target storage cluster name.
                 type: string
               subtasks:
+                description: Subtasks includes related child subtasks when supported
+                  by the backend.
                 type: boolean
               taskID:
+                description: TaskID filters results to a specific backend task when
+                  set.
                 type: string
             required:
             - clusterName
             type: object
           status:
-            description: status defines the observed state of SimplyBlockTask
+            description: status defines the observed state of Task
             properties:
               tasks:
+                description: Tasks is the currently reported task list for the query
+                  scope.
                 items:
                   properties:
                     canceled:
+                      description: Canceled indicates whether the task was canceled.
                       type: boolean
                     parentTask:
+                      description: ParentTask is the parent task UUID when this task
+                        is a subtask.
                       type: string
                     retried:
+                      description: Retried is the number of retry attempts made for
+                        the task.
                       format: int32
                       type: integer
                     startedAt:
+                      description: StartedAt is the backend-reported task start timestamp.
                       format: date-time
                       type: string
                     taskResult:
+                      description: TaskResult is the backend result payload/message.
                       type: string
                     taskStatus:
+                      description: TaskStatus is the backend lifecycle status for
+                        the task.
                       type: string
                     taskType:
+                      description: TaskType is the backend task function/type name.
                       type: string
                     uuid:
+                      description: UUID is the backend task UUID.
                       type: string
                   type: object
                 type: array
@@ -950,17 +1301,36 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: simplyblock-manager-manager-role
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-device-admin-role
 rules:
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockdevices
-  - simplyblocklvols
-  - simplyblockpools
-  - simplyblockstorageclusters
-  - simplyblockstoragenodes
-  - simplyblocktasks
+  - devices
+  verbs:
+  - '*'
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - devices/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-device-editor-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - devices
   verbs:
   - create
   - delete
@@ -970,25 +1340,160 @@ rules:
   - update
   - watch
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockdevices/finalizers
-  - simplyblocklvols/finalizers
-  - simplyblockpools/finalizers
-  - simplyblockstorageclusters/finalizers
-  - simplyblockstoragenodes/finalizers
-  - simplyblocktasks/finalizers
+  - devices/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-device-viewer-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - devices
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - devices/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-lvol-admin-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - lvols
+  verbs:
+  - '*'
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - lvols/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-lvol-editor-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - lvols
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - lvols/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-lvol-viewer-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - lvols
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - lvols/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-manager-manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - devices
+  - lvols
+  - pools
+  - storageclusters
+  - storagenodes
+  - tasks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - devices/finalizers
+  - lvols/finalizers
+  - pools/finalizers
+  - storageclusters/finalizers
+  - storagenodes/finalizers
+  - tasks/finalizers
   verbs:
   - update
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockdevices/status
-  - simplyblocklvols/status
-  - simplyblockpools/status
-  - simplyblockstorageclusters/status
-  - simplyblockstoragenodes/status
-  - simplyblocktasks/status
+  - devices/status
+  - lvols/status
+  - pools/status
+  - storageclusters/status
+  - storagenodes/status
+  - tasks/status
   verbs:
   - get
   - patch
@@ -1028,18 +1533,18 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblockdevice-admin-role
+  name: simplyblock-manager-pool-admin-role
 rules:
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockdevices
+  - pools
   verbs:
   - '*'
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockdevices/status
+  - pools/status
   verbs:
   - get
 ---
@@ -1049,12 +1554,12 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblockdevice-editor-role
+  name: simplyblock-manager-pool-editor-role
 rules:
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockdevices
+  - pools
   verbs:
   - create
   - delete
@@ -1064,9 +1569,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockdevices/status
+  - pools/status
   verbs:
   - get
 ---
@@ -1076,348 +1581,20 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblockdevice-viewer-role
+  name: simplyblock-manager-pool-viewer-role
 rules:
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockdevices
+  - pools
   verbs:
   - get
   - list
   - watch
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockdevices/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblocklvol-admin-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblocklvols
-  verbs:
-  - '*'
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblocklvols/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblocklvol-editor-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblocklvols
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblocklvols/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblocklvol-viewer-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblocklvols
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblocklvols/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblockpool-admin-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockpools
-  verbs:
-  - '*'
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockpools/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblockpool-editor-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockpools
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockpools/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblockpool-viewer-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockpools
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockpools/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblockstoragecluster-admin-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockstorageclusters
-  verbs:
-  - '*'
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockstorageclusters/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblockstoragecluster-editor-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockstorageclusters
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockstorageclusters/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblockstoragecluster-viewer-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockstorageclusters
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockstorageclusters/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblockstoragenode-admin-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockstoragenodes
-  verbs:
-  - '*'
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockstoragenodes/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblockstoragenode-viewer-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockstoragenodes
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblockstoragenodes/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblocktask-admin-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblocktasks
-  verbs:
-  - '*'
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblocktasks/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblocktask-editor-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblocktasks
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblocktasks/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-simplyblocktask-viewer-role
-rules:
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblocktasks
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - simplyblock.simplyblock.io
-  resources:
-  - simplyblocktasks/status
+  - pools/status
   verbs:
   - get
 ---
@@ -1430,9 +1607,9 @@ metadata:
   name: simplyblock-manager-ssimplyblocktoragenode-editor-role
 rules:
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockstoragenodes
+  - storagenodes
   verbs:
   - create
   - delete
@@ -1442,9 +1619,195 @@ rules:
   - update
   - watch
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockstoragenodes/status
+  - storagenodes/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-storagecluster-admin-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storageclusters
+  verbs:
+  - '*'
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storageclusters/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-storagecluster-editor-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storageclusters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storageclusters/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-storagecluster-viewer-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storageclusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storageclusters/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-storagenode-admin-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagenodes
+  verbs:
+  - '*'
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagenodes/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-storagenode-viewer-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagenodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagenodes/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-task-admin-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - tasks
+  verbs:
+  - '*'
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - tasks/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-task-editor-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - tasks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - tasks/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-manager
+  name: simplyblock-manager-task-viewer-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - tasks
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - tasks/status
   verbs:
   - get
 ---

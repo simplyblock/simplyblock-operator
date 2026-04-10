@@ -1,0 +1,26 @@
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: StorageCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-manager
+    app.kubernetes.io/managed-by: kustomize
+  name: storagecluster-sample
+spec:
+  clusterName: sample-cluster
+  backup:
+    localEndpoint: http://10.10.11.10:9000
+    snapshotBackups: true
+    withCompression: false
+    secondaryTarget: 0
+    localTesting: true
+    credentialsSecretRef:
+      name: sample-cluster-backup
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sample-cluster-backup
+type: Opaque
+stringData:
+  access_key_id: username
+  secret_access_key: password

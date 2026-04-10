@@ -25,7 +25,7 @@ import (
 )
 
 func TestEnsureNodeStatus(t *testing.T) {
-	cr := &simplyblockv1alpha1.SimplyBlockStorageNode{}
+	cr := &simplyblockv1alpha1.StorageNode{}
 
 	s := ensureNodeStatus(cr, "node-a", "10.0.0.1")
 	if s == nil {
@@ -52,7 +52,7 @@ func TestEnsureNodeStatus(t *testing.T) {
 }
 
 func TestWaitForActionCompletionUnknownAction(t *testing.T) {
-	r := &SimplyBlockStorageNodeReconciler{}
+	r := &StorageNodeReconciler{}
 	c := webapi.NewClient("http://127.0.0.1:1")
 	err := r.waitForActionCompletion(context.Background(), c, "cluster", "secret", "node", "invalid-action")
 	if err == nil {
@@ -113,7 +113,7 @@ func TestWaitForActionCompletionValidTransitions(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			r := &SimplyBlockStorageNodeReconciler{}
+			r := &StorageNodeReconciler{}
 			c := webapi.NewClient(srv.URL)
 			err := r.waitForActionCompletion(context.Background(), c, "cluster", "secret", "node", tc.action)
 			if err != nil {
@@ -125,16 +125,16 @@ func TestWaitForActionCompletionValidTransitions(t *testing.T) {
 
 func TestHandleNodeActionTransitions(t *testing.T) {
 	t.Run("does not re-enter terminal success for same action and node", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "sn-a",
 				Namespace: "default",
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				Action:   "restart",
 				NodeUUID: "node-1",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageNodeStatus{
+			Status: simplyblockv1alpha1.StorageNodeStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
 					Action:   "restart",
 					NodeUUID: "node-1",
@@ -154,12 +154,12 @@ func TestHandleNodeActionTransitions(t *testing.T) {
 	})
 
 	t.Run("transitions running to failed when action call fails", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "sn-b",
 				Namespace: "default",
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				Action:   "restart",
 				NodeUUID: "node-2",
 			},
@@ -171,7 +171,7 @@ func TestHandleNodeActionTransitions(t *testing.T) {
 			t.Fatalf("expected action failure")
 		}
 
-		current := &simplyblockv1alpha1.SimplyBlockStorageNode{}
+		current := &simplyblockv1alpha1.StorageNode{}
 		if getErr := r.Get(context.Background(), client.ObjectKeyFromObject(sn), current); getErr != nil {
 			t.Fatalf("failed to fetch storagenode: %v", getErr)
 		}
@@ -188,16 +188,16 @@ func TestHandleNodeActionTransitions(t *testing.T) {
 }
 
 func TestHandleNodeActionRejectsIllegalSuccessIdentity(t *testing.T) {
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "sn-illegal-success",
 			Namespace: "default",
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			Action:   "restart",
 			NodeUUID: "node-expected",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockStorageNodeStatus{
+		Status: simplyblockv1alpha1.StorageNodeStatus{
 			// Illegal success for another identity should not be accepted.
 			ActionStatus: &simplyblockv1alpha1.ActionStatus{
 				Action:   "restart",
@@ -213,7 +213,7 @@ func TestHandleNodeActionRejectsIllegalSuccessIdentity(t *testing.T) {
 		t.Fatalf("expected failure after rejecting illegal success identity")
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockStorageNode{}
+	current := &simplyblockv1alpha1.StorageNode{}
 	if getErr := r.Get(context.Background(), client.ObjectKeyFromObject(sn), current); getErr != nil {
 		t.Fatalf("failed to fetch storagenode: %v", getErr)
 	}
@@ -232,7 +232,7 @@ func TestStorageNodeFinalizerLifecycleHelpers(t *testing.T) {
 	now := metav1.NewTime(time.Now())
 
 	t.Run("ensureFinalizer adds finalizer when missing", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "sn-finalizer-add",
 				Namespace: "default",
@@ -253,7 +253,7 @@ func TestStorageNodeFinalizerLifecycleHelpers(t *testing.T) {
 	})
 
 	t.Run("handleDeletion removes finalizer when deletion timestamp is set", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "sn-finalizer-del",
 				Namespace:         "default",
@@ -278,12 +278,12 @@ func TestStorageNodeFinalizerLifecycleHelpers(t *testing.T) {
 
 func TestStorageNodeLabelingHelpers(t *testing.T) {
 	t.Run("labelWorkerNodes labels all configured workers", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "sn-label-all",
 				Namespace: "default",
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: "cluster-a",
 				WorkerNodes: []string{"node-a", "node-b"},
 			},
@@ -310,12 +310,12 @@ func TestStorageNodeLabelingHelpers(t *testing.T) {
 	})
 
 	t.Run("labelWorkerNode labels single worker node", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "sn-label-one",
 				Namespace: "default",
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: "cluster-b",
 				WorkerNode:  "node-one",
 			},
@@ -339,13 +339,13 @@ func TestStorageNodeLabelingHelpers(t *testing.T) {
 
 func TestStorageNodeDaemonSetReconcile(t *testing.T) {
 	t.Run("creates daemonset when missing", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "sn-ds-create",
 				Namespace: "default",
 				UID:       "uid-create",
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: "cluster-a",
 			},
 		}
@@ -365,13 +365,13 @@ func TestStorageNodeDaemonSetReconcile(t *testing.T) {
 	})
 
 	t.Run("updates existing daemonset", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "sn-ds-update",
 				Namespace: "default",
 				UID:       "uid-update",
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: "cluster-a",
 			},
 		}
@@ -432,13 +432,13 @@ func TestGetNodeInternalIPNoAddress(t *testing.T) {
 
 func TestStorageNodeReconcileActionFastPaths(t *testing.T) {
 	t.Run("reconcileAction returns no requeue when action already successful", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-ra-ok", Namespace: "default"},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				Action:   "restart",
 				NodeUUID: "node-1",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageNodeStatus{
+			Status: simplyblockv1alpha1.StorageNodeStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
 					Action:   "restart",
 					NodeUUID: "node-1",
@@ -458,9 +458,9 @@ func TestStorageNodeReconcileActionFastPaths(t *testing.T) {
 	})
 
 	t.Run("reconcileAction requeues on action failure", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-ra-fail", Namespace: "default"},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				Action:   "restart",
 				NodeUUID: "node-2",
 			},
@@ -478,7 +478,7 @@ func TestStorageNodeReconcileActionFastPaths(t *testing.T) {
 }
 
 func TestStorageNodeHandleDeletionNoopWithoutDeletionTimestamp(t *testing.T) {
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "sn-no-delete",
 			Namespace: "default",
@@ -497,7 +497,7 @@ func TestStorageNodeHandleDeletionNoopWithoutDeletionTimestamp(t *testing.T) {
 
 func TestStorageNodeHandleDeletionDoneWithoutFinalizer(t *testing.T) {
 	now := metav1.NewTime(time.Now())
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "sn-delete-done",
 			Namespace:         "default",
@@ -516,12 +516,12 @@ func TestStorageNodeHandleDeletionDoneWithoutFinalizer(t *testing.T) {
 }
 
 func TestStorageNodeReconcileClusterUnavailableRequeues(t *testing.T) {
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "sn-reconcile-no-cluster",
 			Namespace: "default",
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: "cluster-missing",
 		},
 	}
@@ -537,17 +537,17 @@ func TestStorageNodeReconcileClusterUnavailableRequeues(t *testing.T) {
 }
 
 func TestStorageNodeReconcileSecretMissingRequeues(t *testing.T) {
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-a"},
-		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: "cluster-uuid-no-secret"},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-uuid-no-secret"},
 	}
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "sn-reconcile-no-secret",
 			Namespace: "default",
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: "cluster-a",
 		},
 	}
@@ -582,10 +582,10 @@ func TestStorageNodeReconcileDeletionFlow(t *testing.T) {
 	const clusterUUID = "cluster-uuid-del"
 	now := metav1.NewTime(time.Now())
 
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-del", Namespace: namespace},
-		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
-		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
 	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -597,14 +597,14 @@ func TestStorageNodeReconcileDeletionFlow(t *testing.T) {
 			"secret": []byte("s3cr3t"),
 		},
 	}
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "sn-delete-flow",
 			Namespace:         namespace,
 			Finalizers:        []string{"simplyblock.storagenode.finalizer"},
 			DeletionTimestamp: &now,
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
 		},
 	}
@@ -618,7 +618,7 @@ func TestStorageNodeReconcileDeletionFlow(t *testing.T) {
 		t.Fatalf("expected deletion flow to complete without requeue, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockStorageNode{}
+	current := &simplyblockv1alpha1.StorageNode{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), current); err != nil {
 		if !apierrors.IsNotFound(err) {
 			t.Fatalf("failed to fetch storagenode: %v", err)
@@ -635,10 +635,10 @@ func TestStorageNodeReconcileAddsFinalizer(t *testing.T) {
 	const clusterName = "cluster-finalizer"
 	const clusterUUID = "cluster-uuid-finalizer"
 
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-finalizer", Namespace: namespace},
-		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
-		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
 	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -650,12 +650,12 @@ func TestStorageNodeReconcileAddsFinalizer(t *testing.T) {
 			"secret": []byte("s3cr3t"),
 		},
 	}
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "sn-finalizer-flow",
 			Namespace: namespace,
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
 		},
 	}
@@ -669,7 +669,7 @@ func TestStorageNodeReconcileAddsFinalizer(t *testing.T) {
 		t.Fatalf("expected finalizer add path to return without requeue, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockStorageNode{}
+	current := &simplyblockv1alpha1.StorageNode{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), current); err != nil {
 		t.Fatalf("failed to fetch storagenode: %v", err)
 	}
@@ -683,10 +683,10 @@ func TestStorageNodeReconcileActionPath(t *testing.T) {
 	const clusterName = "cluster-action"
 	const clusterUUID = "cluster-uuid-action"
 
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-action", Namespace: namespace},
-		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
-		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
 	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -698,18 +698,18 @@ func TestStorageNodeReconcileActionPath(t *testing.T) {
 			"secret": []byte("s3cr3t"),
 		},
 	}
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "sn-action-flow",
 			Namespace:  namespace,
 			Finalizers: []string{"simplyblock.storagenode.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
 			Action:      "restart",
 			NodeUUID:    "node-action-1",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockStorageNodeStatus{
+		Status: simplyblockv1alpha1.StorageNodeStatus{
 			ActionStatus: &simplyblockv1alpha1.ActionStatus{
 				Action:   "restart",
 				NodeUUID: "node-action-1",
@@ -733,10 +733,10 @@ func TestStorageNodeReconcileLabelWorkerNodesFailure(t *testing.T) {
 	const clusterName = "cluster-label-fail"
 	const clusterUUID = "cluster-uuid-label-fail"
 
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-label-fail", Namespace: namespace},
-		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
-		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
 	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -748,13 +748,13 @@ func TestStorageNodeReconcileLabelWorkerNodesFailure(t *testing.T) {
 			"secret": []byte("s3cr3t"),
 		},
 	}
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "sn-label-fail",
 			Namespace:  namespace,
 			Finalizers: []string{"simplyblock.storagenode.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
 			WorkerNodes: []string{"missing-worker"},
 		},
@@ -773,10 +773,10 @@ func TestStorageNodeReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
 	const clusterUUID = "cluster-uuid-known-worker"
 	const workerName = "node-known"
 
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-known-worker", Namespace: namespace},
-		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
-		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
 	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -791,17 +791,17 @@ func TestStorageNodeReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: workerName},
 	}
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "sn-known-worker",
 			Namespace:  namespace,
 			Finalizers: []string{"simplyblock.storagenode.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
 			WorkerNodes: []string{workerName},
 		},
-		Status: simplyblockv1alpha1.SimplyBlockStorageNodeStatus{
+		Status: simplyblockv1alpha1.StorageNodeStatus{
 			Nodes: []simplyblockv1alpha1.NodeStatus{
 				{
 					Hostname: workerName,
@@ -828,10 +828,10 @@ func TestStorageNodeReconcileServiceAccountHasOwnerReference(t *testing.T) {
 	const clusterName = "cluster-ownerref-sa"
 	const clusterUUID = "cluster-uuid-ownerref-sa"
 
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-ownerref-sa", Namespace: namespace},
-		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
-		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
 	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -843,13 +843,13 @@ func TestStorageNodeReconcileServiceAccountHasOwnerReference(t *testing.T) {
 			"secret": []byte("s3cr3t"),
 		},
 	}
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "sn-ownerref-sa",
 			Namespace:  namespace,
 			Finalizers: []string{"simplyblock.storagenode.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
 			WorkerNodes: []string{},
 		},
@@ -880,10 +880,10 @@ func TestStorageNodeReconcileMissingInternalIPRequeues(t *testing.T) {
 	const clusterUUID = "cluster-uuid-missing-ip"
 	const workerName = "node-no-ip"
 
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-missing-ip", Namespace: namespace},
-		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
-		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
 	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -898,13 +898,13 @@ func TestStorageNodeReconcileMissingInternalIPRequeues(t *testing.T) {
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: workerName},
 	}
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "sn-missing-ip",
 			Namespace:  namespace,
 			Finalizers: []string{"simplyblock.storagenode.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
 			WorkerNodes: []string{workerName},
 		},
@@ -926,10 +926,10 @@ func TestStorageNodeReconcileUnreachableNodeInfoRequeues(t *testing.T) {
 	const clusterUUID = "cluster-uuid-unreachable-info"
 	const workerName = "node-bad-ip"
 
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-unreachable-info", Namespace: namespace},
-		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
-		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: clusterUUID},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
 	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -952,13 +952,13 @@ func TestStorageNodeReconcileUnreachableNodeInfoRequeues(t *testing.T) {
 			},
 		},
 	}
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "sn-unreachable-info",
 			Namespace:  namespace,
 			Finalizers: []string{"simplyblock.storagenode.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
 			WorkerNodes: []string{workerName},
 		},
@@ -1098,21 +1098,21 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 		)
 		apiClient := webapi.NewClient(mock.URL())
 
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
-			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: clusterName},
+			Status: simplyblockv1alpha1.StorageClusterStatus{
 				Status:              "active",
 				ErasureCodingScheme: "1x0",
 			},
 		}
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-online", Namespace: "default"},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: clusterName,
 				WorkerNodes: []string{"node-a"},
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageNodeStatus{
+			Status: simplyblockv1alpha1.StorageNodeStatus{
 				Nodes: []simplyblockv1alpha1.NodeStatus{
 					{Hostname: "node-a", MgmtIp: "10.0.0.1", Status: "in_creation"},
 				},
@@ -1175,17 +1175,17 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 		)
 		apiClient := webapi.NewClient(mock.URL())
 
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-b", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: clusterName},
-			Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: clusterName},
+			Status: simplyblockv1alpha1.StorageClusterStatus{
 				Status:              "active",
 				ErasureCodingScheme: "1x0",
 			},
 		}
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-missing-status", Namespace: "default"},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: clusterName,
 				WorkerNodes: []string{"node-b"},
 			},
@@ -1244,12 +1244,12 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 			},
 		)
 
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-wfno-invalid-json", Namespace: "default"},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: "cluster-a",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageNodeStatus{
+			Status: simplyblockv1alpha1.StorageNodeStatus{
 				Nodes: []simplyblockv1alpha1.NodeStatus{
 					{Hostname: "node-a", MgmtIp: "10.0.0.1", Status: "in_creation"},
 				},
@@ -1304,12 +1304,12 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 			},
 		)
 
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-wfno-cluster-missing", Namespace: "default"},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: "cluster-missing",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockStorageNodeStatus{
+			Status: simplyblockv1alpha1.StorageNodeStatus{
 				Nodes: []simplyblockv1alpha1.NodeStatus{
 					{Hostname: "node-c", MgmtIp: "10.0.0.3", Status: "in_creation"},
 				},
@@ -1351,9 +1351,9 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 			},
 		)
 
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-wfno-timeout", Namespace: "default"},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: "cluster-a",
 			},
 		}
@@ -1407,7 +1407,7 @@ func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		r := &SimplyBlockStorageNodeReconciler{}
+		r := &StorageNodeReconciler{}
 		err := r.waitForActionCompletion(
 			context.Background(),
 			webapi.NewClient(srv.URL),
@@ -1444,7 +1444,7 @@ func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		r := &SimplyBlockStorageNodeReconciler{}
+		r := &StorageNodeReconciler{}
 		err := r.waitForActionCompletion(
 			context.Background(),
 			webapi.NewClient(srv.URL),
@@ -1480,9 +1480,9 @@ func TestPerformNodeActionRemoveHappyPath(t *testing.T) {
 	)
 	apiClient := webapi.NewClient(mock.URL())
 
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-remove", Namespace: "default"},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			Action:   "remove",
 			NodeUUID: nodeUUID,
 		},
@@ -1498,9 +1498,9 @@ func TestPerformNodeActionRestartWorkerNodeLabelFailure(t *testing.T) {
 	const clusterUUID = "cluster-uuid-restart-label-fail"
 	const nodeUUID = "node-uuid-restart-label-fail"
 
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-restart-label-fail", Namespace: "default"},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			Action:     "restart",
 			NodeUUID:   nodeUUID,
 			WorkerNode: "missing-node",
@@ -1531,9 +1531,9 @@ func TestPerformNodeActionRestartWorkerNodeMissingInternalIP(t *testing.T) {
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: workerNode},
 	}
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-restart-ip-fail", Namespace: "default"},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			Action:      "restart",
 			NodeUUID:    nodeUUID,
 			WorkerNode:  workerNode,
@@ -1570,9 +1570,9 @@ func TestPerformNodeActionRestartWorkerNodeReachabilityCanceled(t *testing.T) {
 			},
 		},
 	}
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-restart-cancel", Namespace: "default"},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			Action:      "restart",
 			NodeUUID:    nodeUUID,
 			WorkerNode:  workerNode,
@@ -1615,9 +1615,9 @@ func TestPerformNodeActionAPIFailure(t *testing.T) {
 			},
 		)
 
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-restart-api-fail", Namespace: "default"},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				Action:   "restart",
 				NodeUUID: nodeUUID,
 			},
@@ -1650,9 +1650,9 @@ func TestPerformNodeActionAPIFailure(t *testing.T) {
 			},
 		)
 
-		sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-default-api-fail", Namespace: "default"},
-			Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				Action:   "suspend",
 				NodeUUID: nodeUUID,
 			},
@@ -1706,9 +1706,9 @@ func TestPerformNodeActionDefaultActionSuccess(t *testing.T) {
 		},
 	)
 
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-default-success", Namespace: "default"},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			Action:   "suspend",
 			NodeUUID: nodeUUID,
 		},
@@ -1745,9 +1745,9 @@ func TestHandleNodeActionTransitionsToSuccess(t *testing.T) {
 		webapimock.RouteResponse{Status: http.StatusNotFound},
 	)
 
-	sn := &simplyblockv1alpha1.SimplyBlockStorageNode{
+	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-action-success", Namespace: "default"},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			Action:   "remove",
 			NodeUUID: nodeUUID,
 		},
@@ -1758,7 +1758,7 @@ func TestHandleNodeActionTransitionsToSuccess(t *testing.T) {
 		t.Fatalf("handleNodeAction returned error: %v", err)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockStorageNode{}
+	current := &simplyblockv1alpha1.StorageNode{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), current); err != nil {
 		t.Fatalf("failed to fetch storagenode: %v", err)
 	}
@@ -1773,7 +1773,7 @@ func TestHandleNodeActionTransitionsToSuccess(t *testing.T) {
 func newStorageNodeStateTestReconciler(
 	t *testing.T,
 	objects ...client.Object,
-) *SimplyBlockStorageNodeReconciler {
+) *StorageNodeReconciler {
 	t.Helper()
 
 	scheme := newTestScheme(
@@ -1784,12 +1784,12 @@ func newStorageNodeStateTestReconciler(
 		rbacv1.AddToScheme,
 	)
 	cl := newTestClient(t, scheme, []client.Object{
-		&simplyblockv1alpha1.SimplyBlockStorageNode{},
-		&simplyblockv1alpha1.SimplyBlockStorageCluster{},
+		&simplyblockv1alpha1.StorageNode{},
+		&simplyblockv1alpha1.StorageCluster{},
 		&appsv1.DaemonSet{},
 	}, objects...)
 
-	return &SimplyBlockStorageNodeReconciler{
+	return &StorageNodeReconciler{
 		Client: cl,
 		Scheme: scheme,
 	}

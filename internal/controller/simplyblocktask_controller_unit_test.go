@@ -16,12 +16,12 @@ import (
 )
 
 func TestTaskReconcileAddsFinalizer(t *testing.T) {
-	task := &simplyblockv1alpha1.SimplyBlockTask{
+	task := &simplyblockv1alpha1.Task{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "task-a",
 			Namespace: "default",
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockTaskSpec{
+		Spec: simplyblockv1alpha1.TaskSpec{
 			ClusterName: "cluster-a",
 		},
 	}
@@ -32,7 +32,7 @@ func TestTaskReconcileAddsFinalizer(t *testing.T) {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockTask{}
+	current := &simplyblockv1alpha1.Task{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(task), current); err != nil {
 		t.Fatalf("failed to get task: %v", err)
 	}
@@ -42,13 +42,13 @@ func TestTaskReconcileAddsFinalizer(t *testing.T) {
 }
 
 func TestTaskReconcileDeletionRemovesFinalizer(t *testing.T) {
-	task := &simplyblockv1alpha1.SimplyBlockTask{
+	task := &simplyblockv1alpha1.Task{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "task-b",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.task.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockTaskSpec{
+		Spec: simplyblockv1alpha1.TaskSpec{
 			ClusterName: "cluster-a",
 		},
 	}
@@ -62,7 +62,7 @@ func TestTaskReconcileDeletionRemovesFinalizer(t *testing.T) {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockTask{}
+	current := &simplyblockv1alpha1.Task{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(task), current); err != nil {
 		if apierrors.IsNotFound(err) {
 			return
@@ -75,16 +75,16 @@ func TestTaskReconcileDeletionRemovesFinalizer(t *testing.T) {
 }
 
 func TestTaskReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
-	task := &simplyblockv1alpha1.SimplyBlockTask{
+	task := &simplyblockv1alpha1.Task{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "task-c",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.task.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockTaskSpec{
+		Spec: simplyblockv1alpha1.TaskSpec{
 			ClusterName: "cluster-missing",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockTaskStatus{
+		Status: simplyblockv1alpha1.TaskStatus{
 			Tasks: []simplyblockv1alpha1.TaskEntry{
 				{UUID: "task-1", TaskType: "rebuild", TaskStatus: "running"},
 			},
@@ -100,7 +100,7 @@ func TestTaskReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
 		t.Fatalf("expected requeue when cluster UUID is unresolved")
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockTask{}
+	current := &simplyblockv1alpha1.Task{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(task), current); err != nil {
 		t.Fatalf("failed to get task: %v", err)
 	}
@@ -112,16 +112,16 @@ func TestTaskReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
 func TestTaskReconcilePreventsStatusRegressionWhenSecretMissing(t *testing.T) {
 	const clusterUUID = "cluster-uuid-missing-secret"
 
-	task := &simplyblockv1alpha1.SimplyBlockTask{
+	task := &simplyblockv1alpha1.Task{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "task-d",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.task.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockTaskSpec{
+		Spec: simplyblockv1alpha1.TaskSpec{
 			ClusterName: "cluster-a",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockTaskStatus{
+		Status: simplyblockv1alpha1.TaskStatus{
 			Tasks: []simplyblockv1alpha1.TaskEntry{
 				{UUID: "task-2", TaskType: "migrate", TaskStatus: "running"},
 			},
@@ -141,7 +141,7 @@ func TestTaskReconcilePreventsStatusRegressionWhenSecretMissing(t *testing.T) {
 		t.Fatalf("expected requeue when cluster secret is missing")
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockTask{}
+	current := &simplyblockv1alpha1.Task{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(task), current); err != nil {
 		t.Fatalf("failed to get task: %v", err)
 	}
@@ -170,13 +170,13 @@ func TestTaskReconcileWorksInNonDefaultNamespace(t *testing.T) {
 	)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	task := &simplyblockv1alpha1.SimplyBlockTask{
+	task := &simplyblockv1alpha1.Task{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "task-nondefault",
 			Namespace:  ns,
 			Finalizers: []string{"simplyblock.task.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockTaskSpec{
+		Spec: simplyblockv1alpha1.TaskSpec{
 			ClusterName: clusterName,
 		},
 	}
@@ -196,7 +196,7 @@ func TestTaskReconcileWorksInNonDefaultNamespace(t *testing.T) {
 		t.Fatalf("expected requeue after task API polling failure in non-default namespace")
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockTask{}
+	current := &simplyblockv1alpha1.Task{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(task), current); err != nil {
 		t.Fatalf("failed to get task: %v", err)
 	}
@@ -235,13 +235,13 @@ func TestTaskReconcileFiltersCompletedTasksViaMock(t *testing.T) {
 
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	task := &simplyblockv1alpha1.SimplyBlockTask{
+	task := &simplyblockv1alpha1.Task{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "task-mock",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.task.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockTaskSpec{
+		Spec: simplyblockv1alpha1.TaskSpec{
 			ClusterName: "cluster-a",
 		},
 	}
@@ -260,7 +260,7 @@ func TestTaskReconcileFiltersCompletedTasksViaMock(t *testing.T) {
 		t.Fatalf("expected periodic requeue for task polling")
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockTask{}
+	current := &simplyblockv1alpha1.Task{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(task), current); err != nil {
 		t.Fatalf("failed to get task: %v", err)
 	}
@@ -292,16 +292,16 @@ func TestTaskReconcileNon2xxTaskAPIRequeuesAndPreservesStatus(t *testing.T) {
 
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	task := &simplyblockv1alpha1.SimplyBlockTask{
+	task := &simplyblockv1alpha1.Task{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "task-mock-non2xx",
 			Namespace:  "default",
 			Finalizers: []string{"simplyblock.task.finalizer"},
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockTaskSpec{
+		Spec: simplyblockv1alpha1.TaskSpec{
 			ClusterName: "cluster-a",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockTaskStatus{
+		Status: simplyblockv1alpha1.TaskStatus{
 			Tasks: []simplyblockv1alpha1.TaskEntry{
 				{UUID: "existing-task", TaskType: "rebalance", TaskStatus: "running"},
 			},
@@ -322,7 +322,7 @@ func TestTaskReconcileNon2xxTaskAPIRequeuesAndPreservesStatus(t *testing.T) {
 		t.Fatalf("expected delayed requeue after non-2xx tasks API response, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.SimplyBlockTask{}
+	current := &simplyblockv1alpha1.Task{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(task), current); err != nil {
 		t.Fatalf("failed to get task: %v", err)
 	}
@@ -331,16 +331,16 @@ func TestTaskReconcileNon2xxTaskAPIRequeuesAndPreservesStatus(t *testing.T) {
 	}
 }
 
-func testCluster(namespace, clusterName, uuid string) *simplyblockv1alpha1.SimplyBlockStorageCluster {
-	return &simplyblockv1alpha1.SimplyBlockStorageCluster{
+func testCluster(namespace, clusterName, uuid string) *simplyblockv1alpha1.StorageCluster {
+	return &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "cluster-" + clusterName,
 			Namespace: namespace,
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			ClusterName: clusterName,
 		},
-		Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{
+		Status: simplyblockv1alpha1.StorageClusterStatus{
 			UUID: uuid,
 		},
 	}
@@ -359,33 +359,33 @@ func testClusterSecret(namespace, clusterName, uuid, secret string) *corev1.Secr
 	}
 }
 
-func testPool(namespace, poolName, clusterName, uuid string) *simplyblockv1alpha1.SimplyBlockPool {
-	return &simplyblockv1alpha1.SimplyBlockPool{
+func testPool(namespace, poolName, clusterName, uuid string) *simplyblockv1alpha1.Pool {
+	return &simplyblockv1alpha1.Pool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      poolName,
 			Namespace: namespace,
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockPoolSpec{
+		Spec: simplyblockv1alpha1.PoolSpec{
 			Name:        poolName,
 			ClusterName: clusterName,
 		},
-		Status: simplyblockv1alpha1.SimplyBlockPoolStatus{
+		Status: simplyblockv1alpha1.PoolStatus{
 			UUID: uuid,
 		},
 	}
 }
 
-func newTaskStateTestReconciler(t *testing.T, objects ...client.Object) *SimplyBlockTaskReconciler {
+func newTaskStateTestReconciler(t *testing.T, objects ...client.Object) *TaskReconciler {
 	t.Helper()
 
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	cl := newTestClient(t, scheme, []client.Object{
-		&simplyblockv1alpha1.SimplyBlockTask{},
-		&simplyblockv1alpha1.SimplyBlockStorageCluster{},
-		&simplyblockv1alpha1.SimplyBlockPool{},
+		&simplyblockv1alpha1.Task{},
+		&simplyblockv1alpha1.StorageCluster{},
+		&simplyblockv1alpha1.Pool{},
 	}, objects...)
 
-	return &SimplyBlockTaskReconciler{
+	return &TaskReconciler{
 		Client: cl,
 		Scheme: scheme,
 	}

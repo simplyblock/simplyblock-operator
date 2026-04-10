@@ -37,8 +37,8 @@ import (
 	"github.com/simplyblock/simplyblock-manager/internal/webapi"
 )
 
-// SimplyBlockDeviceReconciler reconciles a SimplyBlockDevice object
-type SimplyBlockDeviceReconciler struct {
+// DeviceReconciler reconciles a Device object
+type DeviceReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
@@ -55,24 +55,24 @@ type deviceAPIResponse struct {
 	NvmfPort    int      `json:"nvmf_port"`
 }
 
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockdevices,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockdevices/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockdevices/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=devices,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=devices/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=devices/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the SimplyBlockDevice object against the actual cluster state, and then
+// the Device object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
-func (r *SimplyBlockDeviceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *DeviceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 
 	log := logf.FromContext(ctx)
 
-	devCR := &simplyblockv1alpha1.SimplyBlockDevice{}
+	devCR := &simplyblockv1alpha1.Device{}
 	if err := r.Get(ctx, req.NamespacedName, devCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -241,14 +241,14 @@ func (r *SimplyBlockDeviceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *SimplyBlockDeviceReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *DeviceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.SimplyBlockDevice{}).
-		Named("simplyblockdevice").
+		For(&simplyblockv1alpha1.Device{}).
+		Named("device").
 		Complete(r)
 }
 
-func (r *SimplyBlockDeviceReconciler) mapDevices(
+func (r *DeviceReconciler) mapDevices(
 	apiDevs []deviceAPIResponse,
 ) []simplyblockv1alpha1.DeviceInfo {
 
@@ -270,9 +270,9 @@ func (r *SimplyBlockDeviceReconciler) mapDevices(
 	return out
 }
 
-func (r *SimplyBlockDeviceReconciler) reconcileDeviceAction(
+func (r *DeviceReconciler) reconcileDeviceAction(
 	ctx context.Context,
-	devCR *simplyblockv1alpha1.SimplyBlockDevice,
+	devCR *simplyblockv1alpha1.Device,
 	clusterUUID string,
 	clusterSecret string,
 ) (ctrl.Result, error) {
@@ -297,7 +297,7 @@ func (r *SimplyBlockDeviceReconciler) reconcileDeviceAction(
 	if devCR.Status.ActionStatus == nil ||
 		devCR.Status.ActionStatus.Action != action {
 
-		err := r.patchDeviceStatus(ctx, devCR, func(d *simplyblockv1alpha1.SimplyBlockDevice) {
+		err := r.patchDeviceStatus(ctx, devCR, func(d *simplyblockv1alpha1.Device) {
 			d.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
 				Action:             action,
 				State:              utils.ActionStateRunning,
@@ -344,7 +344,7 @@ func (r *SimplyBlockDeviceReconciler) reconcileDeviceAction(
 			"nodeUUID", nodeUUID,
 		)
 
-		err = r.patchDeviceStatus(ctx, devCR, func(d *simplyblockv1alpha1.SimplyBlockDevice) {
+		err = r.patchDeviceStatus(ctx, devCR, func(d *simplyblockv1alpha1.Device) {
 			d.Status.ActionStatus.Triggered = true
 		})
 		if err != nil {
@@ -371,7 +371,7 @@ func (r *SimplyBlockDeviceReconciler) reconcileDeviceAction(
 
 	if r.deviceActionCompleted(action, resp.Status) {
 
-		err := r.patchDeviceStatus(ctx, devCR, func(d *simplyblockv1alpha1.SimplyBlockDevice) {
+		err := r.patchDeviceStatus(ctx, devCR, func(d *simplyblockv1alpha1.Device) {
 			d.Status.ActionStatus.State = utils.ActionStateSuccess
 			d.Status.ActionStatus.Message = fmt.Sprintf(
 				"Device %s %s successfully", deviceID, action,
@@ -393,7 +393,7 @@ func (r *SimplyBlockDeviceReconciler) reconcileDeviceAction(
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
-func (r *SimplyBlockDeviceReconciler) deviceActionCompleted(
+func (r *DeviceReconciler) deviceActionCompleted(
 	action string,
 	deviceStatus string,
 ) bool {
@@ -408,9 +408,9 @@ func (r *SimplyBlockDeviceReconciler) deviceActionCompleted(
 	}
 }
 
-func (r *SimplyBlockDeviceReconciler) failDeviceAction(
+func (r *DeviceReconciler) failDeviceAction(
 	ctx context.Context,
-	devCR *simplyblockv1alpha1.SimplyBlockDevice,
+	devCR *simplyblockv1alpha1.Device,
 	err error,
 ) (ctrl.Result, error) {
 
@@ -425,10 +425,10 @@ func (r *SimplyBlockDeviceReconciler) failDeviceAction(
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-func (r *SimplyBlockDeviceReconciler) patchDeviceStatus(
+func (r *DeviceReconciler) patchDeviceStatus(
 	ctx context.Context,
-	devCR *simplyblockv1alpha1.SimplyBlockDevice,
-	mutate func(*simplyblockv1alpha1.SimplyBlockDevice),
+	devCR *simplyblockv1alpha1.Device,
+	mutate func(*simplyblockv1alpha1.Device),
 ) error {
 	base := devCR.DeepCopy()
 	mutate(devCR)

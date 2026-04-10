@@ -35,8 +35,8 @@ import (
 	"github.com/simplyblock/simplyblock-manager/internal/webapi"
 )
 
-// SimplyBlockTaskReconciler reconciles a SimplyBlockTask object
-type SimplyBlockTaskReconciler struct {
+// TaskReconciler reconciles a Task object
+type TaskReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
@@ -50,23 +50,23 @@ type ClusterTaskAPIResponse []struct {
 	Retried  int    `json:"retry"`
 }
 
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocktasks,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocktasks/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocktasks/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=tasks,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=tasks/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=tasks/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the SimplyBlockTask object against the actual cluster state, and then
+// the Task object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
-func (r *SimplyBlockTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *TaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	taskCR := &simplyblockv1alpha1.SimplyBlockTask{}
+	taskCR := &simplyblockv1alpha1.Task{}
 	if err := r.Get(ctx, req.NamespacedName, taskCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -182,9 +182,9 @@ func (r *SimplyBlockTaskReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *SimplyBlockTaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *TaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.SimplyBlockTask{}).
-		Named("simplyblocktask").
+		For(&simplyblockv1alpha1.Task{}).
+		Named("task").
 		Complete(r)
 }

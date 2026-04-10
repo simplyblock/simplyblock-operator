@@ -17,14 +17,14 @@ rules:
   - update
   - watch
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockdevices
-  - simplyblocklvols
-  - simplyblockpools
-  - simplyblockstorageclusters
-  - simplyblockstoragenodes
-  - simplyblocktasks
+  - devices
+  - lvols
+  - pools
+  - storageclusters
+  - storagenodes
+  - tasks
   verbs:
   - create
   - delete
@@ -34,25 +34,25 @@ rules:
   - update
   - watch
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockdevices/finalizers
-  - simplyblocklvols/finalizers
-  - simplyblockpools/finalizers
-  - simplyblockstorageclusters/finalizers
-  - simplyblockstoragenodes/finalizers
-  - simplyblocktasks/finalizers
+  - devices/finalizers
+  - lvols/finalizers
+  - pools/finalizers
+  - storageclusters/finalizers
+  - storagenodes/finalizers
+  - tasks/finalizers
   verbs:
   - update
 - apiGroups:
-  - simplyblock.simplyblock.io
+  - storage.simplyblock.io
   resources:
-  - simplyblockdevices/status
-  - simplyblocklvols/status
-  - simplyblockpools/status
-  - simplyblockstorageclusters/status
-  - simplyblockstoragenodes/status
-  - simplyblocktasks/status
+  - devices/status
+  - lvols/status
+  - pools/status
+  - storageclusters/status
+  - storagenodes/status
+  - tasks/status
   verbs:
   - get
   - patch

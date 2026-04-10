@@ -20,9 +20,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 )
 
-var _ = Describe("SimplyBlockDevice Controller", func() {
+var _ = Describe("Device Controller", func() {
 	It("should ignore not-found resources and return no requeue", func() {
-		controllerReconciler := &SimplyBlockDeviceReconciler{
+		controllerReconciler := &DeviceReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
 		}

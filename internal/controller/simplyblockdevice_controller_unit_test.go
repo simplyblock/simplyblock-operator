@@ -18,7 +18,7 @@ import (
 )
 
 func TestDeviceActionCompleted(t *testing.T) {
-	r := &SimplyBlockDeviceReconciler{}
+	r := &DeviceReconciler{}
 
 	tests := []struct {
 		name   string
@@ -70,13 +70,13 @@ func TestDeviceActionCompleted(t *testing.T) {
 
 func TestReconcileDeviceActionTransitions(t *testing.T) {
 	t.Run("initializes running status when action status is missing", func(t *testing.T) {
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "dev-a",
 				Namespace:  "default",
 				Generation: 7,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockDeviceSpec{
+			Spec: simplyblockv1alpha1.DeviceSpec{
 				Action:   utils.DeviceActionRemove,
 				DeviceID: "d1",
 				NodeUUID: "n1",
@@ -103,18 +103,18 @@ func TestReconcileDeviceActionTransitions(t *testing.T) {
 	})
 
 	t.Run("does not re-enter terminal success for same generation", func(t *testing.T) {
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "dev-b",
 				Namespace:  "default",
 				Generation: 5,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockDeviceSpec{
+			Spec: simplyblockv1alpha1.DeviceSpec{
 				Action:   utils.DeviceActionRestart,
 				DeviceID: "d1",
 				NodeUUID: "n1",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockDeviceStatus{
+			Status: simplyblockv1alpha1.DeviceStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
 					Action:             utils.DeviceActionRestart,
 					State:              utils.ActionStateSuccess,
@@ -135,18 +135,18 @@ func TestReconcileDeviceActionTransitions(t *testing.T) {
 	})
 
 	t.Run("re-initializes running status when action changes", func(t *testing.T) {
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "dev-c",
 				Namespace:  "default",
 				Generation: 3,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockDeviceSpec{
+			Spec: simplyblockv1alpha1.DeviceSpec{
 				Action:   utils.DeviceActionRemove,
 				DeviceID: "d1",
 				NodeUUID: "n1",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockDeviceStatus{
+			Status: simplyblockv1alpha1.DeviceStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
 					Action:             utils.DeviceActionRestart,
 					State:              utils.ActionStateSuccess,
@@ -169,18 +169,18 @@ func TestReconcileDeviceActionTransitions(t *testing.T) {
 	})
 
 	t.Run("rejects unsupported action transition", func(t *testing.T) {
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "dev-d",
 				Namespace:  "default",
 				Generation: 2,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockDeviceSpec{
+			Spec: simplyblockv1alpha1.DeviceSpec{
 				Action:   "invalid-action",
 				DeviceID: "d1",
 				NodeUUID: "n1",
 			},
-			Status: simplyblockv1alpha1.SimplyBlockDeviceStatus{
+			Status: simplyblockv1alpha1.DeviceStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
 					Action: "invalid-action",
 					State:  utils.ActionStateRunning,
@@ -203,12 +203,12 @@ func TestReconcileDeviceActionTransitions(t *testing.T) {
 }
 
 func TestFailDeviceActionTransitionsToFailed(t *testing.T) {
-	dev := &simplyblockv1alpha1.SimplyBlockDevice{
+	dev := &simplyblockv1alpha1.Device{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "dev-f",
 			Namespace: "default",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockDeviceStatus{
+		Status: simplyblockv1alpha1.DeviceStatus{
 			ActionStatus: &simplyblockv1alpha1.ActionStatus{
 				Action: utils.DeviceActionRemove,
 				State:  utils.ActionStateRunning,
@@ -230,18 +230,18 @@ func TestFailDeviceActionTransitionsToFailed(t *testing.T) {
 }
 
 func TestReconcileDeviceActionRejectsIllegalSuccessState(t *testing.T) {
-	dev := &simplyblockv1alpha1.SimplyBlockDevice{
+	dev := &simplyblockv1alpha1.Device{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "dev-illegal",
 			Namespace:  "default",
 			Generation: 10,
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockDeviceSpec{
+		Spec: simplyblockv1alpha1.DeviceSpec{
 			Action:   utils.DeviceActionRemove,
 			DeviceID: "d1",
 			NodeUUID: "n1",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockDeviceStatus{
+		Status: simplyblockv1alpha1.DeviceStatus{
 			// Illegal/stale success: observedGeneration does not match current generation.
 			ActionStatus: &simplyblockv1alpha1.ActionStatus{
 				Action:             utils.DeviceActionRemove,
@@ -280,9 +280,9 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 	})
 
 	t.Run("requeues when cluster uuid is not ready", func(t *testing.T) {
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{Name: "dev-no-cluster", Namespace: "default"},
-			Spec: simplyblockv1alpha1.SimplyBlockDeviceSpec{
+			Spec: simplyblockv1alpha1.DeviceSpec{
 				ClusterName: "cluster-a",
 			},
 		}
@@ -297,16 +297,16 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 	})
 
 	t.Run("requeues when cluster auth secret is missing", func(t *testing.T) {
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{Name: "dev-no-auth", Namespace: "default"},
-			Spec: simplyblockv1alpha1.SimplyBlockDeviceSpec{
+			Spec: simplyblockv1alpha1.DeviceSpec{
 				ClusterName: "cluster-a",
 			},
 		}
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-a"},
-			Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: "cluster-uuid-a"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-uuid-a"},
 		}
 		r := newDeviceStateTestReconciler(t, dev, cluster)
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(dev)})
@@ -320,21 +320,21 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 
 	t.Run("deletion removes finalizer and returns terminal result", func(t *testing.T) {
 		now := metav1.NewTime(time.Now())
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "dev-delete-ok",
 				Namespace:         "default",
 				Finalizers:        []string{"simplyblock.device.finalizer"},
 				DeletionTimestamp: &now,
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockDeviceSpec{
+			Spec: simplyblockv1alpha1.DeviceSpec{
 				ClusterName: "cluster-a",
 			},
 		}
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-delete", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-a"},
-			Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: "cluster-uuid-delete"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-uuid-delete"},
 		}
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster-cluster-a", Namespace: "default"},
@@ -351,7 +351,7 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 		if res.RequeueAfter != 0 {
 			t.Fatalf("expected terminal result in deletion path, got %+v", res)
 		}
-		current := &simplyblockv1alpha1.SimplyBlockDevice{}
+		current := &simplyblockv1alpha1.Device{}
 		if err := r.Get(context.Background(), client.ObjectKeyFromObject(dev), current); err != nil {
 			if !apierrors.IsNotFound(err) {
 				t.Fatalf("failed to fetch device after deletion flow: %v", err)
@@ -364,16 +364,16 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 	})
 
 	t.Run("adds finalizer when missing and exits", func(t *testing.T) {
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{Name: "dev-add-finalizer", Namespace: "default"},
-			Spec: simplyblockv1alpha1.SimplyBlockDeviceSpec{
+			Spec: simplyblockv1alpha1.DeviceSpec{
 				ClusterName: "cluster-a",
 			},
 		}
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-finalizer", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-a"},
-			Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: "cluster-uuid-finalizer"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-uuid-finalizer"},
 		}
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster-cluster-a", Namespace: "default"},
@@ -390,7 +390,7 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 		if res.RequeueAfter != 0 {
 			t.Fatalf("expected immediate return after adding finalizer, got %+v", res)
 		}
-		current := &simplyblockv1alpha1.SimplyBlockDevice{}
+		current := &simplyblockv1alpha1.Device{}
 		if err := r.Get(context.Background(), client.ObjectKeyFromObject(dev), current); err != nil {
 			t.Fatalf("failed to fetch device: %v", err)
 		}
@@ -400,22 +400,22 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 	})
 
 	t.Run("delegates to action reconcile path when action is set", func(t *testing.T) {
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "dev-action-delegate",
 				Namespace:  "default",
 				Finalizers: []string{"simplyblock.device.finalizer"},
 			},
-			Spec: simplyblockv1alpha1.SimplyBlockDeviceSpec{
+			Spec: simplyblockv1alpha1.DeviceSpec{
 				ClusterName: "cluster-a",
 				Action:      utils.DeviceActionRestart,
 				// Missing deviceID/nodeUUID forces reconcileDeviceAction error, proving delegation path.
 			},
 		}
-		cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-action", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-a"},
-			Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: "cluster-uuid-action"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-uuid-action"},
 		}
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster-cluster-a", Namespace: "default"},
@@ -436,10 +436,10 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 }
 
 func TestDeviceReconcileInventoryPaths(t *testing.T) {
-	baseCluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	baseCluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-inv", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-a"},
-		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: "cluster-uuid-inv"},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-uuid-inv"},
 	}
 	baseSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster-cluster-a", Namespace: "default"},
@@ -459,9 +459,9 @@ func TestDeviceReconcileInventoryPaths(t *testing.T) {
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{Name: "dev-node-list-fail", Namespace: "default", Finalizers: []string{"simplyblock.device.finalizer"}},
-			Spec:       simplyblockv1alpha1.SimplyBlockDeviceSpec{ClusterName: "cluster-a"},
+			Spec:       simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
 		}
 		r := newDeviceStateTestReconciler(t, dev, baseCluster.DeepCopy(), baseSecret.DeepCopy())
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(dev)})
@@ -483,9 +483,9 @@ func TestDeviceReconcileInventoryPaths(t *testing.T) {
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{Name: "dev-node-list-invalid", Namespace: "default", Finalizers: []string{"simplyblock.device.finalizer"}},
-			Spec:       simplyblockv1alpha1.SimplyBlockDeviceSpec{ClusterName: "cluster-a"},
+			Spec:       simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
 		}
 		r := newDeviceStateTestReconciler(t, dev, baseCluster.DeepCopy(), baseSecret.DeepCopy())
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(dev)})
@@ -507,9 +507,9 @@ func TestDeviceReconcileInventoryPaths(t *testing.T) {
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{Name: "dev-no-nodes", Namespace: "default", Finalizers: []string{"simplyblock.device.finalizer"}},
-			Spec:       simplyblockv1alpha1.SimplyBlockDeviceSpec{ClusterName: "cluster-a"},
+			Spec:       simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
 		}
 		r := newDeviceStateTestReconciler(t, dev, baseCluster.DeepCopy(), baseSecret.DeepCopy())
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(dev)})
@@ -542,9 +542,9 @@ func TestDeviceReconcileInventoryPaths(t *testing.T) {
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{Name: "dev-empty-map", Namespace: "default", Finalizers: []string{"simplyblock.device.finalizer"}},
-			Spec:       simplyblockv1alpha1.SimplyBlockDeviceSpec{ClusterName: "cluster-a"},
+			Spec:       simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
 		}
 		r := newDeviceStateTestReconciler(t, dev, baseCluster.DeepCopy(), baseSecret.DeepCopy())
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(dev)})
@@ -582,10 +582,10 @@ func TestDeviceReconcileInventoryPaths(t *testing.T) {
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-		dev := &simplyblockv1alpha1.SimplyBlockDevice{
+		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{Name: "dev-unchanged", Namespace: "default", Finalizers: []string{"simplyblock.device.finalizer"}},
-			Spec:       simplyblockv1alpha1.SimplyBlockDeviceSpec{ClusterName: "cluster-a"},
-			Status: simplyblockv1alpha1.SimplyBlockDeviceStatus{
+			Spec:       simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
+			Status: simplyblockv1alpha1.DeviceStatus{
 				Nodes: []simplyblockv1alpha1.NodeDevices{
 					{
 						NodeUUID: "node-1",
@@ -613,15 +613,15 @@ func TestDeviceReconcileInventoryPaths(t *testing.T) {
 	})
 }
 
-func newDeviceStateTestReconciler(t *testing.T, objects ...client.Object) *SimplyBlockDeviceReconciler {
+func newDeviceStateTestReconciler(t *testing.T, objects ...client.Object) *DeviceReconciler {
 	t.Helper()
 
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	cl := newTestClient(t, scheme, []client.Object{
-		&simplyblockv1alpha1.SimplyBlockDevice{},
+		&simplyblockv1alpha1.Device{},
 	}, objects...)
 
-	return &SimplyBlockDeviceReconciler{
+	return &DeviceReconciler{
 		Client: cl,
 		Scheme: scheme,
 	}

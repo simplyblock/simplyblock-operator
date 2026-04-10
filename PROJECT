@@ -14,8 +14,8 @@ resources:
     namespaced: true
   controller: true
   domain: simplyblock.io
-  group: simplyblock
-  kind: SimplyBlockStorageCluster
+  group: storage
+  kind: StorageCluster
   path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
   version: v1alpha1
 - api:
@@ -23,7 +23,7 @@ resources:
     namespaced: true
   controller: true
   domain: simplyblock.io
-  group: simplyblock
+  group: storage
   kind: StorageNode
   path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
   version: v1alpha1
@@ -32,7 +32,7 @@ resources:
     namespaced: true
   controller: true
   domain: simplyblock.io
-  group: simplyblock
+  group: storage
   kind: Pool
   path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
   version: v1alpha1
@@ -41,8 +41,8 @@ resources:
     namespaced: true
   controller: true
   domain: simplyblock.io
-  group: simplyblock
-  kind: SimplyBlockDevice
+  group: storage
+  kind: Device
   path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
   version: v1alpha1
 - api:
@@ -50,8 +50,8 @@ resources:
     namespaced: true
   controller: true
   domain: simplyblock.io
-  group: simplyblock
-  kind: SimplyBlockTask
+  group: storage
+  kind: Task
   path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
   version: v1alpha1
 - api:
@@ -59,8 +59,8 @@ resources:
     namespaced: true
   controller: true
   domain: simplyblock.io
-  group: simplyblock
-  kind: SimplyBlockLvol
+  group: storage
+  kind: Lvol
   path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
   version: v1alpha1
 version: "3"
