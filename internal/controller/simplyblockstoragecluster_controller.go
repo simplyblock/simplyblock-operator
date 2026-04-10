@@ -436,9 +436,9 @@ func (r *StorageClusterReconciler) handleDeletion(
 	apiClient := webapi.NewClient()
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
 
-	_, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
 	if err != nil || status >= 300 {
-		log.Error(err, "Cluster DELETE API call failed, will retry", "name", clusterCR.Name, "status", status, "clusterUUID", clusterUUID)
+		log.Error(err, "Cluster DELETE API call failed, will retry", "name", clusterCR.Name, "status", status, "clusterUUID", clusterUUID, "response", string(body))
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, true, nil
 	}
 
