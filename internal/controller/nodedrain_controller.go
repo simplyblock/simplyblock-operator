@@ -165,7 +165,7 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 
 		requeue, advErr := r.advanceStateMachine(
-			ctx, node, snCR, state, apiClient, clusterUUID, clusterSecret, maxFaultTolerance,
+			ctx, snCR, state, apiClient, clusterUUID, clusterSecret, maxFaultTolerance,
 		)
 		if advErr != nil {
 			log.Error(advErr, "Drain state machine error", "node", workerName, "phase", state.Phase)
@@ -193,7 +193,6 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 // advanceStateMachine dispatches to the handler for the current drain phase.
 func (r *NodeDrainCoordinatorReconciler) advanceStateMachine(
 	ctx context.Context,
-	node *corev1.Node,
 	snCR *simplyblockv1alpha1.StorageNode,
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
