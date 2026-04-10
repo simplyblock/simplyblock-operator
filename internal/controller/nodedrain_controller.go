@@ -23,8 +23,8 @@ import (
 	"net/http"
 	"time"
 
-	policyv1 "k8s.io/api/policy/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -58,7 +58,7 @@ const (
 //
 //  1. Detect   – k8s node cordoned (spec.unschedulable=true); wait for drain slot
 //  2. Shutdown – label storage pod, create blocking PDB (maxUnavailable=0),
-//               call simplyblock shutdown API
+//     call simplyblock shutdown API
 //  3. Confirm  – poll until backend node status == "offline"
 //  4. Release  – relax PDB to maxUnavailable=1; drain proceeds and pod is evicted
 //  5. Reboot   – node reboots (OS upgrade applied); wait for SPDK to restart
