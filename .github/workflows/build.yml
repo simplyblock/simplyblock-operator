@@ -39,4 +39,4 @@ jobs:
           IMAGE_TAG=${IMAGE_NAME}:${GITHUB_REF_NAME}
           echo "Building and pushing multi-arch image: $IMAGE_TAG"
           # Use multi-arch Makefile target
-          make docker-buildx IMG=$IMAGE_TAG PLATFORMS="amd64,arm64"
+          make docker-buildx IMG=$IMAGE_TAG PLATFORMS="linux/amd64,linux/arm64"
