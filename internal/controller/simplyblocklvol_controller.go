@@ -36,8 +36,8 @@ import (
 	"github.com/simplyblock/simplyblock-manager/internal/webapi"
 )
 
-// SimplyBlockLvolReconciler reconciles a SimplyBlockLvol object
-type SimplyBlockLvolReconciler struct {
+// LvolReconciler reconciles a Lvol object
+type LvolReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
@@ -73,24 +73,24 @@ type LVOLAPIResponse struct {
 	MaxNamespacesPerSubsystem int64 `json:"max_namespace_per_subsys,omitempty"`
 }
 
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocklvols,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocklvols/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblocklvols/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=lvols,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=lvols/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=lvols/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the SimplyBlockLvol object against the actual cluster state, and then
+// the Lvol object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
-func (r *SimplyBlockLvolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *LvolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
 	// Fetch the Pool CR
-	lvolCR := &simplyblockv1alpha1.SimplyBlockLvol{}
+	lvolCR := &simplyblockv1alpha1.Lvol{}
 	if err := r.Get(ctx, req.NamespacedName, lvolCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -162,7 +162,7 @@ func (r *SimplyBlockLvolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		params := utils.PoolUpdateParams{
 			LvolCRName:      lvolCR.Name,
 			LvolCRNameSpace: lvolCR.Namespace,
-			LvolCRPlural:    "simplyblocklvols",
+			LvolCRPlural:    "lvols",
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolUUID)
@@ -245,18 +245,18 @@ func (r *SimplyBlockLvolReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *SimplyBlockLvolReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *LvolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.SimplyBlockLvol{}).
-		Named("simplyblocklvol").
+		For(&simplyblockv1alpha1.Lvol{}).
+		Named("lvol").
 		Complete(r)
 }
 
-func lvolStatusListFromAPI(api []LVOLAPIResponse) simplyblockv1alpha1.SimplyBlockLvolStatus {
-	lvols := make([]simplyblockv1alpha1.LvolStatus, 0, len(api))
+func lvolStatusListFromAPI(api []LVOLAPIResponse) simplyblockv1alpha1.LvolStatus {
+	lvols := make([]simplyblockv1alpha1.LvolEntry, 0, len(api))
 
 	for _, l := range api {
-		lvols = append(lvols, simplyblockv1alpha1.LvolStatus{
+		lvols = append(lvols, simplyblockv1alpha1.LvolEntry{
 			UUID:               l.UUID,
 			LvolName:           l.LvolName,
 			NodeUUID:           l.NodeUUID,
@@ -291,7 +291,7 @@ func lvolStatusListFromAPI(api []LVOLAPIResponse) simplyblockv1alpha1.SimplyBloc
 		})
 	}
 
-	return simplyblockv1alpha1.SimplyBlockLvolStatus{
+	return simplyblockv1alpha1.LvolStatus{
 		Lvols: lvols,
 	}
 }
@@ -303,7 +303,7 @@ func erasureCodingScheme(data, parity int64) string {
 	return fmt.Sprintf("%dx%d", data, parity)
 }
 
-func normalizeLvolStatus(s *simplyblockv1alpha1.SimplyBlockLvolStatus) {
+func normalizeLvolStatus(s *simplyblockv1alpha1.LvolStatus) {
 	sort.SliceStable(s.Lvols, func(i, j int) bool {
 		return s.Lvols[i].UUID < s.Lvols[j].UUID
 	})

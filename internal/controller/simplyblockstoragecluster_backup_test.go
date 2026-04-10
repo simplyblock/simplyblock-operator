@@ -26,12 +26,12 @@ func TestBuildBackupConfig(t *testing.T) {
 		t.Fatalf("add simplyblock scheme: %v", err)
 	}
 
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "sample-cluster",
 			Namespace: "default",
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			ClusterName: "sample-cluster",
 			Backup: &simplyblockv1alpha1.BackupSpec{
 				LocalEndpoint:   "http://10.10.11.10:9000",
@@ -57,7 +57,7 @@ func TestBuildBackupConfig(t *testing.T) {
 		},
 	}
 
-	reconciler := &SimplyBlockStorageClusterReconciler{
+	reconciler := &StorageClusterReconciler{
 		Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, credentials).Build(),
 		Scheme: scheme,
 	}
@@ -102,12 +102,12 @@ func TestBuildBackupConfigMissingSecretKey(t *testing.T) {
 		t.Fatalf("add simplyblock scheme: %v", err)
 	}
 
-	cluster := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "sample-cluster",
 			Namespace: "default",
 		},
-		Spec: simplyblockv1alpha1.SimplyBlockStorageClusterSpec{
+		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			ClusterName: "sample-cluster",
 			Backup: &simplyblockv1alpha1.BackupSpec{
 				CredentialsSecretRef: simplyblockv1alpha1.BackupCredentialsSecretRef{
@@ -127,7 +127,7 @@ func TestBuildBackupConfigMissingSecretKey(t *testing.T) {
 		},
 	}
 
-	reconciler := &SimplyBlockStorageClusterReconciler{
+	reconciler := &StorageClusterReconciler{
 		Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, credentials).Build(),
 		Scheme: scheme,
 	}

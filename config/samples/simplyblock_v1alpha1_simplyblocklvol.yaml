@@ -1,9 +1,0 @@
-apiVersion: simplyblock.simplyblock.io/v1alpha1
-kind: SimplyBlockLvol
-metadata:
-  labels:
-    app.kubernetes.io/name: simplyblock-manager
-    app.kubernetes.io/managed-by: kustomize
-  name: simplyblocklvol-sample
-spec:
-  # TODO(user): Add fields here

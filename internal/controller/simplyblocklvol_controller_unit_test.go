@@ -63,7 +63,7 @@ func TestLvolStatusListFromAPIAndNormalize(t *testing.T) {
 }
 
 func TestNormalizeLvolStatusEmptySafe(t *testing.T) {
-	s := simplyblockv1alpha1.SimplyBlockLvolStatus{}
+	s := simplyblockv1alpha1.LvolStatus{}
 	normalizeLvolStatus(&s)
 	if len(s.Lvols) != 0 {
 		t.Fatalf("expected empty lvols")

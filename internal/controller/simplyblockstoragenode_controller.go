@@ -40,8 +40,8 @@ import (
 	"github.com/simplyblock/simplyblock-manager/internal/webapi"
 )
 
-// SimplyBlockStorageNodeReconciler reconciles a SimplyBlockStorageNode object
-type SimplyBlockStorageNodeReconciler struct {
+// StorageNodeReconciler reconciles a StorageNode object
+type StorageNodeReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
@@ -85,23 +85,23 @@ var (
 	waitForActionCompletionSleepFn      = time.Sleep
 )
 
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstoragenodes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstoragenodes/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=simplyblock.simplyblock.io,resources=simplyblockstoragenodes/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the SimplyBlockStorageNode object against the actual cluster state, and then
+// the StorageNode object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
-func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	snCR := &simplyblockv1alpha1.SimplyBlockStorageNode{}
+	snCR := &simplyblockv1alpha1.StorageNode{}
 	if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -215,7 +215,7 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 			HaJMCount:           journalManagerCount(snCR),
 			CRName:              snCR.Name,
 			CRNameSpace:         snCR.Namespace,
-			CRPlural:            "simplyblockstoragenodes",
+			CRPlural:            "storagenodes",
 			Format4K:            utils.BoolPtrOrFalse(snCR.Spec.ForceFormat4K),
 		}
 
@@ -266,16 +266,16 @@ func (r *SimplyBlockStorageNodeReconciler) Reconcile(ctx context.Context, req ct
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *SimplyBlockStorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.SimplyBlockStorageNode{}).
+		For(&simplyblockv1alpha1.StorageNode{}).
 		Named("storagenode").
 		Complete(r)
 }
 
-func (r *SimplyBlockStorageNodeReconciler) handleDeletion(
+func (r *StorageNodeReconciler) handleDeletion(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+	snCR *simplyblockv1alpha1.StorageNode,
 ) (bool, error) {
 
 	if snCR.DeletionTimestamp.IsZero() {
@@ -290,9 +290,9 @@ func (r *SimplyBlockStorageNodeReconciler) handleDeletion(
 	return true, r.Update(ctx, snCR)
 }
 
-func (r *SimplyBlockStorageNodeReconciler) ensureFinalizer(
+func (r *StorageNodeReconciler) ensureFinalizer(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+	snCR *simplyblockv1alpha1.StorageNode,
 ) (bool, error) {
 
 	if controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
@@ -303,7 +303,7 @@ func (r *SimplyBlockStorageNodeReconciler) ensureFinalizer(
 	return true, r.Update(ctx, snCR)
 }
 
-func (r *SimplyBlockStorageNodeReconciler) labelWorkerNodes(ctx context.Context, sn *simplyblockv1alpha1.SimplyBlockStorageNode) error {
+func (r *StorageNodeReconciler) labelWorkerNodes(ctx context.Context, sn *simplyblockv1alpha1.StorageNode) error {
 	for _, nodeName := range sn.Spec.WorkerNodes {
 		var node corev1.Node
 		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
@@ -330,7 +330,7 @@ func (r *SimplyBlockStorageNodeReconciler) labelWorkerNodes(ctx context.Context,
 	return nil
 }
 
-func (r *SimplyBlockStorageNodeReconciler) labelWorkerNode(ctx context.Context, sn *simplyblockv1alpha1.SimplyBlockStorageNode) error {
+func (r *StorageNodeReconciler) labelWorkerNode(ctx context.Context, sn *simplyblockv1alpha1.StorageNode) error {
 	var node corev1.Node
 	if err := r.Get(ctx, client.ObjectKey{Name: sn.Spec.WorkerNode}, &node); err != nil {
 		return err
@@ -351,9 +351,9 @@ func (r *SimplyBlockStorageNodeReconciler) labelWorkerNode(ctx context.Context, 
 	return nil
 }
 
-func (r *SimplyBlockStorageNodeReconciler) reconcileDaemonSet(
+func (r *StorageNodeReconciler) reconcileDaemonSet(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
 
 	ds := utils.BuildStorageNodeDaemonSet(snCR)
@@ -391,7 +391,7 @@ func getNodeInternalIP(ctx context.Context, c client.Client, nodeName string) (s
 }
 
 func ensureNodeStatus(
-	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+	snCR *simplyblockv1alpha1.StorageNode,
 	nodeName, ip string,
 ) *simplyblockv1alpha1.NodeStatus {
 
@@ -488,8 +488,8 @@ func waitForNodeOnline(
 	clusterUUID string,
 	ip string,
 	nodeName string,
-	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
-	r *SimplyBlockStorageNodeReconciler,
+	snCR *simplyblockv1alpha1.StorageNode,
+	r *StorageNodeReconciler,
 ) error {
 	log := logf.FromContext(ctx)
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
@@ -643,7 +643,7 @@ func waitForNodeOnline(
 }
 
 func journalManagerPercentPerDevice(
-	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+	snCR *simplyblockv1alpha1.StorageNode,
 ) int {
 	if snCR.Spec.JournalManagerSpec == nil {
 		return 3
@@ -652,7 +652,7 @@ func journalManagerPercentPerDevice(
 }
 
 func journalManagerCount(
-	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+	snCR *simplyblockv1alpha1.StorageNode,
 ) int {
 	if snCR.Spec.JournalManagerSpec == nil {
 		return 3
@@ -660,9 +660,9 @@ func journalManagerCount(
 	return utils.IntPtrOrDefault(snCR.Spec.JournalManagerSpec.Count, 3)
 }
 
-func (r *SimplyBlockStorageNodeReconciler) reconcileAction(
+func (r *StorageNodeReconciler) reconcileAction(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+	snCR *simplyblockv1alpha1.StorageNode,
 	clusterUUID string,
 	clusterSecret string,
 ) (ctrl.Result, error) {
@@ -682,10 +682,10 @@ func (r *SimplyBlockStorageNodeReconciler) reconcileAction(
 	return ctrl.Result{}, nil
 }
 
-func (r *SimplyBlockStorageNodeReconciler) handleNodeAction(
+func (r *StorageNodeReconciler) handleNodeAction(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+	snCR *simplyblockv1alpha1.StorageNode,
 	clusterUUID, clusterSecret string,
 ) error {
 	log := logf.FromContext(ctx)
@@ -734,12 +734,12 @@ func (r *SimplyBlockStorageNodeReconciler) handleNodeAction(
 	return nil
 }
 
-func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
+func (r *StorageNodeReconciler) performNodeAction(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
 	clusterSecret string,
-	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
 
 	log := logf.FromContext(ctx)
@@ -850,7 +850,7 @@ func (r *SimplyBlockStorageNodeReconciler) performNodeAction(
 	return nil
 }
 
-func (r *SimplyBlockStorageNodeReconciler) waitForActionCompletion(
+func (r *StorageNodeReconciler) waitForActionCompletion(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,

@@ -1,0 +1,9 @@
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: Device
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-manager
+    app.kubernetes.io/managed-by: kustomize
+  name: device-sample
+spec:
+  # TODO(user): Add fields here

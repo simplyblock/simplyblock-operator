@@ -39,8 +39,8 @@ func TestCountOnlineHealthyNodes(t *testing.T) {
 }
 
 func TestShouldActivateCluster(t *testing.T) {
-	cr := &simplyblockv1alpha1.SimplyBlockStorageNode{
-		Spec: simplyblockv1alpha1.SimplyBlockStorageNodeSpec{
+	cr := &simplyblockv1alpha1.StorageNode{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			WorkerNodes: []string{"n1", "n2", "n3"},
 		},
 	}
@@ -56,15 +56,15 @@ func TestShouldActivateCluster(t *testing.T) {
 }
 
 func TestClusterStatusHelpers(t *testing.T) {
-	active := &simplyblockv1alpha1.SimplyBlockStorageCluster{
-		Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{Status: "active"},
+	active := &simplyblockv1alpha1.StorageCluster{
+		Status: simplyblockv1alpha1.StorageClusterStatus{Status: "active"},
 	}
 	if !ClusterAlreadyActive(active) {
 		t.Fatalf("ClusterAlreadyActive should be true")
 	}
 
-	expanding := &simplyblockv1alpha1.SimplyBlockStorageCluster{
-		Status: simplyblockv1alpha1.SimplyBlockStorageClusterStatus{Status: "in_expansion"},
+	expanding := &simplyblockv1alpha1.StorageCluster{
+		Status: simplyblockv1alpha1.StorageClusterStatus{Status: "in_expansion"},
 	}
 	if !ClusterInExpansion(expanding) {
 		t.Fatalf("ClusterInExpansion should be true")
@@ -77,23 +77,23 @@ func TestResolveClusterAndPoolUUID(t *testing.T) {
 		t.Fatalf("add scheme: %v", err)
 	}
 
-	clusterA := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	clusterA := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns1"},
-		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-a"},
-		Status:     simplyblockv1alpha1.SimplyBlockStorageClusterStatus{UUID: "uuid-a"},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "uuid-a"},
 	}
-	clusterNoUUID := &simplyblockv1alpha1.SimplyBlockStorageCluster{
+	clusterNoUUID := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns1"},
-		Spec:       simplyblockv1alpha1.SimplyBlockStorageClusterSpec{ClusterName: "cluster-b"},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-b"},
 	}
 
-	poolA := &simplyblockv1alpha1.SimplyBlockPool{
+	poolA := &simplyblockv1alpha1.Pool{
 		ObjectMeta: metav1.ObjectMeta{Name: "pool-a", Namespace: "ns1"},
-		Spec: simplyblockv1alpha1.SimplyBlockPoolSpec{
+		Spec: simplyblockv1alpha1.PoolSpec{
 			ClusterName: "cluster-a",
 			Name:        "gold",
 		},
-		Status: simplyblockv1alpha1.SimplyBlockPoolStatus{UUID: "pool-uuid-a"},
+		Status: simplyblockv1alpha1.PoolStatus{UUID: "pool-uuid-a"},
 	}
 
 	c := fake.NewClientBuilder().

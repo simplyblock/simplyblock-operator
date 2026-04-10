@@ -67,7 +67,7 @@ func ResolvePoolUUID(
 	poolName string,
 ) (string, error) {
 
-	var pools simplyblockv1alpha1.SimplyBlockPoolList
+	var pools simplyblockv1alpha1.PoolList
 	if err := c.List(ctx, &pools, client.InNamespace(namespace)); err != nil {
 		return "", err
 	}
@@ -90,7 +90,7 @@ func ResolveClusterUUID(
 	clusterName string,
 ) (string, error) {
 
-	var clusters simplyblockv1alpha1.SimplyBlockStorageClusterList
+	var clusters simplyblockv1alpha1.StorageClusterList
 	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
 		return "", err
 	}
@@ -126,9 +126,9 @@ func ResolveClusterCR(
 	c client.Client,
 	namespace string,
 	clusterName string,
-) (*simplyblockv1alpha1.SimplyBlockStorageCluster, error) {
+) (*simplyblockv1alpha1.StorageCluster, error) {
 
-	var clusters simplyblockv1alpha1.SimplyBlockStorageClusterList
+	var clusters simplyblockv1alpha1.StorageClusterList
 	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func ExistingClusterUUID(
 	namespace string,
 ) (exists bool, uuid string, clusterName string, err error) {
 
-	var clusters simplyblockv1alpha1.SimplyBlockStorageClusterList
+	var clusters simplyblockv1alpha1.StorageClusterList
 
 	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
 		return false, "", "", err
@@ -194,7 +194,7 @@ func CountOnlineHealthyNodes(
 func ShouldActivateCluster(
 	mod int,
 	onlineHealthy int,
-	snCR *simplyblockv1alpha1.SimplyBlockStorageNode,
+	snCR *simplyblockv1alpha1.StorageNode,
 ) bool {
 
 	required := mod + 1
@@ -218,11 +218,11 @@ func ShouldActivateCluster(
 		!coreIsolation
 }
 
-func ClusterAlreadyActive(cluster *simplyblockv1alpha1.SimplyBlockStorageCluster) bool {
+func ClusterAlreadyActive(cluster *simplyblockv1alpha1.StorageCluster) bool {
 	return cluster.Status.Status == "active"
 }
 
-func ClusterInExpansion(cluster *simplyblockv1alpha1.SimplyBlockStorageCluster) bool {
+func ClusterInExpansion(cluster *simplyblockv1alpha1.StorageCluster) bool {
 	return cluster.Status.Status == "in_expansion"
 }
 

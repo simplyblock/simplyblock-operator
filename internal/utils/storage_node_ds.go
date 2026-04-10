@@ -9,7 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.SimplyBlockStorageNode) *appsv1.DaemonSet {
+func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.DaemonSet {
 
 	labels := map[string]string{
 		"app":                 "storage-node",

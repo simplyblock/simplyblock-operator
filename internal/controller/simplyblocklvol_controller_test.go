@@ -20,9 +20,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 )
 
-var _ = Describe("SimplyBlockLvol Controller", func() {
+var _ = Describe("Lvol Controller", func() {
 	It("should ignore not-found resources and return no requeue", func() {
-		controllerReconciler := &SimplyBlockLvolReconciler{
+		controllerReconciler := &LvolReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
 		}
