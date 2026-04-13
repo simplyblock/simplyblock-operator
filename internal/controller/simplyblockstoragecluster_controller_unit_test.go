@@ -1227,7 +1227,8 @@ func newClusterStateTestReconciler(t *testing.T, objects ...client.Object) *Stor
 	}, objects...)
 
 	return &StorageClusterReconciler{
-		Client: cl,
-		Scheme: scheme,
+		Client:    cl,
+		Scheme:    scheme,
+		APIReader: cl,
 	}
 }
