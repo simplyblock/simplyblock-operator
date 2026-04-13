@@ -293,7 +293,7 @@ func lvolStatusListFromAPI(api []LVOLAPIResponse) simplyblockv1alpha1.LvolStatus
 			ErasureCodingScheme: erasureCodingScheme(l.StripeWdata, l.StripeWparity),
 
 			MaxNamespacesPerSubsystem: l.MaxNamespacesPerSubsystem,
-			Fabric:                    l.Fabric,
+			FabricType:                l.Fabric,
 		})
 	}
 

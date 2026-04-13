@@ -33,7 +33,7 @@ type ClusterAddParams struct {
 	CRName                 string        `json:"cr_name,omitempty"`
 	CRNameSpace            string        `json:"cr_namespace,omitempty"`
 	CRPlural               string        `json:"cr_plural,omitempty"`
-	ClientDataNic          string        `json:"client_data_nic,omitempty"`
+	ClientDataIfname       string        `json:"client_data_ifname,omitempty"`
 	MaxFaultTolerance      int           `json:"max_fault_tolerance,omitempty"`
 	NvmfBasePort           int           `json:"nvmf_base_port,omitempty"`
 	RpcBasePort            int           `json:"rpc_base_port,omitempty"`
