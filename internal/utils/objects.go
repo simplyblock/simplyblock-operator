@@ -2,7 +2,6 @@ package utils
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -16,11 +15,6 @@ import (
 
 	"github.com/simplyblock/simplyblock-manager/internal/webapi"
 )
-
-type ClusterGetResponse struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-}
 
 func ResolvePoolUUID(
 	ctx context.Context,
@@ -218,8 +212,8 @@ func IsClusterActive(
 		)
 	}
 
-	var resp ClusterGetResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
+	resp, err := webapi.ParseClusterResponse(body)
+	if err != nil {
 		return false, "", err
 	}
 

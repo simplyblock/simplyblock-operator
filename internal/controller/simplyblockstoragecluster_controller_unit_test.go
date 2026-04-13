@@ -1156,6 +1156,77 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			t.Fatalf("expected create_v2 auth secret to be created: %v", err)
 		}
 	})
+
+	t.Run("create_v2 supports cluster dto response shape", func(t *testing.T) {
+		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		defer mock.Close()
+		mock.Register(
+			http.MethodGet,
+			"/api/v1/health/fdb/",
+			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+		)
+		mock.Register(
+			http.MethodPost,
+			"/api/v2/clusters/",
+			webapimock.RouteResponse{
+				Status: http.StatusCreated,
+				Body: `{
+					"id":"cluster-dto-new-uuid",
+					"name":"cluster-create-v2-dto",
+					"secret":"cluster-dto-new-secret",
+					"nqn":"nqn.2026-04.io.simplyblock:cluster-dto-new",
+					"status":"inactive",
+					"is_re_balancing":false,
+					"distr_ndcs":4,
+					"distr_npcs":2
+				}`,
+				Headers: map[string]string{"Content-Type": "application/json"},
+			},
+		)
+		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+		cluster := &simplyblockv1alpha1.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "cluster-create-v2-dto",
+				Namespace:  "default",
+				Finalizers: []string{"simplyblock.cluster.finalizer"},
+			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
+				ClusterName: "cluster-create-v2-dto",
+			},
+		}
+		existing := &simplyblockv1alpha1.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "cluster-existing-dto", Namespace: "default"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-existing-dto"},
+			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-existing-dto-uuid"},
+		}
+		existingSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster-cluster-existing-dto", Namespace: "default"},
+			Data: map[string][]byte{
+				"uuid":   []byte("cluster-existing-dto-uuid"),
+				"secret": []byte("existing-dto-secret"),
+			},
+		}
+		r := newClusterStateTestReconciler(t, cluster, existing, existingSecret)
+		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+		if err != nil {
+			t.Fatalf("reconcile returned error: %v", err)
+		}
+		if res.RequeueAfter != 0 {
+			t.Fatalf("expected terminal result after dto-shaped create_v2, got %+v", res)
+		}
+
+		current := &simplyblockv1alpha1.StorageCluster{}
+		if err := r.Get(context.Background(), client.ObjectKeyFromObject(cluster), current); err != nil {
+			t.Fatalf("failed to fetch cluster: %v", err)
+		}
+		if current.Status.UUID != "cluster-dto-new-uuid" {
+			t.Fatalf("expected dto id to populate status uuid, got %#v", current.Status)
+		}
+		if current.Status.ErasureCodingScheme != "4x2" {
+			t.Fatalf("expected dto coding tuple to map to erasureCodingScheme, got %#v", current.Status)
+		}
+	})
 }
 
 func TestStorageClusterCreateFirstSecretHasOwnerReference(t *testing.T) {
