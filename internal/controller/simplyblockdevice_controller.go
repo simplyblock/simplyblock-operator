@@ -99,10 +99,10 @@ func (r *DeviceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if !devCR.DeletionTimestamp.IsZero() {
-		if utils.ContainsString(devCR.Finalizers, "simplyblock.device.finalizer") {
+		if utils.ContainsString(devCR.Finalizers, utils.FinalizerDevice) {
 			// TODO: add any cleanup logic needed before device deletion
 
-			devCR.Finalizers = utils.RemoveString(devCR.Finalizers, "simplyblock.device.finalizer")
+			devCR.Finalizers = utils.RemoveString(devCR.Finalizers, utils.FinalizerDevice)
 			if err := r.Update(ctx, devCR); err != nil {
 				log.Error(err, "Failed to remove finalizer")
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -113,8 +113,8 @@ func (r *DeviceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
-	if !controllerutil.ContainsFinalizer(devCR, "simplyblock.device.finalizer") {
-		controllerutil.AddFinalizer(devCR, "simplyblock.device.finalizer")
+	if !controllerutil.ContainsFinalizer(devCR, utils.FinalizerDevice) {
+		controllerutil.AddFinalizer(devCR, utils.FinalizerDevice)
 		if err := r.Update(ctx, devCR); err != nil {
 			return ctrl.Result{}, err
 		}

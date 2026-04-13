@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-manager/internal/utils"
 	webapimock "github.com/simplyblock/simplyblock-manager/internal/webapi/mock"
 )
 
@@ -43,7 +44,7 @@ func TestLvolReconcileAddsFinalizer(t *testing.T) {
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(lvol), current); err != nil {
 		t.Fatalf("failed to get lvol: %v", err)
 	}
-	if !contains(current.Finalizers, "simplyblock.lvol.finalizer") {
+	if !contains(current.Finalizers, utils.FinalizerLvol) {
 		t.Fatalf("expected lvol finalizer to be added")
 	}
 }
@@ -53,7 +54,7 @@ func TestLvolReconcileDeletionRemovesFinalizer(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "lvol-b",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.lvol.finalizer"},
+			Finalizers: []string{utils.FinalizerLvol},
 		},
 		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: "cluster-a",
@@ -83,7 +84,7 @@ func TestLvolReconcileDeletionRemovesFinalizer(t *testing.T) {
 		}
 		t.Fatalf("failed to get lvol: %v", err)
 	}
-	if contains(current.Finalizers, "simplyblock.lvol.finalizer") {
+	if contains(current.Finalizers, utils.FinalizerLvol) {
 		t.Fatalf("expected lvol finalizer to be removed")
 	}
 }
@@ -93,7 +94,7 @@ func TestLvolReconcilePreventsStatusRegressionWhenPoolMissing(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "lvol-c",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.lvol.finalizer"},
+			Finalizers: []string{utils.FinalizerLvol},
 		},
 		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: "cluster-a",
@@ -167,7 +168,7 @@ func TestLvolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 	if current.Namespace != ns {
 		t.Fatalf("namespace changed unexpectedly: got %q want %q", current.Namespace, ns)
 	}
-	if !contains(current.Finalizers, "simplyblock.lvol.finalizer") {
+	if !contains(current.Finalizers, utils.FinalizerLvol) {
 		t.Fatalf("expected lvol finalizer to be added in non-default namespace")
 	}
 	if current.Spec.ClusterName != clusterName {
@@ -220,7 +221,7 @@ func TestLvolReconcileConfiguredAndStatusRefreshViaOpenAPIMock(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "lvol-mock",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.lvol.finalizer"},
+			Finalizers: []string{utils.FinalizerLvol},
 		},
 		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: "cluster-a",
@@ -291,7 +292,7 @@ func TestLvolReconcilePoolUpdateNon2xxRequeues(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "lvol-mock-update-fail",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.lvol.finalizer"},
+			Finalizers: []string{utils.FinalizerLvol},
 		},
 		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: "cluster-a",
@@ -348,7 +349,7 @@ func TestLvolReconcileVolumesFetchNon2xxNoRegression(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "lvol-mock-fetch-fail",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.lvol.finalizer"},
+			Finalizers: []string{utils.FinalizerLvol},
 		},
 		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: "cluster-a",
@@ -411,7 +412,7 @@ func TestLvolReconcileVolumesFetchFailurePreservesExistingLvolStatus(t *testing.
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "lvol-preserve-fail",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.lvol.finalizer"},
+			Finalizers: []string{utils.FinalizerLvol},
 		},
 		Spec: simplyblockv1alpha1.LvolSpec{
 			ClusterName: "cluster-a",

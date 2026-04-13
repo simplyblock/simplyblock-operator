@@ -390,18 +390,18 @@ func (r *StorageClusterReconciler) handleDeletion(
 
 	log.Info("Handling deletion", "name", clusterCR.Name)
 
-	if !controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
+	if !controllerutil.ContainsFinalizer(clusterCR, utils.FinalizerStorageCluster) {
 		return ctrl.Result{}, true, nil
 	}
 
 	if clusterCR.Spec.Action == utils.ClusterActionActivate {
-		controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+		controllerutil.RemoveFinalizer(clusterCR, utils.FinalizerStorageCluster)
 		return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 	}
 
 	if clusterCR.Status.UUID == "" {
 		log.Info("Cluster has no UUID, removing finalizer without API call", "name", clusterCR.Name)
-		controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+		controllerutil.RemoveFinalizer(clusterCR, utils.FinalizerStorageCluster)
 		return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 	}
 
@@ -431,7 +431,7 @@ func (r *StorageClusterReconciler) handleDeletion(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
 	}
 
-	controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+	controllerutil.RemoveFinalizer(clusterCR, utils.FinalizerStorageCluster)
 	return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 }
 
@@ -440,11 +440,11 @@ func (r *StorageClusterReconciler) ensureFinalizer(
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 ) (bool, error) {
 
-	if controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
+	if controllerutil.ContainsFinalizer(clusterCR, utils.FinalizerStorageCluster) {
 		return false, nil
 	}
 
-	controllerutil.AddFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+	controllerutil.AddFinalizer(clusterCR, utils.FinalizerStorageCluster)
 	return true, r.Update(ctx, clusterCR)
 }
 
