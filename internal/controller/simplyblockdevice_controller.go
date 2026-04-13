@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -138,6 +139,9 @@ func (r *DeviceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		apiClient := webapi.NewClient()
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, nodesEndpoint, nil)
 		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
 			log.Error(err, "Failed to fetch storage nodes",
 				"endpoint", nodesEndpoint,
 				"status", status,
@@ -174,6 +178,9 @@ func (r *DeviceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
 			log.Error(err, "Failed to fetch devices",
 				"nodeUUID", nodeUUID,
 				"endpoint", endpoint,
@@ -301,6 +308,8 @@ func (r *DeviceReconciler) reconcileDeviceAction(
 			d.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
 				Action:             action,
 				State:              utils.ActionStateRunning,
+				NodeUUID:           devCR.Spec.NodeUUID,
+				UpdatedAt:          metav1.Now(),
 				ObservedGeneration: devCR.Generation,
 			}
 		})
@@ -332,8 +341,12 @@ func (r *DeviceReconciler) reconcileDeviceAction(
 			return ctrl.Result{}, fmt.Errorf("unsupported device action: %s", action)
 		}
 
-		_, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
+			log.Error(err, "Device action API call failed", "action", action, "deviceID", deviceID, "nodeUUID", nodeUUID, "status", status, "response", string(body))
 			return r.failDeviceAction(ctx, devCR,
 				fmt.Errorf("device action %s failed: status=%d err=%v", action, status, err))
 		}
@@ -361,6 +374,10 @@ func (r *DeviceReconciler) reconcileDeviceAction(
 
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
+		log.Error(err, "Device status GET API call failed", "action", action, "deviceID", deviceID, "nodeUUID", nodeUUID, "status", status, "response", string(body))
 		return r.failDeviceAction(ctx, devCR, err)
 	}
 
@@ -418,6 +435,8 @@ func (r *DeviceReconciler) failDeviceAction(
 	log.Error(err, "Device action failed")
 
 	devCR.Status.ActionStatus.State = utils.ActionStateFailed
+	devCR.Status.ActionStatus.NodeUUID = devCR.Spec.NodeUUID
+	devCR.Status.ActionStatus.UpdatedAt = metav1.Now()
 	devCR.Status.ActionStatus.Message = err.Error()
 
 	_ = r.Status().Update(ctx, devCR)

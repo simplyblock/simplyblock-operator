@@ -99,6 +99,9 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
 			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
 			if err != nil || status >= 300 {
+				if err == nil {
+					err = fmt.Errorf("unexpected status %d", status)
+				}
 				log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
 				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 			}
@@ -141,6 +144,9 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
 		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
 		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
 			log.Error(err, "Pool creation failed", "status", status, "response", string(body))
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}

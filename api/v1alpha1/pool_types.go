@@ -68,12 +68,14 @@ type PoolSpec struct {
 	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`
 	// Status is an optional desired-status hint for backend workflows.
+	// FIXME: Unused for now
 	Status string `json:"status,omitempty"`
 	// CapacityLimit is the maximum pool capacity.
 	CapacityLimit string `json:"capacityLimit,omitempty"`
 	// QosSpec defines QosSpec limits for the pool.
 	QosSpec *PoolQoSSpec `json:"qos,omitempty"`
 	// Action triggers an imperative pool operation.
+	// FIXME: Unused for now
 	Action string `json:"action,omitempty"`
 }
 
