@@ -77,8 +77,8 @@ spec:
                 description: BlockSize defines the logical block size in bytes.
                 format: int32
                 type: integer
-              clientDataNic:
-                description: ClientDataNic defines the client data network interface.
+              clientDataIfname:
+                description: ClientDataIfname defines the client data network interface.
                 type: string
               clientQpairCount:
                 description: |-
@@ -115,7 +115,7 @@ spec:
                 format: int32
                 type: integer
               fabric:
-                description: Fabric defines the storage fabric type.
+                description: FabricType defines the storage fabric type.
                 type: string
               haType:
                 description: HAType defines the backend high-availability mode.

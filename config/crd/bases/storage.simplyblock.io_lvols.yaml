@@ -87,7 +87,7 @@ spec:
                         for example "2x1".
                       type: string
                     fabric:
-                      description: Fabric is the storage fabric/protocol in use.
+                      description: FabricType is the storage fabric/protocol in use.
                       type: string
                     ha:
                       description: HA indicates whether high availability is enabled.
