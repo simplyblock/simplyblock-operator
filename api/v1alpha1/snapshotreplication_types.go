@@ -23,6 +23,56 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+// Volume-level replication phases. Each phase maps to a specific idempotent
+// action so that re-reconciliation after a crash or error resumes from the
+// correct step rather than re-calling already-completed API operations.
+const (
+	// VolPhaseWaitingForTargetReplication is the initial phase after the
+	// failover triggers replicate_lvol on the target cluster. The controller
+	// waits for the task to complete before proceeding.
+	VolPhaseWaitingForTargetReplication = "WaitingForTargetReplication"
+
+	// VolPhaseTriggeringTargetReplication means the replicate_lvol API call
+	// has been dispatched to the target cluster and has not yet completed.
+	VolPhaseTriggeringTargetReplication = "TriggeringTargetReplication"
+
+	// VolPhaseReplicatingToSource means the failback replication from target
+	// back to the source cluster is in progress.
+	VolPhaseReplicatingToSource = "ReplicatingToSource"
+
+	// VolPhaseWaitingForTargetDeletion means the source-side lvol has been
+	// restored and the controller is waiting for the target-side snapshot to
+	// be cleaned up.
+	VolPhaseWaitingForTargetDeletion = "WaitingForTargetDeletion"
+
+	// VolPhaseCompleted means all replication steps finished successfully for
+	// this volume.
+	VolPhaseCompleted = "Completed"
+
+	// VolPhaseFailed means an unrecoverable error occurred for this volume.
+	VolPhaseFailed = "Failed"
+
+	// VolPhasePending is the default phase for volumes that have not started
+	// replication yet.
+	VolPhasePending = "Pending"
+
+	// VolPhaseRunning means normal periodic replication is active.
+	VolPhaseRunning = "Running"
+
+	// VolPhasePaused means replication is explicitly paused.
+	VolPhasePaused = "Paused"
+)
+
+// Condition type constants used in SnapshotReplicationStatus.Conditions.
+const (
+	// ConditionTypeReady indicates the overall replication is operational.
+	ConditionTypeReady = "Ready"
+	// ConditionTypeConfigured indicates addreplication has completed successfully.
+	ConditionTypeConfigured = "Configured"
+	// ConditionTypeFailback indicates a failback operation is in progress or completed.
+	ConditionTypeFailback = "Failback"
+)
+
 // SnapshotReplicationSpec defines the desired state of SnapshotReplication
 type SnapshotReplicationSpec struct {
 	// Source cluster for the snapshots
@@ -65,6 +115,13 @@ type SnapshotReplicationStatus struct {
 
 	// Per-volume replication status
 	Volumes []VolumeReplicationStatus `json:"volumes,omitempty"`
+
+	// Conditions provides human-readable status conditions for kubectl get output.
+	// +listType=map
+	// +listMapKey=type
+	// +patchStrategy=merge
+	// +patchMergeKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // VolumeReplicationStatus tracks the replication state of an individual volume
@@ -72,8 +129,8 @@ type VolumeReplicationStatus struct {
 	// Volume ID
 	VolumeID string `json:"volumeID"`
 
-	// Current phase for this volume
-	// +kubebuilder:validation:Enum=Pending;Running;Completed;Failed;Paused
+	// Phase is the current replication phase for this volume.
+	// +kubebuilder:validation:Enum=Pending;Running;TriggeringTargetReplication;WaitingForTargetReplication;ReplicatingToSource;WaitingForTargetDeletion;Completed;Failed;Paused
 	Phase string `json:"phase,omitempty"`
 
 	// Last snapshot ID replicated for this volume
@@ -97,6 +154,10 @@ type ReplicationError struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Configured",type="boolean",JSONPath=".status.configured"
+// +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="Reason",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].reason"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // SnapshotReplication is the Schema for the snapshotreplications API
 type SnapshotReplication struct {

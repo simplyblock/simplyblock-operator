@@ -18,12 +18,12 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,15 +45,6 @@ type SnapshotReplicationReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=snapshotreplications/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=snapshotreplications/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the SnapshotReplication object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
 func (r *SnapshotReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -64,12 +55,13 @@ func (r *SnapshotReplicationReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, err
 	}
 	if snapRepCR == nil {
-		return ctrl.Result{}, nil // not found
+		return ctrl.Result{}, nil
 	}
 
 	clusterUUID, clusterSecret, res, err := r.resolveSourceClusterAuth(ctx, snapRepCR)
 	if err != nil {
 		log.Error(err, "Failed to resolve source cluster auth")
+		r.setCondition(ctx, snapRepCR, simplyblockv1alpha1.ConditionTypeReady, metav1.ConditionFalse, "AuthFailed", err.Error())
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 	if res != nil {
@@ -86,11 +78,12 @@ func (r *SnapshotReplicationReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, err
 	}
 
-	// Ensure addreplication is configured once
+	// Step 1: ensure addreplication is configured (one-time setup, idempotent via status.configured)
 	if res := r.ensureConfigured(ctx, apiClient, snapRepCR, clusterUUID, clusterSecret); res != nil {
 		return *res, nil
 	}
 
+	// Step 2: failback action — phase-driven per volume
 	if snapRepCR.Spec.Action == "failback" {
 		if snapRepCR.Status.ObservedFailbackGeneration == snapRepCR.Generation {
 			log.Info("Failback already processed for current generation, skipping",
@@ -100,51 +93,36 @@ func (r *SnapshotReplicationReconciler) Reconcile(ctx context.Context, req ctrl.
 			return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
 		}
 
-		res, processed, err := r.handleFailbackAction(
-			ctx,
-			apiClient,
-			snapRepCR,
-			clusterUUID,
-			clusterSecret,
-		)
+		requeue, err := r.reconcileFailback(ctx, apiClient, snapRepCR, clusterUUID, clusterSecret)
 		if err != nil {
-			log.Error(err, "Failback failed")
+			log.Error(err, "Failback reconciliation error")
+			r.setCondition(ctx, snapRepCR, simplyblockv1alpha1.ConditionTypeFailback, metav1.ConditionFalse, "Error", err.Error())
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
-		if res != nil {
-			return *res, nil
+		if requeue > 0 {
+			return ctrl.Result{RequeueAfter: requeue}, nil
 		}
 
-		if processed {
-			orig := snapRepCR.DeepCopy()
-			snapRepCR.Status.ObservedFailbackGeneration = snapRepCR.Generation
-			if err := r.Status().Patch(ctx, snapRepCR, client.MergeFrom(orig)); err != nil {
-				log.Error(err, "Failed to patch failback processed generation")
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
+		// All volumes reached terminal phase — mark generation processed
+		orig := snapRepCR.DeepCopy()
+		snapRepCR.Status.ObservedFailbackGeneration = snapRepCR.Generation
+		r.setConditionOnCopy(snapRepCR, simplyblockv1alpha1.ConditionTypeFailback, metav1.ConditionTrue, "Completed", "All volumes processed")
+		if err := r.Status().Patch(ctx, snapRepCR, client.MergeFrom(orig)); err != nil {
+			log.Error(err, "Failed to patch failback generation")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
-
 		return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
 	}
 
-	failover, targetIDs, res, err := r.computeFailoverAndTargetIDs(ctx, apiClient, snapRepCR, clusterUUID, clusterSecret)
-	if err != nil {
-		log.Error(err, "Failover pre-check failed", "clusterUUID", clusterUUID)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-	if res != nil {
-		return *res, nil
-	}
-
-	interval := utils.IntPtrOrDefault(snapRepCR.Spec.Interval, 300)
-	now := time.Now().UTC()
-
-	if err := r.replicateAcrossPools(ctx, apiClient, snapRepCR, clusterUUID, clusterSecret, failover, targetIDs, interval, now); err != nil {
-		log.Error(err, "Replication loop failed")
+	// Step 3: normal periodic replication — phase-driven per volume
+	if err := r.reconcileNormalReplication(ctx, apiClient, snapRepCR, clusterUUID, clusterSecret); err != nil {
+		log.Error(err, "Normal replication reconciliation error")
+		r.setCondition(ctx, snapRepCR, simplyblockv1alpha1.ConditionTypeReady, metav1.ConditionFalse, "ReplicationError", err.Error())
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
+	r.setCondition(ctx, snapRepCR, simplyblockv1alpha1.ConditionTypeReady, metav1.ConditionTrue, "Replicating", "Replication is running")
+	return ctrl.Result{RequeueAfter: time.Duration(utils.IntPtrOrDefault(snapRepCR.Spec.Interval, 300)) * time.Second}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -155,7 +133,300 @@ func (r *SnapshotReplicationReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Complete(r)
 }
 
-/* -------------------- helpers func to reduce Reconcile complexity -------------------- */
+/* -------------------- Phase-driven failback reconciliation -------------------- */
+
+// reconcileFailback drives each volume through its failback phases.
+// Returns a non-zero requeue duration if any volume is still in-progress,
+// or 0 if all volumes are in a terminal phase (Completed or Failed).
+func (r *SnapshotReplicationReconciler) reconcileFailback(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
+	sourceClusterUUID, sourceClusterSecret string,
+) (time.Duration, error) {
+	log := logf.FromContext(ctx)
+
+	// Verify source cluster is active before proceeding.
+	sourceActive, status, err := utils.IsClusterActive(ctx, apiClient, sourceClusterSecret, sourceClusterUUID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to verify source cluster active state: %w", err)
+	}
+	if !sourceActive {
+		log.Info("Source cluster not active yet, requeuing",
+			"sourceCluster", snapRepCR.Spec.SourceCluster,
+			"status", status,
+		)
+		return 15 * time.Second, nil
+	}
+
+	targetClusterUUID, err := utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
+	if err != nil {
+		log.Info("Target cluster UUID not ready, requeuing", "cluster", snapRepCR.Spec.TargetCluster)
+		return 10 * time.Second, nil
+	}
+
+	_, targetClusterSecret, err := utils.GetClusterAuth(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get target cluster auth: %w", err)
+	}
+
+	targetPoolUUID, err := utils.ResolvePoolIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster, snapRepCR.Spec.TargetPool)
+	if err != nil {
+		log.Info("Target pool UUID not found, requeuing", "pool", snapRepCR.Spec.TargetPool)
+		return 10 * time.Second, nil
+	}
+
+	lvols, err := utils.GetLvols(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to list target lvols for failback: %w", err)
+	}
+
+	includeIDs := snapRepCR.Spec.VolumeIDs
+	excludeIDs := snapRepCR.Spec.ExcludeVolumeIDs
+
+	orig := snapRepCR.DeepCopy()
+	r.setConditionOnCopy(snapRepCR, simplyblockv1alpha1.ConditionTypeFailback, metav1.ConditionFalse, "InProgress", "Failback in progress")
+
+	anyInProgress := false
+
+	for _, lvolSummary := range lvols {
+		lvolDetail, err := utils.GetLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, lvolSummary.UUID)
+		if err != nil {
+			log.Error(err, "Failed to get target lvol", "lvolUUID", lvolSummary.UUID)
+			r.setVolumePhase(snapRepCR, lvolSummary.UUID, simplyblockv1alpha1.VolPhaseFailed, err.Error())
+			anyInProgress = true
+			continue
+		}
+
+		filterID := failbackFilterID(lvolDetail)
+
+		if !shouldProcessFailbackVolume(filterID, includeIDs, excludeIDs) {
+			continue
+		}
+
+		currentPhase := r.getVolumePhase(snapRepCR, lvolDetail.UUID)
+
+		// Terminal phases — skip.
+		if currentPhase == simplyblockv1alpha1.VolPhaseCompleted ||
+			currentPhase == simplyblockv1alpha1.VolPhaseFailed {
+			continue
+		}
+
+		requeue, advErr := r.advanceFailbackVolume(
+			ctx, apiClient, snapRepCR,
+			sourceClusterUUID, sourceClusterSecret,
+			targetClusterUUID, targetClusterSecret,
+			targetPoolUUID, lvolDetail,
+			currentPhase,
+		)
+		if advErr != nil {
+			log.Error(advErr, "Failed to advance failback volume phase",
+				"lvolUUID", lvolDetail.UUID, "phase", currentPhase)
+			r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseFailed, advErr.Error())
+		}
+		if requeue {
+			anyInProgress = true
+		}
+	}
+
+	if err := r.Status().Patch(ctx, snapRepCR, client.MergeFrom(orig)); err != nil {
+		log.Error(err, "Failed to patch volume phase status")
+		return 10 * time.Second, nil
+	}
+
+	if anyInProgress {
+		return 10 * time.Second, nil
+	}
+	return 0, nil
+}
+
+// advanceFailbackVolume advances a single volume through its failback phases.
+// Returns true if the volume is still in-progress and needs requeuing.
+func (r *SnapshotReplicationReconciler) advanceFailbackVolume(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
+	sourceClusterUUID, sourceClusterSecret string,
+	targetClusterUUID, targetClusterSecret string,
+	targetPoolUUID string,
+	lvolDetail *utils.Lvol,
+	currentPhase string,
+) (inProgress bool, err error) {
+	log := logf.FromContext(ctx)
+
+	switch currentPhase {
+
+	case "", simplyblockv1alpha1.VolPhasePending:
+		// Phase 1 — trigger replicate_lvol on target cluster.
+		// First check if the lvol already exists on source to avoid duplicate calls.
+		targetIDs, buildErr := buildLvolIDSet(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, "")
+		if buildErr != nil {
+			log.Info("Could not build source lvol ID set, proceeding with replicate_lvol", "err", buildErr)
+		}
+
+		if id, ok := lvolIDFromNQN(lvolDetail.NQN); ok {
+			if _, exists := targetIDs[id]; exists {
+				log.Info("Lvol already exists on source cluster, skipping replicate_lvol",
+					"lvolUUID", lvolDetail.UUID, "lvolID", id)
+				r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseReplicatingToSource, "already on source, proceeding to failback")
+				return true, nil
+			}
+		}
+
+		if err := replicateLvol(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, "", lvolDetail.UUID); err != nil {
+			return false, fmt.Errorf("replicate_lvol failed: %w", err)
+		}
+		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseTriggeringTargetReplication, "replicate_lvol dispatched")
+		return true, nil
+
+	case simplyblockv1alpha1.VolPhaseTriggeringTargetReplication:
+		// Phase 2 — wait for replicate_lvol task to complete.
+		done, task, err := utils.GetLastSnapshotTaskDoneStatus(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, "", lvolDetail.UUID)
+		if err != nil {
+			log.Info("Cannot check task status, retrying", "lvolUUID", lvolDetail.UUID, "err", err)
+			return true, nil
+		}
+		if !done {
+			log.Info("Waiting for replicate_lvol task", "lvolUUID", lvolDetail.UUID, "taskID", task.UUID, "status", task.Status)
+			return true, nil
+		}
+		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseWaitingForTargetReplication, "replicate_lvol task done")
+		return true, nil
+
+	case simplyblockv1alpha1.VolPhaseWaitingForTargetReplication:
+		// Phase 3 — trigger failback from target back to source.
+		sourcePoolUUID, sourceLvolUUID, isFreshCluster, err := r.resolveSourceFailbackTarget(
+			ctx, apiClient, snapRepCR, sourceClusterSecret, sourceClusterUUID, lvolDetail,
+		)
+		if err != nil {
+			return false, fmt.Errorf("resolve source failback target: %w", err)
+		}
+
+		if err := failbackLvol(
+			ctx, apiClient,
+			sourceClusterSecret, sourceClusterUUID, sourcePoolUUID, sourceLvolUUID,
+			targetClusterSecret, targetClusterUUID, targetPoolUUID,
+			lvolDetail, isFreshCluster,
+		); err != nil {
+			return false, fmt.Errorf("failback_lvol failed: %w", err)
+		}
+		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseReplicatingToSource, "failback triggered")
+		return true, nil
+
+	case simplyblockv1alpha1.VolPhaseReplicatingToSource:
+		// Phase 4 — wait for failback task to complete, then request target cleanup.
+		done, task, err := utils.GetLastSnapshotTaskDoneStatus(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, lvolDetail.UUID)
+		if err != nil {
+			log.Info("Cannot check failback task status, retrying", "lvolUUID", lvolDetail.UUID, "err", err)
+			return true, nil
+		}
+		if !done {
+			log.Info("Waiting for failback task", "lvolUUID", lvolDetail.UUID, "taskID", task.UUID, "status", task.Status)
+			return true, nil
+		}
+		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseWaitingForTargetDeletion, "failback task done")
+		return true, nil
+
+	case simplyblockv1alpha1.VolPhaseWaitingForTargetDeletion:
+		// Phase 5 — confirm the target-side snapshot has been cleaned up.
+		// Re-check whether the lvol still exists on target; if not, we're done.
+		lvols, err := utils.GetLvols(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID)
+		if err != nil {
+			log.Info("Cannot list target lvols, retrying", "err", err)
+			return true, nil
+		}
+		for _, tl := range lvols {
+			if tl.UUID == lvolDetail.UUID {
+				log.Info("Target lvol still exists, waiting for deletion", "lvolUUID", lvolDetail.UUID)
+				return true, nil
+			}
+		}
+		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseCompleted, "failback complete")
+		log.Info("Failback complete for volume", "lvolUUID", lvolDetail.UUID)
+		return false, nil
+	}
+
+	return false, fmt.Errorf("unknown failback phase %q for volume %s", currentPhase, lvolDetail.UUID)
+}
+
+/* -------------------- Normal periodic replication -------------------- */
+
+func (r *SnapshotReplicationReconciler) reconcileNormalReplication(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
+	sourceClusterUUID, sourceClusterSecret string,
+) error {
+	log := logf.FromContext(ctx)
+
+	failover, targetIDs, res, err := r.computeFailoverAndTargetIDs(ctx, apiClient, snapRepCR, sourceClusterUUID, sourceClusterSecret)
+	if err != nil {
+		return err
+	}
+	if res != nil {
+		return nil
+	}
+
+	interval := utils.IntPtrOrDefault(snapRepCR.Spec.Interval, 300)
+	now := time.Now().UTC()
+
+	orig := snapRepCR.DeepCopy()
+	changed := false
+
+	poolUUIDs, err := utils.GetPoolUUIDs(ctx, apiClient, sourceClusterSecret, sourceClusterUUID)
+	if err != nil {
+		return err
+	}
+
+	for _, poolUUID := range poolUUIDs {
+		lvols, err := utils.GetLvols(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, poolUUID)
+		if err != nil {
+			log.Error(err, "Failed to list lvols", "poolUUID", poolUUID)
+			continue
+		}
+
+		for _, lvolSummary := range lvols {
+			if !lvolSummary.DoReplicate {
+				continue
+			}
+
+			lvolDetail, err := utils.GetLvol(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, poolUUID, lvolSummary.UUID)
+			if err != nil {
+				log.Error(err, "Failed to get lvol", "lvolUUID", lvolSummary.UUID)
+				r.setVolumePhase(snapRepCR, lvolSummary.UUID, simplyblockv1alpha1.VolPhaseFailed, err.Error())
+				changed = true
+				continue
+			}
+
+			if failover {
+				triggered := r.handleFailoverReplication(ctx, apiClient, snapRepCR, sourceClusterUUID, sourceClusterSecret, poolUUID, lvolDetail, targetIDs)
+				if triggered {
+					r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseTriggeringTargetReplication, "failover replicate_lvol dispatched")
+					changed = true
+				}
+				continue
+			}
+
+			triggered := r.handleNormalReplication(ctx, apiClient, sourceClusterUUID, sourceClusterSecret, poolUUID, lvolDetail, interval, now)
+			if triggered {
+				r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseRunning, "replication triggered")
+				now2 := metav1.Now()
+				r.setVolumeLastReplicationTime(snapRepCR, lvolDetail.UUID, &now2)
+				changed = true
+			}
+		}
+	}
+
+	if changed {
+		if err := r.Status().Patch(ctx, snapRepCR, client.MergeFrom(orig)); err != nil {
+			log.Error(err, "Failed to patch volume status after normal replication")
+		}
+	}
+
+	return nil
+}
+
+/* -------------------- helpers -------------------- */
 
 func (r *SnapshotReplicationReconciler) getSnapRepCR(
 	ctx context.Context,
@@ -176,9 +447,7 @@ func (r *SnapshotReplicationReconciler) resolveSourceClusterAuth(
 
 	clusterUUID, err = utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.SourceCluster)
 	if err != nil {
-		log.Info("Cluster UUID not ready yet, requeuing",
-			"cluster", snapRepCR.Spec.SourceCluster,
-		)
+		log.Info("Cluster UUID not ready yet, requeuing", "cluster", snapRepCR.Spec.SourceCluster)
 		tmp := ctrl.Result{RequeueAfter: 10 * time.Second}
 		return "", "", &tmp, nil
 	}
@@ -200,18 +469,10 @@ func (r *SnapshotReplicationReconciler) resolveSourcePoolForFreshFailback(
 		return "", fmt.Errorf("spec.sourcePool must be set for failback to a fresh source cluster")
 	}
 
-	sourcePoolUUID, err := utils.ResolvePoolIdentifier(
-		ctx,
-		r.Client,
-		snapRepCR.Namespace,
-		snapRepCR.Spec.SourceCluster,
-		snapRepCR.Spec.SourcePool,
+	return utils.ResolvePoolIdentifier(
+		ctx, r.Client, snapRepCR.Namespace,
+		snapRepCR.Spec.SourceCluster, snapRepCR.Spec.SourcePool,
 	)
-	if err != nil {
-		return "", err
-	}
-
-	return sourcePoolUUID, nil
 }
 
 func (r *SnapshotReplicationReconciler) ensureConfigured(
@@ -229,19 +490,14 @@ func (r *SnapshotReplicationReconciler) ensureConfigured(
 
 	targetClusterUUID, err := utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
 	if err != nil {
-		log.Info("Target cluster UUID not found, requeuing",
-			"cluster", snapRepCR.Spec.TargetCluster,
-		)
+		log.Info("Target cluster UUID not found, requeuing", "cluster", snapRepCR.Spec.TargetCluster)
 		res := ctrl.Result{RequeueAfter: 10 * time.Second}
 		return &res
 	}
 
 	targetPoolUUID, err := utils.ResolvePoolIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster, snapRepCR.Spec.TargetPool)
 	if err != nil {
-		log.Info("Target pool UUID not found, requeuing",
-			"poolName", snapRepCR.Spec.TargetPool,
-			"cluster", snapRepCR.Spec.TargetCluster,
-		)
+		log.Info("Target pool UUID not found, requeuing", "pool", snapRepCR.Spec.TargetPool)
 		res := ctrl.Result{RequeueAfter: 10 * time.Second}
 		return &res
 	}
@@ -262,9 +518,9 @@ func (r *SnapshotReplicationReconciler) ensureConfigured(
 
 	orig := snapRepCR.DeepCopy()
 	snapRepCR.Status.Configured = true
-	patch := client.MergeFrom(orig)
-	if err := r.Status().Patch(ctx, snapRepCR, patch); err != nil {
-		log.Error(err, "Failed to patch snapshot replication status after creation")
+	r.setConditionOnCopy(snapRepCR, simplyblockv1alpha1.ConditionTypeConfigured, metav1.ConditionTrue, "Configured", "addreplication completed successfully")
+	if err := r.Status().Patch(ctx, snapRepCR, client.MergeFrom(orig)); err != nil {
+		log.Error(err, "Failed to patch configured status")
 		res := ctrl.Result{RequeueAfter: 10 * time.Second}
 		return &res
 	}
@@ -295,9 +551,7 @@ func (r *SnapshotReplicationReconciler) computeFailoverAndTargetIDs(
 
 	targetClusterUUID, err := utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
 	if err != nil {
-		log.Info("Target cluster UUID not ready yet, requeuing",
-			"cluster", snapRepCR.Spec.TargetCluster,
-		)
+		log.Info("Target cluster UUID not ready, requeuing", "cluster", snapRepCR.Spec.TargetCluster)
 		tmp := ctrl.Result{RequeueAfter: 10 * time.Second}
 		return true, targetIDs, &tmp, nil
 	}
@@ -310,74 +564,21 @@ func (r *SnapshotReplicationReconciler) computeFailoverAndTargetIDs(
 
 	targetPoolUUID, err := utils.ResolvePoolIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster, snapRepCR.Spec.TargetPool)
 	if err != nil {
-		log.Info("Target pool UUID not found, requeuing",
-			"poolName", snapRepCR.Spec.TargetPool,
-			"cluster", snapRepCR.Spec.TargetCluster,
-		)
+		log.Info("Target pool UUID not found, requeuing", "pool", snapRepCR.Spec.TargetPool)
 		tmp := ctrl.Result{RequeueAfter: 10 * time.Second}
 		return true, targetIDs, &tmp, nil
 	}
 
 	ids, err := buildLvolIDSet(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID)
 	if err != nil {
-		log.Error(err, "Failed to build target lvol ID set; will not skip replicate_lvol")
+		log.Error(err, "Failed to build target lvol ID set")
 		return true, targetIDs, nil, nil
 	}
 
 	return true, ids, nil, nil
 }
 
-func (r *SnapshotReplicationReconciler) replicateAcrossPools(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
-	sourceClusterUUID string,
-	sourceClusterSecret string,
-	failover bool,
-	targetIDs map[string]struct{},
-	interval int,
-	now time.Time,
-) error {
-	log := logf.FromContext(ctx)
-
-	poolUUIDs, err := utils.GetPoolUUIDs(ctx, apiClient, sourceClusterSecret, sourceClusterUUID)
-	if err != nil {
-		return err
-	}
-	log.Info("Pool UUIDs", "poolUUIDs", poolUUIDs)
-
-	for _, poolUUID := range poolUUIDs {
-		log.Info("POOL UUID", "poolUUID", poolUUID)
-
-		lvols, err := utils.GetLvols(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, poolUUID)
-		if err != nil {
-			log.Error(err, "Failed to list lvols", "poolUUID", poolUUID)
-			continue
-		}
-
-		for _, lvolSummary := range lvols {
-			if !lvolSummary.DoReplicate {
-				continue
-			}
-
-			lvolDetail, err := utils.GetLvol(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, poolUUID, lvolSummary.UUID)
-			if err != nil {
-				log.Error(err, "Failed to get lvol", "poolUUID", poolUUID, "lvolUUID", lvolSummary.UUID)
-				continue
-			}
-
-			if failover {
-				r.handleFailoverReplication(ctx, apiClient, snapRepCR, sourceClusterUUID, sourceClusterSecret, poolUUID, lvolDetail, targetIDs)
-				continue
-			}
-
-			r.handleNormalReplication(ctx, apiClient, sourceClusterUUID, sourceClusterSecret, poolUUID, lvolDetail, interval, now)
-		}
-	}
-
-	return nil
-}
-
+// handleFailoverReplication triggers replicate_lvol and returns whether it was dispatched.
 func (r *SnapshotReplicationReconciler) handleFailoverReplication(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -387,44 +588,32 @@ func (r *SnapshotReplicationReconciler) handleFailoverReplication(
 	poolUUID string,
 	lvolDetail *utils.Lvol,
 	targetIDs map[string]struct{},
-) {
+) bool {
 	log := logf.FromContext(ctx)
+
+	currentPhase := r.getVolumePhase(snapRepCR, lvolDetail.UUID)
+	if currentPhase == simplyblockv1alpha1.VolPhaseTriggeringTargetReplication ||
+		currentPhase == simplyblockv1alpha1.VolPhaseCompleted {
+		return false
+	}
 
 	if id, ok := lvolIDFromNQN(lvolDetail.NQN); ok {
 		if _, exists := targetIDs[id]; exists {
-			log.Info("Skipping replicate_lvol: lvol already exists on target cluster",
-				"lvol", lvolDetail.Name,
-				"uuid", lvolDetail.UUID,
-				"nqn", lvolDetail.NQN,
-				"lvolID", id,
-				"targetCluster", snapRepCR.Spec.TargetCluster,
-			)
-			return
+			log.Info("Skipping replicate_lvol: already on target", "lvolUUID", lvolDetail.UUID)
+			return false
 		}
-	} else {
-		log.Info("Could not parse lvol ID from NQN; proceeding with replicate_lvol",
-			"lvol", lvolDetail.Name,
-			"uuid", lvolDetail.UUID,
-			"nqn", lvolDetail.NQN,
-		)
 	}
 
 	if err := replicateLvol(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolDetail.UUID); err != nil {
-		log.Error(err, "Failed to replicate lvol on target cluster",
-			"lvol", lvolDetail.Name,
-			"uuid", lvolDetail.UUID,
-			"targetCluster", snapRepCR.Spec.TargetCluster,
-		)
-		return
+		log.Error(err, "Failed to trigger replicate_lvol", "lvolUUID", lvolDetail.UUID)
+		return false
 	}
 
-	log.Info("Started lvol Replication on Target Cluster",
-		"lvol", lvolDetail.Name,
-		"uuid", lvolDetail.UUID,
-		"targetCluster", snapRepCR.Spec.TargetCluster,
-	)
+	log.Info("Replicate_lvol dispatched", "lvolUUID", lvolDetail.UUID, "targetCluster", snapRepCR.Spec.TargetCluster)
+	return true
 }
 
+// handleNormalReplication triggers a replication cycle and returns whether it was triggered.
 func (r *SnapshotReplicationReconciler) handleNormalReplication(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -434,96 +623,52 @@ func (r *SnapshotReplicationReconciler) handleNormalReplication(
 	lvolDetail *utils.Lvol,
 	interval int,
 	now time.Time,
-) {
+) bool {
 	log := logf.FromContext(ctx)
 
-	activeOnSource, err := utils.GetReplicationActiveSides(
-		ctx,
-		apiClient,
-		clusterSecret,
-		clusterUUID,
-		poolUUID,
-		lvolDetail.UUID,
-	)
+	activeOnSource, err := utils.GetReplicationActiveSides(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolDetail.UUID)
 	if err != nil {
-		log.Error(err, "Failed to determine active side for source lvol",
-			"lvolUUID", lvolDetail.UUID,
-		)
-		return
+		log.Error(err, "Failed to determine active side", "lvolUUID", lvolDetail.UUID)
+		return false
 	}
-
 	if !activeOnSource {
-		log.Info("Skipping source trigger because target side is active",
-			"lvolUUID", lvolDetail.UUID,
-		)
-		return
+		log.Info("Skipping: target side is active", "lvolUUID", lvolDetail.UUID)
+		return false
 	}
 
 	if !shouldReplicate(lvolDetail, interval, now) {
-		log.Info("Skipping replication (interval not reached)",
-			"lvol", lvolDetail.Name,
-			"uuid", lvolDetail.UUID,
-			"lastSnapshot", lvolDetail.RepInfo.LastSnapshotUUID,
-			"intervalSec", interval,
-		)
-		return
+		return false
 	}
 
-	done, task, err := utils.GetLastSnapshotTaskDoneStatus(
-		ctx,
-		apiClient,
-		clusterSecret,
-		clusterUUID,
-		poolUUID,
-		lvolDetail.UUID,
-	)
+	done, task, err := utils.GetLastSnapshotTaskDoneStatus(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolDetail.UUID)
 	if err != nil {
-		log.Error(err, "Failed to check last snapshot replication task",
-			"lvol", lvolDetail.Name,
-			"uuid", lvolDetail.UUID,
-		)
-		return
+		log.Error(err, "Failed to check last snapshot task", "lvolUUID", lvolDetail.UUID)
+		return false
 	}
-
 	if !done {
-		log.Info("skipping replication because previous snapshot replication task not done",
-			"lvolUUID", lvolDetail.UUID,
-			"taskID", task.UUID,
-			"status", task.Status,
-		)
-		return
+		log.Info("Previous task not done, skipping", "lvolUUID", lvolDetail.UUID, "taskID", task.UUID, "status", task.Status)
+		return false
 	}
 
 	if err := triggerReplication(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolDetail.UUID); err != nil {
-		log.Error(err, "Failed to trigger replication",
-			"lvol", lvolDetail.Name,
-			"uuid", lvolDetail.UUID,
-		)
-		return
+		log.Error(err, "Failed to trigger replication", "lvolUUID", lvolDetail.UUID)
+		return false
 	}
 
-	log.Info("Replication triggered for lvol",
-		"lvol", lvolDetail.Name,
-		"uuid", lvolDetail.UUID,
-	)
-
+	log.Info("Replication triggered", "lvolUUID", lvolDetail.UUID)
+	return true
 }
-
-/* -------------------- Existing helpers -------------------- */
 
 func (r *SnapshotReplicationReconciler) handleDeletion(
 	ctx context.Context,
 	SnapRepCR *simplyblockv1alpha1.SnapshotReplication,
 ) (bool, error) {
-
 	if SnapRepCR.DeletionTimestamp.IsZero() {
 		return false, nil
 	}
-
 	if !controllerutil.ContainsFinalizer(SnapRepCR, "simplyblock.replication.finalizer") {
 		return true, nil
 	}
-
 	controllerutil.RemoveFinalizer(SnapRepCR, "simplyblock.replication.finalizer")
 	return true, r.Update(ctx, SnapRepCR)
 }
@@ -532,25 +677,172 @@ func (r *SnapshotReplicationReconciler) ensureFinalizer(
 	ctx context.Context,
 	SnapRepCR *simplyblockv1alpha1.SnapshotReplication,
 ) (bool, error) {
-
 	if controllerutil.ContainsFinalizer(SnapRepCR, "simplyblock.replication.finalizer") {
 		return false, nil
 	}
-
 	controllerutil.AddFinalizer(SnapRepCR, "simplyblock.replication.finalizer")
 	return true, r.Update(ctx, SnapRepCR)
 }
 
+/* -------------------- Volume phase helpers -------------------- */
+
+func (r *SnapshotReplicationReconciler) getVolumePhase(
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
+	volumeID string,
+) string {
+	for _, v := range snapRepCR.Status.Volumes {
+		if v.VolumeID == volumeID {
+			return v.Phase
+		}
+	}
+	return ""
+}
+
+func (r *SnapshotReplicationReconciler) setVolumePhase(
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
+	volumeID, phase, message string,
+) {
+	for i := range snapRepCR.Status.Volumes {
+		if snapRepCR.Status.Volumes[i].VolumeID == volumeID {
+			snapRepCR.Status.Volumes[i].Phase = phase
+			if message != "" && phase == simplyblockv1alpha1.VolPhaseFailed {
+				snapRepCR.Status.Volumes[i].Errors = append(
+					snapRepCR.Status.Volumes[i].Errors,
+					simplyblockv1alpha1.ReplicationError{
+						Timestamp: metav1.Now(),
+						Message:   message,
+					},
+				)
+			}
+			return
+		}
+	}
+	entry := simplyblockv1alpha1.VolumeReplicationStatus{
+		VolumeID: volumeID,
+		Phase:    phase,
+	}
+	if message != "" && phase == simplyblockv1alpha1.VolPhaseFailed {
+		entry.Errors = []simplyblockv1alpha1.ReplicationError{
+			{Timestamp: metav1.Now(), Message: message},
+		}
+	}
+	snapRepCR.Status.Volumes = append(snapRepCR.Status.Volumes, entry)
+}
+
+func (r *SnapshotReplicationReconciler) setVolumeLastReplicationTime(
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
+	volumeID string,
+	t *metav1.Time,
+) {
+	for i := range snapRepCR.Status.Volumes {
+		if snapRepCR.Status.Volumes[i].VolumeID == volumeID {
+			snapRepCR.Status.Volumes[i].LastReplicationTime = t
+			return
+		}
+	}
+}
+
+/* -------------------- Condition helpers -------------------- */
+
+// setCondition patches the named condition on the CR directly (issues its own Status patch).
+func (r *SnapshotReplicationReconciler) setCondition(
+	ctx context.Context,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
+	condType string,
+	status metav1.ConditionStatus,
+	reason, message string,
+) {
+	orig := snapRepCR.DeepCopy()
+	r.setConditionOnCopy(snapRepCR, condType, status, reason, message)
+	if err := r.Status().Patch(ctx, snapRepCR, client.MergeFrom(orig)); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to patch condition", "type", condType)
+	}
+}
+
+// setConditionOnCopy mutates the in-memory CR without patching (caller must patch).
+func (r *SnapshotReplicationReconciler) setConditionOnCopy(
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
+	condType string,
+	status metav1.ConditionStatus,
+	reason, message string,
+) {
+	now := metav1.Now()
+	for i, c := range snapRepCR.Status.Conditions {
+		if c.Type == condType {
+			if c.Status == status && c.Reason == reason {
+				return
+			}
+			snapRepCR.Status.Conditions[i] = metav1.Condition{
+				Type:               condType,
+				Status:             status,
+				Reason:             reason,
+				Message:            message,
+				LastTransitionTime: now,
+				ObservedGeneration: snapRepCR.Generation,
+			}
+			return
+		}
+	}
+	snapRepCR.Status.Conditions = append(snapRepCR.Status.Conditions, metav1.Condition{
+		Type:               condType,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: now,
+		ObservedGeneration: snapRepCR.Generation,
+	})
+}
+
+/* -------------------- Source failback resolution -------------------- */
+
+func (r *SnapshotReplicationReconciler) resolveSourceFailbackTarget(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
+	sourceClusterSecret, sourceClusterUUID string,
+	targetLvol *utils.Lvol,
+) (sourcePoolUUID, sourceLvolUUID string, isFreshCluster bool, err error) {
+	log := logf.FromContext(ctx)
+
+	sourcePools, err := utils.GetPoolUUIDs(ctx, apiClient, sourceClusterSecret, sourceClusterUUID)
+	if err != nil {
+		return "", "", false, fmt.Errorf("list source pools: %w", err)
+	}
+
+	for _, poolUUID := range sourcePools {
+		sourceLvols, err := utils.GetLvols(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, poolUUID)
+		if err != nil {
+			log.Error(err, "Failed to list source lvols", "poolUUID", poolUUID)
+			continue
+		}
+		for _, sl := range sourceLvols {
+			if id, ok := lvolIDFromNQN(sl.NQN); ok {
+				targetID, _ := lvolIDFromNQN(targetLvol.NQN)
+				if id == targetID {
+					return poolUUID, sl.UUID, false, nil
+				}
+			}
+		}
+	}
+
+	// Not found — fresh source cluster path.
+	sourcePoolUUID, err = r.resolveSourcePoolForFreshFailback(ctx, snapRepCR)
+	if err != nil {
+		return "", "", true, err
+	}
+	return sourcePoolUUID, targetLvol.UUID, true, nil
+}
+
+/* -------------------- Pure functions -------------------- */
+
 func triggerReplication(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID, poolUUID, lvolUUID string) error {
 	endpoint := fmt.Sprintf(
 		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication_trigger/",
-		clusterUUID,
-		poolUUID,
-		lvolUUID,
+		clusterUUID, poolUUID, lvolUUID,
 	)
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
 	if err != nil || status >= 300 {
-		return fmt.Errorf("failed to trigger replication for lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
+		return fmt.Errorf("trigger replication for lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
 	}
 	return nil
 }
@@ -559,11 +851,9 @@ func shouldReplicate(lvol *utils.Lvol, interval int, now time.Time) bool {
 	if interval <= 0 {
 		return false
 	}
-
 	if lvol.RepInfo.LastReplicationTime == nil {
 		return true
 	}
-
 	nextRun := lvol.RepInfo.LastReplicationTime.Add(time.Duration(interval) * time.Second)
 	return !now.Before(nextRun)
 }
@@ -571,14 +861,11 @@ func shouldReplicate(lvol *utils.Lvol, interval int, now time.Time) bool {
 func replicateLvol(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID, poolUUID, lvolUUID string) error {
 	endpoint := fmt.Sprintf(
 		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replicate_lvol/",
-		clusterUUID,
-		poolUUID,
-		lvolUUID,
+		clusterUUID, poolUUID, lvolUUID,
 	)
-
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
 	if err != nil || status >= 300 {
-		return fmt.Errorf("failed to start replication for lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
+		return fmt.Errorf("replicate_lvol for %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
 	}
 	return nil
 }
@@ -599,19 +886,34 @@ func lvolIDFromNQN(nqn string) (string, bool) {
 func buildLvolIDSet(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
-	clusterUUID string,
-	poolUUID string,
+	clusterSecret, clusterUUID, poolUUID string,
 ) (map[string]struct{}, error) {
 	log := logf.FromContext(ctx)
 
-	targetLvols, err := utils.GetLvols(ctx, apiClient, clusterSecret, clusterUUID, poolUUID)
-	if err != nil {
-		return nil, err
+	var allLvols []utils.Lvol
+	var err error
+
+	if poolUUID != "" {
+		allLvols, err = utils.GetLvols(ctx, apiClient, clusterSecret, clusterUUID, poolUUID)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		pools, poolErr := utils.GetPoolUUIDs(ctx, apiClient, clusterSecret, clusterUUID)
+		if poolErr != nil {
+			return nil, poolErr
+		}
+		for _, p := range pools {
+			pl, plErr := utils.GetLvols(ctx, apiClient, clusterSecret, clusterUUID, p)
+			if plErr != nil {
+				continue
+			}
+			allLvols = append(allLvols, pl...)
+		}
 	}
 
-	ids := make(map[string]struct{}, len(targetLvols))
-	for _, tl := range targetLvols {
+	ids := make(map[string]struct{}, len(allLvols))
+	for _, tl := range allLvols {
 		if tl.NQN == "" {
 			continue
 		}
@@ -620,178 +922,28 @@ func buildLvolIDSet(
 		}
 	}
 
-	log.Info("Built lvol ID set",
-		"clusterUUID", clusterUUID,
-		"poolUUID", poolUUID,
-		"count", len(ids),
-	)
-
+	log.Info("Built lvol ID set", "clusterUUID", clusterUUID, "count", len(ids))
 	return ids, nil
 }
 
-func (r *SnapshotReplicationReconciler) handleFailbackAction(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
-	sourceClusterUUID string,
-	sourceClusterSecret string,
-) (*ctrl.Result, bool, error) {
-	log := logf.FromContext(ctx)
-
-	sourceActive, status, err := utils.IsClusterActive(ctx, apiClient, sourceClusterSecret, sourceClusterUUID)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to verify source cluster active state: %w", err)
-	}
-	if !sourceActive {
-		log.Info("Source cluster is not active yet; skipping failback for now",
-			"sourceCluster", snapRepCR.Spec.SourceCluster,
-			"sourceClusterUUID", sourceClusterUUID,
-			"status", status,
-		)
-		res := ctrl.Result{RequeueAfter: 15 * time.Second}
-		return &res, false, nil
-	}
-
-	targetClusterUUID, err := utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
-	if err != nil {
-		log.Info("Target cluster UUID not ready yet, requeuing",
-			"cluster", snapRepCR.Spec.TargetCluster,
-		)
-		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return &res, false, nil
-	}
-
-	_, targetClusterSecret, err := utils.GetClusterAuth(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to get target cluster auth: %w", err)
-	}
-
-	targetPoolUUID, err := utils.ResolvePoolIdentifier(
-		ctx,
-		r.Client,
-		snapRepCR.Namespace,
-		snapRepCR.Spec.TargetCluster,
-		snapRepCR.Spec.TargetPool,
-	)
-	if err != nil {
-		log.Info("Target pool UUID not found, requeuing",
-			"poolName", snapRepCR.Spec.TargetPool,
-			"cluster", snapRepCR.Spec.TargetCluster,
-		)
-		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return &res, false, nil
-	}
-
-	lvols, err := utils.GetLvols(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to list target lvols for failback: %w", err)
-	}
-
-	includeIDs := snapRepCR.Spec.VolumeIDs
-	excludeIDs := snapRepCR.Spec.ExcludeVolumeIDs
-
-	allSucceeded := true
-
-	for _, lvolSummary := range lvols {
-		lvolDetail, err := utils.GetLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, lvolSummary.UUID)
-		if err != nil {
-			log.Error(err, "Failed to get target lvol for failback",
-				"targetClusterUUID", targetClusterUUID,
-				"targetPoolUUID", targetPoolUUID,
-				"lvolUUID", lvolSummary.UUID,
-			)
-			allSucceeded = false
-			continue
-		}
-
-		filterID := failbackFilterID(lvolDetail)
-
-		if !shouldProcessFailbackVolume(filterID, includeIDs, excludeIDs) {
-			log.Info("Skipping lvol during failback due to include/exclude filters",
-				"lvol", lvolDetail.Name,
-				"lvolUUID", lvolDetail.UUID,
-				"filterID", filterID,
-				"includeVolumeIDs", includeIDs,
-				"excludeVolumeIDs", excludeIDs,
-			)
-			continue
-		}
-
-		sourcePoolUUID, sourceLvolUUID, isFreshCluster, err := r.resolveSourceFailbackTarget(
-			ctx,
-			apiClient,
-			snapRepCR,
-			sourceClusterSecret,
-			sourceClusterUUID,
-			lvolDetail,
-		)
-		if err != nil {
-			log.Error(err, "Failed to resolve source lvol for failback",
-				"targetLvolUUID", lvolDetail.UUID,
-				"filterID", filterID,
-			)
-			allSucceeded = false
-			continue
-		}
-
-		if err := failbackLvol(
-			ctx,
-			apiClient,
-			sourceClusterSecret,
-			sourceClusterUUID,
-			sourcePoolUUID,
-			sourceLvolUUID,
-			targetClusterSecret,
-			targetClusterUUID,
-			targetPoolUUID,
-			lvolDetail,
-			isFreshCluster,
-		); err != nil {
-			log.Error(err, "Failed to start failback for lvol",
-				"lvol", lvolDetail.Name,
-				"lvolUUID", lvolDetail.UUID,
-				"filterID", filterID,
-			)
-			allSucceeded = false
-			continue
-		}
-
-		log.Info("Started failback for lvol",
-			"lvol", lvolDetail.Name,
-			"lvolUUID", lvolDetail.UUID,
-			"filterID", filterID,
-		)
-	}
-
-	if !allSucceeded {
-		res := ctrl.Result{RequeueAfter: 15 * time.Second}
-		return &res, false, nil
-	}
-
-	return nil, true, nil
-}
-
 func shouldProcessFailbackVolume(volumeID string, includeIDs, excludeIDs []string) bool {
-	includeSet := make(map[string]struct{}, len(includeIDs))
-	for _, id := range includeIDs {
-		includeSet[id] = struct{}{}
-	}
-
-	excludeSet := make(map[string]struct{}, len(excludeIDs))
-	for _, id := range excludeIDs {
-		excludeSet[id] = struct{}{}
-	}
-
-	if len(includeSet) > 0 {
-		if _, ok := includeSet[volumeID]; !ok {
+	if len(includeIDs) > 0 {
+		found := false
+		for _, id := range includeIDs {
+			if id == volumeID {
+				found = true
+				break
+			}
+		}
+		if !found {
 			return false
 		}
 	}
-
-	if _, ok := excludeSet[volumeID]; ok {
-		return false
+	for _, id := range excludeIDs {
+		if id == volumeID {
+			return false
+		}
 	}
-
 	return true
 }
 
@@ -805,403 +957,52 @@ func failbackFilterID(lvol *utils.Lvol) string {
 func failbackLvol(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	sourceClusterSecret string,
-	sourceClusterUUID string,
-	sourcePoolUUID string,
-	sourceLvolUUID string,
-	targetClusterSecret string,
-	targetClusterUUID string,
-	targetPoolUUID string,
+	sourceClusterSecret, sourceClusterUUID, sourcePoolUUID, sourceLvolUUID string,
+	targetClusterSecret, targetClusterUUID, targetPoolUUID string,
 	targetLvol *utils.Lvol,
 	isFreshCluster bool,
 ) error {
 	if isFreshCluster {
 		if err := startReplicationOnFreshSource(
-			ctx,
-			apiClient,
-			sourceClusterSecret,
-			sourceClusterUUID,
-			sourcePoolUUID,
-			targetLvol.UUID,
-			10*time.Minute,
-			5*time.Second,
+			ctx, apiClient,
+			sourceClusterSecret, sourceClusterUUID, sourcePoolUUID,
+			targetLvol.UUID, targetClusterUUID,
 		); err != nil {
-			return fmt.Errorf("start replication on fresh source cluster failed for target lvol %s: %w", targetLvol.UUID, err)
+			return err
 		}
 	}
 
-	if err := triggerReplication(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
-		return fmt.Errorf("target trigger replication failed for lvol %s: %w", targetLvol.UUID, err)
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/failback/",
+		sourceClusterUUID, sourcePoolUUID, sourceLvolUUID,
+	)
+	body, status, err := apiClient.Do(ctx, sourceClusterSecret, http.MethodPost, endpoint, map[string]string{
+		"target_cluster_id": targetClusterUUID,
+		"target_pool_id":    targetPoolUUID,
+		"target_lvol_id":    targetLvol.UUID,
+	})
+	if err != nil || status >= 300 {
+		return fmt.Errorf("failback for lvol %s, status %d: %v, body: %s", sourceLvolUUID, status, err, string(body))
 	}
-
-	if err := waitForReplicationTaskCompletion(
-		ctx,
-		apiClient,
-		targetClusterSecret,
-		targetClusterUUID,
-		targetPoolUUID,
-		targetLvol.UUID,
-		10*time.Minute,
-		5*time.Second,
-	); err != nil {
-		return fmt.Errorf("waiting for first target replication task failed for lvol %s: %w", targetLvol.UUID, err)
-	}
-
-	if err := suspendLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
-		return fmt.Errorf("suspend target lvol failed for lvol %s: %w", targetLvol.UUID, err)
-	}
-
-	if err := triggerReplication(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
-		return fmt.Errorf("second target trigger replication failed for lvol %s: %w", targetLvol.UUID, err)
-	}
-
-	if err := waitForReplicationTaskCompletion(
-		ctx,
-		apiClient,
-		targetClusterSecret,
-		targetClusterUUID,
-		targetPoolUUID,
-		targetLvol.UUID,
-		10*time.Minute,
-		5*time.Second,
-	); err != nil {
-		return fmt.Errorf("waiting for second target replication task failed for lvol %s: %w", targetLvol.UUID, err)
-	}
-
-	if err := deleteLvol(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, sourcePoolUUID, sourceLvolUUID); err != nil {
-		return fmt.Errorf("delete source lvol failed for lvol %s: %w", sourceLvolUUID, err)
-	}
-
-	if err := waitForLvolDeleted(
-		ctx,
-		apiClient,
-		sourceClusterSecret,
-		sourceClusterUUID,
-		sourcePoolUUID,
-		sourceLvolUUID,
-		10*time.Minute,
-		5*time.Second,
-	); err != nil {
-		return fmt.Errorf("waiting for source lvol %s to reach deleted state failed: %w", sourceLvolUUID, err)
-	}
-
-	if err := replicateLvolOnSourceCluster(
-		ctx,
-		apiClient,
-		sourceClusterSecret,
-		sourceClusterUUID,
-		sourcePoolUUID,
-		sourceLvolUUID,
-	); err != nil {
-		return fmt.Errorf("replicate lvol on source cluster failed for source lvol %s: %w", sourceLvolUUID, err)
-	}
-
-	if err := deleteLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, targetLvol.UUID); err != nil {
-		return fmt.Errorf("delete target lvol failed for lvol %s: %w", targetLvol.UUID, err)
-	}
-
-	if err := waitForLvolDeleted(
-		ctx,
-		apiClient,
-		targetClusterSecret,
-		targetClusterUUID,
-		targetPoolUUID,
-		targetLvol.UUID,
-		10*time.Minute,
-		5*time.Second,
-	); err != nil {
-		return fmt.Errorf("waiting for target lvol %s to reach deleted state failed: %w", targetLvol.UUID, err)
-	}
-
 	return nil
 }
 
 func startReplicationOnFreshSource(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	sourceClusterSecret string,
-	sourceClusterUUID string,
-	sourcePoolUUID string,
-	targetLvolUUID string,
-	timeout time.Duration,
-	pollInterval time.Duration,
+	sourceClusterSecret, sourceClusterUUID, sourcePoolUUID string,
+	targetLvolUUID, targetClusterUUID string,
 ) error {
 	endpoint := fmt.Sprintf(
-		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication_start",
-		sourceClusterUUID,
-		sourcePoolUUID,
-		targetLvolUUID,
+		"/api/v2/clusters/%s/storage-pools/%s/start_replication/",
+		sourceClusterUUID, sourcePoolUUID,
 	)
-	body, status, err := apiClient.Do(ctx, sourceClusterSecret, http.MethodPost, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, sourceClusterSecret, http.MethodPost, endpoint, map[string]string{
+		"target_lvol_id":    targetLvolUUID,
+		"target_cluster_id": targetClusterUUID,
+	})
 	if err != nil || status >= 300 {
-		return fmt.Errorf("replication_start failed for target lvol %s, status %d: %v, body: %s", targetLvolUUID, status, err, string(body))
-	}
-
-	if err := waitForReplicationTaskCompletion(
-		ctx,
-		apiClient,
-		sourceClusterSecret,
-		sourceClusterUUID,
-		sourcePoolUUID,
-		targetLvolUUID,
-		timeout,
-		pollInterval,
-	); err != nil {
-		return fmt.Errorf("waiting for replication task on fresh source failed for lvol %s: %w", targetLvolUUID, err)
-	}
-
-	return nil
-}
-
-func suspendLvol(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	clusterSecret string,
-	clusterUUID string,
-	poolUUID string,
-	lvolUUID string,
-) error {
-	endpoint := fmt.Sprintf(
-		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/suspend/",
-		clusterUUID,
-		poolUUID,
-		lvolUUID,
-	)
-
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
-	if err != nil || status >= 300 {
-		return fmt.Errorf("failed to suspend lvol %s, status %d: %v, body: %s", lvolUUID, status, err, string(body))
+		return fmt.Errorf("start_replication on fresh source, status %d: %v, body: %s", status, err, string(body))
 	}
 	return nil
-}
-
-func deleteLvol(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	clusterSecret string,
-	clusterUUID string,
-	poolUUID string,
-	lvolUUID string,
-) error {
-	log := logf.FromContext(ctx)
-
-	endpoint := fmt.Sprintf(
-		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
-		clusterUUID,
-		poolUUID,
-		lvolUUID,
-	)
-
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
-	if err != nil {
-		return fmt.Errorf("failed to delete lvol %s: %w", lvolUUID, err)
-	}
-
-	if status == http.StatusNotFound {
-		log.Info("deleteLvol: lvol already deleted (404), ignoring", "lvolUUID", lvolUUID)
-		return nil
-	}
-
-	if status >= 300 {
-		return fmt.Errorf("failed to delete lvol %s, status %d: body: %s", lvolUUID, status, string(body))
-	}
-
-	return nil
-}
-
-func replicateLvolOnSourceCluster(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	sourceClusterSecret string,
-	sourceClusterUUID string,
-	sourcePoolUUID string,
-	sourceLvolUUID string,
-) error {
-
-	endpoint := fmt.Sprintf(
-		"/api/v2/clusters/%s/storage-pools/%s/volumes/replicate_lvol_on_source_cluster",
-		sourceClusterUUID,
-		sourcePoolUUID,
-	)
-	params := struct {
-		LvolID string `json:"lvol_id"`
-	}{
-		LvolID: sourceLvolUUID,
-	}
-	body, status, err := apiClient.Do(ctx, sourceClusterSecret, http.MethodPost, endpoint, params)
-	if err != nil || status >= 300 {
-		return fmt.Errorf("failed to start replication for lvol %s, status %d: %v, body: %s", sourceLvolUUID, status, err, string(body))
-	}
-	return nil
-}
-
-func waitForReplicationTaskCompletion(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	clusterSecret string,
-	clusterUUID string,
-	poolUUID string,
-	lvolUUID string,
-	timeout time.Duration,
-	pollInterval time.Duration,
-) error {
-	timeoutTimer := time.NewTimer(timeout)
-	defer timeoutTimer.Stop()
-
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-
-	for {
-		done, task, err := utils.GetLastSnapshotTaskDoneStatus(
-			ctx,
-			apiClient,
-			clusterSecret,
-			clusterUUID,
-			poolUUID,
-			lvolUUID,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to get replication task status for lvol %s: %w", lvolUUID, err)
-		}
-
-		if done {
-			return nil
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timeoutTimer.C:
-			return fmt.Errorf(
-				"timed out waiting for replication task completion for lvol %s (taskID=%s status=%s)",
-				lvolUUID,
-				task.UUID,
-				task.Status,
-			)
-		case <-ticker.C:
-		}
-	}
-}
-
-func waitForLvolDeleted(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	clusterSecret string,
-	clusterUUID string,
-	poolUUID string,
-	lvolUUID string,
-	timeout time.Duration,
-	pollInterval time.Duration,
-) error {
-	timeoutTimer := time.NewTimer(timeout)
-	defer timeoutTimer.Stop()
-
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-
-	var lastErr error
-
-	for {
-		lvol, err := utils.GetLvol(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolUUID)
-		if err == nil {
-			if strings.EqualFold(strings.TrimSpace(lvol.Status), "deleted") {
-				return nil
-			}
-		} else {
-			lastErr = err
-			if errors.Is(err, utils.ErrLvolNotFound) {
-				return nil
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timeoutTimer.C:
-			if lastErr != nil {
-				return fmt.Errorf("timed out waiting for lvol %s deletion state; last get error: %w", lvolUUID, lastErr)
-			}
-			return fmt.Errorf("timed out waiting for lvol %s to reach deleted status", lvolUUID)
-		case <-ticker.C:
-		}
-	}
-}
-
-func findSourceLvolForFailback(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	sourceClusterSecret string,
-	sourceClusterUUID string,
-	targetLvol *utils.Lvol,
-) (string, string, error) {
-	filterID := failbackFilterID(targetLvol)
-
-	poolUUIDs, err := utils.GetPoolUUIDs(ctx, apiClient, sourceClusterSecret, sourceClusterUUID)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to list source pools: %w", err)
-	}
-
-	for _, poolUUID := range poolUUIDs {
-		lvols, err := utils.GetLvols(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, poolUUID)
-		if err != nil {
-			continue
-		}
-
-		for _, lvolSummary := range lvols {
-			lvolDetail, err := utils.GetLvol(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, poolUUID, lvolSummary.UUID)
-			if err != nil {
-				continue
-			}
-
-			if failbackFilterID(lvolDetail) == filterID {
-				return poolUUID, lvolDetail.UUID, nil
-			}
-		}
-	}
-
-	return "", "", fmt.Errorf("source lvol not found for target lvol %s (filterID=%s)", targetLvol.UUID, filterID)
-}
-
-func (r *SnapshotReplicationReconciler) resolveSourceFailbackTarget(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
-	sourceClusterSecret string,
-	sourceClusterUUID string,
-	targetLvol *utils.Lvol,
-) (sourcePoolUUID string, sourceLvolUUID string, isFreshCluster bool, err error) {
-	log := logf.FromContext(ctx)
-
-	sourcePoolUUID, sourceLvolUUID, err = findSourceLvolForFailback(
-		ctx,
-		apiClient,
-		sourceClusterSecret,
-		sourceClusterUUID,
-		targetLvol,
-	)
-	if err == nil {
-		return sourcePoolUUID, sourceLvolUUID, false, nil
-	}
-
-	log.Info("Source lvol not found on source cluster, trying fresh-cluster failback fallback",
-		"targetLvolUUID", targetLvol.UUID,
-		"targetLvolNQN", targetLvol.NQN,
-		"reason", err.Error(),
-	)
-
-	sourceLvolUUID = failbackFilterID(targetLvol)
-	if sourceLvolUUID == "" {
-		return "", "", false, fmt.Errorf("failed to derive source lvol UUID from target lvol %s", targetLvol.UUID)
-	}
-
-	sourcePoolUUID, err = r.resolveSourcePoolForFreshFailback(ctx, snapRepCR)
-	if err != nil {
-		return "", "", false, fmt.Errorf(
-			"derived source lvol UUID %s from target NQN, but failed to resolve source pool UUID: %w",
-			sourceLvolUUID,
-			err,
-		)
-	}
-
-	return sourcePoolUUID, sourceLvolUUID, true, nil
 }
