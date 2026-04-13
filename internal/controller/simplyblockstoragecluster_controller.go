@@ -40,7 +40,8 @@ import (
 // StorageClusterReconciler reconciles a StorageCluster object
 type StorageClusterReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme    *runtime.Scheme
+	APIReader client.Reader
 }
 
 type ClusterFIRSTAPIResponse struct {
@@ -92,9 +93,10 @@ type CSIClusterEntry struct {
 func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	// Fetch the CR
+	// Fetch the CR directly from the API server (bypasses the informer cache)
+	// to avoid a stale UUID="" read after Status().Patch() triggers a new reconcile.
 	clusterCR := &simplyblockv1alpha1.StorageCluster{}
-	if err := r.Get(ctx, req.NamespacedName, clusterCR); err != nil {
+	if err := r.APIReader.Get(ctx, req.NamespacedName, clusterCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
