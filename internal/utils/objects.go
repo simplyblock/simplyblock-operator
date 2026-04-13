@@ -260,7 +260,7 @@ func ActivateCluster(
 
 // ClusterListEntry is a single item returned by GET /api/v2/clusters/.
 type ClusterListEntry struct {
-	UUID   string `json:"uuid"`
+	UUID   string `json:"id"`
 	Secret string `json:"secret"`
 	Name   string `json:"name"`
 	NQN    string `json:"nqn"`

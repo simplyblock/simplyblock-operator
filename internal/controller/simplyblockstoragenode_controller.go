@@ -47,7 +47,7 @@ type StorageNodeReconciler struct {
 }
 
 type SNODEAPIResponse struct {
-	UUID      string `json:"uuid"`
+	UUID      string `json:"id"`
 	Status    string `json:"status"`
 	IP        string `json:"mgmt_ip"`
 	Health    bool   `json:"health_check"`
