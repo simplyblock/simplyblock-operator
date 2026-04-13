@@ -271,8 +271,8 @@ type ClusterListEntry struct {
 
 // GetClusterByName lists all clusters and returns the one matching name.
 // Returns nil if no match is found.
-func GetClusterByName(ctx context.Context, apiClient *webapi.Client, name string) (*ClusterListEntry, error) {
-	body, status, err := apiClient.Do(ctx, "", http.MethodGet, "/api/v2/clusters/", nil)
+func GetClusterByName(ctx context.Context, apiClient *webapi.Client, clusterSecret, name string) (*ClusterListEntry, error) {
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, "/api/v2/clusters/", nil)
 	if err != nil || status >= 300 {
 		return nil, fmt.Errorf("list clusters failed, status %d: %v, body: %s", status, err, string(body))
 	}

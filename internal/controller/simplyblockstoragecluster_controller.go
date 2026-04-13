@@ -205,7 +205,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		// POST failed — the cluster may already exist on the backend (race between
 		// two reconciles both seeing UUID="" before the first one patches status).
 		// Try to look it up by name and adopt it instead of failing.
-		existing, lookupErr := utils.GetClusterByName(ctx, apiClient, clusterCR.Spec.ClusterName)
+		existing, lookupErr := utils.GetClusterByName(ctx, apiClient, clusterSecret, clusterCR.Spec.ClusterName)
 		if lookupErr != nil || existing == nil {
 			log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
