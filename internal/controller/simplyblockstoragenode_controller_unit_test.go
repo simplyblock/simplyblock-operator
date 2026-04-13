@@ -1079,7 +1079,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 				Status: http.StatusOK,
 				Body: `[
 					{
-						"uuid":"node-uuid-1",
+						"id":"node-uuid-1",
 						"status":"online",
 						"mgmt_ip":"10.0.0.1",
 						"health_check":true,
@@ -1156,7 +1156,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 				Status: http.StatusOK,
 				Body: `[
 					{
-						"uuid":"node-uuid-2",
+						"id":"node-uuid-2",
 						"status":"online",
 						"mgmt_ip":"10.0.0.2",
 						"health_check":true,
@@ -1286,7 +1286,7 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 				Status: http.StatusOK,
 				Body: `[
 					{
-						"uuid":"node-uuid-3",
+						"id":"node-uuid-3",
 						"status":"online",
 						"mgmt_ip":"10.0.0.3",
 						"health_check":true,
