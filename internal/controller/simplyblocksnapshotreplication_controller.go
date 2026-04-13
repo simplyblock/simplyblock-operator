@@ -182,7 +182,7 @@ func (r *SnapshotReplicationReconciler) reconcileFailback(
 		return 0, fmt.Errorf("failed to list target lvols for failback: %w", err)
 	}
 
-	includeIDs := snapRepCR.Spec.VolumeIDs
+	includeIDs := snapRepCR.Spec.IncludeVolumeIDs
 	excludeIDs := snapRepCR.Spec.ExcludeVolumeIDs
 
 	orig := snapRepCR.DeepCopy()
@@ -391,6 +391,10 @@ func (r *SnapshotReplicationReconciler) reconcileNormalReplication(
 				continue
 			}
 
+			if len(snapRepCR.Spec.VolumeIDs) > 0 && !slices.Contains(snapRepCR.Spec.VolumeIDs, lvolSummary.UUID) {
+				continue
+			}
+
 			lvolDetail, err := utils.GetLvol(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, poolUUID, lvolSummary.UUID)
 			if err != nil {
 				log.Error(err, "Failed to get lvol", "lvolUUID", lvolSummary.UUID)
@@ -413,6 +417,7 @@ func (r *SnapshotReplicationReconciler) reconcileNormalReplication(
 				r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseRunning, "replication triggered")
 				now2 := metav1.Now()
 				r.setVolumeLastReplicationTime(snapRepCR, lvolDetail.UUID, &now2)
+				r.setVolumeRepInfo(snapRepCR, lvolDetail)
 				changed = true
 			}
 		}
@@ -722,6 +727,23 @@ func (r *SnapshotReplicationReconciler) setVolumePhase(
 		}
 	}
 	snapRepCR.Status.Volumes = append(snapRepCR.Status.Volumes, entry)
+}
+
+func (r *SnapshotReplicationReconciler) setVolumeRepInfo(
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
+	lvol *utils.Lvol,
+) {
+	if lvol.RepInfo == nil {
+		return
+	}
+	count := int32(lvol.RepInfo.ReplicatedCount)
+	for i := range snapRepCR.Status.Volumes {
+		if snapRepCR.Status.Volumes[i].VolumeID == lvol.UUID {
+			snapRepCR.Status.Volumes[i].LastSnapshotID = lvol.RepInfo.LastSnapshotUUID
+			snapRepCR.Status.Volumes[i].ReplicatedCount = &count
+			return
+		}
+	}
 }
 
 func (r *SnapshotReplicationReconciler) setVolumeLastReplicationTime(
