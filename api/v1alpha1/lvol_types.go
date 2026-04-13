@@ -108,7 +108,7 @@ type LvolEntry struct {
 	// MaxNamespacesPerSubsystem is the max number of namespaces per subsystem.
 	MaxNamespacesPerSubsystem int64 `json:"maxNamespacesPerSubsystem,omitempty"`
 	// FabricType is the storage fabric/protocol in use.
-	FabricType string `json:"fabric,omitempty"`
+	FabricType string `json:"fabricType,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -114,7 +114,7 @@ spec:
                   FIXME: Unused for now
                 format: int32
                 type: integer
-              fabric:
+              fabricType:
                 description: FabricType defines the storage fabric type.
                 type: string
               haType:

@@ -88,7 +88,7 @@ type StorageClusterSpec struct {
 	// InflightIOThreshold defines the inflight I/O threshold.
 	InflightIOThreshold *int32 `json:"inflightIOThreshold,omitempty"`
 	// FabricType defines the storage fabric type.
-	FabricType string `json:"fabric,omitempty"`
+	FabricType string `json:"fabricType,omitempty"`
 	// ClientDataIfname defines the client data network interface.
 	ClientDataIfname string `json:"clientDataIfname,omitempty"`
 	// MaxFaultTolerance defines the maximum tolerated concurrent faults.
