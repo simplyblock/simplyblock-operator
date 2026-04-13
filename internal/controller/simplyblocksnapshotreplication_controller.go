@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -305,7 +306,7 @@ func (r *SnapshotReplicationReconciler) advanceFailbackVolume(
 		if err := failbackLvol(
 			ctx, apiClient,
 			sourceClusterSecret, sourceClusterUUID, sourcePoolUUID, sourceLvolUUID,
-			targetClusterSecret, targetClusterUUID, targetPoolUUID,
+			targetClusterUUID, targetPoolUUID,
 			lvolDetail, isFreshCluster,
 		); err != nil {
 			return false, fmt.Errorf("failback_lvol failed: %w", err)
@@ -525,7 +526,6 @@ func (r *SnapshotReplicationReconciler) ensureConfigured(
 		return &res
 	}
 
-	log.Info("Snapshot Replication successfully added", "name", snapRepCR.Name)
 	res := ctrl.Result{RequeueAfter: 10 * time.Second}
 	return &res
 }
@@ -599,7 +599,6 @@ func (r *SnapshotReplicationReconciler) handleFailoverReplication(
 
 	if id, ok := lvolIDFromNQN(lvolDetail.NQN); ok {
 		if _, exists := targetIDs[id]; exists {
-			log.Info("Skipping replicate_lvol: already on target", "lvolUUID", lvolDetail.UUID)
 			return false
 		}
 	}
@@ -609,7 +608,6 @@ func (r *SnapshotReplicationReconciler) handleFailoverReplication(
 		return false
 	}
 
-	log.Info("Replicate_lvol dispatched", "lvolUUID", lvolDetail.UUID, "targetCluster", snapRepCR.Spec.TargetCluster)
 	return true
 }
 
@@ -632,7 +630,6 @@ func (r *SnapshotReplicationReconciler) handleNormalReplication(
 		return false
 	}
 	if !activeOnSource {
-		log.Info("Skipping: target side is active", "lvolUUID", lvolDetail.UUID)
 		return false
 	}
 
@@ -640,13 +637,12 @@ func (r *SnapshotReplicationReconciler) handleNormalReplication(
 		return false
 	}
 
-	done, task, err := utils.GetLastSnapshotTaskDoneStatus(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolDetail.UUID)
+	done, _, err := utils.GetLastSnapshotTaskDoneStatus(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolDetail.UUID)
 	if err != nil {
 		log.Error(err, "Failed to check last snapshot task", "lvolUUID", lvolDetail.UUID)
 		return false
 	}
 	if !done {
-		log.Info("Previous task not done, skipping", "lvolUUID", lvolDetail.UUID, "taskID", task.UUID, "status", task.Status)
 		return false
 	}
 
@@ -655,7 +651,6 @@ func (r *SnapshotReplicationReconciler) handleNormalReplication(
 		return false
 	}
 
-	log.Info("Replication triggered", "lvolUUID", lvolDetail.UUID)
 	return true
 }
 
@@ -888,8 +883,6 @@ func buildLvolIDSet(
 	apiClient *webapi.Client,
 	clusterSecret, clusterUUID, poolUUID string,
 ) (map[string]struct{}, error) {
-	log := logf.FromContext(ctx)
-
 	var allLvols []utils.Lvol
 	var err error
 
@@ -922,29 +915,14 @@ func buildLvolIDSet(
 		}
 	}
 
-	log.Info("Built lvol ID set", "clusterUUID", clusterUUID, "count", len(ids))
 	return ids, nil
 }
 
 func shouldProcessFailbackVolume(volumeID string, includeIDs, excludeIDs []string) bool {
-	if len(includeIDs) > 0 {
-		found := false
-		for _, id := range includeIDs {
-			if id == volumeID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
+	if len(includeIDs) > 0 && !slices.Contains(includeIDs, volumeID) {
+		return false
 	}
-	for _, id := range excludeIDs {
-		if id == volumeID {
-			return false
-		}
-	}
-	return true
+	return !slices.Contains(excludeIDs, volumeID)
 }
 
 func failbackFilterID(lvol *utils.Lvol) string {
@@ -958,7 +936,7 @@ func failbackLvol(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	sourceClusterSecret, sourceClusterUUID, sourcePoolUUID, sourceLvolUUID string,
-	targetClusterSecret, targetClusterUUID, targetPoolUUID string,
+	targetClusterUUID, targetPoolUUID string,
 	targetLvol *utils.Lvol,
 	isFreshCluster bool,
 ) error {
