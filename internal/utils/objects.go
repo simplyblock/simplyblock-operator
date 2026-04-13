@@ -258,6 +258,36 @@ func ActivateCluster(
 	return nil
 }
 
+// ClusterListEntry is a single item returned by GET /api/v2/clusters/.
+type ClusterListEntry struct {
+	UUID   string `json:"uuid"`
+	Secret string `json:"secret"`
+	Name   string `json:"name"`
+	NQN    string `json:"nqn"`
+	Status string `json:"status"`
+	NDCS   int    `json:"distr_ndcs"`
+	NPCS   int    `json:"distr_npcs"`
+}
+
+// GetClusterByName lists all clusters and returns the one matching name.
+// Returns nil if no match is found.
+func GetClusterByName(ctx context.Context, apiClient *webapi.Client, name string) (*ClusterListEntry, error) {
+	body, status, err := apiClient.Do(ctx, "", http.MethodGet, "/api/v2/clusters/", nil)
+	if err != nil || status >= 300 {
+		return nil, fmt.Errorf("list clusters failed, status %d: %v, body: %s", status, err, string(body))
+	}
+	var entries []ClusterListEntry
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return nil, fmt.Errorf("failed to parse cluster list: %w", err)
+	}
+	for i := range entries {
+		if entries[i].Name == name {
+			return &entries[i], nil
+		}
+	}
+	return nil, nil
+}
+
 func IsClusterActive(
 	ctx context.Context,
 	apiClient *webapi.Client,

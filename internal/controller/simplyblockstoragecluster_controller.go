@@ -199,8 +199,16 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	body, status, err = apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
 	if err != nil || status >= 300 {
-		log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
-		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+		// POST failed — the cluster may already exist on the backend (race between
+		// two reconciles both seeing UUID="" before the first one patches status).
+		// Try to look it up by name and adopt it instead of failing.
+		existing, lookupErr := utils.GetClusterByName(ctx, apiClient, clusterCR.Spec.ClusterName)
+		if lookupErr != nil || existing == nil {
+			log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
+			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+		}
+		log.Info("Cluster already exists on backend, adopting", "clusterName", existing.Name, "uuid", existing.UUID)
+		return r.adoptExistingCluster(ctx, clusterCR, existing)
 	}
 
 	log.Info("Cluster API call",
@@ -347,6 +355,56 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// }
 
 	// log.Info("Cluster updated successfully", "name", clusterCR.Name)
+	return ctrl.Result{}, nil
+}
+
+func (r *StorageClusterReconciler) adoptExistingCluster(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+	existing *utils.ClusterListEntry,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: clusterCR.Namespace,
+		},
+	}
+	if err := controllerutil.SetControllerReference(clusterCR, secret, r.Scheme); err != nil {
+		log.Error(err, "Failed to set owner reference on cluster secret")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		if secret.Data == nil {
+			secret.Data = map[string][]byte{}
+		}
+		secret.Data["uuid"] = []byte(existing.UUID)
+		secret.Data["secret"] = []byte(existing.Secret)
+		return nil
+	})
+	if err != nil {
+		log.Error(err, "Failed to create/update Secret for adopted cluster")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	if err := r.upsertCSICredentialsSecret(ctx, clusterCR.Namespace, existing.UUID, utils.ENDPOINT, existing.Secret); err != nil {
+		log.Error(err, "Failed to update CSI credentials secret for adopted cluster")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	orig := clusterCR.DeepCopy()
+	clusterCR.Status.UUID = existing.UUID
+	clusterCR.Status.NQN = existing.NQN
+	clusterCR.Status.Status = existing.Status
+	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", existing.NDCS, existing.NPCS)
+	clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
+	clusterCR.Status.SecretName = secretName
+	clusterCR.Status.Configured = true
+	if err := r.Status().Patch(ctx, clusterCR, client.MergeFrom(orig)); err != nil {
+		log.Error(err, "Failed to patch cluster status after adoption")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
