@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -307,6 +308,8 @@ func (r *DeviceReconciler) reconcileDeviceAction(
 			d.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
 				Action:             action,
 				State:              utils.ActionStateRunning,
+				NodeUUID:           devCR.Spec.NodeUUID,
+				UpdatedAt:          metav1.Now(),
 				ObservedGeneration: devCR.Generation,
 			}
 		})
@@ -432,6 +435,8 @@ func (r *DeviceReconciler) failDeviceAction(
 	log.Error(err, "Device action failed")
 
 	devCR.Status.ActionStatus.State = utils.ActionStateFailed
+	devCR.Status.ActionStatus.NodeUUID = devCR.Spec.NodeUUID
+	devCR.Status.ActionStatus.UpdatedAt = metav1.Now()
 	devCR.Status.ActionStatus.Message = err.Error()
 
 	_ = r.Status().Update(ctx, devCR)

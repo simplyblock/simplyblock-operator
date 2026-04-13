@@ -30,6 +30,7 @@ type TaskSpec struct {
 	// TaskID filters results to a specific backend task when set.
 	TaskID string `json:"taskID,omitempty"`
 	// Subtasks includes related child subtasks when supported by the backend.
+	// FIXME: Unused for now
 	Subtasks bool `json:"subtasks,omitempty"`
 }
 
@@ -51,8 +52,10 @@ type TaskEntry struct {
 	// Canceled indicates whether the task was canceled.
 	Canceled bool `json:"canceled,omitempty"`
 	// ParentTask is the parent task UUID when this task is a subtask.
+	// FIXME: Unused for now
 	ParentTask string `json:"parentTask,omitempty"`
 	// StartedAt is the backend-reported task start timestamp.
+	// FIXME: Unused for now
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 	// Retried is the number of retry attempts made for the task.
 	Retried *int32 `json:"retried,omitempty"`
