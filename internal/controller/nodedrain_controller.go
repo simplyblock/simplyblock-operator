@@ -145,12 +145,7 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 			case simplyblockv1alpha1.DrainPhaseDraining:
 				// Node uncordoned after reboot — call restart directly.
 				log.Info("Node uncordoned after drain; calling restart", "node", workerName)
-				requeue, advErr := r.handleDraining(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
-				if advErr != nil {
-					log.Error(advErr, "Drain restart error on uncordon", "node", workerName)
-					state.Phase = simplyblockv1alpha1.DrainPhaseFailed
-					state.Message = advErr.Error()
-				}
+				requeue := r.handleDraining(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
 				upsertDrainState(snCR, *state)
 				if requeue > 0 && (nextRequeue == 0 || requeue < nextRequeue) {
 					nextRequeue = requeue
@@ -329,24 +324,24 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
 	clusterUUID, clusterSecret string,
-) (time.Duration, error) {
+) time.Duration {
 	log := logf.FromContext(ctx)
 
 	ip, err := getNodeInternalIP(ctx, r.Client, state.Hostname)
 	if err != nil {
-		return 15 * time.Second, nil
+		return 15 * time.Second
 	}
 
 	// Verify SPDK is reachable before calling restart.
 	if err := checkNodeInfoReachable(ctx, ip); err != nil {
 		state.Message = "waiting for SPDK to become reachable after reboot"
 		log.Info("SPDK not yet reachable, will retry", "node", state.Hostname)
-		return 15 * time.Second, nil
+		return 15 * time.Second
 	}
 
 	nodeUUID := findNodeUUID(snCR, state.Hostname)
 	if nodeUUID == "" {
-		return 15 * time.Second, nil
+		return 15 * time.Second
 	}
 
 	restartPayload := map[string]any{
@@ -360,13 +355,13 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 			err = fmt.Errorf("status %d: %s", status, string(body))
 		}
 		log.Error(err, "Restart API failed, will retry", "node", state.Hostname)
-		return 15 * time.Second, nil
+		return 15 * time.Second
 	}
 
 	log.Info("Restart API called", "node", state.Hostname, "nodeUUID", nodeUUID)
 	state.Phase = simplyblockv1alpha1.DrainPhaseRestartCalled
 	state.Message = "restart API called; waiting for online confirmation"
-	return 10 * time.Second, nil
+	return 10 * time.Second
 }
 
 // handleRestartCalled polls the backend until the node is "online", then cleans up.
