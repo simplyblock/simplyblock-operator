@@ -8,6 +8,7 @@ resources:
 - bases/storage.simplyblock.io_devices.yaml
 - bases/storage.simplyblock.io_tasks.yaml
 - bases/storage.simplyblock.io_lvols.yaml
+- bases/storage.simplyblock.io_storagebackups.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

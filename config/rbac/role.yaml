@@ -15,19 +15,11 @@ rules:
   - ""
   resources:
   - nodes
+  - persistentvolumeclaims
+  - persistentvolumes
   verbs:
   - get
   - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - pods
-  verbs:
-  - get
-  - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - ""
@@ -60,6 +52,7 @@ rules:
   - lvols
   - pools
   - snapshotreplications
+  - storagebackups
   - storageclusters
   - storagenodes
   - tasks
@@ -78,6 +71,7 @@ rules:
   - lvols/finalizers
   - pools/finalizers
   - snapshotreplications/finalizers
+  - storagebackups/finalizers
   - storageclusters/finalizers
   - storagenodes/finalizers
   - tasks/finalizers
@@ -90,6 +84,7 @@ rules:
   - lvols/status
   - pools/status
   - snapshotreplications/status
+  - storagebackups/status
   - storageclusters/status
   - storagenodes/status
   - tasks/status
