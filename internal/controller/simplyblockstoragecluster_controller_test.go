@@ -23,8 +23,8 @@ import (
 var _ = Describe("StorageCluster Controller", func() {
 	It("should ignore not-found resources and return no requeue", func() {
 		controllerReconciler := &StorageClusterReconciler{
-			Client:    k8sClient,
-			Scheme:    k8sClient.Scheme(),
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
 		}
 		expectIgnoreNotFoundNoRequeue(controllerReconciler, "missing-cluster")
 	})
