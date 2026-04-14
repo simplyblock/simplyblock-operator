@@ -229,6 +229,10 @@ func (r *NodeDrainCoordinatorReconciler) advanceStateMachine(
 // handleDetected waits for a drain slot then initiates the simplyblock shutdown.
 // Gate: number of nodes currently in {shutdown_called, draining, restart_called}
 // must be less than MaxFaultTolerance.
+//
+// Importantly, the storage pod is labelled and a blocking PDB (maxUnavailable=0)
+// is created BEFORE the slot check, so that MCP/kubectl-drain cannot evict the
+// pod while this node is queued behind another drain in progress.
 func (r *NodeDrainCoordinatorReconciler) handleDetected(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
@@ -239,26 +243,26 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 ) (time.Duration, error) {
 	log := logf.FromContext(ctx)
 
+	// Label the storage pod and install a blocking PDB immediately — before the
+	// slot check — so MCP cannot evict this node's storage pod while it is
+	// waiting for a drain slot behind another in-progress drain.
+	if err := r.labelStoragePod(ctx, snCR.Namespace, snCR.Spec.ClusterName, state.Hostname); err != nil {
+		return 10 * time.Second, fmt.Errorf("label storage pod: %w", err)
+	}
+	if err := r.ensurePDB(ctx, snCR.Namespace, state.Hostname, 0); err != nil {
+		return 10 * time.Second, fmt.Errorf("create blocking PDB: %w", err)
+	}
+
 	activeDrains := countActiveDrains(snCR)
 	if activeDrains >= maxFaultTolerance {
 		state.Message = fmt.Sprintf("waiting for drain slot (%d/%d active)", activeDrains, maxFaultTolerance)
-		log.Info("No drain slot available", "node", state.Hostname, "active", activeDrains, "max", maxFaultTolerance)
+		log.Info("No drain slot available, blocking PDB in place", "node", state.Hostname, "active", activeDrains, "max", maxFaultTolerance)
 		return 10 * time.Second, nil
 	}
 
 	nodeUUID := findNodeUUID(snCR, state.Hostname)
 	if nodeUUID == "" {
 		return 15 * time.Second, fmt.Errorf("node %s not yet registered with backend (UUID missing)", state.Hostname)
-	}
-
-	// Label the storage pod on this node so the per-node PDB can select it.
-	if err := r.labelStoragePod(ctx, snCR.Namespace, snCR.Spec.ClusterName, state.Hostname); err != nil {
-		return 10 * time.Second, fmt.Errorf("label storage pod: %w", err)
-	}
-
-	// Create a blocking PDB to prevent premature pod eviction during drain.
-	if err := r.ensurePDB(ctx, snCR.Namespace, state.Hostname, 0); err != nil {
-		return 10 * time.Second, fmt.Errorf("create blocking PDB: %w", err)
 	}
 
 	// Call simplyblock shutdown API.
