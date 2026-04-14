@@ -143,13 +143,11 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 				log.Info("Cleared terminal drain state after uncordon", "node", workerName, "phase", state.Phase)
 				continue
 			case simplyblockv1alpha1.DrainPhaseDraining:
-				// Node uncordoned after reboot — advance to restart.
-				log.Info("Node uncordoned after drain; advancing to restart", "node", workerName)
-				requeue, advErr := r.advanceStateMachine(
-					ctx, snCR, state, apiClient, clusterUUID, clusterSecret, maxFaultTolerance,
-				)
+				// Node uncordoned after reboot — call restart directly.
+				log.Info("Node uncordoned after drain; calling restart", "node", workerName)
+				requeue, advErr := r.handleDraining(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
 				if advErr != nil {
-					log.Error(advErr, "Drain state machine error on uncordon", "node", workerName)
+					log.Error(advErr, "Drain restart error on uncordon", "node", workerName)
 					state.Phase = simplyblockv1alpha1.DrainPhaseFailed
 					state.Message = advErr.Error()
 				}
@@ -221,7 +219,10 @@ func (r *NodeDrainCoordinatorReconciler) advanceStateMachine(
 	case simplyblockv1alpha1.DrainPhaseShutdownCalled:
 		return r.handleShutdownCalled(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
 	case simplyblockv1alpha1.DrainPhaseDraining:
-		return r.handleDraining(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
+		// Restart is only triggered from the uncordon path — not while the node
+		// is still cordoned. Just wait here.
+		state.Message = "waiting for node to be uncordoned after reboot"
+		return 15 * time.Second, nil
 	case simplyblockv1alpha1.DrainPhaseRestartCalled:
 		return r.handleRestartCalled(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
 	case simplyblockv1alpha1.DrainPhaseComplete, simplyblockv1alpha1.DrainPhaseFailed:
