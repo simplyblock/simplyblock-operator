@@ -214,19 +214,16 @@ func (r *SnapshotReplicationReconciler) reconcileFailback(
 			continue
 		}
 
-		requeue, advErr := r.advanceFailbackVolume(
+		if advErr := r.advanceFailbackVolume(
 			ctx, apiClient, snapRepCR,
 			sourceClusterUUID, sourceClusterSecret,
 			targetClusterUUID, targetClusterSecret,
 			targetPoolUUID, lvolDetail,
 			currentPhase,
-		)
-		if advErr != nil {
+		); advErr != nil {
 			log.Error(advErr, "Failed to advance failback volume phase",
 				"lvolUUID", lvolDetail.UUID, "phase", currentPhase)
 			r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseFailed, advErr.Error())
-		}
-		if requeue {
 			anyInProgress = true
 		}
 	}
@@ -253,10 +250,10 @@ func (r *SnapshotReplicationReconciler) advanceFailbackVolume(
 	targetPoolUUID string,
 	lvolDetail *utils.Lvol,
 	currentPhase string,
-) (inProgress bool, err error) {
+) error {
 	switch currentPhase {
 	case simplyblockv1alpha1.VolPhaseCompleted, simplyblockv1alpha1.VolPhaseFailed:
-		return false, nil
+		return nil
 	}
 
 	r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseReplicatingToSource, "failback in progress")
@@ -265,7 +262,7 @@ func (r *SnapshotReplicationReconciler) advanceFailbackVolume(
 		ctx, apiClient, snapRepCR, sourceClusterSecret, sourceClusterUUID, lvolDetail,
 	)
 	if err != nil {
-		return false, fmt.Errorf("resolve source failback target: %w", err)
+		return fmt.Errorf("resolve source failback target: %w", err)
 	}
 
 	if err := failbackLvol(
@@ -274,11 +271,11 @@ func (r *SnapshotReplicationReconciler) advanceFailbackVolume(
 		targetClusterSecret, targetClusterUUID, targetPoolUUID,
 		lvolDetail, isFreshCluster,
 	); err != nil {
-		return false, fmt.Errorf("failback failed for lvol %s: %w", lvolDetail.UUID, err)
+		return fmt.Errorf("failback failed for lvol %s: %w", lvolDetail.UUID, err)
 	}
 
 	r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseCompleted, "failback complete")
-	return false, nil
+	return nil
 }
 
 /* -------------------- Normal periodic replication -------------------- */
