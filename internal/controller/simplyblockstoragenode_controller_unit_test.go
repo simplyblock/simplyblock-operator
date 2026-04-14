@@ -277,7 +277,7 @@ func TestStorageNodeFinalizerLifecycleHelpers(t *testing.T) {
 }
 
 func TestStorageNodeLabelingHelpers(t *testing.T) {
-	t.Run("labelWorkerNodes labels all configured workers", func(t *testing.T) {
+	t.Run("labelWorkerNode labels configured worker", func(t *testing.T) {
 		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "sn-label-all",
@@ -285,27 +285,24 @@ func TestStorageNodeLabelingHelpers(t *testing.T) {
 			},
 			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: "cluster-a",
-				WorkerNodes: []string{"node-a", "node-b"},
+				WorkerNode:  "node-a",
 			},
 		}
 		nodeA := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
-		nodeB := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-b"}}
-		r := newStorageNodeStateTestReconciler(t, sn, nodeA, nodeB)
+		r := newStorageNodeStateTestReconciler(t, sn, nodeA)
 
-		if err := r.labelWorkerNodes(context.Background(), sn); err != nil {
-			t.Fatalf("labelWorkerNodes returned error: %v", err)
+		if err := r.labelWorkerNode(context.Background(), sn); err != nil {
+			t.Fatalf("labelWorkerNode returned error: %v", err)
 		}
 
-		for _, nodeName := range []string{"node-a", "node-b"} {
-			var n corev1.Node
-			if err := r.Get(context.Background(), client.ObjectKey{Name: nodeName}, &n); err != nil {
-				t.Fatalf("failed to fetch node %s: %v", nodeName, err)
-			}
-			got := n.Labels["io.simplyblock.node-type"]
-			want := "simplyblock-storage-plane-cluster-a"
-			if got != want {
-				t.Fatalf("node %s label mismatch: got %q want %q", nodeName, got, want)
-			}
+		var n corev1.Node
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "node-a"}, &n); err != nil {
+			t.Fatalf("failed to fetch node: %v", err)
+		}
+		got := n.Labels["io.simplyblock.node-type"]
+		want := "simplyblock-storage-plane-cluster-a"
+		if got != want {
+			t.Fatalf("node label mismatch: got %q want %q", got, want)
 		}
 	})
 
@@ -728,7 +725,7 @@ func TestStorageNodeReconcileActionPath(t *testing.T) {
 	}
 }
 
-func TestStorageNodeReconcileLabelWorkerNodesFailure(t *testing.T) {
+func TestStorageNodeReconcileLabelWorkerNodeFailure(t *testing.T) {
 	const namespace = "default"
 	const clusterName = "cluster-label-fail"
 	const clusterUUID = "cluster-uuid-label-fail"
@@ -756,7 +753,7 @@ func TestStorageNodeReconcileLabelWorkerNodesFailure(t *testing.T) {
 		},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
-			WorkerNodes: []string{"missing-worker"},
+			WorkerNode:  "missing-worker",
 		},
 	}
 
@@ -799,7 +796,7 @@ func TestStorageNodeReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
 		},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
-			WorkerNodes: []string{workerName},
+			WorkerNode:  workerName,
 		},
 		Status: simplyblockv1alpha1.StorageNodeStatus{
 			Nodes: []simplyblockv1alpha1.NodeStatus{
@@ -851,7 +848,7 @@ func TestStorageNodeReconcileServiceAccountHasOwnerReference(t *testing.T) {
 		},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
-			WorkerNodes: []string{},
+			WorkerNode:  "",
 		},
 	}
 
@@ -906,7 +903,7 @@ func TestStorageNodeReconcileMissingInternalIPRequeues(t *testing.T) {
 		},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
-			WorkerNodes: []string{workerName},
+			WorkerNode:  workerName,
 		},
 	}
 
@@ -960,7 +957,7 @@ func TestStorageNodeReconcileUnreachableNodeInfoRequeues(t *testing.T) {
 		},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
-			WorkerNodes: []string{workerName},
+			WorkerNode:  workerName,
 		},
 	}
 
@@ -1110,7 +1107,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-online", Namespace: "default"},
 			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: clusterName,
-				WorkerNodes: []string{"node-a"},
+				WorkerNode:  "node-a",
 			},
 			Status: simplyblockv1alpha1.StorageNodeStatus{
 				Nodes: []simplyblockv1alpha1.NodeStatus{
@@ -1187,7 +1184,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-missing-status", Namespace: "default"},
 			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: clusterName,
-				WorkerNodes: []string{"node-b"},
+				WorkerNode:  "node-b",
 			},
 		}
 		r := newStorageNodeStateTestReconciler(t, cluster, sn)

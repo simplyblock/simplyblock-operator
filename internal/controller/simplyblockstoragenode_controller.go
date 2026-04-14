@@ -142,8 +142,10 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.reconcileAction(ctx, snCR, clusterUUID, clusterSecret)
 	}
 
-	if err := r.labelWorkerNodes(ctx, snCR); err != nil {
-		return ctrl.Result{}, err
+	if snCR.Spec.WorkerNode != "" {
+		if err := r.labelWorkerNode(ctx, snCR); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	sa := utils.BuildStorageNodeServiceAccount(snCR.Namespace)
@@ -171,7 +173,8 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	for _, nodeName := range snCR.Spec.WorkerNodes {
+	if snCR.Spec.WorkerNode != "" {
+		nodeName := snCR.Spec.WorkerNode
 		nodeExists := false
 		for _, n := range snCR.Status.Nodes {
 			if n.Hostname == nodeName {
@@ -179,89 +182,88 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				break
 			}
 		}
-		if nodeExists {
-			continue
-		}
 
-		ip, err := getNodeInternalIP(ctx, r.Client, nodeName)
-		if err != nil {
-			log.Error(err, "failed to get internal IP", "node", nodeName)
-			return ctrl.Result{RequeueAfter: time.Second * 10}, nil
-		}
-
-		if err := checkNodeInfoReachable(ctx, ip); err != nil {
-			log.Info("Storage node API not reachable yet, requeueing",
-				"node", nodeName,
-				"ip", ip,
-				"error", err.Error(),
-			)
-
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
-		nodeAddress := fmt.Sprintf("%s:5000", ip)
-		params := utils.StorageNodeAddParams{
-			NodeAddress:         nodeAddress,
-			InterfaceName:       snCR.Spec.MgmtIfname,
-			SPDKImage:           snCR.Spec.SpdkImage,
-			SPDKDebug:           false,
-			IdDeviceByNQN:       false,
-			DataNics:            snCR.Spec.DataIfname,
-			Namespace:           snCR.Namespace,
-			JMPercent:           journalManagerPercentPerDevice(snCR),
-			Partitions:          utils.IntPtrOrDefault(snCR.Spec.Partitions, 1),
-			IOBufSmallPoolCount: 0,
-			IOBufLargePoolCount: 0,
-			HaJMCount:           journalManagerCount(snCR),
-			CRName:              snCR.Name,
-			CRNameSpace:         snCR.Namespace,
-			CRPlural:            "storagenodes",
-			Format4K:            utils.BoolPtrOrFalse(snCR.Spec.ForceFormat4K),
-		}
-
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
-
-		jsonParams, err := json.MarshalIndent(params, "", "  ")
-		if err != nil {
-			log.Error(err, "Failed to marshal params")
-		} else {
-			log.Info("Sending Storage Node Add Request",
-				"endpoint", endpoint,
-				"request_body", string(jsonParams),
-			)
-		}
-
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
-		if err != nil || status >= 300 {
-			if err == nil {
-				err = fmt.Errorf("unexpected status %d", status)
+		if !nodeExists {
+			ip, err := getNodeInternalIP(ctx, r.Client, nodeName)
+			if err != nil {
+				log.Error(err, "failed to get internal IP", "node", nodeName)
+				return ctrl.Result{RequeueAfter: time.Second * 10}, nil
 			}
-			log.Error(err, "StorageNode creation failed", "status", status, "response", string(body))
-			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+
+			if err := checkNodeInfoReachable(ctx, ip); err != nil {
+				log.Info("Storage node API not reachable yet, requeueing",
+					"node", nodeName,
+					"ip", ip,
+					"error", err.Error(),
+				)
+
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+
+			nodeAddress := fmt.Sprintf("%s:5000", ip)
+			params := utils.StorageNodeAddParams{
+				NodeAddress:         nodeAddress,
+				InterfaceName:       snCR.Spec.MgmtIfname,
+				SPDKImage:           snCR.Spec.SpdkImage,
+				SPDKDebug:           false,
+				IdDeviceByNQN:       false,
+				DataNics:            snCR.Spec.DataIfname,
+				Namespace:           snCR.Namespace,
+				JMPercent:           journalManagerPercentPerDevice(snCR),
+				Partitions:          utils.IntPtrOrDefault(snCR.Spec.Partitions, 1),
+				IOBufSmallPoolCount: 0,
+				IOBufLargePoolCount: 0,
+				HaJMCount:           journalManagerCount(snCR),
+				CRName:              snCR.Name,
+				CRNameSpace:         snCR.Namespace,
+				CRPlural:            "storagenodes",
+				Format4K:            utils.BoolPtrOrFalse(snCR.Spec.ForceFormat4K),
+			}
+
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
+
+			jsonParams, err := json.MarshalIndent(params, "", "  ")
+			if err != nil {
+				log.Error(err, "Failed to marshal params")
+			} else {
+				log.Info("Sending Storage Node Add Request",
+					"endpoint", endpoint,
+					"request_body", string(jsonParams),
+				)
+			}
+
+			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
+			if err != nil || status >= 300 {
+				if err == nil {
+					err = fmt.Errorf("unexpected status %d", status)
+				}
+				log.Error(err, "StorageNode creation failed", "status", status, "response", string(body))
+				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+			}
+
+			log.Info("SNODE API call",
+				"endpoint", endpoint,
+				"status", status,
+				"response", string(body),
+			)
+
+			if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
+				return ctrl.Result{}, err
+			}
+
+			ensureNodeStatus(snCR, nodeName, ip)
+
+			if err := r.Status().Update(ctx, snCR); err != nil {
+				log.Error(err, "Failed to update storage node status")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+			if err := waitForNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, ip, nodeName, snCR, r); err != nil {
+				log.Error(err, "Node did not become online in time", "node", nodeName)
+				return ctrl.Result{}, nil
+			}
+
+			log.Info("Storage node created successfully", "node", nodeName)
 		}
-
-		log.Info("SNODE API call",
-			"endpoint", endpoint,
-			"status", status,
-			"response", string(body),
-		)
-
-		if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
-			return ctrl.Result{}, err
-		}
-
-		ensureNodeStatus(snCR, nodeName, ip)
-
-		if err := r.Status().Update(ctx, snCR); err != nil {
-			log.Error(err, "Failed to update storage node status")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-		if err := waitForNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, ip, nodeName, snCR, r); err != nil {
-			log.Error(err, "Node did not become online in time", "node", nodeName)
-			return ctrl.Result{}, nil
-		}
-
-		log.Info("Storage node created successfully", "node", nodeName)
 	}
 
 	return ctrl.Result{}, nil
@@ -304,33 +306,6 @@ func (r *StorageNodeReconciler) ensureFinalizer(
 
 	controllerutil.AddFinalizer(snCR, "simplyblock.storagenode.finalizer")
 	return true, r.Update(ctx, snCR)
-}
-
-func (r *StorageNodeReconciler) labelWorkerNodes(ctx context.Context, sn *simplyblockv1alpha1.StorageNode) error {
-	for _, nodeName := range sn.Spec.WorkerNodes {
-		var node corev1.Node
-		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
-			return err
-		}
-
-		if node.Labels == nil {
-			node.Labels = map[string]string{}
-		}
-
-		key := "io.simplyblock.node-type"
-		value := "simplyblock-storage-plane-" + sn.Spec.ClusterName
-
-		if node.Labels[key] == value {
-			continue
-		}
-
-		node.Labels[key] = value
-		if err := r.Update(ctx, &node); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (r *StorageNodeReconciler) labelWorkerNode(ctx context.Context, sn *simplyblockv1alpha1.StorageNode) error {

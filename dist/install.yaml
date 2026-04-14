@@ -1033,14 +1033,9 @@ spec:
                 description: UbuntuHost indicates the node host OS is Ubuntu.
                 type: boolean
               workerNode:
-                description: WorkerNode is a single worker node used by action flows.
+                description: WorkerNode is the Kubernetes worker node managed by
+                  this StorageNode.
                 type: string
-              workerNodes:
-                description: WorkerNodes is the set of Kubernetes worker nodes to
-                  manage.
-                items:
-                  type: string
-                type: array
             required:
             - clusterName
             type: object
@@ -1136,11 +1131,11 @@ spec:
         - message: nodeUUID is required when action is specified
           rule: '!(has(self.spec.action) && self.spec.action != "" && (!has(self.spec.nodeUUID)
             || self.spec.nodeUUID == ""))'
-        - message: clusterImage, maxLogicalVolumeCount, and workerNodes are required
+        - message: clusterImage, maxLogicalVolumeCount, and workerNode are required
             when action is not specified
           rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.clusterImage)
             && self.spec.clusterImage != "" && has(self.spec.maxLogicalVolumeCount)
-            && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)
+            && has(self.spec.workerNode) && self.spec.workerNode != "")
     served: true
     storage: true
     subresources:

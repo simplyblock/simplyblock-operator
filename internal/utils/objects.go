@@ -130,13 +130,13 @@ func ShouldActivateCluster(
 		coreIsolation = *snCR.Spec.CoreIsolation
 	}
 
-	expected := len(snCR.Spec.WorkerNodes)
+	expected := 1
 	if len(snCR.Spec.SocketsToUse) > 0 {
 		nodesPerSocket := 1
 		if snCR.Spec.NodesPerSocket != nil && *snCR.Spec.NodesPerSocket > 0 {
 			nodesPerSocket = int(*snCR.Spec.NodesPerSocket)
 		}
-		expected *= len(snCR.Spec.SocketsToUse) * nodesPerSocket
+		expected = len(snCR.Spec.SocketsToUse) * nodesPerSocket
 	}
 
 	return onlineHealthy == expected &&

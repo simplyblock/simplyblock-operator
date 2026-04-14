@@ -41,11 +41,11 @@ func TestCountOnlineHealthyNodes(t *testing.T) {
 func TestShouldActivateCluster(t *testing.T) {
 	cr := &simplyblockv1alpha1.StorageNode{
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
-			WorkerNodes: []string{"n1", "n2", "n3"},
+			WorkerNode: "n1",
 		},
 	}
-	if !ShouldActivateCluster(2, 3, cr) { // required=mod+1 => 3
-		t.Fatalf("should activate when all workers are online and requirement met")
+	if !ShouldActivateCluster(0, 1, cr) { // required=mod+1=1, expected=1
+		t.Fatalf("should activate when the worker node is online and requirement met")
 	}
 
 	coreIsolation := true

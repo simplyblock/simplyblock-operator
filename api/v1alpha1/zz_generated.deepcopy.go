@@ -1060,11 +1060,6 @@ func (in *StorageNodeSpec) DeepCopyInto(out *StorageNodeSpec) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
-	if in.WorkerNodes != nil {
-		in, out := &in.WorkerNodes, &out.WorkerNodes
-		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
 	if in.OpenShiftCluster != nil {
 		in, out := &in.OpenShiftCluster, &out.OpenShiftCluster
 		*out = new(bool)

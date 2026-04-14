@@ -77,9 +77,7 @@ type StorageNodeSpec struct {
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 	// DataIfname lists data-plane network interfaces.
 	DataIfname []string `json:"dataIfname,omitempty"`
-	// WorkerNodes is the set of Kubernetes worker nodes to manage.
-	WorkerNodes []string `json:"workerNodes,omitempty"`
-	// WorkerNode is a single worker node used by action flows.
+	// WorkerNode is the Kubernetes worker node managed by this StorageNode.
 	WorkerNode string `json:"workerNode,omitempty"`
 	// OpenShiftCluster indicates OpenShift-specific behavior should be enabled.
 	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
@@ -166,7 +164,7 @@ type ActionStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && (!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\"))",message="nodeUUID is required when action is specified"
-// +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.clusterImage) && self.spec.clusterImage != \"\" && has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)",message="clusterImage, maxLogicalVolumeCount, and workerNodes are required when action is not specified"
+// +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.clusterImage) && self.spec.clusterImage != \"\" && has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNode) && self.spec.workerNode != \"\")",message="clusterImage, maxLogicalVolumeCount, and workerNode are required when action is not specified"
 // StorageNode is the Schema for the storagenodes API
 type StorageNode struct {
 	metav1.TypeMeta `json:",inline"`
