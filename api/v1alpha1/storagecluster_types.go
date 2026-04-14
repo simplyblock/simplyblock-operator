@@ -156,6 +156,10 @@ type StorageClusterStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.status",description="Backend-reported cluster lifecycle status"
+// +kubebuilder:printcolumn:name="UUID",type="string",JSONPath=".status.uuid",description="Backend cluster UUID"
+// +kubebuilder:printcolumn:name="Configured",type="boolean",JSONPath=".status.configured",description="Whether initial cluster setup has completed"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // StorageCluster is the Schema for the storageclusters API
 type StorageCluster struct {

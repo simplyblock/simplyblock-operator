@@ -618,7 +618,7 @@ func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("no-op when cluster UUID already present and no action", func(t *testing.T) {
+	t.Run("syncs status periodically when cluster UUID already present and no action", func(t *testing.T) {
 		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-top-noop",
@@ -638,8 +638,8 @@ func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Reconcile returned error: %v", err)
 		}
-		if res.RequeueAfter != 0 {
-			t.Fatalf("expected no delayed requeue for no-op path, got %+v", res)
+		if res.RequeueAfter == 0 {
+			t.Fatalf("expected periodic requeue for status sync, got %+v", res)
 		}
 	})
 }

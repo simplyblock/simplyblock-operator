@@ -14,7 +14,23 @@ spec:
     singular: storagecluster
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - description: Backend-reported cluster lifecycle status
+      jsonPath: .status.status
+      name: Status
+      type: string
+    - description: Backend cluster UUID
+      jsonPath: .status.uuid
+      name: UUID
+      type: string
+    - description: Whether initial cluster setup has completed
+      jsonPath: .status.configured
+      name: Configured
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: StorageCluster is the Schema for the storageclusters API
