@@ -1,0 +1,8 @@
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: StorageBackup
+metadata:
+  name: storagebackup-sample
+spec:
+  clusterName: my-cluster
+  pvcRef:
+    name: my-pvc
