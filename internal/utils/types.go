@@ -33,7 +33,7 @@ type ClusterAddParams struct {
 	CRName                 string        `json:"cr_name,omitempty"`
 	CRNameSpace            string        `json:"cr_namespace,omitempty"`
 	CRPlural               string        `json:"cr_plural,omitempty"`
-	ClientDataNic          string        `json:"client_data_nic,omitempty"`
+	ClientDataIfname       string        `json:"client_data_ifname,omitempty"`
 	MaxFaultTolerance      int           `json:"max_fault_tolerance,omitempty"`
 	NvmfBasePort           int           `json:"nvmf_base_port,omitempty"`
 	RpcBasePort            int           `json:"rpc_base_port,omitempty"`
@@ -54,6 +54,12 @@ type ClusterUpdateParams struct {
 	StatsHistoryInSeconds  int    `json:"stats_history_in_seconds,omitempty"`
 	IncludeEventLog        bool   `json:"include_event_log,omitempty"`
 	EventLogEntries        int    `json:"event_log_entries,omitempty"`
+}
+
+type ReplicationAddParams struct {
+	TargetCluster string `json:"snapshot_replication_target_cluster"`
+	Timeout       int    `json:"snapshot_replication_timeout,omitempty"`
+	TargetPool    string `json:"target_pool,omitempty"`
 }
 
 type PoolAddParams struct {

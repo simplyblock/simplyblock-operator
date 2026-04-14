@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -98,10 +99,10 @@ func (r *DeviceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if !devCR.DeletionTimestamp.IsZero() {
-		if utils.ContainsString(devCR.Finalizers, "simplyblock.device.finalizer") {
+		if utils.ContainsString(devCR.Finalizers, utils.FinalizerDevice) {
 			// TODO: add any cleanup logic needed before device deletion
 
-			devCR.Finalizers = utils.RemoveString(devCR.Finalizers, "simplyblock.device.finalizer")
+			devCR.Finalizers = utils.RemoveString(devCR.Finalizers, utils.FinalizerDevice)
 			if err := r.Update(ctx, devCR); err != nil {
 				log.Error(err, "Failed to remove finalizer")
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -112,8 +113,8 @@ func (r *DeviceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
-	if !controllerutil.ContainsFinalizer(devCR, "simplyblock.device.finalizer") {
-		controllerutil.AddFinalizer(devCR, "simplyblock.device.finalizer")
+	if !controllerutil.ContainsFinalizer(devCR, utils.FinalizerDevice) {
+		controllerutil.AddFinalizer(devCR, utils.FinalizerDevice)
 		if err := r.Update(ctx, devCR); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -243,7 +244,7 @@ func (r *DeviceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		"deviceCount", len(newStatus),
 	)
 
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -307,6 +308,8 @@ func (r *DeviceReconciler) reconcileDeviceAction(
 			d.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
 				Action:             action,
 				State:              utils.ActionStateRunning,
+				NodeUUID:           devCR.Spec.NodeUUID,
+				UpdatedAt:          metav1.Now(),
 				ObservedGeneration: devCR.Generation,
 			}
 		})
@@ -432,6 +435,8 @@ func (r *DeviceReconciler) failDeviceAction(
 	log.Error(err, "Device action failed")
 
 	devCR.Status.ActionStatus.State = utils.ActionStateFailed
+	devCR.Status.ActionStatus.NodeUUID = devCR.Spec.NodeUUID
+	devCR.Status.ActionStatus.UpdatedAt = metav1.Now()
 	devCR.Status.ActionStatus.Message = err.Error()
 
 	_ = r.Status().Update(ctx, devCR)

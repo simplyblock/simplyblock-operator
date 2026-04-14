@@ -61,6 +61,7 @@ type DeviceInfo struct {
 	// Model is the reported device model.
 	Model string `json:"model,omitempty"`
 	// Utilization is the backend utilization metric.
+	// FIXME: Unused for now
 	Utilization int64 `json:"utilization,omitempty"`
 	// Status is the backend lifecycle status of the device.
 	Status string `json:"status,omitempty"`

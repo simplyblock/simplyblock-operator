@@ -31,6 +31,7 @@ type JournalManagerSpec struct {
 	// PercentPerDevice is the journal manager capacity percentage per device.
 	PercentPerDevice *int32 `json:"percentPerDevice,omitempty"`
 	// UseSeparateJournalDevice enables using separate journal devices.
+	// FIXME: Unused for now
 	UseSeparateJournalDevice *bool `json:"useSeparateJournalDevice,omitempty"`
 }
 
@@ -99,10 +100,13 @@ type StorageNodeSpec struct {
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
 	// AddPcieToAllowList appends devices to the allow-list during restart actions.
+	// FIXME: Unused for now
 	AddPcieToAllowList []string `json:"addPcieToAllowList,omitempty"`
 	// NodeAddr is the explicit node address used by action flows.
+	// FIXME: Unused for now
 	NodeAddr string `json:"nodeAddr,omitempty"`
 	// Force enables forced action execution where supported.
+	// FIXME: Unused for now
 	Force *bool `json:"force,omitempty"`
 }
 

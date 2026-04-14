@@ -1,6 +1,14 @@
 package utils
 
 const (
+	FinalizerPool                = "storage.simplyblock.io/pool-finalizer"
+	FinalizerLvol                = "storage.simplyblock.io/lvol-finalizer"
+	FinalizerTask                = "storage.simplyblock.io/task-finalizer"
+	FinalizerDevice              = "storage.simplyblock.io/device-finalizer"
+	FinalizerSnapshotReplication = "storage.simplyblock.io/snapshotreplication-finalizer"
+	FinalizerStorageNode         = "storage.simplyblock.io/storagenode-finalizer"
+	FinalizerStorageCluster      = "storage.simplyblock.io/cluster-finalizer"
+
 	ClusterActionActivate = "activate"
 	ClusterActionExpand   = "expand"
 
@@ -8,7 +16,14 @@ const (
 	ActionStateSuccess = "success"
 	ActionStateFailed  = "failed"
 
-	ClusterStatusActive = "active"
+	TaskStateDone = "done"
+
+	ClusterStatusActive    = "active"
+	ClusterStatusSuspended = "suspended"
+
+	NodeStatusOnline      = "online"
+	NodeStatusOffline     = "offline"
+	NodeStatusUnreachable = "unreachable"
 
 	DeviceActionRemove  = "remove"
 	DeviceActionRestart = "restart"

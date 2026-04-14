@@ -47,7 +47,7 @@ type StorageNodeReconciler struct {
 }
 
 type SNODEAPIResponse struct {
-	UUID      string `json:"uuid"`
+	UUID      string `json:"id"`
 	Status    string `json:"status"`
 	IP        string `json:"mgmt_ip"`
 	Health    bool   `json:"health_check"`
@@ -285,11 +285,11 @@ func (r *StorageNodeReconciler) handleDeletion(
 		return false, nil
 	}
 
-	if !controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
+	if !controllerutil.ContainsFinalizer(snCR, utils.FinalizerStorageNode) {
 		return true, nil
 	}
 
-	controllerutil.RemoveFinalizer(snCR, "simplyblock.storagenode.finalizer")
+	controllerutil.RemoveFinalizer(snCR, utils.FinalizerStorageNode)
 	return true, r.Update(ctx, snCR)
 }
 
@@ -298,11 +298,11 @@ func (r *StorageNodeReconciler) ensureFinalizer(
 	snCR *simplyblockv1alpha1.StorageNode,
 ) (bool, error) {
 
-	if controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
+	if controllerutil.ContainsFinalizer(snCR, utils.FinalizerStorageNode) {
 		return false, nil
 	}
 
-	controllerutil.AddFinalizer(snCR, "simplyblock.storagenode.finalizer")
+	controllerutil.AddFinalizer(snCR, utils.FinalizerStorageNode)
 	return true, r.Update(ctx, snCR)
 }
 
@@ -520,7 +520,7 @@ func waitForNodeOnline(
 		}
 
 		for _, res := range apiResp {
-			if res.IP == ip && res.Status == "online" && res.Health {
+			if res.IP == ip && res.Status == utils.NodeStatusOnline && res.Health {
 
 				for i := range snCR.Status.Nodes {
 					if snCR.Status.Nodes[i].Hostname == nodeName {

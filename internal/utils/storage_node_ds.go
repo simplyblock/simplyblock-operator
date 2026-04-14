@@ -6,6 +6,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.DaemonSet {
@@ -71,6 +72,15 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: labels,
+			},
+			UpdateStrategy: appsv1.DaemonSetUpdateStrategy{
+				Type: appsv1.RollingUpdateDaemonSetStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDaemonSet{
+					MaxUnavailable: &intstr.IntOrString{
+						Type:   intstr.Int,
+						IntVal: 1,
+					},
+				},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
@@ -156,7 +166,18 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 								"python", "simplyblock_web/node_webapp.py", "storage_node_k8s",
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
-							Env:             mainEnv,
+
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/snode/check",
+										Port: intstr.FromInt(5000),
+									},
+								},
+								InitialDelaySeconds: 10,
+								PeriodSeconds:       5,
+							},
+							Env: mainEnv,
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "dev-vol", MountPath: "/dev"},
 								{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},

@@ -59,6 +59,7 @@ type BackupSpec struct {
 // StorageClusterSpec defines the desired state of StorageCluster
 type StorageClusterSpec struct {
 	// MgmtIfname is the management network interface name used for cluster communication.
+	// FIXME: Unused for now
 	MgmtIfname string `json:"mgmtIfname,omitempty"`
 	// EnableNodeAffinity enables node-affinity placement for storage components.
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
@@ -86,10 +87,10 @@ type StorageClusterSpec struct {
 	MaxQueueSize *int32 `json:"maxQueueSize,omitempty"`
 	// InflightIOThreshold defines the inflight I/O threshold.
 	InflightIOThreshold *int32 `json:"inflightIOThreshold,omitempty"`
-	// Fabric defines the storage fabric type.
-	Fabric string `json:"fabric,omitempty"`
-	// ClientDataNic defines the client data network interface.
-	ClientDataNic string `json:"clientDataNic,omitempty"`
+	// FabricType defines the storage fabric type.
+	FabricType string `json:"fabricType,omitempty"`
+	// ClientDataIfname defines the client data network interface.
+	ClientDataIfname string `json:"clientDataIfname,omitempty"`
 	// MaxFaultTolerance defines the maximum tolerated concurrent faults.
 	MaxFaultTolerance *int32 `json:"maxFaultTolerance,omitempty"`
 	// NvmfBasePort defines the base NVMf service port.
@@ -100,17 +101,20 @@ type StorageClusterSpec struct {
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
 
 	// QoSClasses defines backend QosSpec class configuration.
+	// FIXME: Unused for now
 	QoSClasses string `json:"qosClasses,omitempty"`
 	// WarningThresholdSpec defines warning-level capacity thresholds.
 	WarningThresholdSpec *CapacityThresholdSpec `json:"warningThreshold,omitempty"`
 	// CriticalThresholdSpec defines critical-level capacity thresholds.
 	CriticalThresholdSpec *CapacityThresholdSpec `json:"criticalThreshold,omitempty"`
 	// ClientQpairCount defines client-side queue-pair count.
-	// FIXME: Unused for now (API update required?)
+	// FIXME: Unused for now
 	ClientQpairCount *int32 `json:"clientQpairCount,omitempty"`
 	// IncludeEventLog controls whether event logs are included in responses/exports.
+	// FIXME: Unused for now
 	IncludeEventLog *bool `json:"includeEventLog,omitempty"`
 	// EventLogEntries limits the number of event-log entries returned/retained.
+	// FIXME: Unused for now
 	EventLogEntries *int32 `json:"eventLogEntries,omitempty"`
 	// Backup specifies the specification for backup to S3 configuration
 	Backup *BackupSpec `json:"backup,omitempty"`
@@ -123,8 +127,10 @@ type StorageClusterStatus struct {
 	// ClusterName is the resolved backend cluster name.
 	ClusterName string `json:"clusterName,omitempty"`
 	// MgmtNodes is the number of management nodes.
+	// FIXME: Unused for now (API update required?)
 	MgmtNodes *int32 `json:"mgmtNodes,omitempty"`
 	// StorageNodes is the number of storage nodes.
+	// FIXME: Unused for now (API update required?)
 	StorageNodes *int32 `json:"storageNodes,omitempty"`
 	// NQN is the cluster NVM subsystem qualified name.
 	NQN string `json:"nqn,omitempty"`
@@ -137,8 +143,10 @@ type StorageClusterStatus struct {
 	// SecretName is the Kubernetes Secret containing cluster credentials.
 	SecretName string `json:"secretName,omitempty"`
 	// LastUpdated is the last backend update timestamp.
+	// FIXME: Unused for now (API update required?)
 	LastUpdated *metav1.Time `json:"lastUpdated,omitempty"`
 	// Created is the backend creation timestamp.
+	// FIXME: Unused for now (API update required?)
 	Created *metav1.Time `json:"created,omitempty"`
 	// Configured indicates whether initial cluster setup completed.
 	Configured bool `json:"configured,omitempty"`
@@ -148,6 +156,10 @@ type StorageClusterStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.status",description="Backend-reported cluster lifecycle status"
+// +kubebuilder:printcolumn:name="UUID",type="string",JSONPath=".status.uuid",description="Backend cluster UUID"
+// +kubebuilder:printcolumn:name="Configured",type="boolean",JSONPath=".status.configured",description="Whether initial cluster setup has completed"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // StorageCluster is the Schema for the storageclusters API
 type StorageCluster struct {

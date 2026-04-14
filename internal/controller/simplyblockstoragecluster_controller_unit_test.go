@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -377,7 +378,7 @@ func TestClusterEnsureFinalizer(t *testing.T) {
 	if !updated {
 		t.Fatalf("expected ensureFinalizer to add finalizer")
 	}
-	if !contains(cluster.Finalizers, "simplyblock.cluster.finalizer") {
+	if !contains(cluster.Finalizers, utils.FinalizerStorageCluster) {
 		t.Fatalf("expected cluster finalizer to be present")
 	}
 }
@@ -452,7 +453,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "cluster-activate-delete",
 				Namespace:         "default",
-				Finalizers:        []string{"simplyblock.cluster.finalizer"},
+				Finalizers:        []string{utils.FinalizerStorageCluster},
 				DeletionTimestamp: &now,
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
@@ -469,7 +470,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 		if !done {
 			t.Fatalf("expected done=true for handled deletion")
 		}
-		if contains(cluster.Finalizers, "simplyblock.cluster.finalizer") {
+		if contains(cluster.Finalizers, utils.FinalizerStorageCluster) {
 			t.Fatalf("expected finalizer to be removed for activate-action deletion")
 		}
 	})
@@ -479,7 +480,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "cluster-auth-missing",
 				Namespace:         "default",
-				Finalizers:        []string{"simplyblock.cluster.finalizer"},
+				Finalizers:        []string{utils.FinalizerStorageCluster},
 				DeletionTimestamp: &now,
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
@@ -501,7 +502,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 		if res.RequeueAfter == 0 {
 			t.Fatalf("expected requeueAfter when auth is missing")
 		}
-		if !contains(cluster.Finalizers, "simplyblock.cluster.finalizer") {
+		if !contains(cluster.Finalizers, utils.FinalizerStorageCluster) {
 			t.Fatalf("expected finalizer to remain on requeue path")
 		}
 	})
@@ -523,7 +524,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "cluster-delete-ok",
 				Namespace:         "default",
-				Finalizers:        []string{"simplyblock.cluster.finalizer"},
+				Finalizers:        []string{utils.FinalizerStorageCluster},
 				DeletionTimestamp: &now,
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
@@ -553,7 +554,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 		if !done {
 			t.Fatalf("expected done=true for handled deletion")
 		}
-		if contains(cluster.Finalizers, "simplyblock.cluster.finalizer") {
+		if contains(cluster.Finalizers, utils.FinalizerStorageCluster) {
 			t.Fatalf("expected finalizer removed after successful delete")
 		}
 		if len(mock.Requests()) != 1 || mock.Requests()[0].Path != "/api/v2/clusters/"+clusterUUID {
@@ -612,17 +613,17 @@ func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
 		if err := r.Get(context.Background(), client.ObjectKeyFromObject(cluster), current); err != nil {
 			t.Fatalf("failed to fetch cluster: %v", err)
 		}
-		if !contains(current.Finalizers, "simplyblock.cluster.finalizer") {
+		if !contains(current.Finalizers, utils.FinalizerStorageCluster) {
 			t.Fatalf("expected finalizer to be added")
 		}
 	})
 
-	t.Run("no-op when cluster UUID already present and no action", func(t *testing.T) {
+	t.Run("syncs status periodically when cluster UUID already present and no action", func(t *testing.T) {
 		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-top-noop",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-top-noop",
@@ -637,8 +638,8 @@ func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Reconcile returned error: %v", err)
 		}
-		if res.RequeueAfter != 0 {
-			t.Fatalf("expected no delayed requeue for no-op path, got %+v", res)
+		if res.RequeueAfter == 0 {
+			t.Fatalf("expected periodic requeue for status sync, got %+v", res)
 		}
 	})
 }
@@ -661,7 +662,7 @@ func TestStorageClusterReconcileActivateViaMock(t *testing.T) {
 		webapimock.RouteResponse{
 			Status: http.StatusOK,
 			Body: `{
-				"uuid":"` + clusterUUID + `",
+				"id":"` + clusterUUID + `",
 				"status":"active",
 				"distr_ndcs":2,
 				"distr_npcs":1,
@@ -677,7 +678,7 @@ func TestStorageClusterReconcileActivateViaMock(t *testing.T) {
 			Name:       "cluster-activate-mock",
 			Namespace:  "default",
 			Generation: 2,
-			Finalizers: []string{"simplyblock.cluster.finalizer"},
+			Finalizers: []string{utils.FinalizerStorageCluster},
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			ClusterName: clusterName,
@@ -753,7 +754,7 @@ func TestStorageClusterReconcileExpandViaMock(t *testing.T) {
 		webapimock.RouteResponse{
 			Status: http.StatusOK,
 			Body: `{
-				"uuid":"` + clusterUUID + `",
+				"id":"` + clusterUUID + `",
 				"status":"active",
 				"distr_ndcs":3,
 				"distr_npcs":1,
@@ -769,7 +770,7 @@ func TestStorageClusterReconcileExpandViaMock(t *testing.T) {
 			Name:       "cluster-expand-mock",
 			Namespace:  "default",
 			Generation: 3,
-			Finalizers: []string{"simplyblock.cluster.finalizer"},
+			Finalizers: []string{utils.FinalizerStorageCluster},
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			ClusterName: clusterName,
@@ -851,7 +852,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-health-fail",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-health-fail",
@@ -881,7 +882,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-auth-fail",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-auth-fail",
@@ -921,7 +922,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-create-fail",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-create-fail",
@@ -956,7 +957,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-create-parse-fail",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-create-parse-fail",
@@ -991,7 +992,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-v2-parse-fail",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-v2-parse-fail",
@@ -1052,7 +1053,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-create-first-ok",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-create-first-ok",
@@ -1097,7 +1098,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			webapimock.RouteResponse{
 				Status: http.StatusOK,
 				Body: `{
-					"uuid":"cluster-v2-new-uuid",
+					"id":"cluster-v2-new-uuid",
 					"secret":"cluster-v2-new-secret",
 					"nqn":"nqn.2026-04.io.simplyblock:cluster-v2-new",
 					"distr_ndcs":3,
@@ -1114,7 +1115,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-create-v2-ok",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-create-v2-ok",
@@ -1156,6 +1157,77 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			t.Fatalf("expected create_v2 auth secret to be created: %v", err)
 		}
 	})
+
+	t.Run("create_v2 supports cluster dto response shape", func(t *testing.T) {
+		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		defer mock.Close()
+		mock.Register(
+			http.MethodGet,
+			"/api/v1/health/fdb/",
+			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+		)
+		mock.Register(
+			http.MethodPost,
+			"/api/v2/clusters/",
+			webapimock.RouteResponse{
+				Status: http.StatusCreated,
+				Body: `{
+					"id":"cluster-dto-new-uuid",
+					"name":"cluster-create-v2-dto",
+					"secret":"cluster-dto-new-secret",
+					"nqn":"nqn.2026-04.io.simplyblock:cluster-dto-new",
+					"status":"inactive",
+					"is_re_balancing":false,
+					"distr_ndcs":4,
+					"distr_npcs":2
+				}`,
+				Headers: map[string]string{"Content-Type": "application/json"},
+			},
+		)
+		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+		cluster := &simplyblockv1alpha1.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "cluster-create-v2-dto",
+				Namespace:  "default",
+				Finalizers: []string{utils.FinalizerStorageCluster},
+			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
+				ClusterName: "cluster-create-v2-dto",
+			},
+		}
+		existing := &simplyblockv1alpha1.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "cluster-existing-dto", Namespace: "default"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-existing-dto"},
+			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-existing-dto-uuid"},
+		}
+		existingSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster-cluster-existing-dto", Namespace: "default"},
+			Data: map[string][]byte{
+				"uuid":   []byte("cluster-existing-dto-uuid"),
+				"secret": []byte("existing-dto-secret"),
+			},
+		}
+		r := newClusterStateTestReconciler(t, cluster, existing, existingSecret)
+		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+		if err != nil {
+			t.Fatalf("reconcile returned error: %v", err)
+		}
+		if res.RequeueAfter != 0 {
+			t.Fatalf("expected terminal result after dto-shaped create_v2, got %+v", res)
+		}
+
+		current := &simplyblockv1alpha1.StorageCluster{}
+		if err := r.Get(context.Background(), client.ObjectKeyFromObject(cluster), current); err != nil {
+			t.Fatalf("failed to fetch cluster: %v", err)
+		}
+		if current.Status.UUID != "cluster-dto-new-uuid" {
+			t.Fatalf("expected dto id to populate status uuid, got %#v", current.Status)
+		}
+		if current.Status.ErasureCodingScheme != "4x2" {
+			t.Fatalf("expected dto coding tuple to map to erasureCodingScheme, got %#v", current.Status)
+		}
+	})
 }
 
 func TestStorageClusterCreateFirstSecretHasOwnerReference(t *testing.T) {
@@ -1191,7 +1263,7 @@ func TestStorageClusterCreateFirstSecretHasOwnerReference(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "cluster-ownerref",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.cluster.finalizer"},
+			Finalizers: []string{utils.FinalizerStorageCluster},
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			ClusterName: "cluster-ownerref",
@@ -1227,7 +1299,8 @@ func newClusterStateTestReconciler(t *testing.T, objects ...client.Object) *Stor
 	}, objects...)
 
 	return &StorageClusterReconciler{
-		Client: cl,
-		Scheme: scheme,
+		Client:   cl,
+		Scheme:   scheme,
+		Recorder: record.NewFakeRecorder(10),
 	}
 }

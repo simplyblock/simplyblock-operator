@@ -3,6 +3,7 @@ package utils
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -21,6 +22,42 @@ type ClusterGetResponse struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
 }
+
+type NodeStatusResponse struct {
+	UUID   string `json:"id"`
+	Status string `json:"status"`
+	IP     string `json:"ip"`
+}
+
+type Lvol struct {
+	UUID        string `json:"id"`
+	Name        string `json:"name"`
+	DoReplicate bool   `json:"do_replicate"`
+	NQN         string `json:"nqn"`
+	Status      string `json:"status"`
+
+	RepInfo *ReplicationInfo `json:"rep_info,omitempty"`
+}
+
+type ReplicationInfo struct {
+	LastSnapshotUUID        string    `json:"last_snapshot_id,omitempty"`
+	LastReplicationTime     *FlexTime `json:"last_replication_time,omitempty"`
+	LastReplicationDuration string    `json:"last_replication_duration,omitempty"`
+	ReplicatedCount         int64     `json:"replicated_count,omitempty"`
+}
+
+type SnapshotTask struct {
+	UUID         string `json:"id"`
+	Status       string `json:"status"`
+	FunctionName string `json:"function_name"`
+	CreatedDT    string `json:"create_dt,omitempty"`
+}
+
+type lvolActiveSidesResponse struct {
+	Source bool `json:"from_source"`
+}
+
+var ErrLvolNotFound = errors.New("lvol not found")
 
 func ResolvePoolUUID(
 	ctx context.Context,
@@ -67,6 +104,23 @@ func ResolveClusterUUID(
 	return "", fmt.Errorf("cluster %q not found or UUID not ready", clusterName)
 }
 
+func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, namespace, cluster string) (string, error) {
+	if IsUUID(cluster) {
+		return cluster, nil
+	}
+	return ResolveClusterUUID(ctx, k8sClient, namespace, cluster)
+}
+
+func ResolvePoolIdentifier(ctx context.Context, k8sClient client.Client, namespace, cluster, pool string) (string, error) {
+	if pool == "" {
+		return "", nil
+	}
+	if IsUUID(pool) {
+		return pool, nil
+	}
+	return ResolvePoolUUID(ctx, k8sClient, namespace, cluster, pool)
+}
+
 func ResolveClusterCR(
 	ctx context.Context,
 	c client.Client,
@@ -109,6 +163,20 @@ func ExistingClusterUUID(
 	}
 
 	return false, "", "", nil
+}
+
+func GetClusterNameByUUID(ctx context.Context, cli client.Client, namespace, uuid string) (string, error) {
+	clusterList := &simplyblockv1alpha1.StorageClusterList{}
+	if err := cli.List(ctx, clusterList, client.InNamespace(namespace)); err != nil {
+		return "", fmt.Errorf("failed to list clusters: %w", err)
+	}
+
+	for _, c := range clusterList.Items {
+		if c.Status.UUID == uuid {
+			return c.Status.ClusterName, nil
+		}
+	}
+	return "", fmt.Errorf("no cluster found with UUID %s", uuid)
 }
 
 func CountOnlineHealthyNodes(
@@ -190,6 +258,36 @@ func ActivateCluster(
 	return nil
 }
 
+// ClusterListEntry is a single item returned by GET /api/v2/clusters/.
+type ClusterListEntry struct {
+	UUID   string `json:"id"`
+	Secret string `json:"secret"`
+	Name   string `json:"name"`
+	NQN    string `json:"nqn"`
+	Status string `json:"status"`
+	NDCS   int    `json:"distr_ndcs"`
+	NPCS   int    `json:"distr_npcs"`
+}
+
+// GetClusterByName lists all clusters and returns the one matching name.
+// Returns nil if no match is found.
+func GetClusterByName(ctx context.Context, apiClient *webapi.Client, clusterSecret, name string) (*ClusterListEntry, error) {
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, "/api/v2/clusters/", nil)
+	if err != nil || status >= 300 {
+		return nil, fmt.Errorf("list clusters failed, status %d: %v, body: %s", status, err, string(body))
+	}
+	var entries []ClusterListEntry
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return nil, fmt.Errorf("failed to parse cluster list: %w", err)
+	}
+	for i := range entries {
+		if entries[i].Name == name {
+			return &entries[i], nil
+		}
+	}
+	return nil, nil
+}
+
 func IsClusterActive(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -218,8 +316,8 @@ func IsClusterActive(
 		)
 	}
 
-	var resp ClusterGetResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
+	resp, err := webapi.ParseClusterResponse(body)
+	if err != nil {
 		return false, "", err
 	}
 
@@ -292,6 +390,56 @@ func ActivateClusterAndWait(
 	)
 }
 
+func ClusterSuspended(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID string) (bool, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/", clusterUUID)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return false, fmt.Errorf("failed to get cluster %s, status %d: %v, body: %s", clusterUUID, status, err, string(body))
+	}
+
+	var resp ClusterGetResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return false, fmt.Errorf("failed to unmarshal cluster response: %w", err)
+	}
+
+	return strings.EqualFold(resp.Status, ClusterStatusSuspended), nil
+}
+
+func AllStorageNodesUnreachable(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret,
+	clusterUUID string,
+) (bool, error) {
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return false, fmt.Errorf(
+			"failed to list storage nodes for cluster %s, status %d: %v, body: %s",
+			clusterUUID, status, err, string(body),
+		)
+	}
+
+	var nodes []NodeStatusResponse
+	if err := json.Unmarshal(body, &nodes); err != nil {
+		return false, fmt.Errorf("failed to unmarshal storage nodes response: %w", err)
+	}
+
+	if len(nodes) == 0 {
+		return false, nil
+	}
+
+	for _, n := range nodes {
+		if !strings.EqualFold(n.Status, NodeStatusUnreachable) {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
 func RequiredNodesFromErasureCodingScheme(scheme string) (int, error) {
 	parts := strings.Split(scheme, "x")
 	if len(parts) != 2 {
@@ -309,4 +457,241 @@ func RequiredNodesFromErasureCodingScheme(scheme string) (int, error) {
 	}
 
 	return ndcs + npcs, nil
+}
+
+func GetPoolUUIDs(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID string) ([]string, error) {
+	log := logf.FromContext(ctx)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return nil, fmt.Errorf("failed to list pools, status %d: %v, body: %s", status, err, string(body))
+	}
+
+	log.Info("GetPoolUUIDs API call",
+		"endpoint", endpoint,
+		"status", status,
+		"response", string(body),
+	)
+
+	var pools []struct {
+		UUID string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &pools); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal pools: %w", err)
+	}
+
+	uuids := make([]string, 0, len(pools))
+	for _, p := range pools {
+		uuids = append(uuids, p.UUID)
+	}
+	return uuids, nil
+}
+
+func GetLvols(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID, poolUUID string) ([]Lvol, error) {
+	log := logf.FromContext(ctx)
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/",
+		clusterUUID,
+		poolUUID,
+	)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return nil, fmt.Errorf("failed to list lvols for pool %s, status %d: %v, body: %s", poolUUID, status, err, string(body))
+	}
+
+	log.Info("GetLvols API call",
+		"endpoint", endpoint,
+		"status", status,
+		"response", string(body),
+	)
+
+	var lvols []Lvol
+	if err := json.Unmarshal(body, &lvols); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal lvols: %w", err)
+	}
+
+	return lvols, nil
+}
+
+func GetLvol(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	poolUUID string,
+	lvolUUID string,
+) (*Lvol, error) {
+	log := logf.FromContext(ctx)
+
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s",
+		clusterUUID,
+		poolUUID,
+		lvolUUID,
+	)
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to get lvol %s for pool %s: %w",
+			lvolUUID, poolUUID, err,
+		)
+	}
+
+	if status == http.StatusNotFound {
+		return nil, fmt.Errorf("%w: lvol %s in pool %s", ErrLvolNotFound, lvolUUID, poolUUID)
+	}
+
+	if status >= 300 {
+		return nil, fmt.Errorf(
+			"failed to get lvol %s for pool %s, status %d: body: %s",
+			lvolUUID, poolUUID, status, string(body),
+		)
+	}
+
+	log.Info("GetLvol API call",
+		"endpoint", endpoint,
+		"status", status,
+		"response", string(body),
+	)
+
+	var lvol Lvol
+	if err := json.Unmarshal(body, &lvol); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal lvol %s: %w", lvolUUID, err)
+	}
+
+	return &lvol, nil
+}
+
+func ShouldFailoverToRepCluster(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret,
+	clusterUUID string,
+) (bool, error) {
+
+	suspended, err := ClusterSuspended(ctx, apiClient, clusterSecret, clusterUUID)
+	if err != nil || !suspended {
+		return suspended, err
+	}
+
+	allUnreachable, err := AllStorageNodesUnreachable(ctx, apiClient, clusterSecret, clusterUUID)
+	if err != nil {
+		return false, err
+	}
+
+	return allUnreachable, nil
+}
+
+func GetSnapshotTasks(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	poolUUID string,
+	lvolUUID string,
+) ([]SnapshotTask, error) {
+
+	log := logf.FromContext(ctx)
+
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/list_replication_tasks/",
+		clusterUUID,
+		poolUUID,
+		lvolUUID,
+	)
+
+	body, status, err := apiClient.Do(
+		ctx,
+		clusterSecret,
+		http.MethodGet,
+		endpoint,
+		nil,
+	)
+
+	if err != nil || status >= 300 {
+		return nil, fmt.Errorf(
+			"failed to list snapshot tasks for lvol %s, status %d: %v, body: %s",
+			lvolUUID,
+			status,
+			err,
+			string(body),
+		)
+	}
+
+	log.Info("GetSnapshotTasks API call",
+		"endpoint", endpoint,
+		"status", status,
+		"response", string(body),
+	)
+
+	var tasks []SnapshotTask
+	if err := json.Unmarshal(body, &tasks); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal snapshot tasks: %w", err)
+	}
+
+	return tasks, nil
+}
+
+func GetLastSnapshotTaskDoneStatus(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	poolUUID string,
+	lvolUUID string,
+) (bool, *SnapshotTask, error) {
+	tasks, err := GetSnapshotTasks(
+		ctx,
+		apiClient,
+		clusterSecret,
+		clusterUUID,
+		poolUUID,
+		lvolUUID,
+	)
+	if err != nil {
+		return false, nil, err
+	}
+
+	if len(tasks) == 0 {
+		return true, &SnapshotTask{
+			Status: "empty",
+		}, nil
+	}
+
+	lastTask := tasks[len(tasks)-1]
+	done := strings.EqualFold(lastTask.Status, TaskStateDone)
+	return done, &lastTask, nil
+}
+
+func GetReplicationActiveSides(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret string,
+	clusterUUID string,
+	poolUUID string,
+	lvolUUID string,
+) (bool, error) {
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
+		clusterUUID,
+		poolUUID,
+		lvolUUID,
+	)
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to get lvol %s: %w", lvolUUID, err)
+	}
+	if status >= 300 {
+		return false, fmt.Errorf("failed to get lvol %s, status %d: %s", lvolUUID, status, string(body))
+	}
+
+	var resp lvolActiveSidesResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return false, fmt.Errorf("failed to unmarshal lvol %s active side fields: %w", lvolUUID, err)
+	}
+
+	return resp.Source, nil
 }

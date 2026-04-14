@@ -247,7 +247,7 @@ func TestStorageNodeFinalizerLifecycleHelpers(t *testing.T) {
 		if !updated {
 			t.Fatalf("expected ensureFinalizer to report update")
 		}
-		if !contains(sn.Finalizers, "simplyblock.storagenode.finalizer") {
+		if !contains(sn.Finalizers, utils.FinalizerStorageNode) {
 			t.Fatalf("expected storagenode finalizer to be set")
 		}
 	})
@@ -257,7 +257,7 @@ func TestStorageNodeFinalizerLifecycleHelpers(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "sn-finalizer-del",
 				Namespace:         "default",
-				Finalizers:        []string{"simplyblock.storagenode.finalizer"},
+				Finalizers:        []string{utils.FinalizerStorageNode},
 				DeletionTimestamp: &now,
 			},
 		}
@@ -270,7 +270,7 @@ func TestStorageNodeFinalizerLifecycleHelpers(t *testing.T) {
 		if !updated {
 			t.Fatalf("expected handleDeletion to report update")
 		}
-		if contains(sn.Finalizers, "simplyblock.storagenode.finalizer") {
+		if contains(sn.Finalizers, utils.FinalizerStorageNode) {
 			t.Fatalf("expected storagenode finalizer to be removed")
 		}
 	})
@@ -601,7 +601,7 @@ func TestStorageNodeReconcileDeletionFlow(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "sn-delete-flow",
 			Namespace:         namespace,
-			Finalizers:        []string{"simplyblock.storagenode.finalizer"},
+			Finalizers:        []string{utils.FinalizerStorageNode},
 			DeletionTimestamp: &now,
 		},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
@@ -625,7 +625,7 @@ func TestStorageNodeReconcileDeletionFlow(t *testing.T) {
 		}
 		return
 	}
-	if contains(current.Finalizers, "simplyblock.storagenode.finalizer") {
+	if contains(current.Finalizers, utils.FinalizerStorageNode) {
 		t.Fatalf("expected finalizer to be removed during deletion flow")
 	}
 }
@@ -673,7 +673,7 @@ func TestStorageNodeReconcileAddsFinalizer(t *testing.T) {
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), current); err != nil {
 		t.Fatalf("failed to fetch storagenode: %v", err)
 	}
-	if !contains(current.Finalizers, "simplyblock.storagenode.finalizer") {
+	if !contains(current.Finalizers, utils.FinalizerStorageNode) {
 		t.Fatalf("expected finalizer to be added by reconcile")
 	}
 }
@@ -702,7 +702,7 @@ func TestStorageNodeReconcileActionPath(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "sn-action-flow",
 			Namespace:  namespace,
-			Finalizers: []string{"simplyblock.storagenode.finalizer"},
+			Finalizers: []string{utils.FinalizerStorageNode},
 		},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
@@ -752,7 +752,7 @@ func TestStorageNodeReconcileLabelWorkerNodesFailure(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "sn-label-fail",
 			Namespace:  namespace,
-			Finalizers: []string{"simplyblock.storagenode.finalizer"},
+			Finalizers: []string{utils.FinalizerStorageNode},
 		},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
@@ -795,7 +795,7 @@ func TestStorageNodeReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "sn-known-worker",
 			Namespace:  namespace,
-			Finalizers: []string{"simplyblock.storagenode.finalizer"},
+			Finalizers: []string{utils.FinalizerStorageNode},
 		},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
@@ -847,7 +847,7 @@ func TestStorageNodeReconcileServiceAccountHasOwnerReference(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "sn-ownerref-sa",
 			Namespace:  namespace,
-			Finalizers: []string{"simplyblock.storagenode.finalizer"},
+			Finalizers: []string{utils.FinalizerStorageNode},
 		},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
@@ -902,7 +902,7 @@ func TestStorageNodeReconcileMissingInternalIPRequeues(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "sn-missing-ip",
 			Namespace:  namespace,
-			Finalizers: []string{"simplyblock.storagenode.finalizer"},
+			Finalizers: []string{utils.FinalizerStorageNode},
 		},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
@@ -956,7 +956,7 @@ func TestStorageNodeReconcileUnreachableNodeInfoRequeues(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "sn-unreachable-info",
 			Namespace:  namespace,
-			Finalizers: []string{"simplyblock.storagenode.finalizer"},
+			Finalizers: []string{utils.FinalizerStorageNode},
 		},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
@@ -1079,7 +1079,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 				Status: http.StatusOK,
 				Body: `[
 					{
-						"uuid":"node-uuid-1",
+						"id":"node-uuid-1",
 						"status":"online",
 						"mgmt_ip":"10.0.0.1",
 						"health_check":true,
@@ -1156,7 +1156,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 				Status: http.StatusOK,
 				Body: `[
 					{
-						"uuid":"node-uuid-2",
+						"id":"node-uuid-2",
 						"status":"online",
 						"mgmt_ip":"10.0.0.2",
 						"health_check":true,
@@ -1286,7 +1286,7 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 				Status: http.StatusOK,
 				Body: `[
 					{
-						"uuid":"node-uuid-3",
+						"id":"node-uuid-3",
 						"status":"online",
 						"mgmt_ip":"10.0.0.3",
 						"health_check":true,

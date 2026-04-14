@@ -132,10 +132,10 @@ func (r *LvolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	if !lvolCR.DeletionTimestamp.IsZero() {
-		if utils.ContainsString(lvolCR.Finalizers, "simplyblock.lvol.finalizer") {
+		if utils.ContainsString(lvolCR.Finalizers, utils.FinalizerLvol) {
 			// TODO: add any cleanup logic needed before lvol deletion
 
-			lvolCR.Finalizers = utils.RemoveString(lvolCR.Finalizers, "simplyblock.lvol.finalizer")
+			lvolCR.Finalizers = utils.RemoveString(lvolCR.Finalizers, utils.FinalizerLvol)
 			if err := r.Update(ctx, lvolCR); err != nil {
 				log.Error(err, "Failed to remove finalizer")
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -146,8 +146,8 @@ func (r *LvolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, nil
 	}
 
-	if !controllerutil.ContainsFinalizer(lvolCR, "simplyblock.lvol.finalizer") {
-		controllerutil.AddFinalizer(lvolCR, "simplyblock.lvol.finalizer")
+	if !controllerutil.ContainsFinalizer(lvolCR, utils.FinalizerLvol) {
+		controllerutil.AddFinalizer(lvolCR, utils.FinalizerLvol)
 		if err := r.Update(ctx, lvolCR); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -293,7 +293,7 @@ func lvolStatusListFromAPI(api []LVOLAPIResponse) simplyblockv1alpha1.LvolStatus
 			ErasureCodingScheme: erasureCodingScheme(l.StripeWdata, l.StripeWparity),
 
 			MaxNamespacesPerSubsystem: l.MaxNamespacesPerSubsystem,
-			Fabric:                    l.Fabric,
+			FabricType:                l.Fabric,
 		})
 	}
 
