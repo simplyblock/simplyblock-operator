@@ -377,7 +377,7 @@ func TestClusterEnsureFinalizer(t *testing.T) {
 	if !updated {
 		t.Fatalf("expected ensureFinalizer to add finalizer")
 	}
-	if !contains(cluster.Finalizers, "simplyblock.cluster.finalizer") {
+	if !contains(cluster.Finalizers, utils.FinalizerStorageCluster) {
 		t.Fatalf("expected cluster finalizer to be present")
 	}
 }
@@ -452,7 +452,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "cluster-activate-delete",
 				Namespace:         "default",
-				Finalizers:        []string{"simplyblock.cluster.finalizer"},
+				Finalizers:        []string{utils.FinalizerStorageCluster},
 				DeletionTimestamp: &now,
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
@@ -469,7 +469,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 		if !done {
 			t.Fatalf("expected done=true for handled deletion")
 		}
-		if contains(cluster.Finalizers, "simplyblock.cluster.finalizer") {
+		if contains(cluster.Finalizers, utils.FinalizerStorageCluster) {
 			t.Fatalf("expected finalizer to be removed for activate-action deletion")
 		}
 	})
@@ -479,7 +479,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "cluster-auth-missing",
 				Namespace:         "default",
-				Finalizers:        []string{"simplyblock.cluster.finalizer"},
+				Finalizers:        []string{utils.FinalizerStorageCluster},
 				DeletionTimestamp: &now,
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
@@ -501,7 +501,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 		if res.RequeueAfter == 0 {
 			t.Fatalf("expected requeueAfter when auth is missing")
 		}
-		if !contains(cluster.Finalizers, "simplyblock.cluster.finalizer") {
+		if !contains(cluster.Finalizers, utils.FinalizerStorageCluster) {
 			t.Fatalf("expected finalizer to remain on requeue path")
 		}
 	})
@@ -523,7 +523,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "cluster-delete-ok",
 				Namespace:         "default",
-				Finalizers:        []string{"simplyblock.cluster.finalizer"},
+				Finalizers:        []string{utils.FinalizerStorageCluster},
 				DeletionTimestamp: &now,
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
@@ -553,7 +553,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 		if !done {
 			t.Fatalf("expected done=true for handled deletion")
 		}
-		if contains(cluster.Finalizers, "simplyblock.cluster.finalizer") {
+		if contains(cluster.Finalizers, utils.FinalizerStorageCluster) {
 			t.Fatalf("expected finalizer removed after successful delete")
 		}
 		if len(mock.Requests()) != 1 || mock.Requests()[0].Path != "/api/v2/clusters/"+clusterUUID {
@@ -612,7 +612,7 @@ func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
 		if err := r.Get(context.Background(), client.ObjectKeyFromObject(cluster), current); err != nil {
 			t.Fatalf("failed to fetch cluster: %v", err)
 		}
-		if !contains(current.Finalizers, "simplyblock.cluster.finalizer") {
+		if !contains(current.Finalizers, utils.FinalizerStorageCluster) {
 			t.Fatalf("expected finalizer to be added")
 		}
 	})
@@ -622,7 +622,7 @@ func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-top-noop",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-top-noop",
@@ -677,7 +677,7 @@ func TestStorageClusterReconcileActivateViaMock(t *testing.T) {
 			Name:       "cluster-activate-mock",
 			Namespace:  "default",
 			Generation: 2,
-			Finalizers: []string{"simplyblock.cluster.finalizer"},
+			Finalizers: []string{utils.FinalizerStorageCluster},
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			ClusterName: clusterName,
@@ -769,7 +769,7 @@ func TestStorageClusterReconcileExpandViaMock(t *testing.T) {
 			Name:       "cluster-expand-mock",
 			Namespace:  "default",
 			Generation: 3,
-			Finalizers: []string{"simplyblock.cluster.finalizer"},
+			Finalizers: []string{utils.FinalizerStorageCluster},
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			ClusterName: clusterName,
@@ -851,7 +851,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-health-fail",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-health-fail",
@@ -881,7 +881,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-auth-fail",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-auth-fail",
@@ -921,7 +921,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-create-fail",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-create-fail",
@@ -956,7 +956,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-create-parse-fail",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-create-parse-fail",
@@ -991,7 +991,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-v2-parse-fail",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-v2-parse-fail",
@@ -1052,7 +1052,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-create-first-ok",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-create-first-ok",
@@ -1114,7 +1114,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-create-v2-ok",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-create-v2-ok",
@@ -1189,7 +1189,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "cluster-create-v2-dto",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.cluster.finalizer"},
+				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
 				ClusterName: "cluster-create-v2-dto",
@@ -1262,7 +1262,7 @@ func TestStorageClusterCreateFirstSecretHasOwnerReference(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "cluster-ownerref",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.cluster.finalizer"},
+			Finalizers: []string{utils.FinalizerStorageCluster},
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			ClusterName: "cluster-ownerref",

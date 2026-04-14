@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-manager/internal/utils"
 	webapimock "github.com/simplyblock/simplyblock-manager/internal/webapi/mock"
 )
 
@@ -42,7 +43,7 @@ func TestPoolReconcileAddsFinalizer(t *testing.T) {
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
-	if !contains(current.Finalizers, "simplyblock.pool.finalizer") {
+	if !contains(current.Finalizers, utils.FinalizerPool) {
 		t.Fatalf("expected pool finalizer to be added")
 	}
 }
@@ -52,7 +53,7 @@ func TestPoolReconcileDeletionWithoutUUIDDoesNotProgress(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-b",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.pool.finalizer"},
+			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
 			Name:        "p1",
@@ -81,7 +82,7 @@ func TestPoolReconcileDeletionWithoutUUIDDoesNotProgress(t *testing.T) {
 		}
 		t.Fatalf("failed to get pool: %v", err)
 	}
-	if !contains(current.Finalizers, "simplyblock.pool.finalizer") {
+	if !contains(current.Finalizers, utils.FinalizerPool) {
 		t.Fatalf("expected finalizer to remain because deletion requires status.uuid")
 	}
 }
@@ -92,7 +93,7 @@ func TestPoolReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
 			Name:      "pool-c",
 			Namespace: "default",
 			Finalizers: []string{
-				"simplyblock.pool.finalizer",
+				utils.FinalizerPool,
 			},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
@@ -158,7 +159,7 @@ func TestPoolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 	if current.Namespace != ns {
 		t.Fatalf("namespace changed unexpectedly: got %q want %q", current.Namespace, ns)
 	}
-	if !contains(current.Finalizers, "simplyblock.pool.finalizer") {
+	if !contains(current.Finalizers, utils.FinalizerPool) {
 		t.Fatalf("expected pool finalizer to be added in non-default namespace")
 	}
 	if current.Spec.ClusterName != clusterName {
@@ -199,7 +200,7 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-mock",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.pool.finalizer"},
+			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
 			Name:        "p1",
@@ -258,7 +259,7 @@ func TestPoolReconcileCreatePoolNon2xxRequeues(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-mock-fail",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.pool.finalizer"},
+			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
 			Name:        "p1",
@@ -314,7 +315,7 @@ func TestPoolReconcileDeleteNon2xxKeepsFinalizerAndRequeues(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-delete-fail",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.pool.finalizer"},
+			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
 			Name:        "p1",
@@ -346,7 +347,7 @@ func TestPoolReconcileDeleteNon2xxKeepsFinalizerAndRequeues(t *testing.T) {
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
-	if !contains(current.Finalizers, "simplyblock.pool.finalizer") {
+	if !contains(current.Finalizers, utils.FinalizerPool) {
 		t.Fatalf("expected finalizer to remain after failed delete")
 	}
 }
