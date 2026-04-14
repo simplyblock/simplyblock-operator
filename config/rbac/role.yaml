@@ -89,6 +89,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backuppolicies
   - backuprestores
   - devices
   - lvols
@@ -109,6 +110,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backuppolicies/finalizers
   - backuprestores/finalizers
   - devices/finalizers
   - lvols/finalizers
@@ -123,6 +125,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backuppolicies/status
   - backuprestores/status
   - devices/status
   - lvols/status
