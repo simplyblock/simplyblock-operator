@@ -14,7 +14,37 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
   verbs:
   - create
   - delete
@@ -29,6 +59,7 @@ rules:
   - devices
   - lvols
   - pools
+  - snapshotreplications
   - storageclusters
   - storagenodes
   - tasks
@@ -46,6 +77,7 @@ rules:
   - devices/finalizers
   - lvols/finalizers
   - pools/finalizers
+  - snapshotreplications/finalizers
   - storageclusters/finalizers
   - storagenodes/finalizers
   - tasks/finalizers
@@ -57,6 +89,7 @@ rules:
   - devices/status
   - lvols/status
   - pools/status
+  - snapshotreplications/status
   - storageclusters/status
   - storagenodes/status
   - tasks/status
