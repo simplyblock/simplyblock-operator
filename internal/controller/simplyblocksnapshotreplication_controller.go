@@ -597,10 +597,10 @@ func (r *SnapshotReplicationReconciler) handleDeletion(
 	if SnapRepCR.DeletionTimestamp.IsZero() {
 		return false, nil
 	}
-	if !controllerutil.ContainsFinalizer(SnapRepCR, "simplyblock.replication.finalizer") {
+	if !controllerutil.ContainsFinalizer(SnapRepCR, utils.FinalizerSnapshotReplication) {
 		return true, nil
 	}
-	controllerutil.RemoveFinalizer(SnapRepCR, "simplyblock.replication.finalizer")
+	controllerutil.RemoveFinalizer(SnapRepCR, utils.FinalizerSnapshotReplication)
 	return true, r.Update(ctx, SnapRepCR)
 }
 
@@ -608,10 +608,10 @@ func (r *SnapshotReplicationReconciler) ensureFinalizer(
 	ctx context.Context,
 	SnapRepCR *simplyblockv1alpha1.SnapshotReplication,
 ) (bool, error) {
-	if controllerutil.ContainsFinalizer(SnapRepCR, "simplyblock.replication.finalizer") {
+	if controllerutil.ContainsFinalizer(SnapRepCR, utils.FinalizerSnapshotReplication) {
 		return false, nil
 	}
-	controllerutil.AddFinalizer(SnapRepCR, "simplyblock.replication.finalizer")
+	controllerutil.AddFinalizer(SnapRepCR, utils.FinalizerSnapshotReplication)
 	return true, r.Update(ctx, SnapRepCR)
 }
 
