@@ -25,7 +25,6 @@ var _ = Describe("StorageCluster Controller", func() {
 		controllerReconciler := &StorageClusterReconciler{
 			Client:    k8sClient,
 			Scheme:    k8sClient.Scheme(),
-			APIReader: k8sClient,
 		}
 		expectIgnoreNotFoundNoRequeue(controllerReconciler, "missing-cluster")
 	})

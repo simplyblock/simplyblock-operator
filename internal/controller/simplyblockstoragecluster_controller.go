@@ -106,7 +106,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Fetch the CR directly from the API server (bypasses the informer cache)
 	// to avoid a stale UUID="" read after Status().Patch() triggers a new reconcile.
 	clusterCR := &simplyblockv1alpha1.StorageCluster{}
-	if err := r.APIReader.Get(ctx, req.NamespacedName, clusterCR); err != nil {
+	if err := r.Get(ctx, req.NamespacedName, clusterCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -221,7 +221,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		// Try to look it up by name and adopt it instead of failing.
 		existing, lookupErr := utils.GetClusterByName(ctx, apiClient, clusterSecret, clusterCR.Spec.ClusterName)
 		if lookupErr != nil || existing == nil {
-      r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterCreationFailed, "Cluster creation failed (status=%d): %s", status, string(body))
+			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterCreationFailed, "Cluster creation failed (status=%d): %s", status, string(body))
 
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}
