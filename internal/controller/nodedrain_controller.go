@@ -344,9 +344,10 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 		return 15 * time.Second
 	}
 
+	nodeAddr := fmt.Sprintf("%s:5000", ip)
 	restartPayload := map[string]any{
 		"force":        true,
-		"node_address": ip,
+		"node_address": nodeAddr,
 	}
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, restartPayload)
