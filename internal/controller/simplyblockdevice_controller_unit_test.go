@@ -324,7 +324,7 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:              "dev-delete-ok",
 				Namespace:         "default",
-				Finalizers:        []string{"simplyblock.device.finalizer"},
+				Finalizers:        []string{utils.FinalizerDevice},
 				DeletionTimestamp: &now,
 			},
 			Spec: simplyblockv1alpha1.DeviceSpec{
@@ -358,7 +358,7 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 			}
 			return
 		}
-		if contains(current.Finalizers, "simplyblock.device.finalizer") {
+		if contains(current.Finalizers, utils.FinalizerDevice) {
 			t.Fatalf("expected device finalizer to be removed")
 		}
 	})
@@ -394,7 +394,7 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 		if err := r.Get(context.Background(), client.ObjectKeyFromObject(dev), current); err != nil {
 			t.Fatalf("failed to fetch device: %v", err)
 		}
-		if !contains(current.Finalizers, "simplyblock.device.finalizer") {
+		if !contains(current.Finalizers, utils.FinalizerDevice) {
 			t.Fatalf("expected finalizer to be added")
 		}
 	})
@@ -404,7 +404,7 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "dev-action-delegate",
 				Namespace:  "default",
-				Finalizers: []string{"simplyblock.device.finalizer"},
+				Finalizers: []string{utils.FinalizerDevice},
 			},
 			Spec: simplyblockv1alpha1.DeviceSpec{
 				ClusterName: "cluster-a",
@@ -460,7 +460,7 @@ func TestDeviceReconcileInventoryPaths(t *testing.T) {
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
 		dev := &simplyblockv1alpha1.Device{
-			ObjectMeta: metav1.ObjectMeta{Name: "dev-node-list-fail", Namespace: "default", Finalizers: []string{"simplyblock.device.finalizer"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "dev-node-list-fail", Namespace: "default", Finalizers: []string{utils.FinalizerDevice}},
 			Spec:       simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
 		}
 		r := newDeviceStateTestReconciler(t, dev, baseCluster.DeepCopy(), baseSecret.DeepCopy())
@@ -484,7 +484,7 @@ func TestDeviceReconcileInventoryPaths(t *testing.T) {
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
 		dev := &simplyblockv1alpha1.Device{
-			ObjectMeta: metav1.ObjectMeta{Name: "dev-node-list-invalid", Namespace: "default", Finalizers: []string{"simplyblock.device.finalizer"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "dev-node-list-invalid", Namespace: "default", Finalizers: []string{utils.FinalizerDevice}},
 			Spec:       simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
 		}
 		r := newDeviceStateTestReconciler(t, dev, baseCluster.DeepCopy(), baseSecret.DeepCopy())
@@ -508,7 +508,7 @@ func TestDeviceReconcileInventoryPaths(t *testing.T) {
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
 		dev := &simplyblockv1alpha1.Device{
-			ObjectMeta: metav1.ObjectMeta{Name: "dev-no-nodes", Namespace: "default", Finalizers: []string{"simplyblock.device.finalizer"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "dev-no-nodes", Namespace: "default", Finalizers: []string{utils.FinalizerDevice}},
 			Spec:       simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
 		}
 		r := newDeviceStateTestReconciler(t, dev, baseCluster.DeepCopy(), baseSecret.DeepCopy())
@@ -543,7 +543,7 @@ func TestDeviceReconcileInventoryPaths(t *testing.T) {
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
 		dev := &simplyblockv1alpha1.Device{
-			ObjectMeta: metav1.ObjectMeta{Name: "dev-empty-map", Namespace: "default", Finalizers: []string{"simplyblock.device.finalizer"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "dev-empty-map", Namespace: "default", Finalizers: []string{utils.FinalizerDevice}},
 			Spec:       simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
 		}
 		r := newDeviceStateTestReconciler(t, dev, baseCluster.DeepCopy(), baseSecret.DeepCopy())
@@ -583,7 +583,7 @@ func TestDeviceReconcileInventoryPaths(t *testing.T) {
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
 		dev := &simplyblockv1alpha1.Device{
-			ObjectMeta: metav1.ObjectMeta{Name: "dev-unchanged", Namespace: "default", Finalizers: []string{"simplyblock.device.finalizer"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "dev-unchanged", Namespace: "default", Finalizers: []string{utils.FinalizerDevice}},
 			Spec:       simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
 			Status: simplyblockv1alpha1.DeviceStatus{
 				Nodes: []simplyblockv1alpha1.NodeDevices{

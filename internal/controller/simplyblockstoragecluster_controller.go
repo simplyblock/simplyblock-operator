@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -37,33 +38,41 @@ import (
 	"github.com/simplyblock/simplyblock-manager/internal/webapi"
 )
 
+// Event reason constants for StorageCluster reconciliation.
+// These are emitted as Kubernetes Warning events and are visible
+// via `kubectl describe storagecluster <name>` under the Events section.
+const (
+	// eventReasonFDBNotReady is emitted when the FDB health check endpoint
+	// returns a non-2xx status or a connection error, indicating the backend
+	// is not yet ready to accept cluster creation requests.
+	eventReasonFDBNotReady = "FDBNotReady"
+
+	// eventReasonBackupCredentialsError is emitted when the backup credentials
+	// Secret referenced by spec.backup.credentialsSecretRef cannot be resolved
+	// (missing, unreadable, or lacking required keys).
+	eventReasonBackupCredentialsError = "BackupCredentialsError"
+
+	// eventReasonClusterLookupError is emitted when the controller fails to
+	// determine whether a cluster already exists in the namespace, preventing
+	// it from choosing the correct API endpoint.
+	eventReasonClusterLookupError = "ClusterLookupError"
+
+	// eventReasonClusterAuthError is emitted when cluster credentials cannot
+	// be retrieved from the cluster Secret, blocking any authenticated API call.
+	eventReasonClusterAuthError = "ClusterAuthError"
+
+	// eventReasonClusterCreationFailed is emitted when the cluster creation API
+	// call returns a non-2xx status. The event message includes the HTTP status
+	// code and the full response body so the root cause is visible without
+	// consulting controller logs.
+	eventReasonClusterCreationFailed = "ClusterCreationFailed"
+)
+
 // StorageClusterReconciler reconciles a StorageCluster object
 type StorageClusterReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	APIReader client.Reader
-}
-
-type ClusterFIRSTAPIResponse struct {
-	Results struct {
-		UUID        string `json:"uuid"`
-		Secret      string `json:"secret"`
-		NQN         string `json:"nqn"`
-		NDCS        int    `json:"distr_ndcs"`
-		NPCS        int    `json:"distr_npcs"`
-		Rebalancing bool   `json:"is_re_balancing"`
-		Status      string `json:"status"`
-	} `json:"results"`
-}
-
-type ClusterAPIResponse struct {
-	UUID        string `json:"id"`
-	Secret      string `json:"secret"`
-	NQN         string `json:"nqn"`
-	NDCS        int    `json:"distr_ndcs"`
-	NPCS        int    `json:"distr_npcs"`
-	Rebalancing bool   `json:"is_re_balancing"`
-	Status      string `json:"status"`
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 type CSICredentials struct {
@@ -80,6 +89,7 @@ type CSIClusterEntry struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -132,6 +142,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			err = fmt.Errorf("unexpected status %d", status)
 		}
 		log.Error(err, "FDB not ready", "status", status, "response", string(body))
+		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonFDBNotReady, "FDB health check failed (status=%d): %s", status, string(body))
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -140,6 +151,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	backupConfig, err := r.buildBackupConfig(ctx, clusterCR)
 	if err != nil {
 		log.Error(err, "Failed to resolve backup credentials", "secretName", clusterCR.Spec.Backup.CredentialsSecretRef.Name)
+		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonBackupCredentialsError, "Failed to resolve backup credentials: %v", err)
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	}
 
@@ -182,6 +194,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	exists, clusterUUID, clusterName, err := utils.ExistingClusterUUID(ctx, r.Client, req.Namespace)
 	if err != nil {
 		log.Error(err, "Failed to check existing cluster")
+		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterLookupError, "Failed to check existing cluster: %v", err)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -196,6 +209,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 				"clusterName", clusterName,
 				"clusterUUID", clusterUUID,
 			)
+			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterAuthError, "Failed to get cluster auth for %s: %v", clusterName, err)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 	}
@@ -207,7 +221,8 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		// Try to look it up by name and adopt it instead of failing.
 		existing, lookupErr := utils.GetClusterByName(ctx, apiClient, clusterSecret, clusterCR.Spec.ClusterName)
 		if lookupErr != nil || existing == nil {
-			log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
+      r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterCreationFailed, "Cluster creation failed (status=%d): %s", status, string(body))
+
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}
 		log.Info("Cluster already exists on backend, adopting", "clusterName", existing.Name, "uuid", existing.UUID)
@@ -235,18 +250,19 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// original := clusterCR.DeepCopy()
 
+	apiResp, err := webapi.ParseClusterResponse(body)
+	if err != nil {
+		log.Error(err, "Unable to parse cluster creation response", "raw", string(body))
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	if endpoint == "/api/v1/cluster/create_first/" {
-		var apiResp ClusterFIRSTAPIResponse
-		if err := json.Unmarshal(body, &apiResp); err != nil {
-			log.Error(err, "Unable to parse first cluster creation response", "raw", string(body))
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
 		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
 			if secret.Data == nil {
 				secret.Data = map[string][]byte{}
 			}
-			secret.Data["uuid"] = []byte(apiResp.Results.UUID)
-			secret.Data["secret"] = []byte(apiResp.Results.Secret)
+			secret.Data["uuid"] = []byte(apiResp.UUID)
+			secret.Data["secret"] = []byte(apiResp.Secret)
 			return nil
 		})
 
@@ -258,9 +274,9 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		err := r.upsertCSICredentialsSecret(
 			ctx,
 			clusterCR.Namespace,
-			apiResp.Results.UUID,
+			apiResp.UUID,
 			utils.ENDPOINT,
-			apiResp.Results.Secret,
+			apiResp.Secret,
 		)
 
 		if err != nil {
@@ -268,18 +284,12 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
-		clusterCR.Status.UUID = apiResp.Results.UUID
-		clusterCR.Status.Rebalancing = &apiResp.Results.Rebalancing
-		clusterCR.Status.Status = apiResp.Results.Status
-		clusterCR.Status.NQN = apiResp.Results.NQN
-		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.Results.NDCS, apiResp.Results.NPCS)
+		clusterCR.Status.UUID = apiResp.UUID
+		clusterCR.Status.Rebalancing = &apiResp.Rebalancing
+		clusterCR.Status.Status = apiResp.Status
+		clusterCR.Status.NQN = apiResp.NQN
+		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
 	} else {
-		var apiResp ClusterAPIResponse
-		if err := json.Unmarshal(body, &apiResp); err != nil {
-			log.Error(err, "Unable to parse cluster creation response", "raw", string(body))
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
 		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
 			if secret.Data == nil {
 				secret.Data = map[string][]byte{}
@@ -474,18 +484,18 @@ func (r *StorageClusterReconciler) handleDeletion(
 
 	log.Info("Handling deletion", "name", clusterCR.Name)
 
-	if !controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
+	if !controllerutil.ContainsFinalizer(clusterCR, utils.FinalizerStorageCluster) {
 		return ctrl.Result{}, true, nil
 	}
 
 	if clusterCR.Spec.Action == utils.ClusterActionActivate {
-		controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+		controllerutil.RemoveFinalizer(clusterCR, utils.FinalizerStorageCluster)
 		return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 	}
 
 	if clusterCR.Status.UUID == "" {
 		log.Info("Cluster has no UUID, removing finalizer without API call", "name", clusterCR.Name)
-		controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+		controllerutil.RemoveFinalizer(clusterCR, utils.FinalizerStorageCluster)
 		return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 	}
 
@@ -515,7 +525,7 @@ func (r *StorageClusterReconciler) handleDeletion(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
 	}
 
-	controllerutil.RemoveFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+	controllerutil.RemoveFinalizer(clusterCR, utils.FinalizerStorageCluster)
 	return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 }
 
@@ -524,11 +534,11 @@ func (r *StorageClusterReconciler) ensureFinalizer(
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 ) (bool, error) {
 
-	if controllerutil.ContainsFinalizer(clusterCR, "simplyblock.cluster.finalizer") {
+	if controllerutil.ContainsFinalizer(clusterCR, utils.FinalizerStorageCluster) {
 		return false, nil
 	}
 
-	controllerutil.AddFinalizer(clusterCR, "simplyblock.cluster.finalizer")
+	controllerutil.AddFinalizer(clusterCR, utils.FinalizerStorageCluster)
 	return true, r.Update(ctx, clusterCR)
 }
 
@@ -655,8 +665,8 @@ func (r *StorageClusterReconciler) reconcileActivate(
 		"response", string(body),
 	)
 
-	var resp ClusterAPIResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
+	resp, err := webapi.ParseClusterResponse(body)
+	if err != nil {
 		return r.failActivate(ctx, clusterCR, err)
 	}
 
@@ -751,8 +761,8 @@ func (r *StorageClusterReconciler) reconcileExpand(
 		return r.failExpand(ctx, clusterCR, err)
 	}
 
-	var resp ClusterAPIResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
+	resp, err := webapi.ParseClusterResponse(body)
+	if err != nil {
 		return r.failExpand(ctx, clusterCR, err)
 	}
 

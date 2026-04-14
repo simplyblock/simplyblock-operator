@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-manager/internal/utils"
 	webapimock "github.com/simplyblock/simplyblock-manager/internal/webapi/mock"
 )
 
@@ -36,7 +37,7 @@ func TestTaskReconcileAddsFinalizer(t *testing.T) {
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(task), current); err != nil {
 		t.Fatalf("failed to get task: %v", err)
 	}
-	if !contains(current.Finalizers, "simplyblock.task.finalizer") {
+	if !contains(current.Finalizers, utils.FinalizerTask) {
 		t.Fatalf("expected task finalizer to be added")
 	}
 }
@@ -46,7 +47,7 @@ func TestTaskReconcileDeletionRemovesFinalizer(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "task-b",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.task.finalizer"},
+			Finalizers: []string{utils.FinalizerTask},
 		},
 		Spec: simplyblockv1alpha1.TaskSpec{
 			ClusterName: "cluster-a",
@@ -69,7 +70,7 @@ func TestTaskReconcileDeletionRemovesFinalizer(t *testing.T) {
 		}
 		t.Fatalf("failed to get task: %v", err)
 	}
-	if contains(current.Finalizers, "simplyblock.task.finalizer") {
+	if contains(current.Finalizers, utils.FinalizerTask) {
 		t.Fatalf("expected task finalizer to be removed")
 	}
 }
@@ -79,7 +80,7 @@ func TestTaskReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "task-c",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.task.finalizer"},
+			Finalizers: []string{utils.FinalizerTask},
 		},
 		Spec: simplyblockv1alpha1.TaskSpec{
 			ClusterName: "cluster-missing",
@@ -116,7 +117,7 @@ func TestTaskReconcilePreventsStatusRegressionWhenSecretMissing(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "task-d",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.task.finalizer"},
+			Finalizers: []string{utils.FinalizerTask},
 		},
 		Spec: simplyblockv1alpha1.TaskSpec{
 			ClusterName: "cluster-a",
@@ -174,7 +175,7 @@ func TestTaskReconcileWorksInNonDefaultNamespace(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "task-nondefault",
 			Namespace:  ns,
-			Finalizers: []string{"simplyblock.task.finalizer"},
+			Finalizers: []string{utils.FinalizerTask},
 		},
 		Spec: simplyblockv1alpha1.TaskSpec{
 			ClusterName: clusterName,
@@ -239,7 +240,7 @@ func TestTaskReconcileFiltersCompletedTasksViaMock(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "task-mock",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.task.finalizer"},
+			Finalizers: []string{utils.FinalizerTask},
 		},
 		Spec: simplyblockv1alpha1.TaskSpec{
 			ClusterName: "cluster-a",
@@ -296,7 +297,7 @@ func TestTaskReconcileNon2xxTaskAPIRequeuesAndPreservesStatus(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "task-mock-non2xx",
 			Namespace:  "default",
-			Finalizers: []string{"simplyblock.task.finalizer"},
+			Finalizers: []string{utils.FinalizerTask},
 		},
 		Spec: simplyblockv1alpha1.TaskSpec{
 			ClusterName: "cluster-a",

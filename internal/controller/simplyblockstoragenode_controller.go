@@ -285,11 +285,11 @@ func (r *StorageNodeReconciler) handleDeletion(
 		return false, nil
 	}
 
-	if !controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
+	if !controllerutil.ContainsFinalizer(snCR, utils.FinalizerStorageNode) {
 		return true, nil
 	}
 
-	controllerutil.RemoveFinalizer(snCR, "simplyblock.storagenode.finalizer")
+	controllerutil.RemoveFinalizer(snCR, utils.FinalizerStorageNode)
 	return true, r.Update(ctx, snCR)
 }
 
@@ -298,11 +298,11 @@ func (r *StorageNodeReconciler) ensureFinalizer(
 	snCR *simplyblockv1alpha1.StorageNode,
 ) (bool, error) {
 
-	if controllerutil.ContainsFinalizer(snCR, "simplyblock.storagenode.finalizer") {
+	if controllerutil.ContainsFinalizer(snCR, utils.FinalizerStorageNode) {
 		return false, nil
 	}
 
-	controllerutil.AddFinalizer(snCR, "simplyblock.storagenode.finalizer")
+	controllerutil.AddFinalizer(snCR, utils.FinalizerStorageNode)
 	return true, r.Update(ctx, snCR)
 }
 

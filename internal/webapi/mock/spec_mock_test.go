@@ -28,7 +28,7 @@ func TestSpecServerRejectsUnknownPathWhenStrict(t *testing.T) {
 	s := NewSpecServerFromFile(t, "../../../openapi.json", false)
 	defer s.Close()
 
-	resp, err := http.Get(s.URL() + "/api/v2/clusters/c1/tasks/")
+	resp, err := http.Get(s.URL() + "/api/v2/clusters/c1/nonexistent-endpoint/")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}

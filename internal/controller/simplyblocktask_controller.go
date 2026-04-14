@@ -72,11 +72,11 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	if !taskCR.DeletionTimestamp.IsZero() {
-		if utils.ContainsString(taskCR.Finalizers, "simplyblock.task.finalizer") {
+		if utils.ContainsString(taskCR.Finalizers, utils.FinalizerTask) {
 			// TODO: add any cleanup logic needed before task deletion
 
 			// Remove finalizer
-			taskCR.Finalizers = utils.RemoveString(taskCR.Finalizers, "simplyblock.task.finalizer")
+			taskCR.Finalizers = utils.RemoveString(taskCR.Finalizers, utils.FinalizerTask)
 			if err := r.Update(ctx, taskCR); err != nil {
 				log.Error(err, "Failed to remove finalizer from task", "task", taskCR.Name)
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -88,8 +88,8 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	// --- Add finalizer if not present ---
-	if !controllerutil.ContainsFinalizer(taskCR, "simplyblock.task.finalizer") {
-		controllerutil.AddFinalizer(taskCR, "simplyblock.task.finalizer")
+	if !controllerutil.ContainsFinalizer(taskCR, utils.FinalizerTask) {
+		controllerutil.AddFinalizer(taskCR, utils.FinalizerTask)
 		if err := r.Update(ctx, taskCR); err != nil {
 			return ctrl.Result{}, err
 		}

@@ -82,7 +82,7 @@ func TestDoAgainstStrictSpecMockReturns400ForUnknownPath(t *testing.T) {
 		context.Background(),
 		"secret",
 		http.MethodGet,
-		"/api/v2/clusters/cluster-uuid/tasks/",
+		"/api/v2/clusters/cluster-uuid/nonexistent-endpoint/",
 		nil,
 	)
 	if err != nil {

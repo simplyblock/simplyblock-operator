@@ -2,8 +2,6 @@ package utils
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -316,8 +314,8 @@ func IsClusterActive(
 		)
 	}
 
-	var resp ClusterGetResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
+	resp, err := webapi.ParseClusterResponse(body)
+	if err != nil {
 		return false, "", err
 	}
 

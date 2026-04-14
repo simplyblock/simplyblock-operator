@@ -95,7 +95,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	apiClient := webapi.NewClient()
 
 	if !poolCR.DeletionTimestamp.IsZero() {
-		if utils.ContainsString(poolCR.Finalizers, "simplyblock.pool.finalizer") && poolCR.Status.UUID != "" {
+		if utils.ContainsString(poolCR.Finalizers, utils.FinalizerPool) && poolCR.Status.UUID != "" {
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
 			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
 			if err != nil || status >= 300 {
@@ -106,7 +106,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 			}
 
-			poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, "simplyblock.pool.finalizer")
+			poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, utils.FinalizerPool)
 			if err := r.Update(ctx, poolCR); err != nil {
 				log.Error(err, "Failed to remove finalizer")
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -117,8 +117,8 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, nil
 	}
 
-	if !controllerutil.ContainsFinalizer(poolCR, "simplyblock.pool.finalizer") {
-		controllerutil.AddFinalizer(poolCR, "simplyblock.pool.finalizer")
+	if !controllerutil.ContainsFinalizer(poolCR, utils.FinalizerPool) {
+		controllerutil.AddFinalizer(poolCR, utils.FinalizerPool)
 		if err := r.Update(ctx, poolCR); err != nil {
 			return ctrl.Result{}, err
 		}
