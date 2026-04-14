@@ -128,8 +128,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	if clusterCR.Status.UUID != "" {
-		// Cluster already exists
-		return ctrl.Result{}, nil
+		return r.syncStatus(ctx, clusterCR)
 	}
 
 	apiClient := webapi.NewClient()
@@ -810,6 +809,61 @@ func (r *StorageClusterReconciler) upsertCSICredentialsSecret(
 	})
 
 	return err
+}
+
+// syncStatus fetches live cluster status from the backend API and patches the
+// CR status when it differs from the last observed value. It requeues every 30
+// seconds so transient backend transitions (degraded, suspended, in_expansion,
+// read_only) are reflected in the CR without any user-initiated action.
+func (r *StorageClusterReconciler) syncStatus(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	if err != nil {
+		log.Error(err, "syncStatus: failed to get cluster auth", "name", clusterCR.Name)
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	apiClient := webapi.NewClient()
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterCR.Status.UUID)
+
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
+		log.Error(err, "syncStatus: GET cluster failed", "name", clusterCR.Name, "status", status)
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	resp, err := webapi.ParseClusterResponse(body)
+	if err != nil {
+		log.Error(err, "syncStatus: failed to parse cluster response", "name", clusterCR.Name)
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	if resp.Status == clusterCR.Status.Status &&
+		resp.NQN == clusterCR.Status.NQN &&
+		(clusterCR.Status.Rebalancing == nil || resp.Rebalancing == *clusterCR.Status.Rebalancing) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	patch := client.MergeFrom(clusterCR.DeepCopy())
+	clusterCR.Status.Status = resp.Status
+	clusterCR.Status.NQN = resp.NQN
+	clusterCR.Status.Rebalancing = &resp.Rebalancing
+	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
+
+	if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
+		log.Error(err, "syncStatus: failed to patch cluster status", "name", clusterCR.Name)
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	log.Info("syncStatus: cluster status updated", "name", clusterCR.Name, "status", resp.Status)
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
 func capacityThreshold(t *simplyblockv1alpha1.CapacityThresholdSpec) int {
