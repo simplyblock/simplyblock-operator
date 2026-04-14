@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -37,10 +38,41 @@ import (
 	"github.com/simplyblock/simplyblock-manager/internal/webapi"
 )
 
+// Event reason constants for StorageCluster reconciliation.
+// These are emitted as Kubernetes Warning events and are visible
+// via `kubectl describe storagecluster <name>` under the Events section.
+const (
+	// eventReasonFDBNotReady is emitted when the FDB health check endpoint
+	// returns a non-2xx status or a connection error, indicating the backend
+	// is not yet ready to accept cluster creation requests.
+	eventReasonFDBNotReady = "FDBNotReady"
+
+	// eventReasonBackupCredentialsError is emitted when the backup credentials
+	// Secret referenced by spec.backup.credentialsSecretRef cannot be resolved
+	// (missing, unreadable, or lacking required keys).
+	eventReasonBackupCredentialsError = "BackupCredentialsError"
+
+	// eventReasonClusterLookupError is emitted when the controller fails to
+	// determine whether a cluster already exists in the namespace, preventing
+	// it from choosing the correct API endpoint.
+	eventReasonClusterLookupError = "ClusterLookupError"
+
+	// eventReasonClusterAuthError is emitted when cluster credentials cannot
+	// be retrieved from the cluster Secret, blocking any authenticated API call.
+	eventReasonClusterAuthError = "ClusterAuthError"
+
+	// eventReasonClusterCreationFailed is emitted when the cluster creation API
+	// call returns a non-2xx status. The event message includes the HTTP status
+	// code and the full response body so the root cause is visible without
+	// consulting controller logs.
+	eventReasonClusterCreationFailed = "ClusterCreationFailed"
+)
+
 // StorageClusterReconciler reconciles a StorageCluster object
 type StorageClusterReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 type CSICredentials struct {
@@ -57,6 +89,7 @@ type CSIClusterEntry struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -108,6 +141,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			err = fmt.Errorf("unexpected status %d", status)
 		}
 		log.Error(err, "FDB not ready", "status", status, "response", string(body))
+		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonFDBNotReady, "FDB health check failed (status=%d): %s", status, string(body))
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -116,6 +150,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	backupConfig, err := r.buildBackupConfig(ctx, clusterCR)
 	if err != nil {
 		log.Error(err, "Failed to resolve backup credentials", "secretName", clusterCR.Spec.Backup.CredentialsSecretRef.Name)
+		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonBackupCredentialsError, "Failed to resolve backup credentials: %v", err)
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	}
 
@@ -158,6 +193,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	exists, clusterUUID, clusterName, err := utils.ExistingClusterUUID(ctx, r.Client, req.Namespace)
 	if err != nil {
 		log.Error(err, "Failed to check existing cluster")
+		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterLookupError, "Failed to check existing cluster: %v", err)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -172,6 +208,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 				"clusterName", clusterName,
 				"clusterUUID", clusterUUID,
 			)
+			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterAuthError, "Failed to get cluster auth for %s: %v", clusterName, err)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 	}
@@ -182,6 +219,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			err = fmt.Errorf("unexpected status %d", status)
 		}
 		log.Error(err, "Cluster creation failed", "status", status, "response", string(body))
+		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterCreationFailed, "Cluster creation failed (status=%d): %s", status, string(body))
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	}
 
