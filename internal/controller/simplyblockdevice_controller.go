@@ -244,7 +244,7 @@ func (r *DeviceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		"deviceCount", len(newStatus),
 	)
 
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

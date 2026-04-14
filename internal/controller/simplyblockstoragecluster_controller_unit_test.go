@@ -662,7 +662,7 @@ func TestStorageClusterReconcileActivateViaMock(t *testing.T) {
 		webapimock.RouteResponse{
 			Status: http.StatusOK,
 			Body: `{
-				"uuid":"` + clusterUUID + `",
+				"id":"` + clusterUUID + `",
 				"status":"active",
 				"distr_ndcs":2,
 				"distr_npcs":1,
@@ -754,7 +754,7 @@ func TestStorageClusterReconcileExpandViaMock(t *testing.T) {
 		webapimock.RouteResponse{
 			Status: http.StatusOK,
 			Body: `{
-				"uuid":"` + clusterUUID + `",
+				"id":"` + clusterUUID + `",
 				"status":"active",
 				"distr_ndcs":3,
 				"distr_npcs":1,
@@ -1098,7 +1098,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			webapimock.RouteResponse{
 				Status: http.StatusOK,
 				Body: `{
-					"uuid":"cluster-v2-new-uuid",
+					"id":"cluster-v2-new-uuid",
 					"secret":"cluster-v2-new-secret",
 					"nqn":"nqn.2026-04.io.simplyblock:cluster-v2-new",
 					"distr_ndcs":3,

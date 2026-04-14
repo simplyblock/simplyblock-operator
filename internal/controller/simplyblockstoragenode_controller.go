@@ -47,7 +47,7 @@ type StorageNodeReconciler struct {
 }
 
 type SNODEAPIResponse struct {
-	UUID      string `json:"uuid"`
+	UUID      string `json:"id"`
 	Status    string `json:"status"`
 	IP        string `json:"mgmt_ip"`
 	Health    bool   `json:"health_check"`
@@ -520,7 +520,7 @@ func waitForNodeOnline(
 		}
 
 		for _, res := range apiResp {
-			if res.IP == ip && res.Status == "online" && res.Health {
+			if res.IP == ip && res.Status == utils.NodeStatusOnline && res.Health {
 
 				for i := range snCR.Status.Nodes {
 					if snCR.Status.Nodes[i].Hostname == nodeName {
