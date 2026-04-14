@@ -141,6 +141,22 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 			case simplyblockv1alpha1.DrainPhaseComplete, simplyblockv1alpha1.DrainPhaseFailed:
 				removeDrainState(snCR, workerName)
 				log.Info("Cleared terminal drain state after uncordon", "node", workerName, "phase", state.Phase)
+				continue
+			case simplyblockv1alpha1.DrainPhaseDraining:
+				// Node uncordoned after reboot — advance to restart.
+				log.Info("Node uncordoned after drain; advancing to restart", "node", workerName)
+				requeue, advErr := r.advanceStateMachine(
+					ctx, snCR, state, apiClient, clusterUUID, clusterSecret, maxFaultTolerance,
+				)
+				if advErr != nil {
+					log.Error(advErr, "Drain state machine error on uncordon", "node", workerName)
+					state.Phase = simplyblockv1alpha1.DrainPhaseFailed
+					state.Message = advErr.Error()
+				}
+				upsertDrainState(snCR, *state)
+				if requeue > 0 && (nextRequeue == 0 || requeue < nextRequeue) {
+					nextRequeue = requeue
+				}
 			default:
 				// Unexpected uncordon mid-sequence (e.g., admin intervention).
 				log.Info("Node uncordoned mid-drain; aborting coordination", "node", workerName, "phase", state.Phase)
@@ -304,8 +320,8 @@ func (r *NodeDrainCoordinatorReconciler) handleShutdownCalled(
 	return 15 * time.Second, nil
 }
 
-// handleDraining waits for the SPDK stack to restart after the node reboot,
-// then calls the simplyblock restart API.
+// handleDraining is called once the node has been uncordoned and is Ready after
+// reboot. It verifies SPDK is reachable before calling the simplyblock restart API.
 func (r *NodeDrainCoordinatorReconciler) handleDraining(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
@@ -320,10 +336,10 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 		return 15 * time.Second, nil
 	}
 
-	// checkNodeInfoReachable is defined in simplyblockstoragenode_controller.go.
+	// Verify SPDK is reachable before calling restart.
 	if err := checkNodeInfoReachable(ctx, ip); err != nil {
-		state.Message = "waiting for SPDK to restart after node reboot"
-		log.Info("SPDK not yet reachable", "node", state.Hostname)
+		state.Message = "waiting for SPDK to become reachable after reboot"
+		log.Info("SPDK not yet reachable, will retry", "node", state.Hostname)
 		return 15 * time.Second, nil
 	}
 
@@ -332,10 +348,9 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 		return 15 * time.Second, nil
 	}
 
-	nodeAddr := fmt.Sprintf("%s:5000", ip)
 	restartPayload := map[string]any{
 		"force":        true,
-		"node_address": nodeAddr,
+		"node_address": ip,
 	}
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, restartPayload)
