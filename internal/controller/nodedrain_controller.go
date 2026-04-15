@@ -48,6 +48,10 @@ const (
 
 	// drainPDBPrefix is the prefix used for per-node PodDisruptionBudget names.
 	drainPDBPrefix = "simplyblock-drain-"
+
+	// managerPDBName is the name of the temporary PDB that protects the manager
+	// pod from eviction while it sets up storage PDB protection on its own node.
+	managerPDBName = "simplyblock-manager-self"
 )
 
 // NodeDrainCoordinatorReconciler coordinates graceful simplyblock node shutdown
@@ -77,6 +81,11 @@ const (
 type NodeDrainCoordinatorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// ManagerNodeName is the Kubernetes node this manager pod is running on,
+	// injected via the downward API (spec.nodeName). When set, the controller
+	// will create a temporary self-PDB to prevent premature eviction while
+	// setting up storage PDB protection on the same node.
+	ManagerNodeName string
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;update;patch
@@ -100,6 +109,12 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 	if err != nil {
 		// Not yet provisioned; nothing to gate.
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	// Clean up any stale manager self-PDB left over from a previous crash
+	// (e.g., manager was killed after creating its PDB but before deleting it).
+	if r.ManagerNodeName != "" {
+		r.cleanupManagerPDBIfStale(ctx, snCR)
 	}
 
 	// MaxFaultTolerance caps how many nodes can be simultaneously in the drain window.
@@ -257,6 +272,16 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 ) (time.Duration, error) {
 	log := logf.FromContext(ctx)
 
+	// If the manager is running on the node being drained, protect it first with
+	// a self-PDB so MCP cannot evict it while we set up storage protection below.
+	managerOnThisNode := r.ManagerNodeName != "" && r.ManagerNodeName == state.Hostname
+	if managerOnThisNode {
+		if err := r.ensureManagerPDB(ctx, snCR.Namespace); err != nil {
+			return 10 * time.Second, fmt.Errorf("create manager self-PDB: %w", err)
+		}
+		log.Info("Manager is on draining node; created self-PDB to prevent premature eviction", "node", state.Hostname)
+	}
+
 	// Label the storage pod and install a blocking PDB immediately — before the
 	// slot check — so MCP cannot evict this node's storage pod while it is
 	// waiting for a drain slot behind another in-progress drain.
@@ -265,6 +290,17 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 	}
 	if err := r.ensurePDB(ctx, snCR.Namespace, state.Hostname, 0); err != nil {
 		return 10 * time.Second, fmt.Errorf("create blocking PDB: %w", err)
+	}
+
+	// Storage is now protected. Release the manager self-PDB so MCP can evict
+	// and reschedule the manager onto another node, from which it will continue
+	// drain coordination with the storage PDB already in place.
+	if managerOnThisNode {
+		if err := r.deleteManagerPDB(ctx, snCR.Namespace); err != nil {
+			log.Error(err, "Failed to delete manager self-PDB; will retry")
+			return 10 * time.Second, nil
+		}
+		log.Info("Storage PDB in place; released manager self-PDB — manager will migrate to another node", "node", state.Hostname)
 	}
 
 	activeDrains := countActiveDrains(snCR)
@@ -553,6 +589,65 @@ func (r *NodeDrainCoordinatorReconciler) cleanupDrainResources(
 		}
 	}
 	return nil
+}
+
+// ensureManagerPDB creates a blocking PDB (maxUnavailable=0) for the manager
+// pod itself, preventing MCP from evicting the manager while storage PDB
+// protection is being set up on the same node.
+func (r *NodeDrainCoordinatorReconciler) ensureManagerPDB(ctx context.Context, namespace string) error {
+	maxUnavailable := intstr.FromInt32(0)
+	desired := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      managerPDBName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"simplyblock.io/managed-by": "drain-coordinator",
+			},
+		},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MaxUnavailable: &maxUnavailable,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": "simplyblock-manager",
+				},
+			},
+		},
+	}
+	existing := &policyv1.PodDisruptionBudget{}
+	err := r.Get(ctx, types.NamespacedName{Name: managerPDBName, Namespace: namespace}, existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, desired)
+	}
+	return err
+}
+
+// deleteManagerPDB removes the manager self-PDB, allowing MCP to evict and
+// reschedule the manager onto a non-draining node.
+func (r *NodeDrainCoordinatorReconciler) deleteManagerPDB(ctx context.Context, namespace string) error {
+	pdb := &policyv1.PodDisruptionBudget{}
+	err := r.Get(ctx, types.NamespacedName{Name: managerPDBName, Namespace: namespace}, pdb)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return r.Delete(ctx, pdb)
+}
+
+// cleanupManagerPDBIfStale deletes the manager self-PDB when the manager's own
+// node is no longer in the detected drain phase. This handles crash-recovery
+// where the PDB was created but the manager was killed before deleting it.
+func (r *NodeDrainCoordinatorReconciler) cleanupManagerPDBIfStale(ctx context.Context, snCR *simplyblockv1alpha1.StorageNode) {
+	log := logf.FromContext(ctx)
+	state := getDrainState(snCR, r.ManagerNodeName)
+	// PDB is only needed transiently during DrainPhaseDetected on the manager's node.
+	if state != nil && state.Phase == simplyblockv1alpha1.DrainPhaseDetected {
+		return
+	}
+	if err := r.deleteManagerPDB(ctx, snCR.Namespace); err != nil {
+		log.Error(err, "Failed to clean up stale manager self-PDB")
+	}
 }
 
 // SetupWithManager wires the controller to watch StorageNode CRs and k8s Nodes.

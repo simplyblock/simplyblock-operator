@@ -222,8 +222,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.NodeDrainCoordinatorReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		ManagerNodeName: os.Getenv("NODE_NAME"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NodeDrainCoordinator")
 		os.Exit(1)
