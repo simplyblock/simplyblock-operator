@@ -323,12 +323,12 @@ func (r *NodeDrainCoordinatorReconciler) handleShutdownCalled(
 		return 10 * time.Second, nil
 	}
 
-	// Shutdown confirmed — relax the PDB to allow drain to proceed.
-	if err := r.ensurePDB(ctx, snCR.Namespace, state.Hostname, 1); err != nil {
-		return 10 * time.Second, fmt.Errorf("relax PDB: %w", err)
+	// Shutdown confirmed — delete the PDB entirely to allow MCP to evict all pods.
+	if err := r.cleanupPDB(ctx, snCR.Namespace, state.Hostname); err != nil {
+		return 10 * time.Second, fmt.Errorf("delete PDB: %w", err)
 	}
 
-	log.Info("Node offline; PDB relaxed — drain can proceed", "node", state.Hostname)
+	log.Info("Node offline; PDB removed — drain can proceed", "node", state.Hostname)
 	state.Phase = simplyblockv1alpha1.DrainPhaseDraining
 	state.Message = "shutdown confirmed; drain allowed"
 	return 15 * time.Second, nil
@@ -509,8 +509,8 @@ func (r *NodeDrainCoordinatorReconciler) labelStoragePod(
 }
 
 // cleanupDrainResources deletes the per-node PDB and removes the drain label
-// from any pods that still carry it.
-func (r *NodeDrainCoordinatorReconciler) cleanupDrainResources(
+// cleanupPDB deletes the per-node PodDisruptionBudget.
+func (r *NodeDrainCoordinatorReconciler) cleanupPDB(
 	ctx context.Context,
 	namespace, nodeName string,
 ) error {
@@ -522,6 +522,18 @@ func (r *NodeDrainCoordinatorReconciler) cleanupDrainResources(
 		}
 	} else if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get PDB: %w", err)
+	}
+	return nil
+}
+
+// cleanupDrainResources deletes the per-node PDB and removes the drain label
+// from any pods that still carry it.
+func (r *NodeDrainCoordinatorReconciler) cleanupDrainResources(
+	ctx context.Context,
+	namespace, nodeName string,
+) error {
+	if err := r.cleanupPDB(ctx, namespace, nodeName); err != nil {
+		return err
 	}
 
 	// Remove drain label from any surviving pods (e.g., if eviction didn't happen).
