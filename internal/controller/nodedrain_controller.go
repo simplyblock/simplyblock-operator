@@ -260,7 +260,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 	// Label the storage pod and install a blocking PDB immediately — before the
 	// slot check — so MCP cannot evict this node's storage pod while it is
 	// waiting for a drain slot behind another in-progress drain.
-	if err := r.labelStoragePod(ctx, snCR.Namespace, snCR.Spec.ClusterName, state.Hostname); err != nil {
+	if err := r.labelStoragePod(ctx, snCR.Namespace, state.Hostname); err != nil {
 		return 10 * time.Second, fmt.Errorf("label storage pod: %w", err)
 	}
 	if err := r.ensurePDB(ctx, snCR.Namespace, state.Hostname, 0); err != nil {
@@ -464,38 +464,45 @@ func (r *NodeDrainCoordinatorReconciler) ensurePDB(
 	return r.Patch(ctx, existing, patch)
 }
 
-// labelStoragePod patches the storage-node DaemonSet pod running on nodeName
-// to add drainNodeLabelKey so the per-node PDB can select it.
+// labelStoragePod patches the SPDK pod (role=simplyblock-storage-node) and
+// simplyblock-webappapi pods running on nodeName with drainNodeLabelKey so the
+// per-node PDB can select and protect them during drain coordination.
+// These are regular pods (not DaemonSet-owned), so PDB eviction blocking works.
 func (r *NodeDrainCoordinatorReconciler) labelStoragePod(
 	ctx context.Context,
-	namespace, clusterName, nodeName string,
+	namespace, nodeName string,
 ) error {
-	podList := &corev1.PodList{}
-	if err := r.List(ctx, podList,
-		client.InNamespace(namespace),
-		client.MatchingLabels{
-			"app":                 "storage-node",
-			"simplyblock-cluster": clusterName,
-		},
-	); err != nil {
-		return fmt.Errorf("list storage pods: %w", err)
+	// Label selectors for pods that must be protected during drain.
+	targetSelectors := []map[string]string{
+		{"role": "simplyblock-storage-node"},
+		{"app": "simplyblock-webappapi"},
 	}
 
-	for i := range podList.Items {
-		pod := &podList.Items[i]
-		if pod.Spec.NodeName != nodeName {
-			continue
+	for _, selector := range targetSelectors {
+		podList := &corev1.PodList{}
+		if err := r.List(ctx, podList,
+			client.InNamespace(namespace),
+			client.MatchingLabels(selector),
+		); err != nil {
+			return fmt.Errorf("list pods %v: %w", selector, err)
 		}
-		if pod.Labels[drainNodeLabelKey] == nodeName {
-			continue // already labelled
-		}
-		patch := client.MergeFrom(pod.DeepCopy())
-		if pod.Labels == nil {
-			pod.Labels = map[string]string{}
-		}
-		pod.Labels[drainNodeLabelKey] = sanitizeLabelValue(nodeName)
-		if err := r.Patch(ctx, pod, patch); err != nil {
-			return fmt.Errorf("patch pod %s: %w", pod.Name, err)
+
+		for i := range podList.Items {
+			pod := &podList.Items[i]
+			if pod.Spec.NodeName != nodeName {
+				continue
+			}
+			if pod.Labels[drainNodeLabelKey] == sanitizeLabelValue(nodeName) {
+				continue // already labelled
+			}
+			patch := client.MergeFrom(pod.DeepCopy())
+			if pod.Labels == nil {
+				pod.Labels = map[string]string{}
+			}
+			pod.Labels[drainNodeLabelKey] = sanitizeLabelValue(nodeName)
+			if err := r.Patch(ctx, pod, patch); err != nil {
+				return fmt.Errorf("patch pod %s: %w", pod.Name, err)
+			}
 		}
 	}
 	return nil
