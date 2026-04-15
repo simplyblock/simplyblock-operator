@@ -215,6 +215,19 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 			}
 			break
 		}
+
+		// If this node just became online and healthy (complete), stop processing
+		// further workers in this pass. The next node's shutdown will only begin
+		// once the completion is persisted and confirmed in a fresh reconcile cycle.
+		if prevPhase != simplyblockv1alpha1.DrainPhaseComplete &&
+			prevPhase != simplyblockv1alpha1.DrainPhaseFailed &&
+			(state.Phase == simplyblockv1alpha1.DrainPhaseComplete || state.Phase == simplyblockv1alpha1.DrainPhaseFailed) {
+			log.Info("Node drain complete; deferring next node shutdown to next reconcile", "node", workerName, "phase", state.Phase)
+			if nextRequeue == 0 {
+				nextRequeue = 5 * time.Second
+			}
+			break
+		}
 	}
 
 	if err := r.Status().Patch(ctx, snCR, patch); err != nil {
@@ -347,15 +360,15 @@ func (r *NodeDrainCoordinatorReconciler) handleShutdownCalled(
 		return 10 * time.Second, nil
 	}
 
-	backendStatus, err := getBackendNodeStatus(ctx, apiClient, clusterSecret, clusterUUID, nodeUUID)
+	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, nodeUUID)
 	if err != nil {
 		log.Info("Failed to poll backend node status, retrying", "node", state.Hostname, "err", err)
 		return 10 * time.Second, nil
 	}
 
-	if backendStatus != "offline" {
-		state.Message = fmt.Sprintf("waiting for offline, current: %s", backendStatus)
-		log.Info("Node not offline yet", "node", state.Hostname, "status", backendStatus)
+	if nodeInfo.Status != "offline" {
+		state.Message = fmt.Sprintf("waiting for offline, current: %s", nodeInfo.Status)
+		log.Info("Node not offline yet", "node", state.Hostname, "status", nodeInfo.Status)
 		return 10 * time.Second, nil
 	}
 
@@ -434,15 +447,34 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 		return 10 * time.Second, nil
 	}
 
-	backendStatus, err := getBackendNodeStatus(ctx, apiClient, clusterSecret, clusterUUID, nodeUUID)
+	// First verify the Kubernetes node itself is Ready.
+	node := &corev1.Node{}
+	if err := r.Get(ctx, types.NamespacedName{Name: state.Hostname}, node); err != nil {
+		log.Info("Failed to get node for readiness check, retrying", "node", state.Hostname, "err", err)
+		return 10 * time.Second, nil
+	}
+	if !isNodeReady(node) {
+		state.Message = "waiting for Kubernetes node to become Ready"
+		log.Info("Node not Ready yet", "node", state.Hostname)
+		return 10 * time.Second, nil
+	}
+
+	// Then confirm the simplyblock backend reports the node as online and healthy.
+	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, nodeUUID)
 	if err != nil {
 		log.Info("Failed to poll backend node status after restart, retrying", "node", state.Hostname, "err", err)
 		return 10 * time.Second, nil
 	}
 
-	if backendStatus != "online" {
-		state.Message = fmt.Sprintf("waiting for online, current: %s", backendStatus)
-		log.Info("Node not online yet", "node", state.Hostname, "status", backendStatus)
+	if nodeInfo.Status != "online" {
+		state.Message = fmt.Sprintf("Kubernetes node Ready; waiting for backend online, current: %s", nodeInfo.Status)
+		log.Info("Node not online yet", "node", state.Hostname, "status", nodeInfo.Status)
+		return 10 * time.Second, nil
+	}
+
+	if !nodeInfo.Healthy {
+		state.Message = "node online; waiting for storage node health check to pass"
+		log.Info("Storage node health check not passing yet", "node", state.Hostname)
 		return 10 * time.Second, nil
 	}
 
@@ -695,28 +727,32 @@ func (r *NodeDrainCoordinatorReconciler) nodeToStorageNodeRequests(
 
 /* -------------------- helpers -------------------- */
 
-// getBackendNodeStatus fetches the backend status string for a node UUID.
-func getBackendNodeStatus(
+// backendNodeInfo holds the relevant fields from the storage-nodes API response.
+type backendNodeInfo struct {
+	Status  string `json:"status"`
+	Healthy bool   `json:"health_check"`
+}
+
+// getBackendNodeInfo fetches status and health_check for a node UUID.
+func getBackendNodeInfo(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterSecret, clusterUUID, nodeUUID string,
-) (string, error) {
+) (backendNodeInfo, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
 	body, statusCode, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
 	if err != nil || statusCode >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", statusCode, string(body))
 		}
-		return "", err
+		return backendNodeInfo{}, err
 	}
 
-	var resp struct {
-		Status string `json:"status"`
+	var info backendNodeInfo
+	if err := json.Unmarshal(body, &info); err != nil {
+		return backendNodeInfo{}, fmt.Errorf("unmarshal node info: %w", err)
 	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", fmt.Errorf("unmarshal node status: %w", err)
-	}
-	return resp.Status, nil
+	return info, nil
 }
 
 // getDrainState returns the drain state entry for the given hostname, or nil.
@@ -774,6 +810,16 @@ func findNodeUUID(snCR *simplyblockv1alpha1.StorageNode, hostname string) string
 		}
 	}
 	return ""
+}
+
+// isNodeReady returns true when the node has a Ready condition with status True.
+func isNodeReady(node *corev1.Node) bool {
+	for _, cond := range node.Status.Conditions {
+		if cond.Type == corev1.NodeReady {
+			return cond.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // sanitizeLabelValue truncates to 63 chars (Kubernetes label value limit).
