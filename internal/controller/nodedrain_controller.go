@@ -366,7 +366,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 		log.Info("Storage PDB in place; released manager self-PDB — manager will migrate to another node", "node", state.Hostname)
 	}
 
-	activeDrains := countActiveDrains(snCR)
+	activeDrains := countActiveDrains(ctx, snCR, apiClient, clusterUUID, clusterSecret)
 	if activeDrains >= maxFaultTolerance {
 		state.Message = fmt.Sprintf("waiting for drain slot (%d/%d active)", activeDrains, maxFaultTolerance)
 		log.Info("No drain slot available, blocking PDB in place", "node", state.Hostname, "active", activeDrains, "max", maxFaultTolerance)
@@ -867,18 +867,50 @@ func removeDrainState(snCR *simplyblockv1alpha1.StorageNode, hostname string) {
 }
 
 // countActiveDrains returns the number of nodes currently in the active drain
-// window (shutdown_called, draining, or restart_called).
-func countActiveDrains(snCR *simplyblockv1alpha1.StorageNode) int {
-	count := 0
+// window. It takes the maximum of:
+//  1. Controller drain state (phases: shutdown_called, draining, restart_called)
+//  2. Backend node status (in_shutdown, in_restart) for all registered nodes
+//
+// Using the backend as the authoritative source prevents a controller crash/restart
+// from resetting the active count to 0 while nodes are still transitioning in the backend.
+func countActiveDrains(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+	apiClient *webapi.Client,
+	clusterUUID, clusterSecret string,
+) int {
+	// Count from controller drain state.
+	controllerCount := 0
 	for _, s := range snCR.Status.DrainCoordination {
 		switch s.Phase {
 		case simplyblockv1alpha1.DrainPhaseShutdownCalled,
 			simplyblockv1alpha1.DrainPhaseDraining,
 			simplyblockv1alpha1.DrainPhaseRestartCalled:
-			count++
+			controllerCount++
 		}
 	}
-	return count
+
+	// Count from backend status — covers nodes active in the backend but not
+	// yet reflected in controller state (e.g., after a controller restart).
+	backendCount := 0
+	for _, n := range snCR.Status.Nodes {
+		if n.UUID == "" {
+			continue
+		}
+		info, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, n.UUID)
+		if err != nil {
+			continue
+		}
+		switch info.Status {
+		case "in_shutdown", "in_restart":
+			backendCount++
+		}
+	}
+
+	if backendCount > controllerCount {
+		return backendCount
+	}
+	return controllerCount
 }
 
 // findNodeUUID returns the backend UUID for the given hostname from StorageNode status.
