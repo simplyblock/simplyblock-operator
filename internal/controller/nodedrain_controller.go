@@ -280,7 +280,7 @@ func (r *NodeDrainCoordinatorReconciler) processUncordoned(
 			if requeue == 0 {
 				requeue = 5 * time.Second
 			}
-			shouldBreak = true
+			return requeue, true
 		}
 	case simplyblockv1alpha1.DrainPhaseShutdownCalled:
 		// Node uncordoned while waiting for backend to go offline — continue polling.
