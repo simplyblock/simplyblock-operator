@@ -591,9 +591,13 @@ func (r *NodeDrainCoordinatorReconciler) labelStoragePod(
 	namespace, nodeName string,
 ) error {
 	// Label selectors for pods that must be protected during drain.
+	// FDB pods are included so that coordinators and log processes are not
+	// evicted before the simplyblock shutdown is confirmed — losing an FDB
+	// process mid-shutdown causes transaction timeouts in the webAPI.
 	targetSelectors := []map[string]string{
 		{"role": "simplyblock-storage-node"},
 		{"app": "simplyblock-webappapi"},
+		{"foundationdb.org/fdb-cluster-name": "simplyblock-fdb-cluster"},
 	}
 
 	for _, selector := range targetSelectors {
