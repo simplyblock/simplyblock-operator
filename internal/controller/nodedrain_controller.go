@@ -378,6 +378,31 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 		return 15 * time.Second, fmt.Errorf("node %s not yet registered with backend (UUID missing)", state.Hostname)
 	}
 
+	// Check backend status before calling shutdown — the node may already be
+	// in_shutdown or offline from a previous (possibly crashed) reconcile run.
+	// In that case skip the API call and advance the phase directly.
+	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, nodeUUID)
+	if err != nil {
+		log.Info("Failed to query backend node status before shutdown, retrying", "node", state.Hostname, "err", err)
+		return 15 * time.Second, nil
+	}
+
+	switch nodeInfo.Status {
+	case "offline":
+		log.Info("Backend already offline; skipping shutdown API call", "node", state.Hostname)
+		if err := r.cleanupPDB(ctx, snCR.Namespace, state.Hostname); err != nil {
+			return 10 * time.Second, fmt.Errorf("delete PDB: %w", err)
+		}
+		state.Phase = simplyblockv1alpha1.DrainPhaseDraining
+		state.Message = "backend already offline; drain allowed"
+		return 15 * time.Second, nil
+	case "in_shutdown":
+		log.Info("Backend already in_shutdown; advancing to shutdown_called phase", "node", state.Hostname)
+		state.Phase = simplyblockv1alpha1.DrainPhaseShutdownCalled
+		state.Message = "backend already in_shutdown; waiting for offline confirmation"
+		return 10 * time.Second, nil
+	}
+
 	// Call simplyblock shutdown API.
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown?force=true", clusterUUID, nodeUUID)
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
