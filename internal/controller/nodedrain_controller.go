@@ -265,12 +265,23 @@ func (r *NodeDrainCoordinatorReconciler) processUncordoned(
 		// Node uncordoned while restart polling is in progress — this is expected
 		// (MCP uncordons after reboot). Continue polling for online + health.
 		log.Info("Node uncordoned during restart polling; continuing", "node", workerName)
+		prevPhase := state.Phase
 		var err error
 		requeue, err = r.handleRestartCalled(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
 		if err != nil {
 			log.Error(err, "handleRestartCalled failed after uncordon", "node", workerName)
 		}
 		upsertDrainState(snCR, *state)
+		// If this node just completed, stop the loop so the next node's shutdown
+		// only begins on the next reconcile cycle after completion is persisted.
+		if prevPhase != simplyblockv1alpha1.DrainPhaseComplete &&
+			(state.Phase == simplyblockv1alpha1.DrainPhaseComplete || state.Phase == simplyblockv1alpha1.DrainPhaseFailed) {
+			log.Info("Node drain complete via uncordon path; deferring next node to next reconcile", "node", workerName)
+			if requeue == 0 {
+				requeue = 5 * time.Second
+			}
+			shouldBreak = true
+		}
 	case simplyblockv1alpha1.DrainPhaseShutdownCalled:
 		// Node uncordoned while waiting for backend to go offline — continue polling.
 		log.Info("Node uncordoned during shutdown polling; continuing", "node", workerName)
