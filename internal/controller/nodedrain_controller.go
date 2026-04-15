@@ -133,6 +133,30 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 	patch := client.MergeFrom(snCR.DeepCopy())
 	nextRequeue := time.Duration(0)
 
+	// Pre-create blocking PDBs for all worker nodes before processing any
+	// cordon events. This eliminates the race window where MCP cordons and
+	// evicts the SPDK pod before the controller has a chance to label it and
+	// create the per-node PDB. The PDB is deleted only after drain completes.
+	for _, workerName := range snCR.Spec.WorkerNodes {
+		// Skip nodes that are already in an active drain — their PDB lifecycle
+		// is managed by the drain state machine (deleted after offline confirmed).
+		state := getDrainState(snCR, workerName)
+		if state != nil {
+			switch state.Phase {
+			case simplyblockv1alpha1.DrainPhaseShutdownCalled,
+				simplyblockv1alpha1.DrainPhaseDraining,
+				simplyblockv1alpha1.DrainPhaseRestartCalled:
+				continue
+			}
+		}
+		if err := r.labelStoragePod(ctx, snCR.Namespace, workerName); err != nil {
+			log.Error(err, "Failed to pre-label storage pods", "node", workerName)
+		}
+		if err := r.ensurePDB(ctx, snCR.Namespace, workerName, 0); err != nil {
+			log.Error(err, "Failed to pre-create blocking PDB", "node", workerName)
+		}
+	}
+
 	for _, workerName := range snCR.Spec.WorkerNodes {
 		requeue, shouldBreak := r.processWorker(
 			ctx, snCR, workerName, apiClient, clusterUUID, clusterSecret, maxFaultTolerance,
@@ -903,6 +927,8 @@ func countActiveDrains(
 
 	// Count from backend status — covers nodes active in the backend but not
 	// yet reflected in controller state (e.g., after a controller restart).
+	// On API error, conservatively count the node as active to prevent a
+	// transient failure from opening the drain slot.
 	backendCount := 0
 	for _, n := range snCR.Status.Nodes {
 		if n.UUID == "" {
@@ -910,6 +936,8 @@ func countActiveDrains(
 		}
 		info, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, n.UUID)
 		if err != nil {
+			// Cannot determine state — treat as active to be safe.
+			backendCount++
 			continue
 		}
 		switch info.Status {
