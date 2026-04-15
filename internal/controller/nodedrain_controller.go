@@ -257,10 +257,31 @@ func (r *NodeDrainCoordinatorReconciler) processUncordoned(
 		removeDrainState(snCR, workerName)
 		log.Info("Cleared terminal drain state after uncordon", "node", workerName, "phase", state.Phase)
 	case simplyblockv1alpha1.DrainPhaseDraining:
+		// Node uncordoned after reboot — call restart.
 		log.Info("Node uncordoned after drain; calling restart", "node", workerName)
 		requeue = r.handleDraining(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
 		upsertDrainState(snCR, *state)
+	case simplyblockv1alpha1.DrainPhaseRestartCalled:
+		// Node uncordoned while restart polling is in progress — this is expected
+		// (MCP uncordons after reboot). Continue polling for online + health.
+		log.Info("Node uncordoned during restart polling; continuing", "node", workerName)
+		var err error
+		requeue, err = r.handleRestartCalled(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
+		if err != nil {
+			log.Error(err, "handleRestartCalled failed after uncordon", "node", workerName)
+		}
+		upsertDrainState(snCR, *state)
+	case simplyblockv1alpha1.DrainPhaseShutdownCalled:
+		// Node uncordoned while waiting for backend to go offline — continue polling.
+		log.Info("Node uncordoned during shutdown polling; continuing", "node", workerName)
+		var err error
+		requeue, err = r.handleShutdownCalled(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
+		if err != nil {
+			log.Error(err, "handleShutdownCalled failed after uncordon", "node", workerName)
+		}
+		upsertDrainState(snCR, *state)
 	default:
+		// Unexpected uncordon mid-sequence (e.g., admin intervention at detected phase).
 		log.Info("Node uncordoned mid-drain; aborting coordination", "node", workerName, "phase", state.Phase)
 		if cleanupErr := r.cleanupDrainResources(ctx, snCR.Namespace, workerName); cleanupErr != nil {
 			log.Error(cleanupErr, "Failed to clean up drain resources on abort", "node", workerName)
