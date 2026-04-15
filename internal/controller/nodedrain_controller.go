@@ -173,6 +173,7 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 			state = getDrainState(snCR, workerName)
 		}
 
+		prevPhase := state.Phase
 		requeue, advErr := r.advanceStateMachine(
 			ctx, snCR, state, apiClient, clusterUUID, clusterSecret, maxFaultTolerance,
 		)
@@ -185,6 +186,19 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 
 		if requeue > 0 && (nextRequeue == 0 || requeue < nextRequeue) {
 			nextRequeue = requeue
+		}
+
+		// If this node just entered the active drain window, stop processing
+		// further workers in this reconcile pass. The status patch below will
+		// persist the new state so the slot gate sees the correct active count
+		// on the next requeue.
+		if prevPhase == simplyblockv1alpha1.DrainPhaseDetected &&
+			state.Phase == simplyblockv1alpha1.DrainPhaseShutdownCalled {
+			log.Info("Node entered active drain window; deferring remaining workers to next reconcile", "node", workerName)
+			if nextRequeue == 0 {
+				nextRequeue = 10 * time.Second
+			}
+			break
 		}
 	}
 
