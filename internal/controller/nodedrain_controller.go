@@ -134,98 +134,13 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 	nextRequeue := time.Duration(0)
 
 	for _, workerName := range snCR.Spec.WorkerNodes {
-		node := &corev1.Node{}
-		if err := r.Get(ctx, types.NamespacedName{Name: workerName}, node); err != nil {
-			if !apierrors.IsNotFound(err) {
-				log.Error(err, "Failed to get worker node", "node", workerName)
-			}
-			continue
-		}
-
-		state := getDrainState(snCR, workerName)
-		cordoned := node.Spec.Unschedulable
-
-		// Normal operation: no cordon, no state.
-		if !cordoned && state == nil {
-			continue
-		}
-
-		// Node was uncordoned (possibly after reboot + MCO uncordon).
-		if !cordoned && state != nil {
-			switch state.Phase {
-			case simplyblockv1alpha1.DrainPhaseComplete, simplyblockv1alpha1.DrainPhaseFailed:
-				removeDrainState(snCR, workerName)
-				log.Info("Cleared terminal drain state after uncordon", "node", workerName, "phase", state.Phase)
-				continue
-			case simplyblockv1alpha1.DrainPhaseDraining:
-				// Node uncordoned after reboot — call restart directly.
-				log.Info("Node uncordoned after drain; calling restart", "node", workerName)
-				requeue := r.handleDraining(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
-				upsertDrainState(snCR, *state)
-				if requeue > 0 && (nextRequeue == 0 || requeue < nextRequeue) {
-					nextRequeue = requeue
-				}
-			default:
-				// Unexpected uncordon mid-sequence (e.g., admin intervention).
-				log.Info("Node uncordoned mid-drain; aborting coordination", "node", workerName, "phase", state.Phase)
-				if cleanupErr := r.cleanupDrainResources(ctx, snCR.Namespace, workerName); cleanupErr != nil {
-					log.Error(cleanupErr, "Failed to clean up drain resources on abort", "node", workerName)
-				}
-				removeDrainState(snCR, workerName)
-			}
-			continue
-		}
-
-		// Node is cordoned: initialise state if first observation.
-		if state == nil {
-			log.Info("Node cordoned — starting drain coordination", "node", workerName)
-			newState := simplyblockv1alpha1.NodeDrainState{
-				Hostname:  workerName,
-				Phase:     simplyblockv1alpha1.DrainPhaseDetected,
-				StartedAt: metav1.Now(),
-			}
-			upsertDrainState(snCR, newState)
-			state = getDrainState(snCR, workerName)
-		}
-
-		prevPhase := state.Phase
-		requeue, advErr := r.advanceStateMachine(
-			ctx, snCR, state, apiClient, clusterUUID, clusterSecret, maxFaultTolerance,
+		requeue, shouldBreak := r.processWorker(
+			ctx, snCR, workerName, apiClient, clusterUUID, clusterSecret, maxFaultTolerance,
 		)
-		if advErr != nil {
-			log.Error(advErr, "Drain state machine error", "node", workerName, "phase", state.Phase)
-			state.Phase = simplyblockv1alpha1.DrainPhaseFailed
-			state.Message = advErr.Error()
-		}
-		upsertDrainState(snCR, *state)
-
 		if requeue > 0 && (nextRequeue == 0 || requeue < nextRequeue) {
 			nextRequeue = requeue
 		}
-
-		// If this node just entered the active drain window, stop processing
-		// further workers in this reconcile pass. The status patch below will
-		// persist the new state so the slot gate sees the correct active count
-		// on the next requeue.
-		if prevPhase == simplyblockv1alpha1.DrainPhaseDetected &&
-			state.Phase == simplyblockv1alpha1.DrainPhaseShutdownCalled {
-			log.Info("Node entered active drain window; deferring remaining workers to next reconcile", "node", workerName)
-			if nextRequeue == 0 {
-				nextRequeue = 10 * time.Second
-			}
-			break
-		}
-
-		// If this node just became online and healthy (complete), stop processing
-		// further workers in this pass. The next node's shutdown will only begin
-		// once the completion is persisted and confirmed in a fresh reconcile cycle.
-		if prevPhase != simplyblockv1alpha1.DrainPhaseComplete &&
-			prevPhase != simplyblockv1alpha1.DrainPhaseFailed &&
-			(state.Phase == simplyblockv1alpha1.DrainPhaseComplete || state.Phase == simplyblockv1alpha1.DrainPhaseFailed) {
-			log.Info("Node drain complete; deferring next node shutdown to next reconcile", "node", workerName, "phase", state.Phase)
-			if nextRequeue == 0 {
-				nextRequeue = 5 * time.Second
-			}
+		if shouldBreak {
 			break
 		}
 	}
@@ -239,6 +154,120 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{RequeueAfter: nextRequeue}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// processWorker handles drain coordination for a single worker node in one
+// reconcile pass. It returns the desired requeue duration and whether the
+// outer worker loop should stop processing further nodes.
+func (r *NodeDrainCoordinatorReconciler) processWorker(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+	workerName string,
+	apiClient *webapi.Client,
+	clusterUUID, clusterSecret string,
+	maxFaultTolerance int,
+) (requeue time.Duration, shouldBreak bool) {
+	log := logf.FromContext(ctx)
+
+	node := &corev1.Node{}
+	if err := r.Get(ctx, types.NamespacedName{Name: workerName}, node); err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.Error(err, "Failed to get worker node", "node", workerName)
+		}
+		return 0, false
+	}
+
+	state := getDrainState(snCR, workerName)
+	cordoned := node.Spec.Unschedulable
+
+	// Normal operation: no cordon, no state.
+	if !cordoned && state == nil {
+		return 0, false
+	}
+
+	// Node was uncordoned (possibly after reboot + MCO uncordon).
+	if !cordoned && state != nil {
+		return r.processUncordoned(ctx, snCR, workerName, state, apiClient, clusterUUID, clusterSecret)
+	}
+
+	// Node is cordoned: initialise state if first observation.
+	if state == nil {
+		log.Info("Node cordoned — starting drain coordination", "node", workerName)
+		newState := simplyblockv1alpha1.NodeDrainState{
+			Hostname:  workerName,
+			Phase:     simplyblockv1alpha1.DrainPhaseDetected,
+			StartedAt: metav1.Now(),
+		}
+		upsertDrainState(snCR, newState)
+		state = getDrainState(snCR, workerName)
+	}
+
+	prevPhase := state.Phase
+	advRequeue, advErr := r.advanceStateMachine(
+		ctx, snCR, state, apiClient, clusterUUID, clusterSecret, maxFaultTolerance,
+	)
+	if advErr != nil {
+		log.Error(advErr, "Drain state machine error", "node", workerName, "phase", state.Phase)
+		state.Phase = simplyblockv1alpha1.DrainPhaseFailed
+		state.Message = advErr.Error()
+	}
+	upsertDrainState(snCR, *state)
+
+	// If this node just entered the active drain window, stop processing
+	// further workers in this reconcile pass so the slot gate sees the
+	// correct active count on the next requeue.
+	if prevPhase == simplyblockv1alpha1.DrainPhaseDetected &&
+		state.Phase == simplyblockv1alpha1.DrainPhaseShutdownCalled {
+		log.Info("Node entered active drain window; deferring remaining workers to next reconcile", "node", workerName)
+		if advRequeue == 0 {
+			advRequeue = 10 * time.Second
+		}
+		return advRequeue, true
+	}
+
+	// If this node just completed, stop processing further workers so the
+	// next node's shutdown only begins once completion is persisted.
+	if prevPhase != simplyblockv1alpha1.DrainPhaseComplete &&
+		prevPhase != simplyblockv1alpha1.DrainPhaseFailed &&
+		(state.Phase == simplyblockv1alpha1.DrainPhaseComplete || state.Phase == simplyblockv1alpha1.DrainPhaseFailed) {
+		log.Info("Node drain complete; deferring next node shutdown to next reconcile", "node", workerName, "phase", state.Phase)
+		if advRequeue == 0 {
+			advRequeue = 5 * time.Second
+		}
+		return advRequeue, true
+	}
+
+	return advRequeue, false
+}
+
+// processUncordoned handles a worker node that has been uncordoned while drain
+// state is still present (e.g., after reboot or admin intervention).
+func (r *NodeDrainCoordinatorReconciler) processUncordoned(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+	workerName string,
+	state *simplyblockv1alpha1.NodeDrainState,
+	apiClient *webapi.Client,
+	clusterUUID, clusterSecret string,
+) (requeue time.Duration, shouldBreak bool) {
+	log := logf.FromContext(ctx)
+
+	switch state.Phase {
+	case simplyblockv1alpha1.DrainPhaseComplete, simplyblockv1alpha1.DrainPhaseFailed:
+		removeDrainState(snCR, workerName)
+		log.Info("Cleared terminal drain state after uncordon", "node", workerName, "phase", state.Phase)
+	case simplyblockv1alpha1.DrainPhaseDraining:
+		log.Info("Node uncordoned after drain; calling restart", "node", workerName)
+		requeue = r.handleDraining(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
+		upsertDrainState(snCR, *state)
+	default:
+		log.Info("Node uncordoned mid-drain; aborting coordination", "node", workerName, "phase", state.Phase)
+		if cleanupErr := r.cleanupDrainResources(ctx, snCR.Namespace, workerName); cleanupErr != nil {
+			log.Error(cleanupErr, "Failed to clean up drain resources on abort", "node", workerName)
+		}
+		removeDrainState(snCR, workerName)
+	}
+	return requeue, false
 }
 
 // advanceStateMachine dispatches to the handler for the current drain phase.
