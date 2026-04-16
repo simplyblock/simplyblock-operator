@@ -1138,7 +1138,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 			t.Fatalf("unexpected node status length: %d", len(sn.Status.Nodes))
 		}
 		got := sn.Status.Nodes[0]
-		if got.Status != "online" || got.UUID != "node-uuid-1" {
+		if got.Status != utils.NodeStatusOnline || got.UUID != "node-uuid-1" {
 			t.Fatalf("node status not updated as expected: %#v", got)
 		}
 	})
