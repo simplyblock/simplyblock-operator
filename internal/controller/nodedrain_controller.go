@@ -223,6 +223,14 @@ func (r *NodeDrainCoordinatorReconciler) processWorker(
 
 	// Node is cordoned: initialise state if first observation.
 	if state == nil {
+		// Do not start drain coordination for a node that has never been online.
+		// MCP cordons new nodes for the initial KubeletConfig/MachineConfig reboot
+		// before the storage node is added — triggering drain here would create a
+		// blocking PDB and prevent the reboot from completing.
+		if !isWorkerOnline(snCR, workerName) {
+			log.Info("Node cordoned but not yet online — skipping drain coordination (node add reboot)", "node", workerName)
+			return 0, false
+		}
 		log.Info("Node cordoned — starting drain coordination", "node", workerName)
 		newState := simplyblockv1alpha1.NodeDrainState{
 			Hostname:  workerName,
