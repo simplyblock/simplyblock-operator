@@ -133,10 +133,11 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 	patch := client.MergeFrom(snCR.DeepCopy())
 	nextRequeue := time.Duration(0)
 
-	// Pre-create blocking PDBs for all worker nodes before processing any
-	// cordon events. This eliminates the race window where MCP cordons and
-	// evicts the SPDK pod before the controller has a chance to label it and
-	// create the per-node PDB. The PDB is deleted only after drain completes.
+	// Pre-create blocking PDBs for worker nodes that are already online in the
+	// backend. This protects SPDK/FDB/webappapi pods from being evicted by MCP
+	// before the drain state machine fires, while avoiding blocking the kubelet
+	// reboot that is required when a new node applies its KubeletConfig/MachineConfig
+	// for the first time (i.e. node add flow).
 	for _, workerName := range snCR.Spec.WorkerNodes {
 		// Skip nodes that are already in an active drain — their PDB lifecycle
 		// is managed by the drain state machine (deleted after offline confirmed).
@@ -148,6 +149,12 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 				simplyblockv1alpha1.DrainPhaseRestartCalled:
 				continue
 			}
+		}
+		// Only pre-create the PDB once the storage node is online — during the
+		// initial node-add flow the worker must be allowed to reboot freely to
+		// apply KubeletConfig/MachineConfig changes.
+		if !isWorkerOnline(snCR, workerName) {
+			continue
 		}
 		if err := r.labelStoragePod(ctx, snCR.Namespace, workerName); err != nil {
 			log.Error(err, "Failed to pre-label storage pods", "node", workerName)
@@ -963,6 +970,17 @@ func findNodeUUID(snCR *simplyblockv1alpha1.StorageNode, hostname string) string
 }
 
 // isNodeReady returns true when the node has a Ready condition with status True.
+// isWorkerOnline returns true if the worker node has status "online" in the
+// StorageNode status, meaning it has been fully added and is serving I/O.
+func isWorkerOnline(snCR *simplyblockv1alpha1.StorageNode, workerName string) bool {
+	for _, n := range snCR.Status.Nodes {
+		if n.Hostname == workerName {
+			return n.Status == "online"
+		}
+	}
+	return false
+}
+
 func isNodeReady(node *corev1.Node) bool {
 	for _, cond := range node.Status.Conditions {
 		if cond.Type == corev1.NodeReady {
