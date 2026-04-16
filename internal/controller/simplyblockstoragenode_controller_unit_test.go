@@ -1127,6 +1127,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 			clusterUUID,
 			"10.0.0.1",
 			"node-a",
+			1,
 			sn,
 			r,
 		)
@@ -1143,7 +1144,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 		}
 	})
 
-	t.Run("returns invariant error when node missing in status list", func(t *testing.T) {
+	t.Run("appends node status entry when node missing in status list", func(t *testing.T) {
 		const clusterName = "cluster-b"
 		const clusterUUID = "cluster-uuid-missing-status"
 
@@ -1199,14 +1200,19 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 			clusterUUID,
 			"10.0.0.2",
 			"node-b",
+			1,
 			sn,
 			r,
 		)
-		if err == nil {
-			t.Fatalf("expected invariant violation error for missing node status entry")
+		if err != nil {
+			t.Fatalf("waitForNodeOnline returned unexpected error: %v", err)
 		}
-		if !strings.Contains(err.Error(), "missing from status") {
-			t.Fatalf("unexpected error: %v", err)
+		if len(sn.Status.Nodes) != 1 {
+			t.Fatalf("expected 1 status entry, got %d", len(sn.Status.Nodes))
+		}
+		got := sn.Status.Nodes[0]
+		if got.Status != "online" || got.UUID != "node-uuid-2" || got.Hostname != "node-b" {
+			t.Fatalf("unexpected appended node status: %#v", got)
 		}
 	})
 }
@@ -1264,6 +1270,7 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 			clusterUUID,
 			"10.0.0.1",
 			"node-a",
+			1,
 			sn,
 			r,
 		)
@@ -1324,6 +1331,7 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 			clusterUUID,
 			"10.0.0.3",
 			"node-c",
+			1,
 			sn,
 			r,
 		)
@@ -1366,6 +1374,7 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 			clusterUUID,
 			"10.0.0.4",
 			"node-timeout",
+			1,
 			sn,
 			r,
 		)

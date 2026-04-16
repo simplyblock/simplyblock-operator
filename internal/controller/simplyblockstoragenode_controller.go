@@ -171,15 +171,20 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	expectedPerHost := utils.ExpectedNodesPerHost(snCR)
+
 	for _, nodeName := range snCR.Spec.WorkerNodes {
-		nodeExists := false
+		// Count status entries that have a UUID — these represent backend nodes
+		// that have been confirmed online at least once. For socket configs the
+		// control-plane creates expectedPerHost nodes per physical host, so we
+		// skip only when all of them are tracked.
+		trackedCount := 0
 		for _, n := range snCR.Status.Nodes {
-			if n.Hostname == nodeName {
-				nodeExists = true
-				break
+			if n.Hostname == nodeName && n.UUID != "" {
+				trackedCount++
 			}
 		}
-		if nodeExists {
+		if trackedCount >= expectedPerHost {
 			continue
 		}
 
@@ -189,74 +194,88 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{RequeueAfter: time.Second * 10}, nil
 		}
 
-		if err := checkNodeInfoReachable(ctx, ip); err != nil {
-			log.Info("Storage node API not reachable yet, requeueing",
-				"node", nodeName,
-				"ip", ip,
-				"error", err.Error(),
-			)
-
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
-		nodeAddress := fmt.Sprintf("%s:5000", ip)
-		params := utils.StorageNodeAddParams{
-			NodeAddress:         nodeAddress,
-			InterfaceName:       snCR.Spec.MgmtIfname,
-			SPDKImage:           snCR.Spec.SpdkImage,
-			SPDKDebug:           false,
-			IdDeviceByNQN:       false,
-			DataNics:            snCR.Spec.DataIfname,
-			Namespace:           snCR.Namespace,
-			JMPercent:           journalManagerPercentPerDevice(snCR),
-			Partitions:          utils.IntPtrOrDefault(snCR.Spec.Partitions, 1),
-			IOBufSmallPoolCount: 0,
-			IOBufLargePoolCount: 0,
-			HaJMCount:           journalManagerCount(snCR),
-			CRName:              snCR.Name,
-			CRNameSpace:         snCR.Namespace,
-			CRPlural:            "storagenodes",
-			Format4K:            utils.BoolPtrOrFalse(snCR.Spec.ForceFormat4K),
-		}
-
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
-
-		jsonParams, err := json.MarshalIndent(params, "", "  ")
-		if err != nil {
-			log.Error(err, "Failed to marshal params")
-		} else {
-			log.Info("Sending Storage Node Add Request",
-				"endpoint", endpoint,
-				"request_body", string(jsonParams),
-			)
-		}
-
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
-		if err != nil || status >= 300 {
-			if err == nil {
-				err = fmt.Errorf("unexpected status %d", status)
+		// Only send the POST if no placeholder entry exists yet for this host.
+		// A placeholder (UUID=="") means the POST was already sent and we are
+		// still waiting for the backend to bring the node(s) online.
+		hasPlaceholder := false
+		for _, n := range snCR.Status.Nodes {
+			if n.Hostname == nodeName && n.UUID == "" {
+				hasPlaceholder = true
+				break
 			}
-			log.Error(err, "StorageNode creation failed", "status", status, "response", string(body))
-			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}
 
-		log.Info("SNODE API call",
-			"endpoint", endpoint,
-			"status", status,
-			"response", string(body),
-		)
+		if !hasPlaceholder {
+			if err := checkNodeInfoReachable(ctx, ip); err != nil {
+				log.Info("Storage node API not reachable yet, requeueing",
+					"node", nodeName,
+					"ip", ip,
+					"error", err.Error(),
+				)
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
 
-		if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
-			return ctrl.Result{}, err
+			nodeAddress := fmt.Sprintf("%s:5000", ip)
+			params := utils.StorageNodeAddParams{
+				NodeAddress:         nodeAddress,
+				InterfaceName:       snCR.Spec.MgmtIfname,
+				SPDKImage:           snCR.Spec.SpdkImage,
+				SPDKDebug:           false,
+				IdDeviceByNQN:       false,
+				DataNics:            snCR.Spec.DataIfname,
+				Namespace:           snCR.Namespace,
+				JMPercent:           journalManagerPercentPerDevice(snCR),
+				Partitions:          utils.IntPtrOrDefault(snCR.Spec.Partitions, 1),
+				IOBufSmallPoolCount: 0,
+				IOBufLargePoolCount: 0,
+				HaJMCount:           journalManagerCount(snCR),
+				CRName:              snCR.Name,
+				CRNameSpace:         snCR.Namespace,
+				CRPlural:            "storagenodes",
+				Format4K:            utils.BoolPtrOrFalse(snCR.Spec.ForceFormat4K),
+			}
+
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
+
+			jsonParams, err := json.MarshalIndent(params, "", "  ")
+			if err != nil {
+				log.Error(err, "Failed to marshal params")
+			} else {
+				log.Info("Sending Storage Node Add Request",
+					"endpoint", endpoint,
+					"request_body", string(jsonParams),
+				)
+			}
+
+			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
+			if err != nil || status >= 300 {
+				if err == nil {
+					err = fmt.Errorf("unexpected status %d", status)
+				}
+				log.Error(err, "StorageNode creation failed", "status", status, "response", string(body))
+				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+			}
+
+			log.Info("SNODE API call",
+				"endpoint", endpoint,
+				"status", status,
+				"response", string(body),
+			)
+
+			if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
+				return ctrl.Result{}, err
+			}
+
+			// Add a single placeholder entry so we know the POST was sent.
+			ensureNodeStatus(snCR, nodeName, ip)
+
+			if err := r.Status().Update(ctx, snCR); err != nil {
+				log.Error(err, "Failed to update storage node status")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
 		}
 
-		ensureNodeStatus(snCR, nodeName, ip)
-
-		if err := r.Status().Update(ctx, snCR); err != nil {
-			log.Error(err, "Failed to update storage node status")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-		if err := waitForNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, ip, nodeName, snCR, r); err != nil {
+		if err := waitForNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, ip, nodeName, expectedPerHost, snCR, r); err != nil {
 			log.Error(err, "Node did not become online in time", "node", nodeName)
 			return ctrl.Result{}, nil
 		}
@@ -491,6 +510,7 @@ func waitForNodeOnline(
 	clusterUUID string,
 	ip string,
 	nodeName string,
+	expectedPerHost int,
 	snCR *simplyblockv1alpha1.StorageNode,
 	r *StorageNodeReconciler,
 ) error {
@@ -506,6 +526,8 @@ func waitForNodeOnline(
 				err = fmt.Errorf("unexpected status %d", status)
 			}
 			log.Error(err, "Failed to get storage node statuses", "node", nodeName, "status", status, "response", string(body))
+			waitForNodeOnlineSleepFn(waitForNodeOnlineWaitInterval)
+			continue
 		}
 
 		if strings.TrimSpace(string(body)) == "[]" {
@@ -519,126 +541,148 @@ func waitForNodeOnline(
 			return fmt.Errorf("failed to unmarshal storage node response for %s: %v", nodeName, err)
 		}
 
+		// Collect all backend nodes for this host IP that are online+healthy.
+		// When socketsToUse is set the backend creates one node per socket, all
+		// sharing the same mgmt IP and Hostname — we need all of them online.
+		onlineForHost := make([]SNODEAPIResponse, 0, expectedPerHost)
 		for _, res := range apiResp {
 			if res.IP == ip && res.Status == utils.NodeStatusOnline && res.Health {
-
-				for i := range snCR.Status.Nodes {
-					if snCR.Status.Nodes[i].Hostname == nodeName {
-
-						updated := simplyblockv1alpha1.NodeStatus{
-							Hostname: nodeName,
-							UUID:     res.UUID,
-							Health:   res.Health,
-							Status:   res.Status,
-							MgmtIp:   res.IP,
-							Devices:  res.Devices,
-							CPU:      utils.IntToInt32Ptr(res.CPU),
-							Memory:   utils.HumanBytes(res.Memory, "iec"),
-							Volumes:  utils.IntToInt32Ptr(res.Volumes),
-							RpcPort:  utils.IntToInt32Ptr(res.RPC_PORT),
-							LvolPort: utils.IntToInt32Ptr(res.LVOL_PORT),
-							NvmfPort: utils.IntToInt32Ptr(res.NVMF_PORT),
-						}
-
-						if reflect.DeepEqual(snCR.Status.Nodes[i], updated) {
-							log.Info("Node already online, status unchanged", "node", nodeName)
-							return nil
-						}
-
-						patch := client.MergeFrom(snCR.DeepCopy())
-
-						snCR.Status.Nodes[i] = updated
-
-						if err := r.Status().Patch(ctx, snCR, patch); err != nil {
-							log.Error(err, "Failed to patch node status to online", "node", nodeName)
-						}
-
-						log.Info("Node is online", "node", nodeName)
-
-						clusterCR, err := utils.ResolveClusterCR(
-							ctx,
-							r.Client,
-							snCR.Namespace,
-							snCR.Spec.ClusterName,
-						)
-
-						if err != nil {
-							log.Info("Cluster not found yet for activation check")
-							return fmt.Errorf("cluster not found yet")
-						}
-
-						if utils.ClusterAlreadyActive(clusterCR) {
-							log.Info("Cluster already active, skipping activation")
-							return nil
-						}
-
-						if utils.ClusterInExpansion(clusterCR) {
-							log.Info("Cluster In expansion, skipping activation")
-							return nil
-						}
-
-						onlineHealthy := utils.CountOnlineHealthyNodes(snCR.Status.Nodes)
-
-						log.Info("Evaluating cluster activation conditions",
-							"erasureCodingScheme", clusterCR.Status.ErasureCodingScheme,
-							"onlineHealthy", onlineHealthy,
-						)
-
-						requiredEc, err := utils.RequiredNodesFromErasureCodingScheme(clusterCR.Status.ErasureCodingScheme)
-						if err != nil {
-							log.Error(err, "Invalid erasure coding scheme")
-							return err
-						}
-
-						if utils.ShouldActivateCluster(requiredEc, onlineHealthy, snCR) {
-
-							waitForNodeOnlineSleepFn(waitForNodeOnlineActivationDelay)
-							log.Info("Activation conditions met — activating cluster")
-
-							if err := utils.ActivateClusterAndWait(
-								ctx,
-								apiClient,
-								clusterSecret,
-								clusterUUID,
-							); err != nil {
-								log.Error(err, "Cluster activation did not complete")
-								return err
-							}
-
-							log.Info("Cluster successfully activated")
-						}
-
-						return nil
-					}
-				}
-
-				log.Error(nil, "Node missing from status — invariant violated", "node", nodeName)
-				return fmt.Errorf("node %s missing from status", nodeName)
+				onlineForHost = append(onlineForHost, res)
 			}
 		}
-		log.Info("Node not online yet, retrying...", "node", nodeName, "attempt", attempt)
-		waitForNodeOnlineSleepFn(waitForNodeOnlineWaitInterval)
+
+		if len(onlineForHost) < expectedPerHost {
+			log.Info("Not all socket nodes online yet, retrying...",
+				"node", nodeName,
+				"online", len(onlineForHost),
+				"expected", expectedPerHost,
+				"attempt", attempt,
+			)
+			waitForNodeOnlineSleepFn(waitForNodeOnlineWaitInterval)
+			continue
+		}
+
+		// All socket nodes are online — sync status entries keyed by UUID.
+		patch := client.MergeFrom(snCR.DeepCopy())
+		changed := false
+
+		for _, res := range onlineForHost {
+			updated := simplyblockv1alpha1.NodeStatus{
+				Hostname: nodeName,
+				UUID:     res.UUID,
+				Health:   res.Health,
+				Status:   res.Status,
+				MgmtIp:   res.IP,
+				Devices:  res.Devices,
+				CPU:      utils.IntToInt32Ptr(res.CPU),
+				Memory:   utils.HumanBytes(res.Memory, "iec"),
+				Volumes:  utils.IntToInt32Ptr(res.Volumes),
+				RpcPort:  utils.IntToInt32Ptr(res.RPC_PORT),
+				LvolPort: utils.IntToInt32Ptr(res.LVOL_PORT),
+				NvmfPort: utils.IntToInt32Ptr(res.NVMF_PORT),
+			}
+
+			// Try to find existing entry by UUID first, then fall back to the
+			// placeholder entry (UUID=="") created after the POST.
+			matched := false
+			for i := range snCR.Status.Nodes {
+				n := &snCR.Status.Nodes[i]
+				if n.Hostname == nodeName && (n.UUID == res.UUID || n.UUID == "") {
+					if !reflect.DeepEqual(*n, updated) {
+						*n = updated
+						changed = true
+					}
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				// New socket node not yet in status — append it.
+				snCR.Status.Nodes = append(snCR.Status.Nodes, updated)
+				changed = true
+			}
+		}
+
+		if changed {
+			if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+				log.Error(err, "Failed to patch node status to online", "node", nodeName)
+			}
+		}
+
+		log.Info("All socket nodes online", "node", nodeName, "count", len(onlineForHost))
+
+		clusterCR, err := utils.ResolveClusterCR(
+			ctx,
+			r.Client,
+			snCR.Namespace,
+			snCR.Spec.ClusterName,
+		)
+		if err != nil {
+			log.Info("Cluster not found yet for activation check")
+			return fmt.Errorf("cluster not found yet")
+		}
+
+		if utils.ClusterAlreadyActive(clusterCR) {
+			log.Info("Cluster already active, skipping activation")
+			return nil
+		}
+
+		if utils.ClusterInExpansion(clusterCR) {
+			log.Info("Cluster In expansion, skipping activation")
+			return nil
+		}
+
+		onlineHealthy := utils.CountOnlineHealthyNodes(snCR.Status.Nodes)
+
+		log.Info("Evaluating cluster activation conditions",
+			"erasureCodingScheme", clusterCR.Status.ErasureCodingScheme,
+			"onlineHealthy", onlineHealthy,
+		)
+
+		requiredEc, err := utils.RequiredNodesFromErasureCodingScheme(clusterCR.Status.ErasureCodingScheme)
+		if err != nil {
+			log.Error(err, "Invalid erasure coding scheme")
+			return err
+		}
+
+		if utils.ShouldActivateCluster(requiredEc, onlineHealthy, snCR) {
+			waitForNodeOnlineSleepFn(waitForNodeOnlineActivationDelay)
+			log.Info("Activation conditions met — activating cluster")
+
+			if err := utils.ActivateClusterAndWait(
+				ctx,
+				apiClient,
+				clusterSecret,
+				clusterUUID,
+			); err != nil {
+				log.Error(err, "Cluster activation did not complete")
+				return err
+			}
+
+			log.Info("Cluster successfully activated")
+		}
+
+		return nil
 	}
 
 	// Timeout reached
 	log.Error(nil, "Timeout waiting for node to become online", "node", nodeName)
 
-	// Update CR status with timeout state
-	timeoutNode := simplyblockv1alpha1.NodeStatus{
-		Hostname: nodeName,
-		MgmtIp:   ip,
-		Status:   "timeout",
-	}
-	found := false
+	// Mark all placeholder/partial entries for this host as timed-out.
+	updated := false
 	for i := range snCR.Status.Nodes {
 		if snCR.Status.Nodes[i].Hostname == nodeName {
-			snCR.Status.Nodes[i] = timeoutNode
-			found = true
-			break
+			snCR.Status.Nodes[i].Status = "timeout"
+			snCR.Status.Nodes[i].MgmtIp = ip
+			updated = true
 		}
 	}
-	if !found {
-		snCR.Status.Nodes = append(snCR.Status.Nodes, timeoutNode)
+	if !updated {
+		snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
+			Hostname: nodeName,
+			MgmtIp:   ip,
+			Status:   "timeout",
+		})
 	}
 
 	if err := r.Status().Update(ctx, snCR); err != nil {
