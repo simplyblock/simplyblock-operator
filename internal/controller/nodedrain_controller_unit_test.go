@@ -435,7 +435,7 @@ func TestLabelStoragePodIdempotent(t *testing.T) {
 			Name:      "spdk-pod-idempotent",
 			Namespace: "default",
 			Labels: map[string]string{
-				"role":          "simplyblock-storage-node",
+				"role":            "simplyblock-storage-node",
 				drainNodeLabelKey: sanitizeLabelValue(nodeName),
 			},
 		},
