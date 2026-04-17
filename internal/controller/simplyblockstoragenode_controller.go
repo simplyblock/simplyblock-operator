@@ -175,7 +175,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	for _, nodeName := range snCR.Spec.WorkerNodes {
 		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, clusterSecret, apiClient, expectedPerHost)
-		if err != nil || res.RequeueAfter > 0 || res.Requeue {
+		if err != nil || res.RequeueAfter > 0 {
 			return res, err
 		}
 	}

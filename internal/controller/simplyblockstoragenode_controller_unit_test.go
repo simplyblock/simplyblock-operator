@@ -24,6 +24,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const statusOnline = "online"
+
 func TestEnsureNodeStatus(t *testing.T) {
 	cr := &simplyblockv1alpha1.StorageNode{}
 
@@ -77,7 +79,7 @@ func TestWaitForActionCompletionValidTransitions(t *testing.T) {
 			name:       "resume reaches online",
 			action:     "resume",
 			statusCode: http.StatusOK,
-			respStatus: "online",
+			respStatus: statusOnline,
 		},
 		{
 			name:       "shutdown reaches offline",
@@ -89,7 +91,7 @@ func TestWaitForActionCompletionValidTransitions(t *testing.T) {
 			name:       "restart reaches online",
 			action:     "restart",
 			statusCode: http.StatusOK,
-			respStatus: "online",
+			respStatus: statusOnline,
 		},
 		{
 			name:       "remove reaches deleted via 404",
@@ -806,7 +808,7 @@ func TestStorageNodeReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
 				{
 					Hostname: workerName,
 					MgmtIp:   "10.0.0.10",
-					Status:   "online",
+					Status:   statusOnline,
 					UUID:     "node-uuid-known",
 				},
 			},
@@ -1211,7 +1213,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 			t.Fatalf("expected 1 status entry, got %d", len(sn.Status.Nodes))
 		}
 		got := sn.Status.Nodes[0]
-		if got.Status != "online" || got.UUID != "node-uuid-2" || got.Hostname != "node-b" {
+		if got.Status != statusOnline || got.UUID != "node-uuid-2" || got.Hostname != "node-b" {
 			t.Fatalf("unexpected appended node status: %#v", got)
 		}
 	})
@@ -1447,7 +1449,7 @@ func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
 			default:
 				w.WriteHeader(http.StatusOK)
 				_ = json.NewEncoder(w).Encode(NodeStatusResponse{
-					Status: "online",
+					Status: statusOnline,
 				})
 			}
 		}))
