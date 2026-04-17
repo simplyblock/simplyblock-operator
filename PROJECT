@@ -6,8 +6,8 @@ cliVersion: 4.10.1
 domain: simplyblock.io
 layout:
 - go.kubebuilder.io/v4
-projectName: simplyblock-manager
-repo: github.com/simplyblock/simplyblock-manager
+projectName: simplyblock-operator
+repo: github.com/simplyblock/simplyblock-operator
 resources:
 - api:
     crdVersion: v1
@@ -16,7 +16,7 @@ resources:
   domain: simplyblock.io
   group: storage
   kind: StorageCluster
-  path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
+  path: github.com/simplyblock/simplyblock-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -25,7 +25,7 @@ resources:
   domain: simplyblock.io
   group: storage
   kind: StorageNode
-  path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
+  path: github.com/simplyblock/simplyblock-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -34,7 +34,7 @@ resources:
   domain: simplyblock.io
   group: storage
   kind: Pool
-  path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
+  path: github.com/simplyblock/simplyblock-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -43,7 +43,7 @@ resources:
   domain: simplyblock.io
   group: storage
   kind: Device
-  path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
+  path: github.com/simplyblock/simplyblock-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -52,7 +52,7 @@ resources:
   domain: simplyblock.io
   group: storage
   kind: Task
-  path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
+  path: github.com/simplyblock/simplyblock-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -61,7 +61,7 @@ resources:
   domain: simplyblock.io
   group: storage
   kind: Lvol
-  path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
+  path: github.com/simplyblock/simplyblock-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -70,6 +70,6 @@ resources:
   domain: simplyblock.io
   group: storage
   kind: SnapshotReplication
-  path: github.com/simplyblock/simplyblock-manager/api/v1alpha1
+  path: github.com/simplyblock/simplyblock-operator/api/v1alpha1
   version: v1alpha1
 version: "3"

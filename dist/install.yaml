@@ -3,9 +3,9 @@ kind: Namespace
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
+    app.kubernetes.io/name: simplyblock-operator
     control-plane: controller-manager
-  name: simplyblock-manager-system
+  name: simplyblock-operator-system
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -1253,18 +1253,18 @@ kind: ServiceAccount
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-controller-manager
-  namespace: simplyblock-manager-system
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-controller-manager
+  namespace: simplyblock-operator-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-leader-election-role
-  namespace: simplyblock-manager-system
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-leader-election-role
+  namespace: simplyblock-operator-system
 rules:
 - apiGroups:
   - ""
@@ -1303,8 +1303,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-device-admin-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-device-admin-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1324,8 +1324,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-device-editor-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-device-editor-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1351,8 +1351,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-device-viewer-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-device-viewer-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1374,8 +1374,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-lvol-admin-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-lvol-admin-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1395,8 +1395,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-lvol-editor-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-lvol-editor-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1422,8 +1422,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-lvol-viewer-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-lvol-viewer-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1443,7 +1443,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: simplyblock-manager-manager-role
+  name: simplyblock-operator-manager-role
 rules:
 - apiGroups:
   - ""
@@ -1502,7 +1502,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: simplyblock-manager-metrics-auth-role
+  name: simplyblock-operator-metrics-auth-role
 rules:
 - apiGroups:
   - authentication.k8s.io
@@ -1520,7 +1520,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: simplyblock-manager-metrics-reader
+  name: simplyblock-operator-metrics-reader
 rules:
 - nonResourceURLs:
   - /metrics
@@ -1532,8 +1532,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-pool-admin-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-pool-admin-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1553,8 +1553,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-pool-editor-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-pool-editor-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1580,8 +1580,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-pool-viewer-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-pool-viewer-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1603,8 +1603,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-ssimplyblocktoragenode-editor-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-ssimplyblocktoragenode-editor-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1630,8 +1630,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-storagecluster-admin-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-storagecluster-admin-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1651,8 +1651,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-storagecluster-editor-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-storagecluster-editor-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1678,8 +1678,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-storagecluster-viewer-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-storagecluster-viewer-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1701,8 +1701,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-storagenode-admin-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-storagenode-admin-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1722,8 +1722,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-storagenode-viewer-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-storagenode-viewer-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1745,8 +1745,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-task-admin-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-task-admin-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1766,8 +1766,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-task-editor-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-task-editor-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1793,8 +1793,8 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-task-viewer-role
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-task-viewer-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
@@ -1816,56 +1816,56 @@ kind: RoleBinding
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-leader-election-rolebinding
-  namespace: simplyblock-manager-system
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-leader-election-rolebinding
+  namespace: simplyblock-operator-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: simplyblock-manager-leader-election-role
+  name: simplyblock-operator-leader-election-role
 subjects:
 - kind: ServiceAccount
-  name: simplyblock-manager-controller-manager
-  namespace: simplyblock-manager-system
+  name: simplyblock-operator-controller-manager
+  namespace: simplyblock-operator-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
-  name: simplyblock-manager-manager-rolebinding
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-manager-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: simplyblock-manager-manager-role
+  name: simplyblock-operator-manager-role
 subjects:
 - kind: ServiceAccount
-  name: simplyblock-manager-controller-manager
-  namespace: simplyblock-manager-system
+  name: simplyblock-operator-controller-manager
+  namespace: simplyblock-operator-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: simplyblock-manager-metrics-auth-rolebinding
+  name: simplyblock-operator-metrics-auth-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: simplyblock-manager-metrics-auth-role
+  name: simplyblock-operator-metrics-auth-role
 subjects:
 - kind: ServiceAccount
-  name: simplyblock-manager-controller-manager
-  namespace: simplyblock-manager-system
+  name: simplyblock-operator-controller-manager
+  namespace: simplyblock-operator-system
 ---
 apiVersion: v1
 kind: Service
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
+    app.kubernetes.io/name: simplyblock-operator
     control-plane: controller-manager
-  name: simplyblock-manager-controller-manager-metrics-service
-  namespace: simplyblock-manager-system
+  name: simplyblock-operator-controller-manager-metrics-service
+  namespace: simplyblock-operator-system
 spec:
   ports:
   - name: https
@@ -1873,7 +1873,7 @@ spec:
     protocol: TCP
     targetPort: 8443
   selector:
-    app.kubernetes.io/name: simplyblock-manager
+    app.kubernetes.io/name: simplyblock-operator
     control-plane: controller-manager
 ---
 apiVersion: apps/v1
@@ -1881,22 +1881,22 @@ kind: Deployment
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-manager
+    app.kubernetes.io/name: simplyblock-operator
     control-plane: controller-manager
-  name: simplyblock-manager-controller-manager
-  namespace: simplyblock-manager-system
+  name: simplyblock-operator-controller-manager
+  namespace: simplyblock-operator-system
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: simplyblock-manager
+      app.kubernetes.io/name: simplyblock-operator
       control-plane: controller-manager
   template:
     metadata:
       annotations:
         kubectl.kubernetes.io/default-container: manager
       labels:
-        app.kubernetes.io/name: simplyblock-manager
+        app.kubernetes.io/name: simplyblock-operator
         control-plane: controller-manager
     spec:
       containers:
@@ -1939,6 +1939,6 @@ spec:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
-      serviceAccountName: simplyblock-manager-controller-manager
+      serviceAccountName: simplyblock-operator-controller-manager
       terminationGracePeriodSeconds: 10
       volumes: []
