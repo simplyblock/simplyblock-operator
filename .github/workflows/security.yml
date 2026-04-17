@@ -18,6 +18,7 @@ jobs:
     permissions:
       contents: read
       security-events: write  # required to upload SARIF to GitHub Security tab
+      actions: read  # required by codeql-action to access workflow run info
 
     steps:
       - name: Checkout repository
@@ -35,7 +36,7 @@ jobs:
           tags: ${{ env.IMAGE_NAME }}:scan
 
       - name: Run Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:scan
           format: sarif
@@ -45,13 +46,13 @@ jobs:
           exit-code: '1'
 
       - name: Upload vulnerability scan results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-results.sarif
 
       - name: Generate SBOM (CycloneDX)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:scan
           format: cyclonedx
