@@ -53,6 +53,8 @@ const (
 	// managerPDBName is the name of the temporary PDB that protects the manager
 	// pod from eviction while it sets up storage PDB protection on its own node.
 	managerPDBName = "simplyblock-manager-self"
+
+	nodeStatusOffline = "offline"
 )
 
 // NodeDrainCoordinatorReconciler coordinates graceful simplyblock node shutdown
@@ -64,7 +66,7 @@ const (
 //  1. Detect   – k8s node cordoned (spec.unschedulable=true); wait for drain slot
 //  2. Shutdown – label storage pod, create blocking PDB (maxUnavailable=0),
 //     call simplyblock shutdown API
-//  3. Confirm  – poll until backend node status == "offline"
+//  3. Confirm  – poll until backend node status == nodeStatusOffline
 //  4. Release  – relax PDB to maxUnavailable=1; drain proceeds and pod is evicted
 //  5. Reboot   – node reboots (OS upgrade applied); wait for SPDK to restart
 //  6. Restart  – call simplyblock restart API once snode/info is reachable
@@ -447,7 +449,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 	// Fast-path: all nodes already offline — skip shutdown, allow drain.
 	allOffline := true
 	for _, s := range statuses {
-		if s.status != "offline" {
+		if s.status != nodeStatusOffline {
 			allOffline = false
 			break
 		}
@@ -467,7 +469,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 	// Shutdown proceeds one node at a time: handleShutdownCalled waits for each
 	// node to go offline before calling shutdown on the next socket node.
 	for _, s := range statuses {
-		if s.status == "offline" {
+		if s.status == nodeStatusOffline {
 			continue
 		}
 		state.ActiveNodeUUID = s.uuid
@@ -493,7 +495,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 	return 10 * time.Second, nil
 }
 
-// handleShutdownCalled polls the active node until it is "offline", then calls
+// handleShutdownCalled polls the active node until it is nodeStatusOffline, then calls
 // shutdown on the next socket node. Only after every node on the worker is
 // offline is the PDB removed and drain allowed to proceed.
 func (r *NodeDrainCoordinatorReconciler) handleShutdownCalled(
@@ -522,7 +524,7 @@ func (r *NodeDrainCoordinatorReconciler) handleShutdownCalled(
 		log.Info("Failed to poll backend node status, retrying", "node", state.Hostname, "err", err)
 		return 10 * time.Second, nil
 	}
-	if nodeInfo.Status != "offline" {
+	if nodeInfo.Status != nodeStatusOffline {
 		state.Message = fmt.Sprintf("waiting for node %s to go offline, current: %s", activeUUID, nodeInfo.Status)
 		log.Info("Node not offline yet", "node", state.Hostname, "nodeUUID", activeUUID, "status", nodeInfo.Status)
 		return 10 * time.Second, nil
