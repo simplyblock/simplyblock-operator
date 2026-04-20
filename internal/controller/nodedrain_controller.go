@@ -904,8 +904,10 @@ func (r *NodeDrainCoordinatorReconciler) cleanupManagerPDBIfStale(ctx context.Co
 	}
 }
 
-// SetupWithManager wires the controller to watch StorageNode CRs and k8s Nodes.
-// A change to any k8s Node is mapped to the StorageNode CR that owns it.
+// SetupWithManager wires the controller to watch StorageNode CRs, k8s Nodes,
+// and the pods that labelStoragePod tracks. Watching pods ensures that when a
+// tracked pod is recreated (e.g. after a crash) the reconcile fires immediately
+// to re-apply the drain label, keeping PDB protection continuous.
 func (r *NodeDrainCoordinatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageNode{}).
@@ -914,7 +916,51 @@ func (r *NodeDrainCoordinatorReconciler) SetupWithManager(mgr ctrl.Manager) erro
 			&corev1.Node{},
 			handler.EnqueueRequestsFromMapFunc(r.nodeToStorageNodeRequests),
 		).
+		Watches(
+			&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.trackedPodToStorageNodeRequests),
+		).
 		Complete(r)
+}
+
+// trackedPodToStorageNodeRequests maps a Pod event to the StorageNode CR(s)
+// whose workerNodes contains the pod's node. Only fires for the pod selectors
+// that labelStoragePod tracks, so unrelated pods cause no reconcile churn.
+func (r *NodeDrainCoordinatorReconciler) trackedPodToStorageNodeRequests(
+	ctx context.Context,
+	obj client.Object,
+) []reconcile.Request {
+	pod := obj.(*corev1.Pod)
+
+	if pod.Spec.NodeName == "" {
+		return nil
+	}
+
+	labels := pod.GetLabels()
+	tracked := labels["role"] == "simplyblock-storage-node" ||
+		labels["app"] == "simplyblock-webappapi" ||
+		labels["foundationdb.org/fdb-cluster-name"] == "simplyblock-fdb-cluster"
+	if !tracked {
+		return nil
+	}
+
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList); err != nil {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, sn := range snList.Items {
+		if slices.Contains(sn.Spec.WorkerNodes, pod.Spec.NodeName) {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: sn.Namespace,
+					Name:      sn.Name,
+				},
+			})
+		}
+	}
+	return requests
 }
 
 // nodeToStorageNodeRequests maps a k8s Node event to the StorageNode CR(s)
