@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -423,54 +424,78 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 		return 10 * time.Second, nil
 	}
 
-	nodeUUID := findNodeUUID(snCR, state.Hostname)
-	if nodeUUID == "" {
+	nodeUUIDs := findAllNodeUUIDs(snCR, state.Hostname)
+	if len(nodeUUIDs) == 0 {
 		return 15 * time.Second, fmt.Errorf("node %s not yet registered with backend (UUID missing)", state.Hostname)
 	}
 
-	// Check backend status before calling shutdown — the node may already be
-	// in_shutdown or offline from a previous (possibly crashed) reconcile run.
-	// In that case skip the API call and advance the phase directly.
-	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, nodeUUID)
-	if err != nil {
-		log.Info("Failed to query backend node status before shutdown, retrying", "node", state.Hostname, "err", err)
-		return 15 * time.Second, nil
+	// Check backend status for all nodes before calling shutdown — they may
+	// already be in_shutdown or offline from a previous (possibly crashed)
+	// reconcile run. Handles multi-socket workers where each NUMA socket has
+	// its own backend node entry.
+	type nodeStatusEntry struct{ uuid, status string }
+	statuses := make([]nodeStatusEntry, 0, len(nodeUUIDs))
+	for _, uuid := range nodeUUIDs {
+		nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, uuid)
+		if err != nil {
+			log.Info("Failed to query backend node status before shutdown, retrying", "node", state.Hostname, "err", err)
+			return 15 * time.Second, nil
+		}
+		statuses = append(statuses, nodeStatusEntry{uuid: uuid, status: nodeInfo.Status})
 	}
 
-	switch nodeInfo.Status {
-	case "offline":
-		log.Info("Backend already offline; skipping shutdown API call", "node", state.Hostname)
+	// Fast-path: all nodes already offline — skip shutdown, allow drain.
+	allOffline := true
+	for _, s := range statuses {
+		if s.status != "offline" {
+			allOffline = false
+			break
+		}
+	}
+	if allOffline {
+		log.Info("All backend nodes already offline; skipping shutdown API call", "node", state.Hostname)
 		if err := r.cleanupPDB(ctx, snCR.Namespace, state.Hostname); err != nil {
 			return 10 * time.Second, fmt.Errorf("delete PDB: %w", err)
 		}
 		state.Phase = simplyblockv1alpha1.DrainPhaseDraining
-		state.Message = "backend already offline; drain allowed"
+		state.ActiveNodeUUID = ""
+		state.Message = "all backend nodes already offline; drain allowed"
 		return 15 * time.Second, nil
-	case "in_shutdown":
-		log.Info("Backend already in_shutdown; advancing to shutdown_called phase", "node", state.Hostname)
-		state.Phase = simplyblockv1alpha1.DrainPhaseShutdownCalled
-		state.Message = "backend already in_shutdown; waiting for offline confirmation"
-		return 10 * time.Second, nil
 	}
 
-	// Call simplyblock shutdown API.
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown?force=true", clusterUUID, nodeUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
-	if err != nil || status >= 300 {
-		if err == nil {
-			err = fmt.Errorf("status %d: %s", status, string(body))
+	// Find the first node that is not yet offline and initiate shutdown on it.
+	// Shutdown proceeds one node at a time: handleShutdownCalled waits for each
+	// node to go offline before calling shutdown on the next socket node.
+	for _, s := range statuses {
+		if s.status == "offline" {
+			continue
 		}
-		return 15 * time.Second, fmt.Errorf("shutdown API: %w", err)
+		state.ActiveNodeUUID = s.uuid
+		if s.status == "in_shutdown" {
+			log.Info("First pending node already in_shutdown; advancing to shutdown_called", "node", state.Hostname, "nodeUUID", s.uuid)
+			state.Message = fmt.Sprintf("node %s already in_shutdown; waiting for offline", s.uuid)
+		} else {
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown?force=true", clusterUUID, s.uuid)
+			body, httpStatus, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+			if err != nil || httpStatus >= 300 {
+				if err == nil {
+					err = fmt.Errorf("status %d: %s", httpStatus, string(body))
+				}
+				return 15 * time.Second, fmt.Errorf("shutdown API for node %s: %w", s.uuid, err)
+			}
+			log.Info("Shutdown API called for first node", "node", state.Hostname, "nodeUUID", s.uuid)
+			state.Message = fmt.Sprintf("shutdown called for node %s; waiting for offline", s.uuid)
+		}
+		break
 	}
 
-	log.Info("Shutdown API called", "node", state.Hostname, "nodeUUID", nodeUUID)
 	state.Phase = simplyblockv1alpha1.DrainPhaseShutdownCalled
-	state.Message = "shutdown API called; waiting for offline confirmation"
 	return 10 * time.Second, nil
 }
 
-// handleShutdownCalled polls the backend until the node status is "offline",
-// then relaxes the PDB to allow pod eviction.
+// handleShutdownCalled polls the active node until it is "offline", then calls
+// shutdown on the next socket node. Only after every node on the worker is
+// offline is the PDB removed and drain allowed to proceed.
 func (r *NodeDrainCoordinatorReconciler) handleShutdownCalled(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
@@ -480,30 +505,55 @@ func (r *NodeDrainCoordinatorReconciler) handleShutdownCalled(
 ) (time.Duration, error) {
 	log := logf.FromContext(ctx)
 
-	nodeUUID := findNodeUUID(snCR, state.Hostname)
-	if nodeUUID == "" {
+	nodeUUIDs := findAllNodeUUIDs(snCR, state.Hostname)
+	if len(nodeUUIDs) == 0 {
 		return 10 * time.Second, nil
 	}
 
-	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, nodeUUID)
+	// Fall back to the first UUID if ActiveNodeUUID is somehow unset.
+	activeUUID := state.ActiveNodeUUID
+	if activeUUID == "" {
+		activeUUID = nodeUUIDs[0]
+		state.ActiveNodeUUID = activeUUID
+	}
+
+	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, activeUUID)
 	if err != nil {
 		log.Info("Failed to poll backend node status, retrying", "node", state.Hostname, "err", err)
 		return 10 * time.Second, nil
 	}
-
 	if nodeInfo.Status != "offline" {
-		state.Message = fmt.Sprintf("waiting for offline, current: %s", nodeInfo.Status)
-		log.Info("Node not offline yet", "node", state.Hostname, "status", nodeInfo.Status)
+		state.Message = fmt.Sprintf("waiting for node %s to go offline, current: %s", activeUUID, nodeInfo.Status)
+		log.Info("Node not offline yet", "node", state.Hostname, "nodeUUID", activeUUID, "status", nodeInfo.Status)
 		return 10 * time.Second, nil
 	}
 
-	// Shutdown confirmed — delete the PDB entirely to allow MCP to evict all pods.
+	log.Info("Node offline", "node", state.Hostname, "nodeUUID", activeUUID)
+
+	// Advance to the next socket node in sequence.
+	if nextUUID := nextUUIDInList(nodeUUIDs, activeUUID); nextUUID != "" {
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown?force=true", clusterUUID, nextUUID)
+		body, httpStatus, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		if err != nil || httpStatus >= 300 {
+			if err == nil {
+				err = fmt.Errorf("status %d: %s", httpStatus, string(body))
+			}
+			return 10 * time.Second, fmt.Errorf("shutdown API for node %s: %w", nextUUID, err)
+		}
+		log.Info("Shutdown API called for next node", "node", state.Hostname, "nodeUUID", nextUUID)
+		state.ActiveNodeUUID = nextUUID
+		state.Message = fmt.Sprintf("shutdown called for node %s; waiting for offline", nextUUID)
+		return 10 * time.Second, nil
+	}
+
+	// All nodes offline — delete the PDB entirely to allow MCP to evict all pods.
 	if err := r.cleanupPDB(ctx, snCR.Namespace, state.Hostname); err != nil {
 		return 10 * time.Second, fmt.Errorf("delete PDB: %w", err)
 	}
 
-	log.Info("Node offline; PDB removed — drain can proceed", "node", state.Hostname)
+	log.Info("All nodes offline; PDB removed — drain can proceed", "node", state.Hostname)
 	state.Phase = simplyblockv1alpha1.DrainPhaseDraining
+	state.ActiveNodeUUID = ""
 	state.Message = "shutdown confirmed; drain allowed"
 	return 15 * time.Second, nil
 }
@@ -531,33 +581,40 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 		return 15 * time.Second
 	}
 
-	nodeUUID := findNodeUUID(snCR, state.Hostname)
-	if nodeUUID == "" {
+	nodeUUIDs := findAllNodeUUIDs(snCR, state.Hostname)
+	if len(nodeUUIDs) == 0 {
 		return 15 * time.Second
 	}
 
+	// Call restart for the first node only. handleRestartCalled will wait for it
+	// to be online+healthy, then call restart on the next socket node in sequence.
+	firstUUID := nodeUUIDs[0]
 	nodeAddr := fmt.Sprintf("%s:5000", ip)
 	restartPayload := map[string]any{
 		"force":        true,
 		"node_address": nodeAddr,
 	}
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, firstUUID)
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, restartPayload)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))
 		}
-		log.Error(err, "Restart API failed, will retry", "node", state.Hostname)
+		log.Error(err, "Restart API failed, will retry", "node", state.Hostname, "nodeUUID", firstUUID)
 		return 15 * time.Second
 	}
+	log.Info("Restart API called for first node", "node", state.Hostname, "nodeUUID", firstUUID)
 
-	log.Info("Restart API called", "node", state.Hostname, "nodeUUID", nodeUUID)
+	state.ActiveNodeUUID = firstUUID
 	state.Phase = simplyblockv1alpha1.DrainPhaseRestartCalled
-	state.Message = "restart API called; waiting for online confirmation"
+	state.Message = fmt.Sprintf("restart called for node %s; waiting for online", firstUUID)
 	return 10 * time.Second
 }
 
-// handleRestartCalled polls the backend until the node is "online", then cleans up.
+// handleRestartCalled polls the backend until ALL nodes on the worker are
+// "online" and healthy (covers multi-socket workers with one backend node per
+// NUMA socket). Only then is the worker considered ready and the next worker
+// allowed to drain, subject to maxFaultTolerance.
 func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
@@ -567,8 +624,8 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 ) (time.Duration, error) {
 	log := logf.FromContext(ctx)
 
-	nodeUUID := findNodeUUID(snCR, state.Hostname)
-	if nodeUUID == "" {
+	nodeUUIDs := findAllNodeUUIDs(snCR, state.Hostname)
+	if len(nodeUUIDs) == 0 {
 		return 10 * time.Second, nil
 	}
 
@@ -584,34 +641,68 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 		return 10 * time.Second, nil
 	}
 
-	// Then confirm the simplyblock backend reports the node as online and healthy.
-	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, nodeUUID)
+	// Poll the active node until it is online and healthy, then call restart on
+	// the next socket node. The next worker is only allowed to drain once every
+	// socket node on this worker is back online and healthy.
+	activeUUID := state.ActiveNodeUUID
+	if activeUUID == "" {
+		activeUUID = nodeUUIDs[0]
+		state.ActiveNodeUUID = activeUUID
+	}
+
+	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, activeUUID)
 	if err != nil {
 		log.Info("Failed to poll backend node status after restart, retrying", "node", state.Hostname, "err", err)
 		return 10 * time.Second, nil
 	}
-
 	if nodeInfo.Status != "online" {
-		state.Message = fmt.Sprintf("Kubernetes node Ready; waiting for backend online, current: %s", nodeInfo.Status)
-		log.Info("Node not online yet", "node", state.Hostname, "status", nodeInfo.Status)
+		state.Message = fmt.Sprintf("Kubernetes node Ready; waiting for node %s backend online, current: %s", activeUUID, nodeInfo.Status)
+		log.Info("Node not online yet", "node", state.Hostname, "nodeUUID", activeUUID, "status", nodeInfo.Status)
 		return 10 * time.Second, nil
 	}
-
 	if !nodeInfo.Healthy {
-		state.Message = "node online; waiting for storage node health check to pass"
-		log.Info("Storage node health check not passing yet", "node", state.Hostname)
+		state.Message = fmt.Sprintf("node %s online; waiting for health check to pass", activeUUID)
+		log.Info("Storage node health check not passing yet", "node", state.Hostname, "nodeUUID", activeUUID)
 		return 10 * time.Second, nil
 	}
 
-	// Node is back — clean up PDB and pod label.
+	log.Info("Node online and healthy", "node", state.Hostname, "nodeUUID", activeUUID)
+
+	// Advance to the next socket node in sequence.
+	if nextUUID := nextUUIDInList(nodeUUIDs, activeUUID); nextUUID != "" {
+		ip, err := getNodeInternalIP(ctx, r.Client, state.Hostname)
+		if err != nil {
+			return 15 * time.Second, nil
+		}
+		restartPayload := map[string]any{
+			"force":        true,
+			"node_address": fmt.Sprintf("%s:5000", ip),
+		}
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nextUUID)
+		body, httpStatus, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, restartPayload)
+		if err != nil || httpStatus >= 300 {
+			if err == nil {
+				err = fmt.Errorf("status %d: %s", httpStatus, string(body))
+			}
+			log.Error(err, "Restart API failed for next node, will retry", "node", state.Hostname, "nodeUUID", nextUUID)
+			return 15 * time.Second, nil
+		}
+		log.Info("Restart API called for next node", "node", state.Hostname, "nodeUUID", nextUUID)
+		state.ActiveNodeUUID = nextUUID
+		state.Message = fmt.Sprintf("restart called for node %s; waiting for online", nextUUID)
+		return 10 * time.Second, nil
+	}
+
+	// All socket nodes are back online — clean up PDB and pod label.
 	if err := r.cleanupDrainResources(ctx, snCR.Namespace, state.Hostname); err != nil {
 		log.Error(err, "Cleanup failed, will retry", "node", state.Hostname)
 		return 10 * time.Second, nil
 	}
 
-	log.Info("Node back online; drain coordination complete", "node", state.Hostname)
+	log.Info("All storage nodes back online; drain coordination complete", "node", state.Hostname, "nodeCount", len(nodeUUIDs))
 	state.Phase = simplyblockv1alpha1.DrainPhaseComplete
-	state.Message = "node back online"
+	state.ActiveNodeUUID = ""
+	state.Message = "all storage nodes back online"
 	return 0, nil
 }
 
@@ -839,16 +930,13 @@ func (r *NodeDrainCoordinatorReconciler) nodeToStorageNodeRequests(
 
 	var requests []reconcile.Request
 	for _, sn := range snList.Items {
-		for _, workerName := range sn.Spec.WorkerNodes {
-			if workerName == node.Name {
-				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{
-						Namespace: sn.Namespace,
-						Name:      sn.Name,
-					},
-				})
-				break
-			}
+		if slices.Contains(sn.Spec.WorkerNodes, node.Name) {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: sn.Namespace,
+					Name:      sn.Name,
+				},
+			})
 		}
 	}
 	return requests
@@ -916,20 +1004,24 @@ func removeDrainState(snCR *simplyblockv1alpha1.StorageNode, hostname string) {
 	snCR.Status.DrainCoordination = filtered
 }
 
-// countActiveDrains returns the number of nodes currently in the active drain
-// window. It takes the maximum of:
-//  1. Controller drain state (phases: shutdown_called, draining, restart_called)
-//  2. Backend node status (in_shutdown, in_restart) for all registered nodes
+// countActiveDrains returns the number of *workers* currently in the active
+// drain window. maxFaultTolerance is a worker-level limit: with tolerance=2,
+// two workers may drain simultaneously regardless of how many socket nodes each
+// worker carries. It takes the maximum of:
 //
-// Using the backend as the authoritative source prevents a controller crash/restart
-// from resetting the active count to 0 while nodes are still transitioning in the backend.
+//  1. Controller drain state (phases: shutdown_called, draining, restart_called)
+//     — one DrainCoordination entry per worker, so this is already worker-level.
+//  2. Backend node status (in_shutdown, in_restart) grouped by worker hostname
+//     — prevents a controller crash/restart from resetting the count to zero
+//     while nodes are still transitioning in the backend.
 func countActiveDrains(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
 	apiClient *webapi.Client,
 	clusterUUID, clusterSecret string,
 ) int {
-	// Count from controller drain state.
+	// Count workers in the active drain window from controller state.
+	// DrainCoordination has one entry per worker, so no grouping needed.
 	controllerCount := 0
 	for _, s := range snCR.Status.DrainCoordination {
 		switch s.Phase {
@@ -940,26 +1032,29 @@ func countActiveDrains(
 		}
 	}
 
-	// Count from backend status — covers nodes active in the backend but not
-	// yet reflected in controller state (e.g., after a controller restart).
-	// On API error, conservatively count the node as active to prevent a
-	// transient failure from opening the drain slot.
-	backendCount := 0
+	// Count workers with at least one backend node in transition, grouped by
+	// hostname so a 2-socket worker counts as 1, not 2.
+	// On API error, conservatively mark that worker active to prevent a
+	// transient failure from opening a drain slot.
+	activeWorkers := map[string]bool{}
 	for _, n := range snCR.Status.Nodes {
-		if n.UUID == "" {
+		if n.UUID == "" || n.Hostname == "" {
 			continue
+		}
+		if activeWorkers[n.Hostname] {
+			continue // already counted this worker
 		}
 		info, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, n.UUID)
 		if err != nil {
-			// Cannot determine state — treat as active to be safe.
-			backendCount++
+			activeWorkers[n.Hostname] = true
 			continue
 		}
 		switch info.Status {
 		case "in_shutdown", "in_restart":
-			backendCount++
+			activeWorkers[n.Hostname] = true
 		}
 	}
+	backendCount := len(activeWorkers)
 
 	if backendCount > controllerCount {
 		return backendCount
@@ -972,6 +1067,31 @@ func findNodeUUID(snCR *simplyblockv1alpha1.StorageNode, hostname string) string
 	for _, n := range snCR.Status.Nodes {
 		if n.Hostname == hostname {
 			return n.UUID
+		}
+	}
+	return ""
+}
+
+// findAllNodeUUIDs returns all backend UUIDs registered for the given hostname.
+// For multi-socket workers (socketsToUse configured) each NUMA socket produces
+// a separate backend node entry sharing the same hostname, so this may return
+// more than one UUID. Returns a single-element slice for standard workers.
+func findAllNodeUUIDs(snCR *simplyblockv1alpha1.StorageNode, hostname string) []string {
+	var uuids []string
+	for _, n := range snCR.Status.Nodes {
+		if n.Hostname == hostname && n.UUID != "" {
+			uuids = append(uuids, n.UUID)
+		}
+	}
+	return uuids
+}
+
+// nextUUIDInList returns the element immediately after current in uuids,
+// or an empty string if current is the last element or not found.
+func nextUUIDInList(uuids []string, current string) string {
+	for i, u := range uuids {
+		if u == current && i+1 < len(uuids) {
+			return uuids[i+1]
 		}
 	}
 	return ""
