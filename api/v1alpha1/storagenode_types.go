@@ -137,6 +137,10 @@ type NodeDrainState struct {
 	StartedAt metav1.Time `json:"startedAt"`
 	// Message provides additional status detail or error information.
 	Message string `json:"message,omitempty"`
+	// ActiveNodeUUID is the backend UUID of the storage node currently being shut
+	// down or restarted. Used to sequence through multiple NUMA-socket nodes on
+	// the same worker one at a time during drain coordination.
+	ActiveNodeUUID string `json:"activeNodeUUID,omitempty"`
 }
 
 // StorageNodeStatus defines the observed state of StorageNode.

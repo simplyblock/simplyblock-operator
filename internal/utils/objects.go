@@ -191,6 +191,20 @@ func CountOnlineHealthyNodes(
 	return count
 }
 
+// ExpectedNodesPerHost returns how many backend storage-nodes the control-plane
+// will create for a single Kubernetes worker when socketsToUse is configured.
+// Without socketsToUse it is always 1.
+func ExpectedNodesPerHost(snCR *simplyblockv1alpha1.StorageNode) int {
+	if len(snCR.Spec.SocketsToUse) == 0 {
+		return 1
+	}
+	nodesPerSocket := 1
+	if snCR.Spec.NodesPerSocket != nil && *snCR.Spec.NodesPerSocket > 0 {
+		nodesPerSocket = int(*snCR.Spec.NodesPerSocket)
+	}
+	return len(snCR.Spec.SocketsToUse) * nodesPerSocket
+}
+
 func ShouldActivateCluster(
 	mod int,
 	onlineHealthy int,
@@ -204,14 +218,7 @@ func ShouldActivateCluster(
 		coreIsolation = *snCR.Spec.CoreIsolation
 	}
 
-	expected := len(snCR.Spec.WorkerNodes)
-	if len(snCR.Spec.SocketsToUse) > 0 {
-		nodesPerSocket := 1
-		if snCR.Spec.NodesPerSocket != nil && *snCR.Spec.NodesPerSocket > 0 {
-			nodesPerSocket = int(*snCR.Spec.NodesPerSocket)
-		}
-		expected *= len(snCR.Spec.SocketsToUse) * nodesPerSocket
-	}
+	expected := len(snCR.Spec.WorkerNodes) * ExpectedNodesPerHost(snCR)
 
 	return onlineHealthy == expected &&
 		onlineHealthy >= required &&
