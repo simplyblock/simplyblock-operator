@@ -71,8 +71,9 @@ const (
 // StorageClusterReconciler reconciles a StorageCluster object
 type StorageClusterReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Scheme    *runtime.Scheme
+	Recorder  record.EventRecorder
+	Namespace string // operator namespace
 }
 
 type CSICredentials struct {
@@ -272,7 +273,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 		err := r.upsertCSICredentialsSecret(
 			ctx,
-			clusterCR.Namespace,
+			r.Namespace,
 			apiResp.UUID,
 			utils.ENDPOINT,
 			apiResp.Secret,
@@ -305,7 +306,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 		err := r.upsertCSICredentialsSecret(
 			ctx,
-			clusterCR.Namespace,
+			r.Namespace,
 			apiResp.UUID,
 			utils.ENDPOINT,
 			apiResp.Secret,
@@ -400,7 +401,7 @@ func (r *StorageClusterReconciler) adoptExistingCluster(
 		log.Error(err, "Failed to create/update Secret for adopted cluster")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	if err := r.upsertCSICredentialsSecret(ctx, clusterCR.Namespace, existing.UUID, utils.ENDPOINT, existing.Secret); err != nil {
+	if err := r.upsertCSICredentialsSecret(ctx, r.Namespace, existing.UUID, utils.ENDPOINT, existing.Secret); err != nil {
 		log.Error(err, "Failed to update CSI credentials secret for adopted cluster")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
