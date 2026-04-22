@@ -147,22 +147,21 @@ func ResolveClusterCR(
 func ExistingClusterUUID(
 	ctx context.Context,
 	c client.Client,
-	namespace string,
-) (exists bool, uuid string, clusterName string, err error) {
+) (exists bool, uuid string, clusterName string, clusterNamespace string, err error) {
 
 	var clusters simplyblockv1alpha1.StorageClusterList
 
-	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
-		return false, "", "", err
+	if err := c.List(ctx, &clusters); err != nil {
+		return false, "", "", "", err
 	}
 
 	for _, cluster := range clusters.Items {
 		if cluster.Status.UUID != "" {
-			return true, cluster.Status.UUID, cluster.Spec.ClusterName, nil
+			return true, cluster.Status.UUID, cluster.Spec.ClusterName, cluster.Namespace, nil
 		}
 	}
 
-	return false, "", "", nil
+	return false, "", "", "", nil
 }
 
 func GetClusterNameByUUID(ctx context.Context, cli client.Client, namespace, uuid string) (string, error) {
