@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -520,6 +521,11 @@ func (r *StorageClusterReconciler) handleDeletion(
 
 	log.Info("Cluster deleted via API", "name", clusterCR.Name, "clusterUUID", clusterUUID)
 
+	if err := r.removeCSICredentialsEntry(ctx, r.Namespace, clusterUUID); err != nil {
+		log.Error(err, "Failed to remove CSI credentials entry, will retry", "name", clusterCR.Name)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
+	}
+
 	if err := r.deleteClusterSecret(ctx, clusterCR); err != nil {
 		log.Error(err, "Failed to delete cluster secret, will retry", "name", clusterCR.Name)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
@@ -823,49 +829,94 @@ func (r *StorageClusterReconciler) upsertCSICredentialsSecret(
 	clusterEndpoint string,
 	clusterSecret string,
 ) error {
-
 	secretName := "simplyblock-csi-secret-v2"
 
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: namespace,
-		},
-	}
-
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
-		var creds CSICredentials
-
-		if data, ok := secret.Data["secret.json"]; ok {
-			_ = json.Unmarshal(data, &creds)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: namespace,
+			},
 		}
 
-		for _, c := range creds.Clusters {
-			if c.ClusterID == clusterID {
-				return nil
+		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+			var creds CSICredentials
+
+			if data, ok := secret.Data["secret.json"]; ok {
+				_ = json.Unmarshal(data, &creds)
 			}
-		}
 
-		creds.Clusters = append(creds.Clusters, CSIClusterEntry{
-			ClusterID:       clusterID,
-			ClusterEndpoint: clusterEndpoint,
-			ClusterSecret:   clusterSecret,
+			for _, c := range creds.Clusters {
+				if c.ClusterID == clusterID {
+					return nil
+				}
+			}
+
+			creds.Clusters = append(creds.Clusters, CSIClusterEntry{
+				ClusterID:       clusterID,
+				ClusterEndpoint: clusterEndpoint,
+				ClusterSecret:   clusterSecret,
+			})
+
+			payload, err := json.MarshalIndent(creds, "", "  ")
+			if err != nil {
+				return err
+			}
+
+			if secret.Data == nil {
+				secret.Data = map[string][]byte{}
+			}
+
+			secret.Data["secret.json"] = payload
+			return nil
 		})
-
-		payload, err := json.MarshalIndent(creds, "", "  ")
-		if err != nil {
-			return err
-		}
-
-		if secret.Data == nil {
-			secret.Data = map[string][]byte{}
-		}
-
-		secret.Data["secret.json"] = payload
-		return nil
+		return err
 	})
+}
 
-	return err
+func (r *StorageClusterReconciler) removeCSICredentialsEntry(
+	ctx context.Context,
+	namespace string,
+	clusterID string,
+) error {
+	secretName := "simplyblock-csi-secret-v2"
+
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      secretName,
+				Namespace: namespace,
+			},
+		}
+
+		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+			var creds CSICredentials
+
+			if data, ok := secret.Data["secret.json"]; ok {
+				_ = json.Unmarshal(data, &creds)
+			}
+
+			filtered := creds.Clusters[:0]
+			for _, c := range creds.Clusters {
+				if c.ClusterID != clusterID {
+					filtered = append(filtered, c)
+				}
+			}
+			creds.Clusters = filtered
+
+			payload, err := json.MarshalIndent(creds, "", "  ")
+			if err != nil {
+				return err
+			}
+
+			if secret.Data == nil {
+				secret.Data = map[string][]byte{}
+			}
+			secret.Data["secret.json"] = payload
+			return nil
+		})
+		return err
+	})
 }
 
 // syncStatus fetches live cluster status from the backend API and patches the
