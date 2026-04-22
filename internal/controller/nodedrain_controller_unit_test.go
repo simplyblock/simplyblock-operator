@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
-	"github.com/simplyblock/simplyblock-manager/internal/webapi"
+	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -515,7 +515,7 @@ func TestDeleteManagerPDBDeletesWhenPresent(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: managerPDBName, Namespace: "default"},
 		Spec: policyv1.PodDisruptionBudgetSpec{
 			MaxUnavailable: &maxUnavailable,
-			Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app": "simplyblock-manager"}},
+			Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app": "simplyblock-operator"}},
 		},
 	}
 	r := newNodeDrainTestReconciler(t, pdb)
@@ -543,7 +543,7 @@ func TestCleanupManagerPDBIfStaleRemovesWhenNotInDetectedPhase(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: managerPDBName, Namespace: "default"},
 		Spec: policyv1.PodDisruptionBudgetSpec{
 			MaxUnavailable: &maxUnavailable,
-			Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app": "simplyblock-manager"}},
+			Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app": "simplyblock-operator"}},
 		},
 	}
 	// Manager node is NOT in detected phase (no drain state at all).
@@ -567,7 +567,7 @@ func TestCleanupManagerPDBIfStaleKeepsWhenDetected(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: managerPDBName, Namespace: "default"},
 		Spec: policyv1.PodDisruptionBudgetSpec{
 			MaxUnavailable: &maxUnavailable,
-			Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app": "simplyblock-manager"}},
+			Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app": "simplyblock-operator"}},
 		},
 	}
 	// Manager node IS in the detected phase — PDB should be kept.
