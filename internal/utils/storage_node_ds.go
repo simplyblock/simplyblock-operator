@@ -4,6 +4,7 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -247,6 +248,62 @@ func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 			Name: "simplyblock-storage-node-role",
 		},
 		Rules: baseRules,
+	}
+}
+
+func BuildStorageNodeService(sn *simplyblockv1alpha1.StorageNode) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-storage-node-api",
+			Namespace: sn.Namespace,
+			Annotations: map[string]string{
+				"service.beta.openshift.io/serving-cert-secret-name": "simplyblock-storage-node-api-tls",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "None",
+			Ports: []corev1.ServicePort{
+				{
+					Name:     "api",
+					Port:     5000,
+					Protocol: corev1.ProtocolTCP,
+				},
+			},
+		},
+	}
+}
+
+func BuildStorageNodeEndpointSlice(sn *simplyblockv1alpha1.StorageNode, nodeIPs map[string]string) *discoveryv1.EndpointSlice {
+	protocol := corev1.ProtocolTCP
+	port := int32(5000)
+	portName := "api"
+
+	endpoints := make([]discoveryv1.Endpoint, 0, len(nodeIPs))
+	for nodeName, ip := range nodeIPs {
+		hostname := nodeName
+		endpoints = append(endpoints, discoveryv1.Endpoint{
+			Addresses: []string{ip},
+			Hostname:  &hostname,
+		})
+	}
+
+	return &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-storage-node-api-endpoints",
+			Namespace: sn.Namespace,
+			Labels: map[string]string{
+				"kubernetes.io/service-name": "simplyblock-storage-node-api",
+			},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints:   endpoints,
+		Ports: []discoveryv1.EndpointPort{
+			{
+				Name:     &portName,
+				Protocol: &protocol,
+				Port:     &port,
+			},
+		},
 	}
 }
 

@@ -27,6 +27,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -89,6 +90,8 @@ var (
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -169,6 +172,14 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if err := r.reconcileDaemonSet(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileService(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileEndpointSlice(ctx, snCR); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -428,6 +439,63 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 
 	ds.ResourceVersion = existing.ResourceVersion
 	return r.Update(ctx, ds)
+}
+
+func (r *StorageNodeReconciler) reconcileService(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+) error {
+	svc := utils.BuildStorageNodeService(snCR)
+	if err := controllerutil.SetControllerReference(snCR, svc, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set Service owner reference: %w", err)
+	}
+
+	var existing corev1.Service
+	err := r.Get(ctx, client.ObjectKeyFromObject(svc), &existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, svc)
+	}
+	if err != nil {
+		return err
+	}
+
+	svc.ResourceVersion = existing.ResourceVersion
+	svc.Spec.ClusterIP = existing.Spec.ClusterIP
+	return r.Update(ctx, svc)
+}
+
+func (r *StorageNodeReconciler) reconcileEndpointSlice(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+) error {
+	log := logf.FromContext(ctx)
+
+	nodeIPs := make(map[string]string)
+	for _, nodeName := range snCR.Spec.WorkerNodes {
+		ip, err := getNodeInternalIP(ctx, r.Client, nodeName)
+		if err != nil {
+			log.Error(err, "failed to get internal IP for EndpointSlice, skipping node", "node", nodeName)
+			continue
+		}
+		nodeIPs[nodeName] = ip
+	}
+
+	eps := utils.BuildStorageNodeEndpointSlice(snCR, nodeIPs)
+	if err := controllerutil.SetControllerReference(snCR, eps, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set EndpointSlice owner reference: %w", err)
+	}
+
+	var existing discoveryv1.EndpointSlice
+	err := r.Get(ctx, client.ObjectKeyFromObject(eps), &existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, eps)
+	}
+	if err != nil {
+		return err
+	}
+
+	eps.ResourceVersion = existing.ResourceVersion
+	return r.Update(ctx, eps)
 }
 
 func getNodeInternalIP(ctx context.Context, c client.Client, nodeName string) (string, error) {

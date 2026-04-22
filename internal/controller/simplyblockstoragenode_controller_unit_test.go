@@ -17,6 +17,7 @@ import (
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1793,6 +1794,7 @@ func newStorageNodeStateTestReconciler(
 		corev1.AddToScheme,
 		appsv1.AddToScheme,
 		rbacv1.AddToScheme,
+		discoveryv1.AddToScheme,
 	)
 	cl := newTestClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.StorageNode{},
