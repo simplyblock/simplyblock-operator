@@ -54,7 +54,9 @@ const (
 	// pod from eviction while it sets up storage PDB protection on its own node.
 	managerPDBName = "simplyblock-operator-self"
 
-	nodeStatusOffline = "offline"
+	nodeStatusOffline  = "offline"
+	nodeStatusInRestart = "in_restart"
+	nodeStatusInShutdown = "in_shutdown"
 )
 
 // NodeDrainCoordinatorReconciler coordinates graceful simplyblock node shutdown
@@ -591,6 +593,19 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 	// Call restart for the first node only. handleRestartCalled will wait for it
 	// to be online+healthy, then call restart on the next socket node in sequence.
 	firstUUID := nodeUUIDs[0]
+
+	// Hold off if the secondary is currently restarting or shutting down.
+	busy, err := isSecondaryBusy(ctx, apiClient, clusterSecret, clusterUUID, firstUUID)
+	if err != nil {
+		log.Info("Failed to check secondary node status, retrying", "node", state.Hostname, "nodeUUID", firstUUID, "err", err)
+		return 15 * time.Second
+	}
+	if busy {
+		state.Message = fmt.Sprintf("waiting for secondary of node %s to finish restart/shutdown", firstUUID)
+		log.Info("Secondary node is busy; deferring restart", "node", state.Hostname, "nodeUUID", firstUUID)
+		return 15 * time.Second
+	}
+
 	nodeAddr := fmt.Sprintf("%s:5000", ip)
 	restartPayload := map[string]any{
 		"force":        true,
@@ -676,6 +691,19 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 		if err != nil {
 			return 15 * time.Second, nil
 		}
+
+		// Hold off if the next node's secondary is currently restarting or shutting down.
+		busy, err := isSecondaryBusy(ctx, apiClient, clusterSecret, clusterUUID, nextUUID)
+		if err != nil {
+			log.Info("Failed to check secondary node status, retrying", "node", state.Hostname, "nodeUUID", nextUUID, "err", err)
+			return 15 * time.Second, nil
+		}
+		if busy {
+			state.Message = fmt.Sprintf("waiting for secondary of node %s to finish restart/shutdown", nextUUID)
+			log.Info("Secondary node is busy; deferring restart", "node", state.Hostname, "nodeUUID", nextUUID)
+			return 15 * time.Second, nil
+		}
+
 		restartPayload := map[string]any{
 			"force":        true,
 			"node_address": fmt.Sprintf("%s:5000", ip),
@@ -1007,8 +1035,9 @@ func (r *NodeDrainCoordinatorReconciler) nodeToStorageNodeRequests(
 
 // backendNodeInfo holds the relevant fields from the storage-nodes API response.
 type backendNodeInfo struct {
-	Status  string `json:"status"`
-	Healthy bool   `json:"health_check"`
+	Status          string `json:"status"`
+	Healthy         bool   `json:"health_check"`
+	SecondaryNodeID string `json:"secondary_node_id"`
 }
 
 // getBackendNodeInfo fetches status and health_check for a node UUID.
@@ -1177,6 +1206,28 @@ func isNodeReady(node *corev1.Node) bool {
 		}
 	}
 	return false
+}
+
+// isSecondaryBusy returns true when the node's secondary (if any) is currently
+// in_restart or in_shutdown. The restart API must not be called while the
+// secondary is in one of these transient states.
+func isSecondaryBusy(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret, clusterUUID, nodeUUID string,
+) (bool, error) {
+	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, nodeUUID)
+	if err != nil {
+		return false, err
+	}
+	if nodeInfo.SecondaryNodeID == "" {
+		return false, nil
+	}
+	secondaryInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, nodeInfo.SecondaryNodeID)
+	if err != nil {
+		return false, err
+	}
+	return secondaryInfo.Status == nodeStatusInRestart || secondaryInfo.Status == nodeStatusInShutdown, nil
 }
 
 // isClusterRebalancing returns true when the simplyblock cluster is actively
