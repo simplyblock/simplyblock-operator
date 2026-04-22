@@ -191,7 +191,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	endpoint = "/api/v1/cluster/create_first/"
 	clusterSecret := ""
 
-	exists, clusterUUID, clusterName, err := utils.ExistingClusterUUID(ctx, r.Client, req.Namespace)
+	exists, clusterUUID, clusterName, clusterNamespace, err := utils.ExistingClusterUUID(ctx, r.Client)
 	if err != nil {
 		log.Error(err, "Failed to check existing cluster")
 		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterLookupError, "Failed to check existing cluster: %v", err)
@@ -201,7 +201,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if exists {
 		endpoint = "/api/v2/clusters/"
 
-		_, clusterSecret, err = utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterName)
+		_, clusterSecret, err = utils.GetClusterAuth(ctx, r.Client, clusterNamespace, clusterName)
 		if err != nil {
 			log.Error(
 				err,
