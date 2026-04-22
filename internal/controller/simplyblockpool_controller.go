@@ -29,9 +29,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
-	"github.com/simplyblock/simplyblock-manager/internal/utils"
-	"github.com/simplyblock/simplyblock-manager/internal/webapi"
+	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // PoolReconciler reconciles a Pool object

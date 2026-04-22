@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
-	"github.com/simplyblock/simplyblock-manager/internal/utils"
-	webapimock "github.com/simplyblock/simplyblock-manager/internal/webapi/mock"
+	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

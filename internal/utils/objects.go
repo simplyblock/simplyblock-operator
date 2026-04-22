@@ -13,9 +13,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
+	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 
-	"github.com/simplyblock/simplyblock-manager/internal/webapi"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 type ClusterGetResponse struct {

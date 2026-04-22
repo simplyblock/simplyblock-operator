@@ -3,7 +3,7 @@ package controller
 import (
 	"testing"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
+	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 )
 
 func TestLvolStatusListFromAPIAndNormalize(t *testing.T) {

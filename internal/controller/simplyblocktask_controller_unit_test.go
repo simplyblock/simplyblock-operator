@@ -11,9 +11,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
-	"github.com/simplyblock/simplyblock-manager/internal/utils"
-	webapimock "github.com/simplyblock/simplyblock-manager/internal/webapi/mock"
+	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 )
 
 func TestTaskReconcileAddsFinalizer(t *testing.T) {

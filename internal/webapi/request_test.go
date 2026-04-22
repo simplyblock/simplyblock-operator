@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	webapimock "github.com/simplyblock/simplyblock-manager/internal/webapi/mock"
+	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 )
 
 func TestDoAgainstSpecMockSendsHeadersBodyAndReturnsResponse(t *testing.T) {

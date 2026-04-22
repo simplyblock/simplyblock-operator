@@ -1,4 +1,4 @@
-module github.com/simplyblock/simplyblock-manager
+module github.com/simplyblock/simplyblock-operator
 
 go 1.25.0
 
