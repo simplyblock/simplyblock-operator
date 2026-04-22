@@ -884,6 +884,11 @@ func (r *StorageClusterReconciler) syncStatus(
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	if err := r.upsertCSICredentialsSecret(ctx, r.Namespace, clusterCR.Status.UUID, utils.ENDPOINT, clusterSecret); err != nil {
+		log.Error(err, "syncStatus: failed to upsert CSI credentials secret", "name", clusterCR.Name)
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	apiClient := webapi.NewClient()
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterCR.Status.UUID)
 
