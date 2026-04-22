@@ -666,6 +666,172 @@ func TestProcessWorkerCordonedOnlineInitializesState(t *testing.T) {
 	}
 }
 
+func TestIsClusterRebalancingTrue(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"is_re_balancing":true}`))
+	}))
+	defer srv.Close()
+
+	rebalancing, err := isClusterRebalancing(context.Background(), webapi.NewClient(srv.URL), "secret", "cluster-uuid")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !rebalancing {
+		t.Fatalf("expected rebalancing=true, got false")
+	}
+}
+
+func TestIsClusterRebalancingFalse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"is_re_balancing":false}`))
+	}))
+	defer srv.Close()
+
+	rebalancing, err := isClusterRebalancing(context.Background(), webapi.NewClient(srv.URL), "secret", "cluster-uuid")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rebalancing {
+		t.Fatalf("expected rebalancing=false, got true")
+	}
+}
+
+func TestIsClusterRebalancingAPIError(t *testing.T) {
+	// Unreachable address → error expected.
+	_, err := isClusterRebalancing(context.Background(), webapi.NewClient("http://127.0.0.1:1"), "secret", "cluster-uuid")
+	if err == nil {
+		t.Fatalf("expected error when API is unreachable")
+	}
+}
+
+func TestIsClusterRebalancingNonOKStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`internal error`))
+	}))
+	defer srv.Close()
+
+	_, err := isClusterRebalancing(context.Background(), webapi.NewClient(srv.URL), "secret", "cluster-uuid")
+	if err == nil {
+		t.Fatalf("expected error on non-2xx response")
+	}
+}
+
+func TestHandleRestartCalledHoldsDrainSlotWhileRebalancing(t *testing.T) {
+	// Scenario: all socket nodes are online+healthy but cluster is still
+	// rebalancing. handleRestartCalled must NOT mark phase complete — it should
+	// requeue and keep the message about rebalancing.
+	const nodeName = "node-rebal"
+	const nodeUUID = "uuid-rebal"
+
+	// Backend: node is online and healthy; cluster is rebalancing.
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		callCount++
+		// Node info endpoint returns online+healthy.
+		// Cluster info endpoint returns rebalancing=true.
+		if r.URL.Path == "/api/v2/clusters/cluster-uuid" && r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"is_re_balancing":true}`))
+		} else {
+			_, _ = w.Write([]byte(`{"status":"online","health_check":true}`))
+		}
+	}))
+	defer srv.Close()
+
+	k8sNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: nodeName},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{
+				{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	snCR := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-rebal", Namespace: "default"},
+		Status: simplyblockv1alpha1.StorageNodeStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: nodeName, UUID: nodeUUID, Status: "online"},
+			},
+		},
+	}
+	state := &simplyblockv1alpha1.NodeDrainState{
+		Hostname:       nodeName,
+		Phase:          simplyblockv1alpha1.DrainPhaseRestartCalled,
+		ActiveNodeUUID: nodeUUID,
+	}
+
+	r := newNodeDrainTestReconciler(t, snCR, k8sNode)
+	requeue, err := r.handleRestartCalled(context.Background(), snCR, state, webapi.NewClient(srv.URL), "cluster-uuid", "secret")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if requeue == 0 {
+		t.Fatalf("expected non-zero requeue while cluster is rebalancing")
+	}
+	if state.Phase == simplyblockv1alpha1.DrainPhaseComplete {
+		t.Fatalf("drain phase must NOT be complete while cluster is rebalancing")
+	}
+	if state.Message == "" {
+		t.Fatalf("expected a status message about rebalancing")
+	}
+}
+
+func TestHandleRestartCalledCompletesWhenNotRebalancing(t *testing.T) {
+	// Scenario: all socket nodes are online+healthy and cluster is NOT
+	// rebalancing. handleRestartCalled should mark phase complete.
+	const nodeName = "node-done"
+	const nodeUUID = "uuid-done"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if r.URL.Path == "/api/v2/clusters/cluster-uuid" && r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"is_re_balancing":false}`))
+		} else {
+			_, _ = w.Write([]byte(`{"status":"online","health_check":true}`))
+		}
+	}))
+	defer srv.Close()
+
+	k8sNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: nodeName},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{
+				{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+	snCR := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-done", Namespace: "default"},
+		Status: simplyblockv1alpha1.StorageNodeStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: nodeName, UUID: nodeUUID, Status: "online"},
+			},
+		},
+	}
+	state := &simplyblockv1alpha1.NodeDrainState{
+		Hostname:       nodeName,
+		Phase:          simplyblockv1alpha1.DrainPhaseRestartCalled,
+		ActiveNodeUUID: nodeUUID,
+	}
+
+	r := newNodeDrainTestReconciler(t, snCR, k8sNode)
+	requeue, err := r.handleRestartCalled(context.Background(), snCR, state, webapi.NewClient(srv.URL), "cluster-uuid", "secret")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state.Phase != simplyblockv1alpha1.DrainPhaseComplete {
+		t.Fatalf("expected DrainPhaseComplete when node is online+healthy and cluster not rebalancing, got %q", state.Phase)
+	}
+	if requeue != 0 {
+		t.Fatalf("expected zero requeue on completion, got %v", requeue)
+	}
+}
+
 // ---- helper ----
 
 func newNodeDrainTestReconciler(t *testing.T, objects ...client.Object) *NodeDrainCoordinatorReconciler {

@@ -695,16 +695,29 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 		return 10 * time.Second, nil
 	}
 
-	// All socket nodes are back online — clean up PDB and pod label.
+	// All socket nodes are back online — wait for the cluster to finish
+	// rebalancing before releasing this drain slot to the next worker.
+	rebalancing, err := isClusterRebalancing(ctx, apiClient, clusterSecret, clusterUUID)
+	if err != nil {
+		log.Info("Failed to check cluster rebalancing status, retrying", "node", state.Hostname, "err", err)
+		return 30 * time.Second, nil
+	}
+	if rebalancing {
+		state.Message = "all nodes online; waiting for cluster rebalancing to complete"
+		log.Info("Cluster is rebalancing; holding drain slot before next worker", "node", state.Hostname)
+		return 30 * time.Second, nil
+	}
+
+	// Clean up PDB and pod label.
 	if err := r.cleanupDrainResources(ctx, snCR.Namespace, state.Hostname); err != nil {
 		log.Error(err, "Cleanup failed, will retry", "node", state.Hostname)
 		return 10 * time.Second, nil
 	}
 
-	log.Info("All storage nodes back online; drain coordination complete", "node", state.Hostname, "nodeCount", len(nodeUUIDs))
+	log.Info("All storage nodes back online and cluster rebalancing complete; drain coordination complete", "node", state.Hostname, "nodeCount", len(nodeUUIDs))
 	state.Phase = simplyblockv1alpha1.DrainPhaseComplete
 	state.ActiveNodeUUID = ""
-	state.Message = "all storage nodes back online"
+	state.Message = "all storage nodes back online; cluster rebalancing complete"
 	return 0, nil
 }
 
@@ -1164,6 +1177,32 @@ func isNodeReady(node *corev1.Node) bool {
 		}
 	}
 	return false
+}
+
+// isClusterRebalancing returns true when the simplyblock cluster is actively
+// rebalancing data. The drain slot is held until rebalancing completes so that
+// the next worker drain does not start while the cluster is already under load.
+func isClusterRebalancing(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret, clusterUUID string,
+) (bool, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
+	body, statusCode, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || statusCode >= 300 {
+		if err == nil {
+			err = fmt.Errorf("status %d: %s", statusCode, string(body))
+		}
+		return false, fmt.Errorf("get cluster info: %w", err)
+	}
+
+	var info struct {
+		Rebalancing bool `json:"is_re_balancing"`
+	}
+	if err := json.Unmarshal(body, &info); err != nil {
+		return false, fmt.Errorf("unmarshal cluster info: %w", err)
+	}
+	return info.Rebalancing, nil
 }
 
 // sanitizeLabelValue truncates to 63 chars (Kubernetes label value limit).
