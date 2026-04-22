@@ -225,16 +225,19 @@ func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyb
 	reclaimPolicy := corev1.PersistentVolumeReclaimDelete
 	allowExpansion := true
 
+	params := map[string]string{
+		"cluster_id":                clusterUUID,
+		"pool_name":                 poolCR.Spec.Name,
+		"csi.storage.k8s.io/fstype": "ext4",
+	}
+	mergeStorageClassParameters(params, poolCR.Spec.StorageClassParameters)
+
 	sc := &storagev1.StorageClass{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: fmt.Sprintf("simplyblock-%s-%s", poolCR.Spec.ClusterName, poolCR.Spec.Name),
 		},
-		Provisioner: utils.CSIProvisioner,
-		Parameters: map[string]string{
-			"cluster_id":                clusterUUID,
-			"pool_name":                 poolCR.Spec.Name,
-			"csi.storage.k8s.io/fstype": "ext4",
-		},
+		Provisioner:          utils.CSIProvisioner,
+		Parameters:           params,
 		VolumeBindingMode:    &bindingMode,
 		ReclaimPolicy:        &reclaimPolicy,
 		AllowVolumeExpansion: &allowExpansion,
@@ -244,6 +247,34 @@ func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyb
 		return err
 	}
 	return nil
+}
+
+// mergeStorageClassParameters copies non-empty StorageClassParameters fields into dst using
+// the CSI driver's snake_case parameter names. cluster_id and csi.storage.k8s.io/fstype are
+// never overridden.
+func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.StorageClassParameters) {
+	if p == nil {
+		return
+	}
+	set := func(key, val string) {
+		if val != "" {
+			dst[key] = val
+		}
+	}
+	set("pool_name", p.PoolName)
+	set("qos_rw_iops", p.QosRwIops)
+	set("qos_rw_mbytes", p.QosRwMbytes)
+	set("qos_r_mbytes", p.QosRMbytes)
+	set("qos_w_mbytes", p.QosWMbytes)
+	set("compression", p.Compression)
+	set("encryption", p.Encryption)
+	set("replicate", p.Replicate)
+	set("distr_ndcs", p.NumDataChunks)
+	set("distr_npcs", p.NumParityChunks)
+	set("lvol_priority_class", p.LvolPriorityClass)
+	set("fabric", p.Fabric)
+	set("max_namespace_per_subsys", p.MaxNamespacePerSubsys)
+	set("tune2fs_reserved_blocks", p.Tune2fsReservedBlocks)
 }
 
 // SetupWithManager sets up the controller with the Manager.

@@ -61,6 +61,40 @@ type PoolQoSStatus struct {
 	Throughput *PoolQoSThroughputStatus `json:"throughput,omitempty"`
 }
 
+// StorageClassParameters defines the default StorageClass parameter values for volumes in this pool.
+// These are passed as-is to the CSI driver when the StorageClass is created.
+// Customers can override individual parameters; cluster_id and pool_name are always set automatically.
+type StorageClassParameters struct {
+	// PoolName overrides the pool_name parameter in the StorageClass (defaults to spec.name).
+	PoolName string `json:"poolName,omitempty"`
+	// QosRwIops sets the read/write IOPS limit (0 = unlimited).
+	QosRwIops string `json:"qosRwIops,omitempty"`
+	// QosRwMbytes sets the read/write throughput limit in MB/s (0 = unlimited).
+	QosRwMbytes string `json:"qosRwMbytes,omitempty"`
+	// QosRMbytes sets the read throughput limit in MB/s (0 = unlimited).
+	QosRMbytes string `json:"qosRMbytes,omitempty"`
+	// QosWMbytes sets the write throughput limit in MB/s (0 = unlimited).
+	QosWMbytes string `json:"qosWMbytes,omitempty"`
+	// Compression enables compression for logical volumes.
+	Compression string `json:"compression,omitempty"`
+	// Encryption enables encryption for logical volumes.
+	Encryption string `json:"encryption,omitempty"`
+	// Replicate enables replication for logical volumes.
+	Replicate string `json:"replicate,omitempty"`
+	// NumDataChunks is the number of data chunks (distr_ndcs).
+	NumDataChunks string `json:"numDataChunks,omitempty"`
+	// NumParityChunks is the number of parity chunks (distr_npcs).
+	NumParityChunks string `json:"numParityChunks,omitempty"`
+	// LvolPriorityClass sets the logical volume priority class.
+	LvolPriorityClass string `json:"lvolPriorityClass,omitempty"`
+	// Fabric is the transport fabric (e.g. tcp).
+	Fabric string `json:"fabric,omitempty"`
+	// MaxNamespacePerSubsys limits namespaces per NVMf subsystem.
+	MaxNamespacePerSubsys string `json:"maxNamespacePerSubsys,omitempty"`
+	// Tune2fsReservedBlocks sets the ext4 reserved-blocks percentage.
+	Tune2fsReservedBlocks string `json:"tune2fsReservedBlocks,omitempty"`
+}
+
 // PoolSpec defines the desired state of Pool
 type PoolSpec struct {
 	// Name is the backend pool name.
@@ -77,6 +111,8 @@ type PoolSpec struct {
 	// Action triggers an imperative pool operation.
 	// FIXME: Unused for now
 	Action string `json:"action,omitempty"`
+	// StorageClassParameters sets default StorageClass parameter values for volumes in this pool.
+	StorageClassParameters *StorageClassParameters `json:"storageClassParameters,omitempty"`
 }
 
 // PoolStatus defines the observed state of Pool.
