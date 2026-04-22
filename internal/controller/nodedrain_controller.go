@@ -37,9 +37,9 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-manager/api/v1alpha1"
-	"github.com/simplyblock/simplyblock-manager/internal/utils"
-	"github.com/simplyblock/simplyblock-manager/internal/webapi"
+	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const (
@@ -52,7 +52,7 @@ const (
 
 	// managerPDBName is the name of the temporary PDB that protects the manager
 	// pod from eviction while it sets up storage PDB protection on its own node.
-	managerPDBName = "simplyblock-manager-self"
+	managerPDBName = "simplyblock-operator-self"
 
 	nodeStatusOffline = "offline"
 )
@@ -862,7 +862,7 @@ func (r *NodeDrainCoordinatorReconciler) ensureManagerPDB(ctx context.Context, n
 			MaxUnavailable: &maxUnavailable,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"app": "simplyblock-manager",
+					"app": "simplyblock-operator",
 				},
 			},
 		},
