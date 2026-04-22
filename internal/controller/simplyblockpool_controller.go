@@ -57,7 +57,7 @@ type POOLAPIResponse struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/finalizers,verbs=update
-// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -109,6 +109,11 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 				}
 				log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
 				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+			}
+
+			if err := r.deleteStorageClass(ctx, poolCR); err != nil {
+				log.Error(err, "Failed to delete StorageClass for pool")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
 
 			poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, utils.FinalizerPool)
@@ -217,6 +222,16 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	return ctrl.Result{}, nil
 }
 
+// deleteStorageClass deletes the StorageClass associated with the pool, ignoring not-found errors.
+func (r *PoolReconciler) deleteStorageClass(ctx context.Context, poolCR *simplyblockv1alpha1.Pool) error {
+	sc := &storagev1.StorageClass{}
+	name := fmt.Sprintf("simplyblock-%s-%s", poolCR.Spec.ClusterName, poolCR.Spec.Name)
+	if err := r.Get(ctx, client.ObjectKey{Name: name}, sc); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, sc))
+}
+
 // upsertStorageClass creates a StorageClass for the pool if one does not already exist.
 // StorageClass parameters are immutable in Kubernetes, so this is create-once: if the
 // StorageClass already exists it is left unchanged.
@@ -249,32 +264,33 @@ func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyb
 	return nil
 }
 
-// mergeStorageClassParameters copies non-empty StorageClassParameters fields into dst using
-// the CSI driver's snake_case parameter names. cluster_id and csi.storage.k8s.io/fstype are
-// never overridden.
+// mergeStorageClassParameters writes StorageClassParameters fields into dst using the CSI
+// driver's snake_case parameter names. Defaults are declared on the struct via
+// +kubebuilder:default markers and are applied by the API server before the CR is stored,
+// so p fields always carry their intended values here.
 func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.StorageClassParameters) {
 	if p == nil {
 		return
 	}
-	set := func(key, val string) {
-		if val != "" {
-			dst[key] = val
+	boolStr := func(b *bool) string {
+		if b != nil && *b {
+			return "True"
 		}
+		return "False"
 	}
-	set("pool_name", p.PoolName)
-	set("qos_rw_iops", p.QosRwIops)
-	set("qos_rw_mbytes", p.QosRwMbytes)
-	set("qos_r_mbytes", p.QosRMbytes)
-	set("qos_w_mbytes", p.QosWMbytes)
-	set("compression", p.Compression)
-	set("encryption", p.Encryption)
-	set("replicate", p.Replicate)
-	set("distr_ndcs", p.NumDataChunks)
-	set("distr_npcs", p.NumParityChunks)
-	set("lvol_priority_class", p.LvolPriorityClass)
-	set("fabric", p.Fabric)
-	set("max_namespace_per_subsys", p.MaxNamespacePerSubsys)
-	set("tune2fs_reserved_blocks", p.Tune2fsReservedBlocks)
+	dst["qos_rw_iops"] = p.QosRwIops
+	dst["qos_rw_mbytes"] = p.QosRwMbytes
+	dst["qos_r_mbytes"] = p.QosRMbytes
+	dst["qos_w_mbytes"] = p.QosWMbytes
+	dst["compression"] = p.Compression
+	dst["encryption"] = boolStr(p.Encryption)
+	dst["replicate"] = boolStr(p.Replicate)
+	dst["distr_ndcs"] = p.NumDataChunks
+	dst["distr_npcs"] = p.NumParityChunks
+	dst["lvol_priority_class"] = p.LvolPriorityClass
+	dst["fabric"] = p.Fabric
+	dst["max_namespace_per_subsys"] = p.MaxNamespacePerSubsys
+	dst["tune2fs_reserved_blocks"] = p.Tune2fsReservedBlocks
 }
 
 // SetupWithManager sets up the controller with the Manager.
