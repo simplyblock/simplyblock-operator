@@ -18,6 +18,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 
 	image := sn.Spec.ClusterImage
 	initCmd := []string{
+		"sudo", "-E",
 		"python3",
 		"simplyblock_web/node_configure.py",
 		"--max-lvol=" + Int32PtrToString(sn.Spec.MaxLogicalVolumeCount),
