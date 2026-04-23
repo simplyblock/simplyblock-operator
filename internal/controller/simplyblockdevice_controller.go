@@ -59,6 +59,8 @@ type deviceAPIResponse struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=devices,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=devices/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=devices/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.

@@ -1,6 +1,12 @@
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
 
+# Bundle image URL and version
+BUNDLE_IMG ?= controller-bundle:latest
+VERSION ?= 0.1.0
+CHANNELS ?= stable
+DEFAULT_CHANNEL ?= stable
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
 GOBIN=$(shell go env GOPATH)/bin
@@ -149,6 +155,32 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 	mkdir -p dist
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
 	"$(KUSTOMIZE)" build config/default > dist/install.yaml
+
+##@ OLM Bundle
+
+.PHONY: bundle
+bundle: manifests kustomize ## Generate OLM bundle manifests and metadata.
+	operator-sdk generate bundle \
+		--package simplyblock-operator \
+		--version $(VERSION) \
+		--channels $(CHANNELS) \
+		--default-channel $(DEFAULT_CHANNEL) \
+		--deploy-dir config/default \
+		--crds-dir config/crd/bases \
+		--output-dir bundle \
+		--overwrite
+
+.PHONY: bundle-build
+bundle-build: ## Build the bundle image.
+	$(CONTAINER_TOOL) build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
+
+.PHONY: bundle-push
+bundle-push: ## Push the bundle image.
+	$(CONTAINER_TOOL) push $(BUNDLE_IMG)
+
+.PHONY: bundle-validate
+bundle-validate: ## Validate the bundle with operator-sdk scorecard.
+	operator-sdk bundle validate ./bundle
 
 ##@ Deployment
 

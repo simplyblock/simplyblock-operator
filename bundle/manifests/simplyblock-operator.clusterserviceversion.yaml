@@ -1,0 +1,412 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: |-
+      [
+        {
+          "apiVersion": "storage.simplyblock.io/v1alpha1",
+          "kind": "StorageCluster",
+          "metadata": {
+            "name": "storagecluster-sample",
+            "namespace": "simplyblock-operator-system"
+          },
+          "spec": {
+            "clusterName": "sample-cluster"
+          }
+        },
+        {
+          "apiVersion": "storage.simplyblock.io/v1alpha1",
+          "kind": "StorageNode",
+          "metadata": {
+            "name": "storagenode-sample",
+            "namespace": "simplyblock-operator-system"
+          },
+          "spec": {
+            "clusterName": "sample-cluster"
+          }
+        },
+        {
+          "apiVersion": "storage.simplyblock.io/v1alpha1",
+          "kind": "Pool",
+          "metadata": {
+            "name": "pool-sample",
+            "namespace": "simplyblock-operator-system"
+          },
+          "spec": {
+            "clusterName": "sample-cluster",
+            "name": "pool-1"
+          }
+        },
+        {
+          "apiVersion": "storage.simplyblock.io/v1alpha1",
+          "kind": "Device",
+          "metadata": {
+            "name": "device-sample",
+            "namespace": "simplyblock-operator-system"
+          },
+          "spec": {
+            "clusterName": "sample-cluster"
+          }
+        },
+        {
+          "apiVersion": "storage.simplyblock.io/v1alpha1",
+          "kind": "Lvol",
+          "metadata": {
+            "name": "lvol-sample",
+            "namespace": "simplyblock-operator-system"
+          },
+          "spec": {
+            "clusterName": "sample-cluster",
+            "poolName": "pool-1"
+          }
+        },
+        {
+          "apiVersion": "storage.simplyblock.io/v1alpha1",
+          "kind": "Task",
+          "metadata": {
+            "name": "task-sample",
+            "namespace": "simplyblock-operator-system"
+          },
+          "spec": {
+            "clusterName": "sample-cluster"
+          }
+        },
+        {
+          "apiVersion": "storage.simplyblock.io/v1alpha1",
+          "kind": "SnapshotReplication",
+          "metadata": {
+            "name": "snapshotreplication-sample",
+            "namespace": "simplyblock-operator-system"
+          },
+          "spec": {
+            "sourceCluster": "source-cluster",
+            "targetCluster": "target-cluster"
+          }
+        },
+        {
+          "apiVersion": "storage.simplyblock.io/v1alpha1",
+          "kind": "StorageBackup",
+          "metadata": {
+            "name": "storagebackup-sample",
+            "namespace": "simplyblock-operator-system"
+          },
+          "spec": {
+            "clusterName": "sample-cluster",
+            "pvcRef": {
+              "name": "my-pvc"
+            }
+          }
+        }
+      ]
+    capabilities: Basic Install
+    operators.operatorframework.io/builder: operator-sdk-v1.42.2
+    operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
+  name: simplyblock-operator.v0.1.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: Represents a physical or virtual storage device managed by a Simplyblock node.
+      displayName: Device
+      kind: Device
+      name: devices.storage.simplyblock.io
+      version: v1alpha1
+    - description: Represents a logical volume (Lvol) provisioned within a Simplyblock storage pool.
+      displayName: Lvol
+      kind: Lvol
+      name: lvols.storage.simplyblock.io
+      version: v1alpha1
+    - description: Represents a Simplyblock storage pool that groups devices and exposes StorageClasses.
+      displayName: Pool
+      kind: Pool
+      name: pools.storage.simplyblock.io
+      version: v1alpha1
+    - description: Configures periodic snapshot replication between two Simplyblock storage clusters.
+      displayName: SnapshotReplication
+      kind: SnapshotReplication
+      name: snapshotreplications.storage.simplyblock.io
+      version: v1alpha1
+    - description: Triggers and tracks a point-in-time backup of a PVC-backed Simplyblock volume.
+      displayName: StorageBackup
+      kind: StorageBackup
+      name: storagebackups.storage.simplyblock.io
+      version: v1alpha1
+    - description: Defines and manages a Simplyblock storage cluster and its control-plane lifecycle.
+      displayName: StorageCluster
+      kind: StorageCluster
+      name: storageclusters.storage.simplyblock.io
+      version: v1alpha1
+    - description: Represents a single Simplyblock storage node and manages its DaemonSet and RBAC.
+      displayName: StorageNode
+      kind: StorageNode
+      name: storagenodes.storage.simplyblock.io
+      version: v1alpha1
+    - description: Tracks an asynchronous task running against the Simplyblock control-plane API.
+      displayName: Task
+      kind: Task
+      name: tasks.storage.simplyblock.io
+      version: v1alpha1
+  description: >
+    The Simplyblock Operator manages the full lifecycle of Simplyblock storage clusters
+    on Kubernetes — provisioning storage clusters, nodes, pools, logical volumes, devices,
+    snapshots, backups, and snapshot replication. It reconciles the desired state declared
+    via custom resources against the Simplyblock control-plane API.
+  displayName: Simplyblock Operator
+  icon:
+  - base64data: ""
+    mediatype: ""
+  install:
+    spec:
+      clusterPermissions:
+      - rules:
+        - apiGroups:
+          - ""
+          resources:
+          - events
+          verbs:
+          - create
+          - patch
+        - apiGroups:
+          - ""
+          resources:
+          - nodes
+          - pods
+          verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - ""
+          resources:
+          - persistentvolumeclaims
+          - persistentvolumes
+          verbs:
+          - get
+          - list
+          - watch
+        - apiGroups:
+          - ""
+          resources:
+          - secrets
+          - serviceaccounts
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - apps
+          resources:
+          - daemonsets
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - coordination.k8s.io
+          resources:
+          - leases
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - policy
+          resources:
+          - poddisruptionbudgets
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - rbac.authorization.k8s.io
+          resources:
+          - clusterrolebindings
+          - clusterroles
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - storage.k8s.io
+          resources:
+          - storageclasses
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - watch
+        - apiGroups:
+          - storage.simplyblock.io
+          resources:
+          - devices
+          - lvols
+          - pools
+          - snapshotreplications
+          - storagebackups
+          - storageclusters
+          - storagenodes
+          - tasks
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - storage.simplyblock.io
+          resources:
+          - devices/finalizers
+          - lvols/finalizers
+          - pools/finalizers
+          - snapshotreplications/finalizers
+          - storagebackups/finalizers
+          - storageclusters/finalizers
+          - storagenodes/finalizers
+          - tasks/finalizers
+          verbs:
+          - update
+        - apiGroups:
+          - storage.simplyblock.io
+          resources:
+          - devices/status
+          - lvols/status
+          - pools/status
+          - snapshotreplications/status
+          - storagebackups/status
+          - storageclusters/status
+          - storagenodes/status
+          - tasks/status
+          verbs:
+          - get
+          - patch
+          - update
+        - apiGroups:
+          - authentication.k8s.io
+          resources:
+          - tokenreviews
+          verbs:
+          - create
+        - apiGroups:
+          - authorization.k8s.io
+          resources:
+          - subjectaccessreviews
+          verbs:
+          - create
+        serviceAccountName: simplyblock-operator-controller-manager
+      deployments:
+      - label:
+          app.kubernetes.io/name: simplyblock-operator
+          control-plane: controller-manager
+        name: simplyblock-operator-controller-manager
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: simplyblock-operator
+              control-plane: controller-manager
+          strategy: {}
+          template:
+            metadata:
+              annotations:
+                kubectl.kubernetes.io/default-container: manager
+              labels:
+                app.kubernetes.io/name: simplyblock-operator
+                control-plane: controller-manager
+            spec:
+              containers:
+              - args:
+                - --metrics-bind-address=:8443
+                - --leader-elect
+                - --health-probe-bind-address=:8081
+                command:
+                - /manager
+                image: controller:latest
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 8081
+                  initialDelaySeconds: 15
+                  periodSeconds: 20
+                name: manager
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: 8081
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                resources:
+                  limits:
+                    cpu: 500m
+                    memory: 128Mi
+                  requests:
+                    cpu: 10m
+                    memory: 64Mi
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop:
+                    - ALL
+                  readOnlyRootFilesystem: true
+              securityContext:
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              serviceAccountName: simplyblock-operator-controller-manager
+              terminationGracePeriodSeconds: 10
+    strategy: deployment
+  installModes:
+  - supported: true
+    type: OwnNamespace
+  - supported: true
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - storage
+  - nvme
+  - simplyblock
+  - spdk
+  - csi
+  links:
+  - name: Simplyblock
+    url: https://simplyblock.io
+  - name: Documentation
+    url: https://docs.simplyblock.io
+  maintainers:
+  - email: support@simplyblock.io
+    name: Simplyblock
+  maturity: alpha
+  minKubeVersion: 1.25.0
+  provider:
+    name: Simplyblock
+    url: https://simplyblock.io
+  version: 0.1.0

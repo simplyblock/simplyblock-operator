@@ -1,0 +1,4 @@
+resources:
+- ../default
+- bases/simplyblock-operator.clusterserviceversion.yaml
+patchesJson6902: []

@@ -1,0 +1,40 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  name: simplyblock-operator.v0.0.0
+  namespace: placeholder
+spec:
+  description: >
+    The Simplyblock Operator manages the full lifecycle of Simplyblock storage clusters
+    on Kubernetes — provisioning storage clusters, nodes, pools, logical volumes, devices,
+    snapshots, backups, and snapshot replication. It reconciles the desired state declared
+    via custom resources against the Simplyblock control-plane API.
+  displayName: Simplyblock Operator
+  keywords:
+    - storage
+    - nvme
+    - simplyblock
+    - spdk
+    - csi
+  maintainers:
+    - name: Simplyblock
+      email: support@simplyblock.io
+  provider:
+    name: Simplyblock
+    url: https://simplyblock.io
+  links:
+    - name: Simplyblock
+      url: https://simplyblock.io
+    - name: Documentation
+      url: https://docs.simplyblock.io
+  maturity: alpha
+  minKubeVersion: 1.25.0
+  installModes:
+    - type: OwnNamespace
+      supported: true
+    - type: SingleNamespace
+      supported: true
+    - type: MultiNamespace
+      supported: false
+    - type: AllNamespaces
+      supported: true
