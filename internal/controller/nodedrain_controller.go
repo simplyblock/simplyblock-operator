@@ -54,7 +54,9 @@ const (
 	// pod from eviction while it sets up storage PDB protection on its own node.
 	managerPDBName = "simplyblock-operator-self"
 
-	nodeStatusOffline = "offline"
+	nodeStatusOffline    = "offline"
+	nodeStatusInRestart  = "in_restart"
+	nodeStatusInShutdown = "in_shutdown"
 )
 
 // NodeDrainCoordinatorReconciler coordinates graceful simplyblock node shutdown
@@ -591,6 +593,32 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 	// Call restart for the first node only. handleRestartCalled will wait for it
 	// to be online+healthy, then call restart on the next socket node in sequence.
 	firstUUID := nodeUUIDs[0]
+
+	// Hold off if the secondary is currently restarting or shutting down.
+	busy, err := isPeerBusy(ctx, apiClient, clusterSecret, clusterUUID, firstUUID)
+	if err != nil {
+		log.Info("Failed to check peer node status, retrying", "node", state.Hostname, "nodeUUID", firstUUID, "err", err)
+		return 15 * time.Second
+	}
+	if busy {
+		state.Message = fmt.Sprintf("waiting for peer node %s to finish restart/shutdown", firstUUID)
+		log.Info("Peer node is busy; deferring restart", "node", state.Hostname, "nodeUUID", firstUUID)
+		return 15 * time.Second
+	}
+
+	firstNodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, firstUUID)
+	if err != nil {
+		log.Info("Failed to check node status before restart, retrying", "node", state.Hostname, "nodeUUID", firstUUID, "err", err)
+		return 15 * time.Second
+	}
+	if firstNodeInfo.Status == nodeStatusInRestart {
+		log.Info("Node already in_restart; advancing to restart_called without re-calling API", "node", state.Hostname, "nodeUUID", firstUUID)
+		state.ActiveNodeUUID = firstUUID
+		state.Phase = simplyblockv1alpha1.DrainPhaseRestartCalled
+		state.Message = fmt.Sprintf("node %s already in_restart; waiting for online", firstUUID)
+		return 10 * time.Second
+	}
+
 	nodeAddr := fmt.Sprintf("%s:5000", ip)
 	restartPayload := map[string]any{
 		"force":        true,
@@ -676,6 +704,31 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 		if err != nil {
 			return 15 * time.Second, nil
 		}
+
+		// Hold off if the next node's secondary is currently restarting or shutting down.
+		busy, err := isPeerBusy(ctx, apiClient, clusterSecret, clusterUUID, nextUUID)
+		if err != nil {
+			log.Info("Failed to check peer node status, retrying", "node", state.Hostname, "nodeUUID", nextUUID, "err", err)
+			return 15 * time.Second, nil
+		}
+		if busy {
+			state.Message = fmt.Sprintf("waiting for peer node %s to finish restart/shutdown", nextUUID)
+			log.Info("Peer node is busy; deferring restart", "node", state.Hostname, "nodeUUID", nextUUID)
+			return 15 * time.Second, nil
+		}
+
+		nextNodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, nextUUID)
+		if err != nil {
+			log.Info("Failed to check node status before restart, retrying", "node", state.Hostname, "nodeUUID", nextUUID, "err", err)
+			return 15 * time.Second, nil
+		}
+		if nextNodeInfo.Status == nodeStatusInRestart {
+			log.Info("Next node already in_restart; skipping restart API call", "node", state.Hostname, "nodeUUID", nextUUID)
+			state.ActiveNodeUUID = nextUUID
+			state.Message = fmt.Sprintf("node %s already in_restart; waiting for online", nextUUID)
+			return 10 * time.Second, nil
+		}
+
 		restartPayload := map[string]any{
 			"force":        true,
 			"node_address": fmt.Sprintf("%s:5000", ip),
@@ -695,16 +748,29 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 		return 10 * time.Second, nil
 	}
 
-	// All socket nodes are back online — clean up PDB and pod label.
+	// All socket nodes are back online — wait for the cluster to finish
+	// rebalancing before releasing this drain slot to the next worker.
+	rebalancing, err := isClusterRebalancing(ctx, apiClient, clusterSecret, clusterUUID)
+	if err != nil {
+		log.Info("Failed to check cluster rebalancing status, retrying", "node", state.Hostname, "err", err)
+		return 30 * time.Second, nil
+	}
+	if rebalancing {
+		state.Message = "all nodes online; waiting for cluster rebalancing to complete"
+		log.Info("Cluster is rebalancing; holding drain slot before next worker", "node", state.Hostname)
+		return 30 * time.Second, nil
+	}
+
+	// Clean up PDB and pod label.
 	if err := r.cleanupDrainResources(ctx, snCR.Namespace, state.Hostname); err != nil {
 		log.Error(err, "Cleanup failed, will retry", "node", state.Hostname)
 		return 10 * time.Second, nil
 	}
 
-	log.Info("All storage nodes back online; drain coordination complete", "node", state.Hostname, "nodeCount", len(nodeUUIDs))
+	log.Info("All storage nodes back online and cluster rebalancing complete; drain coordination complete", "node", state.Hostname, "nodeCount", len(nodeUUIDs))
 	state.Phase = simplyblockv1alpha1.DrainPhaseComplete
 	state.ActiveNodeUUID = ""
-	state.Message = "all storage nodes back online"
+	state.Message = "all storage nodes back online; cluster rebalancing complete"
 	return 0, nil
 }
 
@@ -994,8 +1060,10 @@ func (r *NodeDrainCoordinatorReconciler) nodeToStorageNodeRequests(
 
 // backendNodeInfo holds the relevant fields from the storage-nodes API response.
 type backendNodeInfo struct {
-	Status  string `json:"status"`
-	Healthy bool   `json:"health_check"`
+	UUID            string `json:"id"`
+	Status          string `json:"status"`
+	Healthy         bool   `json:"health_check"`
+	SecondaryNodeID string `json:"secondary_node_id"`
 }
 
 // getBackendNodeInfo fetches status and health_check for a node UUID.
@@ -1164,6 +1232,63 @@ func isNodeReady(node *corev1.Node) bool {
 		}
 	}
 	return false
+}
+
+// isPeerBusy lists all storage nodes in the cluster and finds the one that
+// has nodeUUID as its secondary_node_id. That node is the HA peer (primary)
+// of the node we want to restart. Returns true if the peer is in_restart or
+// in_shutdown, which means we must defer the restart.
+func isPeerBusy(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret, clusterUUID, nodeUUID string,
+) (bool, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
+	body, statusCode, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || statusCode >= 300 {
+		if err == nil {
+			err = fmt.Errorf("status %d: %s", statusCode, string(body))
+		}
+		return false, fmt.Errorf("list storage nodes: %w", err)
+	}
+
+	var nodes []backendNodeInfo
+	if err := json.Unmarshal(body, &nodes); err != nil {
+		return false, fmt.Errorf("unmarshal storage nodes: %w", err)
+	}
+
+	for _, n := range nodes {
+		if n.SecondaryNodeID == nodeUUID {
+			return n.Status == nodeStatusInRestart || n.Status == nodeStatusInShutdown, nil
+		}
+	}
+	return false, nil
+}
+
+// isClusterRebalancing returns true when the simplyblock cluster is actively
+// rebalancing data. The drain slot is held until rebalancing completes so that
+// the next worker drain does not start while the cluster is already under load.
+func isClusterRebalancing(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret, clusterUUID string,
+) (bool, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
+	body, statusCode, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || statusCode >= 300 {
+		if err == nil {
+			err = fmt.Errorf("status %d: %s", statusCode, string(body))
+		}
+		return false, fmt.Errorf("get cluster info: %w", err)
+	}
+
+	var info struct {
+		Rebalancing bool `json:"is_re_balancing"`
+	}
+	if err := json.Unmarshal(body, &info); err != nil {
+		return false, fmt.Errorf("unmarshal cluster info: %w", err)
+	}
+	return info.Rebalancing, nil
 }
 
 // sanitizeLabelValue truncates to 63 chars (Kubernetes label value limit).
