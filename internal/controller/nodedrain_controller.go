@@ -606,6 +606,19 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 		return 15 * time.Second
 	}
 
+	firstNodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, firstUUID)
+	if err != nil {
+		log.Info("Failed to check node status before restart, retrying", "node", state.Hostname, "nodeUUID", firstUUID, "err", err)
+		return 15 * time.Second
+	}
+	if firstNodeInfo.Status == nodeStatusInRestart {
+		log.Info("Node already in_restart; advancing to restart_called without re-calling API", "node", state.Hostname, "nodeUUID", firstUUID)
+		state.ActiveNodeUUID = firstUUID
+		state.Phase = simplyblockv1alpha1.DrainPhaseRestartCalled
+		state.Message = fmt.Sprintf("node %s already in_restart; waiting for online", firstUUID)
+		return 10 * time.Second
+	}
+
 	nodeAddr := fmt.Sprintf("%s:5000", ip)
 	restartPayload := map[string]any{
 		"force":        true,
@@ -702,6 +715,18 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 			state.Message = fmt.Sprintf("waiting for secondary of node %s to finish restart/shutdown", nextUUID)
 			log.Info("Secondary node is busy; deferring restart", "node", state.Hostname, "nodeUUID", nextUUID)
 			return 15 * time.Second, nil
+		}
+
+		nextNodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, nextUUID)
+		if err != nil {
+			log.Info("Failed to check node status before restart, retrying", "node", state.Hostname, "nodeUUID", nextUUID, "err", err)
+			return 15 * time.Second, nil
+		}
+		if nextNodeInfo.Status == nodeStatusInRestart {
+			log.Info("Next node already in_restart; skipping restart API call", "node", state.Hostname, "nodeUUID", nextUUID)
+			state.ActiveNodeUUID = nextUUID
+			state.Message = fmt.Sprintf("node %s already in_restart; waiting for online", nextUUID)
+			return 10 * time.Second, nil
 		}
 
 		restartPayload := map[string]any{
