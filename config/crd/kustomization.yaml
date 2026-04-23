@@ -9,9 +9,10 @@ resources:
 - bases/storage.simplyblock.io_tasks.yaml
 - bases/storage.simplyblock.io_lvols.yaml
 - bases/storage.simplyblock.io_storagebackups.yaml
+- bases/storage.simplyblock.io_snapshotreplications.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
-patches:
+patches: []
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix.
 # patches here are for enabling the conversion webhook for each CRD
 # +kubebuilder:scaffold:crdkustomizewebhookpatch

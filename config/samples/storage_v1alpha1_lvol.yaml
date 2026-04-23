@@ -6,4 +6,5 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: lvol-sample
 spec:
-  # TODO(user): Add fields here
+  clusterName: sample-cluster
+  poolName: pool-1
