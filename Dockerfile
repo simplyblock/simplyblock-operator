@@ -31,9 +31,21 @@ RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -a -o manager cmd/main.go
 
-# Use distroless/base (includes glibc, required for CGO-linked binaries) as minimal base image.
-# Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM gcr.io/distroless/base:nonroot
+# Use Red Hat UBI10 minimal as runtime base (required for Red Hat certification).
+# ubi10-minimal includes glibc, which is required for CGO-linked binaries (BoringCrypto).
+FROM registry.access.redhat.com/ubi10/ubi-minimal:10.1
+
+ARG VERSION=0.1.0
+ARG RELEASE=1
+
+# Required labels for Red Hat certification (preflight check operator).
+LABEL name="simplyblock-operator" \
+      vendor="Simplyblock" \
+      version="${VERSION}" \
+      release="${RELEASE}" \
+      summary="Simplyblock Operator manages the lifecycle of Simplyblock storage clusters on Kubernetes." \
+      description="The Simplyblock Operator reconciles StorageCluster, StorageNode, Pool, Device, Lvol, Task, SnapshotReplication, and StorageBackup custom resources against the Simplyblock control-plane API."
+
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532
