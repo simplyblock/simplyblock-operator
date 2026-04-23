@@ -6,4 +6,6 @@ resources:
 - storage_v1alpha1_device.yaml
 - storage_v1alpha1_task.yaml
 - storage_v1alpha1_lvol.yaml
+- storage_v1alpha1_snapshotreplication.yaml
+- storage_v1alpha1_storagebackup.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

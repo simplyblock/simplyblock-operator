@@ -6,4 +6,8 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: storagenode-sample
 spec:
-  # TODO(user): Add fields here
+  clusterName: sample-cluster
+  clusterImage: simplyblock/snode:latest
+  maxLogicalVolumeCount: 256
+  workerNodes:
+    - worker-node-1
