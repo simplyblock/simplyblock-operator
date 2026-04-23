@@ -119,7 +119,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -t ${IMG} .
+	$(CONTAINER_TOOL) build --build-arg VERSION=$(VERSION) --build-arg RELEASE=1 -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -142,7 +142,7 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	fi
 	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
 	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
-	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} --build-arg VERSION=$(VERSION) --build-arg RELEASE=1 -f Dockerfile.cross .
 	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
 	rm Dockerfile.cross
 
