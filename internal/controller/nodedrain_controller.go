@@ -54,6 +54,7 @@ const (
 	// pod from eviction while it sets up storage PDB protection on its own node.
 	managerPDBName = "simplyblock-operator-self"
 
+	nodeStatusOnline     = "online"
 	nodeStatusOffline    = "offline"
 	nodeStatusInRestart  = "in_restart"
 	nodeStatusInShutdown = "in_shutdown"

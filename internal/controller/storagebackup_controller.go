@@ -43,6 +43,15 @@ import (
 )
 
 const (
+	backupAPIStatusPending    = "pending"
+	backupAPIStatusInProgress = "in_progress"
+	backupAPIStatusCompleted  = "completed"
+	backupAPIStatusFailed     = "failed"
+	backupAPIStatusMerging    = "merging"
+	backupAPIStatusDeleting   = "deleting"
+)
+
+const (
 	backupFinalizer        = "storage.simplyblock.io/storagebackup-finalizer"
 	backupPendingMessage   = "Waiting for backup metadata from the API"
 	backupDeletionRequeue  = 10 * time.Second
@@ -679,17 +688,17 @@ func findBackupByID(backups []backupAPIResponse, backupID string) *backupAPIResp
 
 func backupPhaseFromAPIStatus(status string) string {
 	switch status {
-	case "pending":
+	case backupAPIStatusPending:
 		return simplyblockv1alpha1.BackupPhasePending
-	case "in_progress":
+	case backupAPIStatusInProgress:
 		return simplyblockv1alpha1.BackupPhaseInProgress
-	case "completed":
+	case backupAPIStatusCompleted:
 		return simplyblockv1alpha1.BackupPhaseDone
-	case "failed":
+	case backupAPIStatusFailed:
 		return simplyblockv1alpha1.BackupPhaseFailed
-	case "merging":
+	case backupAPIStatusMerging:
 		return simplyblockv1alpha1.BackupPhaseMerging
-	case "deleting":
+	case backupAPIStatusDeleting:
 		return simplyblockv1alpha1.BackupPhaseDeleting
 	default:
 		return simplyblockv1alpha1.BackupPhasePending
@@ -697,7 +706,7 @@ func backupPhaseFromAPIStatus(status string) string {
 }
 
 func backupTerminal(status string) bool {
-	return status == "completed" || status == "failed"
+	return status == backupAPIStatusCompleted || status == backupAPIStatusFailed
 }
 
 func unixToTimePtr(ts int64) *metav1.Time {
