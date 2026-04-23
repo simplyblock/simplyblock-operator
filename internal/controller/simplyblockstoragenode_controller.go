@@ -47,19 +47,19 @@ type StorageNodeReconciler struct {
 }
 
 type SNODEAPIResponse struct {
-	UUID       string `json:"id"`
-	Status     string `json:"status"`
-	IP         string `json:"mgmt_ip"`
-	Health     bool   `json:"health_check"`
-	Hostname   string `json:"hostname"`
-	Devices    int    `json:"device_count"`
-	ON_Devices int    `json:"online_device_count"`
-	CPU        int    `json:"cpu_spdk_count"`
-	Memory     int64  `json:"spdk_mem"`
-	Volumes    int    `json:"lvols"`
-	RPC_PORT   int    `json:"rpc_port"`
-	LVOL_PORT  int    `json:"lvol_subsys_port"`
-	NVMF_PORT  int    `json:"nvmf_port"`
+	UUID               string `json:"id"`
+	Status             string `json:"status"`
+	IP                 string `json:"mgmt_ip"`
+	Health             bool   `json:"health_check"`
+	Hostname           string `json:"hostname"`
+	DevicesCount       int    `json:"device_count"`
+	OnlineDevicesCount int    `json:"online_device_count"`
+	CPU                int    `json:"cpu_spdk_count"`
+	Memory             int64  `json:"spdk_mem"`
+	Volumes            int    `json:"lvols"`
+	RPC_PORT           int    `json:"rpc_port"`
+	LVOL_PORT          int    `json:"lvol_subsys_port"`
+	NVMF_PORT          int    `json:"nvmf_port"`
 }
 
 type NodeStatusResponse struct {
@@ -649,7 +649,7 @@ func onAllSocketNodesOnline(
 			Health:   res.Health,
 			Status:   res.Status,
 			MgmtIp:   res.IP,
-			Devices:  fmt.Sprintf("%d/%d", res.Devices, res.ON_Devices),
+			Devices:  fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
 			CPU:      utils.IntToInt32Ptr(res.CPU),
 			Memory:   utils.HumanBytes(res.Memory, "iec"),
 			Volumes:  utils.IntToInt32Ptr(res.Volumes),
