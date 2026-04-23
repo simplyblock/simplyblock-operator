@@ -595,14 +595,14 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 	firstUUID := nodeUUIDs[0]
 
 	// Hold off if the secondary is currently restarting or shutting down.
-	busy, err := isSecondaryBusy(ctx, apiClient, clusterSecret, clusterUUID, firstUUID)
+	busy, err := isPeerBusy(ctx, apiClient, clusterSecret, clusterUUID, firstUUID)
 	if err != nil {
-		log.Info("Failed to check secondary node status, retrying", "node", state.Hostname, "nodeUUID", firstUUID, "err", err)
+		log.Info("Failed to check peer node status, retrying", "node", state.Hostname, "nodeUUID", firstUUID, "err", err)
 		return 15 * time.Second
 	}
 	if busy {
-		state.Message = fmt.Sprintf("waiting for secondary of node %s to finish restart/shutdown", firstUUID)
-		log.Info("Secondary node is busy; deferring restart", "node", state.Hostname, "nodeUUID", firstUUID)
+		state.Message = fmt.Sprintf("waiting for peer node %s to finish restart/shutdown", firstUUID)
+		log.Info("Peer node is busy; deferring restart", "node", state.Hostname, "nodeUUID", firstUUID)
 		return 15 * time.Second
 	}
 
@@ -706,14 +706,14 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 		}
 
 		// Hold off if the next node's secondary is currently restarting or shutting down.
-		busy, err := isSecondaryBusy(ctx, apiClient, clusterSecret, clusterUUID, nextUUID)
+		busy, err := isPeerBusy(ctx, apiClient, clusterSecret, clusterUUID, nextUUID)
 		if err != nil {
-			log.Info("Failed to check secondary node status, retrying", "node", state.Hostname, "nodeUUID", nextUUID, "err", err)
+			log.Info("Failed to check peer node status, retrying", "node", state.Hostname, "nodeUUID", nextUUID, "err", err)
 			return 15 * time.Second, nil
 		}
 		if busy {
-			state.Message = fmt.Sprintf("waiting for secondary of node %s to finish restart/shutdown", nextUUID)
-			log.Info("Secondary node is busy; deferring restart", "node", state.Hostname, "nodeUUID", nextUUID)
+			state.Message = fmt.Sprintf("waiting for peer node %s to finish restart/shutdown", nextUUID)
+			log.Info("Peer node is busy; deferring restart", "node", state.Hostname, "nodeUUID", nextUUID)
 			return 15 * time.Second, nil
 		}
 
@@ -1060,6 +1060,7 @@ func (r *NodeDrainCoordinatorReconciler) nodeToStorageNodeRequests(
 
 // backendNodeInfo holds the relevant fields from the storage-nodes API response.
 type backendNodeInfo struct {
+	UUID            string `json:"id"`
 	Status          string `json:"status"`
 	Healthy         bool   `json:"health_check"`
 	SecondaryNodeID string `json:"secondary_node_id"`
@@ -1233,26 +1234,35 @@ func isNodeReady(node *corev1.Node) bool {
 	return false
 }
 
-// isSecondaryBusy returns true when the node's secondary (if any) is currently
-// in_restart or in_shutdown. The restart API must not be called while the
-// secondary is in one of these transient states.
-func isSecondaryBusy(
+// isPeerBusy lists all storage nodes in the cluster and finds the one that
+// has nodeUUID as its secondary_node_id. That node is the HA peer (primary)
+// of the node we want to restart. Returns true if the peer is in_restart or
+// in_shutdown, which means we must defer the restart.
+func isPeerBusy(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterSecret, clusterUUID, nodeUUID string,
 ) (bool, error) {
-	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, nodeUUID)
-	if err != nil {
-		return false, err
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
+	body, statusCode, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || statusCode >= 300 {
+		if err == nil {
+			err = fmt.Errorf("status %d: %s", statusCode, string(body))
+		}
+		return false, fmt.Errorf("list storage nodes: %w", err)
 	}
-	if nodeInfo.SecondaryNodeID == "" {
-		return false, nil
+
+	var nodes []backendNodeInfo
+	if err := json.Unmarshal(body, &nodes); err != nil {
+		return false, fmt.Errorf("unmarshal storage nodes: %w", err)
 	}
-	secondaryInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, nodeInfo.SecondaryNodeID)
-	if err != nil {
-		return false, err
+
+	for _, n := range nodes {
+		if n.SecondaryNodeID == nodeUUID {
+			return n.Status == nodeStatusInRestart || n.Status == nodeStatusInShutdown, nil
+		}
 	}
-	return secondaryInfo.Status == nodeStatusInRestart || secondaryInfo.Status == nodeStatusInShutdown, nil
+	return false, nil
 }
 
 // isClusterRebalancing returns true when the simplyblock cluster is actively
