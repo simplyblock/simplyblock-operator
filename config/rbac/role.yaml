@@ -15,9 +15,17 @@ rules:
   - ""
   resources:
   - nodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - persistentvolumeclaims
   - persistentvolumes
   verbs:
+  - create
   - get
   - list
   - watch
@@ -81,6 +89,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backuprestores
   - devices
   - lvols
   - pools
@@ -100,6 +109,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backuprestores/finalizers
   - devices/finalizers
   - lvols/finalizers
   - pools/finalizers
@@ -113,6 +123,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backuprestores/status
   - devices/status
   - lvols/status
   - pools/status

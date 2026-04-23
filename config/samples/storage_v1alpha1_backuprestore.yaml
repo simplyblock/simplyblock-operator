@@ -1,0 +1,20 @@
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: BackupRestore
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: backuprestore-sample
+spec:
+  clusterName: sample-cluster
+  backupRef:
+    name: storagebackup-sample
+  pvcTemplate:
+    metadata:
+      name: backuprestore-sample-pvc
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
