@@ -263,6 +263,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 		NodeAddress:         nodeAddress,
 		InterfaceName:       snCR.Spec.MgmtIfname,
 		SPDKImage:           snCR.Spec.SpdkImage,
+		SPDKProxyImage:      snCR.Spec.SpdkProxyImage,
 		SPDKDebug:           false,
 		IdDeviceByNQN:       false,
 		DataNics:            snCR.Spec.DataIfname,

@@ -53,6 +53,8 @@ type StorageNodeSpec struct {
 	MaxSize string `json:"maxSize,omitempty"`
 	// SpdkImage is the SPDK image reference used by node services.
 	SpdkImage string `json:"spdkImage,omitempty"`
+	// SpdkProxyImage is the SPDK proxy image reference used by node services.
+	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
 	// MgmtIfname is the management interface name used by storage nodes.
 	MgmtIfname string `json:"mgmtIfname,omitempty"`
 	// Partitions is the number of partitions created per backend storage device.
