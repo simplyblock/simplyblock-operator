@@ -18,7 +18,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 
 	image := sn.Spec.ClusterImage
 	initCmd := []string{
-		"python",
+		"python3",
 		"simplyblock_web/node_configure.py",
 		"--max-lvol=" + Int32PtrToString(sn.Spec.MaxLogicalVolumeCount),
 		"--max-size=" + sn.Spec.MaxSize,
@@ -163,7 +163,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 							Image:           image,
 							ImagePullPolicy: corev1.PullAlways,
 							Command: []string{
-								"python", "simplyblock_web/node_webapp.py", "storage_node_k8s",
+								"sudo", "-E", "python3", "simplyblock_web/node_webapp.py", "storage_node_k8s",
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
 
