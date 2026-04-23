@@ -53,7 +53,7 @@ type SNODEAPIResponse struct {
 	Health     bool   `json:"health_check"`
 	Hostname   string `json:"hostname"`
 	Devices    int    `json:"device_count"`
-	ON_Devices int    `json:"online_devices"`
+	ON_Devices int    `json:"online_device_count"`
 	CPU        int    `json:"cpu_spdk_count"`
 	Memory     int64  `json:"spdk_mem"`
 	Volumes    int    `json:"lvols"`
