@@ -1,5 +1,7 @@
 # Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+VERSION ?= 0.1.0
+IMG ?= operator:$(VERSION)
+BUNDLE_IMG ?= quay.io/simplyblock/simplyblock-operator-bundle:$(VERSION)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -155,6 +157,20 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 ifndef ignore-not-found
   ignore-not-found = false
 endif
+
+.PHONY: bundle
+bundle:
+	operator-sdk generate kustomize manifests -q
+	cd config/manager && kustomize edit set image controller=$(IMG)
+	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION)
+
+.PHONY: bundle-build
+bundle-build: bundle
+	docker build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
+
+.PHONY: bundle-push
+bundle-push: bundle-build
+	docker push $(BUNDLE_IMG)
 
 .PHONY: install
 install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.

@@ -1,0 +1,89 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: '[]'
+    capabilities: Basic Install
+  name: simplyblock-operator.v0.0.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: Device is the Schema for the devices API
+      displayName: Device
+      kind: Device
+      name: devices.storage.simplyblock.io
+      version: v1alpha1
+    - description: Lvol is the Schema for the lvols API
+      displayName: Lvol
+      kind: Lvol
+      name: lvols.storage.simplyblock.io
+      version: v1alpha1
+    - description: Pool is the Schema for the pools API
+      displayName: Pool
+      kind: Pool
+      name: pools.storage.simplyblock.io
+      version: v1alpha1
+    - description: SnapshotReplication is the Schema for the snapshotreplications
+        API
+      displayName: Snapshot Replication
+      kind: SnapshotReplication
+      name: snapshotreplications.storage.simplyblock.io
+      version: v1alpha1
+    - description: StorageCluster is the Schema for the storageclusters API
+      displayName: Storage Cluster
+      kind: StorageCluster
+      name: storageclusters.storage.simplyblock.io
+      version: v1alpha1
+    - description: StorageNode is the Schema for the storagenodes API
+      displayName: Storage Node
+      kind: StorageNode
+      name: storagenodes.storage.simplyblock.io
+      version: v1alpha1
+    - description: Task is the Schema for the tasks API
+      displayName: Task
+      kind: Task
+      name: tasks.storage.simplyblock.io
+      version: v1alpha1
+  description: The Simplyblock Operator helps with installation, operation, and management
+    of Simplyblock Control Planes, Storage Planes, and the CSI Driver.
+  displayName: Simplyblock Operator
+  icon:
+  - base64data: ""
+    mediatype: ""
+  install:
+    spec:
+      deployments: null
+    strategy: ""
+  installModes:
+  - supported: false
+    type: OwnNamespace
+  - supported: false
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - simplyblock
+  - storage
+  - nvme
+  - nvme-tcp
+  - nvme-rdma
+  - software-defined storage
+  - openshift
+  - hyper-converged
+  - disaggregated
+  links:
+  - name: Simplyblock Operator
+    url: https://simplyblock-operator.domain
+  maintainers:
+  - email: info@simplyblock.io
+    name: Simplyblock
+  maturity: alpha
+  minKubeVersion: 1.28.0
+  provider:
+    name: Simplyblock GmbH
+    url: https://www.simplyblock.io/
+  version: 0.0.0

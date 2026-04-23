@@ -1,0 +1,4 @@
+resources:
+  - bases/simplyblock-operator.clusterserviceversion.yaml
+  - ../default
+  - ../samples
