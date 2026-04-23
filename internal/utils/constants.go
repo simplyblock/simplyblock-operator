@@ -31,5 +31,6 @@ const (
 	DeviceStatusRemoved = "removed"
 	DeviceStatusOnline  = "online"
 
-	ENDPOINT = "http://simplyblock-webappapi:5000"
+	ENDPOINT       = "http://simplyblock-webappapi:5000"
+	CSIProvisioner = "csi.simplyblock.io"
 )
