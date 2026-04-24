@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - "**"
+    tags:
+      - "v*"
 env:
   IMAGE_NAME: simplyblock/simplyblock-operator
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
