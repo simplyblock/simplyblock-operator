@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.DaemonSet {
+func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool) *appsv1.DaemonSet {
 
 	labels := map[string]string{
 		"app":                 "storage-node",
@@ -67,6 +67,93 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: sn.Spec.ReservedSystemCPU})
 	}
 
+	volumes := []corev1.Volume{
+		{
+			Name: "dev-vol",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/dev",
+				},
+			},
+		},
+		{
+			Name: "etc-simplyblock",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/var/simplyblock",
+				},
+			},
+		},
+		{
+			Name: "host-sys",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/sys",
+				},
+			},
+		},
+		{
+			Name: "host-mnt",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/mnt",
+				},
+			},
+		},
+		{
+			Name: "host-modules",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/lib/modules",
+				},
+			},
+		},
+	}
+
+	initMounts := []corev1.VolumeMount{
+		{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
+		{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
+		{Name: "host-mnt", MountPath: "/mnt"},
+	}
+
+	mainMounts := []corev1.VolumeMount{
+		{Name: "dev-vol", MountPath: "/dev"},
+		{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
+		{Name: "host-sys", MountPath: "/sys"},
+	}
+
+	if tlsEnabled {
+		volumes = append(volumes,
+			corev1.Volume{
+				Name: "tls",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: "simplyblock-storage-node-api-tls",
+					},
+				},
+			},
+			corev1.Volume{
+				Name: "certificate-authority",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: "simplyblock-certificate-authority",
+						},
+					},
+				},
+			},
+		)
+
+		tlsMounts := []corev1.VolumeMount{
+			{Name: "tls", MountPath: "/etc/simplyblock/tls", ReadOnly: true},
+			{Name: "certificate-authority", MountPath: "/etc/simplyblock/tls/ca.crt", SubPath: "service-ca.crt", ReadOnly: true},
+		}
+		initMounts = append(initMounts, tlsMounts...)
+		mainMounts = append(mainMounts, tlsMounts...)
+
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "TLS_ENABLED", Value: "true"})
+	}
+
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "simplyblock-storage-node-ds-" + sn.Spec.ClusterName,
@@ -98,48 +185,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 						"io.simplyblock.node-type": "simplyblock-storage-plane-" + sn.Spec.ClusterName,
 					},
 
-					Volumes: []corev1.Volume{
-						{
-							Name: "dev-vol",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: "/dev",
-								},
-							},
-						},
-						{
-							Name: "etc-simplyblock",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: "/var/simplyblock",
-								},
-							},
-						},
-						{
-							Name: "host-sys",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: "/sys",
-								},
-							},
-						},
-						{
-							Name: "host-mnt",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: "/mnt",
-								},
-							},
-						},
-						{
-							Name: "host-modules",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: "/lib/modules",
-								},
-							},
-						},
-					},
+					Volumes: volumes,
 
 					InitContainers: []corev1.Container{
 						{
@@ -148,11 +194,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 							ImagePullPolicy: corev1.PullAlways,
 							Command:         initCmd,
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
-							VolumeMounts: []corev1.VolumeMount{
-								{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
-								{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
-								{Name: "host-mnt", MountPath: "/mnt"},
-							},
+							VolumeMounts:    initMounts,
 							Env: []corev1.EnvVar{
 								{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
@@ -181,12 +223,8 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 								InitialDelaySeconds: 10,
 								PeriodSeconds:       5,
 							},
-							Env: mainEnv,
-							VolumeMounts: []corev1.VolumeMount{
-								{Name: "dev-vol", MountPath: "/dev"},
-								{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
-								{Name: "host-sys", MountPath: "/sys"},
-							},
+							Env:          mainEnv,
+							VolumeMounts: mainMounts,
 						},
 					},
 				},

@@ -196,8 +196,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageNodeReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		TLSEnabled: os.Getenv("TLS_ENABLED") == "true",
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)

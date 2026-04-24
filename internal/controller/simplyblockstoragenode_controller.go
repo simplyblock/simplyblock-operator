@@ -50,7 +50,8 @@ import (
 // StorageNodeReconciler reconciles a StorageNode object
 type StorageNodeReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme     *runtime.Scheme
+	TLSEnabled bool
 }
 
 type SNODEAPIResponse struct {
@@ -468,7 +469,7 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
 
-	ds := utils.BuildStorageNodeDaemonSet(snCR)
+	ds := utils.BuildStorageNodeDaemonSet(snCR, r.TLSEnabled)
 
 	if err := controllerutil.SetControllerReference(snCR, ds, r.Scheme); err != nil {
 		return err

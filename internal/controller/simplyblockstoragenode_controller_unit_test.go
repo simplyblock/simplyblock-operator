@@ -398,6 +398,125 @@ func TestStorageNodeDaemonSetReconcile(t *testing.T) {
 			t.Fatalf("expected updated daemonset to carry owner reference")
 		}
 	})
+
+	t.Run("tls disabled omits tls volumes, mounts, and env", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-tls-off", Namespace: "default", UID: "uid-tls-off"},
+			Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+		r.TLSEnabled = false
+
+		if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+			t.Fatalf("reconcileDaemonSet returned error: %v", err)
+		}
+
+		var ds appsv1.DaemonSet
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+			t.Fatalf("failed to fetch daemonset: %v", err)
+		}
+		for _, v := range ds.Spec.Template.Spec.Volumes {
+			if v.Name == "tls" || v.Name == "certificate-authority" {
+				t.Fatalf("unexpected TLS volume present: %s", v.Name)
+			}
+		}
+		for _, c := range ds.Spec.Template.Spec.InitContainers {
+			for _, m := range c.VolumeMounts {
+				if m.Name == "tls" || m.Name == "certificate-authority" {
+					t.Fatalf("unexpected TLS mount on init container: %s", m.Name)
+				}
+			}
+		}
+		for _, c := range ds.Spec.Template.Spec.Containers {
+			for _, m := range c.VolumeMounts {
+				if m.Name == "tls" || m.Name == "certificate-authority" {
+					t.Fatalf("unexpected TLS mount on main container: %s", m.Name)
+				}
+			}
+			for _, e := range c.Env {
+				if e.Name == "TLS_ENABLED" {
+					t.Fatalf("unexpected TLS_ENABLED env on main container")
+				}
+			}
+		}
+	})
+
+	t.Run("tls enabled mounts secret and ca configmap with env", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-tls-on", Namespace: "default", UID: "uid-tls-on"},
+			Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+		r.TLSEnabled = true
+
+		if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+			t.Fatalf("reconcileDaemonSet returned error: %v", err)
+		}
+
+		var ds appsv1.DaemonSet
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+			t.Fatalf("failed to fetch daemonset: %v", err)
+		}
+
+		var tlsVol, caVol *corev1.Volume
+		for i := range ds.Spec.Template.Spec.Volumes {
+			v := &ds.Spec.Template.Spec.Volumes[i]
+			switch v.Name {
+			case "tls":
+				tlsVol = v
+			case "certificate-authority":
+				caVol = v
+			}
+		}
+		if tlsVol == nil || tlsVol.Secret == nil || tlsVol.Secret.SecretName != "simplyblock-storage-node-api-tls" {
+			t.Fatalf("expected tls volume backed by secret simplyblock-storage-node-api-tls, got %#v", tlsVol)
+		}
+		if caVol == nil || caVol.ConfigMap == nil || caVol.ConfigMap.Name != "simplyblock-certificate-authority" {
+			t.Fatalf("expected certificate-authority volume backed by configmap simplyblock-certificate-authority, got %#v", caVol)
+		}
+
+		checkMounts := func(label string, mounts []corev1.VolumeMount) {
+			var gotTLS, gotCA bool
+			for _, m := range mounts {
+				switch m.Name {
+				case "tls":
+					gotTLS = true
+					if m.MountPath != "/etc/simplyblock/tls" || !m.ReadOnly {
+						t.Fatalf("%s: tls mount shape wrong: %#v", label, m)
+					}
+				case "certificate-authority":
+					gotCA = true
+					if m.MountPath != "/etc/simplyblock/tls/ca.crt" || m.SubPath != "service-ca.crt" || !m.ReadOnly {
+						t.Fatalf("%s: certificate-authority mount shape wrong: %#v", label, m)
+					}
+				}
+			}
+			if !gotTLS || !gotCA {
+				t.Fatalf("%s: expected both tls and certificate-authority mounts, got tls=%v ca=%v", label, gotTLS, gotCA)
+			}
+		}
+		if len(ds.Spec.Template.Spec.InitContainers) != 1 {
+			t.Fatalf("expected single init container")
+		}
+		checkMounts("init container", ds.Spec.Template.Spec.InitContainers[0].VolumeMounts)
+		if len(ds.Spec.Template.Spec.Containers) != 1 {
+			t.Fatalf("expected single main container")
+		}
+		checkMounts("main container", ds.Spec.Template.Spec.Containers[0].VolumeMounts)
+
+		var tlsEnvFound bool
+		for _, e := range ds.Spec.Template.Spec.Containers[0].Env {
+			if e.Name == "TLS_ENABLED" {
+				tlsEnvFound = true
+				if e.Value != "true" {
+					t.Fatalf("TLS_ENABLED should be \"true\", got %q", e.Value)
+				}
+			}
+		}
+		if !tlsEnvFound {
+			t.Fatalf("expected TLS_ENABLED env on main container")
+		}
+	})
 }
 
 func TestGetNodeInternalIP(t *testing.T) {
