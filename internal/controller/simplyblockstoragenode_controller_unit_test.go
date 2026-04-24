@@ -1807,3 +1807,181 @@ func newStorageNodeStateTestReconciler(
 		Scheme: scheme,
 	}
 }
+
+func TestReconcileSpdkProxyService(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns", UID: "sn-uid"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn)
+
+	if err := r.reconcileSpdkProxyService(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileSpdkProxyService: %v", err)
+	}
+
+	var svc corev1.Service
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "simplyblock-spdk-proxy"}, &svc); err != nil {
+		t.Fatalf("expected simplyblock-spdk-proxy Service to be created: %v", err)
+	}
+	if svc.Spec.ClusterIP != "None" {
+		t.Fatalf("expected headless Service, got ClusterIP=%q", svc.Spec.ClusterIP)
+	}
+	if len(svc.Spec.Ports) != 0 {
+		t.Fatalf("expected no ports on Service, got %#v", svc.Spec.Ports)
+	}
+	if got := svc.Annotations["service.beta.openshift.io/serving-cert-secret-name"]; got != "simplyblock-spdk-proxy-tls" {
+		t.Fatalf("missing/incorrect serving-cert annotation: %q", got)
+	}
+	if len(svc.OwnerReferences) != 1 || svc.OwnerReferences[0].UID != "sn-uid" {
+		t.Fatalf("expected owner reference to StorageNode, got %#v", svc.OwnerReferences)
+	}
+
+	// Second pass with a simulated ClusterIP already assigned must preserve it.
+	svc.Spec.ClusterIP = "None"
+	if err := r.reconcileSpdkProxyService(context.Background(), sn); err != nil {
+		t.Fatalf("second reconcileSpdkProxyService: %v", err)
+	}
+}
+
+func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns", UID: "sn-uid"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+
+	podReady := func(name, node, ip, rpcPort string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: "ns",
+				Labels:    map[string]string{"role": "simplyblock-storage-node"},
+			},
+			Spec: corev1.PodSpec{
+				NodeName: node,
+				Containers: []corev1.Container{
+					{
+						Name: "spdk-proxy-container",
+						Env:  []corev1.EnvVar{{Name: "RPC_PORT", Value: rpcPort}},
+					},
+				},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				PodIP: ip,
+				ContainerStatuses: []corev1.ContainerStatus{
+					{Name: "spdk-proxy-container", Ready: true},
+				},
+			},
+		}
+	}
+
+	pod1 := podReady("snode-spdk-pod-9001-cid", "node-a", "10.0.0.1", "9001")
+	pod2 := podReady("snode-spdk-pod-9002-cid", "node-a", "10.0.0.1", "9002")
+	pod3 := podReady("snode-spdk-pod-9001-cid-b", "node-b", "10.0.0.2", "9001")
+
+	// wrong label — must be ignored
+	ignored := podReady("other", "node-c", "10.0.0.3", "9001")
+	ignored.Labels = map[string]string{"role": "other"}
+
+	// not ready — must be ignored
+	notReady := podReady("not-ready", "node-a", "10.0.0.1", "9003")
+	notReady.Status.ContainerStatuses[0].Ready = false
+
+	r := newStorageNodeStateTestReconciler(t, sn, pod1, pod2, pod3, ignored, notReady)
+
+	clusterUUID := "abc-uuid"
+	ctx := context.Background()
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn, clusterUUID); err != nil {
+		t.Fatalf("reconcileSpdkProxyEndpointSlices: %v", err)
+	}
+
+	var slices discoveryv1.EndpointSliceList
+	if err := r.List(ctx, &slices,
+		client.InNamespace("ns"),
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+	); err != nil {
+		t.Fatalf("list slices: %v", err)
+	}
+	if len(slices.Items) != 2 {
+		t.Fatalf("expected 2 EndpointSlices, got %d", len(slices.Items))
+	}
+
+	byName := map[string]discoveryv1.EndpointSlice{}
+	for _, s := range slices.Items {
+		byName[s.Name] = s
+	}
+
+	slice9001, ok := byName["spdk-proxy-endpoints-9001"]
+	if !ok {
+		t.Fatalf("missing slice spdk-proxy-endpoints-9001; got %v", sliceNames(slices.Items))
+	}
+	if len(slice9001.Endpoints) != 2 {
+		t.Fatalf("slice 9001: expected 2 endpoints, got %d", len(slice9001.Endpoints))
+	}
+	gotHostnames := map[string]string{}
+	for _, ep := range slice9001.Endpoints {
+		if ep.Hostname == nil || len(ep.Addresses) != 1 {
+			t.Fatalf("slice 9001: malformed endpoint %#v", ep)
+		}
+		gotHostnames[*ep.Hostname] = ep.Addresses[0]
+	}
+	if gotHostnames["node-a-9001-abc-uuid"] != "10.0.0.1" ||
+		gotHostnames["node-b-9001-abc-uuid"] != "10.0.0.2" {
+		t.Fatalf("slice 9001: unexpected hostname/address map %#v", gotHostnames)
+	}
+	if len(slice9001.Ports) != 1 || slice9001.Ports[0].Port == nil || *slice9001.Ports[0].Port != 9001 {
+		t.Fatalf("slice 9001: expected port 9001, got %#v", slice9001.Ports)
+	}
+	if !metav1.IsControlledBy(&slice9001, sn) {
+		t.Fatalf("slice 9001: expected owner reference to StorageNode")
+	}
+
+	slice9002 := byName["spdk-proxy-endpoints-9002"]
+	if len(slice9002.Endpoints) != 1 || *slice9002.Endpoints[0].Hostname != "node-a-9002-abc-uuid" {
+		t.Fatalf("slice 9002: unexpected endpoints %#v", slice9002.Endpoints)
+	}
+
+	// Delete pod2 (the only pod on port 9002) and reconcile again — the stale
+	// slice should be removed.
+	if err := r.Delete(ctx, pod2); err != nil {
+		t.Fatalf("delete pod2: %v", err)
+	}
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn, clusterUUID); err != nil {
+		t.Fatalf("second reconcileSpdkProxyEndpointSlices: %v", err)
+	}
+
+	slices = discoveryv1.EndpointSliceList{}
+	if err := r.List(ctx, &slices,
+		client.InNamespace("ns"),
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+	); err != nil {
+		t.Fatalf("list slices after delete: %v", err)
+	}
+	if len(slices.Items) != 1 || slices.Items[0].Name != "spdk-proxy-endpoints-9001" {
+		t.Fatalf("expected only spdk-proxy-endpoints-9001 after pod2 deletion, got %v", sliceNames(slices.Items))
+	}
+}
+
+func TestExtractSpdkProxyRpcPort_FallbackToPodName(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "snode-spdk-pod-9004-mycluster"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{Name: "spdk-proxy-container"}, // no RPC_PORT env
+			},
+		},
+	}
+	got, ok := extractSpdkProxyRpcPort(pod)
+	if !ok || got != 9004 {
+		t.Fatalf("expected (9004,true) from pod-name fallback, got (%d,%v)", got, ok)
+	}
+}
+
+func sliceNames(items []discoveryv1.EndpointSlice) []string {
+	out := make([]string, 0, len(items))
+	for _, s := range items {
+		out = append(out, s.Name)
+	}
+	return out
+}

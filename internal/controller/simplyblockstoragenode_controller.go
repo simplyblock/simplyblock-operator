@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,10 +32,15 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -91,6 +97,7 @@ var (
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -180,6 +187,14 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if err := r.reconcileEndpointSlice(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileSpdkProxyService(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, snCR, clusterUUID); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -336,7 +351,38 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageNode{}).
 		Named("storagenode").
+		Watches(
+			&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.spdkProxyPodToStorageNodeRequests),
+			builder.WithPredicates(predicate.NewPredicateFuncs(isSpdkProxyPod)),
+		).
 		Complete(r)
+}
+
+func isSpdkProxyPod(obj client.Object) bool {
+	return obj.GetLabels()["role"] == "simplyblock-storage-node"
+}
+
+// spdkProxyPodToStorageNodeRequests enqueues every StorageNode CR in the Pod's
+// namespace when a spdk-proxy pod changes. Pods are created by the backend, not
+// by the operator, so there is no forward owner reference — fanning out within
+// the namespace is the simplest correct mapping and cheap in practice (one CR
+// per namespace is typical).
+func (r *StorageNodeReconciler) spdkProxyPodToStorageNodeRequests(
+	ctx context.Context,
+	obj client.Object,
+) []reconcile.Request {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(snList.Items))
+	for _, sn := range snList.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: sn.Namespace, Name: sn.Name},
+		})
+	}
+	return reqs
 }
 
 func (r *StorageNodeReconciler) handleDeletion(
@@ -496,6 +542,165 @@ func (r *StorageNodeReconciler) reconcileEndpointSlice(
 
 	eps.ResourceVersion = existing.ResourceVersion
 	return r.Update(ctx, eps)
+}
+
+func (r *StorageNodeReconciler) reconcileSpdkProxyService(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+) error {
+	svc := utils.BuildSpdkProxyService(snCR)
+	if err := controllerutil.SetControllerReference(snCR, svc, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set spdk-proxy Service owner reference: %w", err)
+	}
+
+	var existing corev1.Service
+	err := r.Get(ctx, client.ObjectKeyFromObject(svc), &existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, svc)
+	}
+	if err != nil {
+		return err
+	}
+
+	svc.ResourceVersion = existing.ResourceVersion
+	svc.Spec.ClusterIP = existing.Spec.ClusterIP
+	return r.Update(ctx, svc)
+}
+
+func (r *StorageNodeReconciler) reconcileSpdkProxyEndpointSlices(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+	clusterUUID string,
+) error {
+	log := logf.FromContext(ctx)
+
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods,
+		client.InNamespace(snCR.Namespace),
+		client.MatchingLabels{"role": "simplyblock-storage-node"},
+	); err != nil {
+		return fmt.Errorf("failed to list spdk-proxy pods: %w", err)
+	}
+
+	byPort := map[int32][]utils.SpdkProxyEndpoint{}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !isSpdkProxyPodReady(pod) {
+			continue
+		}
+		rpcPort, ok := extractSpdkProxyRpcPort(pod)
+		if !ok {
+			log.Info("skipping spdk-proxy pod: unable to determine RPC_PORT", "pod", pod.Name)
+			continue
+		}
+		byPort[rpcPort] = append(byPort[rpcPort], utils.SpdkProxyEndpoint{
+			NodeName: pod.Spec.NodeName,
+			PodIP:    pod.Status.PodIP,
+			RpcPort:  rpcPort,
+		})
+	}
+
+	for rpcPort, endpoints := range byPort {
+		eps := utils.BuildSpdkProxyEndpointSlice(snCR, clusterUUID, rpcPort, endpoints)
+		if err := controllerutil.SetControllerReference(snCR, eps, r.Scheme); err != nil {
+			return fmt.Errorf("failed to set spdk-proxy EndpointSlice owner reference: %w", err)
+		}
+
+		var existing discoveryv1.EndpointSlice
+		err := r.Get(ctx, client.ObjectKeyFromObject(eps), &existing)
+		if apierrors.IsNotFound(err) {
+			if err := r.Create(ctx, eps); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		eps.ResourceVersion = existing.ResourceVersion
+		if err := r.Update(ctx, eps); err != nil {
+			return err
+		}
+	}
+
+	// Delete orphaned slices whose RPC_PORT no longer has any ready pod.
+	var existingSlices discoveryv1.EndpointSliceList
+	if err := r.List(ctx, &existingSlices,
+		client.InNamespace(snCR.Namespace),
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+	); err != nil {
+		return fmt.Errorf("failed to list existing spdk-proxy EndpointSlices: %w", err)
+	}
+	for i := range existingSlices.Items {
+		slice := &existingSlices.Items[i]
+		if !metav1.IsControlledBy(slice, snCR) {
+			continue
+		}
+		keep := false
+		for _, p := range slice.Ports {
+			if p.Port != nil {
+				if _, ok := byPort[*p.Port]; ok {
+					keep = true
+					break
+				}
+			}
+		}
+		if keep {
+			continue
+		}
+		if err := r.Delete(ctx, slice); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete stale spdk-proxy EndpointSlice %s: %w", slice.Name, err)
+		}
+	}
+
+	return nil
+}
+
+func isSpdkProxyPodReady(pod *corev1.Pod) bool {
+	if pod.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	if pod.Spec.NodeName == "" || pod.Status.PodIP == "" {
+		return false
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if !cs.Ready {
+			return false
+		}
+	}
+	return len(pod.Status.ContainerStatuses) > 0
+}
+
+// extractSpdkProxyRpcPort reads RPC_PORT from the spdk-proxy-container env; as
+// a defensive fallback it parses the pod name pattern
+// snode-spdk-pod-<RPC_PORT>-<CLUSTER_ID>.
+func extractSpdkProxyRpcPort(pod *corev1.Pod) (int32, bool) {
+	for _, c := range pod.Spec.Containers {
+		if c.Name != "spdk-proxy-container" {
+			continue
+		}
+		for _, e := range c.Env {
+			if e.Name != "RPC_PORT" || e.Value == "" {
+				continue
+			}
+			n, err := strconv.Atoi(e.Value)
+			if err != nil {
+				return 0, false
+			}
+			return int32(n), true
+		}
+	}
+
+	const prefix = "snode-spdk-pod-"
+	if strings.HasPrefix(pod.Name, prefix) {
+		rest := strings.TrimPrefix(pod.Name, prefix)
+		if dash := strings.Index(rest, "-"); dash > 0 {
+			if n, err := strconv.Atoi(rest[:dash]); err == nil {
+				return int32(n), true
+			}
+		}
+	}
+	return 0, false
 }
 
 func getNodeInternalIP(ctx context.Context, c client.Client, nodeName string) (string, error) {

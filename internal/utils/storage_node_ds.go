@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"fmt"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -297,6 +299,73 @@ func BuildStorageNodeEndpointSlice(sn *simplyblockv1alpha1.StorageNode, nodeIPs 
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
 		Endpoints:   endpoints,
+		Ports: []discoveryv1.EndpointPort{
+			{
+				Name:     &portName,
+				Protocol: &protocol,
+				Port:     &port,
+			},
+		},
+	}
+}
+
+// SpdkProxyEndpoint describes a single spdk-proxy pod instance that backs the
+// headless spdk-proxy Service.
+type SpdkProxyEndpoint struct {
+	NodeName string
+	PodIP    string
+	RpcPort  int32
+}
+
+func BuildSpdkProxyService(sn *simplyblockv1alpha1.StorageNode) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-spdk-proxy",
+			Namespace: sn.Namespace,
+			Annotations: map[string]string{
+				"service.beta.openshift.io/serving-cert-secret-name": "simplyblock-spdk-proxy-tls",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "None",
+		},
+	}
+}
+
+// BuildSpdkProxyEndpointSlice builds one EndpointSlice for a single RPC_PORT.
+// Each endpoint resolves <nodeName>-<rpcPort>-<clusterUUID>.spdk-proxy.<ns>.svc
+// to the node's IP via the headless Service's per-endpoint hostname DNS.
+func BuildSpdkProxyEndpointSlice(
+	sn *simplyblockv1alpha1.StorageNode,
+	clusterUUID string,
+	rpcPort int32,
+	endpoints []SpdkProxyEndpoint,
+) *discoveryv1.EndpointSlice {
+	protocol := corev1.ProtocolTCP
+	port := rpcPort
+	portName := "proxy"
+	ready := true
+
+	eps := make([]discoveryv1.Endpoint, 0, len(endpoints))
+	for _, e := range endpoints {
+		hostname := fmt.Sprintf("%s-%d-%s", e.NodeName, e.RpcPort, clusterUUID)
+		eps = append(eps, discoveryv1.Endpoint{
+			Addresses:  []string{e.PodIP},
+			Hostname:   &hostname,
+			Conditions: discoveryv1.EndpointConditions{Ready: &ready},
+		})
+	}
+
+	return &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("spdk-proxy-endpoints-%d", rpcPort),
+			Namespace: sn.Namespace,
+			Labels: map[string]string{
+				"kubernetes.io/service-name": "simplyblock-spdk-proxy",
+			},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints:   eps,
 		Ports: []discoveryv1.EndpointPort{
 			{
 				Name:     &portName,
