@@ -195,7 +195,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	if err := r.reconcileSpdkProxyEndpointSlices(ctx, snCR, clusterUUID); err != nil {
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, snCR); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -571,7 +571,6 @@ func (r *StorageNodeReconciler) reconcileSpdkProxyService(
 func (r *StorageNodeReconciler) reconcileSpdkProxyEndpointSlices(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
-	clusterUUID string,
 ) error {
 	log := logf.FromContext(ctx)
 
@@ -602,13 +601,16 @@ func (r *StorageNodeReconciler) reconcileSpdkProxyEndpointSlices(
 	}
 
 	for rpcPort, endpoints := range byPort {
-		eps := utils.BuildSpdkProxyEndpointSlice(snCR, clusterUUID, rpcPort, endpoints)
+		eps, err := utils.BuildSpdkProxyEndpointSlice(snCR, rpcPort, endpoints)
+		if err != nil {
+			return err
+		}
 		if err := controllerutil.SetControllerReference(snCR, eps, r.Scheme); err != nil {
 			return fmt.Errorf("failed to set spdk-proxy EndpointSlice owner reference: %w", err)
 		}
 
 		var existing discoveryv1.EndpointSlice
-		err := r.Get(ctx, client.ObjectKeyFromObject(eps), &existing)
+		err = r.Get(ctx, client.ObjectKeyFromObject(eps), &existing)
 		if apierrors.IsNotFound(err) {
 			if err := r.Create(ctx, eps); err != nil {
 				return err

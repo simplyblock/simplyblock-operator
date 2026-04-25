@@ -2014,9 +2014,8 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 
 	r := newStorageNodeStateTestReconciler(t, sn, pod1, pod2, pod3, ignored, notReady)
 
-	clusterUUID := "abc-uuid"
 	ctx := context.Background()
-	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn, clusterUUID); err != nil {
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn); err != nil {
 		t.Fatalf("reconcileSpdkProxyEndpointSlices: %v", err)
 	}
 
@@ -2050,8 +2049,8 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 		}
 		gotHostnames[*ep.Hostname] = ep.Addresses[0]
 	}
-	if gotHostnames["node-a-9001-abc-uuid"] != mgmtIP ||
-		gotHostnames["node-b-9001-abc-uuid"] != "10.0.0.2" {
+	if gotHostnames["node-a"] != mgmtIP ||
+		gotHostnames["node-b"] != "10.0.0.2" {
 		t.Fatalf("slice 9001: unexpected hostname/address map %#v", gotHostnames)
 	}
 	if len(slice9001.Ports) != 1 || slice9001.Ports[0].Port == nil || *slice9001.Ports[0].Port != 9001 {
@@ -2062,7 +2061,7 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 	}
 
 	slice9002 := byName["spdk-proxy-endpoints-9002"]
-	if len(slice9002.Endpoints) != 1 || *slice9002.Endpoints[0].Hostname != "node-a-9002-abc-uuid" {
+	if len(slice9002.Endpoints) != 1 || *slice9002.Endpoints[0].Hostname != "node-a" {
 		t.Fatalf("slice 9002: unexpected endpoints %#v", slice9002.Endpoints)
 	}
 
@@ -2071,7 +2070,7 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 	if err := r.Delete(ctx, pod2); err != nil {
 		t.Fatalf("delete pod2: %v", err)
 	}
-	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn, clusterUUID); err != nil {
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn); err != nil {
 		t.Fatalf("second reconcileSpdkProxyEndpointSlices: %v", err)
 	}
 
@@ -2084,6 +2083,66 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 	}
 	if len(slices.Items) != 1 || slices.Items[0].Name != "spdk-proxy-endpoints-9001" {
 		t.Fatalf("expected only spdk-proxy-endpoints-9001 after pod2 deletion, got %v", sliceNames(slices.Items))
+	}
+}
+
+func TestReconcileSpdkProxyEndpointSlices_DuplicateFirstSegment(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns", UID: "sn-uid"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+
+	podReady := func(name, node, ip, rpcPort string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: "ns",
+				Labels:    map[string]string{"role": "simplyblock-storage-node"},
+			},
+			Spec: corev1.PodSpec{
+				NodeName: node,
+				Containers: []corev1.Container{
+					{
+						Name: "spdk-proxy-container",
+						Env:  []corev1.EnvVar{{Name: "RPC_PORT", Value: rpcPort}},
+					},
+				},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				PodIP: ip,
+				ContainerStatuses: []corev1.ContainerStatus{
+					{Name: "spdk-proxy-container", Ready: true},
+				},
+			},
+		}
+	}
+
+	// Two distinct nodes whose first DNS label collides.
+	pod1 := podReady("snode-spdk-pod-9001-a", "worker.us-east-1.local", "10.0.0.1", "9001")
+	pod2 := podReady("snode-spdk-pod-9001-b", "worker.eu-west-1.local", "10.0.0.2", "9001")
+
+	r := newStorageNodeStateTestReconciler(t, sn, pod1, pod2)
+
+	ctx := context.Background()
+	err := r.reconcileSpdkProxyEndpointSlices(ctx, sn)
+	if err == nil {
+		t.Fatalf("expected collision error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "worker.us-east-1.local") || !strings.Contains(msg, "worker.eu-west-1.local") {
+		t.Fatalf("expected error to name both colliding nodes, got %q", msg)
+	}
+
+	var slices discoveryv1.EndpointSliceList
+	if err := r.List(ctx, &slices,
+		client.InNamespace("ns"),
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+	); err != nil {
+		t.Fatalf("list slices: %v", err)
+	}
+	if len(slices.Items) != 0 {
+		t.Fatalf("expected no slices to be created on collision, got %v", sliceNames(slices.Items))
 	}
 }
 

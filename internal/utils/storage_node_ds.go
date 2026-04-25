@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"strings"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -371,22 +372,30 @@ func BuildSpdkProxyService(sn *simplyblockv1alpha1.StorageNode) *corev1.Service 
 }
 
 // BuildSpdkProxyEndpointSlice builds one EndpointSlice for a single RPC_PORT.
-// Each endpoint resolves <nodeName>-<rpcPort>-<clusterUUID>.spdk-proxy.<ns>.svc
-// to the node's IP via the headless Service's per-endpoint hostname DNS.
+// Each endpoint resolves <nodeLabel>.spdk-proxy.<ns>.svc to the node's IP via
+// the headless Service's per-endpoint hostname DNS. The hostname is the node
+// name truncated at the first dot so FQDN-style node names stay within the
+// 63-char DNS label limit.
 func BuildSpdkProxyEndpointSlice(
 	sn *simplyblockv1alpha1.StorageNode,
-	clusterUUID string,
 	rpcPort int32,
 	endpoints []SpdkProxyEndpoint,
-) *discoveryv1.EndpointSlice {
+) (*discoveryv1.EndpointSlice, error) {
 	protocol := corev1.ProtocolTCP
 	port := rpcPort
 	portName := "proxy"
 	ready := true
 
 	eps := make([]discoveryv1.Endpoint, 0, len(endpoints))
+	seen := make(map[string]string, len(endpoints))
 	for _, e := range endpoints {
-		hostname := fmt.Sprintf("%s-%d-%s", e.NodeName, e.RpcPort, clusterUUID)
+		label := nodeHostnameLabel(e.NodeName)
+		if prev, ok := seen[label]; ok && prev != e.NodeName {
+			return nil, fmt.Errorf("spdk-proxy endpoint hostname collision on label %q (nodes %q and %q): node names share the same first DNS segment", label, prev, e.NodeName)
+		}
+		seen[label] = e.NodeName
+
+		hostname := label
 		eps = append(eps, discoveryv1.Endpoint{
 			Addresses:  []string{e.PodIP},
 			Hostname:   &hostname,
@@ -411,7 +420,12 @@ func BuildSpdkProxyEndpointSlice(
 				Port:     &port,
 			},
 		},
-	}
+	}, nil
+}
+
+func nodeHostnameLabel(nodeName string) string {
+	label, _, _ := strings.Cut(nodeName, ".")
+	return label
 }
 
 func BuildStorageNodeClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
