@@ -25,16 +25,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const statusOnline = "online"
+const (
+	statusOnline  = "online"
+	mgmtIP        = "10.0.0.1"
+	tlsVolumeName = "tls"
+	caVolumeName  = "certificate-authority"
+)
 
 func TestEnsureNodeStatus(t *testing.T) {
 	cr := &simplyblockv1alpha1.StorageNode{}
 
-	s := ensureNodeStatus(cr, "node-a", "10.0.0.1")
+	s := ensureNodeStatus(cr, "node-a", mgmtIP)
 	if s == nil {
 		t.Fatalf("ensureNodeStatus returned nil")
 	}
-	if s.Hostname != "node-a" || s.MgmtIp != "10.0.0.1" || s.Status != "in_creation" {
+	if s.Hostname != "node-a" || s.MgmtIp != mgmtIP || s.Status != "in_creation" {
 		t.Fatalf("unexpected initial node status: %#v", *s)
 	}
 	if len(cr.Status.Nodes) != 1 {
@@ -49,7 +54,7 @@ func TestEnsureNodeStatus(t *testing.T) {
 		t.Fatalf("should not append duplicate node entry")
 	}
 	// existing value should be retained
-	if s2.MgmtIp != "10.0.0.1" {
+	if s2.MgmtIp != mgmtIP {
 		t.Fatalf("expected existing node status to be reused, got %#v", *s2)
 	}
 }
@@ -340,183 +345,183 @@ func TestStorageNodeLabelingHelpers(t *testing.T) {
 	})
 }
 
-func TestStorageNodeDaemonSetReconcile(t *testing.T) {
-	t.Run("creates daemonset when missing", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.StorageNode{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "sn-ds-create",
-				Namespace: "default",
-				UID:       "uid-create",
-			},
-			Spec: simplyblockv1alpha1.StorageNodeSpec{
-				ClusterName: "cluster-a",
-			},
-		}
-		r := newStorageNodeStateTestReconciler(t, sn)
+func TestStorageNodeDaemonSetReconcileCreatesWhenMissing(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sn-ds-create",
+			Namespace: "default",
+			UID:       "uid-create",
+		},
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
+			ClusterName: "cluster-a",
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn)
 
-		if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
-			t.Fatalf("reconcileDaemonSet returned error: %v", err)
-		}
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileDaemonSet returned error: %v", err)
+	}
 
-		var ds appsv1.DaemonSet
-		if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
-			t.Fatalf("daemonset should be created: %v", err)
-		}
-		if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
-			t.Fatalf("expected daemonset to be owned by storagenode")
-		}
-	})
+	var ds appsv1.DaemonSet
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+		t.Fatalf("daemonset should be created: %v", err)
+	}
+	if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
+		t.Fatalf("expected daemonset to be owned by storagenode")
+	}
+}
 
-	t.Run("updates existing daemonset", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.StorageNode{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "sn-ds-update",
-				Namespace: "default",
-				UID:       "uid-update",
-			},
-			Spec: simplyblockv1alpha1.StorageNodeSpec{
-				ClusterName: "cluster-a",
-			},
-		}
-		existing := &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "simplyblock-storage-node-ds-cluster-a",
-				Namespace: "default",
-			},
-		}
-		r := newStorageNodeStateTestReconciler(t, sn, existing)
+func TestStorageNodeDaemonSetReconcileUpdatesExisting(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sn-ds-update",
+			Namespace: "default",
+			UID:       "uid-update",
+		},
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
+			ClusterName: "cluster-a",
+		},
+	}
+	existing := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-storage-node-ds-cluster-a",
+			Namespace: "default",
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn, existing)
 
-		if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
-			t.Fatalf("reconcileDaemonSet returned error: %v", err)
-		}
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileDaemonSet returned error: %v", err)
+	}
 
-		var ds appsv1.DaemonSet
-		if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
-			t.Fatalf("failed to fetch daemonset: %v", err)
-		}
-		if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
-			t.Fatalf("expected updated daemonset to carry owner reference")
-		}
-	})
+	var ds appsv1.DaemonSet
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+		t.Fatalf("failed to fetch daemonset: %v", err)
+	}
+	if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
+		t.Fatalf("expected updated daemonset to carry owner reference")
+	}
+}
 
-	t.Run("tls disabled omits tls volumes, mounts, and env", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.StorageNode{
-			ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-tls-off", Namespace: "default", UID: "uid-tls-off"},
-			Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
-		}
-		r := newStorageNodeStateTestReconciler(t, sn)
-		r.TLSEnabled = false
+func TestStorageNodeDaemonSetReconcileTLSDisabled(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-tls-off", Namespace: "default", UID: "uid-tls-off"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn)
+	r.TLSEnabled = false
 
-		if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
-			t.Fatalf("reconcileDaemonSet returned error: %v", err)
-		}
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileDaemonSet returned error: %v", err)
+	}
 
-		var ds appsv1.DaemonSet
-		if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
-			t.Fatalf("failed to fetch daemonset: %v", err)
+	var ds appsv1.DaemonSet
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+		t.Fatalf("failed to fetch daemonset: %v", err)
+	}
+	for _, v := range ds.Spec.Template.Spec.Volumes {
+		if v.Name == tlsVolumeName || v.Name == caVolumeName {
+			t.Fatalf("unexpected TLS volume present: %s", v.Name)
 		}
-		for _, v := range ds.Spec.Template.Spec.Volumes {
-			if v.Name == "tls" || v.Name == "certificate-authority" {
-				t.Fatalf("unexpected TLS volume present: %s", v.Name)
+	}
+	for _, c := range ds.Spec.Template.Spec.InitContainers {
+		for _, m := range c.VolumeMounts {
+			if m.Name == tlsVolumeName || m.Name == caVolumeName {
+				t.Fatalf("unexpected TLS mount on init container: %s", m.Name)
 			}
 		}
-		for _, c := range ds.Spec.Template.Spec.InitContainers {
-			for _, m := range c.VolumeMounts {
-				if m.Name == "tls" || m.Name == "certificate-authority" {
-					t.Fatalf("unexpected TLS mount on init container: %s", m.Name)
-				}
+	}
+	for _, c := range ds.Spec.Template.Spec.Containers {
+		for _, m := range c.VolumeMounts {
+			if m.Name == tlsVolumeName || m.Name == caVolumeName {
+				t.Fatalf("unexpected TLS mount on main container: %s", m.Name)
 			}
 		}
-		for _, c := range ds.Spec.Template.Spec.Containers {
-			for _, m := range c.VolumeMounts {
-				if m.Name == "tls" || m.Name == "certificate-authority" {
-					t.Fatalf("unexpected TLS mount on main container: %s", m.Name)
-				}
-			}
-			for _, e := range c.Env {
-				if e.Name == "TLS_ENABLED" {
-					t.Fatalf("unexpected TLS_ENABLED env on main container")
-				}
-			}
-		}
-	})
-
-	t.Run("tls enabled mounts secret and ca configmap with env", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.StorageNode{
-			ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-tls-on", Namespace: "default", UID: "uid-tls-on"},
-			Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
-		}
-		r := newStorageNodeStateTestReconciler(t, sn)
-		r.TLSEnabled = true
-
-		if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
-			t.Fatalf("reconcileDaemonSet returned error: %v", err)
-		}
-
-		var ds appsv1.DaemonSet
-		if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
-			t.Fatalf("failed to fetch daemonset: %v", err)
-		}
-
-		var tlsVol, caVol *corev1.Volume
-		for i := range ds.Spec.Template.Spec.Volumes {
-			v := &ds.Spec.Template.Spec.Volumes[i]
-			switch v.Name {
-			case "tls":
-				tlsVol = v
-			case "certificate-authority":
-				caVol = v
-			}
-		}
-		if tlsVol == nil || tlsVol.Secret == nil || tlsVol.Secret.SecretName != "simplyblock-storage-node-api-tls" {
-			t.Fatalf("expected tls volume backed by secret simplyblock-storage-node-api-tls, got %#v", tlsVol)
-		}
-		if caVol == nil || caVol.ConfigMap == nil || caVol.ConfigMap.Name != "simplyblock-certificate-authority" {
-			t.Fatalf("expected certificate-authority volume backed by configmap simplyblock-certificate-authority, got %#v", caVol)
-		}
-
-		checkMounts := func(label string, mounts []corev1.VolumeMount) {
-			var gotTLS, gotCA bool
-			for _, m := range mounts {
-				switch m.Name {
-				case "tls":
-					gotTLS = true
-					if m.MountPath != "/etc/simplyblock/tls" || !m.ReadOnly {
-						t.Fatalf("%s: tls mount shape wrong: %#v", label, m)
-					}
-				case "certificate-authority":
-					gotCA = true
-					if m.MountPath != "/etc/simplyblock/tls/ca.crt" || m.SubPath != "service-ca.crt" || !m.ReadOnly {
-						t.Fatalf("%s: certificate-authority mount shape wrong: %#v", label, m)
-					}
-				}
-			}
-			if !gotTLS || !gotCA {
-				t.Fatalf("%s: expected both tls and certificate-authority mounts, got tls=%v ca=%v", label, gotTLS, gotCA)
-			}
-		}
-		if len(ds.Spec.Template.Spec.InitContainers) != 1 {
-			t.Fatalf("expected single init container")
-		}
-		checkMounts("init container", ds.Spec.Template.Spec.InitContainers[0].VolumeMounts)
-		if len(ds.Spec.Template.Spec.Containers) != 1 {
-			t.Fatalf("expected single main container")
-		}
-		checkMounts("main container", ds.Spec.Template.Spec.Containers[0].VolumeMounts)
-
-		var tlsEnvFound bool
-		for _, e := range ds.Spec.Template.Spec.Containers[0].Env {
+		for _, e := range c.Env {
 			if e.Name == "TLS_ENABLED" {
-				tlsEnvFound = true
-				if e.Value != "true" {
-					t.Fatalf("TLS_ENABLED should be \"true\", got %q", e.Value)
-				}
+				t.Fatalf("unexpected TLS_ENABLED env on main container")
 			}
 		}
-		if !tlsEnvFound {
-			t.Fatalf("expected TLS_ENABLED env on main container")
+	}
+}
+
+func checkTLSMounts(t *testing.T, label string, mounts []corev1.VolumeMount) {
+	t.Helper()
+	var gotTLS, gotCA bool
+	for _, m := range mounts {
+		switch m.Name {
+		case tlsVolumeName:
+			gotTLS = true
+			if m.MountPath != "/etc/simplyblock/tls" || !m.ReadOnly {
+				t.Fatalf("%s: tls mount shape wrong: %#v", label, m)
+			}
+		case caVolumeName:
+			gotCA = true
+			if m.MountPath != "/etc/simplyblock/tls/ca.crt" || m.SubPath != "service-ca.crt" || !m.ReadOnly {
+				t.Fatalf("%s: certificate-authority mount shape wrong: %#v", label, m)
+			}
 		}
-	})
+	}
+	if !gotTLS || !gotCA {
+		t.Fatalf("%s: expected both tls and certificate-authority mounts, got tls=%v ca=%v", label, gotTLS, gotCA)
+	}
+}
+
+func TestStorageNodeDaemonSetReconcileTLSEnabled(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-tls-on", Namespace: "default", UID: "uid-tls-on"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn)
+	r.TLSEnabled = true
+
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileDaemonSet returned error: %v", err)
+	}
+
+	var ds appsv1.DaemonSet
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+		t.Fatalf("failed to fetch daemonset: %v", err)
+	}
+
+	var tlsVol, caVol *corev1.Volume
+	for i := range ds.Spec.Template.Spec.Volumes {
+		v := &ds.Spec.Template.Spec.Volumes[i]
+		switch v.Name {
+		case tlsVolumeName:
+			tlsVol = v
+		case caVolumeName:
+			caVol = v
+		}
+	}
+	if tlsVol == nil || tlsVol.Secret == nil || tlsVol.Secret.SecretName != "simplyblock-storage-node-api-tls" {
+		t.Fatalf("expected tls volume backed by secret simplyblock-storage-node-api-tls, got %#v", tlsVol)
+	}
+	if caVol == nil || caVol.ConfigMap == nil || caVol.ConfigMap.Name != "simplyblock-certificate-authority" {
+		t.Fatalf("expected certificate-authority volume backed by configmap simplyblock-certificate-authority, got %#v", caVol)
+	}
+
+	if len(ds.Spec.Template.Spec.InitContainers) != 1 {
+		t.Fatalf("expected single init container")
+	}
+	checkTLSMounts(t, "init container", ds.Spec.Template.Spec.InitContainers[0].VolumeMounts)
+	if len(ds.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("expected single main container")
+	}
+	checkTLSMounts(t, "main container", ds.Spec.Template.Spec.Containers[0].VolumeMounts)
+
+	var tlsEnvFound bool
+	for _, e := range ds.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "TLS_ENABLED" {
+			tlsEnvFound = true
+			if e.Value != "true" {
+				t.Fatalf("TLS_ENABLED should be \"true\", got %q", e.Value)
+			}
+		}
+	}
+	if !tlsEnvFound {
+		t.Fatalf("expected TLS_ENABLED env on main container")
+	}
 }
 
 func TestGetNodeInternalIP(t *testing.T) {
@@ -1124,7 +1129,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 			return nil
 		}
 
-		if err := waitForNodeInfoReachable(context.Background(), "10.0.0.1", "node-a"); err != nil {
+		if err := waitForNodeInfoReachable(context.Background(), mgmtIP, "node-a"); err != nil {
 			t.Fatalf("waitForNodeInfoReachable returned error: %v", err)
 		}
 		if attempts != 1 {
@@ -1236,7 +1241,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 			},
 			Status: simplyblockv1alpha1.StorageNodeStatus{
 				Nodes: []simplyblockv1alpha1.NodeStatus{
-					{Hostname: "node-a", MgmtIp: "10.0.0.1", Status: "in_creation"},
+					{Hostname: "node-a", MgmtIp: mgmtIP, Status: "in_creation"},
 				},
 			},
 		}
@@ -1247,7 +1252,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 			apiClient,
 			"secret",
 			clusterUUID,
-			"10.0.0.1",
+			mgmtIP,
 			"node-a",
 			1,
 			sn,
@@ -1379,7 +1384,7 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 			},
 			Status: simplyblockv1alpha1.StorageNodeStatus{
 				Nodes: []simplyblockv1alpha1.NodeStatus{
-					{Hostname: "node-a", MgmtIp: "10.0.0.1", Status: "in_creation"},
+					{Hostname: "node-a", MgmtIp: mgmtIP, Status: "in_creation"},
 				},
 			},
 		}
@@ -1390,7 +1395,7 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 			webapi.NewClient(mock.URL()),
 			"secret",
 			clusterUUID,
-			"10.0.0.1",
+			mgmtIP,
 			"node-a",
 			1,
 			sn,
@@ -1995,8 +2000,8 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 		}
 	}
 
-	pod1 := podReady("snode-spdk-pod-9001-cid", "node-a", "10.0.0.1", "9001")
-	pod2 := podReady("snode-spdk-pod-9002-cid", "node-a", "10.0.0.1", "9002")
+	pod1 := podReady("snode-spdk-pod-9001-cid", "node-a", mgmtIP, "9001")
+	pod2 := podReady("snode-spdk-pod-9002-cid", "node-a", mgmtIP, "9002")
 	pod3 := podReady("snode-spdk-pod-9001-cid-b", "node-b", "10.0.0.2", "9001")
 
 	// wrong label — must be ignored
@@ -2004,7 +2009,7 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 	ignored.Labels = map[string]string{"role": "other"}
 
 	// not ready — must be ignored
-	notReady := podReady("not-ready", "node-a", "10.0.0.1", "9003")
+	notReady := podReady("not-ready", "node-a", mgmtIP, "9003")
 	notReady.Status.ContainerStatuses[0].Ready = false
 
 	r := newStorageNodeStateTestReconciler(t, sn, pod1, pod2, pod3, ignored, notReady)
@@ -2045,7 +2050,7 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 		}
 		gotHostnames[*ep.Hostname] = ep.Addresses[0]
 	}
-	if gotHostnames["node-a-9001-abc-uuid"] != "10.0.0.1" ||
+	if gotHostnames["node-a-9001-abc-uuid"] != mgmtIP ||
 		gotHostnames["node-b-9001-abc-uuid"] != "10.0.0.2" {
 		t.Fatalf("slice 9001: unexpected hostname/address map %#v", gotHostnames)
 	}
