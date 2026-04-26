@@ -124,30 +124,35 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 	}
 
 	if tlsEnabled {
-		volumes = append(volumes,
-			corev1.Volume{
-				Name: "tls",
-				VolumeSource: corev1.VolumeSource{
-					Secret: &corev1.SecretVolumeSource{
-						SecretName: "simplyblock-storage-node-api-tls",
-					},
-				},
-			},
-			corev1.Volume{
-				Name: "certificate-authority",
-				VolumeSource: corev1.VolumeSource{
-					ConfigMap: &corev1.ConfigMapVolumeSource{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "simplyblock-certificate-authority",
+		volumes = append(volumes, corev1.Volume{
+			Name: "tls",
+			VolumeSource: corev1.VolumeSource{
+				Projected: &corev1.ProjectedVolumeSource{
+					Sources: []corev1.VolumeProjection{
+						{
+							Secret: &corev1.SecretProjection{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: "simplyblock-storage-node-api-tls",
+								},
+							},
+						},
+						{
+							ConfigMap: &corev1.ConfigMapProjection{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: "simplyblock-certificate-authority",
+								},
+								Items: []corev1.KeyToPath{
+									{Key: "service-ca.crt", Path: "ca.crt"},
+								},
+							},
 						},
 					},
 				},
 			},
-		)
+		})
 
 		tlsMounts := []corev1.VolumeMount{
 			{Name: "tls", MountPath: "/etc/simplyblock/tls", ReadOnly: true},
-			{Name: "certificate-authority", MountPath: "/etc/simplyblock/tls/ca.crt", SubPath: "service-ca.crt", ReadOnly: true},
 		}
 		initMounts = append(initMounts, tlsMounts...)
 		mainMounts = append(mainMounts, tlsMounts...)

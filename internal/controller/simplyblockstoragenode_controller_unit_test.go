@@ -447,23 +447,20 @@ func TestStorageNodeDaemonSetReconcileTLSDisabled(t *testing.T) {
 
 func checkTLSMounts(t *testing.T, label string, mounts []corev1.VolumeMount) {
 	t.Helper()
-	var gotTLS, gotCA bool
+	var gotTLS bool
 	for _, m := range mounts {
 		switch m.Name {
 		case tlsVolumeName:
 			gotTLS = true
-			if m.MountPath != "/etc/simplyblock/tls" || !m.ReadOnly {
+			if m.MountPath != "/etc/simplyblock/tls" || m.SubPath != "" || !m.ReadOnly {
 				t.Fatalf("%s: tls mount shape wrong: %#v", label, m)
 			}
 		case caVolumeName:
-			gotCA = true
-			if m.MountPath != "/etc/simplyblock/tls/ca.crt" || m.SubPath != "service-ca.crt" || !m.ReadOnly {
-				t.Fatalf("%s: certificate-authority mount shape wrong: %#v", label, m)
-			}
+			t.Fatalf("%s: unexpected separate certificate-authority mount: %#v", label, m)
 		}
 	}
-	if !gotTLS || !gotCA {
-		t.Fatalf("%s: expected both tls and certificate-authority mounts, got tls=%v ca=%v", label, gotTLS, gotCA)
+	if !gotTLS {
+		t.Fatalf("%s: expected tls mount", label)
 	}
 }
 
@@ -484,21 +481,33 @@ func TestStorageNodeDaemonSetReconcileTLSEnabled(t *testing.T) {
 		t.Fatalf("failed to fetch daemonset: %v", err)
 	}
 
-	var tlsVol, caVol *corev1.Volume
+	var tlsVol *corev1.Volume
 	for i := range ds.Spec.Template.Spec.Volumes {
 		v := &ds.Spec.Template.Spec.Volumes[i]
 		switch v.Name {
 		case tlsVolumeName:
 			tlsVol = v
 		case caVolumeName:
-			caVol = v
+			t.Fatalf("unexpected separate certificate-authority volume: %#v", v)
 		}
 	}
-	if tlsVol == nil || tlsVol.Secret == nil || tlsVol.Secret.SecretName != "simplyblock-storage-node-api-tls" {
-		t.Fatalf("expected tls volume backed by secret simplyblock-storage-node-api-tls, got %#v", tlsVol)
+	if tlsVol == nil || tlsVol.Projected == nil {
+		t.Fatalf("expected projected tls volume, got %#v", tlsVol)
 	}
-	if caVol == nil || caVol.ConfigMap == nil || caVol.ConfigMap.Name != "simplyblock-certificate-authority" {
-		t.Fatalf("expected certificate-authority volume backed by configmap simplyblock-certificate-authority, got %#v", caVol)
+	var gotSecret, gotCA bool
+	for _, src := range tlsVol.Projected.Sources {
+		switch {
+		case src.Secret != nil && src.Secret.Name == "simplyblock-storage-node-api-tls":
+			gotSecret = true
+		case src.ConfigMap != nil && src.ConfigMap.Name == "simplyblock-certificate-authority":
+			gotCA = true
+			if len(src.ConfigMap.Items) != 1 || src.ConfigMap.Items[0].Key != "service-ca.crt" || src.ConfigMap.Items[0].Path != "ca.crt" {
+				t.Fatalf("ca configmap projection wrong: %#v", src.ConfigMap.Items)
+			}
+		}
+	}
+	if !gotSecret || !gotCA {
+		t.Fatalf("expected projected sources for secret and ca configmap, got secret=%v ca=%v", gotSecret, gotCA)
 	}
 
 	if len(ds.Spec.Template.Spec.InitContainers) != 1 {
