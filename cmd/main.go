@@ -195,10 +195,11 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
 		os.Exit(1)
 	}
+	tlsEnabled := os.Getenv("TLS_ENABLED") == "true"
 	if err := (&controller.StorageNodeReconciler{
 		Client:     mgr.GetClient(),
 		Scheme:     mgr.GetScheme(),
-		TLSEnabled: os.Getenv("TLS_ENABLED") == "true",
+		TLSEnabled: tlsEnabled,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
@@ -235,6 +236,7 @@ func main() {
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
 		ManagerNodeName: os.Getenv("NODE_NAME"),
+		TLSEnabled:      tlsEnabled,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NodeDrainCoordinator")
 		os.Exit(1)

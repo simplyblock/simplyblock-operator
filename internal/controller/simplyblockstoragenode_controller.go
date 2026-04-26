@@ -277,7 +277,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if err := checkNodeInfoReachable(ctx, ip); err != nil {
+	if err := checkNodeInfoReachable(ctx, ip, snCR.Namespace, r.TLSEnabled); err != nil {
 		log.Info("Storage node API not reachable yet, requeueing",
 			"node", nodeName,
 			"ip", ip,
@@ -741,16 +741,23 @@ func ensureNodeStatus(
 	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
 }
 
-func checkNodeInfoReachable(ctx context.Context, ip string) error {
-	url := fmt.Sprintf("http://%s:5000/snode/info", ip)
+func checkNodeInfoReachable(ctx context.Context, ip, namespace string, tlsEnabled bool) error {
+	scheme := "http"
+	httpClient := &http.Client{Timeout: 3 * time.Second}
+	if tlsEnabled {
+		scheme = "https"
+		c, err := utils.BuildStorageNodeAPIClient(namespace, utils.StorageNodeAPICAPath)
+		if err != nil {
+			return fmt.Errorf("build storage-node TLS client: %w", err)
+		}
+		httpClient = c
+	}
+
+	url := fmt.Sprintf("%s://%s:5000/snode/info", scheme, ip)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
-	}
-
-	httpClient := &http.Client{
-		Timeout: 3 * time.Second,
 	}
 
 	resp, err := httpClient.Do(req)
@@ -774,6 +781,8 @@ func waitForNodeInfoReachable(
 	ctx context.Context,
 	ip string,
 	nodeName string,
+	namespace string,
+	tlsEnabled bool,
 ) error {
 	log := logf.FromContext(ctx)
 
@@ -781,7 +790,7 @@ func waitForNodeInfoReachable(
 
 	for i := 1; i <= waitForNodeInfoReachableMaxRetries; i++ {
 
-		if err := waitForNodeInfoReachableCheckFn(ctx, ip); err == nil {
+		if err := waitForNodeInfoReachableCheckFn(ctx, ip, namespace, tlsEnabled); err == nil {
 			log.Info("Storage node API is reachable",
 				"node", nodeName,
 				"ip", ip,
@@ -1142,7 +1151,7 @@ func (r *StorageNodeReconciler) performNodeAction(
 				return err
 			}
 
-			if err := waitForNodeInfoReachable(ctx, ip, snCR.Spec.WorkerNode); err != nil {
+			if err := waitForNodeInfoReachable(ctx, ip, snCR.Spec.WorkerNode, snCR.Namespace, r.TLSEnabled); err != nil {
 				log.Error(err, "node never became reachable")
 				return err
 			}

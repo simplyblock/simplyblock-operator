@@ -123,7 +123,20 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 		{Name: "host-sys", MountPath: "/sys"},
 	}
 
+	readinessProbe := &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: "/snode/check",
+				Port: intstr.FromInt(5000),
+			},
+		},
+		InitialDelaySeconds: 10,
+		PeriodSeconds:       5,
+	}
+
 	if tlsEnabled {
+		readinessProbe.HTTPGet.Scheme = corev1.URISchemeHTTPS
+
 		volumes = append(volumes, corev1.Volume{
 			Name: "tls",
 			VolumeSource: corev1.VolumeSource{
@@ -219,18 +232,9 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
 
-							ReadinessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									HTTPGet: &corev1.HTTPGetAction{
-										Path: "/snode/check",
-										Port: intstr.FromInt(5000),
-									},
-								},
-								InitialDelaySeconds: 10,
-								PeriodSeconds:       5,
-							},
-							Env:          mainEnv,
-							VolumeMounts: mainMounts,
+							ReadinessProbe: readinessProbe,
+							Env:            mainEnv,
+							VolumeMounts:   mainMounts,
 						},
 					},
 				},

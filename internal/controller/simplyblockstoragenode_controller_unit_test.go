@@ -442,6 +442,12 @@ func TestStorageNodeDaemonSetReconcileTLSDisabled(t *testing.T) {
 				t.Fatalf("unexpected TLS_ENABLED env on main container")
 			}
 		}
+		if c.ReadinessProbe == nil || c.ReadinessProbe.HTTPGet == nil {
+			t.Fatalf("expected HTTPGet readiness probe")
+		}
+		if c.ReadinessProbe.HTTPGet.Scheme != "" && c.ReadinessProbe.HTTPGet.Scheme != corev1.URISchemeHTTP {
+			t.Fatalf("expected default/HTTP probe scheme when TLS disabled, got %q", c.ReadinessProbe.HTTPGet.Scheme)
+		}
 	}
 }
 
@@ -530,6 +536,14 @@ func TestStorageNodeDaemonSetReconcileTLSEnabled(t *testing.T) {
 	}
 	if !tlsEnvFound {
 		t.Fatalf("expected TLS_ENABLED env on main container")
+	}
+
+	probe := ds.Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe == nil || probe.HTTPGet == nil {
+		t.Fatalf("expected HTTPGet readiness probe")
+	}
+	if probe.HTTPGet.Scheme != corev1.URISchemeHTTPS {
+		t.Fatalf("expected readiness probe scheme HTTPS when TLS enabled, got %q", probe.HTTPGet.Scheme)
 	}
 }
 
@@ -1111,11 +1125,22 @@ func TestStorageNodeReconcileUnreachableNodeInfoRequeues(t *testing.T) {
 }
 
 func TestCheckNodeInfoReachable(t *testing.T) {
-	// checkNodeInfoReachable always probes http://<ip>:5000/snode/info.
 	// Use an unroutable test-net address to deterministically exercise error path.
-	err := checkNodeInfoReachable(context.Background(), "192.0.2.1")
+	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", false)
 	if err == nil {
 		t.Fatalf("expected error when node info endpoint is unreachable")
+	}
+}
+
+func TestCheckNodeInfoReachableTLSMissingCA(t *testing.T) {
+	// With TLS enabled and the default CA path (which won't exist in unit tests),
+	// the function must surface a build-client error before attempting any I/O.
+	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", true)
+	if err == nil {
+		t.Fatalf("expected error when CA bundle is missing")
+	}
+	if !strings.Contains(err.Error(), "build storage-node TLS client") {
+		t.Fatalf("expected TLS client build error, got: %v", err)
 	}
 }
 
@@ -1133,12 +1158,12 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 		attempts := 0
 		waitForNodeInfoReachableMaxRetries = 3
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
 			attempts++
 			return nil
 		}
 
-		if err := waitForNodeInfoReachable(context.Background(), mgmtIP, "node-a"); err != nil {
+		if err := waitForNodeInfoReachable(context.Background(), mgmtIP, "node-a", "default", false); err != nil {
 			t.Fatalf("waitForNodeInfoReachable returned error: %v", err)
 		}
 		if attempts != 1 {
@@ -1150,7 +1175,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 		attempts := 0
 		waitForNodeInfoReachableMaxRetries = 4
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
 			attempts++
 			if attempts < 3 {
 				return errors.New("temporary failure")
@@ -1158,7 +1183,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 			return nil
 		}
 
-		if err := waitForNodeInfoReachable(context.Background(), "10.0.0.2", "node-b"); err != nil {
+		if err := waitForNodeInfoReachable(context.Background(), "10.0.0.2", "node-b", "default", false); err != nil {
 			t.Fatalf("waitForNodeInfoReachable returned error: %v", err)
 		}
 		if attempts != 3 {
@@ -1169,13 +1194,13 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 	t.Run("returns context cancellation", func(t *testing.T) {
 		waitForNodeInfoReachableMaxRetries = 5
 		waitForNodeInfoReachableRetryDelay = time.Second
-		waitForNodeInfoReachableCheckFn = func(context.Context, string) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
 			return errors.New("still down")
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := waitForNodeInfoReachable(ctx, "10.0.0.3", "node-c")
+		err := waitForNodeInfoReachable(ctx, "10.0.0.3", "node-c", "default", false)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context canceled error, got %v", err)
 		}
@@ -1184,11 +1209,11 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 	t.Run("returns wrapped error after max retries", func(t *testing.T) {
 		waitForNodeInfoReachableMaxRetries = 3
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
 			return errors.New("permanent failure")
 		}
 
-		err := waitForNodeInfoReachable(context.Background(), "10.0.0.4", "node-d")
+		err := waitForNodeInfoReachable(context.Background(), "10.0.0.4", "node-d", "default", false)
 		if err == nil {
 			t.Fatalf("expected timeout error after retries")
 		}

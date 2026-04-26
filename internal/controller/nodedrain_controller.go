@@ -91,6 +91,7 @@ type NodeDrainCoordinatorReconciler struct {
 	// will create a temporary self-PDB to prevent premature eviction while
 	// setting up storage PDB protection on the same node.
 	ManagerNodeName string
+	TLSEnabled      bool
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;update;patch
@@ -579,7 +580,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 	}
 
 	// Verify SPDK is reachable before calling restart.
-	if err := checkNodeInfoReachable(ctx, ip); err != nil {
+	if err := checkNodeInfoReachable(ctx, ip, snCR.Namespace, r.TLSEnabled); err != nil {
 		state.Message = "waiting for SPDK to become reachable after reboot"
 		log.Info("SPDK not yet reachable, will retry", "node", state.Hostname)
 		return 15 * time.Second
