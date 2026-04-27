@@ -222,6 +222,11 @@ func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 			Resources: []string{"jobs"},
 			Verbs:     []string{"create", "delete", "get", "list", "watch"},
 		},
+		{
+			APIGroups: []string{""},
+			Resources: []string{"nodes"},
+			Verbs:     []string{"get", "list", "watch"},
+		},
 	}
 
 	if isOpenShift {
