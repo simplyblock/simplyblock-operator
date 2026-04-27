@@ -437,11 +437,6 @@ func TestStorageNodeDaemonSetReconcileTLSDisabled(t *testing.T) {
 				t.Fatalf("unexpected TLS mount on main container: %s", m.Name)
 			}
 		}
-		for _, e := range c.Env {
-			if e.Name == "TLS_ENABLED" {
-				t.Fatalf("unexpected TLS_ENABLED env on main container")
-			}
-		}
 		if c.ReadinessProbe == nil || c.ReadinessProbe.HTTPGet == nil {
 			t.Fatalf("expected HTTPGet readiness probe")
 		}
@@ -524,19 +519,6 @@ func TestStorageNodeDaemonSetReconcileTLSEnabled(t *testing.T) {
 		t.Fatalf("expected single main container")
 	}
 	checkTLSMounts(t, "main container", ds.Spec.Template.Spec.Containers[0].VolumeMounts)
-
-	var tlsEnvFound bool
-	for _, e := range ds.Spec.Template.Spec.Containers[0].Env {
-		if e.Name == "TLS_ENABLED" {
-			tlsEnvFound = true
-			if e.Value != "true" {
-				t.Fatalf("TLS_ENABLED should be \"true\", got %q", e.Value)
-			}
-		}
-	}
-	if !tlsEnvFound {
-		t.Fatalf("expected TLS_ENABLED env on main container")
-	}
 
 	probe := ds.Spec.Template.Spec.Containers[0].ReadinessProbe
 	if probe == nil || probe.HTTPGet == nil {

@@ -30,6 +30,10 @@ func (c *Client) DoWithHeaders(
 	body interface{},
 ) ([]byte, http.Header, int, error) {
 
+	if c.initErr != nil {
+		return nil, nil, 0, fmt.Errorf("webapi client init: %w", c.initErr)
+	}
+
 	// Build URL
 	url := fmt.Sprintf("%s%s", c.BaseURL, endpoint)
 

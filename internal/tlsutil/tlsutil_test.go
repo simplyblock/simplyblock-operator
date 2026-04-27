@@ -1,4 +1,4 @@
-package utils
+package tlsutil
 
 import (
 	"crypto/tls"
@@ -23,8 +23,6 @@ func TestBuildStorageNodeAPIClientTrustsServingCert(t *testing.T) {
 		t.Fatalf("BuildStorageNodeAPIClient returned error: %v", err)
 	}
 
-	// httptest.NewTLSServer issues a cert valid for "example.com" / 127.0.0.1;
-	// override ServerName so verification matches the issued cert.
 	tr, ok := c.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("transport type %T, want *http.Transport", c.Transport)
@@ -77,6 +75,68 @@ func TestBuildStorageNodeAPIClientShape(t *testing.T) {
 	}
 	if tr.TLSClientConfig.RootCAs == nil {
 		t.Fatalf("RootCAs not set")
+	}
+}
+
+func TestBuildWebAPIClientShape(t *testing.T) {
+	server := httptest.NewTLSServer(nil)
+	defer server.Close()
+	caPath := writeCertPEM(t, server.Certificate())
+
+	c, err := BuildWebAPIClient("simplyblock", caPath)
+	if err != nil {
+		t.Fatalf("BuildWebAPIClient: %v", err)
+	}
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type %T, want *http.Transport", c.Transport)
+	}
+	if want := "simplyblock-webappapi.simplyblock.svc"; tr.TLSClientConfig.ServerName != want {
+		t.Fatalf("ServerName = %q, want %q", tr.TLSClientConfig.ServerName, want)
+	}
+}
+
+func TestDetectOperatorNamespace(t *testing.T) {
+	orig := OperatorNamespacePath
+	t.Cleanup(func() { OperatorNamespacePath = orig })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "namespace")
+	if err := os.WriteFile(path, []byte("simplyblock\n"), 0o600); err != nil {
+		t.Fatalf("write ns: %v", err)
+	}
+	OperatorNamespacePath = path
+	got, err := DetectOperatorNamespace()
+	if err != nil {
+		t.Fatalf("DetectOperatorNamespace: %v", err)
+	}
+	if got != "simplyblock" {
+		t.Fatalf("namespace = %q, want %q", got, "simplyblock")
+	}
+}
+
+func TestDetectOperatorNamespaceMissing(t *testing.T) {
+	orig := OperatorNamespacePath
+	t.Cleanup(func() { OperatorNamespacePath = orig })
+
+	OperatorNamespacePath = "/no/such/path"
+	if _, err := DetectOperatorNamespace(); err == nil {
+		t.Fatalf("expected error when namespace file is missing")
+	}
+}
+
+func TestDetectOperatorNamespaceEmpty(t *testing.T) {
+	orig := OperatorNamespacePath
+	t.Cleanup(func() { OperatorNamespacePath = orig })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "namespace")
+	if err := os.WriteFile(path, []byte("\n  \n"), 0o600); err != nil {
+		t.Fatalf("write ns: %v", err)
+	}
+	OperatorNamespacePath = path
+	if _, err := DetectOperatorNamespace(); err == nil {
+		t.Fatalf("expected error when namespace file is empty")
 	}
 }
 

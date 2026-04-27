@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/tlsutil"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -746,7 +747,7 @@ func checkNodeInfoReachable(ctx context.Context, ip, namespace string, tlsEnable
 	httpClient := &http.Client{Timeout: 3 * time.Second}
 	if tlsEnabled {
 		scheme = "https"
-		c, err := utils.BuildStorageNodeAPIClient(namespace, utils.StorageNodeAPICAPath)
+		c, err := tlsutil.BuildStorageNodeAPIClient(namespace, tlsutil.ServiceCABundlePath)
 		if err != nil {
 			return fmt.Errorf("build storage-node TLS client: %w", err)
 		}

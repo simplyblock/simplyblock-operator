@@ -169,8 +169,6 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 		}
 		initMounts = append(initMounts, tlsMounts...)
 		mainMounts = append(mainMounts, tlsMounts...)
-
-		mainEnv = append(mainEnv, corev1.EnvVar{Name: "TLS_ENABLED", Value: "true"})
 	}
 
 	return &appsv1.DaemonSet{
