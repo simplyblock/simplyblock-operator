@@ -222,6 +222,11 @@ func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 			Resources: []string{"jobs"},
 			Verbs:     []string{"create", "delete", "get", "list", "watch"},
 		},
+		{
+			APIGroups: []string{""},
+			Resources: []string{"nodes"},
+			Verbs:     []string{"list", "get", "update", "patch", "watch"},
+		},
 	}
 
 	if isOpenShift {
@@ -230,11 +235,6 @@ func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 				APIGroups: []string{"machineconfiguration.openshift.io"},
 				Resources: []string{"machineconfigs", "machineconfigpools", "kubeletconfigs"},
 				Verbs:     []string{"list", "get", "create", "update", "patch", "watch"},
-			},
-			rbacv1.PolicyRule{
-				APIGroups: []string{""},
-				Resources: []string{"nodes"},
-				Verbs:     []string{"list", "get", "update", "patch", "watch"},
 			},
 		)
 	}
