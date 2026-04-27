@@ -19,6 +19,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 	"strings"
 
@@ -26,8 +27,10 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -46,11 +49,33 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+const openShiftConfigAPIGroup = "config.openshift.io"
+
+type serverGroupsGetter interface {
+	ServerGroups() (*metav1.APIGroupList, error)
+}
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(simplyblockv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
+}
+
+func validateTLSConfiguration(discoveryClient serverGroupsGetter, tlsEnabled bool) error {
+	if !tlsEnabled {
+		return nil
+	}
+	groupList, err := discoveryClient.ServerGroups()
+	if err != nil {
+		return fmt.Errorf("discover API groups: %w", err)
+	}
+	for _, group := range groupList.Groups {
+		if group.Name == openShiftConfigAPIGroup {
+			return nil
+		}
+	}
+	return fmt.Errorf("TLS_ENABLED=true requires an OpenShift cluster")
 }
 
 // nolint:gocyclo
@@ -162,7 +187,21 @@ func main() {
 		metricsServerOptions.KeyName = metricsCertKey
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	cfg := ctrl.GetConfigOrDie()
+	tlsEnabled := os.Getenv("TLS_ENABLED") == "true"
+	if tlsEnabled {
+		discoveryClient, err := discovery.NewDiscoveryClientForConfig(cfg)
+		if err != nil {
+			setupLog.Error(err, "unable to initialize cluster discovery client for TLS validation")
+			os.Exit(1)
+		}
+		if err := validateTLSConfiguration(discoveryClient, tlsEnabled); err != nil {
+			setupLog.Error(err, "invalid TLS configuration")
+			os.Exit(1)
+		}
+	}
+
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -195,7 +234,6 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
 		os.Exit(1)
 	}
-	tlsEnabled := os.Getenv("TLS_ENABLED") == "true"
 	if err := (&controller.StorageNodeReconciler{
 		Client:     mgr.GetClient(),
 		Scheme:     mgr.GetScheme(),
