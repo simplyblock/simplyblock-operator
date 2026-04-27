@@ -235,8 +235,7 @@ func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 				APIGroups: []string{"machineconfiguration.openshift.io"},
 				Resources: []string{"machineconfigs", "machineconfigpools", "kubeletconfigs"},
 				Verbs:     []string{"list", "get", "create", "update", "patch", "watch"},
-			},
-		)
+			})
 	}
 
 	return &rbacv1.ClusterRole{

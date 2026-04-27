@@ -26,11 +26,9 @@ jobs:
           tar -xzf kubeconform.tar.gz kubeconform
           sudo mv kubeconform /usr/local/bin/kubeconform
 
-      - name: Build manifests
-        run: |
-          make kustomize
-          ./bin/kustomize build config/default > rendered-manifests.yaml
+      - name: Build installer
+        run: make build-installer
 
       - name: Validate rendered manifests
         run: |
-          kubeconform -strict -summary -skip CustomResourceDefinition rendered-manifests.yaml
+          kubeconform -strict -summary -skip CustomResourceDefinition dist/install.yaml

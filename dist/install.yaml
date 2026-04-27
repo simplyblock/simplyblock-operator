@@ -171,7 +171,9 @@ spec:
                               the device.
                             type: string
                           utilization:
-                            description: Utilization is the backend utilization metric.
+                            description: |-
+                              Utilization is the backend utilization metric.
+                              FIXME: Unused for now
                             format: int64
                             type: integer
                           uuid:
@@ -286,8 +288,8 @@ spec:
                       description: ErasureCodingScheme is the erasure coding layout,
                         for example "2x1".
                       type: string
-                    fabric:
-                      description: Fabric is the storage fabric/protocol in use.
+                    fabricType:
+                      description: FabricType is the storage fabric/protocol in use.
                       type: string
                     ha:
                       description: HA indicates whether high availability is enabled.
@@ -433,7 +435,9 @@ spec:
             description: spec defines the desired state of Pool
             properties:
               action:
-                description: Action triggers an imperative pool operation.
+                description: |-
+                  Action triggers an imperative pool operation.
+                  FIXME: Unused for now
                 type: string
               capacityLimit:
                 description: CapacityLimit is the maximum pool capacity.
@@ -470,9 +474,74 @@ spec:
                     type: object
                 type: object
               status:
-                description: Status is an optional desired-status hint for backend
-                  workflows.
+                description: |-
+                  Status is an optional desired-status hint for backend workflows.
+                  FIXME: Unused for now
                 type: string
+              storageClassParameters:
+                default: {}
+                description: StorageClassParameters sets default StorageClass parameter
+                  values for volumes in this pool.
+                properties:
+                  compression:
+                    default: "False"
+                    description: Compression enables compression for logical volumes.
+                    type: string
+                  encryption:
+                    default: false
+                    description: Encryption enables encryption for logical volumes.
+                    type: boolean
+                  fabric:
+                    default: tcp
+                    description: Fabric is the transport fabric (e.g. tcp).
+                    type: string
+                  lvolPriorityClass:
+                    default: "0"
+                    description: LvolPriorityClass sets the logical volume priority
+                      class.
+                    type: string
+                  maxNamespacePerSubsys:
+                    default: "1"
+                    description: MaxNamespacePerSubsys limits namespaces per NVMf
+                      subsystem.
+                    type: string
+                  numDataChunks:
+                    default: "1"
+                    description: NumDataChunks is the number of data chunks (distr_ndcs).
+                    type: string
+                  numParityChunks:
+                    default: "1"
+                    description: NumParityChunks is the number of parity chunks (distr_npcs).
+                    type: string
+                  qosRMbytes:
+                    default: "0"
+                    description: QosRMbytes sets the read throughput limit in MB/s
+                      (0 = unlimited).
+                    type: string
+                  qosRwIops:
+                    default: "0"
+                    description: QosRwIops sets the read/write IOPS limit (0 = unlimited).
+                    type: string
+                  qosRwMbytes:
+                    default: "0"
+                    description: QosRwMbytes sets the read/write throughput limit
+                      in MB/s (0 = unlimited).
+                    type: string
+                  qosWMbytes:
+                    default: "0"
+                    description: QosWMbytes sets the write throughput limit in MB/s
+                      (0 = unlimited).
+                    type: string
+                  replicate:
+                    default: false
+                    description: Replicate enables replication for logical volumes.
+                    type: boolean
+                  tune2fsReservedBlocks:
+                    default: "0"
+                    description: Tune2fsReservedBlocks sets the ext4 reserved-blocks
+                      percentage.
+                    type: string
+                type: object
             required:
             - clusterName
             - name
@@ -531,6 +600,409 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
+  name: snapshotreplications.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: SnapshotReplication
+    listKind: SnapshotReplicationList
+    plural: snapshotreplications
+    singular: snapshotreplication
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.configured
+      name: Configured
+      type: boolean
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].reason
+      name: Reason
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SnapshotReplication is the Schema for the snapshotreplications
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of SnapshotReplication
+            properties:
+              action:
+                enum:
+                - failback
+                type: string
+              excludeVolumeIDs:
+                description: 'Optional: volumes to exclude from failback.'
+                items:
+                  type: string
+                type: array
+              includeVolumeIDs:
+                description: |-
+                  Optional: only these volumes are included in failback.
+                  If empty, all volumes are candidates unless excluded below.
+                items:
+                  type: string
+                type: array
+              interval:
+                description: 'snapshot replication interval in seconds (default: 300sec)'
+                format: int32
+                type: integer
+              sourceCluster:
+                description: Source cluster for the snapshots
+                type: string
+              sourcePool:
+                description: required for failback to a fresh source cluster
+                type: string
+              targetCluster:
+                description: Target cluster for replication
+                type: string
+              targetPool:
+                description: Target cluster pool for replication
+                type: string
+              timeout:
+                description: snapshot replication timeout
+                format: int32
+                type: integer
+              volumeIDs:
+                description: 'Optional: list of volumes to replicate. Empty means
+                  all volumes'
+                items:
+                  type: string
+                type: array
+            required:
+            - sourceCluster
+            - targetCluster
+            - targetPool
+            type: object
+          status:
+            description: status defines the observed state of SnapshotReplication
+            properties:
+              conditions:
+                description: Conditions provides human-readable status conditions
+                  for kubectl get output.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              configured:
+                type: boolean
+              observedFailbackGeneration:
+                description: The metadata.generation value for which failback was
+                  last processed.
+                format: int64
+                type: integer
+              volumes:
+                description: Per-volume replication status
+                items:
+                  description: VolumeReplicationStatus tracks the replication state
+                    of an individual volume
+                  properties:
+                    errors:
+                      description: 'Optional: list of errors encountered for this
+                        volume'
+                      items:
+                        description: ReplicationError stores timestamped error messages
+                        properties:
+                          message:
+                            type: string
+                          timestamp:
+                            format: date-time
+                            type: string
+                        required:
+                        - message
+                        - timestamp
+                        type: object
+                      type: array
+                    lastReplicationTime:
+                      description: Timestamp of the last successful replication for
+                        this volume
+                      format: date-time
+                      type: string
+                    lastSnapshotID:
+                      description: Last snapshot ID replicated for this volume
+                      type: string
+                    phase:
+                      description: Phase is the current replication phase for this
+                        volume.
+                      enum:
+                      - Pending
+                      - Running
+                      - TriggeringTargetReplication
+                      - WaitingForTargetReplication
+                      - ReplicatingToSource
+                      - WaitingForTargetDeletion
+                      - Completed
+                      - Failed
+                      - Paused
+                      type: string
+                    replicatedCount:
+                      description: Number of snapshots successfully replicated
+                      format: int32
+                      type: integer
+                    volumeID:
+                      description: Volume ID
+                      type: string
+                  required:
+                  - volumeID
+                  type: object
+                type: array
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: storagebackups.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: StorageBackup
+    listKind: StorageBackupList
+    plural: storagebackups
+    singular: storagebackup
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.pvcRef.name
+      name: PVC
+      type: string
+    - jsonPath: .status.backupID
+      name: BackupID
+      type: string
+    - jsonPath: .status.snapshotName
+      name: Snapshot
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: StorageBackup is the Schema for the storagebackups API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of StorageBackup
+            properties:
+              clusterName:
+                description: ClusterName is the target storage cluster name.
+                type: string
+              pvcRef:
+                description: PVCRef identifies the PVC whose backing Simplyblock volume
+                  should be snapshotted and backed up.
+                properties:
+                  name:
+                    description: Name is the PVC name.
+                    type: string
+                  namespace:
+                    description: Namespace overrides the backup resource namespace
+                      for the PVC lookup.
+                    type: string
+                required:
+                - name
+                type: object
+              snapshotName:
+                description: SnapshotName optionally overrides the internally-created
+                  snapshot name.
+                type: string
+            required:
+            - clusterName
+            - pvcRef
+            type: object
+          status:
+            description: status defines the observed state of StorageBackup
+            properties:
+              allowedHosts:
+                description: AllowedHosts contains the allowed host metadata returned
+                  by the backup API.
+                items:
+                  additionalProperties:
+                    type: string
+                  type: object
+                type: array
+              apiStatus:
+                description: APIStatus is the raw status returned by the backup API.
+                type: string
+              backupID:
+                description: BackupID is the backend backup UUID.
+                type: string
+              clusterUUID:
+                description: ClusterUUID is the backend cluster UUID.
+                type: string
+              completedAt:
+                description: CompletedAt is when the backup completed.
+                format: date-time
+                type: string
+              createdAt:
+                description: CreatedAt is when the backup was created.
+                format: date-time
+                type: string
+              lvolID:
+                description: LvolID is the Simplyblock volume UUID.
+                type: string
+              lvolName:
+                description: LvolName is the backend logical volume name.
+                type: string
+              message:
+                description: Message contains the latest reconciliation detail or
+                  error.
+                type: string
+              nodeID:
+                description: NodeID is the source storage node UUID.
+                type: string
+              phase:
+                description: Phase is the high-level backup lifecycle shown in kubectl
+                  output.
+                type: string
+              poolName:
+                description: PoolName is the Simplyblock pool name derived from the
+                  CSI volume handle.
+                type: string
+              poolUUID:
+                description: PoolUUID is the backend pool UUID.
+                type: string
+              prevBackupID:
+                description: PrevBackupID links the previous backup in the chain.
+                type: string
+              pvName:
+                description: PVName is the bound PV name.
+                type: string
+              pvcNamespace:
+                description: PVCNamespace is the resolved PVC namespace.
+                type: string
+              s3ID:
+                description: S3ID is the backend S3 object identifier.
+                format: int64
+                type: integer
+              size:
+                description: Size is the backup size in bytes.
+                format: int64
+                type: integer
+              snapshotID:
+                description: SnapshotID is the internally-created snapshot UUID used
+                  for the backup request.
+                type: string
+              snapshotName:
+                description: SnapshotName is the snapshot name used for the backup
+                  request.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
   name: storageclusters.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -541,7 +1013,23 @@ spec:
     singular: storagecluster
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - description: Backend-reported cluster lifecycle status
+      jsonPath: .status.status
+      name: Status
+      type: string
+    - description: Backend cluster UUID
+      jsonPath: .status.uuid
+      name: UUID
+      type: string
+    - description: Whether initial cluster setup has completed
+      jsonPath: .status.configured
+      name: Configured
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: StorageCluster is the Schema for the storageclusters API
@@ -610,7 +1098,7 @@ spec:
               clientQpairCount:
                 description: |-
                   ClientQpairCount defines client-side queue-pair count.
-                  FIXME: Unused for now (API update required?)
+                  FIXME: Unused for now
                 format: int32
                 type: integer
               clusterName:
@@ -636,19 +1124,21 @@ spec:
                   storage components.
                 type: boolean
               eventLogEntries:
-                description: EventLogEntries limits the number of event-log entries
-                  returned/retained.
+                description: |-
+                  EventLogEntries limits the number of event-log entries returned/retained.
+                  FIXME: Unused for now
                 format: int32
                 type: integer
-              fabric:
-                description: Fabric defines the storage fabric type.
+              fabricType:
+                description: FabricType defines the storage fabric type.
                 type: string
               haType:
                 description: HAType defines the backend high-availability mode.
                 type: string
               includeEventLog:
-                description: IncludeEventLog controls whether event logs are included
-                  in responses/exports.
+                description: |-
+                  IncludeEventLog controls whether event logs are included in responses/exports.
+                  FIXME: Unused for now
                 type: boolean
               inflightIOThreshold:
                 description: InflightIOThreshold defines the inflight I/O threshold.
@@ -667,8 +1157,9 @@ spec:
                 format: int32
                 type: integer
               mgmtIfname:
-                description: MgmtIfname is the management network interface name used
-                  for cluster communication.
+                description: |-
+                  MgmtIfname is the management network interface name used for cluster communication.
+                  FIXME: Unused for now
                 type: string
               nvmfBasePort:
                 description: NvmfBasePort defines the base NVMf service port.
@@ -679,7 +1170,9 @@ spec:
                 format: int32
                 type: integer
               qosClasses:
-                description: QoSClasses defines backend QosSpec class configuration.
+                description: |-
+                  QoSClasses defines backend QosSpec class configuration.
+                  FIXME: Unused for now
                 type: string
               qpairCount:
                 description: QpairCount defines the NVMe queue-pair count used by
@@ -769,7 +1262,9 @@ spec:
                 description: Configured indicates whether initial cluster setup completed.
                 type: boolean
               created:
-                description: Created is the backend creation timestamp.
+                description: |-
+                  Created is the backend creation timestamp.
+                  FIXME: Unused for now (API update required?)
                 format: date-time
                 type: string
               erasureCodingScheme:
@@ -777,11 +1272,15 @@ spec:
                   for example "2x1".
                 type: string
               lastUpdated:
-                description: LastUpdated is the last backend update timestamp.
+                description: |-
+                  LastUpdated is the last backend update timestamp.
+                  FIXME: Unused for now (API update required?)
                 format: date-time
                 type: string
               mgmtNodes:
-                description: MgmtNodes is the number of management nodes.
+                description: |-
+                  MgmtNodes is the number of management nodes.
+                  FIXME: Unused for now (API update required?)
                 format: int32
                 type: integer
               nqn:
@@ -799,7 +1298,9 @@ spec:
                 description: Status is the backend-reported lifecycle status.
                 type: string
               storageNodes:
-                description: StorageNodes is the number of storage nodes.
+                description: |-
+                  StorageNodes is the number of storage nodes.
+                  FIXME: Unused for now (API update required?)
                 format: int32
                 type: integer
               uuid:
@@ -864,8 +1365,9 @@ spec:
                 - remove
                 type: string
               addPcieToAllowList:
-                description: AddPcieToAllowList appends devices to the allow-list
-                  during restart actions.
+                description: |-
+                  AddPcieToAllowList appends devices to the allow-list during restart actions.
+                  FIXME: Unused for now
                 items:
                   type: string
                 type: array
@@ -902,7 +1404,9 @@ spec:
                 description: EnableCpuTopology enables topology-aware CPU handling.
                 type: boolean
               force:
-                description: Force enables forced action execution where supported.
+                description: |-
+                  Force enables forced action execution where supported.
+                  FIXME: Unused for now
                 type: boolean
               forceFormat4K:
                 description: ForceFormat4K forces 4K blocksize formatting of the NVMe
@@ -921,8 +1425,9 @@ spec:
                     format: int32
                     type: integer
                   useSeparateJournalDevice:
-                    description: UseSeparateJournalDevice enables using separate journal
-                      devices.
+                    description: |-
+                      UseSeparateJournalDevice enables using separate journal devices.
+                      FIXME: Unused for now
                     type: boolean
                 type: object
               maxLogicalVolumeCount:
@@ -939,8 +1444,9 @@ spec:
                   nodes.
                 type: string
               nodeAddr:
-                description: NodeAddr is the explicit node address used by action
-                  flows.
+                description: |-
+                  NodeAddr is the explicit node address used by action flows.
+                  FIXME: Unused for now
                 type: string
               nodeUUID:
                 description: NodeUUID is required when action is specified
@@ -988,6 +1494,10 @@ spec:
                 type: array
               spdkImage:
                 description: SpdkImage is the SPDK image reference used by node services.
+                type: string
+              spdkProxyImage:
+                description: SpdkProxyImage is the SPDK proxy image reference used
+                  by node services.
                 type: string
               tolerations:
                 description: Tolerations configures pod tolerations for storage-node
@@ -1075,6 +1585,47 @@ spec:
                     format: date-time
                     type: string
                 type: object
+              drainCoordination:
+                description: DrainCoordination tracks the upgrade-drain state per
+                  worker node.
+                items:
+                  description: NodeDrainState tracks the upgrade-drain coordination
+                    state for a single worker node.
+                  properties:
+                    activeNodeUUID:
+                      description: |-
+                        ActiveNodeUUID is the backend UUID of the storage node currently being shut
+                        down or restarted. Used to sequence through multiple NUMA-socket nodes on
+                        the same worker one at a time during drain coordination.
+                      type: string
+                    hostname:
+                      description: Hostname is the Kubernetes node name.
+                      type: string
+                    message:
+                      description: Message provides additional status detail or error
+                        information.
+                      type: string
+                    phase:
+                      description: Phase is the current drain coordination phase.
+                      enum:
+                      - detected
+                      - shutdown_called
+                      - draining
+                      - restart_called
+                      - complete
+                      - failed
+                      type: string
+                    startedAt:
+                      description: StartedAt is when drain coordination began for
+                        this node.
+                      format: date-time
+                      type: string
+                  required:
+                  - hostname
+                  - phase
+                  - startedAt
+                  type: object
+                type: array
               nodes:
                 description: Nodes is the observed state of each managed storage node.
                 items:
@@ -1190,8 +1741,9 @@ spec:
                 description: ClusterName is the target storage cluster name.
                 type: string
               subtasks:
-                description: Subtasks includes related child subtasks when supported
-                  by the backend.
+                description: |-
+                  Subtasks includes related child subtasks when supported by the backend.
+                  FIXME: Unused for now
                 type: boolean
               taskID:
                 description: TaskID filters results to a specific backend task when
@@ -1212,8 +1764,9 @@ spec:
                       description: Canceled indicates whether the task was canceled.
                       type: boolean
                     parentTask:
-                      description: ParentTask is the parent task UUID when this task
-                        is a subtask.
+                      description: |-
+                        ParentTask is the parent task UUID when this task is a subtask.
+                        FIXME: Unused for now
                       type: string
                     retried:
                       description: Retried is the number of retry attempts made for
@@ -1221,7 +1774,9 @@ spec:
                       format: int32
                       type: integer
                     startedAt:
-                      description: StartedAt is the backend-reported task start timestamp.
+                      description: |-
+                        StartedAt is the backend-reported task start timestamp.
+                        FIXME: Unused for now
                       format: date-time
                       type: string
                     taskResult:
@@ -1448,6 +2003,33 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - persistentvolumeclaims
+  - persistentvolumes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - secrets
   verbs:
   - create
@@ -1458,11 +2040,35 @@ rules:
   - update
   - watch
 - apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
   - storage.simplyblock.io
   resources:
   - devices
   - lvols
   - pools
+  - snapshotreplications
+  - storagebackups
   - storageclusters
   - storagenodes
   - tasks
@@ -1480,6 +2086,8 @@ rules:
   - devices/finalizers
   - lvols/finalizers
   - pools/finalizers
+  - snapshotreplications/finalizers
+  - storagebackups/finalizers
   - storageclusters/finalizers
   - storagenodes/finalizers
   - tasks/finalizers
@@ -1491,6 +2099,8 @@ rules:
   - devices/status
   - lvols/status
   - pools/status
+  - snapshotreplications/status
+  - storagebackups/status
   - storageclusters/status
   - storagenodes/status
   - tasks/status
@@ -1622,6 +2232,77 @@ rules:
   - storage.simplyblock.io
   resources:
   - storagenodes/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-storagebackup-admin-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagebackups
+  verbs:
+  - '*'
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagebackups/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-storagebackup-editor-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagebackups
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagebackups/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: simplyblock-operator
+  name: simplyblock-operator-storagebackup-viewer-role
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagebackups
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagebackups/status
   verbs:
   - get
 ---
@@ -1914,7 +2595,6 @@ spec:
           initialDelaySeconds: 15
           periodSeconds: 20
         name: manager
-        ports: []
         readinessProbe:
           httpGet:
             path: /readyz
@@ -1934,11 +2614,9 @@ spec:
             drop:
             - ALL
           readOnlyRootFilesystem: true
-        volumeMounts: []
       securityContext:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
       serviceAccountName: simplyblock-operator-controller-manager
       terminationGracePeriodSeconds: 10
-      volumes: []
