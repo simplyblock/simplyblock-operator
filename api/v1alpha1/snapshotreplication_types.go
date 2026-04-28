@@ -95,15 +95,15 @@ type SnapshotReplicationSpec struct {
 	// +kubebuilder:validation:Enum=failback
 	Action string `json:"action,omitempty"`
 
-	// Optional: only these volumes are included in failback.
+	// Optional: only these PVCs are included in failback.
 	// If empty, all volumes are candidates unless excluded below.
-	IncludeVolumeIDs []string `json:"includeVolumeIDs,omitempty"`
+	IncludePVCRefs []PersistentVolumeClaimRef `json:"includePVCRefs,omitempty"`
 
-	// Optional: volumes to exclude from failback.
-	ExcludeVolumeIDs []string `json:"excludeVolumeIDs,omitempty"`
+	// Optional: PVCs to exclude from failback.
+	ExcludePVCRefs []PersistentVolumeClaimRef `json:"excludePVCRefs,omitempty"`
 
-	// Optional: list of volumes to replicate. Empty means all volumes
-	VolumeIDs []string `json:"volumeIDs,omitempty"`
+	// Optional: list of PVCs to replicate. Empty means all volumes.
+	PVCRefs []PersistentVolumeClaimRef `json:"pvcRefs,omitempty"`
 }
 
 // SnapshotReplicationStatus defines the observed state of SnapshotReplication.
@@ -126,8 +126,11 @@ type SnapshotReplicationStatus struct {
 
 // VolumeReplicationStatus tracks the replication state of an individual volume
 type VolumeReplicationStatus struct {
-	// Volume ID
-	VolumeID string `json:"volumeID"`
+	// PVCRef identifies the PVC being replicated
+	PVCRef PersistentVolumeClaimRef `json:"pvcRef"`
+
+	// VolumeID is the resolved backend volume UUID
+	VolumeID string `json:"volumeID,omitempty"`
 
 	// Phase is the current replication phase for this volume.
 	// +kubebuilder:validation:Enum=Pending;Running;TriggeringTargetReplication;WaitingForTargetReplication;ReplicatingToSource;WaitingForTargetDeletion;Completed;Failed;Paused
