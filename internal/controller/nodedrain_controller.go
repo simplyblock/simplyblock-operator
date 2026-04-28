@@ -574,13 +574,8 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 ) time.Duration {
 	log := logf.FromContext(ctx)
 
-	ip, err := getNodeInternalIP(ctx, r.Client, state.Hostname)
-	if err != nil {
-		return 15 * time.Second
-	}
-
 	// Verify SPDK is reachable before calling restart.
-	if err := checkNodeInfoReachable(ctx, ip, snCR.Namespace, r.TLSEnabled); err != nil {
+	if err := checkNodeInfoReachable(ctx, state.Hostname, snCR.Namespace, r.TLSEnabled); err != nil {
 		state.Message = "waiting for SPDK to become reachable after reboot"
 		log.Info("SPDK not yet reachable, will retry", "node", state.Hostname)
 		return 15 * time.Second
@@ -620,10 +615,9 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 		return 10 * time.Second
 	}
 
-	nodeAddr := fmt.Sprintf("%s:5000", ip)
 	restartPayload := map[string]any{
 		"force":        true,
-		"node_address": nodeAddr,
+		"node_address": utils.StorageNodeAPIAddress(state.Hostname, snCR.Namespace),
 	}
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, firstUUID)
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, restartPayload)
@@ -701,11 +695,6 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 
 	// Advance to the next socket node in sequence.
 	if nextUUID := nextUUIDInList(nodeUUIDs, activeUUID); nextUUID != "" {
-		ip, err := getNodeInternalIP(ctx, r.Client, state.Hostname)
-		if err != nil {
-			return 15 * time.Second, nil
-		}
-
 		// Hold off if the next node's secondary is currently restarting or shutting down.
 		busy, err := isPeerBusy(ctx, apiClient, clusterSecret, clusterUUID, nextUUID)
 		if err != nil {
@@ -732,7 +721,7 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 
 		restartPayload := map[string]any{
 			"force":        true,
-			"node_address": fmt.Sprintf("%s:5000", ip),
+			"node_address": utils.StorageNodeAPIAddress(state.Hostname, snCR.Namespace),
 		}
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nextUUID)
 		body, httpStatus, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, restartPayload)

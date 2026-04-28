@@ -299,6 +299,13 @@ func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 	}
 }
 
+// StorageNodeAPIAddress returns the per-pod headless-service DNS address that
+// the cluster control-plane uses to reach a storage-node-api pod backing the
+// given worker node.
+func StorageNodeAPIAddress(workerNode, namespace string) string {
+	return fmt.Sprintf("%s.simplyblock-storage-node-api.%s.svc.cluster.local:5000", workerNode, namespace)
+}
+
 func BuildStorageNodeService(sn *simplyblockv1alpha1.StorageNode) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{

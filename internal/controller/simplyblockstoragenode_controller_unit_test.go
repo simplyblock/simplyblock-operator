@@ -1145,7 +1145,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 			return nil
 		}
 
-		if err := waitForNodeInfoReachable(context.Background(), mgmtIP, "node-a", "default", false); err != nil {
+		if err := waitForNodeInfoReachable(context.Background(), "node-a", "default", false); err != nil {
 			t.Fatalf("waitForNodeInfoReachable returned error: %v", err)
 		}
 		if attempts != 1 {
@@ -1165,7 +1165,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 			return nil
 		}
 
-		if err := waitForNodeInfoReachable(context.Background(), "10.0.0.2", "node-b", "default", false); err != nil {
+		if err := waitForNodeInfoReachable(context.Background(), "node-b", "default", false); err != nil {
 			t.Fatalf("waitForNodeInfoReachable returned error: %v", err)
 		}
 		if attempts != 3 {
@@ -1182,7 +1182,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := waitForNodeInfoReachable(ctx, "10.0.0.3", "node-c", "default", false)
+		err := waitForNodeInfoReachable(ctx, "node-c", "default", false)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context canceled error, got %v", err)
 		}
@@ -1195,7 +1195,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 			return errors.New("permanent failure")
 		}
 
-		err := waitForNodeInfoReachable(context.Background(), "10.0.0.4", "node-d", "default", false)
+		err := waitForNodeInfoReachable(context.Background(), "node-d", "default", false)
 		if err == nil {
 			t.Fatalf("expected timeout error after retries")
 		}
@@ -1671,40 +1671,6 @@ func TestPerformNodeActionRestartWorkerNodeLabelFailure(t *testing.T) {
 		t.Fatalf("expected restart action to fail when worker node lookup fails")
 	}
 	if !strings.Contains(err.Error(), "failed to label worker node") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestPerformNodeActionRestartWorkerNodeMissingInternalIP(t *testing.T) {
-	const clusterUUID = "cluster-uuid-restart-ip-fail"
-	const nodeUUID = "node-uuid-restart-ip-fail"
-	const workerNode = "node-no-ip"
-
-	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: workerNode},
-	}
-	sn := &simplyblockv1alpha1.StorageNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "sn-restart-ip-fail", Namespace: "default"},
-		Spec: simplyblockv1alpha1.StorageNodeSpec{
-			Action:      "restart",
-			NodeUUID:    nodeUUID,
-			WorkerNode:  workerNode,
-			ClusterName: "cluster-a",
-		},
-	}
-	r := newStorageNodeStateTestReconciler(t, sn, node)
-
-	err := r.performNodeAction(
-		context.Background(),
-		webapi.NewClient("http://127.0.0.1:1"),
-		clusterUUID,
-		"secret",
-		sn,
-	)
-	if err == nil {
-		t.Fatalf("expected restart action to fail when worker node has no InternalIP")
-	}
-	if !strings.Contains(err.Error(), "has no InternalIP") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

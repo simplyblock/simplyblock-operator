@@ -9,6 +9,14 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 )
 
+func TestStorageNodeAPIAddress(t *testing.T) {
+	got := StorageNodeAPIAddress("worker-1", "simplyblock")
+	want := "worker-1.simplyblock-storage-node-api.simplyblock.svc.cluster.local:5000"
+	if got != want {
+		t.Fatalf("StorageNodeAPIAddress = %q, want %q", got, want)
+	}
+}
+
 func TestBuildSpdkProxyEndpointSlice_DottedNodeNameTruncates(t *testing.T) {
 	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},

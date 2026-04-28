@@ -278,7 +278,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if err := checkNodeInfoReachable(ctx, ip, snCR.Namespace, r.TLSEnabled); err != nil {
+	if err := checkNodeInfoReachable(ctx, nodeName, snCR.Namespace, r.TLSEnabled); err != nil {
 		log.Info("Storage node API not reachable yet, requeueing",
 			"node", nodeName,
 			"ip", ip,
@@ -287,7 +287,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	nodeAddress := fmt.Sprintf("%s:5000", ip)
+	nodeAddress := utils.StorageNodeAPIAddress(nodeName, snCR.Namespace)
 	params := utils.StorageNodeAddParams{
 		NodeAddress:         nodeAddress,
 		InterfaceName:       snCR.Spec.MgmtIfname,
@@ -742,7 +742,7 @@ func ensureNodeStatus(
 	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
 }
 
-func checkNodeInfoReachable(ctx context.Context, ip, namespace string, tlsEnabled bool) error {
+func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tlsEnabled bool) error {
 	scheme := "http"
 	httpClient := &http.Client{Timeout: 3 * time.Second}
 	if tlsEnabled {
@@ -754,7 +754,7 @@ func checkNodeInfoReachable(ctx context.Context, ip, namespace string, tlsEnable
 		httpClient = c
 	}
 
-	url := fmt.Sprintf("%s://%s:5000/snode/info", scheme, ip)
+	url := fmt.Sprintf("%s://%s/snode/info", scheme, utils.StorageNodeAPIAddress(nodeName, namespace))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -780,7 +780,6 @@ func checkNodeInfoReachable(ctx context.Context, ip, namespace string, tlsEnable
 
 func waitForNodeInfoReachable(
 	ctx context.Context,
-	ip string,
 	nodeName string,
 	namespace string,
 	tlsEnabled bool,
@@ -791,10 +790,9 @@ func waitForNodeInfoReachable(
 
 	for i := 1; i <= waitForNodeInfoReachableMaxRetries; i++ {
 
-		if err := waitForNodeInfoReachableCheckFn(ctx, ip, namespace, tlsEnabled); err == nil {
+		if err := waitForNodeInfoReachableCheckFn(ctx, nodeName, namespace, tlsEnabled); err == nil {
 			log.Info("Storage node API is reachable",
 				"node", nodeName,
-				"ip", ip,
 				"attempt", i,
 			)
 			return nil
@@ -802,7 +800,6 @@ func waitForNodeInfoReachable(
 			lastErr = err
 			log.Info("Storage node API not reachable yet, retrying",
 				"node", nodeName,
-				"ip", ip,
 				"attempt", i,
 				"error", err.Error(),
 			)
@@ -1146,22 +1143,14 @@ func (r *StorageNodeReconciler) performNodeAction(
 				return fmt.Errorf("failed to label worker node %s: %w", snCR.Spec.WorkerNode, err)
 			}
 
-			ip, err := getNodeInternalIP(ctx, r.Client, snCR.Spec.WorkerNode)
-			if err != nil {
-				log.Error(err, "failed to get internal IP", "node", snCR.Spec.WorkerNode)
-				return err
-			}
-
-			if err := waitForNodeInfoReachable(ctx, ip, snCR.Spec.WorkerNode, snCR.Namespace, r.TLSEnabled); err != nil {
+			if err := waitForNodeInfoReachable(ctx, snCR.Spec.WorkerNode, snCR.Namespace, r.TLSEnabled); err != nil {
 				log.Error(err, "node never became reachable")
 				return err
 			}
 
-			nodeAddress := fmt.Sprintf("%s:5000", ip)
-
 			body = map[string]any{
 				"force":        true,
-				"node_address": nodeAddress,
+				"node_address": utils.StorageNodeAPIAddress(snCR.Spec.WorkerNode, snCR.Namespace),
 			}
 		} else {
 			body = payload
