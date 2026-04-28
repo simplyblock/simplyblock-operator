@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -46,6 +47,7 @@ type SnapshotReplicationReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=snapshotreplications,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=snapshotreplications/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=snapshotreplications/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims;persistentvolumes,verbs=get;list;watch
 
 func (r *SnapshotReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -183,8 +185,13 @@ func (r *SnapshotReplicationReconciler) reconcileFailback(
 		return 0, fmt.Errorf("failed to list target lvols for failback: %w", err)
 	}
 
-	includeIDs := snapRepCR.Spec.IncludeVolumeIDs
-	excludeIDs := snapRepCR.Spec.ExcludeVolumeIDs
+	var includeIDs, excludeIDs []string
+	if len(snapRepCR.Spec.IncludePVCRefs) > 0 {
+		includeIDs = r.resolvePVCRefsToVolumeIDs(ctx, snapRepCR.Namespace, snapRepCR.Spec.IncludePVCRefs)
+	}
+	if len(snapRepCR.Spec.ExcludePVCRefs) > 0 {
+		excludeIDs = r.resolvePVCRefsToVolumeIDs(ctx, snapRepCR.Namespace, snapRepCR.Spec.ExcludePVCRefs)
+	}
 
 	orig := snapRepCR.DeepCopy()
 	r.setConditionOnCopy(snapRepCR, simplyblockv1alpha1.ConditionTypeFailback, metav1.ConditionFalse, "InProgress", "Failback in progress")
@@ -296,6 +303,11 @@ func (r *SnapshotReplicationReconciler) reconcileNormalReplication(
 		return nil
 	}
 
+	var pvcVolumeIDs []string
+	if len(snapRepCR.Spec.PVCRefs) > 0 {
+		pvcVolumeIDs = r.resolvePVCRefsToVolumeIDs(ctx, snapRepCR.Namespace, snapRepCR.Spec.PVCRefs)
+	}
+
 	interval := utils.IntPtrOrDefault(snapRepCR.Spec.Interval, 300)
 	now := time.Now().UTC()
 
@@ -319,7 +331,7 @@ func (r *SnapshotReplicationReconciler) reconcileNormalReplication(
 				continue
 			}
 
-			if len(snapRepCR.Spec.VolumeIDs) > 0 && !slices.Contains(snapRepCR.Spec.VolumeIDs, lvolSummary.UUID) {
+			if len(pvcVolumeIDs) > 0 && !slices.Contains(pvcVolumeIDs, lvolSummary.UUID) {
 				continue
 			}
 
@@ -685,6 +697,70 @@ func (r *SnapshotReplicationReconciler) setVolumeLastReplicationTime(
 			return
 		}
 	}
+}
+
+/* -------------------- PVC resolution helpers -------------------- */
+
+func (r *SnapshotReplicationReconciler) resolvePVCRefToLvolID(
+	ctx context.Context,
+	namespace string,
+	pvcRef simplyblockv1alpha1.PersistentVolumeClaimRef,
+) (string, error) {
+	pvcNamespace := pvcRef.Namespace
+	if pvcNamespace == "" {
+		pvcNamespace = namespace
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := r.Get(ctx, client.ObjectKey{Name: pvcRef.Name, Namespace: pvcNamespace}, pvc); err != nil {
+		return "", fmt.Errorf("get PVC %s/%s: %w", pvcNamespace, pvcRef.Name, err)
+	}
+
+	if pvc.Spec.VolumeName == "" {
+		return "", fmt.Errorf("PVC %s/%s is not bound", pvcNamespace, pvc.Name)
+	}
+
+	pv := &corev1.PersistentVolume{}
+	if err := r.Get(ctx, client.ObjectKey{Name: pvc.Spec.VolumeName}, pv); err != nil {
+		return "", fmt.Errorf("get PV %s: %w", pvc.Spec.VolumeName, err)
+	}
+
+	if pv.Spec.CSI == nil {
+		return "", fmt.Errorf("PV %s is not a CSI volume", pv.Name)
+	}
+
+	_, _, lvolID, err := parseSimplyblockVolumeHandle(pv.Spec.CSI.VolumeHandle)
+	if err != nil {
+		return "", err
+	}
+
+	if annotation := pvc.Annotations[pvcLvolIDAnnotation]; annotation != "" {
+		lvolID = annotation
+	}
+
+	if lvolID == "" {
+		return "", fmt.Errorf("PVC %s/%s has no Simplyblock lvol ID", pvcNamespace, pvc.Name)
+	}
+
+	return lvolID, nil
+}
+
+func (r *SnapshotReplicationReconciler) resolvePVCRefsToVolumeIDs(
+	ctx context.Context,
+	namespace string,
+	refs []simplyblockv1alpha1.PersistentVolumeClaimRef,
+) []string {
+	log := logf.FromContext(ctx)
+	ids := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		id, err := r.resolvePVCRefToLvolID(ctx, namespace, ref)
+		if err != nil {
+			log.Error(err, "Failed to resolve PVCRef to volume ID", "pvc", ref.Name)
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 /* -------------------- Condition helpers -------------------- */

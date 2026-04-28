@@ -331,7 +331,7 @@ func TestSnapshotReplicationNormalReplication(t *testing.T) {
 		}
 	})
 
-	t.Run("skips lvol not in VolumeIDs allowlist", func(t *testing.T) {
+	t.Run("skips lvol not in PVCRefs allowlist", func(t *testing.T) {
 		const (
 			srcUUID     = "src-uuid-filter"
 			poolUUID    = "pool-uuid-filter"
@@ -350,6 +350,23 @@ func TestSnapshotReplicationNormalReplication(t *testing.T) {
 			)})
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
+		// PVC + PV that resolve to allowedUUID
+		allowedPV := &corev1.PersistentVolume{
+			ObjectMeta: metav1.ObjectMeta{Name: "pv-allowed"},
+			Spec: corev1.PersistentVolumeSpec{
+				ClaimRef: &corev1.ObjectReference{Name: "pvc-allowed", Namespace: "default"},
+				PersistentVolumeSource: corev1.PersistentVolumeSource{
+					CSI: &corev1.CSIPersistentVolumeSource{
+						VolumeHandle: srcUUID + ":" + poolUUID + ":" + allowedUUID,
+					},
+				},
+			},
+		}
+		allowedPVC := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "pvc-allowed", Namespace: "default"},
+			Spec:       corev1.PersistentVolumeClaimSpec{VolumeName: "pv-allowed"},
+		}
+
 		cr := &simplyblockv1alpha1.SnapshotReplication{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:       "snap-filter",
@@ -360,13 +377,15 @@ func TestSnapshotReplicationNormalReplication(t *testing.T) {
 				SourceCluster: "cluster-src",
 				TargetCluster: "tgt-uuid",
 				TargetPool:    "pool-uuid",
-				VolumeIDs:     []string{allowedUUID}, // only allowedUUID — lvolUUID should be skipped
+				PVCRefs: []simplyblockv1alpha1.PersistentVolumeClaimRef{
+					{Name: "pvc-allowed", Namespace: "default"},
+				},
 			},
 			Status: simplyblockv1alpha1.SnapshotReplicationStatus{Configured: true},
 		}
 		srcSecret := snapRepClusterSecret("cluster-src", srcUUID, "src-s")
 		srcCluster := snapRepClusterCR("cluster-src", srcUUID)
-		r := newSnapRepTestReconciler(t, cr, srcSecret, srcCluster)
+		r := newSnapRepTestReconciler(t, cr, srcSecret, srcCluster, allowedPVC, allowedPV)
 
 		_, _ = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cr)})
 

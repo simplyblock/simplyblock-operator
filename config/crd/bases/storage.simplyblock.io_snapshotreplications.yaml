@@ -57,22 +57,58 @@ spec:
                 enum:
                 - failback
                 type: string
-              excludeVolumeIDs:
-                description: 'Optional: volumes to exclude from failback.'
+              excludePVCRefs:
+                description: 'Optional: PVCs to exclude from failback.'
                 items:
-                  type: string
+                  properties:
+                    name:
+                      description: Name is the PVC name.
+                      type: string
+                    namespace:
+                      description: Namespace overrides the backup resource namespace
+                        for the PVC lookup.
+                      type: string
+                  required:
+                  - name
+                  type: object
                 type: array
-              includeVolumeIDs:
+              includePVCRefs:
                 description: |-
-                  Optional: only these volumes are included in failback.
+                  Optional: only these PVCs are included in failback.
                   If empty, all volumes are candidates unless excluded below.
                 items:
-                  type: string
+                  properties:
+                    name:
+                      description: Name is the PVC name.
+                      type: string
+                    namespace:
+                      description: Namespace overrides the backup resource namespace
+                        for the PVC lookup.
+                      type: string
+                  required:
+                  - name
+                  type: object
                 type: array
               interval:
                 description: 'snapshot replication interval in seconds (default: 300sec)'
                 format: int32
                 type: integer
+              pvcRefs:
+                description: 'Optional: list of PVCs to replicate. Empty means all
+                  volumes.'
+                items:
+                  properties:
+                    name:
+                      description: Name is the PVC name.
+                      type: string
+                    namespace:
+                      description: Namespace overrides the backup resource namespace
+                        for the PVC lookup.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
               sourceCluster:
                 description: Source cluster for the snapshots
                 type: string
@@ -89,12 +125,6 @@ spec:
                 description: snapshot replication timeout
                 format: int32
                 type: integer
-              volumeIDs:
-                description: 'Optional: list of volumes to replicate. Empty means
-                  all volumes'
-                items:
-                  type: string
-                type: array
             required:
             - sourceCluster
             - targetCluster
@@ -215,15 +245,28 @@ spec:
                       - Failed
                       - Paused
                       type: string
+                    pvcRef:
+                      description: PVCRef identifies the PVC being replicated
+                      properties:
+                        name:
+                          description: Name is the PVC name.
+                          type: string
+                        namespace:
+                          description: Namespace overrides the backup resource namespace
+                            for the PVC lookup.
+                          type: string
+                      required:
+                      - name
+                      type: object
                     replicatedCount:
                       description: Number of snapshots successfully replicated
                       format: int32
                       type: integer
                     volumeID:
-                      description: Volume ID
+                      description: VolumeID is the resolved backend volume UUID
                       type: string
                   required:
-                  - volumeID
+                  - pvcRef
                   type: object
                 type: array
             type: object
