@@ -335,7 +335,7 @@ func BuildStorageNodeEndpointSlice(sn *simplyblockv1alpha1.StorageNode, nodeIPs 
 
 	endpoints := make([]discoveryv1.Endpoint, 0, len(nodeIPs))
 	for nodeName, ip := range nodeIPs {
-		hostname := nodeName
+		hostname := nodeHostnameLabel(nodeName)
 		endpoints = append(endpoints, discoveryv1.Endpoint{
 			Addresses: []string{ip},
 			Hostname:  &hostname,
