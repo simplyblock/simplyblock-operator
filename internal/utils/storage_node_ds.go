@@ -303,7 +303,7 @@ func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 // the cluster control-plane uses to reach a storage-node-api pod backing the
 // given worker node.
 func StorageNodeAPIAddress(workerNode, namespace string) string {
-	return fmt.Sprintf("%s.simplyblock-storage-node-api.%s.svc.cluster.local:5000", workerNode, namespace)
+	return fmt.Sprintf("%s.simplyblock-storage-node-api.%s.svc.cluster.local:5000", nodeHostnameLabel(workerNode), namespace)
 }
 
 func BuildStorageNodeService(sn *simplyblockv1alpha1.StorageNode) *corev1.Service {
@@ -335,7 +335,7 @@ func BuildStorageNodeEndpointSlice(sn *simplyblockv1alpha1.StorageNode, nodeIPs 
 
 	endpoints := make([]discoveryv1.Endpoint, 0, len(nodeIPs))
 	for nodeName, ip := range nodeIPs {
-		hostname := nodeName
+		hostname := nodeHostnameLabel(nodeName)
 		endpoints = append(endpoints, discoveryv1.Endpoint{
 			Addresses: []string{ip},
 			Hostname:  &hostname,
