@@ -1361,8 +1361,8 @@ func TestPollNodeOnlinePaths(t *testing.T) {
 			http.MethodGet,
 			"/api/v2/clusters/"+clusterUUID+"/storage-nodes/",
 			webapimock.RouteResponse{
-				Status: http.StatusOK,
-				Body:   `[]`,
+				Status:  http.StatusOK,
+				Body:    `[]`,
 				Headers: map[string]string{"Content-Type": "application/json"},
 			},
 		)
