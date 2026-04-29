@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool) *appsv1.DaemonSet {
+func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
 
 	labels := map[string]string{
 		"app":                 "storage-node",
@@ -60,12 +60,28 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 		{Name: "OPENSHIFT_CLUSTER", Value: BoolPtrToString(sn.Spec.OpenShiftCluster)},
 		{Name: "CPU_TOPOLOGY_ENABLED", Value: BoolPtrToString(sn.Spec.EnableCpuTopology)},
 		{Name: "SKIP_KUBELET_CONFIGURATION", Value: BoolPtrToString(sn.Spec.SkipKubeletConfiguration)},
+		{Name: "SIMPLY_BLOCK_DOCKER_IMAGE", Value: image},
 		{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 		}},
 	}
 	if sn.Spec.ReservedSystemCPU != "" {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: sn.Spec.ReservedSystemCPU})
+	}
+	if tlsMutualEnabled {
+		mainEnv = append(mainEnv,
+			corev1.EnvVar{Name: "SB_TLS_SERVE", Value: "true"},
+			corev1.EnvVar{Name: "SB_TLS_CONNECT", Value: "authenticated"},
+			corev1.EnvVar{Name: "SB_TLS_CLIENT_AUTH", Value: "required"},
+			corev1.EnvVar{Name: "SB_TLS_PROVIDER", Value: NormalizeTLSProvider(tlsProvider)},
+		)
+	} else if tlsEnabled {
+		mainEnv = append(mainEnv,
+			corev1.EnvVar{Name: "SB_TLS_SERVE", Value: "true"},
+			corev1.EnvVar{Name: "SB_TLS_CONNECT", Value: "anonymous"},
+			corev1.EnvVar{Name: "SB_TLS_CLIENT_AUTH", Value: "optional"},
+			corev1.EnvVar{Name: "SB_TLS_PROVIDER", Value: NormalizeTLSProvider(tlsProvider)},
+		)
 	}
 
 	volumes := []corev1.Volume{
@@ -134,41 +150,33 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 		PeriodSeconds:       5,
 	}
 
-	if tlsEnabled {
-		readinessProbe.HTTPGet.Scheme = corev1.URISchemeHTTPS
-
-		volumes = append(volumes, corev1.Volume{
-			Name: "tls",
-			VolumeSource: corev1.VolumeSource{
-				Projected: &corev1.ProjectedVolumeSource{
-					Sources: []corev1.VolumeProjection{
-						{
-							Secret: &corev1.SecretProjection{
-								LocalObjectReference: corev1.LocalObjectReference{
-									Name: "simplyblock-storage-node-api-tls",
-								},
-							},
-						},
-						{
-							ConfigMap: &corev1.ConfigMapProjection{
-								LocalObjectReference: corev1.LocalObjectReference{
-									Name: "simplyblock-certificate-authority",
-								},
-								Items: []corev1.KeyToPath{
-									{Key: "service-ca.crt", Path: "ca.crt"},
-								},
-							},
-						},
-					},
-				},
+	if tlsMutualEnabled {
+		// kubelet does not present a client certificate, so an HTTPS probe
+		// would be rejected by the snode API. Fall back to a TCP check.
+		readinessProbe.ProbeHandler = corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{
+				Port: intstr.FromInt(5000),
 			},
-		})
+		}
+	} else if tlsEnabled {
+		readinessProbe.HTTPGet.Scheme = corev1.URISchemeHTTPS
+	}
+
+	if tlsEnabled {
+		volumes = append(volumes, buildStorageNodeTLSVolume(tlsProvider))
 
 		tlsMounts := []corev1.VolumeMount{
 			{Name: "tls", MountPath: "/etc/simplyblock/tls", ReadOnly: true},
 		}
 		initMounts = append(initMounts, tlsMounts...)
 		mainMounts = append(mainMounts, tlsMounts...)
+	}
+
+	var podAnnotations map[string]string
+	if tlsEnabled && tlsSecretResourceVersion != "" {
+		podAnnotations = map[string]string{
+			AnnotationTLSSecretRevision: tlsSecretResourceVersion,
+		}
 	}
 
 	return &appsv1.DaemonSet{
@@ -192,7 +200,8 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
+					Labels:      labels,
+					Annotations: podAnnotations,
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "simplyblock-storage-node-sa",
@@ -233,6 +242,51 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 							ReadinessProbe: readinessProbe,
 							Env:            mainEnv,
 							VolumeMounts:   mainMounts,
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// buildStorageNodeTLSVolume returns a Volume that exposes tls.crt, tls.key,
+// and ca.crt at /etc/simplyblock/tls. cert-manager already bundles the CA in
+// the Secret, so a plain Secret volume is enough; OpenShift's serving-cert
+// controller emits the CA via a separate ConfigMap, so the two sources are
+// combined through a projected volume.
+func buildStorageNodeTLSVolume(tlsProvider string) corev1.Volume {
+	if IsCertManagerTLSProvider(tlsProvider) {
+		return corev1.Volume{
+			Name: "tls",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: SecretNameStorageNodeAPITLS,
+				},
+			},
+		}
+	}
+
+	return corev1.Volume{
+		Name: "tls",
+		VolumeSource: corev1.VolumeSource{
+			Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{
+					{
+						Secret: &corev1.SecretProjection{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: SecretNameStorageNodeAPITLS,
+							},
+						},
+					},
+					{
+						ConfigMap: &corev1.ConfigMapProjection{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: "simplyblock-certificate-authority",
+							},
+							Items: []corev1.KeyToPath{
+								{Key: "service-ca.crt", Path: "ca.crt"},
+							},
 						},
 					},
 				},
@@ -306,14 +360,12 @@ func StorageNodeAPIAddress(workerNode, namespace string) string {
 	return fmt.Sprintf("%s.simplyblock-storage-node-api.%s.svc.cluster.local:5000", nodeHostnameLabel(workerNode), namespace)
 }
 
-func BuildStorageNodeService(sn *simplyblockv1alpha1.StorageNode) *corev1.Service {
+func BuildStorageNodeService(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsProvider string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-storage-node-api",
-			Namespace: sn.Namespace,
-			Annotations: map[string]string{
-				"service.beta.openshift.io/serving-cert-secret-name": "simplyblock-storage-node-api-tls",
-			},
+			Name:        "simplyblock-storage-node-api",
+			Namespace:   sn.Namespace,
+			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, SecretNameStorageNodeAPITLS),
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
@@ -370,14 +422,12 @@ type SpdkProxyEndpoint struct {
 	RpcPort  int32
 }
 
-func BuildSpdkProxyService(sn *simplyblockv1alpha1.StorageNode) *corev1.Service {
+func BuildSpdkProxyService(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsProvider string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-spdk-proxy",
-			Namespace: sn.Namespace,
-			Annotations: map[string]string{
-				"service.beta.openshift.io/serving-cert-secret-name": "simplyblock-spdk-proxy-tls",
-			},
+			Name:        "simplyblock-spdk-proxy",
+			Namespace:   sn.Namespace,
+			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, SecretNameSpdkProxyTLS),
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",

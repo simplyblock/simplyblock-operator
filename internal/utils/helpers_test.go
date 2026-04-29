@@ -34,6 +34,12 @@ func TestIntAndBoolHelpers(t *testing.T) {
 	if BoolPtrToString(&bTrue) != "true" {
 		t.Fatalf("BoolPtrToString true should be true")
 	}
+	if BoolToString(false) != "false" {
+		t.Fatalf("BoolToString false should be false")
+	}
+	if BoolToString(true) != "true" {
+		t.Fatalf("BoolToString true should be true")
+	}
 }
 
 func TestStringSliceHelpers(t *testing.T) {

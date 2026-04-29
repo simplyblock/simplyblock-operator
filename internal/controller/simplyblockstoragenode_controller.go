@@ -51,8 +51,10 @@ import (
 // StorageNodeReconciler reconciles a StorageNode object
 type StorageNodeReconciler struct {
 	client.Client
-	Scheme     *runtime.Scheme
-	TLSEnabled bool
+	Scheme           *runtime.Scheme
+	TLSEnabled       bool
+	TLSProvider      string
+	TLSMutualEnabled bool
 }
 
 type SNODEAPIResponse struct {
@@ -102,6 +104,7 @@ var (
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -181,19 +184,26 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
 	}
 
-	if err := r.reconcileDaemonSet(ctx, snCR); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	if err := r.reconcileService(ctx, snCR); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	if err := r.reconcileEndpointSlice(ctx, snCR); err != nil {
+	if err := r.reconcileSpdkProxyService(ctx, snCR); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	if err := r.reconcileSpdkProxyService(ctx, snCR); err != nil {
+	// Reconcile certificates before the DaemonSet so the TLS Secret is more
+	// likely to exist when reconcileDaemonSet reads its resourceVersion to
+	// stamp it as a pod-template annotation.
+	if err := r.reconcileServingCertificates(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileDaemonSet(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileEndpointSlice(ctx, snCR); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -273,7 +283,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if err := checkNodeInfoReachable(ctx, nodeName, snCR.Namespace, r.TLSEnabled); err != nil {
+	if err := checkNodeInfoReachable(ctx, nodeName, snCR.Namespace, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
 		log.Info("Storage node API not reachable yet, requeueing",
 			"node", nodeName,
 			"ip", ip,
@@ -353,11 +363,42 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.spdkProxyPodToStorageNodeRequests),
 			builder.WithPredicates(predicate.NewPredicateFuncs(isSpdkProxyPod)),
 		).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.tlsSecretToStorageNodeRequests),
+			builder.WithPredicates(predicate.NewPredicateFuncs(isStorageNodeTLSSecret)),
+		).
 		Complete(r)
 }
 
 func isSpdkProxyPod(obj client.Object) bool {
 	return obj.GetLabels()["role"] == "simplyblock-storage-node"
+}
+
+func isStorageNodeTLSSecret(obj client.Object) bool {
+	return obj.GetName() == utils.SecretNameStorageNodeAPITLS
+}
+
+// tlsSecretToStorageNodeRequests enqueues every StorageNode CR in the
+// Secret's namespace when the storage-node-api TLS Secret changes. Coupled
+// with the resourceVersion annotation stamped on the DaemonSet pod template,
+// this drives a rolling restart whenever cert-manager (or OpenShift's
+// service-ca) rotates the Secret.
+func (r *StorageNodeReconciler) tlsSecretToStorageNodeRequests(
+	ctx context.Context,
+	obj client.Object,
+) []reconcile.Request {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(snList.Items))
+	for _, sn := range snList.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: sn.Namespace, Name: sn.Name},
+		})
+	}
+	return reqs
 }
 
 // spdkProxyPodToStorageNodeRequests enqueues every StorageNode CR in the Pod's
@@ -465,14 +506,19 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
 
-	ds := utils.BuildStorageNodeDaemonSet(snCR, r.TLSEnabled)
+	tlsSecretRV, err := r.getTLSSecretResourceVersion(ctx, snCR.Namespace)
+	if err != nil {
+		return err
+	}
+
+	ds := utils.BuildStorageNodeDaemonSet(snCR, r.TLSEnabled, r.TLSMutualEnabled, r.TLSProvider, tlsSecretRV)
 
 	if err := controllerutil.SetControllerReference(snCR, ds, r.Scheme); err != nil {
 		return err
 	}
 
 	var existing appsv1.DaemonSet
-	err := r.Get(ctx, client.ObjectKeyFromObject(ds), &existing)
+	err = r.Get(ctx, client.ObjectKeyFromObject(ds), &existing)
 	if apierrors.IsNotFound(err) {
 		return r.Create(ctx, ds)
 	}
@@ -484,11 +530,37 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 	return r.Update(ctx, ds)
 }
 
+// getTLSSecretResourceVersion returns the storage-node-api TLS Secret's
+// metadata.resourceVersion, or "" if TLS is disabled or the Secret has not
+// been provisioned yet. The value is stamped onto the DaemonSet's pod
+// template so that cert rotations (where the Secret object changes but its
+// name does not) trigger a rolling restart.
+func (r *StorageNodeReconciler) getTLSSecretResourceVersion(
+	ctx context.Context,
+	namespace string,
+) (string, error) {
+	if !r.TLSEnabled {
+		return "", nil
+	}
+	var sec corev1.Secret
+	err := r.Get(ctx, types.NamespacedName{
+		Namespace: namespace,
+		Name:      utils.SecretNameStorageNodeAPITLS,
+	}, &sec)
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return sec.ResourceVersion, nil
+}
+
 func (r *StorageNodeReconciler) reconcileService(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
-	svc := utils.BuildStorageNodeService(snCR)
+	svc := utils.BuildStorageNodeService(snCR, r.TLSEnabled, r.TLSProvider)
 	if err := controllerutil.SetControllerReference(snCR, svc, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set Service owner reference: %w", err)
 	}
@@ -505,6 +577,54 @@ func (r *StorageNodeReconciler) reconcileService(
 	svc.ResourceVersion = existing.ResourceVersion
 	svc.Spec.ClusterIP = existing.Spec.ClusterIP
 	return r.Update(ctx, svc)
+}
+
+func (r *StorageNodeReconciler) reconcileServingCertificates(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+) error {
+	if !r.TLSEnabled || !utils.IsCertManagerTLSProvider(r.TLSProvider) {
+		return nil
+	}
+
+	certificates := []struct {
+		serviceName string
+		secretName  string
+	}{
+		{
+			serviceName: "simplyblock-storage-node-api",
+			secretName:  utils.SecretNameStorageNodeAPITLS,
+		},
+		{
+			serviceName: "simplyblock-spdk-proxy",
+			secretName:  utils.SecretNameSpdkProxyTLS,
+		},
+	}
+
+	for _, cert := range certificates {
+		if err := r.reconcileServingCertificate(ctx, snCR, cert.serviceName, cert.secretName); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (r *StorageNodeReconciler) reconcileServingCertificate(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+	serviceName, secretName string,
+) error {
+	cert := utils.BuildServiceServingCertificate(snCR.Namespace, serviceName, secretName)
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cert, func() error {
+		desired := utils.BuildServiceServingCertificate(snCR.Namespace, serviceName, secretName)
+		cert.Object["spec"] = desired.Object["spec"]
+		return controllerutil.SetControllerReference(snCR, cert, r.Scheme)
+	}); err != nil {
+		return fmt.Errorf("failed to apply serving Certificate for %s: %w", serviceName, err)
+	}
+
+	return nil
 }
 
 func (r *StorageNodeReconciler) reconcileEndpointSlice(
@@ -545,7 +665,7 @@ func (r *StorageNodeReconciler) reconcileSpdkProxyService(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
-	svc := utils.BuildSpdkProxyService(snCR)
+	svc := utils.BuildSpdkProxyService(snCR, r.TLSEnabled, r.TLSProvider)
 	if err := controllerutil.SetControllerReference(snCR, svc, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set spdk-proxy Service owner reference: %w", err)
 	}
@@ -739,12 +859,17 @@ func ensureNodeStatus(
 	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
 }
 
-func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tlsEnabled bool) error {
+func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tlsEnabled, tlsMutualEnabled bool) error {
 	scheme := "http"
 	httpClient := &http.Client{Timeout: 3 * time.Second}
 	if tlsEnabled {
 		scheme = "https"
-		c, err := tlsutil.BuildStorageNodeAPIClient(namespace, tlsutil.ServiceCABundlePath)
+		certPath, keyPath := "", ""
+		if tlsMutualEnabled {
+			certPath = tlsutil.ServiceClientCertificatePath
+			keyPath = tlsutil.ServiceClientKeyPath
+		}
+		c, err := tlsutil.BuildStorageNodeAPIClient(namespace, tlsutil.ServiceCABundlePath, certPath, keyPath)
 		if err != nil {
 			return fmt.Errorf("build storage-node TLS client: %w", err)
 		}
@@ -779,7 +904,7 @@ func waitForNodeInfoReachable(
 	ctx context.Context,
 	nodeName string,
 	namespace string,
-	tlsEnabled bool,
+	tlsEnabled, tlsMutualEnabled bool,
 ) error {
 	log := logf.FromContext(ctx)
 
@@ -787,7 +912,7 @@ func waitForNodeInfoReachable(
 
 	for i := 1; i <= waitForNodeInfoReachableMaxRetries; i++ {
 
-		if err := waitForNodeInfoReachableCheckFn(ctx, nodeName, namespace, tlsEnabled); err == nil {
+		if err := waitForNodeInfoReachableCheckFn(ctx, nodeName, namespace, tlsEnabled, tlsMutualEnabled); err == nil {
 			log.Info("Storage node API is reachable",
 				"node", nodeName,
 				"attempt", i,
@@ -1153,7 +1278,7 @@ func (r *StorageNodeReconciler) performNodeAction(
 				return fmt.Errorf("failed to label worker node %s: %w", snCR.Spec.WorkerNode, err)
 			}
 
-			if err := waitForNodeInfoReachable(ctx, snCR.Spec.WorkerNode, snCR.Namespace, r.TLSEnabled); err != nil {
+			if err := waitForNodeInfoReachable(ctx, snCR.Spec.WorkerNode, snCR.Namespace, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
 				log.Error(err, "node never became reachable")
 				return err
 			}
