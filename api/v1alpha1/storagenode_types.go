@@ -182,6 +182,9 @@ type NodeStatus struct {
 	Hostname string `json:"hostname,omitempty"`
 	// MgmtIp is the management IP address for the node.
 	MgmtIp string `json:"mgmtIp,omitempty"`
+	// PostedAt is when the storage-node add request was sent. Used to detect
+	// timeout without blocking the reconcile goroutine.
+	PostedAt *metav1.Time `json:"postedAt,omitempty"`
 }
 
 type ActionStatus struct {
