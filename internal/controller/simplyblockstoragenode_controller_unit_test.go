@@ -1208,8 +1208,17 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 	})
 }
 
-func TestWaitForNodeOnlinePaths(t *testing.T) {
-	t.Run("updates node status and exits when cluster already active", func(t *testing.T) {
+func TestPollNodeOnlinePaths(t *testing.T) {
+	origActivationDelay := waitForNodeOnlineActivationDelay
+	origSleepFn := waitForNodeOnlineSleepFn
+	t.Cleanup(func() {
+		waitForNodeOnlineActivationDelay = origActivationDelay
+		waitForNodeOnlineSleepFn = origSleepFn
+	})
+	waitForNodeOnlineActivationDelay = 0
+	waitForNodeOnlineSleepFn = func(time.Duration) {}
+
+	t.Run("updates node status and returns done when cluster already active", func(t *testing.T) {
 		const clusterName = "cluster-a"
 		const clusterUUID = "cluster-uuid-online"
 
@@ -1217,7 +1226,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v2/clusters/"+clusterUUID+"/storage-nodes",
+			"/api/v2/clusters/"+clusterUUID+"/storage-nodes/",
 			webapimock.RouteResponse{
 				Status: http.StatusOK,
 				Body: `[
@@ -1263,21 +1272,13 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, cluster, sn)
 
-		err := waitForNodeOnline(
-			context.Background(),
-			apiClient,
-			"secret",
-			clusterUUID,
-			mgmtIP,
-			"node-a",
-			1,
-			sn,
-			r,
-		)
+		res, err := r.pollNodeOnline(context.Background(), apiClient, "secret", clusterUUID, mgmtIP, "node-a", 1, sn)
 		if err != nil {
-			t.Fatalf("waitForNodeOnline returned error: %v", err)
+			t.Fatalf("pollNodeOnline returned error: %v", err)
 		}
-
+		if res.RequeueAfter != 0 {
+			t.Fatalf("expected done result, got requeue: %v", res)
+		}
 		if len(sn.Status.Nodes) != 1 {
 			t.Fatalf("unexpected node status length: %d", len(sn.Status.Nodes))
 		}
@@ -1295,7 +1296,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v2/clusters/"+clusterUUID+"/storage-nodes",
+			"/api/v2/clusters/"+clusterUUID+"/storage-nodes/",
 			webapimock.RouteResponse{
 				Status: http.StatusOK,
 				Body: `[
@@ -1336,19 +1337,12 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, cluster, sn)
 
-		err := waitForNodeOnline(
-			context.Background(),
-			apiClient,
-			"secret",
-			clusterUUID,
-			"10.0.0.2",
-			"node-b",
-			1,
-			sn,
-			r,
-		)
+		res, err := r.pollNodeOnline(context.Background(), apiClient, "secret", clusterUUID, "10.0.0.2", "node-b", 1, sn)
 		if err != nil {
-			t.Fatalf("waitForNodeOnline returned unexpected error: %v", err)
+			t.Fatalf("pollNodeOnline returned unexpected error: %v", err)
+		}
+		if res.RequeueAfter != 0 {
+			t.Fatalf("expected done result, got requeue: %v", res)
 		}
 		if len(sn.Status.Nodes) != 1 {
 			t.Fatalf("expected 1 status entry, got %d", len(sn.Status.Nodes))
@@ -1358,22 +1352,50 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 			t.Fatalf("unexpected appended node status: %#v", got)
 		}
 	})
+
+	t.Run("returns RequeueAfter when node not yet online and within timeout window", func(t *testing.T) {
+		const clusterUUID = "cluster-uuid-not-yet-online"
+		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		defer mock.Close()
+		mock.Register(
+			http.MethodGet,
+			"/api/v2/clusters/"+clusterUUID+"/storage-nodes/",
+			webapimock.RouteResponse{
+				Status: http.StatusOK,
+				Body:   `[]`,
+				Headers: map[string]string{"Content-Type": "application/json"},
+			},
+		)
+
+		postedAt := metav1.Now()
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-not-yet-online", Namespace: "default"},
+			Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-a", MgmtIp: mgmtIP, Status: "in_creation", PostedAt: &postedAt},
+				},
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+
+		res, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), "secret", clusterUUID, mgmtIP, "node-a", 1, sn)
+		if err != nil {
+			t.Fatalf("pollNodeOnline returned unexpected error: %v", err)
+		}
+		if res.RequeueAfter == 0 {
+			t.Fatalf("expected RequeueAfter, got done result")
+		}
+	})
 }
 
-func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
-	origRetries := waitForNodeOnlineRetries
-	origWait := waitForNodeOnlineWaitInterval
+func TestPollNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 	origActivationDelay := waitForNodeOnlineActivationDelay
 	origSleepFn := waitForNodeOnlineSleepFn
 	t.Cleanup(func() {
-		waitForNodeOnlineRetries = origRetries
-		waitForNodeOnlineWaitInterval = origWait
 		waitForNodeOnlineActivationDelay = origActivationDelay
 		waitForNodeOnlineSleepFn = origSleepFn
 	})
-
-	waitForNodeOnlineRetries = 1
-	waitForNodeOnlineWaitInterval = 0
 	waitForNodeOnlineActivationDelay = 0
 	waitForNodeOnlineSleepFn = func(time.Duration) {}
 
@@ -1406,17 +1428,7 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
 
-		err := waitForNodeOnline(
-			context.Background(),
-			webapi.NewClient(mock.URL()),
-			"secret",
-			clusterUUID,
-			mgmtIP,
-			"node-a",
-			1,
-			sn,
-			r,
-		)
+		_, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), "secret", clusterUUID, mgmtIP, "node-a", 1, sn)
 		if err == nil {
 			t.Fatalf("expected unmarshal error for invalid payload")
 		}
@@ -1467,17 +1479,7 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
 
-		err := waitForNodeOnline(
-			context.Background(),
-			webapi.NewClient(mock.URL()),
-			"secret",
-			clusterUUID,
-			"10.0.0.3",
-			"node-c",
-			1,
-			sn,
-			r,
-		)
+		_, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), "secret", clusterUUID, "10.0.0.3", "node-c", 1, sn)
 		if err == nil {
 			t.Fatalf("expected cluster resolution error")
 		}
@@ -1486,7 +1488,7 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("returns timeout and writes timeout node status", func(t *testing.T) {
+	t.Run("writes timeout node status when PostedAt is expired", func(t *testing.T) {
 		const clusterUUID = "cluster-uuid-wfno-timeout"
 		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
 		defer mock.Close()
@@ -1502,30 +1504,26 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 			},
 		)
 
+		expiredAt := metav1.NewTime(time.Now().Add(-2 * time.Hour))
 		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-wfno-timeout", Namespace: "default"},
 			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: "cluster-a",
 			},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-timeout", MgmtIp: "10.0.0.4", Status: "in_creation", PostedAt: &expiredAt},
+				},
+			},
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
 
-		err := waitForNodeOnline(
-			context.Background(),
-			webapi.NewClient(mock.URL()),
-			"secret",
-			clusterUUID,
-			"10.0.0.4",
-			"node-timeout",
-			1,
-			sn,
-			r,
-		)
-		if err == nil {
-			t.Fatalf("expected timeout error")
+		res, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), "secret", clusterUUID, "10.0.0.4", "node-timeout", 1, sn)
+		if err != nil {
+			t.Fatalf("expected no error on timeout, got: %v", err)
 		}
-		if !strings.Contains(err.Error(), "did not become online in time") {
-			t.Fatalf("unexpected timeout error: %v", err)
+		if res.RequeueAfter != 0 {
+			t.Fatalf("expected done result after timeout, got requeue: %v", res)
 		}
 		if len(sn.Status.Nodes) != 1 {
 			t.Fatalf("expected timeout status node entry, got %d", len(sn.Status.Nodes))

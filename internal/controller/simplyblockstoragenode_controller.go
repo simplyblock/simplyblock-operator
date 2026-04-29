@@ -258,13 +258,7 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 		}
 	}
 
-	if err := waitForNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, ip, nodeName, expectedPerHost, snCR, r); err != nil {
-		log.Error(err, "Node did not become online in time", "node", nodeName)
-		return ctrl.Result{}, nil
-	}
-
-	log.Info("Storage node created successfully", "node", nodeName)
-	return ctrl.Result{}, nil
+	return r.pollNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, ip, nodeName, expectedPerHost, snCR)
 }
 
 // postStorageNode calls the backend storage-node creation API and records the
@@ -733,10 +727,12 @@ func ensureNodeStatus(
 		}
 	}
 
+	now := metav1.Now()
 	snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
 		Hostname: nodeName,
 		MgmtIp:   ip,
 		Status:   "in_creation",
+		PostedAt: &now,
 	})
 
 	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
@@ -819,73 +815,88 @@ func waitForNodeInfoReachable(
 	)
 }
 
-func waitForNodeOnline(
+// pollNodeOnline performs a single non-blocking check of whether the node is
+// online, returning RequeueAfter if it isn't yet. This replaces the old
+// blocking waitForNodeOnline loop so the reconcile worker goroutine stays free.
+func (r *StorageNodeReconciler) pollNodeOnline(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
-	clusterUUID string,
-	ip string,
-	nodeName string,
+	clusterSecret, clusterUUID, ip, nodeName string,
 	expectedPerHost int,
 	snCR *simplyblockv1alpha1.StorageNode,
-	r *StorageNodeReconciler,
-) error {
+) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
 
-	for attempt := 1; attempt <= waitForNodeOnlineRetries; attempt++ {
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
-		log.Info("SNODE LIST raw API response", "endpoint", endpoint, "status", status, "body", string(body))
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	log.Info("SNODE LIST raw API response", "endpoint", endpoint, "status", status, "body", string(body))
 
-		if err != nil || status >= 300 {
-			if err == nil {
-				err = fmt.Errorf("unexpected status %d", status)
-			}
-			log.Error(err, "Failed to get storage node statuses", "node", nodeName, "status", status, "response", string(body))
-			waitForNodeOnlineSleepFn(waitForNodeOnlineWaitInterval)
-			continue
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
 		}
-
-		if strings.TrimSpace(string(body)) == "[]" {
-			log.Info("Storage node list is empty, retrying...", "node", nodeName, "attempt", attempt)
-			waitForNodeOnlineSleepFn(waitForNodeOnlineWaitInterval)
-			continue
-		}
-
-		var apiResp []SNODEAPIResponse
-		if err := json.Unmarshal(body, &apiResp); err != nil {
-			return fmt.Errorf("failed to unmarshal storage node response for %s: %v", nodeName, err)
-		}
-
-		// Collect all backend nodes for this host IP that are online+healthy.
-		// When socketsToUse is set the backend creates one node per socket, all
-		// sharing the same mgmt IP and Hostname — we need all of them online.
-		onlineForHost := make([]SNODEAPIResponse, 0, expectedPerHost)
-		for _, res := range apiResp {
-			if res.IP == ip && res.Status == utils.NodeStatusOnline && res.Health {
-				onlineForHost = append(onlineForHost, res)
-			}
-		}
-
-		if len(onlineForHost) < expectedPerHost {
-			log.Info("Not all socket nodes online yet, retrying...",
-				"node", nodeName,
-				"online", len(onlineForHost),
-				"expected", expectedPerHost,
-				"attempt", attempt,
-			)
-			waitForNodeOnlineSleepFn(waitForNodeOnlineWaitInterval)
-			continue
-		}
-
-		// All socket nodes are online — sync status and check cluster activation.
-		return onAllSocketNodesOnline(ctx, apiClient, clusterSecret, clusterUUID, snCR, nodeName, onlineForHost, r)
+		log.Error(err, "Failed to get storage node statuses", "node", nodeName, "status", status, "response", string(body))
+		return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
 	}
 
-	// Timeout reached
-	log.Error(nil, "Timeout waiting for node to become online", "node", nodeName)
+	if strings.TrimSpace(string(body)) == "[]" {
+		log.Info("Storage node list is empty", "node", nodeName)
+		return r.nodeOnlineRequeueOrTimeout(ctx, nodeName, ip, snCR)
+	}
 
-	// Mark all placeholder/partial entries for this host as timed-out.
+	var apiResp []SNODEAPIResponse
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to unmarshal storage node response for %s: %v", nodeName, err)
+	}
+
+	// Collect all backend nodes for this host IP that are online+healthy.
+	// When socketsToUse is set the backend creates one node per socket, all
+	// sharing the same mgmt IP and Hostname — we need all of them online.
+	onlineForHost := make([]SNODEAPIResponse, 0, expectedPerHost)
+	for _, res := range apiResp {
+		if res.IP == ip && res.Status == utils.NodeStatusOnline && res.Health {
+			onlineForHost = append(onlineForHost, res)
+		}
+	}
+
+	if len(onlineForHost) < expectedPerHost {
+		log.Info("Not all socket nodes online yet",
+			"node", nodeName,
+			"online", len(onlineForHost),
+			"expected", expectedPerHost,
+		)
+		return r.nodeOnlineRequeueOrTimeout(ctx, nodeName, ip, snCR)
+	}
+
+	// All socket nodes are online — sync status and check cluster activation.
+	if err := onAllSocketNodesOnline(ctx, apiClient, clusterSecret, clusterUUID, snCR, nodeName, onlineForHost, r); err != nil {
+		return ctrl.Result{}, err
+	}
+	log.Info("Storage node created successfully", "node", nodeName)
+	return ctrl.Result{}, nil
+}
+
+// nodeOnlineRequeueOrTimeout returns RequeueAfter when the node is still
+// within the allowed wait window, or marks it as timed-out and returns done.
+func (r *StorageNodeReconciler) nodeOnlineRequeueOrTimeout(
+	ctx context.Context,
+	nodeName, ip string,
+	snCR *simplyblockv1alpha1.StorageNode,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	timeout := time.Duration(waitForNodeOnlineRetries) * waitForNodeOnlineWaitInterval
+
+	for i := range snCR.Status.Nodes {
+		n := &snCR.Status.Nodes[i]
+		if n.Hostname == nodeName && n.UUID == "" && n.PostedAt != nil {
+			if time.Since(n.PostedAt.Time) <= timeout {
+				return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
+			}
+		}
+	}
+
+	// Timed out (or PostedAt missing — treat as timed-out to avoid infinite requeue).
+	log.Error(nil, "Timeout waiting for node to become online", "node", nodeName)
 	updated := false
 	for i := range snCR.Status.Nodes {
 		if snCR.Status.Nodes[i].Hostname == nodeName {
@@ -901,12 +912,10 @@ func waitForNodeOnline(
 			Status:   "timeout",
 		})
 	}
-
 	if err := r.Status().Update(ctx, snCR); err != nil {
 		log.Error(err, "Failed to update node status after timeout", "node", nodeName)
 	}
-
-	return fmt.Errorf("node %s did not become online in time", nodeName)
+	return ctrl.Result{}, nil
 }
 
 // onAllSocketNodesOnline syncs the StorageNode status entries for all online
