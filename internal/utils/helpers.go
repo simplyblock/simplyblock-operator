@@ -39,10 +39,11 @@ func BoolPtrOrFalse(ptr *bool) bool {
 }
 
 func BoolPtrToString(ptr *bool) string {
-	if ptr != nil && *ptr {
-		return "true"
-	}
-	return "false"
+	return strconv.FormatBool(ptr != nil && *ptr)
+}
+
+func BoolToString(v bool) string {
+	return strconv.FormatBool(v)
 }
 
 func BoolPtr(v bool) *bool {

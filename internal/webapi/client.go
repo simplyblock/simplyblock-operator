@@ -40,13 +40,18 @@ func cachedTLSClient() (*http.Client, error) {
 			tlsClientErr = err
 			return
 		}
-		tlsClient, tlsClientErr = tlsutil.BuildWebAPIClient(ns, tlsutil.ServiceCABundlePath)
+		certPath, keyPath := "", ""
+		if os.Getenv("SB_TLS_CONNECT") == "authenticated" {
+			certPath = tlsutil.ServiceClientCertificatePath
+			keyPath = tlsutil.ServiceClientKeyPath
+		}
+		tlsClient, tlsClientErr = tlsutil.BuildWebAPIClient(ns, tlsutil.ServiceCABundlePath, certPath, keyPath)
 	})
 	return tlsClient, tlsClientErr
 }
 
 func NewClient(baseURL ...string) *Client {
-	tlsEnabled := os.Getenv("TLS_ENABLED") == "true"
+	tlsEnabled := os.Getenv("SB_TLS_SERVE") == "1"
 
 	defaultURL := "http://simplyblock-webappapi:5000"
 	httpClient := &http.Client{Timeout: 30 * time.Second}

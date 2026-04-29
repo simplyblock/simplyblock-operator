@@ -1,15 +1,20 @@
 package tlsutil
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildStorageNodeAPIClientTrustsServingCert(t *testing.T) {
@@ -18,7 +23,7 @@ func TestBuildStorageNodeAPIClientTrustsServingCert(t *testing.T) {
 
 	caPath := writeCertPEM(t, server.Certificate())
 
-	c, err := BuildStorageNodeAPIClient("default", caPath)
+	c, err := BuildStorageNodeAPIClient("default", caPath, "", "")
 	if err != nil {
 		t.Fatalf("BuildStorageNodeAPIClient returned error: %v", err)
 	}
@@ -41,7 +46,7 @@ func TestBuildStorageNodeAPIClientRejectsBadCA(t *testing.T) {
 	if err := os.WriteFile(caPath, []byte("not a certificate"), 0o600); err != nil {
 		t.Fatalf("write temp ca: %v", err)
 	}
-	if _, err := BuildStorageNodeAPIClient("default", caPath); err == nil {
+	if _, err := BuildStorageNodeAPIClient("default", caPath, "", ""); err == nil {
 		t.Fatalf("expected error on garbage CA bundle")
 	} else if !strings.Contains(err.Error(), "no usable certificates") {
 		t.Fatalf("unexpected error: %v", err)
@@ -49,7 +54,7 @@ func TestBuildStorageNodeAPIClientRejectsBadCA(t *testing.T) {
 }
 
 func TestBuildStorageNodeAPIClientMissingCAFile(t *testing.T) {
-	if _, err := BuildStorageNodeAPIClient("default", "/no/such/file"); err == nil {
+	if _, err := BuildStorageNodeAPIClient("default", "/no/such/file", "", ""); err == nil {
 		t.Fatalf("expected error on missing CA file")
 	}
 }
@@ -59,7 +64,7 @@ func TestBuildStorageNodeAPIClientShape(t *testing.T) {
 	defer server.Close()
 	caPath := writeCertPEM(t, server.Certificate())
 
-	c, err := BuildStorageNodeAPIClient("kube-storage", caPath)
+	c, err := BuildStorageNodeAPIClient("kube-storage", caPath, "", "")
 	if err != nil {
 		t.Fatalf("BuildStorageNodeAPIClient: %v", err)
 	}
@@ -78,12 +83,28 @@ func TestBuildStorageNodeAPIClientShape(t *testing.T) {
 	}
 }
 
+func TestBuildStorageNodeAPIClientMTLSShape(t *testing.T) {
+	caPath, certPath, keyPath := writeSelfSignedCertPairPEM(t)
+
+	c, err := BuildStorageNodeAPIClient("simplyblock", caPath, certPath, keyPath)
+	if err != nil {
+		t.Fatalf("BuildStorageNodeAPIClient: %v", err)
+	}
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type %T, want *http.Transport", c.Transport)
+	}
+	if len(tr.TLSClientConfig.Certificates) != 1 {
+		t.Fatalf("Certificates len = %d, want 1", len(tr.TLSClientConfig.Certificates))
+	}
+}
+
 func TestBuildWebAPIClientShape(t *testing.T) {
 	server := httptest.NewTLSServer(nil)
 	defer server.Close()
 	caPath := writeCertPEM(t, server.Certificate())
 
-	c, err := BuildWebAPIClient("simplyblock", caPath)
+	c, err := BuildWebAPIClient("simplyblock", caPath, "", "")
 	if err != nil {
 		t.Fatalf("BuildWebAPIClient: %v", err)
 	}
@@ -93,6 +114,32 @@ func TestBuildWebAPIClientShape(t *testing.T) {
 	}
 	if want := "simplyblock-webappapi.simplyblock.svc"; tr.TLSClientConfig.ServerName != want {
 		t.Fatalf("ServerName = %q, want %q", tr.TLSClientConfig.ServerName, want)
+	}
+}
+
+func TestBuildWebAPIClientMTLSShape(t *testing.T) {
+	caPath, certPath, keyPath := writeSelfSignedCertPairPEM(t)
+
+	c, err := BuildWebAPIClient("simplyblock", caPath, certPath, keyPath)
+	if err != nil {
+		t.Fatalf("BuildWebAPIClient: %v", err)
+	}
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type %T, want *http.Transport", c.Transport)
+	}
+	if want := "simplyblock-webappapi.simplyblock.svc"; tr.TLSClientConfig.ServerName != want {
+		t.Fatalf("ServerName = %q, want %q", tr.TLSClientConfig.ServerName, want)
+	}
+	if len(tr.TLSClientConfig.Certificates) != 1 {
+		t.Fatalf("Certificates len = %d, want 1", len(tr.TLSClientConfig.Certificates))
+	}
+}
+
+func TestBuildWebAPIClientMissingClientKeyPair(t *testing.T) {
+	caPath, _, _ := writeSelfSignedCertPairPEM(t)
+	if _, err := BuildWebAPIClient("simplyblock", caPath, "/no/such/cert", "/no/such/key"); err == nil {
+		t.Fatalf("expected error when client certificate pair is missing")
 	}
 }
 
@@ -149,4 +196,51 @@ func writeCertPEM(t *testing.T, cert *x509.Certificate) string {
 		t.Fatalf("write ca pem: %v", err)
 	}
 	return caPath
+}
+
+func writeSelfSignedCertPairPEM(t *testing.T) (string, string, string) {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate rsa key: %v", err)
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			CommonName: "simplyblock-client",
+		},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "ca.crt")
+	certPath := filepath.Join(dir, "tls.crt")
+	keyPath := filepath.Join(dir, "tls.key")
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+
+	for path, data := range map[string][]byte{
+		caPath:   certPEM,
+		certPath: certPEM,
+		keyPath:  keyPEM,
+	} {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	return caPath, certPath, keyPath
 }
