@@ -47,6 +47,7 @@ rules:
   - update
   - watch
 - apiGroups:
+<<<<<<< HEAD
   - apps
   resources:
   - daemonsets
@@ -59,6 +60,21 @@ rules:
   - update
   - watch
 - apiGroups:
+||||||| parent of ca760f5 (Enable certificates through cert-manager)
+=======
+  - cert-manager.io
+  resources:
+  - certificates
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+>>>>>>> ca760f5 (Enable certificates through cert-manager)
   - discovery.k8s.io
   resources:
   - endpointslices

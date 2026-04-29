@@ -51,8 +51,9 @@ import (
 // StorageNodeReconciler reconciles a StorageNode object
 type StorageNodeReconciler struct {
 	client.Client
-	Scheme     *runtime.Scheme
-	TLSEnabled bool
+	Scheme      *runtime.Scheme
+	TLSEnabled  bool
+	TLSProvider string
 }
 
 type SNODEAPIResponse struct {
@@ -108,6 +109,7 @@ var (
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -200,6 +202,10 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if err := r.reconcileSpdkProxyService(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileServingCertificates(ctx, snCR); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -471,7 +477,7 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
 
-	ds := utils.BuildStorageNodeDaemonSet(snCR, r.TLSEnabled)
+	ds := utils.BuildStorageNodeDaemonSet(snCR, r.TLSEnabled, r.TLSProvider)
 
 	if err := controllerutil.SetControllerReference(snCR, ds, r.Scheme); err != nil {
 		return err
@@ -494,7 +500,7 @@ func (r *StorageNodeReconciler) reconcileService(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
-	svc := utils.BuildStorageNodeService(snCR)
+	svc := utils.BuildStorageNodeService(snCR, r.TLSEnabled, r.TLSProvider)
 	if err := controllerutil.SetControllerReference(snCR, svc, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set Service owner reference: %w", err)
 	}
@@ -511,6 +517,54 @@ func (r *StorageNodeReconciler) reconcileService(
 	svc.ResourceVersion = existing.ResourceVersion
 	svc.Spec.ClusterIP = existing.Spec.ClusterIP
 	return r.Update(ctx, svc)
+}
+
+func (r *StorageNodeReconciler) reconcileServingCertificates(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+) error {
+	if !r.TLSEnabled || !utils.IsCertManagerTLSProvider(r.TLSProvider) {
+		return nil
+	}
+
+	certificates := []struct {
+		serviceName string
+		secretName  string
+	}{
+		{
+			serviceName: "simplyblock-storage-node-api",
+			secretName:  "simplyblock-storage-node-api-tls",
+		},
+		{
+			serviceName: "simplyblock-spdk-proxy",
+			secretName:  "simplyblock-spdk-proxy-tls",
+		},
+	}
+
+	for _, cert := range certificates {
+		if err := r.reconcileServingCertificate(ctx, snCR, cert.serviceName, cert.secretName); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (r *StorageNodeReconciler) reconcileServingCertificate(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+	serviceName, secretName string,
+) error {
+	cert := utils.BuildServiceServingCertificate(snCR.Namespace, serviceName, secretName)
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cert, func() error {
+		desired := utils.BuildServiceServingCertificate(snCR.Namespace, serviceName, secretName)
+		cert.Object["spec"] = desired.Object["spec"]
+		return controllerutil.SetControllerReference(snCR, cert, r.Scheme)
+	}); err != nil {
+		return fmt.Errorf("failed to apply serving Certificate for %s: %w", serviceName, err)
+	}
+
+	return nil
 }
 
 func (r *StorageNodeReconciler) reconcileEndpointSlice(
@@ -551,7 +605,7 @@ func (r *StorageNodeReconciler) reconcileSpdkProxyService(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
-	svc := utils.BuildSpdkProxyService(snCR)
+	svc := utils.BuildSpdkProxyService(snCR, r.TLSEnabled, r.TLSProvider)
 	if err := controllerutil.SetControllerReference(snCR, svc, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set spdk-proxy Service owner reference: %w", err)
 	}

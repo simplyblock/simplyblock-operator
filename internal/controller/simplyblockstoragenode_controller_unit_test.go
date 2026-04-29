@@ -21,6 +21,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -472,6 +473,7 @@ func TestStorageNodeDaemonSetReconcileTLSEnabled(t *testing.T) {
 	}
 	r := newStorageNodeStateTestReconciler(t, sn)
 	r.TLSEnabled = true
+	r.TLSProvider = utils.TLSProviderOpenShift
 
 	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
 		t.Fatalf("reconcileDaemonSet returned error: %v", err)
@@ -527,6 +529,54 @@ func TestStorageNodeDaemonSetReconcileTLSEnabled(t *testing.T) {
 	if probe.HTTPGet.Scheme != corev1.URISchemeHTTPS {
 		t.Fatalf("expected readiness probe scheme HTTPS when TLS enabled, got %q", probe.HTTPGet.Scheme)
 	}
+}
+
+func TestStorageNodeDaemonSetReconcileTLSCertManagerProvider(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-tls-cert-manager", Namespace: "default", UID: "uid-tls-cert-manager"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn)
+	r.TLSEnabled = true
+	r.TLSProvider = utils.TLSProviderCertManager
+
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileDaemonSet returned error: %v", err)
+	}
+
+	var ds appsv1.DaemonSet
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+		t.Fatalf("failed to fetch daemonset: %v", err)
+	}
+
+	var tlsVol *corev1.Volume
+	for i := range ds.Spec.Template.Spec.Volumes {
+		v := &ds.Spec.Template.Spec.Volumes[i]
+		switch v.Name {
+		case tlsVolumeName:
+			tlsVol = v
+		case caVolumeName:
+			t.Fatalf("unexpected separate certificate-authority volume: %#v", v)
+		}
+	}
+	if tlsVol == nil {
+		t.Fatalf("expected tls volume, got none")
+	}
+	if tlsVol.Projected != nil {
+		t.Fatalf("expected plain Secret volume for cert-manager provider, got projected: %#v", tlsVol.Projected)
+	}
+	if tlsVol.Secret == nil || tlsVol.Secret.SecretName != "simplyblock-storage-node-api-tls" {
+		t.Fatalf("expected Secret volume referencing simplyblock-storage-node-api-tls, got %#v", tlsVol.Secret)
+	}
+
+	if len(ds.Spec.Template.Spec.InitContainers) != 1 {
+		t.Fatalf("expected single init container")
+	}
+	checkTLSMounts(t, "init container", ds.Spec.Template.Spec.InitContainers[0].VolumeMounts)
+	if len(ds.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("expected single main container")
+	}
+	checkTLSMounts(t, "main container", ds.Spec.Template.Spec.Containers[0].VolumeMounts)
 }
 
 func TestGetNodeInternalIP(t *testing.T) {
@@ -1919,6 +1969,8 @@ func TestReconcileSpdkProxyService(t *testing.T) {
 	}
 
 	r := newStorageNodeStateTestReconciler(t, sn)
+	r.TLSEnabled = true
+	r.TLSProvider = utils.TLSProviderOpenShift
 
 	if err := r.reconcileSpdkProxyService(context.Background(), sn); err != nil {
 		t.Fatalf("reconcileSpdkProxyService: %v", err)
@@ -1945,6 +1997,73 @@ func TestReconcileSpdkProxyService(t *testing.T) {
 	svc.Spec.ClusterIP = "None"
 	if err := r.reconcileSpdkProxyService(context.Background(), sn); err != nil {
 		t.Fatalf("second reconcileSpdkProxyService: %v", err)
+	}
+}
+
+func TestReconcileServicesAndServingCertificatesForCertManagerProvider(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns", UID: "sn-uid"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn)
+	r.TLSEnabled = true
+	r.TLSProvider = utils.TLSProviderCertManager
+
+	if err := r.reconcileService(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileService: %v", err)
+	}
+	if err := r.reconcileSpdkProxyService(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileSpdkProxyService: %v", err)
+	}
+	if err := r.reconcileServingCertificates(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileServingCertificates: %v", err)
+	}
+
+	for _, serviceName := range []string{"simplyblock-storage-node-api", "simplyblock-spdk-proxy"} {
+		var svc corev1.Service
+		if err := r.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: serviceName}, &svc); err != nil {
+			t.Fatalf("expected Service %s to be created: %v", serviceName, err)
+		}
+		if got := svc.Annotations[utils.OpenShiftServingCertAnnotation]; got != "" {
+			t.Fatalf("unexpected OpenShift serving-cert annotation on %s: %q", serviceName, got)
+		}
+	}
+
+	for serviceName, secretName := range map[string]string{
+		"simplyblock-storage-node-api": "simplyblock-storage-node-api-tls",
+		"simplyblock-spdk-proxy":       "simplyblock-spdk-proxy-tls",
+	} {
+		cert := &unstructured.Unstructured{}
+		cert.SetAPIVersion("cert-manager.io/v1")
+		cert.SetKind("Certificate")
+		if err := r.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: serviceName}, cert); err != nil {
+			t.Fatalf("expected Certificate %s to be created: %v", serviceName, err)
+		}
+
+		gotSecret, found, err := unstructured.NestedString(cert.Object, "spec", "secretName")
+		if err != nil || !found {
+			t.Fatalf("expected secretName on Certificate %s, err=%v found=%v", serviceName, err, found)
+		}
+		if gotSecret != secretName {
+			t.Fatalf("Certificate %s secretName = %q, want %q", serviceName, gotSecret, secretName)
+		}
+
+		gotIssuer, found, err := unstructured.NestedString(cert.Object, "spec", "issuerRef", "name")
+		if err != nil || !found {
+			t.Fatalf("expected issuerRef.name on Certificate %s, err=%v found=%v", serviceName, err, found)
+		}
+		if gotIssuer != utils.CertManagerServiceIssuerName {
+			t.Fatalf("Certificate %s issuerRef.name = %q, want %q", serviceName, gotIssuer, utils.CertManagerServiceIssuerName)
+		}
+
+		dnsNames, found, err := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
+		if err != nil || !found {
+			t.Fatalf("expected dnsNames on Certificate %s, err=%v found=%v", serviceName, err, found)
+		}
+		if !contains(dnsNames, serviceName) || !contains(dnsNames, serviceName+".ns.svc.cluster.local") {
+			t.Fatalf("Certificate %s dnsNames = %#v", serviceName, dnsNames)
+		}
 	}
 }
 
