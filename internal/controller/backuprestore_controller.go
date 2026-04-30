@@ -43,8 +43,6 @@ import (
 const (
 	restoreProgressRequeue  = 10 * time.Second
 	restoreReconcileRequeue = 10 * time.Second
-	csiDriverName           = "csi.simplyblock.io"
-
 	// lvolStatusFailed is the backend status string returned by the lvol polling API when a restore task fails.
 	lvolStatusFailed = "failed"
 )
@@ -601,7 +599,7 @@ func (r *BackupRestoreReconciler) ensurePV(
 			},
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				CSI: &corev1.CSIPersistentVolumeSource{
-					Driver:           csiDriverName,
+					Driver:           utils.CSIProvisioner,
 					VolumeHandle:     volumeHandle,
 					VolumeAttributes: volumeAttributes,
 				},
