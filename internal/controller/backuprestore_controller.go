@@ -286,7 +286,7 @@ func (r *BackupRestoreReconciler) reconcileRestoreTask(
 	}
 
 	log := logf.FromContext(ctx)
-	lvolName := fmt.Sprintf("restore-%s", restoreCR.Name)
+	lvolName := fmt.Sprintf("restore-%s", restoreCR.UID)
 	lvolID, err := r.callRestoreAPI(ctx, apiClient, clusterSecret, clusterUUID,
 		restoreCR.Status.BackupID, lvolName, restoreCR.Status.PoolName, restoreCR.Spec.TargetNode)
 	if err != nil {
