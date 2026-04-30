@@ -1,6 +1,8 @@
 # Image URL to use all building/pushing image targets
 VERSION ?= 0.1.0
-IMG ?= quay.io/simplyblock-io/simplyblock-operator:$(VERSION)
+IMG_BASE ?= quay.io/simplyblock-io/simplyblock-operator
+IMG_TAG  ?= $(VERSION)
+IMG      ?= $(IMG_BASE):$(IMG_TAG)
 BUNDLE_IMG ?= quay.io/simplyblock-io/simplyblock-operator-bundle:$(VERSION)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -159,9 +161,17 @@ ifndef ignore-not-found
 endif
 
 .PHONY: bundle
-bundle:
+bundle: yq ## Generate bundle manifests with digest-pinned operator image (image must be pushed first)
+	$(eval DIGEST := $(shell curl -sI \
+	  "https://quay.io/v2/simplyblock-io/simplyblock-operator/manifests/$(IMG_TAG)" \
+	  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r'))
+	@test -n "$(DIGEST)" || (echo "ERROR: could not fetch digest for $(IMG_BASE):$(IMG_TAG) — is the image pushed?"; exit 1)
+	@echo "Using digest: $(DIGEST)"
+	$(YQ) e '.metadata.annotations.containerImage = "$(IMG_BASE)@$(DIGEST)"' -i \
+	  config/manifests/bases/simplyblock-operator.clusterserviceversion.yaml
 	operator-sdk generate kustomize manifests -q
-	cd config/manager && kustomize edit set image controller=$(IMG)
+	cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$(DIGEST)
 	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION)
 
 .PHONY: bundle-build
@@ -205,10 +215,12 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+YQ ?= $(LOCALBIN)/yq
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.7.1
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
+YQ_VERSION ?= v4.44.3
 
 #ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
 ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
@@ -248,6 +260,11 @@ $(ENVTEST): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+
+.PHONY: yq
+yq: $(YQ) ## Download yq locally if necessary.
+$(YQ): $(LOCALBIN)
+	$(call go-install-tool,$(YQ),github.com/mikefarah/yq/v4,$(YQ_VERSION))
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
