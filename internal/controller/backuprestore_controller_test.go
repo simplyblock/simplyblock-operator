@@ -81,6 +81,7 @@ func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
 			UID:       "restore-uid",
 		},
 		Spec: simplyblockv1alpha1.BackupRestoreSpec{
+			ClusterName: "mycluster",
 			PVCTemplate: simplyblockv1alpha1.PVCTemplate{
 				Spec: corev1.PersistentVolumeClaimSpec{
 					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
@@ -114,6 +115,16 @@ func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
 	pv := &corev1.PersistentVolume{}
 	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "restore-restore-uid"}, pv); err != nil {
 		t.Fatalf("failed to get created PV: %v", err)
+	}
+
+	wantStorageClass := "simplyblock-mycluster-pool-a"
+	if pv.Spec.StorageClassName != wantStorageClass {
+		t.Fatalf("storageClassName = %q, want %q", pv.Spec.StorageClassName, wantStorageClass)
+	}
+
+	wantVolumeHandle := "cluster-uuid:pool-a:lvol-uuid"
+	if pv.Spec.CSI.VolumeHandle != wantVolumeHandle {
+		t.Fatalf("volumeHandle = %q, want %q", pv.Spec.CSI.VolumeHandle, wantVolumeHandle)
 	}
 
 	got := pv.Spec.CSI.VolumeAttributes
