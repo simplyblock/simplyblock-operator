@@ -557,6 +557,30 @@ func (r *BackupRestoreReconciler) ensurePV(
 ) error {
 	existing := &corev1.PersistentVolume{}
 	if err := r.Get(ctx, client.ObjectKey{Name: pvName}, existing); err == nil {
+		wantStorageClass := fmt.Sprintf("simplyblock-%s-%s", restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
+		wantHandle := fmt.Sprintf("%s:%s:%s", clusterUUID, restoreCR.Status.PoolName, restoreCR.Status.RestoredLvolID)
+		var mismatch string
+		switch {
+		case existing.Spec.StorageClassName != wantStorageClass:
+			mismatch = fmt.Sprintf("storageClassName %q, expected %q", existing.Spec.StorageClassName, wantStorageClass)
+		case existing.Spec.CSI == nil || existing.Spec.CSI.VolumeHandle != wantHandle:
+			got := ""
+			if existing.Spec.CSI != nil {
+				got = existing.Spec.CSI.VolumeHandle
+			}
+			mismatch = fmt.Sprintf("volumeHandle %q, expected %q", got, wantHandle)
+		case existing.Spec.ClaimRef == nil ||
+			existing.Spec.ClaimRef.Name != pvcName ||
+			existing.Spec.ClaimRef.Namespace != pvcNamespace:
+			var gotRef string
+			if existing.Spec.ClaimRef != nil {
+				gotRef = existing.Spec.ClaimRef.Namespace + "/" + existing.Spec.ClaimRef.Name
+			}
+			mismatch = fmt.Sprintf("claimRef %q, expected %q", gotRef, pvcNamespace+"/"+pvcName)
+		}
+		if mismatch != "" {
+			return fmt.Errorf("PV %s already exists with unexpected %s", pvName, mismatch)
+		}
 		return nil
 	} else if !kerrors.IsNotFound(err) {
 		return fmt.Errorf("get PV %s: %w", pvName, err)
