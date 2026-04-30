@@ -368,13 +368,22 @@ func (r *BackupRestoreReconciler) reconcilePVCBinding(
 	if restoreCR.Status.PVName == "" {
 		pvName := fmt.Sprintf("restore-%s", restoreCR.UID)
 		if err := r.ensurePV(ctx, restoreCR, pvName, pvcName, pvcNamespace, clusterUUID, clusterSecret); err != nil {
+			r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestorePVCreateFailed,
+				"Failed to create PV: %v", err)
+			if isNonRetryableCreateError(err) {
+				if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
+					s.Phase = simplyblockv1alpha1.RestorePhaseFailed
+					s.Message = fmt.Sprintf("Failed to create PV: %v", err)
+				}); patchErr != nil {
+					return ctrl.Result{}, patchErr
+				}
+				return ctrl.Result{}, nil
+			}
 			if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 				s.Message = fmt.Sprintf("Failed to create PV: %v", err)
 			}); patchErr != nil {
 				return ctrl.Result{}, patchErr
 			}
-			r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestorePVCreateFailed,
-				"Failed to create PV: %v", err)
 			return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, nil
 		}
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
@@ -386,13 +395,22 @@ func (r *BackupRestoreReconciler) reconcilePVCBinding(
 
 	if restoreCR.Status.PVCName == "" {
 		if err := r.ensurePVC(ctx, restoreCR, pvcName, pvcNamespace); err != nil {
+			r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestorePVCCreateFailed,
+				"Failed to create PVC: %v", err)
+			if isNonRetryableCreateError(err) {
+				if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
+					s.Phase = simplyblockv1alpha1.RestorePhaseFailed
+					s.Message = fmt.Sprintf("Failed to create PVC: %v", err)
+				}); patchErr != nil {
+					return ctrl.Result{}, patchErr
+				}
+				return ctrl.Result{}, nil
+			}
 			if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 				s.Message = fmt.Sprintf("Failed to create PVC: %v", err)
 			}); patchErr != nil {
 				return ctrl.Result{}, patchErr
 			}
-			r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestorePVCCreateFailed,
-				"Failed to create PVC: %v", err)
 			return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, nil
 		}
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
@@ -748,6 +766,14 @@ func (r *BackupRestoreReconciler) handleRestoreAPIError(
 		return ctrl.Result{}, patchErr
 	}
 	return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, nil
+}
+
+// isNonRetryableCreateError returns true for API errors that will never succeed on retry
+// regardless of cluster state — invalid spec, semantic validation failure, or permission errors.
+func isNonRetryableCreateError(err error) bool {
+	return kerrors.IsInvalid(err) ||
+		kerrors.IsForbidden(err) ||
+		kerrors.IsUnauthorized(err)
 }
 
 func (r *BackupRestoreReconciler) patchStatus(
