@@ -212,6 +212,32 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 		return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
 	}
 
+	// Validate storage request before the restore API call so we fail fast on spec errors.
+	// Guard on RestoredLvolID so we don't re-evaluate once the backend task is already running.
+	if restoreCR.Status.RestoredLvolID == "" {
+		storageReq := restoreCR.Spec.PVCTemplate.Spec.Resources.Requests[corev1.ResourceStorage]
+		var specErr string
+		switch {
+		case storageReq.IsZero():
+			specErr = "spec.pvcTemplate.spec.resources.requests.storage must be set"
+		case backup.Status.Size > 0 && storageReq.Value() < backup.Status.Size:
+			specErr = fmt.Sprintf(
+				"requested storage %s (%d bytes) is less than backup size %d bytes",
+				storageReq.String(), storageReq.Value(), backup.Status.Size,
+			)
+		}
+		if specErr != "" {
+			if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
+				s.Phase = simplyblockv1alpha1.RestorePhaseFailed
+				s.Message = specErr
+			}); patchErr != nil {
+				return ctrl.Result{}, true, patchErr
+			}
+			r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreInvalidSpec, "%s", specErr)
+			return ctrl.Result{}, true, nil
+		}
+	}
+
 	if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 		s.ClusterUUID = clusterUUID
 		s.BackupID = backup.Status.BackupID
