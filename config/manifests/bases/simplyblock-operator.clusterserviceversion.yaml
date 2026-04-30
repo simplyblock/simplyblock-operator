@@ -4,6 +4,8 @@ metadata:
   annotations:
     alm-examples: '[]'
     capabilities: Basic Install
+    marketplace.openshift.io/remote-workflow: https://marketplace.redhat.com/en-us/operators/simplyblock-operator/pricing?utm_source=openshift_console
+    marketplace.openshift.io/support-workflow: https://marketplace.redhat.com/en-us/operators/simplyblock-operator/support?utm_source=openshift_console
   name: simplyblock-operator.v0.1.0
   namespace: placeholder
 spec:
