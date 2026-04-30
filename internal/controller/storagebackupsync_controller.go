@@ -228,9 +228,15 @@ func (r *StorageBackupSyncReconciler) buildLvolToPVCMap(
 			continue
 		}
 
-		// Annotation overrides the handle (mirrors resolvePVCLvolID logic).
+		// Prefer the annotation when present, but reject a mismatch — a stale or
+		// mis-set annotation would associate this backup with the wrong PVC.
+		// This mirrors the validation in StorageBackupReconciler.resolveBackupSource.
 		if ann := pvc.Annotations[pvcLvolIDAnnotation]; ann != "" {
-			lvolID = ann
+			if ann != lvolID {
+				logf.FromContext(ctx).Info("Skipping PVC — lvol annotation does not match PV volume handle",
+					"pvc", pvc.Name, "annotation", ann, "handle", lvolID)
+				continue
+			}
 		}
 
 		result[lvolID] = [2]string{pvc.Name, pvc.Namespace}
