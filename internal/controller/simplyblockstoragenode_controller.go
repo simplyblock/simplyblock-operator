@@ -84,7 +84,7 @@ var (
 
 	waitForNodeOnlineRetries         = 60
 	waitForNodeOnlineWaitInterval    = 10 * time.Second
-	waitForNodeOnlineActivationDelay = 180 * time.Second
+	waitForNodeOnlineActivationDelay = 120 * time.Second
 	waitForNodeOnlineSleepFn         = time.Sleep
 
 	performNodeActionPostTriggerDelay = 5 * time.Second
