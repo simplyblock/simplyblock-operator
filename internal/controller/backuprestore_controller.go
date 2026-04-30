@@ -542,11 +542,7 @@ func (r *BackupRestoreReconciler) resolvedPVCNamespacedName(
 	if name == "" {
 		name = restoreCR.Name + "-restored"
 	}
-	namespace = restoreCR.Spec.PVCTemplate.Metadata.Namespace
-	if namespace == "" {
-		namespace = restoreCR.Namespace
-	}
-	return
+	return name, restoreCR.Namespace
 }
 
 func (r *BackupRestoreReconciler) ensurePV(
