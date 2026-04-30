@@ -41,6 +41,7 @@ ARG RELEASE=1
 # Required labels for Red Hat certification (preflight check operator).
 LABEL name="simplyblock-operator" \
       vendor="Simplyblock" \
+      maintainer="developers@simplyblock.io" \
       version="${VERSION}" \
       release="${RELEASE}" \
       summary="Simplyblock Operator manages the lifecycle of Simplyblock storage clusters on Kubernetes." \
@@ -48,6 +49,7 @@ LABEL name="simplyblock-operator" \
 
 WORKDIR /
 COPY --from=builder /workspace/manager .
+COPY LICENSE /licenses/LICENSE
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

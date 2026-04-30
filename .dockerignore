@@ -12,3 +12,6 @@
 
 # Re-include bundle directory
 !bundle/
+
+Re-include LICENSE file
+!LICENSE
