@@ -44,10 +44,18 @@ type StorageBackupSpec struct {
 	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`
 	// PVCRef identifies the PVC whose backing Simplyblock volume should be snapshotted and backed up.
-	PVCRef PersistentVolumeClaimRef `json:"pvcRef"`
+	// Not required when SourceClusterUUID is set (imported backup).
+	// +optional
+	PVCRef *PersistentVolumeClaimRef `json:"pvcRef,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Snapshot Name"
 	// SnapshotName optionally overrides the internally-created snapshot name.
+	// +optional
 	SnapshotName string `json:"snapshotName,omitempty"`
+	// SourceClusterUUID, when non-empty, marks this StorageBackup as imported from another cluster.
+	// The StorageBackup controller will not create snapshots or backups for imported resources.
+	// Set by the BackupImport controller; do not set manually.
+	// +optional
+	SourceClusterUUID string `json:"sourceClusterUUID,omitempty"`
 }
 
 // StorageBackupStatus defines the observed state of StorageBackup.
@@ -82,6 +90,11 @@ type StorageBackupStatus struct {
 	// SnapshotName is the snapshot name used for the backup request.
 	SnapshotName string `json:"snapshotName,omitempty"`
 
+	// SourceClusterUUID is set for imported backups; identifies the cluster that originally
+	// created the backup. When non-empty and different from the restore target cluster UUID,
+	// BackupRestore will automatically perform source-switch operations around the restore.
+	SourceClusterUUID string `json:"sourceClusterUUID,omitempty"`
+	
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Backup ID"
 	// BackupID is the backend backup UUID.
 	BackupID string `json:"backupID,omitempty"`
