@@ -75,6 +75,16 @@ type restoreAPIRequest struct {
 	TargetNodeID string `json:"target_node_id,omitempty"`
 }
 
+type sourceSwitchRequest struct {
+	SourceClusterID string `json:"source_cluster_id"`
+}
+
+type backupSourceAPIResponse struct {
+	SourceClusterID string `json:"source_cluster_id"`
+	IsLocal         bool   `json:"is_local"`
+	Active          bool   `json:"active"`
+}
+
 type restoreAPIResponse struct {
 	LvolID string `json:"lvol_id"`
 }
@@ -130,12 +140,26 @@ func (r *BackupRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return res, err
 	}
 
+	// For cross-cluster restores, source-switch the target cluster before submitting the restore task.
+	if isCrossCluster(restoreCR) && restoreCR.Status.SourceSwitchedAt == nil {
+		if res, done, err = r.reconcileSourceSwitch(ctx, restoreCR, clusterUUID, clusterSecret, apiClient); done {
+			return res, err
+		}
+	}
+
 	if res, done, err = r.reconcileRestoreTask(ctx, restoreCR, clusterUUID, clusterSecret, apiClient); done {
 		return res, err
 	}
 
 	if restoreCR.Status.Phase == simplyblockv1alpha1.RestorePhaseInProgress {
 		if res, done, err = r.reconcileInProgress(ctx, restoreCR, clusterUUID, clusterSecret, apiClient); done {
+			return res, err
+		}
+	}
+
+	// After the lvol comes online, switch the target cluster back to its local bucket.
+	if restoreCR.Status.Phase == simplyblockv1alpha1.RestorePhaseSwitchingSourceLocal {
+		if res, done, err = r.reconcileSourceSwitchLocal(ctx, restoreCR, clusterUUID, clusterSecret, apiClient); done {
 			return res, err
 		}
 	}
@@ -244,6 +268,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 		s.ClusterUUID = clusterUUID
 		s.BackupID = backup.Status.BackupID
 		s.SourceLvolID = backup.Status.LvolID
+		s.SourceClusterUUID = backup.Status.SourceClusterUUID
 		if s.Phase == "" {
 			s.Phase = simplyblockv1alpha1.RestorePhasePending
 		}
@@ -332,9 +357,15 @@ func (r *BackupRestoreReconciler) reconcileInProgress(
 
 	switch lvolStatus {
 	case utils.NodeStatusOnline:
+		nextPhase := simplyblockv1alpha1.RestorePhasePVCBinding
+		nextMsg := "Restore complete; creating PV and PVC"
+		if isCrossCluster(restoreCR) {
+			nextPhase = simplyblockv1alpha1.RestorePhaseSwitchingSourceLocal
+			nextMsg = "Restore complete; switching target cluster back to local backup source"
+		}
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
-			s.Phase = simplyblockv1alpha1.RestorePhasePVCBinding
-			s.Message = "Restore complete; creating PV and PVC"
+			s.Phase = nextPhase
+			s.Message = nextMsg
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
 		}
@@ -439,6 +470,128 @@ func (r *BackupRestoreReconciler) reconcilePVCBinding(
 	}
 
 	return ctrl.Result{RequeueAfter: restoreProgressRequeue}, nil
+}
+
+func isCrossCluster(restoreCR *simplyblockv1alpha1.BackupRestore) bool {
+	return restoreCR.Status.SourceClusterUUID != "" &&
+		restoreCR.Status.SourceClusterUUID != restoreCR.Status.ClusterUUID
+}
+
+func (r *BackupRestoreReconciler) reconcileSourceSwitch(
+	ctx context.Context,
+	restoreCR *simplyblockv1alpha1.BackupRestore,
+	clusterUUID, clusterSecret string,
+	apiClient *webapi.Client,
+) (ctrl.Result, bool, error) {
+	log := logf.FromContext(ctx)
+
+	// Guard: check current active source to detect concurrent cross-cluster restores.
+	activeSrc, err := r.getActiveBackupSource(ctx, apiClient, clusterSecret, clusterUUID)
+	if err != nil {
+		// Non-fatal: proceed if the sources endpoint is unavailable.
+		log.Info("Could not read active backup source; proceeding with source-switch", "err", err)
+	} else if activeSrc != "" && activeSrc != clusterUUID && activeSrc != restoreCR.Status.SourceClusterUUID {
+		msg := fmt.Sprintf("target cluster is already source-switched to %s; retry when that cross-cluster restore completes", activeSrc)
+		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
+			s.Phase = simplyblockv1alpha1.RestorePhaseFailed
+			s.Message = msg
+		}); patchErr != nil {
+			return ctrl.Result{}, true, patchErr
+		}
+		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, "%s", msg)
+		return ctrl.Result{}, true, nil
+	}
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/source-switch", clusterUUID)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, sourceSwitchRequest{
+		SourceClusterID: restoreCR.Status.SourceClusterUUID,
+	})
+	if err != nil || status >= 300 {
+		msg := fmt.Sprintf("source-switch to %s failed", restoreCR.Status.SourceClusterUUID)
+		if err != nil {
+			msg = fmt.Sprintf("%s: %v", msg, err)
+		} else {
+			msg = fmt.Sprintf("%s: status=%d body=%s", msg, status, string(body))
+		}
+		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
+			s.Message = msg
+		}); patchErr != nil {
+			return ctrl.Result{}, true, patchErr
+		}
+		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, "%s", msg)
+		return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
+	}
+
+	now := metav1.Now()
+	if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
+		s.Phase = simplyblockv1alpha1.RestorePhaseSwitchingSource
+		s.SourceSwitchedAt = &now
+		s.Message = fmt.Sprintf("Switched to source cluster %s; submitting restore task", restoreCR.Status.SourceClusterUUID)
+	}); patchErr != nil {
+		return ctrl.Result{}, true, patchErr
+	}
+	return ctrl.Result{}, false, nil
+}
+
+func (r *BackupRestoreReconciler) reconcileSourceSwitchLocal(
+	ctx context.Context,
+	restoreCR *simplyblockv1alpha1.BackupRestore,
+	clusterUUID, clusterSecret string,
+	apiClient *webapi.Client,
+) (ctrl.Result, bool, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/source-switch", clusterUUID)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, sourceSwitchRequest{
+		SourceClusterID: "local",
+	})
+	if err != nil || status >= 300 {
+		msg := "source-switch back to local failed"
+		if err != nil {
+			msg = fmt.Sprintf("%s: %v", msg, err)
+		} else {
+			msg = fmt.Sprintf("%s: status=%d body=%s", msg, status, string(body))
+		}
+		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
+			s.Message = msg
+		}); patchErr != nil {
+			return ctrl.Result{}, true, patchErr
+		}
+		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, "%s", msg)
+		return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
+	}
+
+	if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
+		s.Phase = simplyblockv1alpha1.RestorePhasePVCBinding
+		s.SourceSwitchedAt = nil
+		s.Message = "Switched back to local backup source; creating PV and PVC"
+	}); patchErr != nil {
+		return ctrl.Result{}, true, patchErr
+	}
+	return ctrl.Result{}, false, nil
+}
+
+func (r *BackupRestoreReconciler) getActiveBackupSource(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret, clusterUUID string,
+) (string, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/sources", clusterUUID)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	if status >= 300 {
+		return "", fmt.Errorf("get backup sources failed: status=%d", status)
+	}
+	var sources []backupSourceAPIResponse
+	if err := json.Unmarshal(body, &sources); err != nil {
+		return "", fmt.Errorf("unmarshal backup sources: %w", err)
+	}
+	for _, s := range sources {
+		if s.Active {
+			return s.SourceClusterID, nil
+		}
+	}
+	return clusterUUID, nil // no active entry means local
 }
 
 func (r *BackupRestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
