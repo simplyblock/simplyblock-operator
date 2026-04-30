@@ -173,6 +173,15 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
+	// Imported CRs (created by StorageBackupSyncReconciler) carry the imported
+	// label at creation time; the status patch that populates BackupID and
+	// SnapshotID is a separate API call that races with this reconciler. If
+	// BackupID is still empty the patch hasn't landed yet — requeue and wait
+	// rather than creating a duplicate snapshot/backup in the backend.
+	if backupCR.Labels[backupSyncImportedLabel] == "true" && backupCR.Status.BackupID == "" {
+		return ctrl.Result{RequeueAfter: backupReconcileRequeue}, nil
+	}
+
 	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, backupCR.Namespace, backupCR.Spec.ClusterName)
 	if err != nil {
 		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
