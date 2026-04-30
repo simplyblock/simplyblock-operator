@@ -56,6 +56,7 @@ const (
 	eventReasonRestoreLvolPollFailed     = "RestoreLvolPollFailed"
 	eventReasonRestorePVCreateFailed     = "RestorePVCreateFailed"
 	eventReasonRestorePVCCreateFailed    = "RestorePVCCreateFailed"
+	eventReasonRestoreInvalidSpec        = "RestoreInvalidSpec"
 )
 
 // BackupRestoreReconciler reconciles a BackupRestore object.
@@ -677,6 +678,10 @@ func (r *BackupRestoreReconciler) ensurePVC(
 ) error {
 	existing := &corev1.PersistentVolumeClaim{}
 	if err := r.Get(ctx, client.ObjectKey{Name: pvcName, Namespace: pvcNamespace}, existing); err == nil {
+		if existing.Spec.VolumeName != restoreCR.Status.PVName {
+			return fmt.Errorf("PVC %s/%s already exists bound to PV %q, expected %q",
+				pvcNamespace, pvcName, existing.Spec.VolumeName, restoreCR.Status.PVName)
+		}
 		return nil
 	} else if !kerrors.IsNotFound(err) {
 		return fmt.Errorf("get PVC %s/%s: %w", pvcNamespace, pvcName, err)
