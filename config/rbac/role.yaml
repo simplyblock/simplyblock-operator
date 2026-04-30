@@ -15,7 +15,6 @@ rules:
   - ""
   resources:
   - nodes
-  - pods
   verbs:
   - get
   - list
@@ -31,6 +30,17 @@ rules:
   - create
   - get
   - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - ""
@@ -57,14 +67,6 @@ rules:
   - list
   - patch
   - update
-  - watch
-- apiGroups:
-  - apps
-  resources:
-  - daemonsets
-  verbs:
-  - get
-  - list
   - watch
 - apiGroups:
   - discovery.k8s.io
@@ -116,6 +118,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backupimports
   - backuppolicies
   - backuprestores
   - devices
@@ -137,6 +140,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
   - devices/finalizers
@@ -152,6 +156,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backupimports/status
   - backuppolicies/status
   - backuprestores/status
   - devices/status

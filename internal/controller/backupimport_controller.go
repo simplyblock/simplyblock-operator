@@ -43,12 +43,12 @@ const (
 )
 
 const (
-	eventReasonImportSourceClusterLookupError = "ImportSourceClusterLookupError"
-	eventReasonImportSourceClusterAuthError   = "ImportSourceClusterAuthError"
-	eventReasonImportTargetClusterLookupError = "ImportTargetClusterLookupError"
-	eventReasonImportTargetClusterAuthError   = "ImportTargetClusterAuthError"
-	eventReasonImportExportFailed             = "ImportExportFailed"
-	eventReasonImportFailed                   = "ImportFailed"
+	eventReasonImportSourceClusterLookupError  = "ImportSourceClusterLookupError"
+	eventReasonImportSourceClusterAuthError    = "ImportSourceClusterAuthError"
+	eventReasonImportTargetClusterLookupError  = "ImportTargetClusterLookupError"
+	eventReasonImportTargetClusterAuthError    = "ImportTargetClusterAuthError"
+	eventReasonImportExportFailed              = "ImportExportFailed"
+	eventReasonImportFailed                    = "ImportFailed"
 	eventReasonImportStorageBackupCreateFailed = "ImportStorageBackupCreateFailed"
 )
 
@@ -60,24 +60,12 @@ type BackupImportReconciler struct {
 	APIClient *webapi.Client
 }
 
-type importExportResponse []json.RawMessage
-
 type importBackupsRequest struct {
 	Metadata json.RawMessage `json:"metadata"`
 }
 
 type importBackupsResponse struct {
 	Imported int `json:"imported"`
-}
-
-// backupExportItem mirrors the dict returned by export_backups() in the sbcli.
-type backupExportItem struct {
-	BackupID   string `json:"backup_id"`
-	LvolName   string `json:"lvol_name"`
-	ClusterID  string `json:"cluster_id"`
-	Size       int64  `json:"size"`
-	S3ID       int64  `json:"s3_id"`
-	PrevBackup string `json:"prev_backup_id"`
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=backupimports,verbs=get;list;watch;create;update;patch;delete
@@ -101,14 +89,18 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Resolve source cluster credentials.
 	srcClusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, importCR.Namespace, importCR.Spec.SourceClusterName)
 	if err != nil {
-		r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending, err.Error())
+		if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending, err.Error()); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
 		r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportSourceClusterLookupError,
 			"Failed to resolve source cluster UUID: %v", err)
 		return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
 	}
 	_, srcSecret, err := utils.GetClusterAuth(ctx, r.Client, importCR.Namespace, importCR.Spec.SourceClusterName)
 	if err != nil {
-		r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending, err.Error())
+		if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending, err.Error()); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
 		r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportSourceClusterAuthError,
 			"Failed to get source cluster auth: %v", err)
 		return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
@@ -117,14 +109,18 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Resolve target cluster credentials.
 	targetClusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, importCR.Namespace, importCR.Spec.TargetClusterName)
 	if err != nil {
-		r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending, err.Error())
+		if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending, err.Error()); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
 		r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportTargetClusterLookupError,
 			"Failed to resolve target cluster UUID: %v", err)
 		return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
 	}
 	_, targetSecret, err := utils.GetClusterAuth(ctx, r.Client, importCR.Namespace, importCR.Spec.TargetClusterName)
 	if err != nil {
-		r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending, err.Error())
+		if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending, err.Error()); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
 		r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportTargetClusterAuthError,
 			"Failed to get target cluster auth: %v", err)
 		return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
@@ -154,8 +150,10 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		exportedData, err := r.exportBackup(ctx, apiClient, srcSecret, srcClusterUUID, importCR.Spec.SourceBackupID)
 		if err != nil {
-			r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending,
-				fmt.Sprintf("Export failed: %v", err))
+			if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending,
+				fmt.Sprintf("Export failed: %v", err)); patchErr != nil {
+				return ctrl.Result{}, patchErr
+			}
 			r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportExportFailed,
 				"Failed to export backup from source cluster: %v", err)
 			return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
@@ -169,8 +167,10 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		imported, err := r.importBackup(ctx, apiClient, targetSecret, targetClusterUUID, exportedData)
 		if err != nil {
-			r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending,
-				fmt.Sprintf("Import failed: %v", err))
+			if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending,
+				fmt.Sprintf("Import failed: %v", err)); patchErr != nil {
+				return ctrl.Result{}, patchErr
+			}
 			r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportFailed,
 				"Failed to import backup into target cluster: %v", err)
 			return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
@@ -189,8 +189,10 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if importCR.Status.StorageBackupRef == "" {
 		backupCRName := fmt.Sprintf("%s-imported", importCR.Name)
 		if err := r.ensureStorageBackupCR(ctx, importCR, backupCRName, srcClusterUUID); err != nil {
-			r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending,
-				fmt.Sprintf("Failed to create StorageBackup CR: %v", err))
+			if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending,
+				fmt.Sprintf("Failed to create StorageBackup CR: %v", err)); patchErr != nil {
+				return ctrl.Result{}, patchErr
+			}
 			r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportStorageBackupCreateFailed,
 				"Failed to create StorageBackup CR: %v", err)
 			return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil

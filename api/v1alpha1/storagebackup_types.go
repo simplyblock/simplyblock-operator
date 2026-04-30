@@ -94,7 +94,7 @@ type StorageBackupStatus struct {
 	// created the backup. When non-empty and different from the restore target cluster UUID,
 	// BackupRestore will automatically perform source-switch operations around the restore.
 	SourceClusterUUID string `json:"sourceClusterUUID,omitempty"`
-	
+
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Backup ID"
 	// BackupID is the backend backup UUID.
 	BackupID string `json:"backupID,omitempty"`
