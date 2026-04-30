@@ -132,7 +132,7 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			},
 			Spec: simplyblockv1alpha1.StorageBackupSpec{
 				ClusterName: clusterCR.Spec.ClusterName,
-				PVCRef: simplyblockv1alpha1.PersistentVolumeClaimRef{
+				PVCRef: &simplyblockv1alpha1.PersistentVolumeClaimRef{
 					Name:      pvcName,
 					Namespace: pvcNamespace,
 				},
