@@ -44,6 +44,9 @@ const (
 	restoreProgressRequeue  = 10 * time.Second
 	restoreReconcileRequeue = 10 * time.Second
 	csiDriverName           = "csi.simplyblock.io"
+
+	// lvolStatusFailed is the backend status string returned by the lvol polling API when a restore task fails.
+	lvolStatusFailed = "failed"
 )
 
 const (
@@ -330,7 +333,7 @@ func (r *BackupRestoreReconciler) reconcileInProgress(
 	}
 
 	switch lvolStatus {
-	case nodeStatusOnline:
+	case utils.NodeStatusOnline:
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 			s.Phase = simplyblockv1alpha1.RestorePhasePVCBinding
 			s.Message = "Restore complete; creating PV and PVC"
@@ -338,7 +341,7 @@ func (r *BackupRestoreReconciler) reconcileInProgress(
 			return ctrl.Result{}, true, patchErr
 		}
 		return ctrl.Result{}, false, nil
-	case backupAPIStatusFailed:
+	case lvolStatusFailed:
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 			s.Phase = simplyblockv1alpha1.RestorePhaseFailed
 			s.Message = "Backend restore task failed"
