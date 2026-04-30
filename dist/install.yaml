@@ -1660,6 +1660,12 @@ spec:
                       description: NvmfPort is the NVMf service port.
                       format: int32
                       type: integer
+                    postedAt:
+                      description: |-
+                        PostedAt is when the storage-node add request was sent. Used to detect
+                        timeout without blocking the reconcile goroutine.
+                      format: date-time
+                      type: string
                     rpcPort:
                       description: RpcPort is the node RPC service port.
                       format: int32
@@ -2011,9 +2017,17 @@ rules:
   - ""
   resources:
   - nodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - persistentvolumeclaims
   - persistentvolumes
   verbs:
+  - create
   - get
   - list
   - watch
@@ -2031,6 +2045,19 @@ rules:
   - ""
   resources:
   - secrets
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
   verbs:
   - create
   - delete
@@ -2064,6 +2091,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backuprestores
   - devices
   - lvols
   - pools
@@ -2083,6 +2111,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backuprestores/finalizers
   - devices/finalizers
   - lvols/finalizers
   - pools/finalizers
@@ -2096,6 +2125,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backuprestores/status
   - devices/status
   - lvols/status
   - pools/status

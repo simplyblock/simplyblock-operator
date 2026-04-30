@@ -85,8 +85,6 @@ spec:
                         type: object
                       name:
                         type: string
-                      namespace:
-                        type: string
                     type: object
                   spec:
                     description: |-

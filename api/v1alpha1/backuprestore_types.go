@@ -40,8 +40,6 @@ type PVCTemplateMetadata struct {
 	// +optional
 	Name string `json:"name,omitempty"`
 	// +optional
-	Namespace string `json:"namespace,omitempty"`
-	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
