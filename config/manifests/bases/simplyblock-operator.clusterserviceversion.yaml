@@ -5,8 +5,6 @@ metadata:
     alm-examples: '[]'
     capabilities: Basic Install
     containerImage: quay.io/simplyblock-io/simplyblock-operator@sha256:b7db1d324fa1d6d272f40d696a46c11147de541ca54eb95e67760bc821dec4d8
-    marketplace.openshift.io/remote-workflow: https://marketplace.redhat.com/en-us/operators/simplyblock-operator/pricing?utm_source=openshift_console
-    marketplace.openshift.io/support-workflow: https://marketplace.redhat.com/en-us/operators/simplyblock-operator/support?utm_source=openshift_console
   name: simplyblock-operator.v0.1.0
   namespace: placeholder
 spec:
