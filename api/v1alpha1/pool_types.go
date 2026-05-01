@@ -65,6 +65,7 @@ type PoolQoSStatus struct {
 // These are passed as-is to the CSI driver when the StorageClass is created.
 // cluster_id and pool_name are always set automatically and cannot be overridden here.
 type StorageClassParameters struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Read/Write IOPS"
 	// QosRwIops sets the read/write IOPS limit (0 = unlimited).
 	// +kubebuilder:default="0"
 	QosRwIops string `json:"qosRwIops,omitempty"`
@@ -83,6 +84,7 @@ type StorageClassParameters struct {
 	// Encryption enables encryption for logical volumes.
 	// +kubebuilder:default=false
 	Encryption *bool `json:"encryption,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Replicate By Default"
 	// Replicate enables replication for logical volumes.
 	// +kubebuilder:default=false
 	Replicate *bool `json:"replicate,omitempty"`
@@ -95,6 +97,7 @@ type StorageClassParameters struct {
 	// LvolPriorityClass sets the logical volume priority class.
 	// +kubebuilder:default="0"
 	LvolPriorityClass string `json:"lvolPriorityClass,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Fabric"
 	// Fabric is the transport fabric (e.g. tcp).
 	// +kubebuilder:default=tcp
 	Fabric string `json:"fabric,omitempty"`
@@ -108,13 +111,16 @@ type StorageClassParameters struct {
 
 // PoolSpec defines the desired state of Pool
 type PoolSpec struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Pool Name"
 	// Name is the backend pool name.
 	Name string `json:"name"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`
 	// Status is an optional desired-status hint for backend workflows.
 	// FIXME: Unused for now
 	Status string `json:"status,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Capacity Limit"
 	// CapacityLimit is the maximum pool capacity.
 	CapacityLimit string `json:"capacityLimit,omitempty"`
 	// QosSpec defines QosSpec limits for the pool.
@@ -129,8 +135,10 @@ type PoolSpec struct {
 
 // PoolStatus defines the observed state of Pool.
 type PoolStatus struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Pool UUID"
 	// UUID is the backend pool UUID.
 	UUID string `json:"uuid,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Status"
 	// Status is the backend lifecycle status.
 	Status string `json:"status,omitempty"`
 	// QoS contains observed/configured QoS values.
@@ -139,6 +147,7 @@ type PoolStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +operator-sdk:csv:customresourcedefinitions:displayName="Pool"
 
 // Pool is the Schema for the pools API
 type Pool struct {

@@ -1,5 +1,16 @@
 # Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+VERSION ?= 0.1.0
+IMG_BASE ?= quay.io/simplyblock-io/simplyblock-operator
+IMG_TAG  ?= $(VERSION)
+IMG      ?= $(IMG_BASE):$(IMG_TAG)
+BUNDLE_IMG ?= quay.io/simplyblock-io/simplyblock-operator-bundle:$(VERSION)
+OPENSHIFT_VERSION ?= v4.19
+
+# Related images deployed by the operator (used in relatedImages for airgap support)
+CLUSTER_IMAGE_BASE ?= quay.io/simplyblock-io/simplyblock
+CLUSTER_IMAGE_TAG  ?= 26.2.1-PRE
+SPDK_IMAGE_BASE    ?= quay.io/simplyblock-io/ultra
+SPDK_IMAGE_TAG     ?= R26.2-PRE-latest
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -117,7 +128,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -t ${IMG} .
+	$(CONTAINER_TOOL) build --build-arg VERSION=$(VERSION) --build-arg RELEASE=1 -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -129,7 +140,7 @@ docker-push: ## Push docker image with the manager.
 # - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 # - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
 # To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
-PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
+PLATFORMS ?= linux/arm64,linux/amd64
 .PHONY: docker-buildx
 docker-buildx: ## Build and push docker image for the manager for cross-platform support
 	# Preserve an existing --platform on the first FROM; otherwise inject it for buildx cross-builds.
@@ -140,7 +151,7 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	fi
 	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
 	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
-	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} --build-arg VERSION=$(VERSION) --build-arg RELEASE=1 -f Dockerfile.cross .
 	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
 	rm Dockerfile.cross
 
@@ -155,6 +166,52 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 ifndef ignore-not-found
   ignore-not-found = false
 endif
+
+.PHONY: bundle
+bundle: yq ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
+	@set -e; \
+	operator-sdk generate kustomize manifests -q; \
+	(cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
+	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
+	OPERATOR_DIGEST=$$(curl -sI \
+	  "https://quay.io/v2/simplyblock-io/simplyblock-operator/manifests/$(IMG_TAG)" \
+	  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	test -n "$$OPERATOR_DIGEST" \
+	  || { echo "ERROR: could not fetch digest for $(IMG_BASE):$(IMG_TAG) — is the image pushed?"; exit 1; }; \
+	CLUSTER_DIGEST=$$(curl -sI \
+	  "https://quay.io/v2/simplyblock-io/simplyblock/manifests/$(CLUSTER_IMAGE_TAG)" \
+	  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	SPDK_DIGEST=$$(curl -sI \
+	  "https://quay.io/v2/simplyblock-io/ultra/manifests/$(SPDK_IMAGE_TAG)" \
+	  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	OPERATOR_IMG="$(IMG_BASE)@$$OPERATOR_DIGEST" \
+	CLUSTER_IMG="$(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)@$$CLUSTER_DIGEST" \
+	SPDK_IMG="$(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)@$$SPDK_DIGEST" \
+	"$(YQ)" e ' \
+	  .metadata.annotations.containerImage = strenv(OPERATOR_IMG) | \
+	  .spec.relatedImages = [ \
+	    {"name": "simplyblock-operator", "image": strenv(OPERATOR_IMG)}, \
+	    {"name": "simplyblock",          "image": strenv(CLUSTER_IMG)}, \
+	    {"name": "ultra-spdk",           "image": strenv(SPDK_IMG)} \
+	  ] | \
+	  .spec.install.spec.deployments[0].spec.template.spec.containers[0].image = strenv(OPERATOR_IMG) \
+	  ' -i bundle/manifests/simplyblock-operator.clusterserviceversion.yaml; \
+	  OPENSHIFT_VERSION="$(OPENSHIFT_VERSION)" \
+	  "$(YQ)" e '\
+	  .annotations."com.redhat.openshift.versions" = strenv(OPENSHIFT_VERSION) \
+	  ' -i bundle/metadata/annotations.yaml;
+
+
+.PHONY: bundle-build
+bundle-build: bundle
+	docker build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
+
+.PHONY: bundle-push
+bundle-push: bundle-build
+	docker push $(BUNDLE_IMG)
 
 .PHONY: install
 install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
@@ -189,10 +246,12 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+YQ ?= $(LOCALBIN)/yq
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.7.1
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
+YQ_VERSION ?= v4.44.3
 
 #ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
 ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
@@ -232,6 +291,11 @@ $(ENVTEST): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+
+.PHONY: yq
+yq: $(YQ) ## Download yq locally if necessary.
+$(YQ): $(LOCALBIN)
+	$(call go-install-tool,$(YQ),github.com/mikefarah/yq/v4,$(YQ_VERSION))
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
