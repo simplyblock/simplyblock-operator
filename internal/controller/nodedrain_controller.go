@@ -480,7 +480,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 			log.Info("First pending node already in_shutdown; advancing to shutdown_called", "node", state.Hostname, "nodeUUID", s.uuid)
 			state.Message = fmt.Sprintf("node %s already in_shutdown; waiting for offline", s.uuid)
 		} else {
-			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown?force=true", clusterUUID, s.uuid)
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown", clusterUUID, s.uuid)
 			body, httpStatus, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
 			if err != nil || httpStatus >= 300 {
 				if err == nil {
@@ -537,7 +537,7 @@ func (r *NodeDrainCoordinatorReconciler) handleShutdownCalled(
 
 	// Advance to the next socket node in sequence.
 	if nextUUID := nextUUIDInList(nodeUUIDs, activeUUID); nextUUID != "" {
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown?force=true", clusterUUID, nextUUID)
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown", clusterUUID, nextUUID)
 		body, httpStatus, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
 		if err != nil || httpStatus >= 300 {
 			if err == nil {
