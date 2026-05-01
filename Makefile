@@ -4,6 +4,7 @@ IMG_BASE ?= quay.io/simplyblock-io/simplyblock-operator
 IMG_TAG  ?= $(VERSION)
 IMG      ?= $(IMG_BASE):$(IMG_TAG)
 BUNDLE_IMG ?= quay.io/simplyblock-io/simplyblock-operator-bundle:$(VERSION)
+OPENSHIFT_VERSION ?= v4.19
 
 # Related images deployed by the operator (used in relatedImages for airgap support)
 CLUSTER_IMAGE_BASE ?= quay.io/simplyblock-io/simplyblock
@@ -169,6 +170,9 @@ endif
 .PHONY: bundle
 bundle: yq ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
 	@set -e; \
+	operator-sdk generate kustomize manifests -q; \
+	(cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
+	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
 	OPERATOR_DIGEST=$$(curl -sI \
 	  "https://quay.io/v2/simplyblock-io/simplyblock-operator/manifests/$(IMG_TAG)" \
 	  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
@@ -192,10 +196,14 @@ bundle: yq ## Generate bundle manifests with digest-pinned images (operator imag
 	    {"name": "simplyblock-operator", "image": strenv(OPERATOR_IMG)}, \
 	    {"name": "simplyblock",          "image": strenv(CLUSTER_IMG)}, \
 	    {"name": "ultra-spdk",           "image": strenv(SPDK_IMG)} \
-	  ]' -i config/manifests/bases/simplyblock-operator.clusterserviceversion.yaml; \
-	operator-sdk generate kustomize manifests -q; \
-	(cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
-	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION)
+	  ] | \
+	  .spec.install.spec.deployments[0].spec.template.spec.containers[0].image = strenv(OPERATOR_IMG) \
+	  ' -i bundle/manifests/simplyblock-operator.clusterserviceversion.yaml; \
+	  OPENSHIFT_VERSION="$(OPENSHIFT_VERSION)" \
+	  "$(YQ)" e '\
+	  .annotations."com.redhat.openshift.versions" = strenv(OPENSHIFT_VERSION) \
+	  ' -i bundle/metadata/annotations.yaml;
+
 
 .PHONY: bundle-build
 bundle-build: bundle
