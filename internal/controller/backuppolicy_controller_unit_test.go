@@ -2,17 +2,334 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
+	"k8s.io/client-go/tools/record"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 )
 
 func lvol(ns, name, lvolID string) simplyblockv1alpha1.AttachedLvol {
 	return simplyblockv1alpha1.AttachedLvol{PVCNamespace: ns, PVCName: name, LvolID: lvolID}
+}
+
+func TestBackupPolicyReconcileAnnotationAddAttachesLvol(t *testing.T) {
+	const (
+		namespace   = "default"
+		clusterName = "cluster-a"
+		clusterUUID = "cluster-uuid-policy-add"
+		policyName  = "policy-add"
+		policyID    = "policy-id-add"
+		pvcName     = "pvc-add"
+		pvName      = "pv-add"
+		lvolID      = "lvol-add"
+	)
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	defer mock.Close()
+	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
+			backupPolicyAPIResponse{ID: policyID, Name: policyName},
+		)},
+	)
+	mock.Register(http.MethodPost, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/attach",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+	)
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	policy := testBackupPolicyCR(policyName, clusterName)
+	pv, pvc := testBackupPolicyPVC(namespace, pvcName, pvName, policyName, clusterUUID, lvolID, nil)
+
+	r := newBackupPolicyTestReconciler(t,
+		policy,
+		testCluster(namespace, clusterName, clusterUUID),
+		testClusterSecret(namespace, clusterName, clusterUUID, "secret"),
+		pv,
+		pvc,
+	)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected no requeue, got %+v", res)
+	}
+
+	current := getBackupPolicy(t, r.Client, policy)
+	if current.Status.PolicyID != policyID {
+		t.Fatalf("expected policyID %q, got %q", policyID, current.Status.PolicyID)
+	}
+	if current.Status.ClusterUUID != clusterUUID {
+		t.Fatalf("expected clusterUUID %q, got %q", clusterUUID, current.Status.ClusterUUID)
+	}
+	if current.Status.Phase != simplyblockv1alpha1.BackupPolicyPhaseActive {
+		t.Fatalf("expected phase %q, got %q", simplyblockv1alpha1.BackupPolicyPhaseActive, current.Status.Phase)
+	}
+	if len(current.Status.AttachedLvols) != 1 || current.Status.AttachedLvols[0] != lvol(namespace, pvcName, lvolID) {
+		t.Fatalf("unexpected attached lvols: %#v", current.Status.AttachedLvols)
+	}
+
+	reqs := mock.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 backend requests, got %#v", reqs)
+	}
+	assertAttachDetachRequest(t, reqs[1], http.MethodPost,
+		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/attach", lvolID)
+}
+
+func TestBackupPolicyReconcileAnnotationRemovalDetachesLvol(t *testing.T) {
+	const (
+		namespace   = "default"
+		clusterName = "cluster-a"
+		clusterUUID = "cluster-uuid-policy-remove"
+		policyName  = "policy-remove"
+		policyID    = "policy-id-remove"
+		pvcName     = "pvc-remove"
+		pvName      = "pv-remove"
+		lvolID      = "lvol-remove"
+	)
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	defer mock.Close()
+	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
+			backupPolicyAPIResponse{ID: policyID, Name: policyName},
+		)},
+	)
+	mock.Register(http.MethodPost, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/detach",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+	)
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	policy := testBackupPolicyCR(policyName, clusterName)
+	policy.Status.PolicyID = policyID
+	policy.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{lvol(namespace, pvcName, lvolID)}
+	pv, pvc := testBackupPolicyPVC(namespace, pvcName, pvName, "", clusterUUID, lvolID, nil)
+
+	r := newBackupPolicyTestReconciler(t,
+		policy,
+		testCluster(namespace, clusterName, clusterUUID),
+		testClusterSecret(namespace, clusterName, clusterUUID, "secret"),
+		pv,
+		pvc,
+	)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected no requeue, got %+v", res)
+	}
+
+	current := getBackupPolicy(t, r.Client, policy)
+	if len(current.Status.AttachedLvols) != 0 {
+		t.Fatalf("expected all attachments removed, got %#v", current.Status.AttachedLvols)
+	}
+
+	reqs := mock.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 backend requests, got %#v", reqs)
+	}
+	assertAttachDetachRequest(t, reqs[1], http.MethodPost,
+		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/detach", lvolID)
+}
+
+func TestBackupPolicyReconcilePolicySwitchMovesAttachment(t *testing.T) {
+	const (
+		namespace    = "default"
+		clusterName  = "cluster-a"
+		clusterUUID  = "cluster-uuid-policy-switch"
+		oldPolicy    = "policy-old"
+		newPolicy    = "policy-new"
+		oldPolicyID  = "policy-id-old"
+		newPolicyID  = "policy-id-new"
+		pvcName      = "pvc-switch"
+		pvName       = "pv-switch"
+		lvolID       = "lvol-switch"
+	)
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	defer mock.Close()
+	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
+			backupPolicyAPIResponse{ID: oldPolicyID, Name: oldPolicy},
+			backupPolicyAPIResponse{ID: newPolicyID, Name: newPolicy},
+		)},
+	)
+	mock.Register(http.MethodPost, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+oldPolicyID+"/detach",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+	)
+	mock.Register(http.MethodPost, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+newPolicyID+"/attach",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+	)
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	oldCR := testBackupPolicyCR(oldPolicy, clusterName)
+	oldCR.Status.PolicyID = oldPolicyID
+	oldCR.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{lvol(namespace, pvcName, lvolID)}
+	newCR := testBackupPolicyCR(newPolicy, clusterName)
+	newCR.Status.PolicyID = newPolicyID
+	pv, pvc := testBackupPolicyPVC(namespace, pvcName, pvName, newPolicy, clusterUUID, lvolID, nil)
+
+	r := newBackupPolicyTestReconciler(t,
+		oldCR,
+		newCR,
+		testCluster(namespace, clusterName, clusterUUID),
+		testClusterSecret(namespace, clusterName, clusterUUID, "secret"),
+		pv,
+		pvc,
+	)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(oldCR)}); err != nil {
+		t.Fatalf("old policy reconcile returned error: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(newCR)}); err != nil {
+		t.Fatalf("new policy reconcile returned error: %v", err)
+	}
+
+	currentOld := getBackupPolicy(t, r.Client, oldCR)
+	if len(currentOld.Status.AttachedLvols) != 0 {
+		t.Fatalf("expected old policy attachments to be removed, got %#v", currentOld.Status.AttachedLvols)
+	}
+	currentNew := getBackupPolicy(t, r.Client, newCR)
+	if len(currentNew.Status.AttachedLvols) != 1 || currentNew.Status.AttachedLvols[0] != lvol(namespace, pvcName, lvolID) {
+		t.Fatalf("unexpected new policy attachments: %#v", currentNew.Status.AttachedLvols)
+	}
+
+	reqs := mock.Requests()
+	if len(reqs) != 4 {
+		t.Fatalf("expected 4 backend requests, got %#v", reqs)
+	}
+	assertAttachDetachRequest(t, reqs[1], http.MethodPost,
+		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+oldPolicyID+"/detach", lvolID)
+	assertAttachDetachRequest(t, reqs[3], http.MethodPost,
+		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+newPolicyID+"/attach", lvolID)
+}
+
+func TestBackupPolicyReconcileLvolAnnotationMismatchDetachesStaleAttachment(t *testing.T) {
+	const (
+		namespace   = "default"
+		clusterName = "cluster-a"
+		clusterUUID = "cluster-uuid-policy-mismatch"
+		policyName  = "policy-mismatch"
+		policyID    = "policy-id-mismatch"
+		pvcName     = "pvc-mismatch"
+		pvName      = "pv-mismatch"
+		handleLvol  = "lvol-from-handle"
+		staleLvol   = "lvol-stale-annotation"
+	)
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	defer mock.Close()
+	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
+			backupPolicyAPIResponse{ID: policyID, Name: policyName},
+		)},
+	)
+	mock.Register(http.MethodPost, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/detach",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+	)
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	policy := testBackupPolicyCR(policyName, clusterName)
+	policy.Status.PolicyID = policyID
+	policy.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{lvol(namespace, pvcName, staleLvol)}
+	pv, pvc := testBackupPolicyPVC(namespace, pvcName, pvName, policyName, clusterUUID, handleLvol,
+		map[string]string{pvcLvolIDAnnotation: staleLvol})
+
+	r := newBackupPolicyTestReconciler(t,
+		policy,
+		testCluster(namespace, clusterName, clusterUUID),
+		testClusterSecret(namespace, clusterName, clusterUUID, "secret"),
+		pv,
+		pvc,
+	)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)}); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	current := getBackupPolicy(t, r.Client, policy)
+	if len(current.Status.AttachedLvols) != 0 {
+		t.Fatalf("expected stale attachment to be removed, got %#v", current.Status.AttachedLvols)
+	}
+
+	reqs := mock.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 backend requests, got %#v", reqs)
+	}
+	assertAttachDetachRequest(t, reqs[1], http.MethodPost,
+		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/detach", staleLvol)
+}
+
+func TestBackupPolicyReconcilePVCRebindSwapsLvolID(t *testing.T) {
+	const (
+		namespace   = "default"
+		clusterName = "cluster-a"
+		clusterUUID = "cluster-uuid-policy-rebind"
+		policyName  = "policy-rebind"
+		policyID    = "policy-id-rebind"
+		pvcName     = "pvc-rebind"
+		pvName      = "pv-rebind"
+		oldLvolID   = "lvol-old"
+		newLvolID   = "lvol-new"
+	)
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	defer mock.Close()
+	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
+			backupPolicyAPIResponse{ID: policyID, Name: policyName},
+		)},
+	)
+	mock.Register(http.MethodPost, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/attach",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+	)
+	mock.Register(http.MethodPost, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/detach",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+	)
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	policy := testBackupPolicyCR(policyName, clusterName)
+	policy.Status.PolicyID = policyID
+	policy.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{lvol(namespace, pvcName, oldLvolID)}
+	pv, pvc := testBackupPolicyPVC(namespace, pvcName, pvName, policyName, clusterUUID, newLvolID, nil)
+
+	r := newBackupPolicyTestReconciler(t,
+		policy,
+		testCluster(namespace, clusterName, clusterUUID),
+		testClusterSecret(namespace, clusterName, clusterUUID, "secret"),
+		pv,
+		pvc,
+	)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)}); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	current := getBackupPolicy(t, r.Client, policy)
+	if len(current.Status.AttachedLvols) != 1 || current.Status.AttachedLvols[0] != lvol(namespace, pvcName, newLvolID) {
+		t.Fatalf("expected attachment to move to %q, got %#v", newLvolID, current.Status.AttachedLvols)
+	}
+
+	reqs := mock.Requests()
+	if len(reqs) != 3 {
+		t.Fatalf("expected 3 backend requests, got %#v", reqs)
+	}
+	assertAttachDetachRequest(t, reqs[1], http.MethodPost,
+		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/attach", newLvolID)
+	assertAttachDetachRequest(t, reqs[2], http.MethodPost,
+		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/detach", oldLvolID)
 }
 
 func TestDiffAttachments_NoChange(t *testing.T) {
@@ -189,5 +506,100 @@ func TestResolvePVCLvolID_Unbound(t *testing.T) {
 	_, err := resolvePVCLvolID(context.Background(), k8s, pvc, resolveTestClusterUUID)
 	if err == nil || !strings.Contains(err.Error(), "not bound") {
 		t.Fatalf("expected 'not bound' error, got: %v", err)
+	}
+}
+
+func testBackupPolicyCR(name, clusterName string) *simplyblockv1alpha1.BackupPolicy {
+	return &simplyblockv1alpha1.BackupPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       name,
+			Namespace:  "default",
+			Finalizers: []string{backupPolicyFinalizer},
+		},
+		Spec: simplyblockv1alpha1.BackupPolicySpec{
+			ClusterName: clusterName,
+		},
+	}
+}
+
+func testBackupPolicyPVC(namespace, pvcName, pvName, policyName, clusterUUID, lvolID string, extraAnnotations map[string]string) (*corev1.PersistentVolume, *corev1.PersistentVolumeClaim) {
+	annotations := map[string]string{}
+	if policyName != "" {
+		annotations[pvcBackupPolicyAnnotation] = policyName
+	}
+	for k, v := range extraAnnotations {
+		annotations[k] = v
+	}
+
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: pvName},
+		Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					VolumeHandle: clusterUUID + ":pool-a:" + lvolID,
+				},
+			},
+		},
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        pvcName,
+			Namespace:   namespace,
+			Annotations: annotations,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			VolumeName: pvName,
+		},
+	}
+
+	return pv, pvc
+}
+
+func backupPolicyListJSON(policies ...backupPolicyAPIResponse) string {
+	body, err := json.Marshal(policies)
+	if err != nil {
+		panic(err)
+	}
+	return string(body)
+}
+
+func getBackupPolicy(t *testing.T, cl client.Client, policy *simplyblockv1alpha1.BackupPolicy) *simplyblockv1alpha1.BackupPolicy {
+	t.Helper()
+
+	current := &simplyblockv1alpha1.BackupPolicy{}
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(policy), current); err != nil {
+		t.Fatalf("failed to get BackupPolicy %s/%s: %v", policy.Namespace, policy.Name, err)
+	}
+	return current
+}
+
+func assertAttachDetachRequest(t *testing.T, req webapimock.RecordedRequest, method, path, lvolID string) {
+	t.Helper()
+
+	if req.Method != method || req.Path != path {
+		t.Fatalf("unexpected request: got %s %s want %s %s", req.Method, req.Path, method, path)
+	}
+
+	var body backupPolicyAttachRequest
+	if err := json.Unmarshal(req.Body, &body); err != nil {
+		t.Fatalf("failed to decode request body %q: %v", string(req.Body), err)
+	}
+	if body.TargetType != "lvol" || body.TargetID != lvolID {
+		t.Fatalf("unexpected attach/detach body: %#v", body)
+	}
+}
+
+func newBackupPolicyTestReconciler(t *testing.T, objects ...client.Object) *BackupPolicyReconciler {
+	t.Helper()
+
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	cl := newTestClient(t, scheme, []client.Object{
+		&simplyblockv1alpha1.BackupPolicy{},
+	}, objects...)
+
+	return &BackupPolicyReconciler{
+		Client:   cl,
+		Scheme:   scheme,
+		Recorder: record.NewFakeRecorder(32),
 	}
 }
