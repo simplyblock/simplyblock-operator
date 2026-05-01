@@ -71,12 +71,6 @@ type SNODEAPIResponse struct {
 	NVMF_PORT          int    `json:"nvmf_port"`
 }
 
-type NodeStatusResponse struct {
-	UUID   string `json:"id"`
-	Status string `json:"status"`
-	IP     string `json:"ip"`
-}
-
 var (
 	waitForNodeInfoReachableCheckFn    = checkNodeInfoReachable
 	waitForNodeInfoReachableMaxRetries = 12
@@ -1288,7 +1282,7 @@ func (r *StorageNodeReconciler) waitForActionCompletion(
 			continue
 		}
 
-		var resp NodeStatusResponse
+		var resp utils.NodeStatusResponse
 		if err := json.Unmarshal(body, &resp); err != nil {
 			log.Error(err, "Failed to parse node status response", "body", string(body))
 			waitForActionCompletionSleepFn(waitForActionCompletionWaitInterval)

@@ -115,7 +115,7 @@ func TestWaitForActionCompletionValidTransitions(t *testing.T) {
 				}
 
 				w.WriteHeader(http.StatusOK)
-				_ = json.NewEncoder(w).Encode(NodeStatusResponse{
+				_ = json.NewEncoder(w).Encode(utils.NodeStatusResponse{
 					Status: tc.respStatus,
 				})
 			}))
@@ -1551,7 +1551,7 @@ func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
 	t.Run("returns terminal error when target status never reached", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(NodeStatusResponse{
+			_ = json.NewEncoder(w).Encode(utils.NodeStatusResponse{
 				Status: "creating",
 			})
 		}))
@@ -1587,7 +1587,7 @@ func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
 				_, _ = w.Write([]byte(`{`))
 			default:
 				w.WriteHeader(http.StatusOK)
-				_ = json.NewEncoder(w).Encode(NodeStatusResponse{
+				_ = json.NewEncoder(w).Encode(utils.NodeStatusResponse{
 					Status: statusOnline,
 				})
 			}
