@@ -101,4 +101,11 @@ spec:
   provider:
     name: Simplyblock GmbH
     url: https://simplyblock.io/
+  relatedImages:
+  - image: quay.io/simplyblock-io/simplyblock-operator@sha256:b7db1d324fa1d6d272f40d696a46c11147de541ca54eb95e67760bc821dec4d8
+    name: simplyblock-operator
+  - image: quay.io/simplyblock-io/simplyblock:26.2.1-PRE@sha256:adb13b6cd3bc7fbe2500c68c4107145c5da1120dcdb79884ba693d43d9ebaaab
+    name: simplyblock
+  - image: quay.io/simplyblock-io/ultra:R26.2-PRE-latest@sha256:f10a5b1186da852abe7e4dae6110a75554c46a51de229174acaec99dff283eb0
+    name: ultra-spdk
   version: 0.1.0

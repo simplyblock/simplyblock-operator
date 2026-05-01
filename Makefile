@@ -5,6 +5,12 @@ IMG_TAG  ?= $(VERSION)
 IMG      ?= $(IMG_BASE):$(IMG_TAG)
 BUNDLE_IMG ?= quay.io/simplyblock-io/simplyblock-operator-bundle:$(VERSION)
 
+# Related images deployed by the operator (used in relatedImages for airgap support)
+CLUSTER_IMAGE_BASE ?= quay.io/simplyblock-io/simplyblock
+CLUSTER_IMAGE_TAG  ?= 26.2.1-PRE
+SPDK_IMAGE_BASE    ?= quay.io/simplyblock-io/ultra
+SPDK_IMAGE_TAG     ?= R26.2-PRE-latest
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
 GOBIN=$(shell go env GOPATH)/bin
@@ -161,17 +167,34 @@ ifndef ignore-not-found
 endif
 
 .PHONY: bundle
-bundle: yq ## Generate bundle manifests with digest-pinned operator image (image must be pushed first)
-	$(eval DIGEST := $(shell curl -sI \
+bundle: yq ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
+	@set -e; \
+	OPERATOR_DIGEST=$$(curl -sI \
 	  "https://quay.io/v2/simplyblock-io/simplyblock-operator/manifests/$(IMG_TAG)" \
 	  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r'))
-	@test -n "$(DIGEST)" || (echo "ERROR: could not fetch digest for $(IMG_BASE):$(IMG_TAG) — is the image pushed?"; exit 1)
-	@echo "Using digest: $(DIGEST)"
-	$(YQ) e '.metadata.annotations.containerImage = "$(IMG_BASE)@$(DIGEST)"' -i \
-	  config/manifests/bases/simplyblock-operator.clusterserviceversion.yaml
-	operator-sdk generate kustomize manifests -q
-	cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$(DIGEST)
+	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	test -n "$$OPERATOR_DIGEST" \
+	  || { echo "ERROR: could not fetch digest for $(IMG_BASE):$(IMG_TAG) — is the image pushed?"; exit 1; }; \
+	CLUSTER_DIGEST=$$(curl -sI \
+	  "https://quay.io/v2/simplyblock-io/simplyblock/manifests/$(CLUSTER_IMAGE_TAG)" \
+	  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	SPDK_DIGEST=$$(curl -sI \
+	  "https://quay.io/v2/simplyblock-io/ultra/manifests/$(SPDK_IMAGE_TAG)" \
+	  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	OPERATOR_IMG="$(IMG_BASE)@$$OPERATOR_DIGEST" \
+	CLUSTER_IMG="$(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)@$$CLUSTER_DIGEST" \
+	SPDK_IMG="$(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)@$$SPDK_DIGEST" \
+	"$(YQ)" e ' \
+	  .metadata.annotations.containerImage = strenv(OPERATOR_IMG) | \
+	  .spec.relatedImages = [ \
+	    {"name": "simplyblock-operator", "image": strenv(OPERATOR_IMG)}, \
+	    {"name": "simplyblock",          "image": strenv(CLUSTER_IMG)}, \
+	    {"name": "ultra-spdk",           "image": strenv(SPDK_IMG)} \
+	  ]' -i config/manifests/bases/simplyblock-operator.clusterserviceversion.yaml; \
+	operator-sdk generate kustomize manifests -q; \
+	(cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
 	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION)
 
 .PHONY: bundle-build
