@@ -155,9 +155,16 @@ type backupAPIResponse struct {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
+// backupContext holds the resolved prerequisites needed across reconciliation phases.
+type backupContext struct {
+	clusterUUID   string
+	clusterSecret string
+	apiClient     *webapi.Client
+	source        *backupSource
+	poolUUID      string
+}
 
+func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	backupCR := &simplyblockv1alpha1.StorageBackup{}
 	if err := r.Get(ctx, req.NamespacedName, backupCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -175,16 +182,45 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
+	// Imported CRs (created by StorageBackupSyncReconciler) carry the imported
+	// label at creation time; the status patch that populates BackupID and
+	// SnapshotID is a separate API call that races with this reconciler. If
+	// BackupID is still empty the patch hasn't landed yet — requeue and wait
+	// rather than creating a duplicate snapshot/backup in the backend.
+	if backupCR.Labels[backupSyncImportedLabel] == "true" && backupCR.Status.BackupID == "" {
+		return ctrl.Result{RequeueAfter: backupReconcileRequeue}, nil
+	}
+
+	bctx, result, done, err := r.prepareBackupContext(ctx, backupCR)
+	if done {
+		return result, err
+	}
+
+	result, done, err = r.ensureSnapshotAndBackup(ctx, backupCR, bctx)
+	if done {
+		return result, err
+	}
+
+	return r.syncBackupProgress(ctx, backupCR, bctx)
+}
+
+// prepareBackupContext resolves all prerequisites (cluster UUID, auth, source, pool UUID)
+// and patches their resolved values into status. Returns done=true when the caller should
+// return result immediately (either an error or a requeue).
+func (r *StorageBackupReconciler) prepareBackupContext(
+	ctx context.Context,
+	backupCR *simplyblockv1alpha1.StorageBackup,
+) (*backupContext, ctrl.Result, bool, error) {
 	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, backupCR.Namespace, backupCR.Spec.ClusterName)
 	if err != nil {
 		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
 			status.Phase = simplyblockv1alpha1.BackupPhasePending
 			status.Message = err.Error()
 		}); patchErr != nil {
-			return ctrl.Result{}, patchErr
+			return nil, ctrl.Result{}, true, patchErr
 		}
 		r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupClusterLookupError, "Failed to resolve cluster UUID for %s: %v", backupCR.Spec.ClusterName, err)
-		return ctrl.Result{RequeueAfter: backupReconcileRequeue}, nil
+		return nil, ctrl.Result{RequeueAfter: backupReconcileRequeue}, true, nil
 	}
 
 	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, backupCR.Namespace, backupCR.Spec.ClusterName)
@@ -194,10 +230,10 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			status.ClusterUUID = clusterUUID
 			status.Message = err.Error()
 		}); patchErr != nil {
-			return ctrl.Result{}, patchErr
+			return nil, ctrl.Result{}, true, patchErr
 		}
 		r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupClusterAuthError, "Failed to get cluster auth for %s: %v", backupCR.Spec.ClusterName, err)
-		return ctrl.Result{RequeueAfter: backupReconcileRequeue}, nil
+		return nil, ctrl.Result{RequeueAfter: backupReconcileRequeue}, true, nil
 	}
 
 	apiClient := r.apiClient()
@@ -209,10 +245,10 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			status.ClusterUUID = clusterUUID
 			status.Message = err.Error()
 		}); patchErr != nil {
-			return ctrl.Result{}, patchErr
+			return nil, ctrl.Result{}, true, patchErr
 		}
 		r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupSourceResolutionError, "Failed to resolve backup source: %v", err)
-		return ctrl.Result{RequeueAfter: backupReconcileRequeue}, nil
+		return nil, ctrl.Result{RequeueAfter: backupReconcileRequeue}, true, nil
 	}
 
 	poolUUID, err := r.lookupPoolUUID(ctx, apiClient, clusterSecret, clusterUUID, source.PoolName)
@@ -226,10 +262,10 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			status.LvolID = source.LvolID
 			status.Message = err.Error()
 		}); patchErr != nil {
-			return ctrl.Result{}, patchErr
+			return nil, ctrl.Result{}, true, patchErr
 		}
 		r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupPoolLookupError, "Failed to look up pool UUID for %s: %v", source.PoolName, err)
-		return ctrl.Result{RequeueAfter: backupReconcileRequeue}, nil
+		return nil, ctrl.Result{RequeueAfter: backupReconcileRequeue}, true, nil
 	}
 
 	if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
@@ -243,52 +279,79 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			status.Phase = simplyblockv1alpha1.BackupPhasePending
 		}
 	}); patchErr != nil {
-		return ctrl.Result{}, patchErr
+		return nil, ctrl.Result{}, true, patchErr
 	}
+
+	return &backupContext{
+		clusterUUID:   clusterUUID,
+		clusterSecret: clusterSecret,
+		apiClient:     apiClient,
+		source:        source,
+		poolUUID:      poolUUID,
+	}, ctrl.Result{}, false, nil
+}
+
+// ensureSnapshotAndBackup idempotently creates the internal snapshot and backup
+// objects. Returns done=true when the caller should return result immediately.
+func (r *StorageBackupReconciler) ensureSnapshotAndBackup(
+	ctx context.Context,
+	backupCR *simplyblockv1alpha1.StorageBackup,
+	bctx *backupContext,
+) (ctrl.Result, bool, error) {
+	log := logf.FromContext(ctx)
 
 	if backupCR.Status.SnapshotName == "" {
 		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
 			status.SnapshotName = r.snapshotNameFor(backupCR)
 		}); patchErr != nil {
-			return ctrl.Result{}, patchErr
+			return ctrl.Result{}, true, patchErr
 		}
 	}
 
 	if backupCR.Status.SnapshotID == "" {
-		snapshotID, createErr := r.createSnapshot(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, source.LvolID, backupCR.Status.SnapshotName)
+		snapshotID, createErr := r.createSnapshot(ctx, bctx.apiClient, bctx.clusterSecret, bctx.clusterUUID, bctx.poolUUID, bctx.source.LvolID, backupCR.Status.SnapshotName)
 		if createErr != nil {
 			log.Error(createErr, "Failed to create snapshot", "backup", backupCR.Name)
 			r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupSnapshotCreateFailed, "Failed to create snapshot: %v", createErr)
-			return r.handleAPIError(ctx, backupCR, clusterUUID, createErr)
+			result, err := r.handleAPIError(ctx, backupCR, bctx.clusterUUID, createErr)
+			return result, true, err
 		}
-
 		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
 			status.SnapshotID = snapshotID
 			status.Message = "Snapshot created; submitting backup request"
 			status.Phase = simplyblockv1alpha1.BackupPhasePending
 		}); patchErr != nil {
-			return ctrl.Result{}, patchErr
+			return ctrl.Result{}, true, patchErr
 		}
 	}
 
 	if backupCR.Status.BackupID == "" {
-		backupID, createErr := r.createBackup(ctx, apiClient, clusterSecret, clusterUUID, backupCR.Status.SnapshotID)
+		backupID, createErr := r.createBackup(ctx, bctx.apiClient, bctx.clusterSecret, bctx.clusterUUID, backupCR.Status.SnapshotID)
 		if createErr != nil {
 			log.Error(createErr, "Failed to create backup", "backup", backupCR.Name, "snapshotID", backupCR.Status.SnapshotID)
 			r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupCreateFailed, "Failed to create backup: %v", createErr)
-			return r.handleAPIError(ctx, backupCR, clusterUUID, createErr)
+			result, err := r.handleAPIError(ctx, backupCR, bctx.clusterUUID, createErr)
+			return result, true, err
 		}
-
 		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
 			status.BackupID = backupID
 			status.Message = backupPendingMessage
 			status.Phase = simplyblockv1alpha1.BackupPhasePending
 		}); patchErr != nil {
-			return ctrl.Result{}, patchErr
+			return ctrl.Result{}, true, patchErr
 		}
 	}
 
-	backups, err := r.listBackups(ctx, apiClient, clusterSecret, clusterUUID)
+	return ctrl.Result{}, false, nil
+}
+
+// syncBackupProgress polls the API for the current backup state and updates status.
+func (r *StorageBackupReconciler) syncBackupProgress(
+	ctx context.Context,
+	backupCR *simplyblockv1alpha1.StorageBackup,
+	bctx *backupContext,
+) (ctrl.Result, error) {
+	backups, err := r.listBackups(ctx, bctx.apiClient, bctx.clusterSecret, bctx.clusterUUID)
 	if err != nil {
 		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
 			status.Message = err.Error()

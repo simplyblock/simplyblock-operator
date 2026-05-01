@@ -4,158 +4,138 @@ kind: ClusterRole
 metadata:
   name: manager-role
 rules:
-  - apiGroups:
-      - ""
-    resources:
-      - events
-    verbs:
-      - create
-      - patch
-  - apiGroups:
-      - ""
-    resources:
-      - nodes
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - ""
-    resources:
-      - persistentvolumeclaims
-      - persistentvolumes
-    verbs:
-      - create
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - ""
-    resources:
-      - pods
-    verbs:
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - ""
-    resources:
-      - secrets
-      - services
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - discovery.k8s.io
-    resources:
-      - endpointslices
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - policy
-    resources:
-      - poddisruptionbudgets
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - storage.k8s.io
-    resources:
-      - storageclasses
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - storage.simplyblock.io
-    resources:
-      - backuprestores
-      - devices
-      - lvols
-      - pools
-      - snapshotreplications
-      - storagebackups
-      - storageclusters
-      - storagenodes
-      - tasks
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - storage.simplyblock.io
-    resources:
-      - backuprestores/finalizers
-      - devices/finalizers
-      - lvols/finalizers
-      - pools/finalizers
-      - snapshotreplications/finalizers
-      - storagebackups/finalizers
-      - storageclusters/finalizers
-      - storagenodes/finalizers
-      - tasks/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - storage.simplyblock.io
-    resources:
-      - backuprestores/status
-      - devices/status
-      - lvols/status
-      - pools/status
-      - snapshotreplications/status
-      - storagebackups/status
-      - storageclusters/status
-      - storagenodes/status
-      - tasks/status
-    verbs:
-      - get
-      - patch
-      - update
-  - apiGroups:
-      - apps
-    resources:
-      - daemonsets
-    verbs:
-      - create
-      - delete
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - rbac.authorization.k8s.io
-    resources:
-      - clusterrolebindings
-      - clusterroles
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  - persistentvolumes
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - backuppolicies
+  - backuprestores
+  - devices
+  - lvols
+  - pools
+  - snapshotreplications
+  - storagebackups
+  - storageclusters
+  - storagenodes
+  - tasks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - backuppolicies/finalizers
+  - backuprestores/finalizers
+  - devices/finalizers
+  - lvols/finalizers
+  - pools/finalizers
+  - snapshotreplications/finalizers
+  - storagebackups/finalizers
+  - storageclusters/finalizers
+  - storagenodes/finalizers
+  - tasks/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - backuppolicies/status
+  - backuprestores/status
+  - devices/status
+  - lvols/status
+  - pools/status
+  - snapshotreplications/status
+  - storagebackups/status
+  - storageclusters/status
+  - storagenodes/status
+  - tasks/status
+  verbs:
+  - get
+  - patch
+  - update

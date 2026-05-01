@@ -1182,7 +1182,7 @@ func (r *StorageNodeReconciler) performNodeAction(
 		method = http.MethodDelete
 		body = nil
 		endpoint = fmt.Sprintf(
-			"/api/v2/clusters/%s/storage-nodes/%s?force_remove=true&force_delete=true",
+			"/api/v2/clusters/%s/storage-nodes/%s?force_remove=true",
 			clusterUUID,
 			snCR.Spec.NodeUUID,
 		)
@@ -1190,7 +1190,7 @@ func (r *StorageNodeReconciler) performNodeAction(
 	default:
 		body = nil
 		endpoint = fmt.Sprintf(
-			"/api/v2/clusters/%s/storage-nodes/%s/%s?force=true",
+			"/api/v2/clusters/%s/storage-nodes/%s/%s",
 			clusterUUID,
 			snCR.Spec.NodeUUID,
 			snCR.Spec.Action,
