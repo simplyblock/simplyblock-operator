@@ -38,13 +38,13 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
-// PoolReconciler reconciles a Pool object
-type PoolReconciler struct {
+// StoragePoolReconciler reconciles a StoragePool object
+type StoragePoolReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-type POOLAPIResponse struct {
+type StoragePoolAPIResponse struct {
 	UUID         string `json:"uuid"`
 	QoSIOPSLimit int64  `json:"max_rw_ios_per_sec"`
 	RWLimit      int64  `json:"max_rw_mbytes_per_sec"`
@@ -54,25 +54,25 @@ type POOLAPIResponse struct {
 	Status       string `json:"status"`
 }
 
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagepools,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagepools/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagepools/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the Pool object against the actual cluster state, and then
+// the StoragePool object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
-func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	// Fetch the Pool CR
-	poolCR := &simplyblockv1alpha1.Pool{}
+	// Fetch the StoragePool CR
+	poolCR := &simplyblockv1alpha1.StoragePool{}
 	if err := r.Get(ctx, req.NamespacedName, poolCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -100,7 +100,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	apiClient := webapi.NewClient()
 
 	if !poolCR.DeletionTimestamp.IsZero() {
-		if utils.ContainsString(poolCR.Finalizers, utils.FinalizerPool) && poolCR.Status.UUID != "" {
+		if utils.ContainsString(poolCR.Finalizers, utils.FinalizerStoragePool) && poolCR.Status.UUID != "" {
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
 			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
 			if err != nil || status >= 300 {
@@ -116,19 +116,19 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
 
-			poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, utils.FinalizerPool)
+			poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, utils.FinalizerStoragePool)
 			if err := r.Update(ctx, poolCR); err != nil {
 				log.Error(err, "Failed to remove finalizer")
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
 
-			log.Info("Pool deleted successfully", "name", poolCR.Name)
+			log.Info("StoragePool deleted successfully", "name", poolCR.Name)
 		}
 		return ctrl.Result{}, nil
 	}
 
-	if !controllerutil.ContainsFinalizer(poolCR, utils.FinalizerPool) {
-		controllerutil.AddFinalizer(poolCR, utils.FinalizerPool)
+	if !controllerutil.ContainsFinalizer(poolCR, utils.FinalizerStoragePool) {
+		controllerutil.AddFinalizer(poolCR, utils.FinalizerStoragePool)
 		if err := r.Update(ctx, poolCR); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -148,7 +148,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			MaxWMB:        poolSpecQoSThroughputWrite(poolCR.Spec.QosSpec),
 			CRName:        poolCR.Name,
 			CRNameSpace:   poolCR.Namespace,
-			CRPlural:      "pools",
+			CRPlural:      "storagepools",
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
@@ -167,7 +167,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			"response", string(body),
 		)
 
-		var apiResp POOLAPIResponse
+		var apiResp StoragePoolAPIResponse
 
 		if err := json.Unmarshal(body, &apiResp); err != nil {
 			log.Error(err, "Failed to parse pool creation response", "raw", string(body))
@@ -176,10 +176,10 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		// API returns UUID of the created pool
 		poolCR.Status.UUID = apiResp.UUID
 		poolCR.Status.Status = apiResp.Status
-		poolCR.Status.QoS = &simplyblockv1alpha1.PoolQoSStatus{
+		poolCR.Status.QoS = &simplyblockv1alpha1.StoragePoolQoSStatus{
 			Host: apiResp.QoSHost,
 			IOPS: utils.ToInt32Ptr(apiResp.QoSIOPSLimit),
-			Throughput: &simplyblockv1alpha1.PoolQoSThroughputStatus{
+			Throughput: &simplyblockv1alpha1.StoragePoolQoSThroughputStatus{
 				Read:      utils.ToInt32Ptr(apiResp.RLimit),
 				ReadWrite: utils.ToInt32Ptr(apiResp.RWLimit),
 				Write:     utils.ToInt32Ptr(apiResp.WLimit),
@@ -191,7 +191,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
-		log.Info("Pool successfully created", "name", poolCR.Name)
+		log.Info("StoragePool successfully created", "name", poolCR.Name)
 		return ctrl.Result{}, nil
 	}
 
@@ -218,12 +218,12 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	// 	return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	// }
 
-	// log.Info("Pool updated successfully", "name", poolCR.Name)
+	// log.Info("StoragePool updated successfully", "name", poolCR.Name)
 	return ctrl.Result{}, nil
 }
 
 // deleteStorageClass deletes the StorageClass associated with the pool, ignoring not-found errors.
-func (r *PoolReconciler) deleteStorageClass(ctx context.Context, poolCR *simplyblockv1alpha1.Pool) error {
+func (r *StoragePoolReconciler) deleteStorageClass(ctx context.Context, poolCR *simplyblockv1alpha1.StoragePool) error {
 	sc := &storagev1.StorageClass{}
 	name := fmt.Sprintf("simplyblock-%s-%s", poolCR.Spec.ClusterName, poolCR.Spec.Name)
 	if err := r.Get(ctx, client.ObjectKey{Name: name}, sc); err != nil {
@@ -235,7 +235,7 @@ func (r *PoolReconciler) deleteStorageClass(ctx context.Context, poolCR *simplyb
 // upsertStorageClass creates a StorageClass for the pool if one does not already exist.
 // StorageClass parameters are immutable in Kubernetes, so this is create-once: if the
 // StorageClass already exists it is left unchanged.
-func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyblockv1alpha1.Pool, clusterUUID string) error {
+func (r *StoragePoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyblockv1alpha1.StoragePool, clusterUUID string) error {
 	bindingMode := storagev1.VolumeBindingWaitForFirstConsumer
 	reclaimPolicy := corev1.PersistentVolumeReclaimDelete
 	allowExpansion := true
@@ -294,35 +294,35 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *PoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *StoragePoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.Pool{}).
-		Named("pool").
+		For(&simplyblockv1alpha1.StoragePool{}).
+		Named("storagepool").
 		Complete(r)
 }
 
-func poolSpecQoSIOPS(q *simplyblockv1alpha1.PoolQoSSpec) int {
+func poolSpecQoSIOPS(q *simplyblockv1alpha1.StoragePoolQoSSpec) int {
 	if q == nil {
 		return 0
 	}
 	return utils.IntPtrOrDefault(q.IOPS, 0)
 }
 
-func poolSpecQoSThroughputRead(q *simplyblockv1alpha1.PoolQoSSpec) int {
+func poolSpecQoSThroughputRead(q *simplyblockv1alpha1.StoragePoolQoSSpec) int {
 	if q == nil || q.Throughput == nil {
 		return 0
 	}
 	return utils.IntPtrOrDefault(q.Throughput.Read, 0)
 }
 
-func poolSpecQoSThroughputReadWrite(q *simplyblockv1alpha1.PoolQoSSpec) int {
+func poolSpecQoSThroughputReadWrite(q *simplyblockv1alpha1.StoragePoolQoSSpec) int {
 	if q == nil || q.Throughput == nil {
 		return 0
 	}
 	return utils.IntPtrOrDefault(q.Throughput.ReadWrite, 0)
 }
 
-func poolSpecQoSThroughputWrite(q *simplyblockv1alpha1.PoolQoSSpec) int {
+func poolSpecQoSThroughputWrite(q *simplyblockv1alpha1.StoragePoolQoSSpec) int {
 	if q == nil || q.Throughput == nil {
 		return 0
 	}

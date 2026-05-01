@@ -20,12 +20,12 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 )
 
-var _ = Describe("Pool Controller", func() {
+var _ = Describe("StoragePool Controller", func() {
 	It("should ignore not-found resources and return no requeue", func() {
-		controllerReconciler := &PoolReconciler{
+		controllerReconciler := &StoragePoolReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
 		}
-		expectIgnoreNotFoundNoRequeue(controllerReconciler, "missing-pool")
+		expectIgnoreNotFoundNoRequeue(controllerReconciler, "missing-storagepool")
 	})
 })

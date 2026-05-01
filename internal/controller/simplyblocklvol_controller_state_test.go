@@ -456,7 +456,7 @@ func newLvolStateTestReconciler(t *testing.T, objects ...client.Object) *LvolRec
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	cl := newTestClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.Lvol{},
-		&simplyblockv1alpha1.Pool{},
+		&simplyblockv1alpha1.StoragePool{},
 		&simplyblockv1alpha1.StorageCluster{},
 	}, objects...)
 

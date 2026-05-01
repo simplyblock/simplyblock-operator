@@ -2,7 +2,7 @@
 resources:
 - storage_v1alpha1_storagecluster.yaml
 - storage_v1alpha1_storagenode.yaml
-- storage_v1alpha1_pool.yaml
+- storage_v1alpha1_storagepool.yaml
 - storage_v1alpha1_device.yaml
 - storage_v1alpha1_task.yaml
 - storage_v1alpha1_lvol.yaml

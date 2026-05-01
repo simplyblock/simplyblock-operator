@@ -149,10 +149,10 @@ func TestSnapshotReplicationEnsureConfigured(t *testing.T) {
 		srcSecret := snapRepClusterSecret("cluster-src", srcUUID, "src-s")
 		srcCluster := snapRepClusterCR("cluster-src", srcUUID)
 		tgtCluster := snapRepClusterCR(tgtUUID, tgtUUID)
-		tgtPool := &simplyblockv1alpha1.Pool{
+		tgtPool := &simplyblockv1alpha1.StoragePool{
 			ObjectMeta: metav1.ObjectMeta{Name: poolUUID, Namespace: "default"},
-			Spec:       simplyblockv1alpha1.PoolSpec{ClusterName: tgtUUID, Name: poolUUID},
-			Status:     simplyblockv1alpha1.PoolStatus{UUID: poolUUID},
+			Spec:       simplyblockv1alpha1.StoragePoolSpec{ClusterName: tgtUUID, Name: poolUUID},
+			Status:     simplyblockv1alpha1.StoragePoolStatus{UUID: poolUUID},
 		}
 		r := newSnapRepTestReconciler(t, cr, srcSecret, srcCluster, tgtCluster, tgtPool)
 

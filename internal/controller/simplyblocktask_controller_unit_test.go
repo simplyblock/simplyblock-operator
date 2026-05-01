@@ -360,17 +360,17 @@ func testClusterSecret(namespace, clusterName, uuid, secret string) *corev1.Secr
 	}
 }
 
-func testPool(namespace, poolName, clusterName, uuid string) *simplyblockv1alpha1.Pool {
-	return &simplyblockv1alpha1.Pool{
+func testPool(namespace, poolName, clusterName, uuid string) *simplyblockv1alpha1.StoragePool {
+	return &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      poolName,
 			Namespace: namespace,
 		},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			Name:        poolName,
 			ClusterName: clusterName,
 		},
-		Status: simplyblockv1alpha1.PoolStatus{
+		Status: simplyblockv1alpha1.StoragePoolStatus{
 			UUID: uuid,
 		},
 	}
@@ -383,7 +383,7 @@ func newTaskStateTestReconciler(t *testing.T, objects ...client.Object) *TaskRec
 	cl := newTestClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.Task{},
 		&simplyblockv1alpha1.StorageCluster{},
-		&simplyblockv1alpha1.Pool{},
+		&simplyblockv1alpha1.StoragePool{},
 	}, objects...)
 
 	return &TaskReconciler{

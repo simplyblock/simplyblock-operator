@@ -1,10 +1,10 @@
 apiVersion: storage.simplyblock.io/v1alpha1
-kind: Pool
+kind: StoragePool
 metadata:
   labels:
     app.kubernetes.io/name: simplyblock-operator
     app.kubernetes.io/managed-by: kustomize
-  name: pool-sample
+  name: storagepool-sample
 spec:
   clusterName: sample-cluster
   name: pool-1

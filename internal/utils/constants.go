@@ -1,7 +1,7 @@
 package utils
 
 const (
-	FinalizerPool                = "storage.simplyblock.io/pool-finalizer"
+	FinalizerStoragePool         = "storage.simplyblock.io/storagepool-finalizer"
 	FinalizerLvol                = "storage.simplyblock.io/lvol-finalizer"
 	FinalizerTask                = "storage.simplyblock.io/task-finalizer"
 	FinalizerDevice              = "storage.simplyblock.io/device-finalizer"

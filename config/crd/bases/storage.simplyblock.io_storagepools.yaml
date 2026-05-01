@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: pools.storage.simplyblock.io
+  name: storagepools.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
   names:
-    kind: Pool
-    listKind: PoolList
-    plural: pools
-    singular: pool
+    kind: StoragePool
+    listKind: StoragePoolList
+    plural: storagepools
+    singular: storagepool
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Pool is the Schema for the pools API
+        description: StoragePool is the Schema for the storagepools API
         properties:
           apiVersion:
             description: |-
@@ -37,7 +37,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of Pool
+            description: spec defines the desired state of StoragePool
             properties:
               action:
                 description: |-
@@ -152,7 +152,7 @@ spec:
             - name
             type: object
           status:
-            description: status defines the observed state of Pool
+            description: status defines the observed state of StoragePool
             properties:
               qos:
                 description: QoS contains observed/configured QoS values.

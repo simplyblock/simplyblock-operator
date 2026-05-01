@@ -67,7 +67,7 @@ func ResolvePoolUUID(
 	poolName string,
 ) (string, error) {
 
-	var pools simplyblockv1alpha1.PoolList
+	var pools simplyblockv1alpha1.StoragePoolList
 	if err := c.List(ctx, &pools, client.InNamespace(namespace)); err != nil {
 		return "", err
 	}

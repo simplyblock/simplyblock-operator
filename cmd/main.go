@@ -242,11 +242,11 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}
-	if err := (&controller.PoolReconciler{
+	if err := (&controller.StoragePoolReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Pool")
+		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")
 		os.Exit(1)
 	}
 	if err := (&controller.DeviceReconciler{

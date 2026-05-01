@@ -121,10 +121,10 @@ spec:
         displayName: Logical Volumes
         path: lvols
       version: v1alpha1
-    - description: Pool is the Schema for the pools API
-      displayName: Pool
-      kind: Pool
-      name: pools.storage.simplyblock.io
+    - description: StoragePool is the Schema for the storagepools API
+      displayName: StoragePool
+      kind: StoragePool
+      name: storagepools.storage.simplyblock.io
       specDescriptors:
       - description: CapacityLimit is the maximum pool capacity.
         displayName: Capacity Limit
