@@ -37,20 +37,20 @@ type JournalManagerSpec struct {
 
 // StorageNodeSpec defines the desired state of StorageNode
 type StorageNodeSpec struct {
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Image"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Image"
 	// ClusterImage is the container image used for storage-node workloads.
 	ClusterImage string `json:"clusterImage,omitempty"`
 	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume;remove
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
 	// Action triggers an imperative node operation.
 	Action string `json:"action,omitempty"`
 	// NodeUUID is required when action is specified
 	NodeUUID string `json:"nodeUUID,omitempty"`
 
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Logical Volume Count"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Logical Volume Count"
 	// MaxLogicalVolumeCount is the maximum number of logical volumes per node.
 	MaxLogicalVolumeCount *int32 `json:"maxLogicalVolumeCount,omitempty"`
 	// MaxSize is the maximum allocatable size of the storage node.
@@ -83,7 +83,7 @@ type StorageNodeSpec struct {
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 	// DataIfname lists data-plane network interfaces.
 	DataIfname []string `json:"dataIfname,omitempty"`
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Worker Nodes"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Worker Nodes"
 	// WorkerNodes is the set of Kubernetes worker nodes to manage.
 	WorkerNodes []string `json:"workerNodes,omitempty"`
 	// WorkerNode is a single worker node used by action flows.
@@ -152,12 +152,12 @@ type NodeDrainState struct {
 
 // StorageNodeStatus defines the observed state of StorageNode.
 type StorageNodeStatus struct {
-	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Nodes"
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Nodes"
 	// Nodes is the observed state of each managed storage node.
 	Nodes []NodeStatus `json:"nodes,omitempty"`
 	// ActionStatus tracks the latest action execution status.
 	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
-	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Drain Coordination"
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Drain Coordination"
 	// DrainCoordination tracks the upgrade-drain state per worker node.
 	DrainCoordination []NodeDrainState `json:"drainCoordination,omitempty"`
 }
@@ -199,9 +199,9 @@ type ActionStatus struct {
 	Action string `json:"action,omitempty"`
 	// NodeUUID is the target node UUID for the action.
 	NodeUUID string `json:"nodeUUID,omitempty"`
-	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Action State"
-	State    string `json:"state,omitempty"` // pending | running | success | failed
-	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Action Message"
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Action State"
+	State string `json:"state,omitempty"` // pending | running | success | failed
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Action Message"
 	// Message is a human-readable action result or error.
 	Message string `json:"message,omitempty"`
 	// UpdatedAt is the timestamp of the last status transition.
@@ -216,7 +216,7 @@ type ActionStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && (!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\"))",message="nodeUUID is required when action is specified"
 // +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.clusterImage) && self.spec.clusterImage != \"\" && has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)",message="clusterImage, maxLogicalVolumeCount, and workerNodes are required when action is not specified"
-//+operator-sdk:csv:customresourcedefinitions:displayName="Storage Node",resources={{ServiceAccount,v1,simplyblock-storage-node},{Service,v1,simplyblock-storage-node},{DaemonSet,v1,simplyblock-storage-node},{ClusterRole,v1,simplyblock-storage-node},{ClusterRoleBinding,v1,simplyblock-storage-node}}
+// +operator-sdk:csv:customresourcedefinitions:displayName="Storage Node",resources={{ServiceAccount,v1,simplyblock-storage-node},{Service,v1,simplyblock-storage-node},{DaemonSet,v1,simplyblock-storage-node},{ClusterRole,v1,simplyblock-storage-node},{ClusterRoleBinding,v1,simplyblock-storage-node}}
 // StorageNode is the Schema for the storagenodes API
 type StorageNode struct {
 	metav1.TypeMeta `json:",inline"`

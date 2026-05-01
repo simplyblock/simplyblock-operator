@@ -31,7 +31,7 @@ const (
 
 // BackupRef identifies the StorageBackup to restore from, scoped to the same namespace.
 type BackupRef struct {
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup Name"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup Name"
 	// Name is the StorageBackup resource name.
 	Name string `json:"name"`
 }
@@ -57,32 +57,32 @@ type PVCTemplate struct {
 
 // BackupRestoreSpec defines the desired state of BackupRestore.
 type BackupRestoreSpec struct {
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`
 	// BackupRef references the StorageBackup resource to restore from.
 	BackupRef BackupRef `json:"backupRef"`
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Target Pool"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Target Pool"
 	// TargetPool overrides the pool to restore into.
 	// Defaults to the source backup's pool.
 	// +optional
 	TargetPool string `json:"targetPool,omitempty"`
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Target Node"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Target Node"
 	// TargetNode is the UUID of the storage node to restore onto.
 	// Defaults to the node that originally held the backup.
 	// +optional
 	TargetNode string `json:"targetNode,omitempty"`
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PVC Template"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PVC Template"
 	// PVCTemplate describes the PVC to create once the restore completes.
 	PVCTemplate PVCTemplate `json:"pvcTemplate"`
 }
 
 // BackupRestoreStatus defines the observed state of BackupRestore.
 type BackupRestoreStatus struct {
-	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Phase"
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Phase"
 	// Phase is the high-level lifecycle shown in kubectl output.
 	Phase string `json:"phase,omitempty"`
-	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Message"
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Message"
 	// Message contains the latest reconciliation detail or error.
 	Message string `json:"message,omitempty"`
 
@@ -98,14 +98,14 @@ type BackupRestoreStatus struct {
 	// PoolUUID is the backend pool UUID.
 	PoolUUID string `json:"poolUUID,omitempty"`
 
-	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Restored LVOL ID"
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Restored LVOL ID"
 	// RestoredLvolID is the UUID of the newly-created logical volume.
 	RestoredLvolID string `json:"restoredLvolID,omitempty"`
 
-	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Persistent Volume"
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Persistent Volume"
 	// PVName is the name of the PersistentVolume created by the controller.
 	PVName string `json:"pvName,omitempty"`
-	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="PersistentVolumeClaim"
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="PersistentVolumeClaim"
 	// PVCName is the name of the PersistentVolumeClaim created from pvcTemplate.
 	PVCName string `json:"pvcName,omitempty"`
 	// PVCNamespace is the namespace of the created PVC.
@@ -124,7 +124,7 @@ type BackupRestoreStatus struct {
 // +kubebuilder:printcolumn:name="Backup",type=string,JSONPath=".spec.backupRef.name"
 // +kubebuilder:printcolumn:name="PVC",type=string,JSONPath=".status.pvcName"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-//+operator-sdk:csv:customresourcedefinitions:displayName="Backup Restore",resources={{PersistentVolume,v1,restored-volume},{PersistentVolumeClaim,v1,restored-claim}}
+// +operator-sdk:csv:customresourcedefinitions:displayName="Backup Restore",resources={{PersistentVolume,v1,restored-volume},{PersistentVolumeClaim,v1,restored-claim}}
 
 // BackupRestore is the Schema for the backuprestores API.
 type BackupRestore struct {

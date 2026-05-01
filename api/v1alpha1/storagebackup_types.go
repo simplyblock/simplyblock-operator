@@ -30,34 +30,34 @@ const (
 )
 
 type PersistentVolumeClaimRef struct {
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PVC Name"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PVC Name"
 	// Name is the PVC name.
 	Name string `json:"name"`
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PVC Namespace"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PVC Namespace"
 	// Namespace overrides the backup resource namespace for the PVC lookup.
 	Namespace string `json:"namespace,omitempty"`
 }
 
 // StorageBackupSpec defines the desired state of StorageBackup.
 type StorageBackupSpec struct {
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`
 	// PVCRef identifies the PVC whose backing Simplyblock volume should be snapshotted and backed up.
 	PVCRef PersistentVolumeClaimRef `json:"pvcRef"`
-	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Snapshot Name"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Snapshot Name"
 	// SnapshotName optionally overrides the internally-created snapshot name.
 	SnapshotName string `json:"snapshotName,omitempty"`
 }
 
 // StorageBackupStatus defines the observed state of StorageBackup.
 type StorageBackupStatus struct {
-	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Phase"
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Phase"
 	// Phase is the high-level backup lifecycle shown in kubectl output.
 	Phase string `json:"phase,omitempty"`
 	// APIStatus is the raw status returned by the backup API.
 	APIStatus string `json:"apiStatus,omitempty"`
-	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Message"
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Message"
 	// Message contains the latest reconciliation detail or error.
 	Message string `json:"message,omitempty"`
 
@@ -78,11 +78,11 @@ type StorageBackupStatus struct {
 
 	// SnapshotID is the internally-created snapshot UUID used for the backup request.
 	SnapshotID string `json:"snapshotID,omitempty"`
-	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Snapshot Name"
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Snapshot Name"
 	// SnapshotName is the snapshot name used for the backup request.
 	SnapshotName string `json:"snapshotName,omitempty"`
 
-	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Backup ID"
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Backup ID"
 	// BackupID is the backend backup UUID.
 	BackupID string `json:"backupID,omitempty"`
 	// S3ID is the backend S3 object identifier.
@@ -108,7 +108,7 @@ type StorageBackupStatus struct {
 // +kubebuilder:printcolumn:name="BackupID",type=string,JSONPath=".status.backupID"
 // +kubebuilder:printcolumn:name="Snapshot",type=string,JSONPath=".status.snapshotName"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-//+operator-sdk:csv:customresourcedefinitions:displayName="Storage Backup",resources={{PersistentVolume,v1,source-volume},{PersistentVolumeClaim,v1,source-claim}}
+// +operator-sdk:csv:customresourcedefinitions:displayName="Storage Backup",resources={{PersistentVolume,v1,source-volume},{PersistentVolumeClaim,v1,source-claim}}
 
 // StorageBackup is the Schema for the storagebackups API.
 type StorageBackup struct {
