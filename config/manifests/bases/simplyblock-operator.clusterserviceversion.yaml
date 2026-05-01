@@ -4,7 +4,22 @@ metadata:
   annotations:
     alm-examples: '[]'
     capabilities: Basic Install
+    categories: Storage
+    com.redhat.openshift.versions: v4.19
     containerImage: quay.io/simplyblock-io/simplyblock-operator@sha256:b7db1d324fa1d6d272f40d696a46c11147de541ca54eb95e67760bc821dec4d8
+    description: The Simplyblock Operator helps with installation, operation, and
+      management
+    features.operators.openshift.io/cnf: "false"
+    features.operators.openshift.io/cni: "false"
+    features.operators.openshift.io/csi: "true"
+    features.operators.openshift.io/disconnected: "false"
+    features.operators.openshift.io/fips-compliant: "false"
+    features.operators.openshift.io/proxy-aware: "false"
+    features.operators.openshift.io/tls-profiles: "false"
+    features.operators.openshift.io/token-auth-aws: "false"
+    features.operators.openshift.io/token-auth-azure: "false"
+    features.operators.openshift.io/token-auth-gcp: "false"
+    operators.openshift.io/valid-subscription: "false"
   name: simplyblock-operator.v0.1.0
   namespace: placeholder
 spec:
