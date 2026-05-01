@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"k8s.io/client-go/tools/record"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -20,6 +20,12 @@ import (
 func lvol(ns, name, lvolID string) simplyblockv1alpha1.AttachedLvol {
 	return simplyblockv1alpha1.AttachedLvol{PVCNamespace: ns, PVCName: name, LvolID: lvolID}
 }
+
+const (
+	testBackupPolicyNamespace   = "default"
+	testBackupPolicyClusterName = "cluster-a"
+	testPVC2Name                = "pvc2"
+)
 
 func TestBackupPolicyReconcileAnnotationAddAttachesLvol(t *testing.T) {
 	const (
@@ -45,8 +51,8 @@ func TestBackupPolicyReconcileAnnotationAddAttachesLvol(t *testing.T) {
 	)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	policy := testBackupPolicyCR(policyName, clusterName)
-	pv, pvc := testBackupPolicyPVC(namespace, pvcName, pvName, policyName, clusterUUID, lvolID, nil)
+	policy := testBackupPolicyCR(policyName)
+	pv, pvc := testBackupPolicyPVC(pvcName, pvName, policyName, clusterUUID, lvolID, nil)
 
 	r := newBackupPolicyTestReconciler(t,
 		policy,
@@ -82,7 +88,7 @@ func TestBackupPolicyReconcileAnnotationAddAttachesLvol(t *testing.T) {
 	if len(reqs) != 2 {
 		t.Fatalf("expected 2 backend requests, got %#v", reqs)
 	}
-	assertAttachDetachRequest(t, reqs[1], http.MethodPost,
+	assertAttachDetachRequest(t, reqs[1],
 		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/attach", lvolID)
 }
 
@@ -110,10 +116,10 @@ func TestBackupPolicyReconcileAnnotationRemovalDetachesLvol(t *testing.T) {
 	)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	policy := testBackupPolicyCR(policyName, clusterName)
+	policy := testBackupPolicyCR(policyName)
 	policy.Status.PolicyID = policyID
 	policy.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{lvol(namespace, pvcName, lvolID)}
-	pv, pvc := testBackupPolicyPVC(namespace, pvcName, pvName, "", clusterUUID, lvolID, nil)
+	pv, pvc := testBackupPolicyPVC(pvcName, pvName, "", clusterUUID, lvolID, nil)
 
 	r := newBackupPolicyTestReconciler(t,
 		policy,
@@ -140,22 +146,22 @@ func TestBackupPolicyReconcileAnnotationRemovalDetachesLvol(t *testing.T) {
 	if len(reqs) != 2 {
 		t.Fatalf("expected 2 backend requests, got %#v", reqs)
 	}
-	assertAttachDetachRequest(t, reqs[1], http.MethodPost,
+	assertAttachDetachRequest(t, reqs[1],
 		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/detach", lvolID)
 }
 
 func TestBackupPolicyReconcilePolicySwitchMovesAttachment(t *testing.T) {
 	const (
-		namespace    = "default"
-		clusterName  = "cluster-a"
-		clusterUUID  = "cluster-uuid-policy-switch"
-		oldPolicy    = "policy-old"
-		newPolicy    = "policy-new"
-		oldPolicyID  = "policy-id-old"
-		newPolicyID  = "policy-id-new"
-		pvcName      = "pvc-switch"
-		pvName       = "pv-switch"
-		lvolID       = "lvol-switch"
+		namespace   = "default"
+		clusterName = "cluster-a"
+		clusterUUID = "cluster-uuid-policy-switch"
+		oldPolicy   = "policy-old"
+		newPolicy   = "policy-new"
+		oldPolicyID = "policy-id-old"
+		newPolicyID = "policy-id-new"
+		pvcName     = "pvc-switch"
+		pvName      = "pv-switch"
+		lvolID      = "lvol-switch"
 	)
 
 	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
@@ -174,12 +180,12 @@ func TestBackupPolicyReconcilePolicySwitchMovesAttachment(t *testing.T) {
 	)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	oldCR := testBackupPolicyCR(oldPolicy, clusterName)
+	oldCR := testBackupPolicyCR(oldPolicy)
 	oldCR.Status.PolicyID = oldPolicyID
 	oldCR.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{lvol(namespace, pvcName, lvolID)}
-	newCR := testBackupPolicyCR(newPolicy, clusterName)
+	newCR := testBackupPolicyCR(newPolicy)
 	newCR.Status.PolicyID = newPolicyID
-	pv, pvc := testBackupPolicyPVC(namespace, pvcName, pvName, newPolicy, clusterUUID, lvolID, nil)
+	pv, pvc := testBackupPolicyPVC(pvcName, pvName, newPolicy, clusterUUID, lvolID, nil)
 
 	r := newBackupPolicyTestReconciler(t,
 		oldCR,
@@ -210,9 +216,9 @@ func TestBackupPolicyReconcilePolicySwitchMovesAttachment(t *testing.T) {
 	if len(reqs) != 4 {
 		t.Fatalf("expected 4 backend requests, got %#v", reqs)
 	}
-	assertAttachDetachRequest(t, reqs[1], http.MethodPost,
+	assertAttachDetachRequest(t, reqs[1],
 		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+oldPolicyID+"/detach", lvolID)
-	assertAttachDetachRequest(t, reqs[3], http.MethodPost,
+	assertAttachDetachRequest(t, reqs[3],
 		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+newPolicyID+"/attach", lvolID)
 }
 
@@ -241,10 +247,10 @@ func TestBackupPolicyReconcileLvolAnnotationMismatchDetachesStaleAttachment(t *t
 	)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	policy := testBackupPolicyCR(policyName, clusterName)
+	policy := testBackupPolicyCR(policyName)
 	policy.Status.PolicyID = policyID
 	policy.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{lvol(namespace, pvcName, staleLvol)}
-	pv, pvc := testBackupPolicyPVC(namespace, pvcName, pvName, policyName, clusterUUID, handleLvol,
+	pv, pvc := testBackupPolicyPVC(pvcName, pvName, policyName, clusterUUID, handleLvol,
 		map[string]string{pvcLvolIDAnnotation: staleLvol})
 
 	r := newBackupPolicyTestReconciler(t,
@@ -268,7 +274,7 @@ func TestBackupPolicyReconcileLvolAnnotationMismatchDetachesStaleAttachment(t *t
 	if len(reqs) != 2 {
 		t.Fatalf("expected 2 backend requests, got %#v", reqs)
 	}
-	assertAttachDetachRequest(t, reqs[1], http.MethodPost,
+	assertAttachDetachRequest(t, reqs[1],
 		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/detach", staleLvol)
 }
 
@@ -300,10 +306,10 @@ func TestBackupPolicyReconcilePVCRebindSwapsLvolID(t *testing.T) {
 	)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	policy := testBackupPolicyCR(policyName, clusterName)
+	policy := testBackupPolicyCR(policyName)
 	policy.Status.PolicyID = policyID
 	policy.Status.AttachedLvols = []simplyblockv1alpha1.AttachedLvol{lvol(namespace, pvcName, oldLvolID)}
-	pv, pvc := testBackupPolicyPVC(namespace, pvcName, pvName, policyName, clusterUUID, newLvolID, nil)
+	pv, pvc := testBackupPolicyPVC(pvcName, pvName, policyName, clusterUUID, newLvolID, nil)
 
 	r := newBackupPolicyTestReconciler(t,
 		policy,
@@ -326,9 +332,9 @@ func TestBackupPolicyReconcilePVCRebindSwapsLvolID(t *testing.T) {
 	if len(reqs) != 3 {
 		t.Fatalf("expected 3 backend requests, got %#v", reqs)
 	}
-	assertAttachDetachRequest(t, reqs[1], http.MethodPost,
+	assertAttachDetachRequest(t, reqs[1],
 		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/attach", newLvolID)
-	assertAttachDetachRequest(t, reqs[2], http.MethodPost,
+	assertAttachDetachRequest(t, reqs[2],
 		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/detach", oldLvolID)
 }
 
@@ -343,12 +349,12 @@ func TestDiffAttachments_NoChange(t *testing.T) {
 func TestDiffAttachments_NewAttachment(t *testing.T) {
 	desired := []simplyblockv1alpha1.AttachedLvol{
 		lvol("ns", "pvc1", "lvol-aaa"),
-		lvol("ns", "pvc2", "lvol-bbb"),
+		lvol("ns", testPVC2Name, "lvol-bbb"),
 	}
 	current := []simplyblockv1alpha1.AttachedLvol{lvol("ns", "pvc1", "lvol-aaa")}
 	got := diffAttachments(desired, current)
-	if len(got) != 1 || got[0].PVCName != "pvc2" {
-		t.Fatalf("expected pvc2 to attach, got %v", got)
+	if len(got) != 1 || got[0].PVCName != testPVC2Name {
+		t.Fatalf("expected %s to attach, got %v", testPVC2Name, got)
 	}
 }
 
@@ -356,11 +362,11 @@ func TestDiffAttachments_RemovedAttachment(t *testing.T) {
 	desired := []simplyblockv1alpha1.AttachedLvol{lvol("ns", "pvc1", "lvol-aaa")}
 	current := []simplyblockv1alpha1.AttachedLvol{
 		lvol("ns", "pvc1", "lvol-aaa"),
-		lvol("ns", "pvc2", "lvol-bbb"),
+		lvol("ns", testPVC2Name, "lvol-bbb"),
 	}
 	got := diffAttachments(current, desired)
-	if len(got) != 1 || got[0].PVCName != "pvc2" {
-		t.Fatalf("expected pvc2 to detach, got %v", got)
+	if len(got) != 1 || got[0].PVCName != testPVC2Name {
+		t.Fatalf("expected %s to detach, got %v", testPVC2Name, got)
 	}
 }
 
@@ -385,11 +391,11 @@ func TestDiffAttachments_ReboundPVC(t *testing.T) {
 func TestRemoveAttachment(t *testing.T) {
 	slice := []simplyblockv1alpha1.AttachedLvol{
 		lvol("ns", "pvc1", "lvol-aaa"),
-		lvol("ns", "pvc2", "lvol-bbb"),
+		lvol("ns", testPVC2Name, "lvol-bbb"),
 	}
 	result := removeAttachment(slice, lvol("ns", "pvc1", "lvol-aaa"))
-	if len(result) != 1 || result[0].PVCName != "pvc2" {
-		t.Fatalf("expected only pvc2 remaining, got %v", result)
+	if len(result) != 1 || result[0].PVCName != testPVC2Name {
+		t.Fatalf("expected only %s remaining, got %v", testPVC2Name, result)
 	}
 }
 
@@ -415,13 +421,13 @@ const (
 	resolveTestNamespace   = "default"
 )
 
-func resolveTestObjects(clusterUUID, lvolID string, annotations map[string]string) (*corev1.PersistentVolume, *corev1.PersistentVolumeClaim) {
+func resolveTestObjects(clusterUUID string, annotations map[string]string) (*corev1.PersistentVolume, *corev1.PersistentVolumeClaim) {
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: resolveTestPVName},
 		Spec: corev1.PersistentVolumeSpec{
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				CSI: &corev1.CSIPersistentVolumeSource{
-					VolumeHandle: clusterUUID + ":pool-a:" + lvolID,
+					VolumeHandle: clusterUUID + ":pool-a:" + resolveTestLvolID,
 				},
 			},
 		},
@@ -438,7 +444,7 @@ func resolveTestObjects(clusterUUID, lvolID string, annotations map[string]strin
 }
 
 func TestResolvePVCLvolID_FromHandle(t *testing.T) {
-	pv, pvc := resolveTestObjects(resolveTestClusterUUID, resolveTestLvolID, nil)
+	pv, pvc := resolveTestObjects(resolveTestClusterUUID, nil)
 	scheme := newTestScheme(t, corev1.AddToScheme)
 	k8s := newTestClient(t, scheme, nil, pv, pvc)
 
@@ -453,7 +459,7 @@ func TestResolvePVCLvolID_FromHandle(t *testing.T) {
 
 func TestResolvePVCLvolID_AnnotationMatchesHandle(t *testing.T) {
 	ann := map[string]string{pvcLvolIDAnnotation: resolveTestLvolID}
-	pv, pvc := resolveTestObjects(resolveTestClusterUUID, resolveTestLvolID, ann)
+	pv, pvc := resolveTestObjects(resolveTestClusterUUID, ann)
 	scheme := newTestScheme(t, corev1.AddToScheme)
 	k8s := newTestClient(t, scheme, nil, pv, pvc)
 
@@ -471,7 +477,7 @@ func TestResolvePVCLvolID_AnnotationMatchesHandle(t *testing.T) {
 // must return an error, not silently use the (potentially stale) annotation.
 func TestResolvePVCLvolID_AnnotationMismatch(t *testing.T) {
 	ann := map[string]string{pvcLvolIDAnnotation: "lvol-stale-annotation"}
-	pv, pvc := resolveTestObjects(resolveTestClusterUUID, resolveTestLvolID, ann)
+	pv, pvc := resolveTestObjects(resolveTestClusterUUID, ann)
 	scheme := newTestScheme(t, corev1.AddToScheme)
 	k8s := newTestClient(t, scheme, nil, pv, pvc)
 
@@ -485,7 +491,7 @@ func TestResolvePVCLvolID_AnnotationMismatch(t *testing.T) {
 }
 
 func TestResolvePVCLvolID_WrongCluster(t *testing.T) {
-	pv, pvc := resolveTestObjects("other-cluster-uuid", resolveTestLvolID, nil)
+	pv, pvc := resolveTestObjects("other-cluster-uuid", nil)
 	scheme := newTestScheme(t, corev1.AddToScheme)
 	k8s := newTestClient(t, scheme, nil, pv, pvc)
 
@@ -509,20 +515,20 @@ func TestResolvePVCLvolID_Unbound(t *testing.T) {
 	}
 }
 
-func testBackupPolicyCR(name, clusterName string) *simplyblockv1alpha1.BackupPolicy {
+func testBackupPolicyCR(name string) *simplyblockv1alpha1.BackupPolicy {
 	return &simplyblockv1alpha1.BackupPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       name,
-			Namespace:  "default",
+			Namespace:  testBackupPolicyNamespace,
 			Finalizers: []string{backupPolicyFinalizer},
 		},
 		Spec: simplyblockv1alpha1.BackupPolicySpec{
-			ClusterName: clusterName,
+			ClusterName: testBackupPolicyClusterName,
 		},
 	}
 }
 
-func testBackupPolicyPVC(namespace, pvcName, pvName, policyName, clusterUUID, lvolID string, extraAnnotations map[string]string) (*corev1.PersistentVolume, *corev1.PersistentVolumeClaim) {
+func testBackupPolicyPVC(pvcName, pvName, policyName, clusterUUID, lvolID string, extraAnnotations map[string]string) (*corev1.PersistentVolume, *corev1.PersistentVolumeClaim) {
 	annotations := map[string]string{}
 	if policyName != "" {
 		annotations[pvcBackupPolicyAnnotation] = policyName
@@ -544,7 +550,7 @@ func testBackupPolicyPVC(namespace, pvcName, pvName, policyName, clusterUUID, lv
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        pvcName,
-			Namespace:   namespace,
+			Namespace:   testBackupPolicyNamespace,
 			Annotations: annotations,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
@@ -573,11 +579,11 @@ func getBackupPolicy(t *testing.T, cl client.Client, policy *simplyblockv1alpha1
 	return current
 }
 
-func assertAttachDetachRequest(t *testing.T, req webapimock.RecordedRequest, method, path, lvolID string) {
+func assertAttachDetachRequest(t *testing.T, req webapimock.RecordedRequest, path, lvolID string) {
 	t.Helper()
 
-	if req.Method != method || req.Path != path {
-		t.Fatalf("unexpected request: got %s %s want %s %s", req.Method, req.Path, method, path)
+	if req.Method != http.MethodPost || req.Path != path {
+		t.Fatalf("unexpected request: got %s %s want %s %s", req.Method, req.Path, http.MethodPost, path)
 	}
 
 	var body backupPolicyAttachRequest
