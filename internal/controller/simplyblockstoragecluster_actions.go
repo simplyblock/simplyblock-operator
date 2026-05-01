@@ -421,14 +421,25 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefresh(
 	clusterSecret, clusterUUID, nodeUUID string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	nrs := clusterCR.Status.NodeRecycleStatus
 
-	if err := r.deleteStorageNodePod(ctx, clusterCR, apiClient, clusterSecret, clusterUUID, nodeUUID); err != nil {
+	found, err := r.deleteStorageNodePod(ctx, clusterCR, apiClient, clusterSecret, clusterUUID, nodeUUID)
+	if err != nil {
 		log.Error(err, "Failed to delete storage node pod for refresh", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	if !found {
+		log.Info("Node not found in storage node list, skipping snode-refresh — proceeding to shutdown", "nodeUUID", nodeUUID)
+		nrs.NodePhase = utils.NodeRecyclePhaseShuttingDown
+		nrs.PhaseTriggered = false
+		if err := r.Status().Update(ctx, clusterCR); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	log.Info("Storage node pod deleted for refresh, waiting for restart", "nodeUUID", nodeUUID)
-	nrs := clusterCR.Status.NodeRecycleStatus
 	nrs.NodePhase = utils.NodeRecyclePhaseSnodeRefreshWait
 	nrs.PhaseTriggered = false
 	if err := r.Status().Update(ctx, clusterCR); err != nil {
@@ -640,15 +651,18 @@ func (r *StorageClusterReconciler) isStorageNodeInStatus(
 
 // deleteStorageNodePod finds and deletes the storage-node DaemonSet pod running
 // on the Kubernetes node that hosts the given backend storage node.
+// Returns (true, nil) on success, (false, nil) when the node is not in the
+// storage node list (caller should skip the refresh phase), or (false, err)
+// on a real failure.
 func (r *StorageClusterReconciler) deleteStorageNodePod(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterSecret, clusterUUID, nodeUUID string,
-) error {
+) (bool, error) {
 	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterSecret, clusterUUID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	var nodeIP string
 	for _, n := range nodes {
@@ -658,22 +672,22 @@ func (r *StorageClusterReconciler) deleteStorageNodePod(
 		}
 	}
 	if nodeIP == "" {
-		return fmt.Errorf("node %s not found in storage node list", nodeUUID)
+		return false, nil // node not in list — caller skips snode-refresh
 	}
 
 	k8sNodeName, err := r.findK8sNodeByIP(ctx, nodeIP)
 	if err != nil {
-		return fmt.Errorf("find k8s node for IP %s: %w", nodeIP, err)
+		return false, fmt.Errorf("find k8s node for IP %s: %w", nodeIP, err)
 	}
 
 	pod, err := r.findStorageNodePod(ctx, clusterCR.Namespace, clusterCR.Spec.ClusterName, k8sNodeName)
 	if err != nil {
-		return fmt.Errorf("find storage node pod on %s: %w", k8sNodeName, err)
+		return false, fmt.Errorf("find storage node pod on %s: %w", k8sNodeName, err)
 	}
 	if pod == nil {
-		return nil // already gone — DaemonSet will recreate it
+		return true, nil // already gone — DaemonSet will recreate it
 	}
-	return client.IgnoreNotFound(r.Delete(ctx, pod))
+	return true, client.IgnoreNotFound(r.Delete(ctx, pod))
 }
 
 // isStorageNodePodReady returns true when the storage-node pod for the given
