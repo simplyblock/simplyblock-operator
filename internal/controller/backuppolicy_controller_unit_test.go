@@ -1,7 +1,12 @@
 package controller
 
 import (
+	"context"
+	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 )
@@ -80,5 +85,109 @@ func TestRemoveAttachment_DoesNotMatchDifferentLvol(t *testing.T) {
 	result := removeAttachment(slice, lvol("ns", "pvc1", "lvol-old"))
 	if len(result) != 1 {
 		t.Fatalf("expected new attachment to survive removal of old lvolID, got %v", result)
+	}
+}
+
+// ---- resolvePVCLvolID tests ----
+
+const (
+	resolveTestClusterUUID = "cluster-uuid-1"
+	resolveTestLvolID      = "lvol-resolve-1"
+	resolveTestPVName      = "pv-resolve-1"
+	resolveTestPVCName     = "pvc-resolve-1"
+	resolveTestNamespace   = "default"
+)
+
+func resolveTestObjects(clusterUUID, lvolID string, annotations map[string]string) (*corev1.PersistentVolume, *corev1.PersistentVolumeClaim) {
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: resolveTestPVName},
+		Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					VolumeHandle: clusterUUID + ":pool-a:" + lvolID,
+				},
+			},
+		},
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        resolveTestPVCName,
+			Namespace:   resolveTestNamespace,
+			Annotations: annotations,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{VolumeName: resolveTestPVName},
+	}
+	return pv, pvc
+}
+
+func TestResolvePVCLvolID_FromHandle(t *testing.T) {
+	pv, pvc := resolveTestObjects(resolveTestClusterUUID, resolveTestLvolID, nil)
+	scheme := newTestScheme(t, corev1.AddToScheme)
+	k8s := newTestClient(t, scheme, nil, pv, pvc)
+
+	got, err := resolvePVCLvolID(context.Background(), k8s, pvc, resolveTestClusterUUID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != resolveTestLvolID {
+		t.Fatalf("expected %s, got %s", resolveTestLvolID, got)
+	}
+}
+
+func TestResolvePVCLvolID_AnnotationMatchesHandle(t *testing.T) {
+	ann := map[string]string{pvcLvolIDAnnotation: resolveTestLvolID}
+	pv, pvc := resolveTestObjects(resolveTestClusterUUID, resolveTestLvolID, ann)
+	scheme := newTestScheme(t, corev1.AddToScheme)
+	k8s := newTestClient(t, scheme, nil, pv, pvc)
+
+	got, err := resolvePVCLvolID(context.Background(), k8s, pvc, resolveTestClusterUUID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != resolveTestLvolID {
+		t.Fatalf("expected %s, got %s", resolveTestLvolID, got)
+	}
+}
+
+// TestResolvePVCLvolID_AnnotationMismatch is the core regression test: when the
+// simplybk/lvol-id annotation disagrees with the PV CSI volume handle the call
+// must return an error, not silently use the (potentially stale) annotation.
+func TestResolvePVCLvolID_AnnotationMismatch(t *testing.T) {
+	ann := map[string]string{pvcLvolIDAnnotation: "lvol-stale-annotation"}
+	pv, pvc := resolveTestObjects(resolveTestClusterUUID, resolveTestLvolID, ann)
+	scheme := newTestScheme(t, corev1.AddToScheme)
+	k8s := newTestClient(t, scheme, nil, pv, pvc)
+
+	_, err := resolvePVCLvolID(context.Background(), k8s, pvc, resolveTestClusterUUID)
+	if err == nil {
+		t.Fatal("expected mismatch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("error message should mention mismatch, got: %v", err)
+	}
+}
+
+func TestResolvePVCLvolID_WrongCluster(t *testing.T) {
+	pv, pvc := resolveTestObjects("other-cluster-uuid", resolveTestLvolID, nil)
+	scheme := newTestScheme(t, corev1.AddToScheme)
+	k8s := newTestClient(t, scheme, nil, pv, pvc)
+
+	_, err := resolvePVCLvolID(context.Background(), k8s, pvc, resolveTestClusterUUID)
+	if err == nil {
+		t.Fatal("expected cluster mismatch error, got nil")
+	}
+}
+
+func TestResolvePVCLvolID_Unbound(t *testing.T) {
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: resolveTestPVCName, Namespace: resolveTestNamespace},
+		Spec:       corev1.PersistentVolumeClaimSpec{},
+	}
+	scheme := newTestScheme(t, corev1.AddToScheme)
+	k8s := newTestClient(t, scheme, nil, pvc)
+
+	_, err := resolvePVCLvolID(context.Background(), k8s, pvc, resolveTestClusterUUID)
+	if err == nil || !strings.Contains(err.Error(), "not bound") {
+		t.Fatalf("expected 'not bound' error, got: %v", err)
 	}
 }

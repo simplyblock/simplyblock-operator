@@ -574,7 +574,9 @@ func (r *BackupPolicyReconciler) computeDesiredAttachments(
 
 // resolvePVCLvolID extracts the Simplyblock lvol UUID from a PVC.
 // It reads the PV volume handle and validates that the PVC belongs to the
-// expected cluster. The simplybk/lvol-id annotation overrides the handle.
+// expected cluster. The simplybk/lvol-id annotation may be used in place of
+// the handle, but only when it agrees with the handle — a mismatch is rejected
+// to prevent acting on a stale or mis-set annotation.
 func resolvePVCLvolID(ctx context.Context, k8sClient client.Client, pvc *corev1.PersistentVolumeClaim, expectedClusterUUID string) (string, error) {
 	if pvc.Spec.VolumeName == "" {
 		return "", fmt.Errorf("PVC %s/%s is not bound", pvc.Namespace, pvc.Name)
@@ -605,6 +607,12 @@ func resolvePVCLvolID(ctx context.Context, k8sClient client.Client, pvc *corev1.
 	}
 	if lvolID == "" {
 		return "", fmt.Errorf("PVC %s/%s has no Simplyblock lvol ID", pvc.Namespace, pvc.Name)
+	}
+	if handleLvolID != "" && handleLvolID != lvolID {
+		return "", fmt.Errorf(
+			"PVC %s/%s lvol annotation %s does not match PV volume handle %s",
+			pvc.Namespace, pvc.Name, lvolID, handleLvolID,
+		)
 	}
 
 	return lvolID, nil
