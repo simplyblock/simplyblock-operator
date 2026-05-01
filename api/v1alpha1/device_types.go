@@ -25,19 +25,24 @@ import (
 
 // DeviceSpec defines the desired state of Device
 type DeviceSpec struct {
+	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`
+	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node UUID"
 	// NodeUUID scopes operations to a single storage node when set.
 	NodeUUID string `json:"nodeUUID,omitempty"`
+	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Device ID"
 	// DeviceID is the backend device identifier used for actions.
 	DeviceID string `json:"deviceID,omitempty"`
 	// +kubebuilder:validation:Enum=remove;restart
+	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
 	// Action triggers an imperative device operation.
 	Action string `json:"action,omitempty"`
 }
 
 // DeviceStatus defines the observed state of Device.
 type DeviceStatus struct {
+	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Devices"
 	// Nodes contains observed devices grouped by storage node.
 	Nodes []NodeDevices `json:"nodes,omitempty"`
 	// ActionStatus tracks the lifecycle of the latest device action.
@@ -102,6 +107,7 @@ type DeviceStats struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && ((!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\") || (!has(self.spec.deviceID) || self.spec.deviceID == \"\")))",message="nodeUUID and deviceID are required when action is specified"
+//+operator-sdk:csv:customresourcedefinitions:displayName="Device"
 // Device is the Schema for the devices API
 type Device struct {
 	metav1.TypeMeta `json:",inline"`

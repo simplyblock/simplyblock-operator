@@ -25,8 +25,10 @@ import (
 
 // TaskSpec defines the desired state of Task
 type TaskSpec struct {
+	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`
+	//+operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Task ID"
 	// TaskID filters results to a specific backend task when set.
 	TaskID string `json:"taskID,omitempty"`
 	// Subtasks includes related child subtasks when supported by the backend.
@@ -36,6 +38,7 @@ type TaskSpec struct {
 
 // TaskStatus defines the observed state of Task.
 type TaskStatus struct {
+	//+operator-sdk:csv:customresourcedefinitions:type=status,displayName="Tasks"
 	// Tasks is the currently reported task list for the query scope.
 	Tasks []TaskEntry `json:"tasks,omitempty"`
 }
@@ -63,6 +66,7 @@ type TaskEntry struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+//+operator-sdk:csv:customresourcedefinitions:displayName="Task"
 
 // Task is the Schema for the tasks API
 type Task struct {
