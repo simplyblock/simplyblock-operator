@@ -32,8 +32,9 @@ const (
 	ClusterStatusActive    = "active"
 	ClusterStatusSuspended = "suspended"
 
-	NodeStatusOnline      = "online"
-	NodeStatusOffline     = "offline"
+	NodeStatusOnline     = "online"
+	NodeStatusOffline    = "offline"
+	NodeStatusInRestart  = "in_restart"
 	NodeStatusUnreachable = "unreachable"
 
 	DeviceActionRemove  = "remove"

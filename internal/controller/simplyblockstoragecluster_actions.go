@@ -91,7 +91,7 @@ func (r *StorageClusterReconciler) reconcileShutdown(
 		log.Info("Cluster shutdown triggered", "cluster", clusterCR.Name)
 		clusterCR.Status.ActionStatus.Triggered = true
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
@@ -117,7 +117,7 @@ func (r *StorageClusterReconciler) reconcileShutdown(
 		clusterCR.Status.ActionStatus.State = utils.ActionStateSuccess
 		clusterCR.Status.ActionStatus.Message = "Cluster shut down successfully"
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		log.Info("Cluster shut down successfully", "cluster", clusterCR.Name)
 		return ctrl.Result{}, nil
@@ -171,7 +171,7 @@ func (r *StorageClusterReconciler) reconcileStart(
 		log.Info("Cluster start triggered", "cluster", clusterCR.Name)
 		clusterCR.Status.ActionStatus.Triggered = true
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
@@ -198,7 +198,7 @@ func (r *StorageClusterReconciler) reconcileStart(
 		clusterCR.Status.ActionStatus.Message = "Cluster started successfully"
 		clusterCR.Status.Rebalancing = &resp.Rebalancing
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		log.Info("Cluster started successfully", "cluster", clusterCR.Name)
 		return ctrl.Result{}, nil
@@ -261,7 +261,7 @@ func (r *StorageClusterReconciler) reconcileRestart(
 		log.Info("Cluster restart phase triggered", "cluster", clusterCR.Name, "phase", phase)
 		clusterCR.Status.ActionStatus.Triggered = true
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
@@ -288,7 +288,7 @@ func (r *StorageClusterReconciler) reconcileRestart(
 		clusterCR.Status.ActionStatus.Message = "start"
 		clusterCR.Status.ActionStatus.Triggered = false
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		log.Info("Cluster shutdown complete during restart, triggering start", "cluster", clusterCR.Name)
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -299,7 +299,7 @@ func (r *StorageClusterReconciler) reconcileRestart(
 		clusterCR.Status.ActionStatus.Message = "Cluster restarted successfully"
 		clusterCR.Status.Rebalancing = &resp.Rebalancing
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		log.Info("Cluster restarted successfully", "cluster", clusterCR.Name)
 		return ctrl.Result{}, nil
@@ -355,7 +355,7 @@ func (r *StorageClusterReconciler) reconcileNodeRecycle(
 			clusterCR.Status.ActionStatus.State = utils.ActionStateSuccess
 			clusterCR.Status.ActionStatus.Message = "No nodes to recycle"
 			if err := r.Status().Update(ctx, clusterCR); err != nil {
-				return ctrl.Result{}, err
+				return ctrl.Result{Requeue: true}, nil
 			}
 			return ctrl.Result{}, nil
 		}
@@ -370,7 +370,7 @@ func (r *StorageClusterReconciler) reconcileNodeRecycle(
 			NodePhase:      nodeRecycleFirstPhase(clusterCR),
 		}
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -381,7 +381,7 @@ func (r *StorageClusterReconciler) reconcileNodeRecycle(
 		clusterCR.Status.ActionStatus.State = utils.ActionStateSuccess
 		clusterCR.Status.ActionStatus.Message = "All nodes recycled successfully"
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		log.Info("Node recycle completed", "cluster", clusterCR.Name)
 		return ctrl.Result{}, nil
@@ -405,10 +405,7 @@ func (r *StorageClusterReconciler) reconcileNodeRecycle(
 	}
 }
 
-func nodeRecycleFirstPhase(clusterCR *simplyblockv1alpha1.StorageCluster) string {
-	if clusterCR.Spec.NodeRecycle != nil && clusterCR.Spec.NodeRecycle.RefreshSNodeAPI {
-		return utils.NodeRecyclePhaseSnodeRefresh
-	}
+func nodeRecycleFirstPhase(_ *simplyblockv1alpha1.StorageCluster) string {
 	return utils.NodeRecyclePhaseShuttingDown
 }
 
@@ -430,11 +427,11 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefresh(
 	}
 
 	if !found {
-		log.Info("Node not found in storage node list, skipping snode-refresh — proceeding to shutdown", "nodeUUID", nodeUUID)
-		nrs.NodePhase = utils.NodeRecyclePhaseShuttingDown
+		log.Info("Node not found in storage node list, skipping snode-refresh — proceeding to restart", "nodeUUID", nodeUUID)
+		nrs.NodePhase = utils.NodeRecyclePhaseRestarting
 		nrs.PhaseTriggered = false
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -443,7 +440,7 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefresh(
 	nrs.NodePhase = utils.NodeRecyclePhaseSnodeRefreshWait
 	nrs.PhaseTriggered = false
 	if err := r.Status().Update(ctx, clusterCR); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{Requeue: true}, nil
 	}
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
@@ -465,12 +462,12 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefreshWait(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	log.Info("Storage node pod refreshed, proceeding to shutdown", "nodeUUID", nodeUUID)
+	log.Info("Storage node pod refreshed, proceeding to restart", "nodeUUID", nodeUUID)
 	nrs := clusterCR.Status.NodeRecycleStatus
-	nrs.NodePhase = utils.NodeRecyclePhaseShuttingDown
+	nrs.NodePhase = utils.NodeRecyclePhaseRestarting
 	nrs.PhaseTriggered = false
 	if err := r.Status().Update(ctx, clusterCR); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{Requeue: true}, nil
 	}
 	return ctrl.Result{Requeue: true}, nil
 }
@@ -497,27 +494,65 @@ func (r *StorageClusterReconciler) nodeRecycleShuttingDown(
 		log.Info("Node shutdown triggered", "nodeUUID", nodeUUID)
 		nrs.PhaseTriggered = true
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	offline, err := r.isStorageNodeInStatus(ctx, apiClient, clusterSecret, clusterUUID, nodeUUID, utils.NodeStatusOffline)
+	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterSecret, clusterUUID)
 	if err != nil {
-		log.Error(err, "Failed to check node status after shutdown trigger", "nodeUUID", nodeUUID)
+		log.Error(err, "Failed to list storage nodes during shutdown poll", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	if !offline {
+	var nodeStatus string
+	for _, n := range nodes {
+		if n.UUID == nodeUUID {
+			nodeStatus = strings.ToLower(n.Status)
+			break
+		}
+	}
+	if nodeStatus == "" {
+		log.Error(fmt.Errorf("node not found"), "Node missing from storage node list during shutdown poll", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	log.Info("Node offline, advancing to restart", "nodeUUID", nodeUUID)
-	nrs.NodePhase = utils.NodeRecyclePhaseRestarting
-	nrs.PhaseTriggered = false
-	if err := r.Status().Update(ctx, clusterCR); err != nil {
-		return ctrl.Result{}, err
+	log.Info("Polling node status after shutdown trigger", "nodeUUID", nodeUUID, "status", nodeStatus)
+
+	refreshSNode := clusterCR.Spec.NodeRecycle != nil && clusterCR.Spec.NodeRecycle.RefreshSNodeAPI
+
+	switch nodeStatus {
+	case utils.NodeStatusOffline, utils.NodeStatusInRestart:
+		// Node is shutting down or transitioning — refresh snode pod first if requested.
+		if refreshSNode {
+			log.Info("Node shutdown confirmed, refreshing snode pod before restart", "nodeUUID", nodeUUID, "status", nodeStatus)
+			nrs.NodePhase = utils.NodeRecyclePhaseSnodeRefresh
+		} else {
+			log.Info("Node shutdown confirmed, advancing to restart", "nodeUUID", nodeUUID, "status", nodeStatus)
+			nrs.NodePhase = utils.NodeRecyclePhaseRestarting
+		}
+		nrs.PhaseTriggered = false
+		if err := r.Status().Update(ctx, clusterCR); err != nil {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		return ctrl.Result{Requeue: true}, nil
+	case utils.NodeStatusOnline:
+		// Node came back on its own before we could poll. Refresh snode pod if requested,
+		// otherwise consider the node done and move to rebalancing.
+		if refreshSNode {
+			log.Info("Node already back online, still refreshing snode pod", "nodeUUID", nodeUUID)
+			nrs.NodePhase = utils.NodeRecyclePhaseSnodeRefresh
+		} else {
+			log.Info("Node already back online after shutdown, advancing to rebalancing", "nodeUUID", nodeUUID)
+			nrs.NodePhase = utils.NodeRecyclePhaseRebalancing
+		}
+		nrs.PhaseTriggered = false
+		if err := r.Status().Update(ctx, clusterCR); err != nil {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		return ctrl.Result{Requeue: true}, nil
+	default:
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	return ctrl.Result{Requeue: true}, nil
 }
 
 func (r *StorageClusterReconciler) nodeRecycleRestarting(
@@ -542,17 +577,25 @@ func (r *StorageClusterReconciler) nodeRecycleRestarting(
 		log.Info("Node restart triggered", "nodeUUID", nodeUUID)
 		nrs.PhaseTriggered = true
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	online, err := r.isStorageNodeInStatus(ctx, apiClient, clusterSecret, clusterUUID, nodeUUID, utils.NodeStatusOnline)
+	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterSecret, clusterUUID)
 	if err != nil {
-		log.Error(err, "Failed to check node status after restart trigger", "nodeUUID", nodeUUID)
+		log.Error(err, "Failed to list storage nodes during restart poll", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	if !online {
+	var nodeStatus string
+	for _, n := range nodes {
+		if n.UUID == nodeUUID {
+			nodeStatus = strings.ToLower(n.Status)
+			break
+		}
+	}
+	log.Info("Polling node status after restart trigger", "nodeUUID", nodeUUID, "status", nodeStatus)
+	if nodeStatus != utils.NodeStatusOnline {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -560,7 +603,7 @@ func (r *StorageClusterReconciler) nodeRecycleRestarting(
 	nrs.NodePhase = utils.NodeRecyclePhaseRebalancing
 	nrs.PhaseTriggered = false
 	if err := r.Status().Update(ctx, clusterCR); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{Requeue: true}, nil
 	}
 	return ctrl.Result{Requeue: true}, nil
 }
@@ -604,7 +647,7 @@ func (r *StorageClusterReconciler) nodeRecycleRebalancing(
 	}
 
 	if err := r.Status().Update(ctx, clusterCR); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{Requeue: true}, nil
 	}
 	return ctrl.Result{Requeue: true}, nil
 }
