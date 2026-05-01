@@ -645,7 +645,9 @@ func policyBackendName(policyCR *simplyblockv1alpha1.BackupPolicy) string {
 }
 
 // diffAttachments returns entries that are in 'a' but not in 'b', matched by
-// PVCNamespace + PVCName (the stable identity of an attachment).
+// PVCNamespace + PVCName + LvolID. Including LvolID ensures that a rebound PVC
+// (same namespace/name, new lvol) is treated as a distinct attachment, so the
+// old lvol is detached and the new one is attached rather than silently skipped.
 func diffAttachments(a, b []simplyblockv1alpha1.AttachedLvol) []simplyblockv1alpha1.AttachedLvol {
 	bSet := make(map[string]struct{}, len(b))
 	for _, v := range b {
@@ -661,7 +663,7 @@ func diffAttachments(a, b []simplyblockv1alpha1.AttachedLvol) []simplyblockv1alp
 }
 
 // removeAttachment returns the slice with the given entry removed (matched by
-// PVCNamespace + PVCName).
+// PVCNamespace + PVCName + LvolID).
 func removeAttachment(slice []simplyblockv1alpha1.AttachedLvol, remove simplyblockv1alpha1.AttachedLvol) []simplyblockv1alpha1.AttachedLvol {
 	key := attachmentKey(remove)
 	out := slice[:0:0]
@@ -674,5 +676,5 @@ func removeAttachment(slice []simplyblockv1alpha1.AttachedLvol, remove simplyblo
 }
 
 func attachmentKey(a simplyblockv1alpha1.AttachedLvol) string {
-	return a.PVCNamespace + "/" + a.PVCName
+	return a.PVCNamespace + "/" + a.PVCName + "/" + a.LvolID
 }
