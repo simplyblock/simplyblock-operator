@@ -522,7 +522,7 @@ func (r *StorageClusterReconciler) nodeRecycleShuttingDown(
 
 	switch nodeStatus {
 	case utils.NodeStatusOffline, utils.NodeStatusInRestart:
-		// Node is shutting down or transitioning — refresh snode pod first if requested.
+		// Node confirmed offline or transitioning — refresh snode pod first if requested.
 		if refreshSNode {
 			log.Info("Node shutdown confirmed, refreshing snode pod before restart", "nodeUUID", nodeUUID, "status", nodeStatus)
 			nrs.NodePhase = utils.NodeRecyclePhaseSnodeRefresh
@@ -535,22 +535,8 @@ func (r *StorageClusterReconciler) nodeRecycleShuttingDown(
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{Requeue: true}, nil
-	case utils.NodeStatusOnline:
-		// Node came back on its own before we could poll. Refresh snode pod if requested,
-		// otherwise consider the node done and move to rebalancing.
-		if refreshSNode {
-			log.Info("Node already back online, still refreshing snode pod", "nodeUUID", nodeUUID)
-			nrs.NodePhase = utils.NodeRecyclePhaseSnodeRefresh
-		} else {
-			log.Info("Node already back online after shutdown, advancing to rebalancing", "nodeUUID", nodeUUID)
-			nrs.NodePhase = utils.NodeRecyclePhaseRebalancing
-		}
-		nrs.PhaseTriggered = false
-		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{Requeue: true}, nil
-		}
-		return ctrl.Result{Requeue: true}, nil
 	default:
+		// Node still online — shutdown not yet effective, keep polling.
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 }
