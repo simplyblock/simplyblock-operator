@@ -15,9 +15,12 @@ rules:
   - ""
   resources:
   - nodes
+  - pods
   verbs:
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - ""
@@ -32,18 +35,21 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - pods
+  - secrets
+  - serviceaccounts
+  - services
   verbs:
+  - create
+  - delete
   - get
   - list
   - patch
   - update
   - watch
 - apiGroups:
-  - ""
+  - apps
   resources:
-  - secrets
-  - services
+  - daemonsets
   verbs:
   - create
   - delete
@@ -68,6 +74,19 @@ rules:
   - policy
   resources:
   - poddisruptionbudgets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  - clusterroles
   verbs:
   - create
   - delete
