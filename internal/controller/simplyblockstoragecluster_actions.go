@@ -24,9 +24,7 @@ import (
 	"strings"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -414,8 +412,8 @@ func nodeRecycleFirstPhase(clusterCR *simplyblockv1alpha1.StorageCluster) string
 	return utils.NodeRecyclePhaseShuttingDown
 }
 
-// nodeRecycleSnodeRefresh optionally sets imagePullPolicy: Always on the
-// storage-node DaemonSet, then deletes the pod so the DaemonSet restarts it.
+// nodeRecycleSnodeRefresh deletes the storage-node DaemonSet pod so the
+// DaemonSet restarts it with the image already cached on the node.
 func (r *StorageClusterReconciler) nodeRecycleSnodeRefresh(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
@@ -423,13 +421,6 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefresh(
 	clusterSecret, clusterUUID, nodeUUID string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-
-	if clusterCR.Spec.NodeRecycle != nil && clusterCR.Spec.NodeRecycle.PullFreshImage {
-		if err := r.patchDaemonSetImagePullPolicy(ctx, clusterCR.Namespace, clusterCR.Spec.ClusterName, corev1.PullAlways); err != nil {
-			log.Error(err, "Failed to patch DaemonSet imagePullPolicy to Always", "nodeUUID", nodeUUID)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-	}
 
 	if err := r.deleteStorageNodePod(ctx, clusterCR, apiClient, clusterSecret, clusterUUID, nodeUUID); err != nil {
 		log.Error(err, "Failed to delete storage node pod for refresh", "nodeUUID", nodeUUID)
@@ -741,28 +732,6 @@ func (r *StorageClusterReconciler) findK8sNodeByIP(ctx context.Context, ip strin
 		}
 	}
 	return "", fmt.Errorf("no k8s node with InternalIP %s", ip)
-}
-
-// patchDaemonSetImagePullPolicy sets the imagePullPolicy on all containers and
-// init containers of the storage-node DaemonSet for the given cluster.
-func (r *StorageClusterReconciler) patchDaemonSetImagePullPolicy(
-	ctx context.Context,
-	namespace, clusterName string,
-	policy corev1.PullPolicy,
-) error {
-	dsName := fmt.Sprintf("simplyblock-storage-node-ds-%s", clusterName)
-	ds := &appsv1.DaemonSet{}
-	if err := r.Get(ctx, types.NamespacedName{Name: dsName, Namespace: namespace}, ds); err != nil {
-		return fmt.Errorf("get DaemonSet %s: %w", dsName, err)
-	}
-	patch := client.MergeFrom(ds.DeepCopy())
-	for i := range ds.Spec.Template.Spec.Containers {
-		ds.Spec.Template.Spec.Containers[i].ImagePullPolicy = policy
-	}
-	for i := range ds.Spec.Template.Spec.InitContainers {
-		ds.Spec.Template.Spec.InitContainers[i].ImagePullPolicy = policy
-	}
-	return r.Patch(ctx, ds, patch)
 }
 
 func (r *StorageClusterReconciler) findStorageNodePod(

@@ -39,10 +39,6 @@ type NodeRecycleSpec struct {
 	// RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
 	// before shutting it down, ensuring the latest image is running.
 	RefreshSNodeAPI bool `json:"refreshSNodeAPI,omitempty"`
-	// PullFreshImage sets imagePullPolicy: Always on the storage-node DaemonSet
-	// before restarting each pod, causing it to pull the latest image from the
-	// configured registry. Requires the node to have network access to the registry.
-	PullFreshImage bool `json:"pullFreshImage,omitempty"`
 }
 
 // NodeRecycleStatus tracks in-progress state for the node-recycle action.

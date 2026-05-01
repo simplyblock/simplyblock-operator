@@ -169,12 +169,6 @@ spec:
               nodeRecycle:
                 description: NodeRecycle configures the node-recycle action.
                 properties:
-                  pullFreshImage:
-                    description: |-
-                      PullFreshImage sets imagePullPolicy: Always on the storage-node DaemonSet
-                      before restarting each pod, causing it to pull the latest image from the
-                      configured registry. Requires the node to have network access to the registry.
-                    type: boolean
                   refreshSNodeAPI:
                     description: |-
                       RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node

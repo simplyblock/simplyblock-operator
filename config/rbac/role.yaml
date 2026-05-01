@@ -60,7 +60,6 @@ rules:
   verbs:
   - get
   - list
-  - patch
   - watch
 - apiGroups:
   - discovery.k8s.io
