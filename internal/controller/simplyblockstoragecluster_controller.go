@@ -92,6 +92,9 @@ type CSIClusterEntry struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -128,6 +131,18 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	case utils.ClusterActionExpand:
 		return r.reconcileExpand(ctx, clusterCR)
+
+	case utils.ClusterActionShutdown:
+		return r.reconcileShutdown(ctx, clusterCR)
+
+	case utils.ClusterActionStart:
+		return r.reconcileStart(ctx, clusterCR)
+
+	case utils.ClusterActionRestart:
+		return r.reconcileRestart(ctx, clusterCR)
+
+	case utils.ClusterActionNodeRecycle:
+		return r.reconcileNodeRecycle(ctx, clusterCR)
 	}
 
 	if clusterCR.Status.UUID != "" {

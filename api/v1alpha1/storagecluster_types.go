@@ -34,6 +34,31 @@ type StripeSpec struct {
 	ParityChunks *int32 `json:"parityChunks,omitempty"`
 }
 
+// NodeRecycleSpec configures the node-recycle action behaviour.
+type NodeRecycleSpec struct {
+	// RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
+	// before shutting it down, ensuring the latest image is running.
+	RefreshSNodeAPI bool `json:"refreshSNodeAPI,omitempty"`
+	// PullFreshImage sets imagePullPolicy: Always on the storage-node DaemonSet
+	// before restarting each pod, causing it to pull the latest image from the
+	// configured registry. Requires the node to have network access to the registry.
+	PullFreshImage bool `json:"pullFreshImage,omitempty"`
+}
+
+// NodeRecycleStatus tracks in-progress state for the node-recycle action.
+// All fields are persisted in CR status so the reconciler can resume after a requeue.
+type NodeRecycleStatus struct {
+	// PendingNodes is the ordered list of node UUIDs still to be recycled.
+	PendingNodes []string `json:"pendingNodes,omitempty"`
+	// ProcessedNodes is the list of node UUIDs already recycled.
+	ProcessedNodes []string `json:"processedNodes,omitempty"`
+	// NodePhase is the current step for the node being recycled:
+	// "snode-refresh" | "snode-refresh-wait" | "shutting-down" | "restarting" | "rebalancing"
+	NodePhase string `json:"nodePhase,omitempty"`
+	// PhaseTriggered indicates the API call for the current NodePhase was already sent.
+	PhaseTriggered bool `json:"phaseTriggered,omitempty"`
+}
+
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
@@ -69,9 +94,11 @@ type StorageClusterSpec struct {
 	HAType string `json:"haType,omitempty"`
 	// ClusterName is the user-facing cluster identifier.
 	ClusterName string `json:"clusterName"`
-	// +kubebuilder:validation:Enum=activate;expand
+	// +kubebuilder:validation:Enum=activate;expand;shutdown;start;restart;node-recycle
 	// Action triggers a cluster-level action.
 	Action string `json:"action,omitempty"`
+	// NodeRecycle configures the node-recycle action.
+	NodeRecycle *NodeRecycleSpec `json:"nodeRecycle,omitempty"`
 
 	// IsSingleNode enables single-node cluster mode.
 	IsSingleNode *bool `json:"isSingleNode,omitempty"`
@@ -152,6 +179,8 @@ type StorageClusterStatus struct {
 	Configured bool `json:"configured,omitempty"`
 	// ActionStatus tracks the most recent action execution state.
 	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
+	// NodeRecycleStatus tracks in-progress state for the node-recycle action.
+	NodeRecycleStatus *NodeRecycleStatus `json:"nodeRecycleStatus,omitempty"`
 }
 
 // +kubebuilder:object:root=true

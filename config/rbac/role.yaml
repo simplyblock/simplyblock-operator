@@ -34,6 +34,7 @@ rules:
   resources:
   - pods
   verbs:
+  - delete
   - get
   - list
   - patch
@@ -51,6 +52,15 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  verbs:
+  - get
+  - list
+  - patch
   - watch
 - apiGroups:
   - discovery.k8s.io
