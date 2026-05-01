@@ -34,22 +34,26 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.schedule == oldSelf.schedule",message="schedule is immutable"
 type BackupPolicySpec struct {
 	// ClusterName is the target storage cluster name.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	ClusterName string `json:"clusterName"`
 
 	// MaxVersions is the maximum number of completed backup versions to retain.
 	// When exceeded, the oldest backup is merged into the second-oldest.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Versions"
 	MaxVersions int `json:"maxVersions,omitempty"`
 
 	// MaxAge is the maximum age of backups to retain (e.g. "7d", "12h", "30m").
 	// Backups older than this are merged. Accepts m, h, d, w suffixes.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Age"
 	MaxAge string `json:"maxAge,omitempty"`
 
 	// Schedule defines the tiered backup schedule as a space-separated list of
 	// interval,keep_count pairs (e.g. "15m,4 60m,11 24h,7").
 	// Intervals must be strictly increasing. Supported units: m, h, d, w.
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Schedule"
 	Schedule string `json:"schedule,omitempty"`
 }
 
@@ -66,8 +70,10 @@ type AttachedLvol struct {
 // BackupPolicyStatus defines the observed state of BackupPolicy.
 type BackupPolicyStatus struct {
 	// Phase is the high-level lifecycle state of the policy.
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Phase"
 	Phase string `json:"phase,omitempty"`
 	// Message contains the latest reconciliation detail or error.
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Message"
 	Message string `json:"message,omitempty"`
 
 	// ClusterUUID is the resolved backend cluster UUID.
