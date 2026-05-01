@@ -675,23 +675,6 @@ func listClusterStorageNodes(
 	return nodes, nil
 }
 
-func (r *StorageClusterReconciler) isStorageNodeInStatus(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, nodeUUID, expectedStatus string,
-) (bool, error) {
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterSecret, clusterUUID)
-	if err != nil {
-		return false, err
-	}
-	for _, n := range nodes {
-		if n.UUID == nodeUUID {
-			return strings.EqualFold(n.Status, expectedStatus), nil
-		}
-	}
-	return false, fmt.Errorf("node %s not found in cluster %s", nodeUUID, clusterUUID)
-}
-
 // deleteStorageNodePod finds and deletes the storage-node DaemonSet pod running
 // on the Kubernetes node that hosts the given backend storage node.
 // Returns (true, nil) on success, (false, nil) when the node is not in the
