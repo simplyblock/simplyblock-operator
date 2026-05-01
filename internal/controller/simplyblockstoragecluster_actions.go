@@ -530,8 +530,8 @@ func (r *StorageClusterReconciler) nodeRecycleRestarting(
 	nrs := clusterCR.Status.NodeRecycleStatus
 
 	if !nrs.PhaseTriggered {
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart?force=true", clusterUUID, nodeUUID)
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
+		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, map[string]bool{"force": true})
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d body=%s", status, string(body))
