@@ -106,8 +106,6 @@ type CSIClusterEntry struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
 func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
 	// Fetch the CR directly from the API server (bypasses the informer cache)
 	// to avoid a stale UUID="" read after Status().Patch() triggers a new reconcile.
 	clusterCR := &simplyblockv1alpha1.StorageCluster{}
@@ -148,6 +146,15 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if clusterCR.Status.UUID != "" {
 		return r.syncStatus(ctx, clusterCR)
 	}
+
+	return r.reconcileCreate(ctx, clusterCR)
+}
+
+func (r *StorageClusterReconciler) reconcileCreate(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 
 	apiClient := webapi.NewClient()
 	/* -------------------- Health Check -------------------- */
