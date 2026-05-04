@@ -75,12 +75,15 @@ const (
 
 // SnapshotReplicationSpec defines the desired state of SnapshotReplication
 type SnapshotReplicationSpec struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source Cluster"
 	// Source cluster for the snapshots
 	SourceCluster string `json:"sourceCluster"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Target Cluster"
 	// Target cluster for replication
 	TargetCluster string `json:"targetCluster"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Target Pool"
 	// Target cluster pool for replication
 	TargetPool string `json:"targetPool"`
 
@@ -90,9 +93,11 @@ type SnapshotReplicationSpec struct {
 	// snapshot replication timeout
 	Timeout *int32 `json:"timeout,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Interval"
 	// snapshot replication interval in seconds (default: 300sec)
 	Interval *int32 `json:"interval,omitempty"`
 	// +kubebuilder:validation:Enum=failback
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
 	Action string `json:"action,omitempty"`
 
 	// Optional: only these volumes are included in failback.
@@ -108,14 +113,17 @@ type SnapshotReplicationSpec struct {
 
 // SnapshotReplicationStatus defines the observed state of SnapshotReplication.
 type SnapshotReplicationStatus struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Configured"
 	Configured bool `json:"configured,omitempty"`
 
 	// The metadata.generation value for which failback was last processed.
 	ObservedFailbackGeneration int64 `json:"observedFailbackGeneration,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Volumes"
 	// Per-volume replication status
 	Volumes []VolumeReplicationStatus `json:"volumes,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Conditions"
 	// Conditions provides human-readable status conditions for kubectl get output.
 	// +listType=map
 	// +listMapKey=type
@@ -158,6 +166,7 @@ type ReplicationError struct {
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="Reason",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].reason"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +operator-sdk:csv:customresourcedefinitions:displayName="Snapshot Replication"
 
 // SnapshotReplication is the Schema for the snapshotreplications API
 type SnapshotReplication struct {

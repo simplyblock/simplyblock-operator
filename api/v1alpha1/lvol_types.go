@@ -25,16 +25,20 @@ import (
 
 // LvolSpec defines the desired state of Lvol
 type LvolSpec struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Pool Name"
 	// PoolName is the target storage pool name.
 	PoolName string `json:"poolName"`
 }
 
 // LvolStatus defines the observed state of Lvol.
 type LvolStatus struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Logical Volumes"
 	// Lvols contains observed logical volume entries.
 	Lvols []LvolEntry `json:"lvols,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Configured"
 	// Configured indicates whether initial Lvol reconciliation has completed.
 	Configured bool `json:"configured,omitempty"`
 }
@@ -114,6 +118,7 @@ type LvolEntry struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="LVOLs",type=integer,JSONPath=".status.lvols.length()"
+// +operator-sdk:csv:customresourcedefinitions:displayName="Lvol"
 
 // Lvol is the Schema for the lvols API
 type Lvol struct {
