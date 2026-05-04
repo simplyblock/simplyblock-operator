@@ -2267,3 +2267,203 @@ func sliceNames(items []discoveryv1.EndpointSlice) []string {
 	}
 	return out
 }
+
+func TestStorageNodeDaemonSetTLSSecretRevisionAnnotation(t *testing.T) {
+	const (
+		ns          = "default"
+		clusterName = "cluster-a"
+		dsName      = "simplyblock-storage-node-ds-cluster-a"
+	)
+
+	cases := []struct {
+		name       string
+		tlsEnabled bool
+		seedSecret bool
+		secretRV   string
+		wantValue  string
+		wantSet    bool
+	}{
+		{
+			name:       "tls enabled with secret stamps annotation",
+			tlsEnabled: true,
+			seedSecret: true,
+			secretRV:   "12345",
+			wantValue:  "12345",
+			wantSet:    true,
+		},
+		{
+			name:       "tls enabled but secret missing leaves annotation unset",
+			tlsEnabled: true,
+			seedSecret: false,
+			wantSet:    false,
+		},
+		{
+			name:       "tls disabled leaves annotation unset even if secret exists",
+			tlsEnabled: false,
+			seedSecret: true,
+			secretRV:   "67890",
+			wantSet:    false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sn := &simplyblockv1alpha1.StorageNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-rv", Namespace: ns, UID: "uid-rv"},
+				Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: clusterName},
+			}
+			objs := []client.Object{sn}
+			if tc.seedSecret {
+				objs = append(objs, &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            utils.SecretNameStorageNodeAPITLS,
+						Namespace:       ns,
+						ResourceVersion: tc.secretRV,
+					},
+				})
+			}
+			r := newStorageNodeStateTestReconciler(t, objs...)
+			r.TLSEnabled = tc.tlsEnabled
+			r.TLSProvider = utils.TLSProviderCertManager
+
+			if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+				t.Fatalf("reconcileDaemonSet returned error: %v", err)
+			}
+
+			var ds appsv1.DaemonSet
+			if err := r.Get(context.Background(), client.ObjectKey{Name: dsName, Namespace: ns}, &ds); err != nil {
+				t.Fatalf("failed to fetch daemonset: %v", err)
+			}
+
+			got, ok := ds.Spec.Template.Annotations[utils.AnnotationTLSSecretRevision]
+			switch {
+			case tc.wantSet && !ok:
+				t.Fatalf("expected pod-template annotation %q to be set", utils.AnnotationTLSSecretRevision)
+			case tc.wantSet && got != tc.wantValue:
+				t.Fatalf("annotation value: want %q, got %q", tc.wantValue, got)
+			case !tc.wantSet && ok:
+				t.Fatalf("expected pod-template annotation %q to be unset, got %q", utils.AnnotationTLSSecretRevision, got)
+			}
+		})
+	}
+}
+
+func TestStorageNodeDaemonSetReconcileRollsOnTLSSecretRevisionChange(t *testing.T) {
+	const ns = "default"
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-roll", Namespace: ns, UID: "uid-roll"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            utils.SecretNameStorageNodeAPITLS,
+			Namespace:       ns,
+			ResourceVersion: "1",
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn, secret)
+	r.TLSEnabled = true
+	r.TLSProvider = utils.TLSProviderCertManager
+
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("first reconcileDaemonSet: %v", err)
+	}
+
+	dsKey := client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: ns}
+	var first appsv1.DaemonSet
+	if err := r.Get(context.Background(), dsKey, &first); err != nil {
+		t.Fatalf("fetch first daemonset: %v", err)
+	}
+
+	// Simulate cert-manager rotating the Secret: any Update bumps
+	// metadata.resourceVersion via the fake client's bookkeeping.
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: utils.SecretNameStorageNodeAPITLS}, secret); err != nil {
+		t.Fatalf("refetch secret: %v", err)
+	}
+	secret.Data = map[string][]byte{"tls.crt": []byte("rotated")}
+	if err := r.Update(context.Background(), secret); err != nil {
+		t.Fatalf("rotate secret: %v", err)
+	}
+
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("second reconcileDaemonSet: %v", err)
+	}
+
+	var second appsv1.DaemonSet
+	if err := r.Get(context.Background(), dsKey, &second); err != nil {
+		t.Fatalf("fetch second daemonset: %v", err)
+	}
+
+	firstRV := first.Spec.Template.Annotations[utils.AnnotationTLSSecretRevision]
+	secondRV := second.Spec.Template.Annotations[utils.AnnotationTLSSecretRevision]
+	if firstRV == "" || secondRV == "" {
+		t.Fatalf("expected pod-template annotation set in both passes, got first=%q second=%q", firstRV, secondRV)
+	}
+	if firstRV == secondRV {
+		t.Fatalf("expected pod-template annotation to change after Secret rotation, both still %q", firstRV)
+	}
+}
+
+func TestIsStorageNodeTLSSecretPredicate(t *testing.T) {
+	cases := []struct {
+		name string
+		obj  client.Object
+		want bool
+	}{
+		{
+			name: "matches storage-node-api TLS secret",
+			obj:  &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: utils.SecretNameStorageNodeAPITLS}},
+			want: true,
+		},
+		{
+			name: "ignores spdk-proxy TLS secret",
+			obj:  &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: utils.SecretNameSpdkProxyTLS}},
+			want: false,
+		},
+		{
+			name: "ignores unrelated secret",
+			obj:  &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "some-other-secret"}},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isStorageNodeTLSSecret(tc.obj); got != tc.want {
+				t.Fatalf("isStorageNodeTLSSecret(%q) = %v, want %v", tc.obj.GetName(), got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTLSSecretToStorageNodeRequestsEnqueuesAllInNamespace(t *testing.T) {
+	const ns = "ns"
+	snA := &simplyblockv1alpha1.StorageNode{ObjectMeta: metav1.ObjectMeta{Name: "sn-a", Namespace: ns}}
+	snB := &simplyblockv1alpha1.StorageNode{ObjectMeta: metav1.ObjectMeta{Name: "sn-b", Namespace: ns}}
+	otherNS := &simplyblockv1alpha1.StorageNode{ObjectMeta: metav1.ObjectMeta{Name: "sn-c", Namespace: "other"}}
+
+	r := newStorageNodeStateTestReconciler(t, snA, snB, otherNS)
+
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name:      utils.SecretNameStorageNodeAPITLS,
+		Namespace: ns,
+	}}
+	reqs := r.tlsSecretToStorageNodeRequests(context.Background(), secret)
+
+	got := make(map[string]bool, len(reqs))
+	for _, req := range reqs {
+		got[req.Namespace+"/"+req.Name] = true
+	}
+
+	want := map[string]bool{ns + "/sn-a": true, ns + "/sn-b": true}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d requests, got %d (%v)", len(want), len(got), got)
+	}
+	for k := range want {
+		if !got[k] {
+			t.Fatalf("missing reconcile request for %q", k)
+		}
+	}
+	if got[ns+"/sn-c"] || got["other/sn-c"] {
+		t.Fatalf("did not expect cross-namespace StorageNode to be enqueued: %v", got)
+	}
+}

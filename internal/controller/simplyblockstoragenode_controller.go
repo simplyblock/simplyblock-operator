@@ -189,15 +189,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
 	}
 
-	if err := r.reconcileDaemonSet(ctx, snCR); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	if err := r.reconcileService(ctx, snCR); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	if err := r.reconcileEndpointSlice(ctx, snCR); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -205,7 +197,18 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	// Reconcile certificates before the DaemonSet so the TLS Secret is more
+	// likely to exist when reconcileDaemonSet reads its resourceVersion to
+	// stamp it as a pod-template annotation.
 	if err := r.reconcileServingCertificates(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileDaemonSet(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileEndpointSlice(ctx, snCR); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -365,11 +368,42 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.spdkProxyPodToStorageNodeRequests),
 			builder.WithPredicates(predicate.NewPredicateFuncs(isSpdkProxyPod)),
 		).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.tlsSecretToStorageNodeRequests),
+			builder.WithPredicates(predicate.NewPredicateFuncs(isStorageNodeTLSSecret)),
+		).
 		Complete(r)
 }
 
 func isSpdkProxyPod(obj client.Object) bool {
 	return obj.GetLabels()["role"] == "simplyblock-storage-node"
+}
+
+func isStorageNodeTLSSecret(obj client.Object) bool {
+	return obj.GetName() == utils.SecretNameStorageNodeAPITLS
+}
+
+// tlsSecretToStorageNodeRequests enqueues every StorageNode CR in the
+// Secret's namespace when the storage-node-api TLS Secret changes. Coupled
+// with the resourceVersion annotation stamped on the DaemonSet pod template,
+// this drives a rolling restart whenever cert-manager (or OpenShift's
+// service-ca) rotates the Secret.
+func (r *StorageNodeReconciler) tlsSecretToStorageNodeRequests(
+	ctx context.Context,
+	obj client.Object,
+) []reconcile.Request {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(snList.Items))
+	for _, sn := range snList.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: sn.Namespace, Name: sn.Name},
+		})
+	}
+	return reqs
 }
 
 // spdkProxyPodToStorageNodeRequests enqueues every StorageNode CR in the Pod's
@@ -477,14 +511,19 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
 
-	ds := utils.BuildStorageNodeDaemonSet(snCR, r.TLSEnabled, r.TLSProvider)
+	tlsSecretRV, err := r.getTLSSecretResourceVersion(ctx, snCR.Namespace)
+	if err != nil {
+		return err
+	}
+
+	ds := utils.BuildStorageNodeDaemonSet(snCR, r.TLSEnabled, r.TLSProvider, tlsSecretRV)
 
 	if err := controllerutil.SetControllerReference(snCR, ds, r.Scheme); err != nil {
 		return err
 	}
 
 	var existing appsv1.DaemonSet
-	err := r.Get(ctx, client.ObjectKeyFromObject(ds), &existing)
+	err = r.Get(ctx, client.ObjectKeyFromObject(ds), &existing)
 	if apierrors.IsNotFound(err) {
 		return r.Create(ctx, ds)
 	}
@@ -494,6 +533,32 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 
 	ds.ResourceVersion = existing.ResourceVersion
 	return r.Update(ctx, ds)
+}
+
+// getTLSSecretResourceVersion returns the storage-node-api TLS Secret's
+// metadata.resourceVersion, or "" if TLS is disabled or the Secret has not
+// been provisioned yet. The value is stamped onto the DaemonSet's pod
+// template so that cert rotations (where the Secret object changes but its
+// name does not) trigger a rolling restart.
+func (r *StorageNodeReconciler) getTLSSecretResourceVersion(
+	ctx context.Context,
+	namespace string,
+) (string, error) {
+	if !r.TLSEnabled {
+		return "", nil
+	}
+	var sec corev1.Secret
+	err := r.Get(ctx, types.NamespacedName{
+		Namespace: namespace,
+		Name:      utils.SecretNameStorageNodeAPITLS,
+	}, &sec)
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return sec.ResourceVersion, nil
 }
 
 func (r *StorageNodeReconciler) reconcileService(
@@ -533,11 +598,11 @@ func (r *StorageNodeReconciler) reconcileServingCertificates(
 	}{
 		{
 			serviceName: "simplyblock-storage-node-api",
-			secretName:  "simplyblock-storage-node-api-tls",
+			secretName:  utils.SecretNameStorageNodeAPITLS,
 		},
 		{
 			serviceName: "simplyblock-spdk-proxy",
-			secretName:  "simplyblock-spdk-proxy-tls",
+			secretName:  utils.SecretNameSpdkProxyTLS,
 		},
 	}
 

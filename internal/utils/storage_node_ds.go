@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsProvider string) *appsv1.DaemonSet {
+func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
 
 	labels := map[string]string{
 		"app":                 "storage-node",
@@ -146,6 +146,13 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 		mainMounts = append(mainMounts, tlsMounts...)
 	}
 
+	var podAnnotations map[string]string
+	if tlsEnabled && tlsSecretResourceVersion != "" {
+		podAnnotations = map[string]string{
+			AnnotationTLSSecretRevision: tlsSecretResourceVersion,
+		}
+	}
+
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "simplyblock-storage-node-ds-" + sn.Spec.ClusterName,
@@ -167,7 +174,8 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
+					Labels:      labels,
+					Annotations: podAnnotations,
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "simplyblock-storage-node-sa",
@@ -227,7 +235,7 @@ func buildStorageNodeTLSVolume(tlsProvider string) corev1.Volume {
 			Name: "tls",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: "simplyblock-storage-node-api-tls",
+					SecretName: SecretNameStorageNodeAPITLS,
 				},
 			},
 		}
@@ -241,7 +249,7 @@ func buildStorageNodeTLSVolume(tlsProvider string) corev1.Volume {
 					{
 						Secret: &corev1.SecretProjection{
 							LocalObjectReference: corev1.LocalObjectReference{
-								Name: "simplyblock-storage-node-api-tls",
+								Name: SecretNameStorageNodeAPITLS,
 							},
 						},
 					},
@@ -331,7 +339,7 @@ func BuildStorageNodeService(sn *simplyblockv1alpha1.StorageNode, tlsEnabled boo
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "simplyblock-storage-node-api",
 			Namespace:   sn.Namespace,
-			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, "simplyblock-storage-node-api-tls"),
+			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, SecretNameStorageNodeAPITLS),
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
@@ -393,7 +401,7 @@ func BuildSpdkProxyService(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool,
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "simplyblock-spdk-proxy",
 			Namespace:   sn.Namespace,
-			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, "simplyblock-spdk-proxy-tls"),
+			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, SecretNameSpdkProxyTLS),
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
