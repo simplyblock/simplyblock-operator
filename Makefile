@@ -3,6 +3,8 @@ VERSION ?= 0.1.0
 IMG_BASE ?= quay.io/simplyblock-io/simplyblock-operator
 IMG_TAG  ?= $(VERSION)
 IMG      ?= $(IMG_BASE):$(IMG_TAG)
+ECR_IMG_BASE ?= public.ecr.aws/simplyblock/simplyblock-operator
+ECR_IMG      ?= $(ECR_IMG_BASE):$(IMG_TAG)
 BUNDLE_IMG ?= quay.io/simplyblock-io/simplyblock-operator-bundle:$(VERSION)
 OPENSHIFT_VERSION ?= v4.19
 
@@ -152,6 +154,19 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
 	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
 	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} --build-arg VERSION=$(VERSION) --build-arg RELEASE=1 -f Dockerfile.cross .
+	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
+	rm Dockerfile.cross
+
+.PHONY: docker-buildx-ecr
+docker-buildx-ecr: ## Build and push docker image to ECR public for cross-platform support
+	if grep -Eq '^FROM[[:space:]]+--platform=' Dockerfile; then \
+		cp Dockerfile Dockerfile.cross; \
+	else \
+		sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross; \
+	fi
+	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
+	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${ECR_IMG} --build-arg VERSION=$(VERSION) --build-arg RELEASE=1 -f Dockerfile.cross .
 	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
 	rm Dockerfile.cross
 
