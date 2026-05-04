@@ -189,26 +189,28 @@ ifndef ignore-not-found
   ignore-not-found = false
 endif
 
+MANIFEST_ACCEPT := application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json
+
 .PHONY: bundle
 bundle: yq ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
 	@set -e; \
 	operator-sdk generate kustomize manifests -q; \
-	(cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
-	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
 	OPERATOR_DIGEST=$$(curl -sI \
 	  "https://quay.io/v2/simplyblock-io/simplyblock-operator/manifests/$(IMG_TAG)" \
-	  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
 	test -n "$$OPERATOR_DIGEST" \
 	  || { echo "ERROR: could not fetch digest for $(IMG_BASE):$(IMG_TAG) — is the image pushed?"; exit 1; }; \
 	CLUSTER_DIGEST=$$(curl -sI \
 	  "https://quay.io/v2/simplyblock-io/simplyblock/manifests/$(CLUSTER_IMAGE_TAG)" \
-	  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
 	SPDK_DIGEST=$$(curl -sI \
 	  "https://quay.io/v2/simplyblock-io/ultra/manifests/$(SPDK_IMAGE_TAG)" \
-	  -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	(cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
+	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
 	OPERATOR_IMG="$(IMG_BASE)@$$OPERATOR_DIGEST" \
 	CLUSTER_IMG="$(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)@$$CLUSTER_DIGEST" \
 	SPDK_IMG="$(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)@$$SPDK_DIGEST" \
