@@ -2404,6 +2404,59 @@ func TestStorageNodeDaemonSetReconcileRollsOnTLSSecretRevisionChange(t *testing.
 	}
 }
 
+func TestStorageNodeDaemonSetSBTLSServeEnv(t *testing.T) {
+	cases := []struct {
+		name       string
+		tlsEnabled bool
+		wantValue  string
+		wantSet    bool
+	}{
+		{name: "tls enabled sets SB_TLS_SERVE=true", tlsEnabled: true, wantValue: "true", wantSet: true},
+		{name: "tls disabled omits SB_TLS_SERVE", tlsEnabled: false, wantSet: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sn := &simplyblockv1alpha1.StorageNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "sn-env", Namespace: "default", UID: "uid-env"},
+				Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+			}
+			r := newStorageNodeStateTestReconciler(t, sn)
+			r.TLSEnabled = tc.tlsEnabled
+			r.TLSProvider = utils.TLSProviderCertManager
+
+			if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+				t.Fatalf("reconcileDaemonSet returned error: %v", err)
+			}
+
+			var ds appsv1.DaemonSet
+			if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+				t.Fatalf("failed to fetch daemonset: %v", err)
+			}
+			if len(ds.Spec.Template.Spec.Containers) != 1 {
+				t.Fatalf("expected single main container, got %d", len(ds.Spec.Template.Spec.Containers))
+			}
+
+			var got string
+			var found bool
+			for _, e := range ds.Spec.Template.Spec.Containers[0].Env {
+				if e.Name == "SB_TLS_SERVE" {
+					got = e.Value
+					found = true
+					break
+				}
+			}
+			switch {
+			case tc.wantSet && !found:
+				t.Fatalf("expected SB_TLS_SERVE env var to be set on main container")
+			case tc.wantSet && got != tc.wantValue:
+				t.Fatalf("SB_TLS_SERVE: want %q, got %q", tc.wantValue, got)
+			case !tc.wantSet && found:
+				t.Fatalf("expected SB_TLS_SERVE env var to be absent, got %q", got)
+			}
+		})
+	}
+}
+
 func TestIsStorageNodeTLSSecretPredicate(t *testing.T) {
 	cases := []struct {
 		name string
