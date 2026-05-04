@@ -449,7 +449,7 @@ func BuildStorageNodeClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBin
 			APIVersion: "rbac.authorization.k8s.io/v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "simplyblock-storage-node-binding",
+			Name: "simplyblock-storage-node-binding-" + namespace,
 		},
 		Subjects: []rbacv1.Subject{
 			{
