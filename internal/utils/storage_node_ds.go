@@ -68,7 +68,10 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: sn.Spec.ReservedSystemCPU})
 	}
 	if tlsEnabled {
-		mainEnv = append(mainEnv, corev1.EnvVar{Name: "SB_TLS_SERVE", Value: "true"})
+		mainEnv = append(mainEnv,
+			corev1.EnvVar{Name: "SB_TLS_SERVE", Value: "true"},
+			corev1.EnvVar{Name: "SB_TLS_PROVIDER", Value: NormalizeTLSProvider(tlsProvider)},
+		)
 	}
 
 	volumes := []corev1.Volume{

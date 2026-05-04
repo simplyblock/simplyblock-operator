@@ -2406,13 +2406,38 @@ func TestStorageNodeDaemonSetReconcileRollsOnTLSSecretRevisionChange(t *testing.
 
 func TestStorageNodeDaemonSetSBTLSServeEnv(t *testing.T) {
 	cases := []struct {
-		name       string
-		tlsEnabled bool
-		wantValue  string
-		wantSet    bool
+		name            string
+		tlsEnabled      bool
+		tlsProvider     string
+		wantServe       string
+		wantServeSet    bool
+		wantProvider    string
+		wantProviderSet bool
 	}{
-		{name: "tls enabled sets SB_TLS_SERVE=true", tlsEnabled: true, wantValue: "true", wantSet: true},
-		{name: "tls disabled omits SB_TLS_SERVE", tlsEnabled: false, wantSet: false},
+		{
+			name:            "tls enabled with cert-manager",
+			tlsEnabled:      true,
+			tlsProvider:     utils.TLSProviderCertManager,
+			wantServe:       "true",
+			wantServeSet:    true,
+			wantProvider:    utils.TLSProviderCertManager,
+			wantProviderSet: true,
+		},
+		{
+			name:            "tls enabled with OpenShift",
+			tlsEnabled:      true,
+			tlsProvider:     utils.TLSProviderOpenShift,
+			wantServe:       "true",
+			wantServeSet:    true,
+			wantProvider:    utils.TLSProviderOpenShift,
+			wantProviderSet: true,
+		},
+		{
+			name:         "tls disabled omits TLS env vars",
+			tlsEnabled:   false,
+			tlsProvider:  utils.TLSProviderCertManager,
+			wantServeSet: false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2422,7 +2447,7 @@ func TestStorageNodeDaemonSetSBTLSServeEnv(t *testing.T) {
 			}
 			r := newStorageNodeStateTestReconciler(t, sn)
 			r.TLSEnabled = tc.tlsEnabled
-			r.TLSProvider = utils.TLSProviderCertManager
+			r.TLSProvider = tc.tlsProvider
 
 			if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
 				t.Fatalf("reconcileDaemonSet returned error: %v", err)
@@ -2436,22 +2461,29 @@ func TestStorageNodeDaemonSetSBTLSServeEnv(t *testing.T) {
 				t.Fatalf("expected single main container, got %d", len(ds.Spec.Template.Spec.Containers))
 			}
 
-			var got string
-			var found bool
+			envByName := map[string]string{}
+			envSeen := map[string]bool{}
 			for _, e := range ds.Spec.Template.Spec.Containers[0].Env {
-				if e.Name == "SB_TLS_SERVE" {
-					got = e.Value
-					found = true
-					break
-				}
+				envByName[e.Name] = e.Value
+				envSeen[e.Name] = true
 			}
+
 			switch {
-			case tc.wantSet && !found:
+			case tc.wantServeSet && !envSeen["SB_TLS_SERVE"]:
 				t.Fatalf("expected SB_TLS_SERVE env var to be set on main container")
-			case tc.wantSet && got != tc.wantValue:
-				t.Fatalf("SB_TLS_SERVE: want %q, got %q", tc.wantValue, got)
-			case !tc.wantSet && found:
-				t.Fatalf("expected SB_TLS_SERVE env var to be absent, got %q", got)
+			case tc.wantServeSet && envByName["SB_TLS_SERVE"] != tc.wantServe:
+				t.Fatalf("SB_TLS_SERVE: want %q, got %q", tc.wantServe, envByName["SB_TLS_SERVE"])
+			case !tc.wantServeSet && envSeen["SB_TLS_SERVE"]:
+				t.Fatalf("expected SB_TLS_SERVE env var to be absent, got %q", envByName["SB_TLS_SERVE"])
+			}
+
+			switch {
+			case tc.wantProviderSet && !envSeen["SB_TLS_PROVIDER"]:
+				t.Fatalf("expected SB_TLS_PROVIDER env var to be set on main container")
+			case tc.wantProviderSet && envByName["SB_TLS_PROVIDER"] != tc.wantProvider:
+				t.Fatalf("SB_TLS_PROVIDER: want %q, got %q", tc.wantProvider, envByName["SB_TLS_PROVIDER"])
+			case !tc.wantProviderSet && envSeen["SB_TLS_PROVIDER"]:
+				t.Fatalf("expected SB_TLS_PROVIDER env var to be absent, got %q", envByName["SB_TLS_PROVIDER"])
 			}
 		})
 	}
