@@ -84,9 +84,6 @@ spec:
               driveSizeRange:
                 description: DriveSizeRange filters devices by size range.
                 type: string
-              enableCpuTopology:
-                description: EnableCpuTopology enables topology-aware CPU handling.
-                type: boolean
               force:
                 description: |-
                   Force enables forced action execution where supported.

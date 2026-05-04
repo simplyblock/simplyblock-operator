@@ -58,8 +58,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 		{Name: "CORE_ISOLATION", Value: BoolPtrToString(sn.Spec.CoreIsolation)},
 		{Name: "UBUNTU_HOST", Value: BoolPtrToString(sn.Spec.UbuntuHost)},
 		{Name: "OPENSHIFT_CLUSTER", Value: BoolPtrToString(sn.Spec.OpenShiftCluster)},
-		{Name: "CPU_TOPOLOGY_ENABLED", Value: BoolPtrToString(sn.Spec.EnableCpuTopology)},
-		{Name: "SKIP_KUBELET_CONFIGURATION", Value: BoolPtrToString(sn.Spec.SkipKubeletConfiguration)},
+{Name: "SKIP_KUBELET_CONFIGURATION", Value: BoolPtrToString(sn.Spec.SkipKubeletConfiguration)},
 		{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 		}},

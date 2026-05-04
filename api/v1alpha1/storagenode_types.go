@@ -98,8 +98,6 @@ type StorageNodeSpec struct {
 	SkipKubeletConfiguration *bool `json:"skipKubeletConfiguration,omitempty"`
 	// ForceFormat4K forces 4K blocksize formatting of the NVMe device where supported.
 	ForceFormat4K *bool `json:"forceFormat4K,omitempty"`
-	// EnableCpuTopology enables topology-aware CPU handling.
-	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
 	// ReservedSystemCPU defines CPUs reserved for system workloads.
 	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
 
