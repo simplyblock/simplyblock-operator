@@ -14,6 +14,13 @@ CLUSTER_IMAGE_TAG  ?= 26.2.2-PRE
 SPDK_IMAGE_BASE    ?= quay.io/simplyblock-io/ultra
 SPDK_IMAGE_TAG     ?= R26.2-PRE-latest
 
+YQ_CSV_EXPR = .metadata.annotations.containerImage = strenv(OPERATOR_IMG) \
+  | .spec.relatedImages = [{"name": "simplyblock-operator", "image": strenv(OPERATOR_IMG)}, \
+    {"name": "simplyblock", "image": strenv(CLUSTER_IMG)}, \
+    {"name": "ultra-spdk", "image": strenv(SPDK_IMG)}] \
+  | .spec.install.spec.deployments[0].spec.template.spec.containers[0].image = strenv(OPERATOR_IMG)
+YQ_ANNOTATIONS_EXPR = .annotations."com.redhat.openshift.versions" = strenv(OPENSHIFT_VERSION)
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
 GOBIN=$(shell go env GOPATH)/bin
@@ -205,19 +212,9 @@ bundle: yq ## Generate bundle manifests with digest-pinned images (operator imag
 	OPERATOR_IMG="$(IMG_BASE)@$$OPERATOR_DIGEST" \
 	CLUSTER_IMG="$(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)@$$CLUSTER_DIGEST" \
 	SPDK_IMG="$(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)@$$SPDK_DIGEST" \
-	"$(YQ)" e ' \
-	  .metadata.annotations.containerImage = strenv(OPERATOR_IMG) | \
-	  .spec.relatedImages = [ \
-	    {"name": "simplyblock-operator", "image": strenv(OPERATOR_IMG)}, \
-	    {"name": "simplyblock",          "image": strenv(CLUSTER_IMG)}, \
-	    {"name": "ultra-spdk",           "image": strenv(SPDK_IMG)} \
-	  ] | \
-	  .spec.install.spec.deployments[0].spec.template.spec.containers[0].image = strenv(OPERATOR_IMG) \
-	  ' -i bundle/manifests/simplyblock-operator.clusterserviceversion.yaml; \
-	  OPENSHIFT_VERSION="$(OPENSHIFT_VERSION)" \
-	  "$(YQ)" e '\
-	  .annotations."com.redhat.openshift.versions" = strenv(OPENSHIFT_VERSION) \
-	  ' -i bundle/metadata/annotations.yaml;
+	"$(YQ)" e '$(YQ_CSV_EXPR)' -i bundle/manifests/simplyblock-operator.clusterserviceversion.yaml; \
+	OPENSHIFT_VERSION="$(OPENSHIFT_VERSION)" \
+	"$(YQ)" e '$(YQ_ANNOTATIONS_EXPR)' -i bundle/metadata/annotations.yaml;
 
 
 .PHONY: bundle-build
