@@ -167,9 +167,6 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	sa := utils.BuildStorageNodeServiceAccount(snCR.Namespace)
-	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
-	}
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error { return nil })
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ServiceAccount: %w", err)
