@@ -51,9 +51,10 @@ import (
 // StorageNodeReconciler reconciles a StorageNode object
 type StorageNodeReconciler struct {
 	client.Client
-	Scheme      *runtime.Scheme
-	TLSEnabled  bool
-	TLSProvider string
+	Scheme           *runtime.Scheme
+	TLSEnabled       bool
+	TLSProvider      string
+	TLSMutualEnabled bool
 }
 
 type SNODEAPIResponse struct {
@@ -288,7 +289,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if err := checkNodeInfoReachable(ctx, nodeName, snCR.Namespace, r.TLSEnabled); err != nil {
+	if err := checkNodeInfoReachable(ctx, nodeName, snCR.Namespace, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
 		log.Info("Storage node API not reachable yet, requeueing",
 			"node", nodeName,
 			"ip", ip,
@@ -516,7 +517,7 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 		return err
 	}
 
-	ds := utils.BuildStorageNodeDaemonSet(snCR, r.TLSEnabled, r.TLSProvider, tlsSecretRV)
+	ds := utils.BuildStorageNodeDaemonSet(snCR, r.TLSEnabled, r.TLSProvider, r.TLSMutualEnabled, tlsSecretRV)
 
 	if err := controllerutil.SetControllerReference(snCR, ds, r.Scheme); err != nil {
 		return err
@@ -864,12 +865,17 @@ func ensureNodeStatus(
 	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
 }
 
-func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tlsEnabled bool) error {
+func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tlsEnabled, tlsMutualEnabled bool) error {
 	scheme := "http"
 	httpClient := &http.Client{Timeout: 3 * time.Second}
 	if tlsEnabled {
 		scheme = "https"
-		c, err := tlsutil.BuildStorageNodeAPIClient(namespace, tlsutil.ServiceCABundlePath)
+		c, err := tlsutil.BuildStorageNodeAPIClient(namespace, tlsutil.ClientOptions{
+			CABundlePath:   tlsutil.ServiceCABundlePath,
+			Mutual:         tlsMutualEnabled,
+			ClientCertPath: tlsutil.ServiceClientCertPath,
+			ClientKeyPath:  tlsutil.ServiceClientKeyPath,
+		})
 		if err != nil {
 			return fmt.Errorf("build storage-node TLS client: %w", err)
 		}
@@ -904,7 +910,7 @@ func waitForNodeInfoReachable(
 	ctx context.Context,
 	nodeName string,
 	namespace string,
-	tlsEnabled bool,
+	tlsEnabled, tlsMutualEnabled bool,
 ) error {
 	log := logf.FromContext(ctx)
 
@@ -912,7 +918,7 @@ func waitForNodeInfoReachable(
 
 	for i := 1; i <= waitForNodeInfoReachableMaxRetries; i++ {
 
-		if err := waitForNodeInfoReachableCheckFn(ctx, nodeName, namespace, tlsEnabled); err == nil {
+		if err := waitForNodeInfoReachableCheckFn(ctx, nodeName, namespace, tlsEnabled, tlsMutualEnabled); err == nil {
 			log.Info("Storage node API is reachable",
 				"node", nodeName,
 				"attempt", i,
@@ -1278,7 +1284,7 @@ func (r *StorageNodeReconciler) performNodeAction(
 				return fmt.Errorf("failed to label worker node %s: %w", snCR.Spec.WorkerNode, err)
 			}
 
-			if err := waitForNodeInfoReachable(ctx, snCR.Spec.WorkerNode, snCR.Namespace, r.TLSEnabled); err != nil {
+			if err := waitForNodeInfoReachable(ctx, snCR.Spec.WorkerNode, snCR.Namespace, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
 				log.Error(err, "node never became reachable")
 				return err
 			}

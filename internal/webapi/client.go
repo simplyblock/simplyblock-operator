@@ -33,20 +33,27 @@ func resetTLSClientOnce() {
 	tlsClientOnce = sync.Once{}
 }
 
-func cachedTLSClient() (*http.Client, error) {
+func cachedTLSClient(mutual bool) (*http.Client, error) {
 	tlsClientOnce.Do(func() {
 		ns, err := tlsutil.DetectOperatorNamespace()
 		if err != nil {
 			tlsClientErr = err
 			return
 		}
-		tlsClient, tlsClientErr = tlsutil.BuildWebAPIClient(ns, tlsutil.ServiceCABundlePath)
+		opts := tlsutil.ClientOptions{
+			CABundlePath:   tlsutil.ServiceCABundlePath,
+			Mutual:         mutual,
+			ClientCertPath: tlsutil.ServiceClientCertPath,
+			ClientKeyPath:  tlsutil.ServiceClientKeyPath,
+		}
+		tlsClient, tlsClientErr = tlsutil.BuildWebAPIClient(ns, opts)
 	})
 	return tlsClient, tlsClientErr
 }
 
 func NewClient(baseURL ...string) *Client {
-	tlsEnabled := os.Getenv("TLS_ENABLED") == "true"
+	tlsEnabled := os.Getenv("SB_TLS_SERVE") == "1"
+	mutual := os.Getenv("SB_TLS_CONNECT") == "authenticated"
 
 	defaultURL := "http://simplyblock-webappapi:5000"
 	httpClient := &http.Client{Timeout: 30 * time.Second}
@@ -54,7 +61,7 @@ func NewClient(baseURL ...string) *Client {
 
 	if tlsEnabled {
 		defaultURL = "https://simplyblock-webappapi:5000"
-		if c, err := cachedTLSClient(); err != nil {
+		if c, err := cachedTLSClient(mutual); err != nil {
 			initErr = err
 		} else {
 			httpClient = c

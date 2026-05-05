@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
+func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsProvider string, tlsMutualEnabled bool, tlsSecretResourceVersion string) *appsv1.DaemonSet {
 
 	labels := map[string]string{
 		"app":                 "storage-node",
@@ -69,9 +69,19 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 	}
 	if tlsEnabled {
 		mainEnv = append(mainEnv,
-			corev1.EnvVar{Name: "SB_TLS_SERVE", Value: "true"},
+			corev1.EnvVar{Name: "SB_TLS_SERVE", Value: "1"},
 			corev1.EnvVar{Name: "SB_TLS_PROVIDER", Value: NormalizeTLSProvider(tlsProvider)},
 		)
+		if tlsMutualEnabled {
+			mainEnv = append(mainEnv,
+				corev1.EnvVar{Name: "SB_TLS_CLIENT_AUTH", Value: "required"},
+				corev1.EnvVar{Name: "SB_TLS_CONNECT", Value: "authenticated"},
+			)
+		} else {
+			mainEnv = append(mainEnv,
+				corev1.EnvVar{Name: "SB_TLS_CONNECT", Value: "anonymous"},
+			)
+		}
 	}
 
 	volumes := []corev1.Volume{

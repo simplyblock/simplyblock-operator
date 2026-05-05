@@ -50,7 +50,7 @@ func TestValidateTLSConfiguration(t *testing.T) {
 			name:        "unsupported provider rejected",
 			tlsEnabled:  true,
 			tlsProvider: "vault",
-			wantErr:     `unsupported TLS_PROVIDER "vault"`,
+			wantErr:     `unsupported SB_TLS_PROVIDER "vault"`,
 		},
 		{
 			name:        "openshift provider requires openshift api group",

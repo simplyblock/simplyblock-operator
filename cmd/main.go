@@ -71,7 +71,7 @@ func validateTLSConfiguration(discoveryClient serverGroupsGetter, tlsEnabled boo
 		return nil
 	}
 	if !utils.TLSProviderSupported(tlsProvider) {
-		return fmt.Errorf("unsupported TLS_PROVIDER %q", tlsProvider)
+		return fmt.Errorf("unsupported SB_TLS_PROVIDER %q", tlsProvider)
 	}
 
 	requiredGroup := openShiftConfigAPIGroup
@@ -91,7 +91,7 @@ func validateTLSConfiguration(discoveryClient serverGroupsGetter, tlsEnabled boo
 			return nil
 		}
 	}
-	return fmt.Errorf("TLS_ENABLED=true with TLS_PROVIDER=%q requires API group %q", tlsProvider, requiredGroup)
+	return fmt.Errorf("SB_TLS_SERVE=1 with SB_TLS_PROVIDER=%q requires API group %q", tlsProvider, requiredGroup)
 }
 
 // nolint:gocyclo
@@ -204,8 +204,9 @@ func main() {
 	}
 
 	cfg := ctrl.GetConfigOrDie()
-	tlsEnabled := os.Getenv("TLS_ENABLED") == "true"
-	tlsProvider := utils.NormalizeTLSProvider(os.Getenv("TLS_PROVIDER"))
+	tlsEnabled := os.Getenv("SB_TLS_SERVE") == "1"
+	tlsProvider := utils.NormalizeTLSProvider(os.Getenv("SB_TLS_PROVIDER"))
+	tlsMutualEnabled := os.Getenv("SB_TLS_CONNECT") == "authenticated"
 	if tlsEnabled {
 		discoveryClient, err := discovery.NewDiscoveryClientForConfig(cfg)
 		if err != nil {
@@ -252,10 +253,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageNodeReconciler{
-		Client:      mgr.GetClient(),
-		Scheme:      mgr.GetScheme(),
-		TLSEnabled:  tlsEnabled,
-		TLSProvider: tlsProvider,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		TLSEnabled:       tlsEnabled,
+		TLSProvider:      tlsProvider,
+		TLSMutualEnabled: tlsMutualEnabled,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
@@ -289,10 +291,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.NodeDrainCoordinatorReconciler{
-		Client:          mgr.GetClient(),
-		Scheme:          mgr.GetScheme(),
-		ManagerNodeName: os.Getenv("NODE_NAME"),
-		TLSEnabled:      tlsEnabled,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		ManagerNodeName:  os.Getenv("NODE_NAME"),
+		TLSEnabled:       tlsEnabled,
+		TLSMutualEnabled: tlsMutualEnabled,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NodeDrainCoordinator")
 		os.Exit(1)

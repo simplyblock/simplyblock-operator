@@ -1158,7 +1158,7 @@ func TestStorageNodeReconcileUnreachableNodeInfoRequeues(t *testing.T) {
 
 func TestCheckNodeInfoReachable(t *testing.T) {
 	// Use an unroutable test-net address to deterministically exercise error path.
-	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", false)
+	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", false, false)
 	if err == nil {
 		t.Fatalf("expected error when node info endpoint is unreachable")
 	}
@@ -1167,7 +1167,7 @@ func TestCheckNodeInfoReachable(t *testing.T) {
 func TestCheckNodeInfoReachableTLSMissingCA(t *testing.T) {
 	// With TLS enabled and the default CA path (which won't exist in unit tests),
 	// the function must surface a build-client error before attempting any I/O.
-	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", true)
+	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", true, false)
 	if err == nil {
 		t.Fatalf("expected error when CA bundle is missing")
 	}
@@ -1190,12 +1190,12 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 		attempts := 0
 		waitForNodeInfoReachableMaxRetries = 3
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool, bool) error {
 			attempts++
 			return nil
 		}
 
-		if err := waitForNodeInfoReachable(context.Background(), "node-a", "default", false); err != nil {
+		if err := waitForNodeInfoReachable(context.Background(), "node-a", "default", false, false); err != nil {
 			t.Fatalf("waitForNodeInfoReachable returned error: %v", err)
 		}
 		if attempts != 1 {
@@ -1207,7 +1207,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 		attempts := 0
 		waitForNodeInfoReachableMaxRetries = 4
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool, bool) error {
 			attempts++
 			if attempts < 3 {
 				return errors.New("temporary failure")
@@ -1215,7 +1215,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 			return nil
 		}
 
-		if err := waitForNodeInfoReachable(context.Background(), "node-b", "default", false); err != nil {
+		if err := waitForNodeInfoReachable(context.Background(), "node-b", "default", false, false); err != nil {
 			t.Fatalf("waitForNodeInfoReachable returned error: %v", err)
 		}
 		if attempts != 3 {
@@ -1226,13 +1226,13 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 	t.Run("returns context cancellation", func(t *testing.T) {
 		waitForNodeInfoReachableMaxRetries = 5
 		waitForNodeInfoReachableRetryDelay = time.Second
-		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool, bool) error {
 			return errors.New("still down")
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := waitForNodeInfoReachable(ctx, "node-c", "default", false)
+		err := waitForNodeInfoReachable(ctx, "node-c", "default", false, false)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context canceled error, got %v", err)
 		}
@@ -1241,11 +1241,11 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 	t.Run("returns wrapped error after max retries", func(t *testing.T) {
 		waitForNodeInfoReachableMaxRetries = 3
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool, bool) error {
 			return errors.New("permanent failure")
 		}
 
-		err := waitForNodeInfoReachable(context.Background(), "node-d", "default", false)
+		err := waitForNodeInfoReachable(context.Background(), "node-d", "default", false, false)
 		if err == nil {
 			t.Fatalf("expected timeout error after retries")
 		}
@@ -2406,37 +2406,41 @@ func TestStorageNodeDaemonSetReconcileRollsOnTLSSecretRevisionChange(t *testing.
 
 func TestStorageNodeDaemonSetSBTLSServeEnv(t *testing.T) {
 	cases := []struct {
-		name            string
-		tlsEnabled      bool
-		tlsProvider     string
-		wantServe       string
-		wantServeSet    bool
-		wantProvider    string
-		wantProviderSet bool
+		name             string
+		tlsEnabled       bool
+		tlsMutualEnabled bool
+		tlsProvider      string
+		wantEnv          map[string]string
+		notWantEnv       []string
 	}{
 		{
-			name:            "tls enabled with cert-manager",
-			tlsEnabled:      true,
-			tlsProvider:     utils.TLSProviderCertManager,
-			wantServe:       "true",
-			wantServeSet:    true,
-			wantProvider:    utils.TLSProviderCertManager,
-			wantProviderSet: true,
+			name:        "tls enabled (anonymous) with cert-manager",
+			tlsEnabled:  true,
+			tlsProvider: utils.TLSProviderCertManager,
+			wantEnv: map[string]string{
+				"SB_TLS_SERVE":    "1",
+				"SB_TLS_PROVIDER": utils.TLSProviderCertManager,
+				"SB_TLS_CONNECT":  "anonymous",
+			},
+			notWantEnv: []string{"SB_TLS_CLIENT_AUTH"},
 		},
 		{
-			name:            "tls enabled with OpenShift",
-			tlsEnabled:      true,
-			tlsProvider:     utils.TLSProviderOpenShift,
-			wantServe:       "true",
-			wantServeSet:    true,
-			wantProvider:    utils.TLSProviderOpenShift,
-			wantProviderSet: true,
+			name:             "tls + mutual TLS with OpenShift",
+			tlsEnabled:       true,
+			tlsMutualEnabled: true,
+			tlsProvider:      utils.TLSProviderOpenShift,
+			wantEnv: map[string]string{
+				"SB_TLS_SERVE":       "1",
+				"SB_TLS_PROVIDER":    utils.TLSProviderOpenShift,
+				"SB_TLS_CLIENT_AUTH": "required",
+				"SB_TLS_CONNECT":     "authenticated",
+			},
 		},
 		{
-			name:         "tls disabled omits TLS env vars",
-			tlsEnabled:   false,
-			tlsProvider:  utils.TLSProviderCertManager,
-			wantServeSet: false,
+			name:        "tls disabled omits TLS env vars",
+			tlsEnabled:  false,
+			tlsProvider: utils.TLSProviderCertManager,
+			notWantEnv:  []string{"SB_TLS_SERVE", "SB_TLS_PROVIDER", "SB_TLS_CLIENT_AUTH", "SB_TLS_CONNECT"},
 		},
 	}
 	for _, tc := range cases {
@@ -2448,6 +2452,7 @@ func TestStorageNodeDaemonSetSBTLSServeEnv(t *testing.T) {
 			r := newStorageNodeStateTestReconciler(t, sn)
 			r.TLSEnabled = tc.tlsEnabled
 			r.TLSProvider = tc.tlsProvider
+			r.TLSMutualEnabled = tc.tlsMutualEnabled
 
 			if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
 				t.Fatalf("reconcileDaemonSet returned error: %v", err)
@@ -2468,22 +2473,18 @@ func TestStorageNodeDaemonSetSBTLSServeEnv(t *testing.T) {
 				envSeen[e.Name] = true
 			}
 
-			switch {
-			case tc.wantServeSet && !envSeen["SB_TLS_SERVE"]:
-				t.Fatalf("expected SB_TLS_SERVE env var to be set on main container")
-			case tc.wantServeSet && envByName["SB_TLS_SERVE"] != tc.wantServe:
-				t.Fatalf("SB_TLS_SERVE: want %q, got %q", tc.wantServe, envByName["SB_TLS_SERVE"])
-			case !tc.wantServeSet && envSeen["SB_TLS_SERVE"]:
-				t.Fatalf("expected SB_TLS_SERVE env var to be absent, got %q", envByName["SB_TLS_SERVE"])
+			for name, want := range tc.wantEnv {
+				if !envSeen[name] {
+					t.Fatalf("expected env var %s to be set on main container", name)
+				}
+				if envByName[name] != want {
+					t.Fatalf("%s: want %q, got %q", name, want, envByName[name])
+				}
 			}
-
-			switch {
-			case tc.wantProviderSet && !envSeen["SB_TLS_PROVIDER"]:
-				t.Fatalf("expected SB_TLS_PROVIDER env var to be set on main container")
-			case tc.wantProviderSet && envByName["SB_TLS_PROVIDER"] != tc.wantProvider:
-				t.Fatalf("SB_TLS_PROVIDER: want %q, got %q", tc.wantProvider, envByName["SB_TLS_PROVIDER"])
-			case !tc.wantProviderSet && envSeen["SB_TLS_PROVIDER"]:
-				t.Fatalf("expected SB_TLS_PROVIDER env var to be absent, got %q", envByName["SB_TLS_PROVIDER"])
+			for _, name := range tc.notWantEnv {
+				if envSeen[name] {
+					t.Fatalf("expected env var %s to be absent, got %q", name, envByName[name])
+				}
 			}
 		})
 	}

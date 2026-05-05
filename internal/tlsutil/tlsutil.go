@@ -17,9 +17,30 @@ import (
 // signs the in-cluster simplyblock service serving certificates.
 const ServiceCABundlePath = "/etc/simplyblock/tls/ca.crt"
 
+// ServiceClientCertPath / ServiceClientKeyPath are where the operator pod
+// mounts its own keypair for presenting as a client certificate to
+// services that require mutual TLS (i.e. SB_TLS_CLIENT_AUTH=required on the
+// server side / SB_TLS_CONNECT=authenticated on the client side).
+const (
+	ServiceClientCertPath = "/etc/simplyblock/tls/tls.crt"
+	ServiceClientKeyPath  = "/etc/simplyblock/tls/tls.key"
+)
+
 // OperatorNamespacePath holds the path the in-pod service-account namespace
 // is mounted at. Overridable for tests.
 var OperatorNamespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+// ClientOptions tunes the TLS client built by the helpers in this package.
+type ClientOptions struct {
+	// CABundlePath is the path to the PEM bundle that signs the server cert.
+	CABundlePath string
+	// Mutual enables mutual TLS by loading a client keypair on every
+	// handshake. When true, ClientCertPath / ClientKeyPath must point at a
+	// usable PEM-encoded cert/key pair.
+	Mutual         bool
+	ClientCertPath string
+	ClientKeyPath  string
+}
 
 // BuildStorageNodeAPIClient returns an *http.Client that trusts the CA at
 // caPath and pins ServerName to the storage-node API service DNS name in the
@@ -27,8 +48,8 @@ var OperatorNamespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/names
 // still passing hostname verification against the service-ca-issued cert,
 // whose SAN is the service DNS name. Timeout is short (3s) since this is used
 // for reachability probes.
-func BuildStorageNodeAPIClient(namespace, caPath string) (*http.Client, error) {
-	c, err := buildServiceAPIClient("simplyblock-storage-node-api", namespace, caPath)
+func BuildStorageNodeAPIClient(namespace string, opts ClientOptions) (*http.Client, error) {
+	c, err := buildServiceAPIClient("simplyblock-storage-node-api", namespace, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -39,8 +60,8 @@ func BuildStorageNodeAPIClient(namespace, caPath string) (*http.Client, error) {
 // BuildWebAPIClient returns an *http.Client that trusts the CA at caPath and
 // pins ServerName to the simplyblock-webappapi service DNS name. Timeout
 // matches the previous default for the cluster control-plane API client.
-func BuildWebAPIClient(namespace, caPath string) (*http.Client, error) {
-	c, err := buildServiceAPIClient("simplyblock-webappapi", namespace, caPath)
+func BuildWebAPIClient(namespace string, opts ClientOptions) (*http.Client, error) {
+	c, err := buildServiceAPIClient("simplyblock-webappapi", namespace, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -48,22 +69,44 @@ func BuildWebAPIClient(namespace, caPath string) (*http.Client, error) {
 	return c, nil
 }
 
-func buildServiceAPIClient(serviceName, namespace, caPath string) (*http.Client, error) {
-	caPEM, err := os.ReadFile(caPath)
+func buildServiceAPIClient(serviceName, namespace string, opts ClientOptions) (*http.Client, error) {
+	caPEM, err := os.ReadFile(opts.CABundlePath)
 	if err != nil {
-		return nil, fmt.Errorf("read CA bundle %q: %w", caPath, err)
+		return nil, fmt.Errorf("read CA bundle %q: %w", opts.CABundlePath, err)
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("CA bundle at %q contains no usable certificates", caPath)
+		return nil, fmt.Errorf("CA bundle at %q contains no usable certificates", opts.CABundlePath)
 	}
+
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    pool,
+		ServerName: fmt.Sprintf("%s.%s.svc", serviceName, namespace),
+	}
+
+	if opts.Mutual {
+		// Probe once at construction time so a misconfigured pod fails fast
+		// instead of erroring on the first request.
+		if _, err := tls.LoadX509KeyPair(opts.ClientCertPath, opts.ClientKeyPath); err != nil {
+			return nil, fmt.Errorf("load client keypair (%q, %q): %w", opts.ClientCertPath, opts.ClientKeyPath, err)
+		}
+		certPath := opts.ClientCertPath
+		keyPath := opts.ClientKeyPath
+		// Re-read on every handshake so cert-manager rotations take effect
+		// without requiring a pod restart.
+		tlsConfig.GetClientCertificate = func(_ *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+			if err != nil {
+				return nil, fmt.Errorf("reload client keypair: %w", err)
+			}
+			return &cert, nil
+		}
+	}
+
 	return &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS12,
-				RootCAs:    pool,
-				ServerName: fmt.Sprintf("%s.%s.svc", serviceName, namespace),
-			},
+			TLSClientConfig: tlsConfig,
 		},
 	}, nil
 }

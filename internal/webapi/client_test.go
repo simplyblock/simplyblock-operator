@@ -8,7 +8,8 @@ import (
 )
 
 func TestNewClientDefaultsToHTTP(t *testing.T) {
-	t.Setenv("TLS_ENABLED", "")
+	t.Setenv("SB_TLS_SERVE", "")
+	t.Setenv("SB_TLS_CONNECT", "")
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
 
 	c := NewClient()
@@ -24,7 +25,8 @@ func TestNewClientDefaultsToHTTP(t *testing.T) {
 }
 
 func TestNewClientTLSEnabledFlipsScheme(t *testing.T) {
-	t.Setenv("TLS_ENABLED", "true")
+	t.Setenv("SB_TLS_SERVE", "1")
+	t.Setenv("SB_TLS_CONNECT", "")
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
 	resetTLSClientCacheForTest(t)
 
@@ -39,8 +41,24 @@ func TestNewClientTLSEnabledFlipsScheme(t *testing.T) {
 	}
 }
 
+func TestNewClientMutualTLSAttemptsClientKeypair(t *testing.T) {
+	t.Setenv("SB_TLS_SERVE", "1")
+	t.Setenv("SB_TLS_CONNECT", "authenticated")
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
+	resetTLSClientCacheForTest(t)
+
+	c := NewClient()
+	// In unit tests, the CA bundle path is missing so the builder fails
+	// before the client keypair is loaded — that's still expected to
+	// surface as an initErr.
+	if c.initErr == nil {
+		t.Fatalf("expected initErr when CA bundle is unavailable in unit tests")
+	}
+}
+
 func TestNewClientInitErrSurfacesFromDo(t *testing.T) {
-	t.Setenv("TLS_ENABLED", "true")
+	t.Setenv("SB_TLS_SERVE", "1")
+	t.Setenv("SB_TLS_CONNECT", "")
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
 	resetTLSClientCacheForTest(t)
 
@@ -59,7 +77,8 @@ func TestNewClientInitErrSurfacesFromDo(t *testing.T) {
 }
 
 func TestNewClientExplicitURLBypassesEnv(t *testing.T) {
-	t.Setenv("TLS_ENABLED", "true")
+	t.Setenv("SB_TLS_SERVE", "1")
+	t.Setenv("SB_TLS_CONNECT", "")
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "https://override.example/")
 	resetTLSClientCacheForTest(t)
 
