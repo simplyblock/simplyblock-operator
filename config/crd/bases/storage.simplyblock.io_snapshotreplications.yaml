@@ -223,6 +223,18 @@ spec:
                         - timestamp
                         type: object
                       type: array
+                    failbackState:
+                      description: |-
+                        FailbackState stores identifiers resolved during failback initiation and
+                        used by all subsequent failback phases.
+                      properties:
+                        isFreshCluster:
+                          type: boolean
+                        sourceLvolUUID:
+                          type: string
+                        sourcePoolUUID:
+                          type: string
+                      type: object
                     lastReplicationTime:
                       description: Timestamp of the last successful replication for
                         this volume
@@ -244,6 +256,15 @@ spec:
                       - Completed
                       - Failed
                       - Paused
+                      - FailbackTriggerFirst
+                      - FailbackWaitFirst
+                      - FailbackSuspend
+                      - FailbackWaitSecond
+                      - FailbackDeleteSource
+                      - FailbackWaitSourceDeleted
+                      - FailbackReplicateOnSource
+                      - FailbackDeleteTarget
+                      - FailbackWaitTargetDeleted
                       type: string
                     pvcRef:
                       description: PVCRef identifies the PVC being replicated

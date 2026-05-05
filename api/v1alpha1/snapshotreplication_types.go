@@ -61,6 +61,36 @@ const (
 
 	// VolPhasePaused means replication is explicitly paused.
 	VolPhasePaused = "Paused"
+
+	// Failback sub-phases — each maps to a single non-blocking reconcile step.
+	// Source info is resolved once and stored in FailbackVolumeState so that
+	// every subsequent step can be re-entered safely after a crash or requeue.
+
+	// VolPhaseFailbackTriggerFirst means the first replication trigger on the
+	// target cluster is pending (source info already resolved and persisted).
+	VolPhaseFailbackTriggerFirst = "FailbackTriggerFirst"
+	// VolPhaseFailbackWaitFirst means the controller is polling for the first
+	// target replication task to complete.
+	VolPhaseFailbackWaitFirst = "FailbackWaitFirst"
+	// VolPhaseFailbackSuspend means the target lvol should be suspended and the
+	// second replication triggered in the same step.
+	VolPhaseFailbackSuspend = "FailbackSuspend"
+	// VolPhaseFailbackWaitSecond means the controller is polling for the second
+	// target replication task to complete.
+	VolPhaseFailbackWaitSecond = "FailbackWaitSecond"
+	// VolPhaseFailbackDeleteSource means the source lvol should be deleted.
+	VolPhaseFailbackDeleteSource = "FailbackDeleteSource"
+	// VolPhaseFailbackWaitSourceDeleted means the controller is polling for the
+	// source lvol to reach the deleted state.
+	VolPhaseFailbackWaitSourceDeleted = "FailbackWaitSourceDeleted"
+	// VolPhaseFailbackReplicateOnSource means replicate_lvol_on_source_cluster
+	// should be called, then the target lvol deleted.
+	VolPhaseFailbackReplicateOnSource = "FailbackReplicateOnSource"
+	// VolPhaseFailbackDeleteTarget means the target lvol should be deleted.
+	VolPhaseFailbackDeleteTarget = "FailbackDeleteTarget"
+	// VolPhaseFailbackWaitTargetDeleted means the controller is polling for the
+	// target lvol to reach the deleted state.
+	VolPhaseFailbackWaitTargetDeleted = "FailbackWaitTargetDeleted"
 )
 
 // Condition type constants used in SnapshotReplicationStatus.Conditions.
@@ -132,6 +162,15 @@ type SnapshotReplicationStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
+// FailbackVolumeState holds per-volume identifiers resolved once at the start
+// of a failback and persisted so every subsequent phase can be re-entered
+// safely after a crash or requeue without re-querying the source cluster.
+type FailbackVolumeState struct {
+	SourcePoolUUID string `json:"sourcePoolUUID,omitempty"`
+	SourceLvolUUID string `json:"sourceLvolUUID,omitempty"`
+	IsFreshCluster bool   `json:"isFreshCluster,omitempty"`
+}
+
 // VolumeReplicationStatus tracks the replication state of an individual volume
 type VolumeReplicationStatus struct {
 	// PVCRef identifies the PVC being replicated
@@ -141,7 +180,7 @@ type VolumeReplicationStatus struct {
 	VolumeID string `json:"volumeID,omitempty"`
 
 	// Phase is the current replication phase for this volume.
-	// +kubebuilder:validation:Enum=Pending;Running;TriggeringTargetReplication;WaitingForTargetReplication;ReplicatingToSource;WaitingForTargetDeletion;Completed;Failed;Paused
+	// +kubebuilder:validation:Enum=Pending;Running;TriggeringTargetReplication;WaitingForTargetReplication;ReplicatingToSource;WaitingForTargetDeletion;Completed;Failed;Paused;FailbackTriggerFirst;FailbackWaitFirst;FailbackSuspend;FailbackWaitSecond;FailbackDeleteSource;FailbackWaitSourceDeleted;FailbackReplicateOnSource;FailbackDeleteTarget;FailbackWaitTargetDeleted
 	Phase string `json:"phase,omitempty"`
 
 	// Last snapshot ID replicated for this volume
@@ -155,6 +194,10 @@ type VolumeReplicationStatus struct {
 
 	// Optional: list of errors encountered for this volume
 	Errors []ReplicationError `json:"errors,omitempty"`
+
+	// FailbackState stores identifiers resolved during failback initiation and
+	// used by all subsequent failback phases.
+	FailbackState *FailbackVolumeState `json:"failbackState,omitempty"`
 }
 
 // ReplicationError stores timestamped error messages
