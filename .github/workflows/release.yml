@@ -67,6 +67,18 @@ jobs:
             VERSION=${{ steps.version.outputs.version }} \
             IMG_TAG=${{ steps.version.outputs.tag }}
 
+      - name: Package bundle as release asset
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          zip -r "bundle-${TAG}.zip" bundle/manifests/ bundle/metadata/
+
+      - name: Attach bundle zip to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          gh release upload "$TAG" "bundle-${TAG}.zip" --clobber
+
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v4
         with:
