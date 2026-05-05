@@ -1,15 +1,19 @@
 package utils
 
 import (
+	"fmt"
+	"strings"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.DaemonSet {
+func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool) *appsv1.DaemonSet {
 
 	labels := map[string]string{
 		"app":                 "storage-node",
@@ -64,6 +68,109 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: sn.Spec.ReservedSystemCPU})
 	}
 
+	volumes := []corev1.Volume{
+		{
+			Name: "dev-vol",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/dev",
+				},
+			},
+		},
+		{
+			Name: "etc-simplyblock",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/var/simplyblock",
+				},
+			},
+		},
+		{
+			Name: "host-sys",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/sys",
+				},
+			},
+		},
+		{
+			Name: "host-mnt",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/mnt",
+				},
+			},
+		},
+		{
+			Name: "host-modules",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/lib/modules",
+				},
+			},
+		},
+	}
+
+	initMounts := []corev1.VolumeMount{
+		{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
+		{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
+		{Name: "host-mnt", MountPath: "/mnt"},
+	}
+
+	mainMounts := []corev1.VolumeMount{
+		{Name: "dev-vol", MountPath: "/dev"},
+		{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
+		{Name: "host-sys", MountPath: "/sys"},
+	}
+
+	readinessProbe := &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: "/snode/check",
+				Port: intstr.FromInt(5000),
+			},
+		},
+		InitialDelaySeconds: 10,
+		PeriodSeconds:       5,
+	}
+
+	if tlsEnabled {
+		readinessProbe.HTTPGet.Scheme = corev1.URISchemeHTTPS
+
+		volumes = append(volumes, corev1.Volume{
+			Name: "tls",
+			VolumeSource: corev1.VolumeSource{
+				Projected: &corev1.ProjectedVolumeSource{
+					Sources: []corev1.VolumeProjection{
+						{
+							Secret: &corev1.SecretProjection{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: "simplyblock-storage-node-api-tls",
+								},
+							},
+						},
+						{
+							ConfigMap: &corev1.ConfigMapProjection{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: "simplyblock-certificate-authority",
+								},
+								Items: []corev1.KeyToPath{
+									{Key: "service-ca.crt", Path: "ca.crt"},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+
+		tlsMounts := []corev1.VolumeMount{
+			{Name: "tls", MountPath: "/etc/simplyblock/tls", ReadOnly: true},
+		}
+		initMounts = append(initMounts, tlsMounts...)
+		mainMounts = append(mainMounts, tlsMounts...)
+	}
+
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "simplyblock-storage-node-ds-" + sn.Spec.ClusterName,
@@ -95,48 +202,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 						"io.simplyblock.node-type": "simplyblock-storage-plane-" + sn.Spec.ClusterName,
 					},
 
-					Volumes: []corev1.Volume{
-						{
-							Name: "dev-vol",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: "/dev",
-								},
-							},
-						},
-						{
-							Name: "etc-simplyblock",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: "/var/simplyblock",
-								},
-							},
-						},
-						{
-							Name: "host-sys",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: "/sys",
-								},
-							},
-						},
-						{
-							Name: "host-mnt",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: "/mnt",
-								},
-							},
-						},
-						{
-							Name: "host-modules",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: "/lib/modules",
-								},
-							},
-						},
-					},
+					Volumes: volumes,
 
 					InitContainers: []corev1.Container{
 						{
@@ -145,11 +211,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 							ImagePullPolicy: corev1.PullAlways,
 							Command:         initCmd,
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
-							VolumeMounts: []corev1.VolumeMount{
-								{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
-								{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
-								{Name: "host-mnt", MountPath: "/mnt"},
-							},
+							VolumeMounts:    initMounts,
 							Env: []corev1.EnvVar{
 								{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
@@ -168,22 +230,9 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode) *appsv1.Daem
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
 
-							ReadinessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									HTTPGet: &corev1.HTTPGetAction{
-										Path: "/snode/check",
-										Port: intstr.FromInt(5000),
-									},
-								},
-								InitialDelaySeconds: 10,
-								PeriodSeconds:       5,
-							},
-							Env: mainEnv,
-							VolumeMounts: []corev1.VolumeMount{
-								{Name: "dev-vol", MountPath: "/dev"},
-								{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
-								{Name: "host-sys", MountPath: "/sys"},
-							},
+							ReadinessProbe: readinessProbe,
+							Env:            mainEnv,
+							VolumeMounts:   mainMounts,
 						},
 					},
 				},
@@ -248,6 +297,149 @@ func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 		},
 		Rules: baseRules,
 	}
+}
+
+// StorageNodeAPIAddress returns the per-pod headless-service DNS address that
+// the cluster control-plane uses to reach a storage-node-api pod backing the
+// given worker node.
+func StorageNodeAPIAddress(workerNode, namespace string) string {
+	return fmt.Sprintf("%s.simplyblock-storage-node-api.%s.svc.cluster.local:5000", nodeHostnameLabel(workerNode), namespace)
+}
+
+func BuildStorageNodeService(sn *simplyblockv1alpha1.StorageNode) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-storage-node-api",
+			Namespace: sn.Namespace,
+			Annotations: map[string]string{
+				"service.beta.openshift.io/serving-cert-secret-name": "simplyblock-storage-node-api-tls",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "None",
+			Ports: []corev1.ServicePort{
+				{
+					Name:     "api",
+					Port:     5000,
+					Protocol: corev1.ProtocolTCP,
+				},
+			},
+		},
+	}
+}
+
+func BuildStorageNodeEndpointSlice(sn *simplyblockv1alpha1.StorageNode, nodeIPs map[string]string) *discoveryv1.EndpointSlice {
+	protocol := corev1.ProtocolTCP
+	port := int32(5000)
+	portName := "api"
+
+	endpoints := make([]discoveryv1.Endpoint, 0, len(nodeIPs))
+	for nodeName, ip := range nodeIPs {
+		hostname := nodeHostnameLabel(nodeName)
+		endpoints = append(endpoints, discoveryv1.Endpoint{
+			Addresses: []string{ip},
+			Hostname:  &hostname,
+		})
+	}
+
+	return &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-storage-node-api-endpoints",
+			Namespace: sn.Namespace,
+			Labels: map[string]string{
+				"kubernetes.io/service-name": "simplyblock-storage-node-api",
+			},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints:   endpoints,
+		Ports: []discoveryv1.EndpointPort{
+			{
+				Name:     &portName,
+				Protocol: &protocol,
+				Port:     &port,
+			},
+		},
+	}
+}
+
+// SpdkProxyEndpoint describes a single spdk-proxy pod instance that backs the
+// headless spdk-proxy Service.
+type SpdkProxyEndpoint struct {
+	NodeName string
+	PodIP    string
+	RpcPort  int32
+}
+
+func BuildSpdkProxyService(sn *simplyblockv1alpha1.StorageNode) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-spdk-proxy",
+			Namespace: sn.Namespace,
+			Annotations: map[string]string{
+				"service.beta.openshift.io/serving-cert-secret-name": "simplyblock-spdk-proxy-tls",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "None",
+		},
+	}
+}
+
+// BuildSpdkProxyEndpointSlice builds one EndpointSlice for a single RPC_PORT.
+// Each endpoint resolves <nodeLabel>.spdk-proxy.<ns>.svc to the node's IP via
+// the headless Service's per-endpoint hostname DNS. The hostname is the node
+// name truncated at the first dot so FQDN-style node names stay within the
+// 63-char DNS label limit.
+func BuildSpdkProxyEndpointSlice(
+	sn *simplyblockv1alpha1.StorageNode,
+	rpcPort int32,
+	endpoints []SpdkProxyEndpoint,
+) (*discoveryv1.EndpointSlice, error) {
+	protocol := corev1.ProtocolTCP
+	port := rpcPort
+	portName := "proxy"
+	ready := true
+
+	eps := make([]discoveryv1.Endpoint, 0, len(endpoints))
+	seen := make(map[string]string, len(endpoints))
+	for _, e := range endpoints {
+		label := nodeHostnameLabel(e.NodeName)
+		if prev, ok := seen[label]; ok && prev != e.NodeName {
+			return nil, fmt.Errorf("spdk-proxy endpoint hostname collision on label %q (nodes %q and %q): node names share the same first DNS segment", label, prev, e.NodeName)
+		}
+		seen[label] = e.NodeName
+
+		hostname := label
+		eps = append(eps, discoveryv1.Endpoint{
+			Addresses:  []string{e.PodIP},
+			Hostname:   &hostname,
+			Conditions: discoveryv1.EndpointConditions{Ready: &ready},
+		})
+	}
+
+	return &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("spdk-proxy-endpoints-%d", rpcPort),
+			Namespace: sn.Namespace,
+			Labels: map[string]string{
+				"kubernetes.io/service-name": "simplyblock-spdk-proxy",
+			},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints:   eps,
+		Ports: []discoveryv1.EndpointPort{
+			{
+				Name:     &portName,
+				Protocol: &protocol,
+				Port:     &port,
+			},
+		},
+	}, nil
+}
+
+func nodeHostnameLabel(nodeName string) string {
+	label, _, _ := strings.Cut(nodeName, ".")
+	return label
 }
 
 func BuildStorageNodeClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {

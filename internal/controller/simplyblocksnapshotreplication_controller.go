@@ -48,6 +48,9 @@ type SnapshotReplicationReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=snapshotreplications/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=snapshotreplications/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims;persistentvolumes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 func (r *SnapshotReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)

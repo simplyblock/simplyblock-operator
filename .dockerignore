@@ -9,3 +9,9 @@
 # Re-include Go module files
 !go.mod
 !go.sum
+
+# Re-include bundle directory
+!bundle/
+
+Re-include LICENSE file
+!LICENSE

@@ -15,15 +15,6 @@ rules:
   - ""
   resources:
   - nodes
-  - persistentvolumeclaims
-  - persistentvolumes
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - pods
   verbs:
   - get
@@ -34,7 +25,51 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - persistentvolumeclaims
+  - persistentvolumes
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - secrets
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
   verbs:
   - create
   - delete
@@ -56,6 +91,19 @@ rules:
   - update
   - watch
 - apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  - clusterroles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - storage.k8s.io
   resources:
   - storageclasses
@@ -68,6 +116,8 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backuppolicies
+  - backuprestores
   - devices
   - lvols
   - pools
@@ -87,6 +137,8 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backuppolicies/finalizers
+  - backuprestores/finalizers
   - devices/finalizers
   - lvols/finalizers
   - pools/finalizers
@@ -100,6 +152,8 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backuppolicies/status
+  - backuprestores/status
   - devices/status
   - lvols/status
   - pools/status

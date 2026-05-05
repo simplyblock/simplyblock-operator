@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+env:
+  QUAY_IMAGE_BASE: quay.io/simplyblock-io/simplyblock-operator
+
+jobs:
+  release:
+    name: Build, Push, and Bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to upload release assets if desired
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Extract version
+        id: version
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Quay.io
+        uses: docker/login-action@v3
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Build and push multi-arch image to quay.io
+        run: |
+          make docker-buildx \
+            VERSION=${{ steps.version.outputs.version }} \
+            IMG_TAG=${{ steps.version.outputs.tag }} \
+            PLATFORMS="linux/amd64,linux/arm64"
+
+      - name: Install operator-sdk
+        run: |
+          OPERATOR_SDK_VERSION="v1.42.2"
+          curl -sLo /usr/local/bin/operator-sdk \
+            "https://github.com/operator-framework/operator-sdk/releases/download/${OPERATOR_SDK_VERSION}/operator-sdk_linux_amd64"
+          chmod +x /usr/local/bin/operator-sdk
+          operator-sdk version
+
+      - name: Install kustomize
+        run: |
+          make kustomize
+          echo "${{ github.workspace }}/bin" >> "$GITHUB_PATH"
+
+      - name: Generate bundle
+        run: |
+          make bundle \
+            VERSION=${{ steps.version.outputs.version }} \
+            IMG_TAG=${{ steps.version.outputs.tag }}
+
+      - name: Package bundle as release asset
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          zip -r "bundle-${TAG}.zip" bundle/manifests/ bundle/metadata/
+
+      - name: Attach bundle zip to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          gh release upload "$TAG" "bundle-${TAG}.zip" --clobber
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ steps.version.outputs.tag }}
+          path: |
+            bundle/manifests/
+            bundle/metadata/
+          retention-days: 90

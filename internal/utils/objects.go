@@ -26,7 +26,7 @@ type ClusterGetResponse struct {
 type NodeStatusResponse struct {
 	UUID   string `json:"id"`
 	Status string `json:"status"`
-	IP     string `json:"ip"`
+	IP     string `json:"mgmt_ip"`
 }
 
 type Lvol struct {

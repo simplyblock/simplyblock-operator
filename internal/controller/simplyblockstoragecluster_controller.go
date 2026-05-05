@@ -92,6 +92,9 @@ type CSIClusterEntry struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -103,8 +106,6 @@ type CSIClusterEntry struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
 func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
 	// Fetch the CR directly from the API server (bypasses the informer cache)
 	// to avoid a stale UUID="" read after Status().Patch() triggers a new reconcile.
 	clusterCR := &simplyblockv1alpha1.StorageCluster{}
@@ -128,11 +129,32 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	case utils.ClusterActionExpand:
 		return r.reconcileExpand(ctx, clusterCR)
+
+	case utils.ClusterActionShutdown:
+		return r.reconcileShutdown(ctx, clusterCR)
+
+	case utils.ClusterActionStart:
+		return r.reconcileStart(ctx, clusterCR)
+
+	case utils.ClusterActionRestart:
+		return r.reconcileRestart(ctx, clusterCR)
+
+	case utils.ClusterActionNodeRecycle:
+		return r.reconcileNodeRecycle(ctx, clusterCR)
 	}
 
 	if clusterCR.Status.UUID != "" {
 		return r.syncStatus(ctx, clusterCR)
 	}
+
+	return r.reconcileCreate(ctx, clusterCR)
+}
+
+func (r *StorageClusterReconciler) reconcileCreate(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 
 	apiClient := webapi.NewClient()
 	/* -------------------- Health Check -------------------- */

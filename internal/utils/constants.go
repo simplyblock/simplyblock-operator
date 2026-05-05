@@ -9,8 +9,19 @@ const (
 	FinalizerStorageNode         = "storage.simplyblock.io/storagenode-finalizer"
 	FinalizerStorageCluster      = "storage.simplyblock.io/cluster-finalizer"
 
-	ClusterActionActivate = "activate"
-	ClusterActionExpand   = "expand"
+	ClusterActionActivate    = "activate"
+	ClusterActionExpand      = "expand"
+	ClusterActionShutdown    = "shutdown"
+	ClusterActionStart       = "start"
+	ClusterActionRestart     = "restart"
+	ClusterActionNodeRecycle = "node-recycle"
+
+	// NodeRecycle per-node phases
+	NodeRecyclePhaseSnodeRefresh     = "snode-refresh"
+	NodeRecyclePhaseSnodeRefreshWait = "snode-refresh-wait"
+	NodeRecyclePhaseShuttingDown     = "shutting-down"
+	NodeRecyclePhaseRestarting       = "restarting"
+	NodeRecyclePhaseRebalancing      = "rebalancing"
 
 	ActionStateRunning = "running"
 	ActionStateSuccess = "success"
@@ -23,6 +34,7 @@ const (
 
 	NodeStatusOnline      = "online"
 	NodeStatusOffline     = "offline"
+	NodeStatusInRestart   = "in_restart"
 	NodeStatusUnreachable = "unreachable"
 
 	DeviceActionRemove  = "remove"

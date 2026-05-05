@@ -17,6 +17,7 @@ import (
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,16 +25,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const statusOnline = "online"
+const (
+	statusOnline  = "online"
+	mgmtIP        = "10.0.0.1"
+	tlsVolumeName = "tls"
+	caVolumeName  = "certificate-authority"
+)
 
 func TestEnsureNodeStatus(t *testing.T) {
 	cr := &simplyblockv1alpha1.StorageNode{}
 
-	s := ensureNodeStatus(cr, "node-a", "10.0.0.1")
+	s := ensureNodeStatus(cr, "node-a", mgmtIP)
 	if s == nil {
 		t.Fatalf("ensureNodeStatus returned nil")
 	}
-	if s.Hostname != "node-a" || s.MgmtIp != "10.0.0.1" || s.Status != "in_creation" {
+	if s.Hostname != "node-a" || s.MgmtIp != mgmtIP || s.Status != "in_creation" {
 		t.Fatalf("unexpected initial node status: %#v", *s)
 	}
 	if len(cr.Status.Nodes) != 1 {
@@ -48,7 +54,7 @@ func TestEnsureNodeStatus(t *testing.T) {
 		t.Fatalf("should not append duplicate node entry")
 	}
 	// existing value should be retained
-	if s2.MgmtIp != "10.0.0.1" {
+	if s2.MgmtIp != mgmtIP {
 		t.Fatalf("expected existing node status to be reused, got %#v", *s2)
 	}
 }
@@ -109,7 +115,7 @@ func TestWaitForActionCompletionValidTransitions(t *testing.T) {
 				}
 
 				w.WriteHeader(http.StatusOK)
-				_ = json.NewEncoder(w).Encode(NodeStatusResponse{
+				_ = json.NewEncoder(w).Encode(utils.NodeStatusResponse{
 					Status: tc.respStatus,
 				})
 			}))
@@ -339,64 +345,188 @@ func TestStorageNodeLabelingHelpers(t *testing.T) {
 	})
 }
 
-func TestStorageNodeDaemonSetReconcile(t *testing.T) {
-	t.Run("creates daemonset when missing", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.StorageNode{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "sn-ds-create",
-				Namespace: "default",
-				UID:       "uid-create",
-			},
-			Spec: simplyblockv1alpha1.StorageNodeSpec{
-				ClusterName: "cluster-a",
-			},
-		}
-		r := newStorageNodeStateTestReconciler(t, sn)
+func TestStorageNodeDaemonSetReconcileCreatesWhenMissing(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sn-ds-create",
+			Namespace: "default",
+			UID:       "uid-create",
+		},
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
+			ClusterName: "cluster-a",
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn)
 
-		if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
-			t.Fatalf("reconcileDaemonSet returned error: %v", err)
-		}
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileDaemonSet returned error: %v", err)
+	}
 
-		var ds appsv1.DaemonSet
-		if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
-			t.Fatalf("daemonset should be created: %v", err)
-		}
-		if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
-			t.Fatalf("expected daemonset to be owned by storagenode")
-		}
-	})
+	var ds appsv1.DaemonSet
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+		t.Fatalf("daemonset should be created: %v", err)
+	}
+	if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
+		t.Fatalf("expected daemonset to be owned by storagenode")
+	}
+}
 
-	t.Run("updates existing daemonset", func(t *testing.T) {
-		sn := &simplyblockv1alpha1.StorageNode{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "sn-ds-update",
-				Namespace: "default",
-				UID:       "uid-update",
-			},
-			Spec: simplyblockv1alpha1.StorageNodeSpec{
-				ClusterName: "cluster-a",
-			},
-		}
-		existing := &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "simplyblock-storage-node-ds-cluster-a",
-				Namespace: "default",
-			},
-		}
-		r := newStorageNodeStateTestReconciler(t, sn, existing)
+func TestStorageNodeDaemonSetReconcileUpdatesExisting(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sn-ds-update",
+			Namespace: "default",
+			UID:       "uid-update",
+		},
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
+			ClusterName: "cluster-a",
+		},
+	}
+	existing := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-storage-node-ds-cluster-a",
+			Namespace: "default",
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn, existing)
 
-		if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
-			t.Fatalf("reconcileDaemonSet returned error: %v", err)
-		}
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileDaemonSet returned error: %v", err)
+	}
 
-		var ds appsv1.DaemonSet
-		if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
-			t.Fatalf("failed to fetch daemonset: %v", err)
+	var ds appsv1.DaemonSet
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+		t.Fatalf("failed to fetch daemonset: %v", err)
+	}
+	if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
+		t.Fatalf("expected updated daemonset to carry owner reference")
+	}
+}
+
+func TestStorageNodeDaemonSetReconcileTLSDisabled(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-tls-off", Namespace: "default", UID: "uid-tls-off"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn)
+	r.TLSEnabled = false
+
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileDaemonSet returned error: %v", err)
+	}
+
+	var ds appsv1.DaemonSet
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+		t.Fatalf("failed to fetch daemonset: %v", err)
+	}
+	for _, v := range ds.Spec.Template.Spec.Volumes {
+		if v.Name == tlsVolumeName || v.Name == caVolumeName {
+			t.Fatalf("unexpected TLS volume present: %s", v.Name)
 		}
-		if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
-			t.Fatalf("expected updated daemonset to carry owner reference")
+	}
+	for _, c := range ds.Spec.Template.Spec.InitContainers {
+		for _, m := range c.VolumeMounts {
+			if m.Name == tlsVolumeName || m.Name == caVolumeName {
+				t.Fatalf("unexpected TLS mount on init container: %s", m.Name)
+			}
 		}
-	})
+	}
+	for _, c := range ds.Spec.Template.Spec.Containers {
+		for _, m := range c.VolumeMounts {
+			if m.Name == tlsVolumeName || m.Name == caVolumeName {
+				t.Fatalf("unexpected TLS mount on main container: %s", m.Name)
+			}
+		}
+		if c.ReadinessProbe == nil || c.ReadinessProbe.HTTPGet == nil {
+			t.Fatalf("expected HTTPGet readiness probe")
+		}
+		if c.ReadinessProbe.HTTPGet.Scheme != "" && c.ReadinessProbe.HTTPGet.Scheme != corev1.URISchemeHTTP {
+			t.Fatalf("expected default/HTTP probe scheme when TLS disabled, got %q", c.ReadinessProbe.HTTPGet.Scheme)
+		}
+	}
+}
+
+func checkTLSMounts(t *testing.T, label string, mounts []corev1.VolumeMount) {
+	t.Helper()
+	var gotTLS bool
+	for _, m := range mounts {
+		switch m.Name {
+		case tlsVolumeName:
+			gotTLS = true
+			if m.MountPath != "/etc/simplyblock/tls" || m.SubPath != "" || !m.ReadOnly {
+				t.Fatalf("%s: tls mount shape wrong: %#v", label, m)
+			}
+		case caVolumeName:
+			t.Fatalf("%s: unexpected separate certificate-authority mount: %#v", label, m)
+		}
+	}
+	if !gotTLS {
+		t.Fatalf("%s: expected tls mount", label)
+	}
+}
+
+func TestStorageNodeDaemonSetReconcileTLSEnabled(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-tls-on", Namespace: "default", UID: "uid-tls-on"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn)
+	r.TLSEnabled = true
+
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileDaemonSet returned error: %v", err)
+	}
+
+	var ds appsv1.DaemonSet
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+		t.Fatalf("failed to fetch daemonset: %v", err)
+	}
+
+	var tlsVol *corev1.Volume
+	for i := range ds.Spec.Template.Spec.Volumes {
+		v := &ds.Spec.Template.Spec.Volumes[i]
+		switch v.Name {
+		case tlsVolumeName:
+			tlsVol = v
+		case caVolumeName:
+			t.Fatalf("unexpected separate certificate-authority volume: %#v", v)
+		}
+	}
+	if tlsVol == nil || tlsVol.Projected == nil {
+		t.Fatalf("expected projected tls volume, got %#v", tlsVol)
+	}
+	var gotSecret, gotCA bool
+	for _, src := range tlsVol.Projected.Sources {
+		switch {
+		case src.Secret != nil && src.Secret.Name == "simplyblock-storage-node-api-tls":
+			gotSecret = true
+		case src.ConfigMap != nil && src.ConfigMap.Name == "simplyblock-certificate-authority":
+			gotCA = true
+			if len(src.ConfigMap.Items) != 1 || src.ConfigMap.Items[0].Key != "service-ca.crt" || src.ConfigMap.Items[0].Path != "ca.crt" {
+				t.Fatalf("ca configmap projection wrong: %#v", src.ConfigMap.Items)
+			}
+		}
+	}
+	if !gotSecret || !gotCA {
+		t.Fatalf("expected projected sources for secret and ca configmap, got secret=%v ca=%v", gotSecret, gotCA)
+	}
+
+	if len(ds.Spec.Template.Spec.InitContainers) != 1 {
+		t.Fatalf("expected single init container")
+	}
+	checkTLSMounts(t, "init container", ds.Spec.Template.Spec.InitContainers[0].VolumeMounts)
+	if len(ds.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("expected single main container")
+	}
+	checkTLSMounts(t, "main container", ds.Spec.Template.Spec.Containers[0].VolumeMounts)
+
+	probe := ds.Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe == nil || probe.HTTPGet == nil {
+		t.Fatalf("expected HTTPGet readiness probe")
+	}
+	if probe.HTTPGet.Scheme != corev1.URISchemeHTTPS {
+		t.Fatalf("expected readiness probe scheme HTTPS when TLS enabled, got %q", probe.HTTPGet.Scheme)
+	}
 }
 
 func TestGetNodeInternalIP(t *testing.T) {
@@ -977,11 +1107,22 @@ func TestStorageNodeReconcileUnreachableNodeInfoRequeues(t *testing.T) {
 }
 
 func TestCheckNodeInfoReachable(t *testing.T) {
-	// checkNodeInfoReachable always probes http://<ip>:5000/snode/info.
 	// Use an unroutable test-net address to deterministically exercise error path.
-	err := checkNodeInfoReachable(context.Background(), "192.0.2.1")
+	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", false)
 	if err == nil {
 		t.Fatalf("expected error when node info endpoint is unreachable")
+	}
+}
+
+func TestCheckNodeInfoReachableTLSMissingCA(t *testing.T) {
+	// With TLS enabled and the default CA path (which won't exist in unit tests),
+	// the function must surface a build-client error before attempting any I/O.
+	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", true)
+	if err == nil {
+		t.Fatalf("expected error when CA bundle is missing")
+	}
+	if !strings.Contains(err.Error(), "build storage-node TLS client") {
+		t.Fatalf("expected TLS client build error, got: %v", err)
 	}
 }
 
@@ -999,12 +1140,12 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 		attempts := 0
 		waitForNodeInfoReachableMaxRetries = 3
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
 			attempts++
 			return nil
 		}
 
-		if err := waitForNodeInfoReachable(context.Background(), "10.0.0.1", "node-a"); err != nil {
+		if err := waitForNodeInfoReachable(context.Background(), "node-a", "default", false); err != nil {
 			t.Fatalf("waitForNodeInfoReachable returned error: %v", err)
 		}
 		if attempts != 1 {
@@ -1016,7 +1157,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 		attempts := 0
 		waitForNodeInfoReachableMaxRetries = 4
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
 			attempts++
 			if attempts < 3 {
 				return errors.New("temporary failure")
@@ -1024,7 +1165,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 			return nil
 		}
 
-		if err := waitForNodeInfoReachable(context.Background(), "10.0.0.2", "node-b"); err != nil {
+		if err := waitForNodeInfoReachable(context.Background(), "node-b", "default", false); err != nil {
 			t.Fatalf("waitForNodeInfoReachable returned error: %v", err)
 		}
 		if attempts != 3 {
@@ -1035,13 +1176,13 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 	t.Run("returns context cancellation", func(t *testing.T) {
 		waitForNodeInfoReachableMaxRetries = 5
 		waitForNodeInfoReachableRetryDelay = time.Second
-		waitForNodeInfoReachableCheckFn = func(context.Context, string) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
 			return errors.New("still down")
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := waitForNodeInfoReachable(ctx, "10.0.0.3", "node-c")
+		err := waitForNodeInfoReachable(ctx, "node-c", "default", false)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context canceled error, got %v", err)
 		}
@@ -1050,11 +1191,11 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 	t.Run("returns wrapped error after max retries", func(t *testing.T) {
 		waitForNodeInfoReachableMaxRetries = 3
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
 			return errors.New("permanent failure")
 		}
 
-		err := waitForNodeInfoReachable(context.Background(), "10.0.0.4", "node-d")
+		err := waitForNodeInfoReachable(context.Background(), "node-d", "default", false)
 		if err == nil {
 			t.Fatalf("expected timeout error after retries")
 		}
@@ -1067,8 +1208,17 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 	})
 }
 
-func TestWaitForNodeOnlinePaths(t *testing.T) {
-	t.Run("updates node status and exits when cluster already active", func(t *testing.T) {
+func TestPollNodeOnlinePaths(t *testing.T) {
+	origActivationDelay := waitForNodeOnlineActivationDelay
+	origSleepFn := waitForNodeOnlineSleepFn
+	t.Cleanup(func() {
+		waitForNodeOnlineActivationDelay = origActivationDelay
+		waitForNodeOnlineSleepFn = origSleepFn
+	})
+	waitForNodeOnlineActivationDelay = 0
+	waitForNodeOnlineSleepFn = func(time.Duration) {}
+
+	t.Run("updates node status and returns done when cluster already active", func(t *testing.T) {
 		const clusterName = "cluster-a"
 		const clusterUUID = "cluster-uuid-online"
 
@@ -1076,7 +1226,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v2/clusters/"+clusterUUID+"/storage-nodes",
+			"/api/v2/clusters/"+clusterUUID+"/storage-nodes/",
 			webapimock.RouteResponse{
 				Status: http.StatusOK,
 				Body: `[
@@ -1116,27 +1266,19 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 			},
 			Status: simplyblockv1alpha1.StorageNodeStatus{
 				Nodes: []simplyblockv1alpha1.NodeStatus{
-					{Hostname: "node-a", MgmtIp: "10.0.0.1", Status: "in_creation"},
+					{Hostname: "node-a", MgmtIp: mgmtIP, Status: "in_creation"},
 				},
 			},
 		}
 		r := newStorageNodeStateTestReconciler(t, cluster, sn)
 
-		err := waitForNodeOnline(
-			context.Background(),
-			apiClient,
-			"secret",
-			clusterUUID,
-			"10.0.0.1",
-			"node-a",
-			1,
-			sn,
-			r,
-		)
+		res, err := r.pollNodeOnline(context.Background(), apiClient, "secret", clusterUUID, mgmtIP, "node-a", 1, sn)
 		if err != nil {
-			t.Fatalf("waitForNodeOnline returned error: %v", err)
+			t.Fatalf("pollNodeOnline returned error: %v", err)
 		}
-
+		if res.RequeueAfter != 0 {
+			t.Fatalf("expected done result, got requeue: %v", res)
+		}
 		if len(sn.Status.Nodes) != 1 {
 			t.Fatalf("unexpected node status length: %d", len(sn.Status.Nodes))
 		}
@@ -1154,7 +1296,7 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v2/clusters/"+clusterUUID+"/storage-nodes",
+			"/api/v2/clusters/"+clusterUUID+"/storage-nodes/",
 			webapimock.RouteResponse{
 				Status: http.StatusOK,
 				Body: `[
@@ -1195,19 +1337,12 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, cluster, sn)
 
-		err := waitForNodeOnline(
-			context.Background(),
-			apiClient,
-			"secret",
-			clusterUUID,
-			"10.0.0.2",
-			"node-b",
-			1,
-			sn,
-			r,
-		)
+		res, err := r.pollNodeOnline(context.Background(), apiClient, "secret", clusterUUID, "10.0.0.2", "node-b", 1, sn)
 		if err != nil {
-			t.Fatalf("waitForNodeOnline returned unexpected error: %v", err)
+			t.Fatalf("pollNodeOnline returned unexpected error: %v", err)
+		}
+		if res.RequeueAfter != 0 {
+			t.Fatalf("expected done result, got requeue: %v", res)
 		}
 		if len(sn.Status.Nodes) != 1 {
 			t.Fatalf("expected 1 status entry, got %d", len(sn.Status.Nodes))
@@ -1217,22 +1352,50 @@ func TestWaitForNodeOnlinePaths(t *testing.T) {
 			t.Fatalf("unexpected appended node status: %#v", got)
 		}
 	})
+
+	t.Run("returns RequeueAfter when node not yet online and within timeout window", func(t *testing.T) {
+		const clusterUUID = "cluster-uuid-not-yet-online"
+		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		defer mock.Close()
+		mock.Register(
+			http.MethodGet,
+			"/api/v2/clusters/"+clusterUUID+"/storage-nodes/",
+			webapimock.RouteResponse{
+				Status:  http.StatusOK,
+				Body:    `[]`,
+				Headers: map[string]string{"Content-Type": "application/json"},
+			},
+		)
+
+		postedAt := metav1.Now()
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-not-yet-online", Namespace: "default"},
+			Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-a", MgmtIp: mgmtIP, Status: "in_creation", PostedAt: &postedAt},
+				},
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+
+		res, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), "secret", clusterUUID, mgmtIP, "node-a", 1, sn)
+		if err != nil {
+			t.Fatalf("pollNodeOnline returned unexpected error: %v", err)
+		}
+		if res.RequeueAfter == 0 {
+			t.Fatalf("expected RequeueAfter, got done result")
+		}
+	})
 }
 
-func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
-	origRetries := waitForNodeOnlineRetries
-	origWait := waitForNodeOnlineWaitInterval
+func TestPollNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 	origActivationDelay := waitForNodeOnlineActivationDelay
 	origSleepFn := waitForNodeOnlineSleepFn
 	t.Cleanup(func() {
-		waitForNodeOnlineRetries = origRetries
-		waitForNodeOnlineWaitInterval = origWait
 		waitForNodeOnlineActivationDelay = origActivationDelay
 		waitForNodeOnlineSleepFn = origSleepFn
 	})
-
-	waitForNodeOnlineRetries = 1
-	waitForNodeOnlineWaitInterval = 0
 	waitForNodeOnlineActivationDelay = 0
 	waitForNodeOnlineSleepFn = func(time.Duration) {}
 
@@ -1259,23 +1422,13 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 			},
 			Status: simplyblockv1alpha1.StorageNodeStatus{
 				Nodes: []simplyblockv1alpha1.NodeStatus{
-					{Hostname: "node-a", MgmtIp: "10.0.0.1", Status: "in_creation"},
+					{Hostname: "node-a", MgmtIp: mgmtIP, Status: "in_creation"},
 				},
 			},
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
 
-		err := waitForNodeOnline(
-			context.Background(),
-			webapi.NewClient(mock.URL()),
-			"secret",
-			clusterUUID,
-			"10.0.0.1",
-			"node-a",
-			1,
-			sn,
-			r,
-		)
+		_, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), "secret", clusterUUID, mgmtIP, "node-a", 1, sn)
 		if err == nil {
 			t.Fatalf("expected unmarshal error for invalid payload")
 		}
@@ -1326,17 +1479,7 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
 
-		err := waitForNodeOnline(
-			context.Background(),
-			webapi.NewClient(mock.URL()),
-			"secret",
-			clusterUUID,
-			"10.0.0.3",
-			"node-c",
-			1,
-			sn,
-			r,
-		)
+		_, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), "secret", clusterUUID, "10.0.0.3", "node-c", 1, sn)
 		if err == nil {
 			t.Fatalf("expected cluster resolution error")
 		}
@@ -1345,7 +1488,7 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("returns timeout and writes timeout node status", func(t *testing.T) {
+	t.Run("writes timeout node status when PostedAt is expired", func(t *testing.T) {
 		const clusterUUID = "cluster-uuid-wfno-timeout"
 		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
 		defer mock.Close()
@@ -1361,30 +1504,26 @@ func TestWaitForNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 			},
 		)
 
+		expiredAt := metav1.NewTime(time.Now().Add(-2 * time.Hour))
 		sn := &simplyblockv1alpha1.StorageNode{
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-wfno-timeout", Namespace: "default"},
 			Spec: simplyblockv1alpha1.StorageNodeSpec{
 				ClusterName: "cluster-a",
 			},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-timeout", MgmtIp: "10.0.0.4", Status: "in_creation", PostedAt: &expiredAt},
+				},
+			},
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
 
-		err := waitForNodeOnline(
-			context.Background(),
-			webapi.NewClient(mock.URL()),
-			"secret",
-			clusterUUID,
-			"10.0.0.4",
-			"node-timeout",
-			1,
-			sn,
-			r,
-		)
-		if err == nil {
-			t.Fatalf("expected timeout error")
+		res, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), "secret", clusterUUID, "10.0.0.4", "node-timeout", 1, sn)
+		if err != nil {
+			t.Fatalf("expected no error on timeout, got: %v", err)
 		}
-		if !strings.Contains(err.Error(), "did not become online in time") {
-			t.Fatalf("unexpected timeout error: %v", err)
+		if res.RequeueAfter != 0 {
+			t.Fatalf("expected done result after timeout, got requeue: %v", res)
 		}
 		if len(sn.Status.Nodes) != 1 {
 			t.Fatalf("expected timeout status node entry, got %d", len(sn.Status.Nodes))
@@ -1412,7 +1551,7 @@ func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
 	t.Run("returns terminal error when target status never reached", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(NodeStatusResponse{
+			_ = json.NewEncoder(w).Encode(utils.NodeStatusResponse{
 				Status: "creating",
 			})
 		}))
@@ -1448,7 +1587,7 @@ func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
 				_, _ = w.Write([]byte(`{`))
 			default:
 				w.WriteHeader(http.StatusOK)
-				_ = json.NewEncoder(w).Encode(NodeStatusResponse{
+				_ = json.NewEncoder(w).Encode(utils.NodeStatusResponse{
 					Status: statusOnline,
 				})
 			}
@@ -1530,40 +1669,6 @@ func TestPerformNodeActionRestartWorkerNodeLabelFailure(t *testing.T) {
 		t.Fatalf("expected restart action to fail when worker node lookup fails")
 	}
 	if !strings.Contains(err.Error(), "failed to label worker node") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestPerformNodeActionRestartWorkerNodeMissingInternalIP(t *testing.T) {
-	const clusterUUID = "cluster-uuid-restart-ip-fail"
-	const nodeUUID = "node-uuid-restart-ip-fail"
-	const workerNode = "node-no-ip"
-
-	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: workerNode},
-	}
-	sn := &simplyblockv1alpha1.StorageNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "sn-restart-ip-fail", Namespace: "default"},
-		Spec: simplyblockv1alpha1.StorageNodeSpec{
-			Action:      "restart",
-			NodeUUID:    nodeUUID,
-			WorkerNode:  workerNode,
-			ClusterName: "cluster-a",
-		},
-	}
-	r := newStorageNodeStateTestReconciler(t, sn, node)
-
-	err := r.performNodeAction(
-		context.Background(),
-		webapi.NewClient("http://127.0.0.1:1"),
-		clusterUUID,
-		"secret",
-		sn,
-	)
-	if err == nil {
-		t.Fatalf("expected restart action to fail when worker node has no InternalIP")
-	}
-	if !strings.Contains(err.Error(), "has no InternalIP") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1793,6 +1898,7 @@ func newStorageNodeStateTestReconciler(
 		corev1.AddToScheme,
 		appsv1.AddToScheme,
 		rbacv1.AddToScheme,
+		discoveryv1.AddToScheme,
 	)
 	cl := newTestClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.StorageNode{},
@@ -1804,4 +1910,241 @@ func newStorageNodeStateTestReconciler(
 		Client: cl,
 		Scheme: scheme,
 	}
+}
+
+func TestReconcileSpdkProxyService(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns", UID: "sn-uid"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn)
+
+	if err := r.reconcileSpdkProxyService(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileSpdkProxyService: %v", err)
+	}
+
+	var svc corev1.Service
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "simplyblock-spdk-proxy"}, &svc); err != nil {
+		t.Fatalf("expected simplyblock-spdk-proxy Service to be created: %v", err)
+	}
+	if svc.Spec.ClusterIP != "None" {
+		t.Fatalf("expected headless Service, got ClusterIP=%q", svc.Spec.ClusterIP)
+	}
+	if len(svc.Spec.Ports) != 0 {
+		t.Fatalf("expected no ports on Service, got %#v", svc.Spec.Ports)
+	}
+	if got := svc.Annotations["service.beta.openshift.io/serving-cert-secret-name"]; got != "simplyblock-spdk-proxy-tls" {
+		t.Fatalf("missing/incorrect serving-cert annotation: %q", got)
+	}
+	if len(svc.OwnerReferences) != 1 || svc.OwnerReferences[0].UID != "sn-uid" {
+		t.Fatalf("expected owner reference to StorageNode, got %#v", svc.OwnerReferences)
+	}
+
+	// Second pass with a simulated ClusterIP already assigned must preserve it.
+	svc.Spec.ClusterIP = "None"
+	if err := r.reconcileSpdkProxyService(context.Background(), sn); err != nil {
+		t.Fatalf("second reconcileSpdkProxyService: %v", err)
+	}
+}
+
+func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns", UID: "sn-uid"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+
+	podReady := func(name, node, ip, rpcPort string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: "ns",
+				Labels:    map[string]string{"role": "simplyblock-storage-node"},
+			},
+			Spec: corev1.PodSpec{
+				NodeName: node,
+				Containers: []corev1.Container{
+					{
+						Name: "spdk-proxy-container",
+						Env:  []corev1.EnvVar{{Name: "RPC_PORT", Value: rpcPort}},
+					},
+				},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				PodIP: ip,
+				ContainerStatuses: []corev1.ContainerStatus{
+					{Name: "spdk-proxy-container", Ready: true},
+				},
+			},
+		}
+	}
+
+	pod1 := podReady("snode-spdk-pod-9001-cid", "node-a", mgmtIP, "9001")
+	pod2 := podReady("snode-spdk-pod-9002-cid", "node-a", mgmtIP, "9002")
+	pod3 := podReady("snode-spdk-pod-9001-cid-b", "node-b", "10.0.0.2", "9001")
+
+	// wrong label — must be ignored
+	ignored := podReady("other", "node-c", "10.0.0.3", "9001")
+	ignored.Labels = map[string]string{"role": "other"}
+
+	// not ready — must be ignored
+	notReady := podReady("not-ready", "node-a", mgmtIP, "9003")
+	notReady.Status.ContainerStatuses[0].Ready = false
+
+	r := newStorageNodeStateTestReconciler(t, sn, pod1, pod2, pod3, ignored, notReady)
+
+	ctx := context.Background()
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn); err != nil {
+		t.Fatalf("reconcileSpdkProxyEndpointSlices: %v", err)
+	}
+
+	var slices discoveryv1.EndpointSliceList
+	if err := r.List(ctx, &slices,
+		client.InNamespace("ns"),
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+	); err != nil {
+		t.Fatalf("list slices: %v", err)
+	}
+	if len(slices.Items) != 2 {
+		t.Fatalf("expected 2 EndpointSlices, got %d", len(slices.Items))
+	}
+
+	byName := map[string]discoveryv1.EndpointSlice{}
+	for _, s := range slices.Items {
+		byName[s.Name] = s
+	}
+
+	slice9001, ok := byName["spdk-proxy-endpoints-9001"]
+	if !ok {
+		t.Fatalf("missing slice spdk-proxy-endpoints-9001; got %v", sliceNames(slices.Items))
+	}
+	if len(slice9001.Endpoints) != 2 {
+		t.Fatalf("slice 9001: expected 2 endpoints, got %d", len(slice9001.Endpoints))
+	}
+	gotHostnames := map[string]string{}
+	for _, ep := range slice9001.Endpoints {
+		if ep.Hostname == nil || len(ep.Addresses) != 1 {
+			t.Fatalf("slice 9001: malformed endpoint %#v", ep)
+		}
+		gotHostnames[*ep.Hostname] = ep.Addresses[0]
+	}
+	if gotHostnames["node-a"] != mgmtIP ||
+		gotHostnames["node-b"] != "10.0.0.2" {
+		t.Fatalf("slice 9001: unexpected hostname/address map %#v", gotHostnames)
+	}
+	if len(slice9001.Ports) != 1 || slice9001.Ports[0].Port == nil || *slice9001.Ports[0].Port != 9001 {
+		t.Fatalf("slice 9001: expected port 9001, got %#v", slice9001.Ports)
+	}
+	if !metav1.IsControlledBy(&slice9001, sn) {
+		t.Fatalf("slice 9001: expected owner reference to StorageNode")
+	}
+
+	slice9002 := byName["spdk-proxy-endpoints-9002"]
+	if len(slice9002.Endpoints) != 1 || *slice9002.Endpoints[0].Hostname != "node-a" {
+		t.Fatalf("slice 9002: unexpected endpoints %#v", slice9002.Endpoints)
+	}
+
+	// Delete pod2 (the only pod on port 9002) and reconcile again — the stale
+	// slice should be removed.
+	if err := r.Delete(ctx, pod2); err != nil {
+		t.Fatalf("delete pod2: %v", err)
+	}
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn); err != nil {
+		t.Fatalf("second reconcileSpdkProxyEndpointSlices: %v", err)
+	}
+
+	slices = discoveryv1.EndpointSliceList{}
+	if err := r.List(ctx, &slices,
+		client.InNamespace("ns"),
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+	); err != nil {
+		t.Fatalf("list slices after delete: %v", err)
+	}
+	if len(slices.Items) != 1 || slices.Items[0].Name != "spdk-proxy-endpoints-9001" {
+		t.Fatalf("expected only spdk-proxy-endpoints-9001 after pod2 deletion, got %v", sliceNames(slices.Items))
+	}
+}
+
+func TestReconcileSpdkProxyEndpointSlices_DuplicateFirstSegment(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns", UID: "sn-uid"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+
+	podReady := func(name, node, ip, rpcPort string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: "ns",
+				Labels:    map[string]string{"role": "simplyblock-storage-node"},
+			},
+			Spec: corev1.PodSpec{
+				NodeName: node,
+				Containers: []corev1.Container{
+					{
+						Name: "spdk-proxy-container",
+						Env:  []corev1.EnvVar{{Name: "RPC_PORT", Value: rpcPort}},
+					},
+				},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				PodIP: ip,
+				ContainerStatuses: []corev1.ContainerStatus{
+					{Name: "spdk-proxy-container", Ready: true},
+				},
+			},
+		}
+	}
+
+	// Two distinct nodes whose first DNS label collides.
+	pod1 := podReady("snode-spdk-pod-9001-a", "worker.us-east-1.local", "10.0.0.1", "9001")
+	pod2 := podReady("snode-spdk-pod-9001-b", "worker.eu-west-1.local", "10.0.0.2", "9001")
+
+	r := newStorageNodeStateTestReconciler(t, sn, pod1, pod2)
+
+	ctx := context.Background()
+	err := r.reconcileSpdkProxyEndpointSlices(ctx, sn)
+	if err == nil {
+		t.Fatalf("expected collision error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "worker.us-east-1.local") || !strings.Contains(msg, "worker.eu-west-1.local") {
+		t.Fatalf("expected error to name both colliding nodes, got %q", msg)
+	}
+
+	var slices discoveryv1.EndpointSliceList
+	if err := r.List(ctx, &slices,
+		client.InNamespace("ns"),
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+	); err != nil {
+		t.Fatalf("list slices: %v", err)
+	}
+	if len(slices.Items) != 0 {
+		t.Fatalf("expected no slices to be created on collision, got %v", sliceNames(slices.Items))
+	}
+}
+
+func TestExtractSpdkProxyRpcPort_FallbackToPodName(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "snode-spdk-pod-9004-mycluster"},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{Name: "spdk-proxy-container"}, // no RPC_PORT env
+			},
+		},
+	}
+	got, ok := extractSpdkProxyRpcPort(pod)
+	if !ok || got != 9004 {
+		t.Fatalf("expected (9004,true) from pod-name fallback, got (%d,%v)", got, ok)
+	}
+}
+
+func sliceNames(items []discoveryv1.EndpointSlice) []string {
+	out := make([]string, 0, len(items))
+	for _, s := range items {
+		out = append(out, s.Name)
+	}
+	return out
 }

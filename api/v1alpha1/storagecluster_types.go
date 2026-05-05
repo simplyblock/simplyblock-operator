@@ -28,16 +28,39 @@ type CapacityThresholdSpec struct {
 }
 
 type StripeSpec struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Data Chunks"
 	// DataChunks defines the number of data chunks in the erasure-coding layout.
 	DataChunks *int32 `json:"dataChunks,omitempty"`
 	// ParityChunks defines the number of parity chunks in the erasure-coding layout.
 	ParityChunks *int32 `json:"parityChunks,omitempty"`
 }
 
+// NodeRecycleSpec configures the node-recycle action behaviour.
+type NodeRecycleSpec struct {
+	// RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
+	// before shutting it down, ensuring the latest image is running.
+	RefreshSNodeAPI bool `json:"refreshSNodeAPI,omitempty"`
+}
+
+// NodeRecycleStatus tracks in-progress state for the node-recycle action.
+// All fields are persisted in CR status so the reconciler can resume after a requeue.
+type NodeRecycleStatus struct {
+	// PendingNodes is the ordered list of node UUIDs still to be recycled.
+	PendingNodes []string `json:"pendingNodes,omitempty"`
+	// ProcessedNodes is the list of node UUIDs already recycled.
+	ProcessedNodes []string `json:"processedNodes,omitempty"`
+	// NodePhase is the current step for the node being recycled:
+	// "snode-refresh" | "snode-refresh-wait" | "shutting-down" | "restarting" | "rebalancing"
+	NodePhase string `json:"nodePhase,omitempty"`
+	// PhaseTriggered indicates the API call for the current NodePhase was already sent.
+	PhaseTriggered bool `json:"phaseTriggered,omitempty"`
+}
+
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 type BackupCredentialsSecretRef struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup Credentials Secret"
 	// Name is the name of the Secret in the same namespace as the cluster CR.
 	Name string `json:"name"`
 }
@@ -65,13 +88,17 @@ type StorageClusterSpec struct {
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
 	// StripeSpec configures erasure-coding data/parity chunk counts.
 	StripeSpec *StripeSpec `json:"stripe,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="HA Type"
 	// HAType defines the backend high-availability mode.
 	HAType string `json:"haType,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the user-facing cluster identifier.
 	ClusterName string `json:"clusterName"`
-	// +kubebuilder:validation:Enum=activate;expand
+	// +kubebuilder:validation:Enum=activate;expand;shutdown;start;restart;node-recycle
 	// Action triggers a cluster-level action.
 	Action string `json:"action,omitempty"`
+	// NodeRecycle configures the node-recycle action.
+	NodeRecycle *NodeRecycleSpec `json:"nodeRecycle,omitempty"`
 
 	// IsSingleNode enables single-node cluster mode.
 	IsSingleNode *bool `json:"isSingleNode,omitempty"`
@@ -87,6 +114,7 @@ type StorageClusterSpec struct {
 	MaxQueueSize *int32 `json:"maxQueueSize,omitempty"`
 	// InflightIOThreshold defines the inflight I/O threshold.
 	InflightIOThreshold *int32 `json:"inflightIOThreshold,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Fabric Type"
 	// FabricType defines the storage fabric type.
 	FabricType string `json:"fabricType,omitempty"`
 	// ClientDataIfname defines the client data network interface.
@@ -122,6 +150,7 @@ type StorageClusterSpec struct {
 
 // StorageClusterStatus defines the observed state of StorageCluster.
 type StorageClusterStatus struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Cluster UUID"
 	// UUID is the backend cluster UUID.
 	UUID string `json:"uuid,omitempty"`
 	// ClusterName is the resolved backend cluster name.
@@ -134,12 +163,14 @@ type StorageClusterStatus struct {
 	StorageNodes *int32 `json:"storageNodes,omitempty"`
 	// NQN is the cluster NVM subsystem qualified name.
 	NQN string `json:"nqn,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Status"
 	// Status is the backend-reported lifecycle status.
 	Status string `json:"status,omitempty"`
 	// Rebalancing indicates whether cluster rebalancing is currently active.
 	Rebalancing *bool `json:"rebalancing,omitempty"`
 	// ErasureCodingScheme is the active erasure-coding layout, for example "2x1".
 	ErasureCodingScheme string `json:"erasureCodingScheme,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Cluster Secret"
 	// SecretName is the Kubernetes Secret containing cluster credentials.
 	SecretName string `json:"secretName,omitempty"`
 	// LastUpdated is the last backend update timestamp.
@@ -148,10 +179,13 @@ type StorageClusterStatus struct {
 	// Created is the backend creation timestamp.
 	// FIXME: Unused for now (API update required?)
 	Created *metav1.Time `json:"created,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Configured"
 	// Configured indicates whether initial cluster setup completed.
 	Configured bool `json:"configured,omitempty"`
 	// ActionStatus tracks the most recent action execution state.
 	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
+	// NodeRecycleStatus tracks in-progress state for the node-recycle action.
+	NodeRecycleStatus *NodeRecycleStatus `json:"nodeRecycleStatus,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -160,6 +194,7 @@ type StorageClusterStatus struct {
 // +kubebuilder:printcolumn:name="UUID",type="string",JSONPath=".status.uuid",description="Backend cluster UUID"
 // +kubebuilder:printcolumn:name="Configured",type="boolean",JSONPath=".status.configured",description="Whether initial cluster setup has completed"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +operator-sdk:csv:customresourcedefinitions:displayName="Storage Cluster",resources={{Secret,v1,simplyblock-cluster-credentials}}
 
 // StorageCluster is the Schema for the storageclusters API
 type StorageCluster struct {

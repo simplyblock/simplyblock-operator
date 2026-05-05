@@ -22,20 +22,28 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/tlsutil"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -43,7 +51,8 @@ import (
 // StorageNodeReconciler reconciles a StorageNode object
 type StorageNodeReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme     *runtime.Scheme
+	TLSEnabled bool
 }
 
 type SNODEAPIResponse struct {
@@ -62,12 +71,6 @@ type SNODEAPIResponse struct {
 	NVMF_PORT          int    `json:"nvmf_port"`
 }
 
-type NodeStatusResponse struct {
-	UUID   string `json:"id"`
-	Status string `json:"status"`
-	IP     string `json:"ip"`
-}
-
 var (
 	waitForNodeInfoReachableCheckFn    = checkNodeInfoReachable
 	waitForNodeInfoReachableMaxRetries = 12
@@ -75,7 +78,7 @@ var (
 
 	waitForNodeOnlineRetries         = 60
 	waitForNodeOnlineWaitInterval    = 10 * time.Second
-	waitForNodeOnlineActivationDelay = 180 * time.Second
+	waitForNodeOnlineActivationDelay = 120 * time.Second
 	waitForNodeOnlineSleepFn         = time.Sleep
 
 	performNodeActionPostTriggerDelay = 5 * time.Second
@@ -89,6 +92,16 @@ var (
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -172,6 +185,22 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	if err := r.reconcileService(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileEndpointSlice(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileSpdkProxyService(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	expectedPerHost := utils.ExpectedNodesPerHost(snCR)
 
 	for _, nodeName := range snCR.Spec.WorkerNodes {
@@ -230,13 +259,7 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 		}
 	}
 
-	if err := waitForNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, ip, nodeName, expectedPerHost, snCR, r); err != nil {
-		log.Error(err, "Node did not become online in time", "node", nodeName)
-		return ctrl.Result{}, nil
-	}
-
-	log.Info("Storage node created successfully", "node", nodeName)
-	return ctrl.Result{}, nil
+	return r.pollNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, ip, nodeName, expectedPerHost, snCR)
 }
 
 // postStorageNode calls the backend storage-node creation API and records the
@@ -250,7 +273,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if err := checkNodeInfoReachable(ctx, ip); err != nil {
+	if err := checkNodeInfoReachable(ctx, nodeName, snCR.Namespace, r.TLSEnabled); err != nil {
 		log.Info("Storage node API not reachable yet, requeueing",
 			"node", nodeName,
 			"ip", ip,
@@ -259,7 +282,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	nodeAddress := fmt.Sprintf("%s:5000", ip)
+	nodeAddress := utils.StorageNodeAPIAddress(nodeName, snCR.Namespace)
 	params := utils.StorageNodeAddParams{
 		NodeAddress:         nodeAddress,
 		InterfaceName:       snCR.Spec.MgmtIfname,
@@ -325,7 +348,38 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageNode{}).
 		Named("storagenode").
+		Watches(
+			&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.spdkProxyPodToStorageNodeRequests),
+			builder.WithPredicates(predicate.NewPredicateFuncs(isSpdkProxyPod)),
+		).
 		Complete(r)
+}
+
+func isSpdkProxyPod(obj client.Object) bool {
+	return obj.GetLabels()["role"] == "simplyblock-storage-node"
+}
+
+// spdkProxyPodToStorageNodeRequests enqueues every StorageNode CR in the Pod's
+// namespace when a spdk-proxy pod changes. Pods are created by the backend, not
+// by the operator, so there is no forward owner reference — fanning out within
+// the namespace is the simplest correct mapping and cheap in practice (one CR
+// per namespace is typical).
+func (r *StorageNodeReconciler) spdkProxyPodToStorageNodeRequests(
+	ctx context.Context,
+	obj client.Object,
+) []reconcile.Request {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(snList.Items))
+	for _, sn := range snList.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: sn.Namespace, Name: sn.Name},
+		})
+	}
+	return reqs
 }
 
 func (r *StorageNodeReconciler) handleDeletion(
@@ -411,7 +465,7 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
 
-	ds := utils.BuildStorageNodeDaemonSet(snCR)
+	ds := utils.BuildStorageNodeDaemonSet(snCR, r.TLSEnabled)
 
 	if err := controllerutil.SetControllerReference(snCR, ds, r.Scheme); err != nil {
 		return err
@@ -428,6 +482,224 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 
 	ds.ResourceVersion = existing.ResourceVersion
 	return r.Update(ctx, ds)
+}
+
+func (r *StorageNodeReconciler) reconcileService(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+) error {
+	svc := utils.BuildStorageNodeService(snCR)
+	if err := controllerutil.SetControllerReference(snCR, svc, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set Service owner reference: %w", err)
+	}
+
+	var existing corev1.Service
+	err := r.Get(ctx, client.ObjectKeyFromObject(svc), &existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, svc)
+	}
+	if err != nil {
+		return err
+	}
+
+	svc.ResourceVersion = existing.ResourceVersion
+	svc.Spec.ClusterIP = existing.Spec.ClusterIP
+	return r.Update(ctx, svc)
+}
+
+func (r *StorageNodeReconciler) reconcileEndpointSlice(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+) error {
+	log := logf.FromContext(ctx)
+
+	nodeIPs := make(map[string]string)
+	for _, nodeName := range snCR.Spec.WorkerNodes {
+		ip, err := getNodeInternalIP(ctx, r.Client, nodeName)
+		if err != nil {
+			log.Error(err, "failed to get internal IP for EndpointSlice, skipping node", "node", nodeName)
+			continue
+		}
+		nodeIPs[nodeName] = ip
+	}
+
+	eps := utils.BuildStorageNodeEndpointSlice(snCR, nodeIPs)
+	if err := controllerutil.SetControllerReference(snCR, eps, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set EndpointSlice owner reference: %w", err)
+	}
+
+	var existing discoveryv1.EndpointSlice
+	err := r.Get(ctx, client.ObjectKeyFromObject(eps), &existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, eps)
+	}
+	if err != nil {
+		return err
+	}
+
+	eps.ResourceVersion = existing.ResourceVersion
+	return r.Update(ctx, eps)
+}
+
+func (r *StorageNodeReconciler) reconcileSpdkProxyService(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+) error {
+	svc := utils.BuildSpdkProxyService(snCR)
+	if err := controllerutil.SetControllerReference(snCR, svc, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set spdk-proxy Service owner reference: %w", err)
+	}
+
+	var existing corev1.Service
+	err := r.Get(ctx, client.ObjectKeyFromObject(svc), &existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, svc)
+	}
+	if err != nil {
+		return err
+	}
+
+	svc.ResourceVersion = existing.ResourceVersion
+	svc.Spec.ClusterIP = existing.Spec.ClusterIP
+	return r.Update(ctx, svc)
+}
+
+func (r *StorageNodeReconciler) reconcileSpdkProxyEndpointSlices(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+) error {
+	log := logf.FromContext(ctx)
+
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods,
+		client.InNamespace(snCR.Namespace),
+		client.MatchingLabels{"role": "simplyblock-storage-node"},
+	); err != nil {
+		return fmt.Errorf("failed to list spdk-proxy pods: %w", err)
+	}
+
+	byPort := map[int32][]utils.SpdkProxyEndpoint{}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !isSpdkProxyPodReady(pod) {
+			continue
+		}
+		rpcPort, ok := extractSpdkProxyRpcPort(pod)
+		if !ok {
+			log.Info("skipping spdk-proxy pod: unable to determine RPC_PORT", "pod", pod.Name)
+			continue
+		}
+		byPort[rpcPort] = append(byPort[rpcPort], utils.SpdkProxyEndpoint{
+			NodeName: pod.Spec.NodeName,
+			PodIP:    pod.Status.PodIP,
+			RpcPort:  rpcPort,
+		})
+	}
+
+	for rpcPort, endpoints := range byPort {
+		eps, err := utils.BuildSpdkProxyEndpointSlice(snCR, rpcPort, endpoints)
+		if err != nil {
+			return err
+		}
+		if err := controllerutil.SetControllerReference(snCR, eps, r.Scheme); err != nil {
+			return fmt.Errorf("failed to set spdk-proxy EndpointSlice owner reference: %w", err)
+		}
+
+		var existing discoveryv1.EndpointSlice
+		err = r.Get(ctx, client.ObjectKeyFromObject(eps), &existing)
+		if apierrors.IsNotFound(err) {
+			if err := r.Create(ctx, eps); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		eps.ResourceVersion = existing.ResourceVersion
+		if err := r.Update(ctx, eps); err != nil {
+			return err
+		}
+	}
+
+	// Delete orphaned slices whose RPC_PORT no longer has any ready pod.
+	var existingSlices discoveryv1.EndpointSliceList
+	if err := r.List(ctx, &existingSlices,
+		client.InNamespace(snCR.Namespace),
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+	); err != nil {
+		return fmt.Errorf("failed to list existing spdk-proxy EndpointSlices: %w", err)
+	}
+	for i := range existingSlices.Items {
+		slice := &existingSlices.Items[i]
+		if !metav1.IsControlledBy(slice, snCR) {
+			continue
+		}
+		keep := false
+		for _, p := range slice.Ports {
+			if p.Port != nil {
+				if _, ok := byPort[*p.Port]; ok {
+					keep = true
+					break
+				}
+			}
+		}
+		if keep {
+			continue
+		}
+		if err := r.Delete(ctx, slice); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete stale spdk-proxy EndpointSlice %s: %w", slice.Name, err)
+		}
+	}
+
+	return nil
+}
+
+func isSpdkProxyPodReady(pod *corev1.Pod) bool {
+	if pod.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	if pod.Spec.NodeName == "" || pod.Status.PodIP == "" {
+		return false
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if !cs.Ready {
+			return false
+		}
+	}
+	return len(pod.Status.ContainerStatuses) > 0
+}
+
+// extractSpdkProxyRpcPort reads RPC_PORT from the spdk-proxy-container env; as
+// a defensive fallback it parses the pod name pattern
+// snode-spdk-pod-<RPC_PORT>-<CLUSTER_ID>.
+func extractSpdkProxyRpcPort(pod *corev1.Pod) (int32, bool) {
+	for _, c := range pod.Spec.Containers {
+		if c.Name != "spdk-proxy-container" {
+			continue
+		}
+		for _, e := range c.Env {
+			if e.Name != "RPC_PORT" || e.Value == "" {
+				continue
+			}
+			n, err := strconv.Atoi(e.Value)
+			if err != nil {
+				return 0, false
+			}
+			return int32(n), true
+		}
+	}
+
+	const prefix = "snode-spdk-pod-"
+	if strings.HasPrefix(pod.Name, prefix) {
+		rest := strings.TrimPrefix(pod.Name, prefix)
+		if dash := strings.Index(rest, "-"); dash > 0 {
+			if n, err := strconv.Atoi(rest[:dash]); err == nil {
+				return int32(n), true
+			}
+		}
+	}
+	return 0, false
 }
 
 func getNodeInternalIP(ctx context.Context, c client.Client, nodeName string) (string, error) {
@@ -456,25 +728,34 @@ func ensureNodeStatus(
 		}
 	}
 
+	now := metav1.Now()
 	snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
 		Hostname: nodeName,
 		MgmtIp:   ip,
 		Status:   "in_creation",
+		PostedAt: &now,
 	})
 
 	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
 }
 
-func checkNodeInfoReachable(ctx context.Context, ip string) error {
-	url := fmt.Sprintf("http://%s:5000/snode/info", ip)
+func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tlsEnabled bool) error {
+	scheme := "http"
+	httpClient := &http.Client{Timeout: 3 * time.Second}
+	if tlsEnabled {
+		scheme = "https"
+		c, err := tlsutil.BuildStorageNodeAPIClient(namespace, tlsutil.ServiceCABundlePath)
+		if err != nil {
+			return fmt.Errorf("build storage-node TLS client: %w", err)
+		}
+		httpClient = c
+	}
+
+	url := fmt.Sprintf("%s://%s/snode/info", scheme, utils.StorageNodeAPIAddress(nodeName, namespace))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
-	}
-
-	httpClient := &http.Client{
-		Timeout: 3 * time.Second,
 	}
 
 	resp, err := httpClient.Do(req)
@@ -496,8 +777,9 @@ func checkNodeInfoReachable(ctx context.Context, ip string) error {
 
 func waitForNodeInfoReachable(
 	ctx context.Context,
-	ip string,
 	nodeName string,
+	namespace string,
+	tlsEnabled bool,
 ) error {
 	log := logf.FromContext(ctx)
 
@@ -505,10 +787,9 @@ func waitForNodeInfoReachable(
 
 	for i := 1; i <= waitForNodeInfoReachableMaxRetries; i++ {
 
-		if err := waitForNodeInfoReachableCheckFn(ctx, ip); err == nil {
+		if err := waitForNodeInfoReachableCheckFn(ctx, nodeName, namespace, tlsEnabled); err == nil {
 			log.Info("Storage node API is reachable",
 				"node", nodeName,
-				"ip", ip,
 				"attempt", i,
 			)
 			return nil
@@ -516,7 +797,6 @@ func waitForNodeInfoReachable(
 			lastErr = err
 			log.Info("Storage node API not reachable yet, retrying",
 				"node", nodeName,
-				"ip", ip,
 				"attempt", i,
 				"error", err.Error(),
 			)
@@ -536,73 +816,88 @@ func waitForNodeInfoReachable(
 	)
 }
 
-func waitForNodeOnline(
+// pollNodeOnline performs a single non-blocking check of whether the node is
+// online, returning RequeueAfter if it isn't yet. This replaces the old
+// blocking waitForNodeOnline loop so the reconcile worker goroutine stays free.
+func (r *StorageNodeReconciler) pollNodeOnline(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
-	clusterUUID string,
-	ip string,
-	nodeName string,
+	clusterSecret, clusterUUID, ip, nodeName string,
 	expectedPerHost int,
 	snCR *simplyblockv1alpha1.StorageNode,
-	r *StorageNodeReconciler,
-) error {
+) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
 
-	for attempt := 1; attempt <= waitForNodeOnlineRetries; attempt++ {
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
-		log.Info("SNODE LIST raw API response", "endpoint", endpoint, "status", status, "body", string(body))
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	log.Info("SNODE LIST raw API response", "endpoint", endpoint, "status", status, "body", string(body))
 
-		if err != nil || status >= 300 {
-			if err == nil {
-				err = fmt.Errorf("unexpected status %d", status)
-			}
-			log.Error(err, "Failed to get storage node statuses", "node", nodeName, "status", status, "response", string(body))
-			waitForNodeOnlineSleepFn(waitForNodeOnlineWaitInterval)
-			continue
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
 		}
-
-		if strings.TrimSpace(string(body)) == "[]" {
-			log.Info("Storage node list is empty, retrying...", "node", nodeName, "attempt", attempt)
-			waitForNodeOnlineSleepFn(waitForNodeOnlineWaitInterval)
-			continue
-		}
-
-		var apiResp []SNODEAPIResponse
-		if err := json.Unmarshal(body, &apiResp); err != nil {
-			return fmt.Errorf("failed to unmarshal storage node response for %s: %v", nodeName, err)
-		}
-
-		// Collect all backend nodes for this host IP that are online+healthy.
-		// When socketsToUse is set the backend creates one node per socket, all
-		// sharing the same mgmt IP and Hostname — we need all of them online.
-		onlineForHost := make([]SNODEAPIResponse, 0, expectedPerHost)
-		for _, res := range apiResp {
-			if res.IP == ip && res.Status == utils.NodeStatusOnline && res.Health {
-				onlineForHost = append(onlineForHost, res)
-			}
-		}
-
-		if len(onlineForHost) < expectedPerHost {
-			log.Info("Not all socket nodes online yet, retrying...",
-				"node", nodeName,
-				"online", len(onlineForHost),
-				"expected", expectedPerHost,
-				"attempt", attempt,
-			)
-			waitForNodeOnlineSleepFn(waitForNodeOnlineWaitInterval)
-			continue
-		}
-
-		// All socket nodes are online — sync status and check cluster activation.
-		return onAllSocketNodesOnline(ctx, apiClient, clusterSecret, clusterUUID, snCR, nodeName, onlineForHost, r)
+		log.Error(err, "Failed to get storage node statuses", "node", nodeName, "status", status, "response", string(body))
+		return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
 	}
 
-	// Timeout reached
-	log.Error(nil, "Timeout waiting for node to become online", "node", nodeName)
+	if strings.TrimSpace(string(body)) == "[]" {
+		log.Info("Storage node list is empty", "node", nodeName)
+		return r.nodeOnlineRequeueOrTimeout(ctx, nodeName, ip, snCR)
+	}
 
-	// Mark all placeholder/partial entries for this host as timed-out.
+	var apiResp []SNODEAPIResponse
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to unmarshal storage node response for %s: %v", nodeName, err)
+	}
+
+	// Collect all backend nodes for this host IP that are online+healthy.
+	// When socketsToUse is set the backend creates one node per socket, all
+	// sharing the same mgmt IP and Hostname — we need all of them online.
+	onlineForHost := make([]SNODEAPIResponse, 0, expectedPerHost)
+	for _, res := range apiResp {
+		if res.IP == ip && res.Status == utils.NodeStatusOnline && res.Health {
+			onlineForHost = append(onlineForHost, res)
+		}
+	}
+
+	if len(onlineForHost) < expectedPerHost {
+		log.Info("Not all socket nodes online yet",
+			"node", nodeName,
+			"online", len(onlineForHost),
+			"expected", expectedPerHost,
+		)
+		return r.nodeOnlineRequeueOrTimeout(ctx, nodeName, ip, snCR)
+	}
+
+	// All socket nodes are online — sync status and check cluster activation.
+	if err := onAllSocketNodesOnline(ctx, apiClient, clusterSecret, clusterUUID, snCR, nodeName, onlineForHost, r); err != nil {
+		return ctrl.Result{}, err
+	}
+	log.Info("Storage node created successfully", "node", nodeName)
+	return ctrl.Result{}, nil
+}
+
+// nodeOnlineRequeueOrTimeout returns RequeueAfter when the node is still
+// within the allowed wait window, or marks it as timed-out and returns done.
+func (r *StorageNodeReconciler) nodeOnlineRequeueOrTimeout(
+	ctx context.Context,
+	nodeName, ip string,
+	snCR *simplyblockv1alpha1.StorageNode,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	timeout := time.Duration(waitForNodeOnlineRetries) * waitForNodeOnlineWaitInterval
+
+	for i := range snCR.Status.Nodes {
+		n := &snCR.Status.Nodes[i]
+		if n.Hostname == nodeName && n.UUID == "" && n.PostedAt != nil {
+			if time.Since(n.PostedAt.Time) <= timeout {
+				return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
+			}
+		}
+	}
+
+	// Timed out (or PostedAt missing — treat as timed-out to avoid infinite requeue).
+	log.Error(nil, "Timeout waiting for node to become online", "node", nodeName)
 	updated := false
 	for i := range snCR.Status.Nodes {
 		if snCR.Status.Nodes[i].Hostname == nodeName {
@@ -618,12 +913,10 @@ func waitForNodeOnline(
 			Status:   "timeout",
 		})
 	}
-
 	if err := r.Status().Update(ctx, snCR); err != nil {
 		log.Error(err, "Failed to update node status after timeout", "node", nodeName)
 	}
-
-	return fmt.Errorf("node %s did not become online in time", nodeName)
+	return ctrl.Result{}, nil
 }
 
 // onAllSocketNodesOnline syncs the StorageNode status entries for all online
@@ -860,22 +1153,14 @@ func (r *StorageNodeReconciler) performNodeAction(
 				return fmt.Errorf("failed to label worker node %s: %w", snCR.Spec.WorkerNode, err)
 			}
 
-			ip, err := getNodeInternalIP(ctx, r.Client, snCR.Spec.WorkerNode)
-			if err != nil {
-				log.Error(err, "failed to get internal IP", "node", snCR.Spec.WorkerNode)
-				return err
-			}
-
-			if err := waitForNodeInfoReachable(ctx, ip, snCR.Spec.WorkerNode); err != nil {
+			if err := waitForNodeInfoReachable(ctx, snCR.Spec.WorkerNode, snCR.Namespace, r.TLSEnabled); err != nil {
 				log.Error(err, "node never became reachable")
 				return err
 			}
 
-			nodeAddress := fmt.Sprintf("%s:5000", ip)
-
 			body = map[string]any{
 				"force":        true,
-				"node_address": nodeAddress,
+				"node_address": utils.StorageNodeAPIAddress(snCR.Spec.WorkerNode, snCR.Namespace),
 			}
 		} else {
 			body = payload
@@ -891,7 +1176,7 @@ func (r *StorageNodeReconciler) performNodeAction(
 		method = http.MethodDelete
 		body = nil
 		endpoint = fmt.Sprintf(
-			"/api/v2/clusters/%s/storage-nodes/%s?force_remove=true&force_delete=true",
+			"/api/v2/clusters/%s/storage-nodes/%s?force_remove=true",
 			clusterUUID,
 			snCR.Spec.NodeUUID,
 		)
@@ -899,7 +1184,7 @@ func (r *StorageNodeReconciler) performNodeAction(
 	default:
 		body = nil
 		endpoint = fmt.Sprintf(
-			"/api/v2/clusters/%s/storage-nodes/%s/%s?force=true",
+			"/api/v2/clusters/%s/storage-nodes/%s/%s",
 			clusterUUID,
 			snCR.Spec.NodeUUID,
 			snCR.Spec.Action,
@@ -1004,7 +1289,7 @@ func (r *StorageNodeReconciler) waitForActionCompletion(
 			continue
 		}
 
-		var resp NodeStatusResponse
+		var resp utils.NodeStatusResponse
 		if err := json.Unmarshal(body, &resp); err != nil {
 			log.Error(err, "Failed to parse node status response", "body", string(body))
 			waitForActionCompletionSleepFn(waitForActionCompletionWaitInterval)
