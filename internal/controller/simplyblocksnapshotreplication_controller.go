@@ -257,10 +257,10 @@ func (r *SnapshotReplicationReconciler) reconcileFailback(
 // progress and needs a requeue, (false, nil) when it reaches a terminal phase,
 // or (false, err) on a fatal error that should mark the volume as Failed.
 //
-// Polling steps (WaitFirst, WaitSecond, WaitSourceDeleted, WaitTargetDeleted)
-// treat transient API errors as non-fatal and return (true, nil) so the
-// reconciler retries on the next requeue rather than permanently failing the
-// volume.
+// The implementation is split into two helpers to stay within cyclomatic
+// complexity limits: advanceFailbackReplicationPhases handles the initial
+// resolution and first-replication steps; advanceFailbackDeletionPhases handles
+// the source/target cleanup steps.
 func (r *SnapshotReplicationReconciler) advanceFailbackVolume(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -270,7 +270,39 @@ func (r *SnapshotReplicationReconciler) advanceFailbackVolume(
 	targetPoolUUID string,
 	lvolDetail *utils.Lvol,
 	currentPhase string,
-) (stillInProgress bool, err error) {
+) (bool, error) {
+	switch currentPhase {
+	case "",
+		simplyblockv1alpha1.VolPhaseReplicatingToSource,
+		simplyblockv1alpha1.VolPhaseFailbackTriggerFirst,
+		simplyblockv1alpha1.VolPhaseFailbackWaitFirst,
+		simplyblockv1alpha1.VolPhaseFailbackSuspend,
+		simplyblockv1alpha1.VolPhaseFailbackWaitSecond:
+		return r.advanceFailbackReplicationPhases(ctx, apiClient, snapRepCR,
+			sourceClusterUUID, sourceClusterSecret,
+			targetClusterUUID, targetClusterSecret,
+			targetPoolUUID, lvolDetail, currentPhase)
+	default:
+		return r.advanceFailbackDeletionPhases(ctx, apiClient, snapRepCR,
+			sourceClusterUUID, sourceClusterSecret,
+			targetClusterUUID, targetClusterSecret,
+			targetPoolUUID, lvolDetail, currentPhase)
+	}
+}
+
+// advanceFailbackReplicationPhases handles the early failback steps: resolving
+// source info, triggering and waiting for the two target replication rounds, and
+// suspending the target lvol between them.
+func (r *SnapshotReplicationReconciler) advanceFailbackReplicationPhases(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
+	sourceClusterUUID, sourceClusterSecret string,
+	targetClusterUUID, targetClusterSecret string,
+	targetPoolUUID string,
+	lvolDetail *utils.Lvol,
+	currentPhase string,
+) (bool, error) {
 	log := logf.FromContext(ctx)
 
 	switch currentPhase {
@@ -337,6 +369,27 @@ func (r *SnapshotReplicationReconciler) advanceFailbackVolume(
 		}
 		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseFailbackDeleteSource, "")
 		return true, nil
+	}
+
+	return false, nil
+}
+
+// advanceFailbackDeletionPhases handles the later failback steps: deleting the
+// source lvol, calling replicate_lvol_on_source_cluster, deleting the target
+// lvol, and polling for each deletion to complete.
+func (r *SnapshotReplicationReconciler) advanceFailbackDeletionPhases(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
+	sourceClusterUUID, sourceClusterSecret string,
+	targetClusterUUID, targetClusterSecret string,
+	targetPoolUUID string,
+	lvolDetail *utils.Lvol,
+	currentPhase string,
+) (bool, error) {
+	log := logf.FromContext(ctx)
+
+	switch currentPhase {
 
 	case simplyblockv1alpha1.VolPhaseFailbackDeleteSource:
 		state := r.getFailbackState(snapRepCR, lvolDetail.UUID)
@@ -400,10 +453,9 @@ func (r *SnapshotReplicationReconciler) advanceFailbackVolume(
 		}
 		log.Info("Failback: target lvol pending deletion", "lvolUUID", lvolDetail.UUID)
 		return true, nil
-
-	default:
-		return false, nil
 	}
+
+	return false, nil
 }
 
 /* -------------------- Normal periodic replication -------------------- */
