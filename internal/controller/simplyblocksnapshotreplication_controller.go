@@ -317,11 +317,10 @@ func (r *SnapshotReplicationReconciler) advanceFailbackReplicationPhases(
 			return false, fmt.Errorf("resolve source failback target: %w", resolveErr)
 		}
 		if isFreshCluster {
-			// startReplicationOnFreshSource is a known gap (separate issue):
-			// the source cluster does not yet have the volume, so that step is
-			// skipped.  deleteLvol on source will receive a 404 and continue.
-			log.Info("Failback: fresh source cluster — skipping replication_start step",
-				"lvolUUID", lvolDetail.UUID)
+			// Fresh source cluster: the volume does not exist there yet.
+			// deleteLvol on source will receive a 404 (handled gracefully) and
+			// replicate_lvol_on_source_cluster will create it from the target snapshot.
+			log.Info("Failback: fresh source cluster detected", "lvolUUID", lvolDetail.UUID)
 		}
 		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseFailbackTriggerFirst, "")
 		r.setFailbackState(snapRepCR, lvolDetail.UUID, sourcePoolUUID, sourceLvolUUID, isFreshCluster)
@@ -431,6 +430,10 @@ func (r *SnapshotReplicationReconciler) advanceFailbackDeletionPhases(
 		if repErr := replicateLvolOnSourceCluster(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, state.SourcePoolUUID, state.SourceLvolUUID); repErr != nil {
 			return false, fmt.Errorf("replicate lvol on source cluster: %w", repErr)
 		}
+		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseFailbackDeleteTarget, "")
+		return true, nil
+
+	case simplyblockv1alpha1.VolPhaseFailbackDeleteTarget:
 		if delErr := deleteLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, lvolDetail.UUID); delErr != nil {
 			return false, fmt.Errorf("delete target lvol: %w", delErr)
 		}
