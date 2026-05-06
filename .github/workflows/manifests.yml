@@ -26,6 +26,11 @@ jobs:
           tar -xzf kubeconform.tar.gz kubeconform
           sudo mv kubeconform /usr/local/bin/kubeconform
 
+      - name: Check generated manifests are up to date
+        run: |
+          make manifests generate
+          git diff --exit-code || (echo "Generated files are out of date. Run 'make manifests generate' and commit the result." && exit 1)
+
       - name: Build installer
         run: make build-installer
 

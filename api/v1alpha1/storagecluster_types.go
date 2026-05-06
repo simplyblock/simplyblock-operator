@@ -81,11 +81,14 @@ type BackupSpec struct {
 
 // StorageClusterSpec defines the desired state of StorageCluster
 type StorageClusterSpec struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Management Interface"
 	// MgmtIfname is the management network interface name used for cluster communication.
 	// FIXME: Unused for now
 	MgmtIfname string `json:"mgmtIfname,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Node Affinity"
 	// EnableNodeAffinity enables node-affinity placement for storage components.
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Stripe"
 	// StripeSpec configures erasure-coding data/parity chunk counts.
 	StripeSpec *StripeSpec `json:"stripe,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="HA Type"
@@ -95,55 +98,76 @@ type StorageClusterSpec struct {
 	// ClusterName is the user-facing cluster identifier.
 	ClusterName string `json:"clusterName"`
 	// +kubebuilder:validation:Enum=activate;expand;shutdown;start;restart;node-recycle
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
 	// Action triggers a cluster-level action.
 	Action string `json:"action,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node Recycle"
 	// NodeRecycle configures the node-recycle action.
 	NodeRecycle *NodeRecycleSpec `json:"nodeRecycle,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Single Node"
 	// IsSingleNode enables single-node cluster mode.
 	IsSingleNode *bool `json:"isSingleNode,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Strict Node Anti-Affinity"
 	// StrictNodeAntiAffinity enforces strict anti-affinity between storage nodes.
 	StrictNodeAntiAffinity *bool `json:"strictNodeAntiAffinity,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Queue Pair Count"
 	// QpairCount defines the NVMe queue-pair count used by the cluster.
 	QpairCount *int32 `json:"qpairCount,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Block Size"
 	// BlockSize defines the logical block size in bytes.
 	BlockSize *int32 `json:"blockSize,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Page Size In Blocks"
 	// PageSizeInBlocks defines page size expressed in blocks.
 	PageSizeInBlocks *int32 `json:"pageSizeInBlocks,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Queue Size"
 	// MaxQueueSize defines the maximum backend queue size.
 	MaxQueueSize *int32 `json:"maxQueueSize,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Inflight IO Threshold"
 	// InflightIOThreshold defines the inflight I/O threshold.
 	InflightIOThreshold *int32 `json:"inflightIOThreshold,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Fabric Type"
 	// FabricType defines the storage fabric type.
 	FabricType string `json:"fabricType,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Client Data Interface"
 	// ClientDataIfname defines the client data network interface.
 	ClientDataIfname string `json:"clientDataIfname,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Fault Tolerance"
 	// MaxFaultTolerance defines the maximum tolerated concurrent faults.
 	MaxFaultTolerance *int32 `json:"maxFaultTolerance,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="NVMf Base Port"
 	// NvmfBasePort defines the base NVMf service port.
 	NvmfBasePort *int32 `json:"nvmfBasePort,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="RPC Base Port"
 	// RpcBasePort defines the base RPC service port.
 	RpcBasePort *int32 `json:"rpcBasePort,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Storage Node API Port"
 	// SnodeApiPort defines the storage-node API port.
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="QoS Classes"
 	// QoSClasses defines backend QosSpec class configuration.
 	// FIXME: Unused for now
 	QoSClasses string `json:"qosClasses,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Warning Threshold"
 	// WarningThresholdSpec defines warning-level capacity thresholds.
 	WarningThresholdSpec *CapacityThresholdSpec `json:"warningThreshold,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Critical Threshold"
 	// CriticalThresholdSpec defines critical-level capacity thresholds.
 	CriticalThresholdSpec *CapacityThresholdSpec `json:"criticalThreshold,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Client Queue Pair Count"
 	// ClientQpairCount defines client-side queue-pair count.
 	// FIXME: Unused for now
 	ClientQpairCount *int32 `json:"clientQpairCount,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Include Event Log"
 	// IncludeEventLog controls whether event logs are included in responses/exports.
 	// FIXME: Unused for now
 	IncludeEventLog *bool `json:"includeEventLog,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Event Log Entries"
 	// EventLogEntries limits the number of event-log entries returned/retained.
 	// FIXME: Unused for now
 	EventLogEntries *int32 `json:"eventLogEntries,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup"
 	// Backup specifies the specification for backup to S3 configuration
 	Backup *BackupSpec `json:"backup,omitempty"`
 }

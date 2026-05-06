@@ -87,9 +87,11 @@ type SnapshotReplicationSpec struct {
 	// Target cluster pool for replication
 	TargetPool string `json:"targetPool"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source Pool"
 	// required for failback to a fresh source cluster
 	SourcePool string `json:"sourcePool,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Timeout"
 	// snapshot replication timeout
 	Timeout *int32 `json:"timeout,omitempty"`
 
@@ -100,13 +102,16 @@ type SnapshotReplicationSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
 	Action string `json:"action,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Include Volume IDs"
 	// Optional: only these volumes are included in failback.
 	// If empty, all volumes are candidates unless excluded below.
 	IncludeVolumeIDs []string `json:"includeVolumeIDs,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Exclude Volume IDs"
 	// Optional: volumes to exclude from failback.
 	ExcludeVolumeIDs []string `json:"excludeVolumeIDs,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Volume IDs"
 	// Optional: list of volumes to replicate. Empty means all volumes
 	VolumeIDs []string `json:"volumeIDs,omitempty"`
 }

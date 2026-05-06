@@ -43,6 +43,7 @@ type StorageBackupSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PVC Ref"
 	// PVCRef identifies the PVC whose backing Simplyblock volume should be snapshotted and backed up.
 	// Not required when SourceClusterUUID is set (imported backup).
 	// +optional
@@ -51,6 +52,7 @@ type StorageBackupSpec struct {
 	// SnapshotName optionally overrides the internally-created snapshot name.
 	// +optional
 	SnapshotName string `json:"snapshotName,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source Cluster UUID"
 	// SourceClusterUUID, when non-empty, marks this StorageBackup as imported from another cluster.
 	// The StorageBackup controller will not create snapshots or backups for imported resources.
 	// Set by the BackupImport controller; do not set manually.

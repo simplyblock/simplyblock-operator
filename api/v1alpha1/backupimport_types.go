@@ -30,10 +30,13 @@ const (
 
 // BackupImportSpec defines the desired state of BackupImport.
 type BackupImportSpec struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source Cluster Name"
 	// SourceClusterName is the StorageCluster CR name of the cluster that owns the backup.
 	SourceClusterName string `json:"sourceClusterName"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source Backup ID"
 	// SourceBackupID is the UUID of the backup on the source cluster to import.
 	SourceBackupID string `json:"sourceBackupID"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Target Cluster Name"
 	// TargetClusterName is the StorageCluster CR name of the cluster to import into.
 	TargetClusterName string `json:"targetClusterName"`
 }
