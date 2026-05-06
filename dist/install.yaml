@@ -957,12 +957,24 @@ spec:
                   Action triggers an imperative pool operation.
                   FIXME: Unused for now
                 type: string
+              allowedHosts:
+                description: |-
+                  AllowedHosts is the list of NQN host identifiers permitted to access volumes in the pool.
+                  Only valid when DHCHAP is true.
+                items:
+                  type: string
+                type: array
               capacityLimit:
                 description: CapacityLimit is the maximum pool capacity.
                 type: string
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+              dhchap:
+                default: false
+                description: DHCHAP enables DH-HMAC-CHAP authentication for all volumes
+                  in the pool.
+                type: boolean
               name:
                 description: Name is the backend pool name.
                 type: string
@@ -1067,6 +1079,12 @@ spec:
           status:
             description: status defines the observed state of Pool
             properties:
+              allowedHosts:
+                description: AllowedHosts lists the host NQNs currently registered
+                  on the backend.
+                items:
+                  type: string
+                type: array
               qos:
                 description: QoS contains observed/configured QoS values.
                 properties:
