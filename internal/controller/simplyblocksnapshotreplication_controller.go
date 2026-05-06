@@ -1057,7 +1057,14 @@ func (r *SnapshotReplicationReconciler) resolveSourceFailbackTarget(
 	if err != nil {
 		return "", "", true, err
 	}
-	return sourcePoolUUID, targetLvol.UUID, true, nil
+	// The target lvol's NQN encodes the original source lvol UUID (e.g. ...lvol:<source-uuid>).
+	// Using targetLvol.UUID would point sbcli at the target's FDB record, causing
+	// DeleteSource to delete from the target node instead of the source.
+	sourceLvolUUID, ok := lvolIDFromNQN(targetLvol.NQN)
+	if !ok {
+		return "", "", true, fmt.Errorf("cannot extract source lvol UUID from target NQN %q", targetLvol.NQN)
+	}
+	return sourcePoolUUID, sourceLvolUUID, true, nil
 }
 
 /* -------------------- Pure functions -------------------- */
