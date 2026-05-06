@@ -70,6 +70,7 @@ type PoolAddParams struct {
 	MaxRwMB       int    `json:"max_rw_mbytes,omitempty"`
 	MaxRMB        int    `json:"max_r_mbytes,omitempty"`
 	MaxWMB        int    `json:"max_w_mbytes,omitempty"`
+	DHCHAP        bool   `json:"dhchap,omitempty"`
 	CRName        string `json:"cr_name,omitempty"`
 	CRNameSpace   string `json:"cr_namespace,omitempty"`
 	CRPlural      string `json:"cr_plural,omitempty"`

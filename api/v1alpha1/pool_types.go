@@ -123,6 +123,12 @@ type PoolSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Capacity Limit"
 	// CapacityLimit is the maximum pool capacity.
 	CapacityLimit string `json:"capacityLimit,omitempty"`
+	// DHCHAP enables DH-HMAC-CHAP authentication for all volumes in the pool.
+	// +kubebuilder:default=false
+	DHCHAP bool `json:"dhchap,omitempty"`
+	// AllowedHosts is the list of NQN host identifiers permitted to access volumes in the pool.
+	// Only valid when DHCHAP is true.
+	AllowedHosts []string `json:"allowedHosts,omitempty"`
 	// QosSpec defines QosSpec limits for the pool.
 	QosSpec *PoolQoSSpec `json:"qos,omitempty"`
 	// Action triggers an imperative pool operation.
@@ -143,6 +149,8 @@ type PoolStatus struct {
 	Status string `json:"status,omitempty"`
 	// QoS contains observed/configured QoS values.
 	QoS *PoolQoSStatus `json:"qos,omitempty"`
+	// AllowedHosts lists the host NQNs currently registered on the backend.
+	AllowedHosts []string `json:"allowedHosts,omitempty"`
 }
 
 // +kubebuilder:object:root=true
