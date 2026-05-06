@@ -31,6 +31,7 @@ type TaskSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Task ID"
 	// TaskID filters results to a specific backend task when set.
 	TaskID string `json:"taskID,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Subtasks"
 	// Subtasks includes related child subtasks when supported by the backend.
 	// FIXME: Unused for now
 	Subtasks bool `json:"subtasks,omitempty"`

@@ -64,6 +64,7 @@ type BackupRestoreSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup Ref"
 	// BackupRef references the StorageBackup resource to restore from.
 	BackupRef BackupRef `json:"backupRef"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Target Pool"
