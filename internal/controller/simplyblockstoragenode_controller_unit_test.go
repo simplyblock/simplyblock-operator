@@ -2078,8 +2078,8 @@ func TestReconcileServicesAndServingCertificatesForCertManagerProvider(t *testin
 		if err != nil || !found {
 			t.Fatalf("expected issuerRef.name on Certificate %s, err=%v found=%v", serviceName, err, found)
 		}
-		if gotIssuer != utils.CertManagerServiceIssuerName {
-			t.Fatalf("Certificate %s issuerRef.name = %q, want %q", serviceName, gotIssuer, utils.CertManagerServiceIssuerName)
+		if gotIssuer != utils.CertManagerClusterIssuerName {
+			t.Fatalf("Certificate %s issuerRef.name = %q, want %q", serviceName, gotIssuer, utils.CertManagerClusterIssuerName)
 		}
 
 		dnsNames, found, err := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
