@@ -49,6 +49,7 @@ rules:
   - serviceaccounts
   - services
   verbs:
+  - create
   - delete
   - get
   - list
@@ -56,11 +57,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - ""
+  - apps
   resources:
-  - secrets
-  - serviceaccounts
-  - services
+  - daemonsets
   verbs:
   - create
   - delete

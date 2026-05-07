@@ -74,7 +74,7 @@ spec:
                 type: array
               includePVCRefs:
                 description: |-
-                  Optional: only these PVCs are included in failback.
+                  Optional: only these volumes are included in failback.
                   If empty, all volumes are candidates unless excluded below.
                 items:
                   properties:

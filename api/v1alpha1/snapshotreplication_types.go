@@ -137,7 +137,7 @@ type SnapshotReplicationSpec struct {
 	// If empty, all volumes are candidates unless excluded below.
 	IncludePVCRefs []PersistentVolumeClaimRef `json:"includePVCRefs,omitempty"`
 
-  // +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Exclude Volume IDs"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Exclude Volume IDs"
 	// Optional: PVCs to exclude from failback.
 	ExcludePVCRefs []PersistentVolumeClaimRef `json:"excludePVCRefs,omitempty"`
 
