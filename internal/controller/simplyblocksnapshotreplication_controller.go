@@ -274,8 +274,8 @@ func (r *SnapshotReplicationReconciler) advanceFailbackVolume(
 	switch currentPhase {
 	case "",
 		simplyblockv1alpha1.VolPhaseReplicatingToSource,
-		simplyblockv1alpha1.VolPhaseFailbackTriggerFirst,
-		simplyblockv1alpha1.VolPhaseFailbackWaitFirst,
+		simplyblockv1alpha1.VolPhaseFailbackStartReplication,
+		simplyblockv1alpha1.VolPhaseFailbackWaitReplication,
 		simplyblockv1alpha1.VolPhaseFailbackSuspend,
 		simplyblockv1alpha1.VolPhaseFailbackWaitSecond:
 		return r.advanceFailbackReplicationPhases(ctx, apiClient, snapRepCR,
@@ -322,25 +322,25 @@ func (r *SnapshotReplicationReconciler) advanceFailbackReplicationPhases(
 			// replicate_lvol_on_source_cluster will create it from the target snapshot.
 			log.Info("Failback: fresh source cluster detected", "lvolUUID", lvolDetail.UUID)
 		}
-		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseFailbackTriggerFirst, "")
+		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseFailbackStartReplication, "")
 		r.setFailbackState(snapRepCR, lvolDetail.UUID, sourcePoolUUID, sourceLvolUUID, isFreshCluster)
 		return true, nil
 
-	case simplyblockv1alpha1.VolPhaseFailbackTriggerFirst:
-		if trigErr := triggerReplication(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, lvolDetail.UUID); trigErr != nil {
-			return false, fmt.Errorf("trigger first failback replication: %w", trigErr)
+	case simplyblockv1alpha1.VolPhaseFailbackStartReplication:
+		if startErr := replicationStart(ctx, apiClient, targetClusterSecret, sourceClusterUUID, targetPoolUUID, lvolDetail.UUID); startErr != nil {
+			return false, fmt.Errorf("failback replication_start: %w", startErr)
 		}
-		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseFailbackWaitFirst, "")
+		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseFailbackWaitReplication, "")
 		return true, nil
 
-	case simplyblockv1alpha1.VolPhaseFailbackWaitFirst:
+	case simplyblockv1alpha1.VolPhaseFailbackWaitReplication:
 		done, _, pollErr := utils.GetLastSnapshotTaskDoneStatus(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, lvolDetail.UUID)
 		if pollErr != nil {
-			log.Error(pollErr, "Failback: poll first replication task failed, will retry", "lvolUUID", lvolDetail.UUID)
+			log.Error(pollErr, "Failback: poll replication task failed, will retry", "lvolUUID", lvolDetail.UUID)
 			return true, nil
 		}
 		if !done {
-			log.Info("Failback: first replication task pending", "lvolUUID", lvolDetail.UUID)
+			log.Info("Failback: replication task pending", "lvolUUID", lvolDetail.UUID)
 			return true, nil
 		}
 		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseFailbackSuspend, "")
@@ -351,7 +351,7 @@ func (r *SnapshotReplicationReconciler) advanceFailbackReplicationPhases(
 			return false, fmt.Errorf("suspend target lvol: %w", suspErr)
 		}
 		if trigErr := triggerReplication(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, lvolDetail.UUID); trigErr != nil {
-			return false, fmt.Errorf("trigger second failback replication: %w", trigErr)
+			return false, fmt.Errorf("trigger failback replication: %w", trigErr)
 		}
 		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseFailbackWaitSecond, "")
 		return true, nil
@@ -1068,6 +1068,18 @@ func (r *SnapshotReplicationReconciler) resolveSourceFailbackTarget(
 }
 
 /* -------------------- Pure functions -------------------- */
+
+func replicationStart(ctx context.Context, apiClient *webapi.Client, targetClusterSecret, sourceClusterUUID, targetPoolUUID, targetLvolUUID string) error {
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication_start",
+		sourceClusterUUID, targetPoolUUID, targetLvolUUID,
+	)
+	body, status, err := apiClient.Do(ctx, targetClusterSecret, http.MethodPost, endpoint, nil)
+	if err != nil || status >= 300 {
+		return fmt.Errorf("replication_start for lvol %s, status %d: %v, body: %s", targetLvolUUID, status, err, string(body))
+	}
+	return nil
+}
 
 func triggerReplication(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID, poolUUID, lvolUUID string) error {
 	endpoint := fmt.Sprintf(

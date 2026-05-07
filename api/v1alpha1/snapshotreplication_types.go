@@ -66,17 +66,17 @@ const (
 	// Source info is resolved once and stored in FailbackVolumeState so that
 	// every subsequent step can be re-entered safely after a crash or requeue.
 
-	// VolPhaseFailbackTriggerFirst means the first replication trigger on the
-	// target cluster is pending (source info already resolved and persisted).
-	VolPhaseFailbackTriggerFirst = "FailbackTriggerFirst"
-	// VolPhaseFailbackWaitFirst means the controller is polling for the first
-	// target replication task to complete.
-	VolPhaseFailbackWaitFirst = "FailbackWaitFirst"
-	// VolPhaseFailbackSuspend means the target lvol should be suspended and the
-	// second replication triggered in the same step.
+	// VolPhaseFailbackStartReplication means replication_start should be called
+	// on the target lvol with the source cluster as the replication destination.
+	VolPhaseFailbackStartReplication = "FailbackStartReplication"
+	// VolPhaseFailbackWaitReplication means the controller is polling for the
+	// first replication task (started via replication_start) to complete.
+	VolPhaseFailbackWaitReplication = "FailbackWaitReplication"
+	// VolPhaseFailbackSuspend means the target lvol should be suspended and
+	// replication_trigger called to capture the final delta snapshot.
 	VolPhaseFailbackSuspend = "FailbackSuspend"
 	// VolPhaseFailbackWaitSecond means the controller is polling for the second
-	// target replication task to complete.
+	// (post-suspend) replication task to complete.
 	VolPhaseFailbackWaitSecond = "FailbackWaitSecond"
 	// VolPhaseFailbackDeleteSource means the source lvol should be deleted.
 	VolPhaseFailbackDeleteSource = "FailbackDeleteSource"
