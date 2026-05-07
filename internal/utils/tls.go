@@ -10,7 +10,7 @@ const (
 	TLSProviderOpenShift           = "OpenShift"
 	TLSProviderCertManager         = "cert-manager"
 	OpenShiftServingCertAnnotation = "service.beta.openshift.io/serving-cert-secret-name"
-	CertManagerServiceIssuerName   = "simplyblock-certificate-authority-issuer"
+	CertManagerClusterIssuerName   = "simplyblock-certificate-authority-issuer"
 )
 
 func NormalizeTLSProvider(provider string) string {
@@ -66,8 +66,8 @@ func BuildServiceServingCertificate(namespace, serviceName, secretName string) *
 			"spec": map[string]any{
 				"secretName": secretName,
 				"issuerRef": map[string]any{
-					"kind": "Issuer",
-					"name": CertManagerServiceIssuerName,
+					"kind": "ClusterIssuer",
+					"name": CertManagerClusterIssuerName,
 				},
 				"dnsNames": dnsNames,
 			},
