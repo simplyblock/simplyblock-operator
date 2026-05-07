@@ -256,8 +256,8 @@ spec:
                       - Completed
                       - Failed
                       - Paused
-                      - FailbackTriggerFirst
-                      - FailbackWaitFirst
+                      - FailbackStartReplication
+                      - FailbackWaitReplication
                       - FailbackSuspend
                       - FailbackWaitSecond
                       - FailbackDeleteSource

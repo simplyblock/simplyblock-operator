@@ -180,7 +180,7 @@ type VolumeReplicationStatus struct {
 	VolumeID string `json:"volumeID,omitempty"`
 
 	// Phase is the current replication phase for this volume.
-	// +kubebuilder:validation:Enum=Pending;Running;TriggeringTargetReplication;WaitingForTargetReplication;ReplicatingToSource;WaitingForTargetDeletion;Completed;Failed;Paused;FailbackTriggerFirst;FailbackWaitFirst;FailbackSuspend;FailbackWaitSecond;FailbackDeleteSource;FailbackWaitSourceDeleted;FailbackReplicateOnSource;FailbackDeleteTarget;FailbackWaitTargetDeleted
+	// +kubebuilder:validation:Enum=Pending;Running;TriggeringTargetReplication;WaitingForTargetReplication;ReplicatingToSource;WaitingForTargetDeletion;Completed;Failed;Paused;FailbackStartReplication;FailbackWaitReplication;FailbackSuspend;FailbackWaitSecond;FailbackDeleteSource;FailbackWaitSourceDeleted;FailbackReplicateOnSource;FailbackDeleteTarget;FailbackWaitTargetDeleted
 	Phase string `json:"phase,omitempty"`
 
 	// Last snapshot ID replicated for this volume
