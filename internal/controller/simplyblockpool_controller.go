@@ -45,13 +45,19 @@ type PoolReconciler struct {
 }
 
 type POOLAPIResponse struct {
-	UUID         string `json:"uuid"`
-	QoSIOPSLimit int64  `json:"max_rw_ios_per_sec"`
-	RWLimit      int64  `json:"max_rw_mbytes_per_sec"`
-	RLimit       int64  `json:"max_r_mbytes_per_sec"`
-	WLimit       int64  `json:"max_w_mbytes_per_sec"`
-	QoSHost      string `json:"qos_host,omitempty"`
-	Status       string `json:"status"`
+	UUID         string   `json:"uuid"`
+	QoSIOPSLimit int64    `json:"max_rw_ios_per_sec"`
+	RWLimit      int64    `json:"max_rw_mbytes_per_sec"`
+	RLimit       int64    `json:"max_r_mbytes_per_sec"`
+	WLimit       int64    `json:"max_w_mbytes_per_sec"`
+	QoSHost      string   `json:"qos_host,omitempty"`
+	Status       string   `json:"status"`
+	DHCHAP       bool     `json:"dhchap,omitempty"`
+	AllowedHosts []string `json:"allowed_hosts,omitempty"`
+}
+
+type poolHostParams struct {
+	HostNQN string `json:"host_nqn"`
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools,verbs=get;list;watch;create;update;patch;delete
@@ -146,6 +152,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			MaxRwIOPS:     poolSpecQoSIOPS(poolCR.Spec.QosSpec),
 			MaxRMB:        poolSpecQoSThroughputRead(poolCR.Spec.QosSpec),
 			MaxWMB:        poolSpecQoSThroughputWrite(poolCR.Spec.QosSpec),
+			DHCHAP:        poolCR.Spec.DHCHAP,
 			CRName:        poolCR.Name,
 			CRNameSpace:   poolCR.Namespace,
 			CRPlural:      "pools",
@@ -198,6 +205,16 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.upsertStorageClass(ctx, poolCR, clusterUUID); err != nil {
 		log.Error(err, "Failed to create StorageClass for pool")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if changed, err := r.syncPoolHosts(ctx, apiClient, clusterSecret, clusterUUID, poolCR); err != nil {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	} else if changed {
+		poolCR.Status.AllowedHosts = poolCR.Spec.AllowedHosts
+		if err := r.Status().Update(ctx, poolCR); err != nil {
+			log.Error(err, "Failed to update pool status after host sync")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 	}
 
 	// // --- Handle update ---
@@ -291,6 +308,86 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 	dst["fabric"] = p.Fabric
 	dst["max_namespace_per_subsys"] = p.MaxNamespacePerSubsys
 	dst["tune2fs_reserved_blocks"] = p.Tune2fsReservedBlocks
+}
+
+// syncPoolHosts reconciles the pool's allowed hosts: fetches the current host list from the
+// backend, adds hosts in spec but not on the backend, and removes hosts on the backend but
+// no longer in spec. Returns true if any change was made.
+func (r *PoolReconciler) syncPoolHosts(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret, clusterUUID string,
+	poolCR *simplyblockv1alpha1.Pool,
+) (bool, error) {
+	log := logf.FromContext(ctx)
+	desired := poolCR.Spec.AllowedHosts
+
+	// Fetch current backend state to use as applied list.
+	getEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, getEndpoint, nil)
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d: %s", status, string(body))
+		}
+		log.Error(err, "Failed to fetch pool for host sync")
+		return false, err
+	}
+	var poolResp POOLAPIResponse
+	if err := json.Unmarshal(body, &poolResp); err != nil {
+		log.Error(err, "Failed to parse pool GET response")
+		return false, err
+	}
+	applied := poolResp.AllowedHosts
+
+	if len(desired) == 0 && len(applied) == 0 {
+		return false, nil
+	}
+
+	desiredSet := make(map[string]struct{}, len(desired))
+	for _, h := range desired {
+		desiredSet[h] = struct{}{}
+	}
+	appliedSet := make(map[string]struct{}, len(applied))
+	for _, h := range applied {
+		appliedSet[h] = struct{}{}
+	}
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/host", clusterUUID, poolCR.Status.UUID)
+	changed := false
+
+	for _, h := range desired {
+		if _, ok := appliedSet[h]; ok {
+			continue
+		}
+		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, poolHostParams{HostNQN: h})
+		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d: %s", status, string(body))
+			}
+			log.Error(err, "Failed to add host to pool", "host", h)
+			return changed, err
+		}
+		log.Info("Added host to pool", "host", h)
+		changed = true
+	}
+
+	for _, h := range applied {
+		if _, ok := desiredSet[h]; ok {
+			continue
+		}
+		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, poolHostParams{HostNQN: h})
+		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d: %s", status, string(body))
+			}
+			log.Error(err, "Failed to remove host from pool", "host", h)
+			return changed, err
+		}
+		log.Info("Removed host from pool", "host", h)
+		changed = true
+	}
+
+	return changed, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

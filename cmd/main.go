@@ -41,6 +41,7 @@ import (
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -49,7 +50,10 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
-const openShiftConfigAPIGroup = "config.openshift.io"
+const (
+	openShiftConfigAPIGroup = "config.openshift.io"
+	certManagerAPIGroup     = "cert-manager.io"
+)
 
 type serverGroupsGetter interface {
 	ServerGroups() (*metav1.APIGroupList, error)
@@ -62,20 +66,32 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
-func validateTLSConfiguration(discoveryClient serverGroupsGetter, tlsEnabled bool) error {
+func validateTLSConfiguration(discoveryClient serverGroupsGetter, tlsEnabled bool, tlsProvider string) error {
 	if !tlsEnabled {
 		return nil
 	}
+	if !utils.TLSProviderSupported(tlsProvider) {
+		return fmt.Errorf("unsupported SB_TLS_PROVIDER %q", tlsProvider)
+	}
+
+	requiredGroup := openShiftConfigAPIGroup
+	switch utils.NormalizeTLSProvider(tlsProvider) {
+	case utils.TLSProviderCertManager:
+		requiredGroup = certManagerAPIGroup
+	case utils.TLSProviderOpenShift:
+		requiredGroup = openShiftConfigAPIGroup
+	}
+
 	groupList, err := discoveryClient.ServerGroups()
 	if err != nil {
 		return fmt.Errorf("discover API groups: %w", err)
 	}
 	for _, group := range groupList.Groups {
-		if group.Name == openShiftConfigAPIGroup {
+		if group.Name == requiredGroup {
 			return nil
 		}
 	}
-	return fmt.Errorf("TLS_ENABLED=true requires an OpenShift cluster")
+	return fmt.Errorf("SB_TLS_SERVE=1 with SB_TLS_PROVIDER=%q requires API group %q", tlsProvider, requiredGroup)
 }
 
 // nolint:gocyclo
@@ -188,14 +204,16 @@ func main() {
 	}
 
 	cfg := ctrl.GetConfigOrDie()
-	tlsEnabled := os.Getenv("TLS_ENABLED") == "true"
+	tlsEnabled := os.Getenv("SB_TLS_SERVE") == "1"
+	tlsProvider := utils.NormalizeTLSProvider(os.Getenv("SB_TLS_PROVIDER"))
+	tlsMutualEnabled := os.Getenv("SB_TLS_CONNECT") == "authenticated"
 	if tlsEnabled {
 		discoveryClient, err := discovery.NewDiscoveryClientForConfig(cfg)
 		if err != nil {
 			setupLog.Error(err, "unable to initialize cluster discovery client for TLS validation")
 			os.Exit(1)
 		}
-		if err := validateTLSConfiguration(discoveryClient, tlsEnabled); err != nil {
+		if err := validateTLSConfiguration(discoveryClient, tlsEnabled, tlsProvider); err != nil {
 			setupLog.Error(err, "invalid TLS configuration")
 			os.Exit(1)
 		}
@@ -235,9 +253,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageNodeReconciler{
-		Client:     mgr.GetClient(),
-		Scheme:     mgr.GetScheme(),
-		TLSEnabled: tlsEnabled,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		TLSEnabled:       tlsEnabled,
+		TLSProvider:      tlsProvider,
+		TLSMutualEnabled: tlsMutualEnabled,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
@@ -271,10 +291,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.NodeDrainCoordinatorReconciler{
-		Client:          mgr.GetClient(),
-		Scheme:          mgr.GetScheme(),
-		ManagerNodeName: os.Getenv("NODE_NAME"),
-		TLSEnabled:      tlsEnabled,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		ManagerNodeName:  os.Getenv("NODE_NAME"),
+		TLSEnabled:       tlsEnabled,
+		TLSMutualEnabled: tlsMutualEnabled,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NodeDrainCoordinator")
 		os.Exit(1)
@@ -316,6 +337,14 @@ func main() {
 		Recorder: mgr.GetEventRecorderFor("backuppolicy-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupPolicy")
+		os.Exit(1)
+	}
+	if err := (&controller.BackupImportReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("backupimport-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "BackupImport")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

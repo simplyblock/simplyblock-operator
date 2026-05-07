@@ -49,6 +49,19 @@ rules:
   - serviceaccounts
   - services
   verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  - serviceaccounts
+  - services
+  verbs:
   - create
   - delete
   - get
@@ -57,9 +70,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - apps
+  - cert-manager.io
   resources:
-  - daemonsets
+  - certificates
   verbs:
   - create
   - delete
@@ -118,6 +131,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backupimports
   - backuppolicies
   - backuprestores
   - devices
@@ -139,6 +153,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
   - devices/finalizers
@@ -154,6 +169,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - backupimports/status
   - backuppolicies/status
   - backuprestores/status
   - devices/status

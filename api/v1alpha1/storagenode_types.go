@@ -47,71 +47,99 @@ type StorageNodeSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
 	// Action triggers an imperative node operation.
 	Action string `json:"action,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node UUID"
 	// NodeUUID is required when action is specified
 	NodeUUID string `json:"nodeUUID,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Logical Volume Count"
 	// MaxLogicalVolumeCount is the maximum number of logical volumes per node.
 	MaxLogicalVolumeCount *int32 `json:"maxLogicalVolumeCount,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Size"
 	// MaxSize is the maximum allocatable size of the storage node.
 	MaxSize string `json:"maxSize,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="SPDK Image"
 	// SpdkImage is the SPDK image reference used by node services.
 	SpdkImage string `json:"spdkImage,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="SPDK Proxy Image"
 	// SpdkProxyImage is the SPDK proxy image reference used by node services.
 	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Management Interface"
 	// MgmtIfname is the management interface name used by storage nodes.
 	MgmtIfname string `json:"mgmtIfname,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Partitions"
 	// Partitions is the number of partitions created per backend storage device.
 	Partitions *int32 `json:"partitions,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Journal Manager"
 	// JournalManagerSpec configures journal manager behavior.
 	JournalManagerSpec *JournalManagerSpec `json:"journalManager,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Core Isolation"
 	// CoreIsolation enables CPU core isolation mode.
 	CoreIsolation *bool `json:"coreIsolation,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Core Percentage"
 	// CorePercentage is the percentage of cores to be used for spdk (0-99).
 	CorePercentage *int32 `json:"corePercentage,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PCIe Allow List"
 	// PcieAllowList is the list of PCI addresses allowed for use.
 	PcieAllowList []string `json:"pcieAllowList,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PCIe Deny List"
 	// PcieDenyList is the list of PCI addresses excluded from use.
 	PcieDenyList []string `json:"pcieDenyList,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PCIe Model"
 	// PcieModel filters devices by PCI model.
 	PcieModel string `json:"pcieModel,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Drive Size Range"
 	// DriveSizeRange filters devices by size range.
 	DriveSizeRange string `json:"driveSizeRange,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Sockets To Use"
 	// SocketsToUse restricts deployment to selected NUMA sockets.
 	SocketsToUse []string `json:"socketsToUse,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Nodes Per Socket"
 	// NodesPerSocket defines how many storage nodes are created per NUMA socket.
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Data Interfaces"
 	// DataIfname lists data-plane network interfaces.
 	DataIfname []string `json:"dataIfname,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Worker Nodes"
 	// WorkerNodes is the set of Kubernetes worker nodes to manage.
 	WorkerNodes []string `json:"workerNodes,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Worker Node"
 	// WorkerNode is a single worker node used by action flows.
 	WorkerNode string `json:"workerNode,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="OpenShift Cluster"
 	// OpenShiftCluster indicates OpenShift-specific behavior should be enabled.
 	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Device Names"
 	// DeviceNames explicitly defines a comma separated list of nvme namespace names like nvme0n1,nvme1n1...
 	DeviceNames []string `json:"deviceNames,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Ubuntu Host"
 	// UbuntuHost indicates the node host OS is Ubuntu.
 	UbuntuHost *bool `json:"ubuntuHost,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Skip Kubelet Configuration"
 	// SkipKubeletConfiguration skips kubelet configuration changes.
 	SkipKubeletConfiguration *bool `json:"skipKubeletConfiguration,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force Format 4K"
 	// ForceFormat4K forces 4K blocksize formatting of the NVMe device where supported.
 	ForceFormat4K *bool `json:"forceFormat4K,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable CPU Topology"
 	// EnableCpuTopology enables topology-aware CPU handling.
 	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Reserved System CPU"
 	// ReservedSystemCPU defines CPUs reserved for system workloads.
 	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Tolerations"
 	// Tolerations configures pod tolerations for storage-node pods.
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Add PCIe To Allow List"
 	// AddPcieToAllowList appends devices to the allow-list during restart actions.
 	// FIXME: Unused for now
 	AddPcieToAllowList []string `json:"addPcieToAllowList,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node Address"
 	// NodeAddr is the explicit node address used by action flows.
 	// FIXME: Unused for now
 	NodeAddr string `json:"nodeAddr,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
 	// Force enables forced action execution where supported.
 	// FIXME: Unused for now
 	Force *bool `json:"force,omitempty"`

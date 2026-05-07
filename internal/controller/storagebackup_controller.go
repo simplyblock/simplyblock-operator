@@ -174,6 +174,17 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.handleDeletion(ctx, backupCR)
 	}
 
+	// Imported backups (created by BackupImport controller) have their status managed
+	// externally. Skip snapshot/backup creation and treat as terminal once Done.
+	if backupCR.Spec.SourceClusterUUID != "" {
+		if backupCR.Status.Phase == simplyblockv1alpha1.BackupPhaseDone ||
+			backupCR.Status.Phase == simplyblockv1alpha1.BackupPhaseFailed {
+			return ctrl.Result{}, nil
+		}
+		// Still pending status patch from BackupImport controller; requeue briefly.
+		return ctrl.Result{RequeueAfter: backupReconcileRequeue}, nil
+	}
+
 	if !controllerutil.ContainsFinalizer(backupCR, backupFinalizer) {
 		controllerutil.AddFinalizer(backupCR, backupFinalizer)
 		if err := r.Update(ctx, backupCR); err != nil {
@@ -419,6 +430,12 @@ func (r *StorageBackupReconciler) handleDeletion(
 		return ctrl.Result{}, nil
 	}
 
+	// Imported backups live on the source cluster's S3; do not delete them from the backend.
+	if backupCR.Spec.SourceClusterUUID != "" {
+		controllerutil.RemoveFinalizer(backupCR, backupFinalizer)
+		return ctrl.Result{}, r.Update(ctx, backupCR)
+	}
+
 	clusterUUID := backupCR.Status.ClusterUUID
 	clusterSecret := ""
 
@@ -491,6 +508,10 @@ func (r *StorageBackupReconciler) resolveBackupSource(
 	backupCR *simplyblockv1alpha1.StorageBackup,
 	clusterUUID string,
 ) (*backupSource, error) {
+	if backupCR.Spec.PVCRef == nil {
+		return nil, fmt.Errorf("spec.pvcRef is required for non-imported StorageBackup resources")
+	}
+
 	pvcNamespace := backupCR.Spec.PVCRef.Namespace
 	if pvcNamespace == "" {
 		pvcNamespace = backupCR.Namespace

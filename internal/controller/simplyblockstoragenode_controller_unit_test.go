@@ -21,6 +21,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -443,6 +444,9 @@ func TestStorageNodeDaemonSetReconcileTLSDisabled(t *testing.T) {
 		if c.ReadinessProbe.HTTPGet.Scheme != "" && c.ReadinessProbe.HTTPGet.Scheme != corev1.URISchemeHTTP {
 			t.Fatalf("expected default/HTTP probe scheme when TLS disabled, got %q", c.ReadinessProbe.HTTPGet.Scheme)
 		}
+		if _, ok := envValue(c.Env, "SB_TLS_CONNECT"); ok {
+			t.Fatalf("unexpected SB_TLS_CONNECT env when TLS disabled")
+		}
 	}
 }
 
@@ -465,6 +469,15 @@ func checkTLSMounts(t *testing.T, label string, mounts []corev1.VolumeMount) {
 	}
 }
 
+func envValue(env []corev1.EnvVar, name string) (string, bool) {
+	for _, item := range env {
+		if item.Name == name {
+			return item.Value, true
+		}
+	}
+	return "", false
+}
+
 func TestStorageNodeDaemonSetReconcileTLSEnabled(t *testing.T) {
 	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-tls-on", Namespace: "default", UID: "uid-tls-on"},
@@ -472,6 +485,8 @@ func TestStorageNodeDaemonSetReconcileTLSEnabled(t *testing.T) {
 	}
 	r := newStorageNodeStateTestReconciler(t, sn)
 	r.TLSEnabled = true
+	r.TLSProvider = utils.TLSProviderOpenShift
+	r.TLSMutualEnabled = true
 
 	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
 		t.Fatalf("reconcileDaemonSet returned error: %v", err)
@@ -521,11 +536,71 @@ func TestStorageNodeDaemonSetReconcileTLSEnabled(t *testing.T) {
 	checkTLSMounts(t, "main container", ds.Spec.Template.Spec.Containers[0].VolumeMounts)
 
 	probe := ds.Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe == nil || probe.TCPSocket == nil {
+		t.Fatalf("expected TCPSocket readiness probe under mutual TLS, got %#v", probe)
+	}
+	if probe.HTTPGet != nil {
+		t.Fatalf("did not expect HTTPGet readiness probe under mutual TLS, got %#v", probe.HTTPGet)
+	}
+	if got, ok := envValue(ds.Spec.Template.Spec.Containers[0].Env, "SB_TLS_CONNECT"); !ok || got != "authenticated" {
+		t.Fatalf("expected SB_TLS_CONNECT=authenticated on main container, got value=%q present=%v", got, ok)
+	}
+}
+
+func TestStorageNodeDaemonSetReconcileTLSCertManagerProvider(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-tls-cert-manager", Namespace: "default", UID: "uid-tls-cert-manager"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn)
+	r.TLSEnabled = true
+	r.TLSProvider = utils.TLSProviderCertManager
+	r.TLSMutualEnabled = false
+
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileDaemonSet returned error: %v", err)
+	}
+
+	var ds appsv1.DaemonSet
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+		t.Fatalf("failed to fetch daemonset: %v", err)
+	}
+
+	var tlsVol *corev1.Volume
+	for i := range ds.Spec.Template.Spec.Volumes {
+		v := &ds.Spec.Template.Spec.Volumes[i]
+		switch v.Name {
+		case tlsVolumeName:
+			tlsVol = v
+		case caVolumeName:
+			t.Fatalf("unexpected separate certificate-authority volume: %#v", v)
+		}
+	}
+	if tlsVol == nil {
+		t.Fatalf("expected tls volume, got none")
+	}
+	if tlsVol.Projected != nil {
+		t.Fatalf("expected plain Secret volume for cert-manager provider, got projected: %#v", tlsVol.Projected)
+	}
+	if tlsVol.Secret == nil || tlsVol.Secret.SecretName != "simplyblock-storage-node-api-tls" {
+		t.Fatalf("expected Secret volume referencing simplyblock-storage-node-api-tls, got %#v", tlsVol.Secret)
+	}
+
+	if len(ds.Spec.Template.Spec.InitContainers) != 1 {
+		t.Fatalf("expected single init container")
+	}
+	checkTLSMounts(t, "init container", ds.Spec.Template.Spec.InitContainers[0].VolumeMounts)
+	if len(ds.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("expected single main container")
+	}
+	checkTLSMounts(t, "main container", ds.Spec.Template.Spec.Containers[0].VolumeMounts)
+
+	probe := ds.Spec.Template.Spec.Containers[0].ReadinessProbe
 	if probe == nil || probe.HTTPGet == nil {
-		t.Fatalf("expected HTTPGet readiness probe")
+		t.Fatalf("expected HTTPGet readiness probe under server-only TLS, got %#v", probe)
 	}
 	if probe.HTTPGet.Scheme != corev1.URISchemeHTTPS {
-		t.Fatalf("expected readiness probe scheme HTTPS when TLS enabled, got %q", probe.HTTPGet.Scheme)
+		t.Fatalf("expected readiness probe scheme HTTPS, got %q", probe.HTTPGet.Scheme)
 	}
 }
 
@@ -1108,7 +1183,7 @@ func TestStorageNodeReconcileUnreachableNodeInfoRequeues(t *testing.T) {
 
 func TestCheckNodeInfoReachable(t *testing.T) {
 	// Use an unroutable test-net address to deterministically exercise error path.
-	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", false)
+	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", false, false)
 	if err == nil {
 		t.Fatalf("expected error when node info endpoint is unreachable")
 	}
@@ -1117,7 +1192,7 @@ func TestCheckNodeInfoReachable(t *testing.T) {
 func TestCheckNodeInfoReachableTLSMissingCA(t *testing.T) {
 	// With TLS enabled and the default CA path (which won't exist in unit tests),
 	// the function must surface a build-client error before attempting any I/O.
-	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", true)
+	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", true, false)
 	if err == nil {
 		t.Fatalf("expected error when CA bundle is missing")
 	}
@@ -1140,12 +1215,12 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 		attempts := 0
 		waitForNodeInfoReachableMaxRetries = 3
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool, bool) error {
 			attempts++
 			return nil
 		}
 
-		if err := waitForNodeInfoReachable(context.Background(), "node-a", "default", false); err != nil {
+		if err := waitForNodeInfoReachable(context.Background(), "node-a", "default", false, false); err != nil {
 			t.Fatalf("waitForNodeInfoReachable returned error: %v", err)
 		}
 		if attempts != 1 {
@@ -1157,7 +1232,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 		attempts := 0
 		waitForNodeInfoReachableMaxRetries = 4
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool, bool) error {
 			attempts++
 			if attempts < 3 {
 				return errors.New("temporary failure")
@@ -1165,7 +1240,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 			return nil
 		}
 
-		if err := waitForNodeInfoReachable(context.Background(), "node-b", "default", false); err != nil {
+		if err := waitForNodeInfoReachable(context.Background(), "node-b", "default", false, false); err != nil {
 			t.Fatalf("waitForNodeInfoReachable returned error: %v", err)
 		}
 		if attempts != 3 {
@@ -1176,13 +1251,13 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 	t.Run("returns context cancellation", func(t *testing.T) {
 		waitForNodeInfoReachableMaxRetries = 5
 		waitForNodeInfoReachableRetryDelay = time.Second
-		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool, bool) error {
 			return errors.New("still down")
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := waitForNodeInfoReachable(ctx, "node-c", "default", false)
+		err := waitForNodeInfoReachable(ctx, "node-c", "default", false, false)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context canceled error, got %v", err)
 		}
@@ -1191,11 +1266,11 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 	t.Run("returns wrapped error after max retries", func(t *testing.T) {
 		waitForNodeInfoReachableMaxRetries = 3
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool, bool) error {
 			return errors.New("permanent failure")
 		}
 
-		err := waitForNodeInfoReachable(context.Background(), "node-d", "default", false)
+		err := waitForNodeInfoReachable(context.Background(), "node-d", "default", false, false)
 		if err == nil {
 			t.Fatalf("expected timeout error after retries")
 		}
@@ -1919,6 +1994,8 @@ func TestReconcileSpdkProxyService(t *testing.T) {
 	}
 
 	r := newStorageNodeStateTestReconciler(t, sn)
+	r.TLSEnabled = true
+	r.TLSProvider = utils.TLSProviderOpenShift
 
 	if err := r.reconcileSpdkProxyService(context.Background(), sn); err != nil {
 		t.Fatalf("reconcileSpdkProxyService: %v", err)
@@ -1945,6 +2022,73 @@ func TestReconcileSpdkProxyService(t *testing.T) {
 	svc.Spec.ClusterIP = "None"
 	if err := r.reconcileSpdkProxyService(context.Background(), sn); err != nil {
 		t.Fatalf("second reconcileSpdkProxyService: %v", err)
+	}
+}
+
+func TestReconcileServicesAndServingCertificatesForCertManagerProvider(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns", UID: "sn-uid"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn)
+	r.TLSEnabled = true
+	r.TLSProvider = utils.TLSProviderCertManager
+
+	if err := r.reconcileService(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileService: %v", err)
+	}
+	if err := r.reconcileSpdkProxyService(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileSpdkProxyService: %v", err)
+	}
+	if err := r.reconcileServingCertificates(context.Background(), sn); err != nil {
+		t.Fatalf("reconcileServingCertificates: %v", err)
+	}
+
+	for _, serviceName := range []string{"simplyblock-storage-node-api", "simplyblock-spdk-proxy"} {
+		var svc corev1.Service
+		if err := r.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: serviceName}, &svc); err != nil {
+			t.Fatalf("expected Service %s to be created: %v", serviceName, err)
+		}
+		if got := svc.Annotations[utils.OpenShiftServingCertAnnotation]; got != "" {
+			t.Fatalf("unexpected OpenShift serving-cert annotation on %s: %q", serviceName, got)
+		}
+	}
+
+	for serviceName, secretName := range map[string]string{
+		"simplyblock-storage-node-api": "simplyblock-storage-node-api-tls",
+		"simplyblock-spdk-proxy":       "simplyblock-spdk-proxy-tls",
+	} {
+		cert := &unstructured.Unstructured{}
+		cert.SetAPIVersion("cert-manager.io/v1")
+		cert.SetKind("Certificate")
+		if err := r.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: serviceName}, cert); err != nil {
+			t.Fatalf("expected Certificate %s to be created: %v", serviceName, err)
+		}
+
+		gotSecret, found, err := unstructured.NestedString(cert.Object, "spec", "secretName")
+		if err != nil || !found {
+			t.Fatalf("expected secretName on Certificate %s, err=%v found=%v", serviceName, err, found)
+		}
+		if gotSecret != secretName {
+			t.Fatalf("Certificate %s secretName = %q, want %q", serviceName, gotSecret, secretName)
+		}
+
+		gotIssuer, found, err := unstructured.NestedString(cert.Object, "spec", "issuerRef", "name")
+		if err != nil || !found {
+			t.Fatalf("expected issuerRef.name on Certificate %s, err=%v found=%v", serviceName, err, found)
+		}
+		if gotIssuer != utils.CertManagerServiceIssuerName {
+			t.Fatalf("Certificate %s issuerRef.name = %q, want %q", serviceName, gotIssuer, utils.CertManagerServiceIssuerName)
+		}
+
+		dnsNames, found, err := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
+		if err != nil || !found {
+			t.Fatalf("expected dnsNames on Certificate %s, err=%v found=%v", serviceName, err, found)
+		}
+		if !contains(dnsNames, serviceName) || !contains(dnsNames, serviceName+".ns.svc.cluster.local") {
+			t.Fatalf("Certificate %s dnsNames = %#v", serviceName, dnsNames)
+		}
 	}
 }
 
@@ -2147,4 +2291,289 @@ func sliceNames(items []discoveryv1.EndpointSlice) []string {
 		out = append(out, s.Name)
 	}
 	return out
+}
+
+func TestStorageNodeDaemonSetTLSSecretRevisionAnnotation(t *testing.T) {
+	const (
+		ns          = "default"
+		clusterName = "cluster-a"
+		dsName      = "simplyblock-storage-node-ds-cluster-a"
+	)
+
+	cases := []struct {
+		name       string
+		tlsEnabled bool
+		seedSecret bool
+		secretRV   string
+		wantValue  string
+		wantSet    bool
+	}{
+		{
+			name:       "tls enabled with secret stamps annotation",
+			tlsEnabled: true,
+			seedSecret: true,
+			secretRV:   "12345",
+			wantValue:  "12345",
+			wantSet:    true,
+		},
+		{
+			name:       "tls enabled but secret missing leaves annotation unset",
+			tlsEnabled: true,
+			seedSecret: false,
+			wantSet:    false,
+		},
+		{
+			name:       "tls disabled leaves annotation unset even if secret exists",
+			tlsEnabled: false,
+			seedSecret: true,
+			secretRV:   "67890",
+			wantSet:    false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sn := &simplyblockv1alpha1.StorageNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-rv", Namespace: ns, UID: "uid-rv"},
+				Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: clusterName},
+			}
+			objs := []client.Object{sn}
+			if tc.seedSecret {
+				objs = append(objs, &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:            utils.SecretNameStorageNodeAPITLS,
+						Namespace:       ns,
+						ResourceVersion: tc.secretRV,
+					},
+				})
+			}
+			r := newStorageNodeStateTestReconciler(t, objs...)
+			r.TLSEnabled = tc.tlsEnabled
+			r.TLSProvider = utils.TLSProviderCertManager
+
+			if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+				t.Fatalf("reconcileDaemonSet returned error: %v", err)
+			}
+
+			var ds appsv1.DaemonSet
+			if err := r.Get(context.Background(), client.ObjectKey{Name: dsName, Namespace: ns}, &ds); err != nil {
+				t.Fatalf("failed to fetch daemonset: %v", err)
+			}
+
+			got, ok := ds.Spec.Template.Annotations[utils.AnnotationTLSSecretRevision]
+			switch {
+			case tc.wantSet && !ok:
+				t.Fatalf("expected pod-template annotation %q to be set", utils.AnnotationTLSSecretRevision)
+			case tc.wantSet && got != tc.wantValue:
+				t.Fatalf("annotation value: want %q, got %q", tc.wantValue, got)
+			case !tc.wantSet && ok:
+				t.Fatalf("expected pod-template annotation %q to be unset, got %q", utils.AnnotationTLSSecretRevision, got)
+			}
+		})
+	}
+}
+
+func TestStorageNodeDaemonSetReconcileRollsOnTLSSecretRevisionChange(t *testing.T) {
+	const ns = "default"
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-ds-roll", Namespace: ns, UID: "uid-roll"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            utils.SecretNameStorageNodeAPITLS,
+			Namespace:       ns,
+			ResourceVersion: "1",
+		},
+	}
+	r := newStorageNodeStateTestReconciler(t, sn, secret)
+	r.TLSEnabled = true
+	r.TLSProvider = utils.TLSProviderCertManager
+
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("first reconcileDaemonSet: %v", err)
+	}
+
+	dsKey := client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: ns}
+	var first appsv1.DaemonSet
+	if err := r.Get(context.Background(), dsKey, &first); err != nil {
+		t.Fatalf("fetch first daemonset: %v", err)
+	}
+
+	// Simulate cert-manager rotating the Secret: any Update bumps
+	// metadata.resourceVersion via the fake client's bookkeeping.
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: utils.SecretNameStorageNodeAPITLS}, secret); err != nil {
+		t.Fatalf("refetch secret: %v", err)
+	}
+	secret.Data = map[string][]byte{"tls.crt": []byte("rotated")}
+	if err := r.Update(context.Background(), secret); err != nil {
+		t.Fatalf("rotate secret: %v", err)
+	}
+
+	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+		t.Fatalf("second reconcileDaemonSet: %v", err)
+	}
+
+	var second appsv1.DaemonSet
+	if err := r.Get(context.Background(), dsKey, &second); err != nil {
+		t.Fatalf("fetch second daemonset: %v", err)
+	}
+
+	firstRV := first.Spec.Template.Annotations[utils.AnnotationTLSSecretRevision]
+	secondRV := second.Spec.Template.Annotations[utils.AnnotationTLSSecretRevision]
+	if firstRV == "" || secondRV == "" {
+		t.Fatalf("expected pod-template annotation set in both passes, got first=%q second=%q", firstRV, secondRV)
+	}
+	if firstRV == secondRV {
+		t.Fatalf("expected pod-template annotation to change after Secret rotation, both still %q", firstRV)
+	}
+}
+
+func TestStorageNodeDaemonSetSBTLSServeEnv(t *testing.T) {
+	cases := []struct {
+		name            string
+		tlsEnabled      bool
+		tlsProvider     string
+		wantServe       string
+		wantServeSet    bool
+		wantProvider    string
+		wantProviderSet bool
+	}{
+		{
+			name:            "tls enabled with cert-manager",
+			tlsEnabled:      true,
+			tlsProvider:     utils.TLSProviderCertManager,
+			wantServe:       "true",
+			wantServeSet:    true,
+			wantProvider:    utils.TLSProviderCertManager,
+			wantProviderSet: true,
+		},
+		{
+			name:            "tls enabled with OpenShift",
+			tlsEnabled:      true,
+			tlsProvider:     utils.TLSProviderOpenShift,
+			wantServe:       "true",
+			wantServeSet:    true,
+			wantProvider:    utils.TLSProviderOpenShift,
+			wantProviderSet: true,
+		},
+		{
+			name:         "tls disabled omits TLS env vars",
+			tlsEnabled:   false,
+			tlsProvider:  utils.TLSProviderCertManager,
+			wantServeSet: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sn := &simplyblockv1alpha1.StorageNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "sn-env", Namespace: "default", UID: "uid-env"},
+				Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+			}
+			r := newStorageNodeStateTestReconciler(t, sn)
+			r.TLSEnabled = tc.tlsEnabled
+			r.TLSProvider = tc.tlsProvider
+
+			if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+				t.Fatalf("reconcileDaemonSet returned error: %v", err)
+			}
+
+			var ds appsv1.DaemonSet
+			if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+				t.Fatalf("failed to fetch daemonset: %v", err)
+			}
+			if len(ds.Spec.Template.Spec.Containers) != 1 {
+				t.Fatalf("expected single main container, got %d", len(ds.Spec.Template.Spec.Containers))
+			}
+
+			envByName := map[string]string{}
+			envSeen := map[string]bool{}
+			for _, e := range ds.Spec.Template.Spec.Containers[0].Env {
+				envByName[e.Name] = e.Value
+				envSeen[e.Name] = true
+			}
+
+			switch {
+			case tc.wantServeSet && !envSeen["SB_TLS_SERVE"]:
+				t.Fatalf("expected SB_TLS_SERVE env var to be set on main container")
+			case tc.wantServeSet && envByName["SB_TLS_SERVE"] != tc.wantServe:
+				t.Fatalf("SB_TLS_SERVE: want %q, got %q", tc.wantServe, envByName["SB_TLS_SERVE"])
+			case !tc.wantServeSet && envSeen["SB_TLS_SERVE"]:
+				t.Fatalf("expected SB_TLS_SERVE env var to be absent, got %q", envByName["SB_TLS_SERVE"])
+			}
+
+			switch {
+			case tc.wantProviderSet && !envSeen["SB_TLS_PROVIDER"]:
+				t.Fatalf("expected SB_TLS_PROVIDER env var to be set on main container")
+			case tc.wantProviderSet && envByName["SB_TLS_PROVIDER"] != tc.wantProvider:
+				t.Fatalf("SB_TLS_PROVIDER: want %q, got %q", tc.wantProvider, envByName["SB_TLS_PROVIDER"])
+			case !tc.wantProviderSet && envSeen["SB_TLS_PROVIDER"]:
+				t.Fatalf("expected SB_TLS_PROVIDER env var to be absent, got %q", envByName["SB_TLS_PROVIDER"])
+			}
+		})
+	}
+}
+
+func TestIsStorageNodeTLSSecretPredicate(t *testing.T) {
+	cases := []struct {
+		name string
+		obj  client.Object
+		want bool
+	}{
+		{
+			name: "matches storage-node-api TLS secret",
+			obj:  &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: utils.SecretNameStorageNodeAPITLS}},
+			want: true,
+		},
+		{
+			name: "ignores spdk-proxy TLS secret",
+			obj:  &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: utils.SecretNameSpdkProxyTLS}},
+			want: false,
+		},
+		{
+			name: "ignores unrelated secret",
+			obj:  &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "some-other-secret"}},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isStorageNodeTLSSecret(tc.obj); got != tc.want {
+				t.Fatalf("isStorageNodeTLSSecret(%q) = %v, want %v", tc.obj.GetName(), got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTLSSecretToStorageNodeRequestsEnqueuesAllInNamespace(t *testing.T) {
+	const ns = "ns"
+	snA := &simplyblockv1alpha1.StorageNode{ObjectMeta: metav1.ObjectMeta{Name: "sn-a", Namespace: ns}}
+	snB := &simplyblockv1alpha1.StorageNode{ObjectMeta: metav1.ObjectMeta{Name: "sn-b", Namespace: ns}}
+	otherNS := &simplyblockv1alpha1.StorageNode{ObjectMeta: metav1.ObjectMeta{Name: "sn-c", Namespace: "other"}}
+
+	r := newStorageNodeStateTestReconciler(t, snA, snB, otherNS)
+
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name:      utils.SecretNameStorageNodeAPITLS,
+		Namespace: ns,
+	}}
+	reqs := r.tlsSecretToStorageNodeRequests(context.Background(), secret)
+
+	got := make(map[string]bool, len(reqs))
+	for _, req := range reqs {
+		got[req.Namespace+"/"+req.Name] = true
+	}
+
+	want := map[string]bool{ns + "/sn-a": true, ns + "/sn-b": true}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d requests, got %d (%v)", len(want), len(got), got)
+	}
+	for k := range want {
+		if !got[k] {
+			t.Fatalf("missing reconcile request for %q", k)
+		}
+	}
+	if got[ns+"/sn-c"] || got["other/sn-c"] {
+		t.Fatalf("did not expect cross-namespace StorageNode to be enqueued: %v", got)
+	}
 }

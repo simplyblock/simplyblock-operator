@@ -45,4 +45,9 @@ const (
 
 	ENDPOINT       = "http://simplyblock-webappapi:5000"
 	CSIProvisioner = "csi.simplyblock.io"
+
+	SecretNameStorageNodeAPITLS = "simplyblock-storage-node-api-tls"
+	SecretNameSpdkProxyTLS      = "simplyblock-spdk-proxy-tls"
+
+	AnnotationTLSSecretRevision = "storage.simplyblock.io/tls-secret-revision"
 )

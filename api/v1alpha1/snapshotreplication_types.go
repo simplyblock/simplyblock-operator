@@ -117,9 +117,11 @@ type SnapshotReplicationSpec struct {
 	// Target cluster pool for replication
 	TargetPool string `json:"targetPool"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source Pool"
 	// required for failback to a fresh source cluster
 	SourcePool string `json:"sourcePool,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Timeout"
 	// snapshot replication timeout
 	Timeout *int32 `json:"timeout,omitempty"`
 
@@ -130,13 +132,16 @@ type SnapshotReplicationSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
 	Action string `json:"action,omitempty"`
 
-	// Optional: only these PVCs are included in failback.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Include Volume IDs"
+	// Optional: only these volumes are included in failback.
 	// If empty, all volumes are candidates unless excluded below.
 	IncludePVCRefs []PersistentVolumeClaimRef `json:"includePVCRefs,omitempty"`
 
+  // +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Exclude Volume IDs"
 	// Optional: PVCs to exclude from failback.
 	ExcludePVCRefs []PersistentVolumeClaimRef `json:"excludePVCRefs,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Volume IDs"
 	// Optional: list of PVCs to replicate. Empty means all volumes.
 	PVCRefs []PersistentVolumeClaimRef `json:"pvcRefs,omitempty"`
 }
