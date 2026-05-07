@@ -327,7 +327,7 @@ func (r *SnapshotReplicationReconciler) advanceFailbackReplicationPhases(
 		return true, nil
 
 	case simplyblockv1alpha1.VolPhaseFailbackStartReplication:
-		if startErr := replicationStart(ctx, apiClient, targetClusterSecret, sourceClusterUUID, targetPoolUUID, lvolDetail.UUID); startErr != nil {
+		if startErr := replicationStart(ctx, apiClient, sourceClusterSecret, sourceClusterUUID, targetPoolUUID, lvolDetail.UUID); startErr != nil {
 			return false, fmt.Errorf("failback replication_start: %w", startErr)
 		}
 		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseFailbackWaitReplication, "")
