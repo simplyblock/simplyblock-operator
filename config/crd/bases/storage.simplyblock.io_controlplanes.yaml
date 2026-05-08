@@ -53,9 +53,15 @@ spec:
           metadata:
             type: object
           spec:
-            description: |-
-              ControlPlaneSpec is intentionally empty. ControlPlane is a singleton
-              resource created by the Helm chart; all configuration comes from the chart.
+            description: ControlPlaneSpec holds configuration for the singleton ControlPlane
+              resource created by the Helm chart.
+            properties:
+              image:
+                description: |-
+                  Image is the container image used for all simplyblock control-plane and
+                  storage-node workloads (e.g. quay.io/simplyblock-io/simplyblock:26.2.2).
+                  StorageNode CRs that omit spec.clusterImage inherit this value.
+                type: string
             type: object
           status:
             description: |-
