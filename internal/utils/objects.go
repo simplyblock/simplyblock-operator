@@ -212,16 +212,10 @@ func ShouldActivateCluster(
 
 	required := mod + 1
 
-	coreIsolation := false
-	if snCR.Spec.CoreIsolation != nil {
-		coreIsolation = *snCR.Spec.CoreIsolation
-	}
-
 	expected := len(snCR.Spec.WorkerNodes) * ExpectedNodesPerHost(snCR)
 
 	return onlineHealthy == expected &&
-		onlineHealthy >= required &&
-		!coreIsolation
+		onlineHealthy >= required
 }
 
 func ClusterAlreadyActive(cluster *simplyblockv1alpha1.StorageCluster) bool {

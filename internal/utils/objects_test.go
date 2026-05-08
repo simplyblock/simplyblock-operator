@@ -47,12 +47,6 @@ func TestShouldActivateCluster(t *testing.T) {
 	if !ShouldActivateCluster(2, 3, cr) { // required=mod+1 => 3
 		t.Fatalf("should activate when all workers are online and requirement met")
 	}
-
-	coreIsolation := true
-	cr.Spec.CoreIsolation = &coreIsolation
-	if ShouldActivateCluster(2, 3, cr) {
-		t.Fatalf("should not activate when core isolation is enabled")
-	}
 }
 
 func TestClusterStatusHelpers(t *testing.T) {
