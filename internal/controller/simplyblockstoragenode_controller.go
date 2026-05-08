@@ -368,6 +368,11 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.tlsSecretToStorageNodeRequests),
 			builder.WithPredicates(predicate.NewPredicateFuncs(isStorageNodeTLSSecret)),
 		).
+		Watches(
+			&simplyblockv1alpha1.ControlPlane{},
+			handler.EnqueueRequestsFromMapFunc(r.controlPlaneToStorageNodeRequests),
+			builder.WithPredicates(predicate.NewPredicateFuncs(isSimplyblockControlPlane)),
+		).
 		Complete(r)
 }
 
@@ -377,6 +382,27 @@ func isSpdkProxyPod(obj client.Object) bool {
 
 func isStorageNodeTLSSecret(obj client.Object) bool {
 	return obj.GetName() == utils.SecretNameStorageNodeAPITLS
+}
+
+func isSimplyblockControlPlane(obj client.Object) bool {
+	return obj.GetName() == SingletonControlPlaneName
+}
+
+func (r *StorageNodeReconciler) controlPlaneToStorageNodeRequests(
+	ctx context.Context,
+	obj client.Object,
+) []reconcile.Request {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(snList.Items))
+	for _, sn := range snList.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: sn.Namespace, Name: sn.Name},
+		})
+	}
+	return reqs
 }
 
 // tlsSecretToStorageNodeRequests enqueues every StorageNode CR in the
@@ -505,6 +531,18 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
+
+	if snCR.Spec.ClusterImage == "" {
+		cp := &simplyblockv1alpha1.ControlPlane{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: snCR.Namespace, Name: SingletonControlPlaneName}, cp); err != nil {
+			return fmt.Errorf("clusterImage not set and ControlPlane %q not found: %w", SingletonControlPlaneName, err)
+		}
+		if cp.Spec.Image == "" {
+			return fmt.Errorf("clusterImage not set and ControlPlane %q has no spec.image", SingletonControlPlaneName)
+		}
+		snCR = snCR.DeepCopy()
+		snCR.Spec.ClusterImage = cp.Spec.Image
+	}
 
 	tlsSecretRV, err := r.getTLSSecretResourceVersion(ctx, snCR.Namespace)
 	if err != nil {

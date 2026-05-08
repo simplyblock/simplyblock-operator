@@ -20,9 +20,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ControlPlaneSpec is intentionally empty. ControlPlane is a singleton
-// resource created by the Helm chart; all configuration comes from the chart.
-type ControlPlaneSpec struct{}
+// ControlPlaneSpec holds configuration for the singleton ControlPlane resource
+// created by the Helm chart.
+type ControlPlaneSpec struct {
+	// Image is the container image used for all simplyblock control-plane and
+	// storage-node workloads (e.g. quay.io/simplyblock-io/simplyblock:26.2.2).
+	// StorageNode CRs that omit spec.clusterImage inherit this value.
+	// +optional
+	Image string `json:"image,omitempty"`
+}
 
 // ControlPlaneStatus reflects the observed readiness of the simplyblock
 // control plane (FDB + management API).
