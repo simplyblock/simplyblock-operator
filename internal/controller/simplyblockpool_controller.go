@@ -408,7 +408,7 @@ func (r *PoolReconciler) syncPoolHosts(
 	poolCR *simplyblockv1alpha1.Pool,
 ) (bool, error) {
 	log := logf.FromContext(ctx)
-	var desired []string
+	desired := make([]string, 0, len(poolCR.Spec.AllowedNodes))
 
 	for _, nodeName := range poolCR.Spec.AllowedNodes {
 		var node corev1.Node
