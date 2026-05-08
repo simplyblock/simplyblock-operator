@@ -731,7 +731,8 @@ func (r *SnapshotReplicationReconciler) handleFailoverReplication(
 	}
 
 	if err := replicateLvol(ctx, apiClient, clusterSecret, clusterUUID, poolUUID, lvolDetail.UUID); err != nil {
-		log.Error(err, "Failed to trigger replicate_lvol", "lvolUUID", lvolDetail.UUID)
+		log.Error(err, "Failed to trigger replicate_lvol — no replicated snapshot available yet, skipping failover for this volume", "lvolUUID", lvolDetail.UUID)
+		r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseFailed, err.Error())
 		return false
 	}
 
