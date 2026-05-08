@@ -2722,6 +2722,7 @@ rules:
   - backupimports
   - backuppolicies
   - backuprestores
+  - controlplanes
   - devices
   - lvols
   - pools
@@ -2760,6 +2761,7 @@ rules:
   - backupimports/status
   - backuppolicies/status
   - backuprestores/status
+  - controlplanes/status
   - devices/status
   - lvols/status
   - pools/status
