@@ -64,6 +64,7 @@ type poolHostParams struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -119,6 +120,13 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 			if err := r.deleteStorageClass(ctx, poolCR); err != nil {
 				log.Error(err, "Failed to delete StorageClass for pool")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+
+			// Clear pool node labels from all nodes.
+			poolCR.Spec.AllowedNodes = nil
+			if err := r.syncNodeLabels(ctx, poolCR); err != nil {
+				log.Error(err, "Failed to clear node labels on pool deletion")
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
 
@@ -207,10 +215,15 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	if err := r.syncNodeLabels(ctx, poolCR); err != nil {
+		log.Error(err, "Failed to sync node labels for pool")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	if changed, err := r.syncPoolHosts(ctx, apiClient, clusterSecret, clusterUUID, poolCR); err != nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	} else if changed {
-		poolCR.Status.AllowedHosts = poolCR.Spec.AllowedHosts
+		poolCR.Status.AllowedNodes = poolCR.Spec.AllowedNodes
 		if err := r.Status().Update(ctx, poolCR); err != nil {
 			log.Error(err, "Failed to update pool status after host sync")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -275,6 +288,19 @@ func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyb
 		AllowVolumeExpansion: &allowExpansion,
 	}
 
+	if poolCR.Spec.DHCHAP && len(poolCR.Spec.AllowedNodes) > 0 {
+		sc.AllowedTopologies = []corev1.TopologySelectorTerm{
+			{
+				MatchLabelExpressions: []corev1.TopologySelectorLabelRequirement{
+					{
+						Key:    poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Spec.Name),
+						Values: []string{"allowed"},
+					},
+				},
+			},
+		}
+	}
+
 	if err := r.Create(ctx, sc); err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}
@@ -313,6 +339,68 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 // syncPoolHosts reconciles the pool's allowed hosts: fetches the current host list from the
 // backend, adds hosts in spec but not on the backend, and removes hosts on the backend but
 // no longer in spec. Returns true if any change was made.
+func poolNodeLabelKey(namespace, clusterName, poolName string) string {
+	return fmt.Sprintf("simplyblock.io/pool.%s.%s.%s", namespace, clusterName, poolName)
+}
+
+// syncNodeLabels ensures the label simplyblock.io/pool.<name>=allowed is present on every
+// node in spec.allowedNodes and absent from nodes no longer in the list.
+func (r *PoolReconciler) syncNodeLabels(ctx context.Context, poolCR *simplyblockv1alpha1.Pool) error {
+	log := logf.FromContext(ctx)
+	labelKey := poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Spec.Name)
+
+	// Find all nodes currently carrying this pool's label.
+	nodeList := &corev1.NodeList{}
+	if err := r.List(ctx, nodeList, client.MatchingLabels{labelKey: "allowed"}); err != nil {
+		return fmt.Errorf("failed to list labeled nodes: %w", err)
+	}
+
+	desiredSet := make(map[string]struct{}, len(poolCR.Spec.AllowedNodes))
+	for _, n := range poolCR.Spec.AllowedNodes {
+		desiredSet[n] = struct{}{}
+	}
+
+	// Remove label from nodes no longer desired.
+	for i := range nodeList.Items {
+		node := &nodeList.Items[i]
+		if _, ok := desiredSet[node.Name]; ok {
+			continue
+		}
+		patch := client.MergeFrom(node.DeepCopy())
+		delete(node.Labels, labelKey)
+		if err := r.Patch(ctx, node, patch); err != nil {
+			return fmt.Errorf("failed to remove label from node %s: %w", node.Name, err)
+		}
+		log.Info("Removed pool label from node", "node", node.Name, "label", labelKey)
+	}
+
+	// Add label to newly desired nodes.
+	currentSet := make(map[string]struct{}, len(nodeList.Items))
+	for _, node := range nodeList.Items {
+		currentSet[node.Name] = struct{}{}
+	}
+	for _, nodeName := range poolCR.Spec.AllowedNodes {
+		if _, ok := currentSet[nodeName]; ok {
+			continue
+		}
+		var node corev1.Node
+		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
+			return fmt.Errorf("failed to get node %s: %w", nodeName, err)
+		}
+		patch := client.MergeFrom(node.DeepCopy())
+		if node.Labels == nil {
+			node.Labels = make(map[string]string)
+		}
+		node.Labels[labelKey] = "allowed"
+		if err := r.Patch(ctx, &node, patch); err != nil {
+			return fmt.Errorf("failed to label node %s: %w", nodeName, err)
+		}
+		log.Info("Added pool label to node", "node", nodeName, "label", labelKey)
+	}
+
+	return nil
+}
+
 func (r *PoolReconciler) syncPoolHosts(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -320,7 +408,15 @@ func (r *PoolReconciler) syncPoolHosts(
 	poolCR *simplyblockv1alpha1.Pool,
 ) (bool, error) {
 	log := logf.FromContext(ctx)
-	desired := poolCR.Spec.AllowedHosts
+	var desired []string
+
+	for _, nodeName := range poolCR.Spec.AllowedNodes {
+		var node corev1.Node
+		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
+			return false, fmt.Errorf("failed to get node %s: %w", nodeName, err)
+		}
+		desired = append(desired, fmt.Sprintf("nqn.2014-08.io.simplyblock:uuid:%s", node.UID))
+	}
 
 	// Fetch current backend state to use as applied list.
 	getEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
