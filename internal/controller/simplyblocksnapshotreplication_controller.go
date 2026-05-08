@@ -202,6 +202,12 @@ func (r *SnapshotReplicationReconciler) reconcileFailback(
 	anyInProgress := false
 
 	for _, lvolSummary := range lvols {
+		// Skip REP_ transfer lvols created by the snapshot replication service;
+		// only user volumes (created during failover) are failback candidates.
+		if strings.HasPrefix(lvolSummary.Name, "REP_") {
+			continue
+		}
+
 		lvolDetail, err := utils.GetLvol(ctx, apiClient, targetClusterSecret, targetClusterUUID, targetPoolUUID, lvolSummary.UUID)
 		if err != nil {
 			log.Error(err, "Failed to get target lvol", "lvolUUID", lvolSummary.UUID)
