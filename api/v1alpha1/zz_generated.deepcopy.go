@@ -1776,11 +1776,6 @@ func (in *StorageNodeSpec) DeepCopyInto(out *StorageNodeSpec) {
 		*out = new(JournalManagerSpec)
 		(*in).DeepCopyInto(*out)
 	}
-	if in.CoreIsolation != nil {
-		in, out := &in.CoreIsolation, &out.CoreIsolation
-		*out = new(bool)
-		**out = **in
-	}
 	if in.CorePercentage != nil {
 		in, out := &in.CorePercentage, &out.CorePercentage
 		*out = new(int32)

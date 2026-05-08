@@ -1968,9 +1968,6 @@ spec:
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
-              coreIsolation:
-                description: CoreIsolation enables CPU core isolation mode.
-                type: boolean
               corePercentage:
                 description: CorePercentage is the percentage of cores to be used
                   for spdk (0-99).

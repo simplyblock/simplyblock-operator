@@ -72,9 +72,6 @@ type StorageNodeSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Journal Manager"
 	// JournalManagerSpec configures journal manager behavior.
 	JournalManagerSpec *JournalManagerSpec `json:"journalManager,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Core Isolation"
-	// CoreIsolation enables CPU core isolation mode.
-	CoreIsolation *bool `json:"coreIsolation,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Core Percentage"
 	// CorePercentage is the percentage of cores to be used for spdk (0-99).
 	CorePercentage *int32 `json:"corePercentage,omitempty"`
