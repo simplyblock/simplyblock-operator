@@ -210,6 +210,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		RpcBasePort:            utils.IntPtrOrDefault(clusterCR.Spec.RpcBasePort, 8080),
 		SnodeApiPort:           utils.IntPtrOrDefault(clusterCR.Spec.SnodeApiPort, 50001),
 		BackupConfig:           backupConfig,
+		HashicorpVaultSettings: buildHashicorpVaultConfig(clusterCR.Spec.HashicorpVaultSettings),
 	}
 
 	endpoint = "/api/v1/cluster/create_first/"
@@ -469,6 +470,13 @@ func (r *StorageClusterReconciler) buildBackupConfig(
 		SecondaryTarget: clusterCR.Spec.Backup.SecondaryTarget,
 		LocalTesting:    clusterCR.Spec.Backup.LocalTesting,
 	}, nil
+}
+
+func buildHashicorpVaultConfig(s *simplyblockv1alpha1.HashicorpVaultSettings) *utils.HashicorpVaultConfig {
+	if s == nil || s.BaseURL == "" {
+		return nil
+	}
+	return &utils.HashicorpVaultConfig{BaseURL: s.BaseURL}
 }
 
 // SetupWithManager sets up the controller with the Manager.
