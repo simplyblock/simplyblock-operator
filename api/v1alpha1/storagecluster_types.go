@@ -66,6 +66,13 @@ type BackupCredentialsSecretRef struct {
 	Name string `json:"name"`
 }
 
+// HashicorpVaultSettings configures the HashiCorp Vault endpoint the cluster uses to store keys.
+type HashicorpVaultSettings struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Vault Base URL"
+	// BaseURL is the HashiCorp Vault endpoint (e.g. https://vault.example.com:8200).
+	BaseURL string `json:"baseURL,omitempty"`
+}
+
 type BackupSpec struct {
 	LocalEndpoint string `json:"localEndpoint,omitempty"`
 	// +optional
@@ -151,6 +158,9 @@ type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup"
 	// Backup specifies the specification for backup to S3 configuration
 	Backup *BackupSpec `json:"backup,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="HashiCorp Vault Settings"
+	// HashicorpVaultSettings configures the Vault endpoint used by the cluster for key storage.
+	HashicorpVaultSettings *HashicorpVaultSettings `json:"hashicorpVaultSettings,omitempty"`
 }
 
 // StorageClusterStatus defines the observed state of StorageCluster.
