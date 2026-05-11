@@ -1,0 +1,187 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-operator-manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  - persistentvolumes
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  - clusterroles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - backupimports
+  - backuppolicies
+  - backuprestores
+  - controlplanes
+  - devices
+  - lvols
+  - pools
+  - snapshotreplications
+  - storagebackups
+  - storageclusters
+  - storagenodes
+  - tasks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - backupimports/finalizers
+  - backuppolicies/finalizers
+  - backuprestores/finalizers
+  - devices/finalizers
+  - lvols/finalizers
+  - pools/finalizers
+  - snapshotreplications/finalizers
+  - storagebackups/finalizers
+  - storageclusters/finalizers
+  - storagenodes/finalizers
+  - tasks/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - backupimports/status
+  - backuppolicies/status
+  - backuprestores/status
+  - controlplanes/status
+  - devices/status
+  - lvols/status
+  - pools/status
+  - snapshotreplications/status
+  - storagebackups/status
+  - storageclusters/status
+  - storagenodes/status
+  - tasks/status
+  verbs:
+  - get
+  - patch
+  - update

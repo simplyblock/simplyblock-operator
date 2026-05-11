@@ -30,10 +30,34 @@ helm upgrade simplyblock-operator charts/simplyblock-operator \
   --namespace simplyblock
 ```
 
+> **Note:** Helm does not update CRDs during `helm upgrade`. After upgrading the chart, apply any updated CRDs manually:
+>
+> ```bash
+> kubectl apply --server-side -f charts/simplyblock-operator/crds/
+> ```
+
 ### Uninstall
 
 ```bash
 helm uninstall simplyblock-operator --namespace simplyblock
+```
+
+## Syncing CRDs and Roles from simplyblock-manager
+
+Run the sync script whenever CRDs or RBAC roles change in the [simplyblock-manager](https://github.com/simplyblock/simplyblock-manager) repo:
+
+```bash
+# Sync only (update files in this repo)
+scripts/sync-from-manager.sh
+
+# Sync and apply CRDs to the cluster in one step
+APPLY=true scripts/sync-from-manager.sh
+```
+
+By default the script looks for `simplyblock-manager` as a sibling directory. Pass a custom path as the first argument if needed:
+
+```bash
+scripts/sync-from-manager.sh /path/to/simplyblock-manager
 ```
 
 ## Development

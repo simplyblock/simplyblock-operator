@@ -276,63 +276,6 @@ rules:
   - update
   - patch
 - apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - backupimports
-  - backuppolicies
-  - backuprestores
-  - devices
-  - lvols
-  - pools
-  - snapshotreplications
-  - storagebackups
-  - storageclusters
-  - storagenodes
-  - tasks
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - backupimports/finalizers
-  - backuppolicies/finalizers
-  - backuprestores/finalizers
-  - devices/finalizers
-  - lvols/finalizers
-  - pools/finalizers
-  - snapshotreplications/finalizers
-  - storagebackups/finalizers
-  - storageclusters/finalizers
-  - storagenodes/finalizers
-  - tasks/finalizers
-  verbs:
-  - update
-  - delete
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - backupimports/status
-  - backuppolicies/status
-  - backuprestores/status
-  - devices/status
-  - lvols/status
-  - pools/status
-  - snapshotreplications/status
-  - storagebackups/status
-  - storageclusters/status
-  - storagenodes/status
-  - tasks/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
   - policy
   resources:
   - poddisruptionbudgets
@@ -380,6 +323,19 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: simplyblock-operator-clusterrole
+subjects:
+- kind: ServiceAccount
+  name: simplyblock-operator
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simplyblock-operator-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: simplyblock-operator-manager-role
 subjects:
 - kind: ServiceAccount
   name: simplyblock-operator
