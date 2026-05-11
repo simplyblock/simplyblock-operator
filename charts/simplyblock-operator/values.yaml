@@ -243,13 +243,12 @@ controlplane:
       passwordSecret: "is6SP2EdWg0NdmVGv6CEp5hRHNL7BKVMFem4t9pouMqDQnHwXMSomas1qcbKSt5yISr8eBHv4Y7Dbswhyz84Ut0TW6kqsiPs"
       maxNumberIndex: "3"
       retentionPeriod: "7d"
-    slackWebhookUrl: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
     grafana:
       repository: quay.io/simplyblock-io/grafana
       tag: 10.0.12
       pullPolicy: Always
       endpoint: ""
-      contactPoint: ""
+      contactPoint: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX""
     thanos:
       repository: quay.io/simplyblock-io/thanos
       tag: v0.31.0
