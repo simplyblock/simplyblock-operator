@@ -486,8 +486,17 @@ func (r *SnapshotReplicationReconciler) reconcileNormalReplication(
 	}
 
 	var pvcVolumeIDs []string
+	pvcRefByVolumeID := map[string]simplyblockv1alpha1.PersistentVolumeClaimRef{}
 	if len(snapRepCR.Spec.PVCRefs) > 0 {
-		pvcVolumeIDs = r.resolvePVCRefsToVolumeIDs(ctx, snapRepCR.Namespace, snapRepCR.Spec.PVCRefs)
+		for _, ref := range snapRepCR.Spec.PVCRefs {
+			id, err := r.resolvePVCRefToLvolID(ctx, snapRepCR.Namespace, ref)
+			if err != nil {
+				log.Error(err, "Failed to resolve PVCRef to volume ID", "pvc", ref.Name)
+				continue
+			}
+			pvcVolumeIDs = append(pvcVolumeIDs, id)
+			pvcRefByVolumeID[id] = ref
+		}
 	}
 
 	interval := utils.IntPtrOrDefault(snapRepCR.Spec.Interval, 300)
@@ -525,10 +534,18 @@ func (r *SnapshotReplicationReconciler) reconcileNormalReplication(
 				continue
 			}
 
+			pvcRef := pvcRefByVolumeID[lvolDetail.UUID]
+			if pvcRef.Name == "" && lvolDetail.PvcName != "" {
+				pvcRef = simplyblockv1alpha1.PersistentVolumeClaimRef{Name: lvolDetail.PvcName}
+			}
+
 			if failover {
 				triggered := r.handleFailoverReplication(ctx, apiClient, snapRepCR, sourceClusterUUID, sourceClusterSecret, poolUUID, lvolDetail, targetIDs)
 				if triggered {
 					r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseTriggeringTargetReplication, "failover replicate_lvol dispatched")
+					if pvcRef.Name != "" {
+						r.setVolumePVCRef(snapRepCR, lvolDetail.UUID, pvcRef)
+					}
 					changed = true
 				}
 				continue
@@ -537,6 +554,9 @@ func (r *SnapshotReplicationReconciler) reconcileNormalReplication(
 			triggered := r.handleNormalReplication(ctx, apiClient, sourceClusterUUID, sourceClusterSecret, poolUUID, lvolDetail, interval, now)
 			if triggered {
 				r.setVolumePhase(snapRepCR, lvolDetail.UUID, simplyblockv1alpha1.VolPhaseRunning, "replication triggered")
+				if pvcRef.Name != "" {
+					r.setVolumePVCRef(snapRepCR, lvolDetail.UUID, pvcRef)
+				}
 				now2 := metav1.Now()
 				r.setVolumeLastReplicationTime(snapRepCR, lvolDetail.UUID, &now2)
 				r.setVolumeRepInfo(snapRepCR, lvolDetail)
@@ -850,6 +870,19 @@ func (r *SnapshotReplicationReconciler) setVolumePhase(
 		}
 	}
 	snapRepCR.Status.Volumes = append(snapRepCR.Status.Volumes, entry)
+}
+
+func (r *SnapshotReplicationReconciler) setVolumePVCRef(
+	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
+	volumeID string,
+	pvcRef simplyblockv1alpha1.PersistentVolumeClaimRef,
+) {
+	for i := range snapRepCR.Status.Volumes {
+		if snapRepCR.Status.Volumes[i].VolumeID == volumeID {
+			snapRepCR.Status.Volumes[i].PVCRef = pvcRef
+			return
+		}
+	}
 }
 
 func (r *SnapshotReplicationReconciler) setVolumeRepInfo(
