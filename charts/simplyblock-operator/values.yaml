@@ -248,7 +248,7 @@ controlplane:
       tag: 10.0.12
       pullPolicy: Always
       endpoint: ""
-      contactPoint: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX""
+      contactPoint: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
     thanos:
       repository: quay.io/simplyblock-io/thanos
       tag: v0.31.0

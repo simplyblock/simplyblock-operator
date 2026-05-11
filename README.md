@@ -52,6 +52,18 @@ helm upgrade --install simplyblock-operator ./charts/simplyblock-operator/ --nam
     --set image.csi.tag=latest
 ```
 
+### Vendored CRDs
+
+The chart's `crds/` directory contains CRDs that Helm applies automatically before any chart resources. Most CRDs are managed directly, but the MongoDB Community CRD is extracted from the vendored sub-chart tarball and committed here so it is installed on clean clusters without any extra steps.
+
+To regenerate it after updating the `mongodb-kubernetes` dependency:
+
+```bash
+tar -xOf charts/simplyblock-operator/charts/mongodb-kubernetes-*.tgz \
+  mongodb-kubernetes/crds/mongodbcommunity.mongodb.com_mongodbcommunity.yaml \
+  > charts/simplyblock-operator/crds/mongodbcommunity.mongodb.com_mongodbcommunity.yaml
+```
+
 To lint the chart:
 
 ```bash
