@@ -317,7 +317,7 @@ controlplane:
         baseImage: "quay.io/simplyblock-io/foundationdb-kubernetes-sidecar"
 
 operator:
-  enabled: false
+  enabled: true
 
 mongodb-kubernetes:
   name: "simplyblock-mongodb"
