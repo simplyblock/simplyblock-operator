@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Arm Limited and Contributors
+# Copyright (c) Intel Corporation
+
+{{- if .Values.storageclass.create -}}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-csi-sc
+  {{- with .Values.storageclass.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+provisioner: csi.simplyblock.io
+parameters:
+  csi.storage.k8s.io/fstype: ext4
+  pool_name: {{ .Values.logicalVolume.pool_name }}
+  qos_rw_iops: "{{ .Values.logicalVolume.qos_rw_iops }}"
+  qos_rw_mbytes: "{{ .Values.logicalVolume.qos_rw_mbytes }}"
+  qos_r_mbytes: "{{ .Values.logicalVolume.qos_r_mbytes }}"
+  qos_w_mbytes: "{{ .Values.logicalVolume.qos_w_mbytes }}"
+  compression: "{{ .Values.logicalVolume.compression }}"
+  encryption: "{{ .Values.logicalVolume.encryption }}"
+  replicate: "{{ .Values.logicalVolume.replicate }}"
+  distr_ndcs: "{{ .Values.logicalVolume.numDataChunks }}"
+  distr_npcs: "{{ .Values.logicalVolume.numParityChunks }}"
+  lvol_priority_class: "{{ .Values.logicalVolume.lvol_priority_class }}"
+  fabric: "{{ .Values.logicalVolume.fabric }}"
+  max_namespace_per_subsys: "{{ .Values.logicalVolume.max_namespace_per_subsys }}"
+  tune2fs_reserved_blocks: "{{ .Values.logicalVolume.tune2fs_reserved_blocks }}"
+{{- if .Values.storageclass.zoneClusterMap }}
+  zone_cluster_map: |
+    {{ .Values.storageclass.zoneClusterMap | toJson }}
+{{- else }}
+  cluster_id: "{{ .Values.csiConfig.simplybk.uuid }}"
+{{- end }}
+reclaimPolicy: Delete
+volumeBindingMode: {{ .Values.storageclass.volumeBindingMode }}
+allowVolumeExpansion: true
+{{- if .Values.storageclass.allowedTopologyZones }}
+allowedTopologies:
+- matchLabelExpressions:
+  - key: topology.kubernetes.io/zone
+    values:
+{{- range .Values.storageclass.allowedTopologyZones }}
+    - {{ . }}
+{{- end }}
+{{- end }}
+
+{{- end -}}
