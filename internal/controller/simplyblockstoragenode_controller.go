@@ -52,6 +52,7 @@ import (
 type StorageNodeReconciler struct {
 	client.Client
 	Scheme           *runtime.Scheme
+	Namespace        string // operator namespace, used to look up the singleton ControlPlane CR
 	TLSEnabled       bool
 	TLSProvider      string
 	TLSMutualEnabled bool
@@ -534,7 +535,7 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 
 	if snCR.Spec.ClusterImage == "" {
 		cp := &simplyblockv1alpha1.ControlPlane{}
-		if err := r.Get(ctx, types.NamespacedName{Namespace: snCR.Namespace, Name: SingletonControlPlaneName}, cp); err != nil {
+		if err := r.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: SingletonControlPlaneName}, cp); err != nil {
 			return fmt.Errorf("clusterImage not set and ControlPlane %q not found: %w", SingletonControlPlaneName, err)
 		}
 		if cp.Spec.Image == "" {

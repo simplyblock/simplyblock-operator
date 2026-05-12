@@ -262,6 +262,7 @@ func main() {
 	if err := (&controller.StorageNodeReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
+		Namespace:        operatorNamespace,
 		TLSEnabled:       tlsEnabled,
 		TLSProvider:      tlsProvider,
 		TLSMutualEnabled: tlsMutualEnabled,

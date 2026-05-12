@@ -1961,6 +1961,10 @@ func TestHandleNodeActionTransitionsToSuccess(t *testing.T) {
 	}
 }
 
+// testOperatorNamespace is the namespace the test reconciler pretends to run in.
+// It must match the namespace of the seeded singleton ControlPlane CR below.
+const testOperatorNamespace = "default"
+
 func newStorageNodeStateTestReconciler(
 	t *testing.T,
 	objects ...client.Object,
@@ -1981,7 +1985,7 @@ func newStorageNodeStateTestReconciler(
 	singleton := &simplyblockv1alpha1.ControlPlane{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      SingletonControlPlaneName,
-			Namespace: "default",
+			Namespace: testOperatorNamespace,
 		},
 		Spec: simplyblockv1alpha1.ControlPlaneSpec{
 			Image: "test-image:latest",
@@ -1997,8 +2001,9 @@ func newStorageNodeStateTestReconciler(
 	}, allObjects...)
 
 	return &StorageNodeReconciler{
-		Client: cl,
-		Scheme: scheme,
+		Client:    cl,
+		Scheme:    scheme,
+		Namespace: testOperatorNamespace,
 	}
 }
 
