@@ -92,7 +92,7 @@ data:
 ---
 
 {{- $name := "simplyblock-prometheus-config" -}}
-{{- $existing := (lookup "v1" "ConfigMap" .Release.Namespace $name) -}}
+{{- $existing := (lookup "v1" "ConfigMap" .Release.Namespace $name) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

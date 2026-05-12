@@ -15,6 +15,7 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "install": { "type": "boolean" },
             "cluster-issuer": { "type": "string" },
             "namespace": { "type": "string" }
           }
