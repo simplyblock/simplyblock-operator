@@ -53,8 +53,9 @@ spec:
           metadata:
             type: object
           spec:
-            description: ControlPlaneSpec holds configuration for the singleton ControlPlane
-              resource created by the Helm chart.
+            description: |-
+              ControlPlaneSpec holds configuration for the singleton ControlPlane resource
+              created by the Helm chart.
             properties:
               image:
                 description: |-
