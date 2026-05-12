@@ -3,14 +3,18 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_CHARTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MANAGER_DIR="${1:-$(cd "$HELM_CHARTS_DIR/../simplyblock-manager" && pwd)}"
+if [[ -z "${1:-}" ]]; then
+  echo "Usage: $0 <operator-dir>" >&2
+  exit 1
+fi
+OPERATOR_DIR="$1"
 
-CRD_SRC="$MANAGER_DIR/config/crd/bases"
+CRD_SRC="$OPERATOR_DIR/config/crd/bases"
 CRD_DST="$HELM_CHARTS_DIR/charts/simplyblock-operator/crds"
-RBAC_SRC="$MANAGER_DIR/config/rbac"
+RBAC_SRC="$OPERATOR_DIR/config/rbac"
 ROLES_DST="$HELM_CHARTS_DIR/charts/simplyblock-operator/templates/roles"
 
-echo "Syncing from: $MANAGER_DIR"
+echo "Syncing from: $OPERATOR_DIR"
 echo ""
 
 # ── CRDs ──────────────────────────────────────────────────────────────────────
