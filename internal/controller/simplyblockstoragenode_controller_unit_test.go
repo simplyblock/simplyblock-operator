@@ -1975,11 +1975,26 @@ func newStorageNodeStateTestReconciler(
 		rbacv1.AddToScheme,
 		discoveryv1.AddToScheme,
 	)
+
+	// Mirror real-cluster state: the Helm chart always creates the singleton
+	// ControlPlane CR before any StorageNode CR is reconciled.
+	singleton := &simplyblockv1alpha1.ControlPlane{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      SingletonControlPlaneName,
+			Namespace: "default",
+		},
+		Spec: simplyblockv1alpha1.ControlPlaneSpec{
+			Image: "test-image:latest",
+		},
+	}
+	allObjects := append([]client.Object{singleton}, objects...)
+
 	cl := newTestClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.StorageNode{},
 		&simplyblockv1alpha1.StorageCluster{},
+		&simplyblockv1alpha1.ControlPlane{},
 		&appsv1.DaemonSet{},
-	}, objects...)
+	}, allObjects...)
 
 	return &StorageNodeReconciler{
 		Client: cl,
