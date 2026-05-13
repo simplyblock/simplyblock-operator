@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -199,7 +200,8 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			ClusterName: "cluster-a",
+			ClusterName:          "cluster-a",
+			LogicalVolumeMaxSize: "20G",
 		},
 	}
 
@@ -227,6 +229,15 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 	reqs := mock.Requests()
 	if len(reqs) != 1 || reqs[0].Path != "/api/v2/clusters/"+clusterUUID+"/storage-pools" {
 		t.Fatalf("expected pool API call with cluster UUID %q, got %#v", clusterUUID, reqs)
+	}
+	var body struct {
+		VolumeMaxSize int `json:"volume_max_size"`
+	}
+	if err := json.Unmarshal(reqs[0].Body, &body); err != nil {
+		t.Fatalf("failed to decode pool create request body %q: %v", string(reqs[0].Body), err)
+	}
+	if body.VolumeMaxSize != 20_000_000_000 {
+		t.Fatalf("volume_max_size got %d want %d; body=%s", body.VolumeMaxSize, 20_000_000_000, string(reqs[0].Body))
 	}
 }
 
