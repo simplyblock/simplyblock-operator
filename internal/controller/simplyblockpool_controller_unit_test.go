@@ -23,7 +23,6 @@ func TestPoolReconcileAddsFinalizer(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
 	}
@@ -56,7 +55,6 @@ func TestPoolReconcileDeletionWithoutUUIDDoesNotProgress(t *testing.T) {
 			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
 	}
@@ -97,7 +95,6 @@ func TestPoolReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
 			},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
 			ClusterName: "cluster-missing",
 		},
 		Status: simplyblockv1alpha1.PoolStatus{
@@ -136,7 +133,6 @@ func TestPoolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 			Namespace: ns,
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
 			ClusterName: clusterName,
 		},
 	}
@@ -203,7 +199,6 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
 	}
@@ -262,7 +257,6 @@ func TestPoolReconcileCreatePoolNon2xxRequeues(t *testing.T) {
 			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
 	}
@@ -318,7 +312,6 @@ func TestPoolReconcileDeleteNon2xxKeepsFinalizerAndRequeues(t *testing.T) {
 			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
 		Status: simplyblockv1alpha1.PoolStatus{

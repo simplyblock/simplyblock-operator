@@ -72,20 +72,19 @@ func TestResolveClusterAndPoolUUID(t *testing.T) {
 	}
 
 	clusterA := &simplyblockv1alpha1.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns1"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "ns1"},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "uuid-a"},
 	}
 	clusterNoUUID := &simplyblockv1alpha1.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns1"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-b"},
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-b", Namespace: "ns1"},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 	}
 
 	poolA := &simplyblockv1alpha1.Pool{
-		ObjectMeta: metav1.ObjectMeta{Name: "pool-a", Namespace: "ns1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gold", Namespace: "ns1"},
 		Spec: simplyblockv1alpha1.PoolSpec{
 			ClusterName: "cluster-a",
-			Name:        "gold",
 		},
 		Status: simplyblockv1alpha1.PoolStatus{UUID: "pool-uuid-a"},
 	}

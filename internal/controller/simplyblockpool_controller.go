@@ -153,7 +153,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	if pool.Status.UUID == "" {
 		params := utils.PoolAddParams{
-			Name:          poolCR.Spec.Name,
+			Name:          poolCR.Name,
 			PoolMax:       utils.IntPtrOrDefault(utils.ParseSize(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
 			VolumeMaxSize: 0,
 			MaxRwMB:       poolSpecQoSThroughputReadWrite(poolCR.Spec.QosSpec),
@@ -232,7 +232,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	// // --- Handle update ---
 	// updateParams := utils.PoolUpdateParams{
-	// 	Name:    poolCR.Spec.Name,
+	// 	Name:    poolCR.Name,
 	// 	PoolMax: utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
 	// 	// VolumeMaxSize: poolCR.Spec.CapacityLimitIntPtr(),
 	// 	MaxRwIOPS: utils.IntPtrOrDefault(poolCR.Spec.QoSIOPSLimit, 0),
@@ -255,7 +255,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 // deleteStorageClass deletes the StorageClass associated with the pool, ignoring not-found errors.
 func (r *PoolReconciler) deleteStorageClass(ctx context.Context, poolCR *simplyblockv1alpha1.Pool) error {
 	sc := &storagev1.StorageClass{}
-	name := fmt.Sprintf("simplyblock-%s-%s", poolCR.Spec.ClusterName, poolCR.Spec.Name)
+	name := fmt.Sprintf("simplyblock-%s-%s", poolCR.Spec.ClusterName, poolCR.Name)
 	if err := r.Get(ctx, client.ObjectKey{Name: name}, sc); err != nil {
 		return client.IgnoreNotFound(err)
 	}
@@ -272,14 +272,14 @@ func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyb
 
 	params := map[string]string{
 		"cluster_id":                clusterUUID,
-		"pool_name":                 poolCR.Spec.Name,
+		"pool_name":                 poolCR.Name,
 		"csi.storage.k8s.io/fstype": "ext4",
 	}
 	mergeStorageClassParameters(params, poolCR.Spec.StorageClassParameters)
 
 	sc := &storagev1.StorageClass{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("simplyblock-%s-%s", poolCR.Spec.ClusterName, poolCR.Spec.Name),
+			Name: fmt.Sprintf("simplyblock-%s-%s", poolCR.Spec.ClusterName, poolCR.Name),
 		},
 		Provisioner:          utils.CSIProvisioner,
 		Parameters:           params,
@@ -293,7 +293,7 @@ func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyb
 			{
 				MatchLabelExpressions: []corev1.TopologySelectorLabelRequirement{
 					{
-						Key:    poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Spec.Name),
+						Key:    poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name),
 						Values: []string{"allowed"},
 					},
 				},
@@ -347,7 +347,7 @@ func poolNodeLabelKey(namespace, clusterName, poolName string) string {
 // node in spec.allowedNodes and absent from nodes no longer in the list.
 func (r *PoolReconciler) syncNodeLabels(ctx context.Context, poolCR *simplyblockv1alpha1.Pool) error {
 	log := logf.FromContext(ctx)
-	labelKey := poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Spec.Name)
+	labelKey := poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name)
 
 	// Find all nodes currently carrying this pool's label.
 	nodeList := &corev1.NodeList{}

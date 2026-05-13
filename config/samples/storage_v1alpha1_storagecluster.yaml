@@ -4,9 +4,8 @@ metadata:
   labels:
     app.kubernetes.io/name: simplyblock-operator
     app.kubernetes.io/managed-by: kustomize
-  name: storagecluster-sample
+  name: sample-cluster
 spec:
-  clusterName: sample-cluster
   backup:
     localEndpoint: http://10.10.11.10:9000
     snapshotBackups: true

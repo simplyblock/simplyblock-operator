@@ -37,9 +37,7 @@ func syncTestCluster() *simplyblockv1alpha1.StorageCluster {
 			Name:      syncTestClusterName,
 			Namespace: syncTestNamespace,
 		},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			ClusterName: syncTestClusterName,
-		},
+		Spec: simplyblockv1alpha1.StorageClusterSpec{},
 		Status: simplyblockv1alpha1.StorageClusterStatus{
 			UUID: syncTestClusterUUID,
 		},
@@ -229,9 +227,7 @@ func TestStorageBackupSyncSkipsAlreadyTracked(t *testing.T) {
 			Name:      "already-tracked",
 			Namespace: syncTestNamespace,
 		},
-		Spec: simplyblockv1alpha1.StorageBackupSpec{
-			ClusterName: syncTestClusterName,
-		},
+		Spec: simplyblockv1alpha1.StorageBackupSpec{},
 		Status: simplyblockv1alpha1.StorageBackupStatus{
 			BackupID: syncTestBackupID,
 		},

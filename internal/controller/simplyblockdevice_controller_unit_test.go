@@ -282,9 +282,7 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 	t.Run("requeues when cluster uuid is not ready", func(t *testing.T) {
 		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{Name: "dev-no-cluster", Namespace: "default"},
-			Spec: simplyblockv1alpha1.DeviceSpec{
-				ClusterName: "cluster-a",
-			},
+			Spec:       simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
 		}
 		r := newDeviceStateTestReconciler(t, dev)
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(dev)})
@@ -299,13 +297,11 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 	t.Run("requeues when cluster auth secret is missing", func(t *testing.T) {
 		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{Name: "dev-no-auth", Namespace: "default"},
-			Spec: simplyblockv1alpha1.DeviceSpec{
-				ClusterName: "cluster-a",
-			},
+			Spec:       simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
 		}
 		cluster := &simplyblockv1alpha1.StorageCluster{
-			ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+			ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "default"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-uuid-a"},
 		}
 		r := newDeviceStateTestReconciler(t, dev, cluster)
@@ -327,13 +323,11 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 				Finalizers:        []string{utils.FinalizerDevice},
 				DeletionTimestamp: &now,
 			},
-			Spec: simplyblockv1alpha1.DeviceSpec{
-				ClusterName: "cluster-a",
-			},
+			Spec: simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
 		}
 		cluster := &simplyblockv1alpha1.StorageCluster{
-			ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-delete", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+			ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "default"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-uuid-delete"},
 		}
 		secret := &corev1.Secret{
@@ -366,13 +360,11 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 	t.Run("adds finalizer when missing and exits", func(t *testing.T) {
 		dev := &simplyblockv1alpha1.Device{
 			ObjectMeta: metav1.ObjectMeta{Name: "dev-add-finalizer", Namespace: "default"},
-			Spec: simplyblockv1alpha1.DeviceSpec{
-				ClusterName: "cluster-a",
-			},
+			Spec:       simplyblockv1alpha1.DeviceSpec{ClusterName: "cluster-a"},
 		}
 		cluster := &simplyblockv1alpha1.StorageCluster{
-			ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-finalizer", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+			ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "default"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-uuid-finalizer"},
 		}
 		secret := &corev1.Secret{
@@ -413,8 +405,8 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 			},
 		}
 		cluster := &simplyblockv1alpha1.StorageCluster{
-			ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-action", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+			ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "default"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-uuid-action"},
 		}
 		secret := &corev1.Secret{
@@ -437,8 +429,8 @@ func TestDeviceReconcileTopLevelPaths(t *testing.T) {
 
 func TestDeviceReconcileInventoryPaths(t *testing.T) {
 	baseCluster := &simplyblockv1alpha1.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "cluster-cr-inv", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "default"},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-uuid-inv"},
 	}
 	baseSecret := &corev1.Secret{

@@ -94,9 +94,6 @@ type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="HA Type"
 	// HAType defines the backend high-availability mode.
 	HAType string `json:"haType,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
-	// ClusterName is the user-facing cluster identifier.
-	ClusterName string `json:"clusterName"`
 	// +kubebuilder:validation:Enum=activate;expand;shutdown;start;restart;node-recycle
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
 	// Action triggers a cluster-level action.
