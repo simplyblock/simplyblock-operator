@@ -7,4 +7,3 @@ metadata:
   name: pool-sample
 spec:
   clusterName: sample-cluster
-  name: pool-1

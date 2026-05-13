@@ -179,7 +179,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	}
 
 	params := utils.ClusterAddParams{
-		Name:             clusterCR.Spec.ClusterName,
+		Name:             clusterCR.Name,
 		BlkSize:          utils.IntPtrOrDefault(clusterCR.Spec.BlockSize, 512),
 		PageSizeInBlocks: utils.IntPtrOrDefault(clusterCR.Spec.PageSizeInBlocks, 2097152),
 		CapWarn:          capacityThreshold(clusterCR.Spec.WarningThresholdSpec),
@@ -242,7 +242,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		// POST failed — the cluster may already exist on the backend (race between
 		// two reconciles both seeing UUID="" before the first one patches status).
 		// Try to look it up by name and adopt it instead of failing.
-		existing, lookupErr := utils.GetClusterByName(ctx, apiClient, clusterSecret, clusterCR.Spec.ClusterName)
+		existing, lookupErr := utils.GetClusterByName(ctx, apiClient, clusterSecret, clusterCR.Name)
 		if lookupErr != nil || existing == nil {
 			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterCreationFailed, "Cluster creation failed (status=%d): %s", status, string(body))
 
@@ -258,7 +258,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		"response", string(body),
 	)
 
-	secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
+	secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Name)
 
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -347,8 +347,8 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
 	}
 
-	clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
-	clusterCR.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
+	clusterCR.Status.ClusterName = clusterCR.Name
+	clusterCR.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Name)
 	clusterCR.Status.Configured = true
 
 	patch := client.MergeFrom(cluster)
@@ -376,7 +376,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	// 	EventLogEntries:        utils.IntPtrOrZero(clusterCR.Spec.EventLogEntries),
 	// }
 
-	// clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	// clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	// if err != nil {
 	// 	log.Error(err, "Failed to get cluster auth")
 	// 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -401,7 +401,7 @@ func (r *StorageClusterReconciler) adoptExistingCluster(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
+	secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Name)
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
@@ -434,7 +434,7 @@ func (r *StorageClusterReconciler) adoptExistingCluster(
 	clusterCR.Status.NQN = existing.NQN
 	clusterCR.Status.Status = existing.Status
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", existing.NDCS, existing.NPCS)
-	clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
+	clusterCR.Status.ClusterName = clusterCR.Name
 	clusterCR.Status.SecretName = secretName
 	clusterCR.Status.Configured = true
 	if err := r.Status().Patch(ctx, clusterCR, client.MergeFrom(orig)); err != nil {
@@ -523,7 +523,7 @@ func (r *StorageClusterReconciler) handleDeletion(
 	}
 
 	clusterUUID, clusterSecret, err :=
-		utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+		utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
 		log.Error(err, "Failed to get cluster auth during deletion, will retry", "name", clusterCR.Name)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
@@ -577,7 +577,7 @@ func (r *StorageClusterReconciler) deleteClusterSecret(
 
 	secretName := clusterCR.Status.SecretName
 	if secretName == "" {
-		secretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Spec.ClusterName)
+		secretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Name)
 	}
 
 	secret := &corev1.Secret{
@@ -627,7 +627,7 @@ func (r *StorageClusterReconciler) reconcileActivate(
 		!clusterCR.Status.ActionStatus.Triggered {
 
 		clusterUUID, clusterSecret, err :=
-			utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+			utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 		if err != nil {
 			return r.failActivate(ctx, clusterCR, err)
 		}
@@ -661,17 +661,17 @@ func (r *StorageClusterReconciler) reconcileActivate(
 		ctx,
 		r.Client,
 		clusterCR.Namespace,
-		clusterCR.Spec.ClusterName,
+		clusterCR.Name,
 	)
 
 	if err != nil {
 		log.Info("Cluster UUID not ready yet, requeuing",
-			"cluster", clusterCR.Spec.ClusterName,
+			"cluster", clusterCR.Name,
 		)
 		return r.failActivate(ctx, clusterCR, err)
 	}
 
-	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
 		log.Error(err, "Failed to get cluster auth")
 		return r.failActivate(ctx, clusterCR, err)
@@ -704,7 +704,7 @@ func (r *StorageClusterReconciler) reconcileActivate(
 		clusterCR.Status.ActionStatus.Message = "Cluster activated successfully"
 		clusterCR.Status.UUID = resp.UUID
 		clusterCR.Status.NQN = resp.NQN
-		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
+		clusterCR.Status.ClusterName = clusterCR.Name
 		clusterCR.Status.Configured = true
 		clusterCR.Status.Rebalancing = &resp.Rebalancing
 		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
@@ -747,7 +747,7 @@ func (r *StorageClusterReconciler) reconcileExpand(
 	}
 
 	clusterUUID, clusterSecret, err :=
-		utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+		utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
 		return r.failExpand(ctx, clusterCR, err)
 	}
@@ -800,7 +800,7 @@ func (r *StorageClusterReconciler) reconcileExpand(
 		clusterCR.Status.ActionStatus.Message = "Cluster expanded successfully"
 		clusterCR.Status.UUID = resp.UUID
 		clusterCR.Status.NQN = resp.NQN
-		clusterCR.Status.ClusterName = clusterCR.Spec.ClusterName
+		clusterCR.Status.ClusterName = clusterCR.Name
 		clusterCR.Status.Configured = true
 		clusterCR.Status.Rebalancing = &resp.Rebalancing
 		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
@@ -951,7 +951,7 @@ func (r *StorageClusterReconciler) syncStatus(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
 		log.Error(err, "syncStatus: failed to get cluster auth", "name", clusterCR.Name)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil

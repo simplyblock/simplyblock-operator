@@ -32,7 +32,6 @@ func TestBuildBackupConfig(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			ClusterName: "sample-cluster",
 			Backup: &simplyblockv1alpha1.BackupSpec{
 				LocalEndpoint:   "http://10.10.11.10:9000",
 				SnapshotBackups: &snapshotBackups,
@@ -108,7 +107,6 @@ func TestBuildBackupConfigMissingSecretKey(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			ClusterName: "sample-cluster",
 			Backup: &simplyblockv1alpha1.BackupSpec{
 				CredentialsSecretRef: simplyblockv1alpha1.BackupCredentialsSecretRef{
 					Name: "sample-cluster-backup",

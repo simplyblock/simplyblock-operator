@@ -978,9 +978,6 @@ spec:
                   DHCHAP enables DH-HMAC-CHAP key generation for the pool. Authentication is only
                   enforced when allowedNodes is non-empty
                 type: boolean
-              name:
-                description: Name is the backend pool name.
-                type: string
               qos:
                 description: QosSpec defines QosSpec limits for the pool.
                 properties:
@@ -1077,7 +1074,6 @@ spec:
                 type: object
             required:
             - clusterName
-            - name
             type: object
           status:
             description: status defines the observed state of Pool
@@ -1656,9 +1652,6 @@ spec:
                   FIXME: Unused for now
                 format: int32
                 type: integer
-              clusterName:
-                description: ClusterName is the user-facing cluster identifier.
-                type: string
               criticalThreshold:
                 description: CriticalThresholdSpec defines critical-level capacity
                   thresholds.
@@ -1784,8 +1777,6 @@ spec:
                     format: int32
                     type: integer
                 type: object
-            required:
-            - clusterName
             type: object
           status:
             description: status defines the observed state of StorageCluster

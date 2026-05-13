@@ -111,9 +111,6 @@ type StorageClassParameters struct {
 
 // PoolSpec defines the desired state of Pool
 type PoolSpec struct {
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Pool Name"
-	// Name is the backend pool name.
-	Name string `json:"name"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`

@@ -74,7 +74,7 @@ func ResolvePoolUUID(
 
 	for _, p := range pools.Items {
 		if p.Spec.ClusterName == clusterName &&
-			p.Spec.Name == poolName &&
+			p.Name == poolName &&
 			p.Status.UUID != "" {
 			return p.Status.UUID, nil
 		}
@@ -96,7 +96,7 @@ func ResolveClusterUUID(
 	}
 
 	for _, cluster := range clusters.Items {
-		if cluster.Spec.ClusterName == clusterName && cluster.Status.UUID != "" {
+		if cluster.Name == clusterName && cluster.Status.UUID != "" {
 			return cluster.Status.UUID, nil
 		}
 	}
@@ -136,12 +136,12 @@ func ResolveClusterCR(
 	for i := range clusters.Items {
 		cluster := &clusters.Items[i]
 
-		if cluster.Spec.ClusterName == clusterName {
+		if cluster.Name == clusterName {
 			return cluster, nil
 		}
 	}
 
-	return nil, fmt.Errorf("cluster with spec.clusterName %q not found", clusterName)
+	return nil, fmt.Errorf("cluster %q not found", clusterName)
 }
 
 func ExistingClusterUUID(
@@ -157,7 +157,7 @@ func ExistingClusterUUID(
 
 	for _, cluster := range clusters.Items {
 		if cluster.Status.UUID != "" {
-			return true, cluster.Status.UUID, cluster.Spec.ClusterName, cluster.Namespace, nil
+			return true, cluster.Status.UUID, cluster.Name, cluster.Namespace, nil
 		}
 	}
 
@@ -172,7 +172,7 @@ func GetClusterNameByUUID(ctx context.Context, cli client.Client, namespace, uui
 
 	for _, c := range clusterList.Items {
 		if c.Status.UUID == uuid {
-			return c.Status.ClusterName, nil
+			return c.Name, nil
 		}
 	}
 	return "", fmt.Errorf("no cluster found with UUID %s", uuid)

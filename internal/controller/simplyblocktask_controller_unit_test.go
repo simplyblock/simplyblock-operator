@@ -335,12 +335,10 @@ func TestTaskReconcileNon2xxTaskAPIRequeuesAndPreservesStatus(t *testing.T) {
 func testCluster(namespace, clusterName, uuid string) *simplyblockv1alpha1.StorageCluster {
 	return &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cluster-" + clusterName,
+			Name:      clusterName,
 			Namespace: namespace,
 		},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			ClusterName: clusterName,
-		},
+		Spec: simplyblockv1alpha1.StorageClusterSpec{},
 		Status: simplyblockv1alpha1.StorageClusterStatus{
 			UUID: uuid,
 		},
@@ -367,7 +365,6 @@ func testPool(namespace, poolName, clusterName, uuid string) *simplyblockv1alpha
 			Namespace: namespace,
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        poolName,
 			ClusterName: clusterName,
 		},
 		Status: simplyblockv1alpha1.PoolStatus{

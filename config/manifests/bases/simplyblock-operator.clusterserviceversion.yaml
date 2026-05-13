@@ -132,9 +132,6 @@ spec:
       - description: ClusterName is the target storage cluster name.
         displayName: Cluster Name
         path: clusterName
-      - description: Name is the backend pool name.
-        displayName: Pool Name
-        path: name
       - description: Fabric is the transport fabric (e.g. tcp).
         displayName: Fabric
         path: storageClassParameters.fabric
@@ -236,9 +233,6 @@ spec:
           CR.
         displayName: Backup Credentials Secret
         path: backup.credentialsSecretRef.name
-      - description: ClusterName is the user-facing cluster identifier.
-        displayName: Cluster Name
-        path: clusterName
       - description: FabricType defines the storage fabric type.
         displayName: Fabric Type
         path: fabricType
