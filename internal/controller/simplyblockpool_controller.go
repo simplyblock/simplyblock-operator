@@ -154,8 +154,8 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if pool.Status.UUID == "" {
 		params := utils.PoolAddParams{
 			Name:          poolCR.Name,
-			PoolMax:       utils.IntPtrOrDefault(utils.ParseSize(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
-			VolumeMaxSize: 0,
+			PoolMax:       utils.Int64PtrOrDefault(utils.ParseSizeInt64(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
+			VolumeMaxSize: utils.Int64PtrOrDefault(utils.ParseSizeInt64(poolCR.Spec.LogicalVolumeMaxSize, "si/iec", "", false), 0),
 			MaxRwMB:       poolSpecQoSThroughputReadWrite(poolCR.Spec.QosSpec),
 			MaxRwIOPS:     poolSpecQoSIOPS(poolCR.Spec.QosSpec),
 			MaxRMB:        poolSpecQoSThroughputRead(poolCR.Spec.QosSpec),

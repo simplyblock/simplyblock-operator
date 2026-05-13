@@ -65,8 +65,8 @@ type ReplicationAddParams struct {
 
 type PoolAddParams struct {
 	Name          string `json:"name"`
-	PoolMax       int    `json:"pool_max,omitempty"`
-	VolumeMaxSize int    `json:"volume_max_size,omitempty"`
+	PoolMax       int64  `json:"pool_max,omitempty"`
+	VolumeMaxSize int64  `json:"volume_max_size,omitempty"`
 	MaxRwIOPS     int    `json:"max_rw_iops,omitempty"`
 	MaxRwMB       int    `json:"max_rw_mbytes,omitempty"`
 	MaxRMB        int    `json:"max_r_mbytes,omitempty"`
@@ -79,8 +79,8 @@ type PoolAddParams struct {
 
 type PoolUpdateParams struct {
 	Name            string `json:"name,omitempty"`
-	PoolMax         int    `json:"pool_max,omitempty"`
-	VolumeMaxSize   int    `json:"lvol_max,omitempty"`
+	PoolMax         int64  `json:"pool_max,omitempty"`
+	VolumeMaxSize   int64  `json:"lvol_max,omitempty"`
 	MaxRwIOPS       int    `json:"max_rw_iops,omitempty"`
 	MaxRwMB         int    `json:"max_rw_mbytes,omitempty"`
 	MaxRMB          int    `json:"max_r_mbytes,omitempty"`

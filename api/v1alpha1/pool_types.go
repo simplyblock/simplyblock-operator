@@ -119,8 +119,14 @@ type PoolSpec struct {
 	// FIXME: Unused for now
 	Status string `json:"status,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Capacity Limit"
-	// CapacityLimit is the maximum pool capacity.
+	// CapacityLimit is the maximum aggregate capacity that can be allocated from this pool.
+	// This maps to sbctl pool add --pool-max. Use sizes like 20M, 20G, or 0 for unlimited.
 	CapacityLimit string `json:"capacityLimit,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Logical Volume Maximum Size"
+	// LogicalVolumeMaxSize is the maximum size allowed for any single logical volume
+	// created in this pool. This maps to sbctl pool add --lvol-max. Use sizes like
+	// 20M, 20G, or 0 for unlimited.
+	LogicalVolumeMaxSize string `json:"logicalVolumeMaxSize,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="DHCHAP"
 	// DHCHAP enables DH-HMAC-CHAP key generation for the pool. Authentication is only
 	// enforced when allowedNodes is non-empty
