@@ -265,8 +265,36 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 	}
 
 	if !hasPlaceholder {
-		if res, err := r.postStorageNode(ctx, req, snCR, nodeName, ip, clusterUUID, clusterSecret, apiClient); err != nil || res.RequeueAfter > 0 {
-			return res, err
+		// Proactive: check if nodes already exist on backend (e.g. from Helm deployment)
+		// before sending a POST that would either fail or create a duplicate.
+		// For multi-socket deployments (expectedPerHost > 1) a single POST creates all
+		// NUMA-socket nodes at once, so we skip POST if ANY node for this IP already
+		// exists. pollNodeOnline then waits for all expectedPerHost nodes to be online.
+		allNodes, lookupErr := listStorageNodesForCluster(ctx, apiClient, clusterSecret, clusterUUID)
+		if lookupErr == nil {
+			existingCount := 0
+			for _, n := range allNodes {
+				if n.IP == ip {
+					existingCount++
+				}
+			}
+			if existingCount > 0 {
+				log.Info("Storage node(s) already exist on backend, adopting", "node", nodeName, "count", existingCount)
+				if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
+					return ctrl.Result{}, err
+				}
+				ensureNodeStatus(snCR, nodeName, ip)
+				if err := r.Status().Update(ctx, snCR); err != nil {
+					log.Error(err, "Failed to set node placeholder status for adoption")
+					return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+				}
+				hasPlaceholder = true
+			}
+		}
+		if !hasPlaceholder {
+			if res, err := r.postStorageNode(ctx, req, snCR, nodeName, ip, clusterUUID, clusterSecret, apiClient); err != nil || res.RequeueAfter > 0 {
+				return res, err
+			}
 		}
 	}
 
@@ -874,6 +902,20 @@ func getNodeInternalIP(ctx context.Context, c client.Client, nodeName string) (s
 	}
 
 	return "", fmt.Errorf("node %s has no InternalIP", nodeName)
+}
+
+// listStorageNodesForCluster fetches all backend storage nodes for the given cluster.
+func listStorageNodesForCluster(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID string) ([]SNODEAPIResponse, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return nil, fmt.Errorf("list storage nodes failed, status %d: %v", status, err)
+	}
+	var nodes []SNODEAPIResponse
+	if err := json.Unmarshal(body, &nodes); err != nil {
+		return nil, fmt.Errorf("failed to parse storage node list: %w", err)
+	}
+	return nodes, nil
 }
 
 func ensureNodeStatus(

@@ -169,6 +169,41 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	/* -------------------- Proactive Adoption Check (Helm upgrade) -------------------- */
+	// To migrate from a Helm deployment, create a Secret named
+	// "simplyblock-{clusterName}-upgrade" in the same namespace containing
+	// the cluster's "uuid" and "secret" fields. The operator uses them to
+	// fetch the existing cluster and populate the CR status without POSTing.
+	upgradeSecretName := fmt.Sprintf("simplyblock-%s-upgrade", clusterCR.Name)
+	upgradeSecret := &corev1.Secret{}
+	if getErr := r.Get(ctx, types.NamespacedName{Name: upgradeSecretName, Namespace: clusterCR.Namespace}, upgradeSecret); getErr == nil {
+		upgradeUUID := string(upgradeSecret.Data["uuid"])
+		upgradeClusterSecret := string(upgradeSecret.Data["secret"])
+		if upgradeUUID != "" && upgradeClusterSecret != "" {
+			clusterEndpoint := fmt.Sprintf("/api/v2/clusters/%s", upgradeUUID)
+			upgradeBody, upgradeStatus, upgradeErr := apiClient.Do(ctx, upgradeClusterSecret, http.MethodGet, clusterEndpoint, nil)
+			if upgradeErr == nil && upgradeStatus < 300 {
+				if clusterResp, parseErr := webapi.ParseClusterResponse(upgradeBody); parseErr == nil {
+					adoptSecret := upgradeClusterSecret
+					if clusterResp.Secret != "" {
+						adoptSecret = clusterResp.Secret
+					}
+					existing := &utils.ClusterListEntry{
+						UUID:   clusterResp.UUID,
+						Secret: adoptSecret,
+						Name:   clusterCR.Name,
+						NQN:    clusterResp.NQN,
+						Status: clusterResp.Status,
+						NDCS:   clusterResp.NDCS,
+						NPCS:   clusterResp.NPCS,
+					}
+					log.Info("Cluster found via upgrade secret, adopting", "clusterName", clusterCR.Name, "uuid", existing.UUID)
+					return r.adoptExistingCluster(ctx, clusterCR, existing)
+				}
+			}
+		}
+	}
+
 	/* -------------------- Create Cluster -------------------- */
 	cluster := clusterCR.DeepCopy()
 	backupConfig, err := r.buildBackupConfig(ctx, clusterCR)

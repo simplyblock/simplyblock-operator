@@ -152,6 +152,12 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	pool := poolCR.DeepCopy()
 
 	if pool.Status.UUID == "" {
+		// Proactive: check if pool already exists on backend (e.g. from Helm deployment).
+		if existing, lookupErr := utils.GetPoolByName(ctx, apiClient, clusterSecret, clusterUUID, poolCR.Name); lookupErr == nil && existing != nil {
+			log.Info("Pool already exists on backend, adopting", "name", poolCR.Name, "uuid", existing.UUID)
+			return r.adoptExistingPool(ctx, poolCR, existing)
+		}
+
 		params := utils.PoolAddParams{
 			Name:          poolCR.Name,
 			PoolMax:       utils.IntPtrOrDefault(utils.ParseSize(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
@@ -520,4 +526,30 @@ func poolSpecQoSThroughputWrite(q *simplyblockv1alpha1.PoolQoSSpec) int {
 		return 0
 	}
 	return utils.IntPtrOrDefault(q.Throughput.Write, 0)
+}
+
+func (r *PoolReconciler) adoptExistingPool(
+	ctx context.Context,
+	poolCR *simplyblockv1alpha1.Pool,
+	existing *utils.PoolListEntry,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	orig := poolCR.DeepCopy()
+	poolCR.Status.UUID = existing.UUID
+	poolCR.Status.Status = existing.Status
+	poolCR.Status.QoS = &simplyblockv1alpha1.PoolQoSStatus{
+		Host: existing.QoSHost,
+		IOPS: utils.ToInt32Ptr(existing.MaxRwIOPS),
+		Throughput: &simplyblockv1alpha1.PoolQoSThroughputStatus{
+			Read:      utils.ToInt32Ptr(existing.RLimit),
+			ReadWrite: utils.ToInt32Ptr(existing.RWLimit),
+			Write:     utils.ToInt32Ptr(existing.WLimit),
+		},
+	}
+	if err := r.Status().Patch(ctx, poolCR, client.MergeFrom(orig)); err != nil {
+		log.Error(err, "Failed to patch pool status after adoption")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	log.Info("Pool adopted from existing backend", "name", poolCR.Name, "uuid", existing.UUID)
+	return ctrl.Result{}, nil
 }
