@@ -1069,6 +1069,76 @@ func TestStorageNodeReconcileServiceAccountHasOwnerReference(t *testing.T) {
 	}
 }
 
+func TestStorageNodeReconcileCreatesNamespaceSpecificClusterRoleBindings(t *testing.T) {
+	const clusterUUID1 = "cluster-uuid-one"
+	const clusterUUID2 = "cluster-uuid-two"
+
+	cluster1 := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster1", Namespace: "cluster1"},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID1},
+	}
+	cluster2 := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster2", Namespace: "cluster2"},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID2},
+	}
+	secret1 := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-cluster-cluster1",
+			Namespace: "cluster1",
+		},
+		Data: map[string][]byte{
+			"uuid":   []byte(clusterUUID1),
+			"secret": []byte("secret1"),
+		},
+	}
+	secret2 := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-cluster-cluster2",
+			Namespace: "cluster2",
+		},
+		Data: map[string][]byte{
+			"uuid":   []byte(clusterUUID2),
+			"secret": []byte("secret2"),
+		},
+	}
+	sn1 := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "sn-cluster1",
+			Namespace:  "cluster1",
+			Finalizers: []string{utils.FinalizerStorageNode},
+		},
+		Spec: simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster1"},
+	}
+	sn2 := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "sn-cluster2",
+			Namespace:  "cluster2",
+			Finalizers: []string{utils.FinalizerStorageNode},
+		},
+		Spec: simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster2"},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn1, sn2, cluster1, cluster2, secret1, secret2)
+	for _, sn := range []*simplyblockv1alpha1.StorageNode{sn2, sn1} {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)}); err != nil {
+			t.Fatalf("reconcile %s/%s returned error: %v", sn.Namespace, sn.Name, err)
+		}
+	}
+
+	for _, namespace := range []string{"cluster1", "cluster2"} {
+		binding := &rbacv1.ClusterRoleBinding{}
+		key := client.ObjectKey{Name: "simplyblock-storage-node-binding-" + namespace}
+		if err := r.Get(context.Background(), key, binding); err != nil {
+			t.Fatalf("failed to fetch ClusterRoleBinding %s: %v", key.Name, err)
+		}
+		if len(binding.Subjects) != 1 || binding.Subjects[0].Namespace != namespace {
+			t.Fatalf("expected binding %s to target namespace %s, got %#v", key.Name, namespace, binding.Subjects)
+		}
+	}
+}
+
 func TestStorageNodeReconcileMissingInternalIPRequeues(t *testing.T) {
 	const namespace = "default"
 	const clusterName = "cluster-missing-ip"
