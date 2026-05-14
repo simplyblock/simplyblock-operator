@@ -724,7 +724,7 @@ func (r *BackupRestoreReconciler) ensurePV(
 ) error {
 	existing := &corev1.PersistentVolume{}
 	if err := r.Get(ctx, client.ObjectKey{Name: pvName}, existing); err == nil {
-		wantStorageClass := fmt.Sprintf("simplyblock-%s-%s", restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
+		wantStorageClass := simplyblockStorageClassName(restoreCR.Namespace, restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
 		wantHandle := fmt.Sprintf("%s:%s:%s", clusterUUID, restoreCR.Status.PoolName, restoreCR.Status.RestoredLvolID)
 		var mismatch string
 		switch {
@@ -753,7 +753,7 @@ func (r *BackupRestoreReconciler) ensurePV(
 		return fmt.Errorf("get PV %s: %w", pvName, err)
 	}
 
-	storageClassName := fmt.Sprintf("simplyblock-%s-%s", restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
+	storageClassName := simplyblockStorageClassName(restoreCR.Namespace, restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
 
 	storageQty := restoreCR.Spec.PVCTemplate.Spec.Resources.Requests[corev1.ResourceStorage]
 
@@ -881,7 +881,7 @@ func (r *BackupRestoreReconciler) ensurePVC(
 
 	pvcSpec := restoreCR.Spec.PVCTemplate.Spec.DeepCopy()
 	pvcSpec.VolumeName = restoreCR.Status.PVName
-	sc := fmt.Sprintf("simplyblock-%s-%s", restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
+	sc := simplyblockStorageClassName(restoreCR.Namespace, restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
 	pvcSpec.StorageClassName = &sc
 
 	pvc := &corev1.PersistentVolumeClaim{

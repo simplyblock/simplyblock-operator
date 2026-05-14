@@ -17,6 +17,21 @@ func TestStorageNodeAPIAddress(t *testing.T) {
 	}
 }
 
+func TestBuildStorageNodeClusterRoleBindingNameIncludesNamespace(t *testing.T) {
+	cluster1Binding := BuildStorageNodeClusterRoleBinding("cluster1")
+	cluster2Binding := BuildStorageNodeClusterRoleBinding("cluster2")
+
+	if cluster1Binding.Name == cluster2Binding.Name {
+		t.Fatalf("expected per-namespace ClusterRoleBinding names, got %q", cluster1Binding.Name)
+	}
+	if cluster1Binding.Name != "simplyblock-storage-node-binding-cluster1" {
+		t.Fatalf("unexpected cluster1 ClusterRoleBinding name %q", cluster1Binding.Name)
+	}
+	if len(cluster1Binding.Subjects) != 1 || cluster1Binding.Subjects[0].Namespace != "cluster1" {
+		t.Fatalf("expected cluster1 service account subject, got %#v", cluster1Binding.Subjects)
+	}
+}
+
 func TestBuildSpdkProxyEndpointSlice_DottedNodeNameTruncates(t *testing.T) {
 	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},

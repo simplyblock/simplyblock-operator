@@ -168,19 +168,33 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
 	}
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error { return nil })
+	desiredSAOwnerRefs := sa.OwnerReferences
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
+		sa.OwnerReferences = desiredSAOwnerRefs
+		return nil
+	})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ServiceAccount: %w", err)
 	}
 
 	cr := utils.BuildStorageNodeClusterRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster))
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error { return nil })
+	desiredCRRules := cr.Rules
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
+		cr.Rules = desiredCRRules
+		return nil
+	})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRole: %w", err)
 	}
 
 	crb := utils.BuildStorageNodeClusterRoleBinding(snCR.Namespace)
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error { return nil })
+	desiredCRBSubjects := crb.Subjects
+	desiredCRBRoleRef := crb.RoleRef
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
+		crb.Subjects = desiredCRBSubjects
+		crb.RoleRef = desiredCRBRoleRef
+		return nil
+	})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
 	}

@@ -5,9 +5,7 @@ resources:
 - bases/storage.simplyblock.io_storageclusters.yaml
 - bases/storage.simplyblock.io_storagenodes.yaml
 - bases/storage.simplyblock.io_pools.yaml
-- bases/storage.simplyblock.io_devices.yaml
 - bases/storage.simplyblock.io_tasks.yaml
-- bases/storage.simplyblock.io_lvols.yaml
 - bases/storage.simplyblock.io_storagebackups.yaml
 - bases/storage.simplyblock.io_backuprestores.yaml
 - bases/storage.simplyblock.io_snapshotreplications.yaml
