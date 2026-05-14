@@ -39,8 +39,8 @@ var OperatorNamespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/names
 // a pod/host IP directly while still passing hostname verification against
 // the service-ca-issued cert, whose SAN is the service DNS name. Timeout is
 // short (3s) since this is used for reachability probes.
-func BuildStorageNodeAPIClient(namespace, caPath, certPath, keyPath string) (*http.Client, error) {
-	c, err := buildServiceAPIClient("simplyblock-storage-node-api", namespace, caPath)
+func BuildStorageNodeAPIClient(namespace, serviceName, caPath, certPath, keyPath string) (*http.Client, error) {
+	c, err := buildServiceAPIClient(serviceName, namespace, caPath)
 	if err != nil {
 		return nil, err
 	}

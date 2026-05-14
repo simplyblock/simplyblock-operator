@@ -23,7 +23,7 @@ func TestBuildStorageNodeAPIClientTrustsServingCert(t *testing.T) {
 
 	caPath := writeCertPEM(t, server.Certificate())
 
-	c, err := BuildStorageNodeAPIClient("default", caPath, "", "")
+	c, err := BuildStorageNodeAPIClient("default", "simplyblock-storage-node-api-test", caPath, "", "")
 	if err != nil {
 		t.Fatalf("BuildStorageNodeAPIClient returned error: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestBuildStorageNodeAPIClientRejectsBadCA(t *testing.T) {
 	if err := os.WriteFile(caPath, []byte("not a certificate"), 0o600); err != nil {
 		t.Fatalf("write temp ca: %v", err)
 	}
-	if _, err := BuildStorageNodeAPIClient("default", caPath, "", ""); err == nil {
+	if _, err := BuildStorageNodeAPIClient("default", "simplyblock-storage-node-api-test", caPath, "", ""); err == nil {
 		t.Fatalf("expected error on garbage CA bundle")
 	} else if !strings.Contains(err.Error(), "no usable certificates") {
 		t.Fatalf("unexpected error: %v", err)
@@ -54,7 +54,7 @@ func TestBuildStorageNodeAPIClientRejectsBadCA(t *testing.T) {
 }
 
 func TestBuildStorageNodeAPIClientMissingCAFile(t *testing.T) {
-	if _, err := BuildStorageNodeAPIClient("default", "/no/such/file", "", ""); err == nil {
+	if _, err := BuildStorageNodeAPIClient("default", "simplyblock-storage-node-api-test", "/no/such/file", "", ""); err == nil {
 		t.Fatalf("expected error on missing CA file")
 	}
 }
@@ -64,7 +64,7 @@ func TestBuildStorageNodeAPIClientShape(t *testing.T) {
 	defer server.Close()
 	caPath := writeCertPEM(t, server.Certificate())
 
-	c, err := BuildStorageNodeAPIClient("kube-storage", caPath, "", "")
+	c, err := BuildStorageNodeAPIClient("kube-storage", "simplyblock-storage-node-api-group-a", caPath, "", "")
 	if err != nil {
 		t.Fatalf("BuildStorageNodeAPIClient: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestBuildStorageNodeAPIClientShape(t *testing.T) {
 	if !ok {
 		t.Fatalf("transport type %T, want *http.Transport", c.Transport)
 	}
-	if want := "simplyblock-storage-node-api.kube-storage.svc"; tr.TLSClientConfig.ServerName != want {
+	if want := "simplyblock-storage-node-api-group-a.kube-storage.svc"; tr.TLSClientConfig.ServerName != want {
 		t.Fatalf("ServerName = %q, want %q", tr.TLSClientConfig.ServerName, want)
 	}
 	if tr.TLSClientConfig.MinVersion != tls.VersionTLS12 {
@@ -86,7 +86,7 @@ func TestBuildStorageNodeAPIClientShape(t *testing.T) {
 func TestBuildStorageNodeAPIClientMTLSShape(t *testing.T) {
 	caPath, certPath, keyPath := writeSelfSignedCertPairPEM(t)
 
-	c, err := BuildStorageNodeAPIClient("simplyblock", caPath, certPath, keyPath)
+	c, err := BuildStorageNodeAPIClient("simplyblock", "simplyblock-storage-node-api-group-a", caPath, certPath, keyPath)
 	if err != nil {
 		t.Fatalf("BuildStorageNodeAPIClient: %v", err)
 	}

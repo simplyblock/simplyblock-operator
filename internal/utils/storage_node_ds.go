@@ -16,8 +16,9 @@ import (
 func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
 
 	labels := map[string]string{
-		"app":                 "storage-node",
-		"simplyblock-cluster": sn.Spec.ClusterName,
+		"app":                      "storage-node",
+		"simplyblock-cluster":      sn.Spec.ClusterName,
+		"simplyblock-storage-node": sn.Name,
 	}
 
 	image := sn.Spec.ClusterImage
@@ -162,7 +163,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 	}
 
 	if tlsEnabled {
-		volumes = append(volumes, buildStorageNodeTLSVolume(tlsProvider))
+		volumes = append(volumes, buildStorageNodeTLSVolume(tlsProvider, StorageNodeAPITLSSecretName(sn)))
 
 		tlsMounts := []corev1.VolumeMount{
 			{Name: "tls", MountPath: "/etc/simplyblock/tls", ReadOnly: true},
@@ -180,7 +181,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-storage-node-ds-" + sn.Spec.ClusterName,
+			Name:      StorageNodeDaemonSetName(sn),
 			Namespace: sn.Namespace,
 			Labels:    labels,
 		},
@@ -207,7 +208,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 					HostNetwork:        true,
 					Tolerations:        sn.Spec.Tolerations,
 					NodeSelector: map[string]string{
-						"io.simplyblock.node-type": "simplyblock-storage-plane-" + sn.Spec.ClusterName,
+						"io.simplyblock.node-type": StorageNodeNodeLabelValue(sn),
 					},
 
 					Volumes: volumes,
@@ -254,13 +255,13 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 // the Secret, so a plain Secret volume is enough; OpenShift's serving-cert
 // controller emits the CA via a separate ConfigMap, so the two sources are
 // combined through a projected volume.
-func buildStorageNodeTLSVolume(tlsProvider string) corev1.Volume {
+func buildStorageNodeTLSVolume(tlsProvider, secretName string) corev1.Volume {
 	if IsCertManagerTLSProvider(tlsProvider) {
 		return corev1.Volume{
 			Name: "tls",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: SecretNameStorageNodeAPITLS,
+					SecretName: secretName,
 				},
 			},
 		}
@@ -274,7 +275,7 @@ func buildStorageNodeTLSVolume(tlsProvider string) corev1.Volume {
 					{
 						Secret: &corev1.SecretProjection{
 							LocalObjectReference: corev1.LocalObjectReference{
-								Name: SecretNameStorageNodeAPITLS,
+								Name: secretName,
 							},
 						},
 					},
@@ -355,16 +356,41 @@ func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 // StorageNodeAPIAddress returns the per-pod headless-service DNS address that
 // the cluster control-plane uses to reach a storage-node-api pod backing the
 // given worker node.
-func StorageNodeAPIAddress(workerNode, namespace string) string {
-	return fmt.Sprintf("%s.simplyblock-storage-node-api.%s.svc.cluster.local:5000", nodeHostnameLabel(workerNode), namespace)
+func StorageNodeAPIAddress(workerNode, namespace, serviceName string) string {
+	return fmt.Sprintf("%s.%s.%s.svc.cluster.local:5000", nodeHostnameLabel(workerNode), serviceName, namespace)
+}
+
+func StorageNodeDaemonSetName(sn *simplyblockv1alpha1.StorageNode) string {
+	return "simplyblock-storage-node-ds-" + sn.Name
+}
+
+func StorageNodeServiceName(sn *simplyblockv1alpha1.StorageNode) string {
+	return "simplyblock-storage-node-api-" + sn.Name
+}
+
+func SpdkProxyServiceName(sn *simplyblockv1alpha1.StorageNode) string {
+	return "simplyblock-spdk-proxy-" + sn.Name
+}
+
+func StorageNodeAPITLSSecretName(sn *simplyblockv1alpha1.StorageNode) string {
+	return SecretNameStorageNodeAPITLS + "-" + sn.Name
+}
+
+func SpdkProxyTLSSecretName(sn *simplyblockv1alpha1.StorageNode) string {
+	return SecretNameSpdkProxyTLS + "-" + sn.Name
+}
+
+func StorageNodeNodeLabelValue(sn *simplyblockv1alpha1.StorageNode) string {
+	return "simplyblock-storage-plane-" + sn.Name
 }
 
 func BuildStorageNodeService(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsProvider string) *corev1.Service {
+	serviceName := StorageNodeServiceName(sn)
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        "simplyblock-storage-node-api",
+			Name:        serviceName,
 			Namespace:   sn.Namespace,
-			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, SecretNameStorageNodeAPITLS),
+			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, StorageNodeAPITLSSecretName(sn)),
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
@@ -383,6 +409,7 @@ func BuildStorageNodeEndpointSlice(sn *simplyblockv1alpha1.StorageNode, nodeIPs 
 	protocol := corev1.ProtocolTCP
 	port := int32(5000)
 	portName := "api"
+	serviceName := StorageNodeServiceName(sn)
 
 	endpoints := make([]discoveryv1.Endpoint, 0, len(nodeIPs))
 	for nodeName, ip := range nodeIPs {
@@ -395,10 +422,10 @@ func BuildStorageNodeEndpointSlice(sn *simplyblockv1alpha1.StorageNode, nodeIPs 
 
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-storage-node-api-endpoints",
+			Name:      "simplyblock-storage-node-api-endpoints-" + sn.Name,
 			Namespace: sn.Namespace,
 			Labels: map[string]string{
-				"kubernetes.io/service-name": "simplyblock-storage-node-api",
+				"kubernetes.io/service-name": serviceName,
 			},
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
@@ -422,11 +449,12 @@ type SpdkProxyEndpoint struct {
 }
 
 func BuildSpdkProxyService(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsProvider string) *corev1.Service {
+	serviceName := SpdkProxyServiceName(sn)
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        "simplyblock-spdk-proxy",
+			Name:        serviceName,
 			Namespace:   sn.Namespace,
-			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, SecretNameSpdkProxyTLS),
+			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, SpdkProxyTLSSecretName(sn)),
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
@@ -448,6 +476,7 @@ func BuildSpdkProxyEndpointSlice(
 	port := rpcPort
 	portName := "proxy"
 	ready := true
+	serviceName := SpdkProxyServiceName(sn)
 
 	eps := make([]discoveryv1.Endpoint, 0, len(endpoints))
 	seen := make(map[string]string, len(endpoints))
@@ -468,10 +497,10 @@ func BuildSpdkProxyEndpointSlice(
 
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("spdk-proxy-endpoints-%d", rpcPort),
+			Name:      fmt.Sprintf("spdk-proxy-endpoints-%s-%d", sn.Name, rpcPort),
 			Namespace: sn.Namespace,
 			Labels: map[string]string{
-				"kubernetes.io/service-name": "simplyblock-spdk-proxy",
+				"kubernetes.io/service-name": serviceName,
 			},
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,

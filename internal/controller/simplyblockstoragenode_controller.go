@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -165,14 +166,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	sa := utils.BuildStorageNodeServiceAccount(snCR.Namespace)
-	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
-	}
-	desiredSAOwnerRefs := sa.OwnerReferences
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
-		sa.OwnerReferences = desiredSAOwnerRefs
-		return nil
-	})
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error { return nil })
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ServiceAccount: %w", err)
 	}
@@ -298,7 +292,8 @@ func (r *StorageNodeReconciler) postStorageNode(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if err := checkNodeInfoReachable(ctx, nodeName, snCR.Namespace, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
+	serviceName := utils.StorageNodeServiceName(snCR)
+	if err := checkNodeInfoReachable(ctx, nodeName, snCR.Namespace, serviceName, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
 		log.Info("Storage node API not reachable yet, requeueing",
 			"node", nodeName,
 			"ip", ip,
@@ -307,7 +302,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	nodeAddress := utils.StorageNodeAPIAddress(nodeName, snCR.Namespace)
+	nodeAddress := utils.StorageNodeAPIAddress(nodeName, snCR.Namespace, serviceName)
 	params := utils.StorageNodeAddParams{
 		NodeAddress:         nodeAddress,
 		InterfaceName:       snCR.Spec.MgmtIfname,
@@ -396,7 +391,8 @@ func isSpdkProxyPod(obj client.Object) bool {
 }
 
 func isStorageNodeTLSSecret(obj client.Object) bool {
-	return obj.GetName() == utils.SecretNameStorageNodeAPITLS
+	return obj.GetName() == utils.SecretNameStorageNodeAPITLS ||
+		strings.HasPrefix(obj.GetName(), utils.SecretNameStorageNodeAPITLS+"-")
 }
 
 func isSimplyblockControlPlane(obj client.Object) bool {
@@ -506,7 +502,7 @@ func (r *StorageNodeReconciler) labelWorkerNodes(ctx context.Context, sn *simply
 		}
 
 		key := "io.simplyblock.node-type"
-		value := "simplyblock-storage-plane-" + sn.Spec.ClusterName
+		value := utils.StorageNodeNodeLabelValue(sn)
 
 		if node.Labels[key] == value {
 			continue
@@ -532,7 +528,7 @@ func (r *StorageNodeReconciler) labelWorkerNode(ctx context.Context, sn *simplyb
 	}
 
 	key := "io.simplyblock.node-type"
-	value := "simplyblock-storage-plane-" + sn.Spec.ClusterName
+	value := utils.StorageNodeNodeLabelValue(sn)
 
 	node.Labels[key] = value
 	if err := r.Update(ctx, &node); err != nil {
@@ -559,7 +555,7 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 		snCR.Spec.ClusterImage = cp.Spec.Image
 	}
 
-	tlsSecretRV, err := r.getTLSSecretResourceVersion(ctx, snCR.Namespace)
+	tlsSecretRV, err := r.getTLSSecretResourceVersion(ctx, snCR)
 	if err != nil {
 		return err
 	}
@@ -590,15 +586,15 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 // name does not) trigger a rolling restart.
 func (r *StorageNodeReconciler) getTLSSecretResourceVersion(
 	ctx context.Context,
-	namespace string,
+	snCR *simplyblockv1alpha1.StorageNode,
 ) (string, error) {
 	if !r.TLSEnabled {
 		return "", nil
 	}
 	var sec corev1.Secret
 	err := r.Get(ctx, types.NamespacedName{
-		Namespace: namespace,
-		Name:      utils.SecretNameStorageNodeAPITLS,
+		Namespace: snCR.Namespace,
+		Name:      utils.StorageNodeAPITLSSecretName(snCR),
 	}, &sec)
 	if apierrors.IsNotFound(err) {
 		return "", nil
@@ -645,12 +641,12 @@ func (r *StorageNodeReconciler) reconcileServingCertificates(
 		secretName  string
 	}{
 		{
-			serviceName: "simplyblock-storage-node-api",
-			secretName:  utils.SecretNameStorageNodeAPITLS,
+			serviceName: utils.StorageNodeServiceName(snCR),
+			secretName:  utils.StorageNodeAPITLSSecretName(snCR),
 		},
 		{
-			serviceName: "simplyblock-spdk-proxy",
-			secretName:  utils.SecretNameSpdkProxyTLS,
+			serviceName: utils.SpdkProxyServiceName(snCR),
+			secretName:  utils.SpdkProxyTLSSecretName(snCR),
 		},
 	}
 
@@ -762,6 +758,9 @@ func (r *StorageNodeReconciler) reconcileSpdkProxyEndpointSlices(
 			log.Info("skipping spdk-proxy pod: unable to determine RPC_PORT", "pod", pod.Name)
 			continue
 		}
+		if !slices.Contains(snCR.Spec.WorkerNodes, pod.Spec.NodeName) {
+			continue
+		}
 		byPort[rpcPort] = append(byPort[rpcPort], utils.SpdkProxyEndpoint{
 			NodeName: pod.Spec.NodeName,
 			PodIP:    pod.Status.PodIP,
@@ -799,7 +798,7 @@ func (r *StorageNodeReconciler) reconcileSpdkProxyEndpointSlices(
 	var existingSlices discoveryv1.EndpointSliceList
 	if err := r.List(ctx, &existingSlices,
 		client.InNamespace(snCR.Namespace),
-		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+		client.MatchingLabels{"kubernetes.io/service-name": utils.SpdkProxyServiceName(snCR)},
 	); err != nil {
 		return fmt.Errorf("failed to list existing spdk-proxy EndpointSlices: %w", err)
 	}
@@ -912,7 +911,7 @@ func ensureNodeStatus(
 	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
 }
 
-func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tlsEnabled, tlsMutualEnabled bool) error {
+func checkNodeInfoReachable(ctx context.Context, nodeName, namespace, serviceName string, tlsEnabled, tlsMutualEnabled bool) error {
 	scheme := "http"
 	httpClient := &http.Client{Timeout: 3 * time.Second}
 	if tlsEnabled {
@@ -922,14 +921,14 @@ func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tls
 			certPath = tlsutil.ServiceClientCertificatePath
 			keyPath = tlsutil.ServiceClientKeyPath
 		}
-		c, err := tlsutil.BuildStorageNodeAPIClient(namespace, tlsutil.ServiceCABundlePath, certPath, keyPath)
+		c, err := tlsutil.BuildStorageNodeAPIClient(namespace, serviceName, tlsutil.ServiceCABundlePath, certPath, keyPath)
 		if err != nil {
 			return fmt.Errorf("build storage-node TLS client: %w", err)
 		}
 		httpClient = c
 	}
 
-	url := fmt.Sprintf("%s://%s/snode/info", scheme, utils.StorageNodeAPIAddress(nodeName, namespace))
+	url := fmt.Sprintf("%s://%s/snode/info", scheme, utils.StorageNodeAPIAddress(nodeName, namespace, serviceName))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -957,6 +956,7 @@ func waitForNodeInfoReachable(
 	ctx context.Context,
 	nodeName string,
 	namespace string,
+	serviceName string,
 	tlsEnabled, tlsMutualEnabled bool,
 ) error {
 	log := logf.FromContext(ctx)
@@ -965,7 +965,7 @@ func waitForNodeInfoReachable(
 
 	for i := 1; i <= waitForNodeInfoReachableMaxRetries; i++ {
 
-		if err := waitForNodeInfoReachableCheckFn(ctx, nodeName, namespace, tlsEnabled, tlsMutualEnabled); err == nil {
+		if err := waitForNodeInfoReachableCheckFn(ctx, nodeName, namespace, serviceName, tlsEnabled, tlsMutualEnabled); err == nil {
 			log.Info("Storage node API is reachable",
 				"node", nodeName,
 				"attempt", i,
@@ -1186,10 +1186,14 @@ func maybeActivateCluster(
 		return nil
 	}
 
-	onlineHealthy := utils.CountOnlineHealthyNodes(snCR.Status.Nodes)
+	onlineHealthy, expectedNodes, err := r.storageNodeGroupCounts(ctx, snCR)
+	if err != nil {
+		return err
+	}
 	log.Info("Evaluating cluster activation conditions",
 		"erasureCodingScheme", clusterCR.Status.ErasureCodingScheme,
 		"onlineHealthy", onlineHealthy,
+		"expectedNodes", expectedNodes,
 	)
 
 	requiredEc, err := utils.RequiredNodesFromErasureCodingScheme(clusterCR.Status.ErasureCodingScheme)
@@ -1198,7 +1202,7 @@ func maybeActivateCluster(
 		return err
 	}
 
-	if utils.ShouldActivateCluster(requiredEc, onlineHealthy, snCR) {
+	if shouldActivateClusterFromCounts(requiredEc, onlineHealthy, expectedNodes) {
 		waitForNodeOnlineSleepFn(waitForNodeOnlineActivationDelay)
 		log.Info("Activation conditions met — activating cluster")
 		if err := utils.ActivateClusterAndWait(ctx, apiClient, clusterSecret, clusterUUID); err != nil {
@@ -1209,6 +1213,30 @@ func maybeActivateCluster(
 	}
 
 	return nil
+}
+
+func (r *StorageNodeReconciler) storageNodeGroupCounts(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+) (onlineHealthy, expected int, err error) {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList, client.InNamespace(snCR.Namespace)); err != nil {
+		return 0, 0, fmt.Errorf("list StorageNode groups: %w", err)
+	}
+	for i := range snList.Items {
+		group := &snList.Items[i]
+		if group.Spec.ClusterName != snCR.Spec.ClusterName {
+			continue
+		}
+		onlineHealthy += utils.CountOnlineHealthyNodes(group.Status.Nodes)
+		expected += len(group.Spec.WorkerNodes) * utils.ExpectedNodesPerHost(group)
+	}
+	return onlineHealthy, expected, nil
+}
+
+func shouldActivateClusterFromCounts(requiredEc, onlineHealthy, expected int) bool {
+	required := requiredEc + 1
+	return expected > 0 && onlineHealthy == expected && onlineHealthy >= required
 }
 
 func journalManagerPercentPerDevice(
@@ -1332,7 +1360,8 @@ func (r *StorageNodeReconciler) performNodeAction(
 				return fmt.Errorf("failed to label worker node %s: %w", snCR.Spec.WorkerNode, err)
 			}
 
-			if err := waitForNodeInfoReachable(ctx, snCR.Spec.WorkerNode, snCR.Namespace, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
+			serviceName := utils.StorageNodeServiceName(snCR)
+			if err := waitForNodeInfoReachable(ctx, snCR.Spec.WorkerNode, snCR.Namespace, serviceName, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
 				log.Error(err, "node never became reachable")
 				return err
 			}
@@ -1340,7 +1369,7 @@ func (r *StorageNodeReconciler) performNodeAction(
 			body = map[string]any{
 				"force":           nodeActionForce(snCR, true),
 				"reattach_volume": utils.BoolPtrOrFalse(snCR.Spec.ReattachVolume),
-				"node_address":    utils.StorageNodeAPIAddress(snCR.Spec.WorkerNode, snCR.Namespace),
+				"node_address":    utils.StorageNodeAPIAddress(snCR.Spec.WorkerNode, snCR.Namespace, serviceName),
 			}
 		} else {
 			body = payload

@@ -576,7 +576,8 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 	log := logf.FromContext(ctx)
 
 	// Verify SPDK is reachable before calling restart.
-	if err := checkNodeInfoReachable(ctx, state.Hostname, snCR.Namespace, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
+	serviceName := utils.StorageNodeServiceName(snCR)
+	if err := checkNodeInfoReachable(ctx, state.Hostname, snCR.Namespace, serviceName, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
 		state.Message = "waiting for SPDK to become reachable after reboot"
 		log.Info("SPDK not yet reachable, will retry", "node", state.Hostname)
 		return 15 * time.Second
@@ -618,7 +619,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 
 	restartPayload := map[string]any{
 		"force":        true,
-		"node_address": utils.StorageNodeAPIAddress(state.Hostname, snCR.Namespace),
+		"node_address": utils.StorageNodeAPIAddress(state.Hostname, snCR.Namespace, utils.StorageNodeServiceName(snCR)),
 	}
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, firstUUID)
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, restartPayload)
@@ -722,7 +723,7 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 
 		restartPayload := map[string]any{
 			"force":        true,
-			"node_address": utils.StorageNodeAPIAddress(state.Hostname, snCR.Namespace),
+			"node_address": utils.StorageNodeAPIAddress(state.Hostname, snCR.Namespace, utils.StorageNodeServiceName(snCR)),
 		}
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nextUUID)
 		body, httpStatus, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, restartPayload)

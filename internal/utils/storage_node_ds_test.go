@@ -10,10 +10,41 @@ import (
 )
 
 func TestStorageNodeAPIAddress(t *testing.T) {
-	got := StorageNodeAPIAddress("worker-1", "simplyblock")
-	want := "worker-1.simplyblock-storage-node-api.simplyblock.svc.cluster.local:5000"
+	got := StorageNodeAPIAddress("worker-1", "simplyblock", "simplyblock-storage-node-api-group-a")
+	want := "worker-1.simplyblock-storage-node-api-group-a.simplyblock.svc.cluster.local:5000"
 	if got != want {
 		t.Fatalf("StorageNodeAPIAddress = %q, want %q", got, want)
+	}
+}
+
+func TestBuildStorageNodeResourcesUseNodeGroupName(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "group-a", Namespace: "ns"},
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
+			ClusterName: "cluster-a",
+		},
+	}
+
+	ds := BuildStorageNodeDaemonSet(sn, true, false, TLSProviderCertManager, "42")
+	if ds.Name != "simplyblock-storage-node-ds-group-a" {
+		t.Fatalf("DaemonSet name = %q", ds.Name)
+	}
+	if ds.Spec.Template.Spec.NodeSelector["io.simplyblock.node-type"] != "simplyblock-storage-plane-group-a" {
+		t.Fatalf("unexpected node selector %#v", ds.Spec.Template.Spec.NodeSelector)
+	}
+	if ds.Labels["simplyblock-storage-node"] != "group-a" {
+		t.Fatalf("expected node-group label, got %#v", ds.Labels)
+	}
+	if ds.Spec.Template.Spec.Volumes[len(ds.Spec.Template.Spec.Volumes)-1].Secret.SecretName != "simplyblock-storage-node-api-tls-group-a" {
+		t.Fatalf("unexpected TLS Secret volume %#v", ds.Spec.Template.Spec.Volumes)
+	}
+
+	svc := BuildStorageNodeService(sn, true, TLSProviderOpenShift)
+	if svc.Name != "simplyblock-storage-node-api-group-a" {
+		t.Fatalf("Service name = %q", svc.Name)
+	}
+	if svc.Annotations[OpenShiftServingCertAnnotation] != "simplyblock-storage-node-api-tls-group-a" {
+		t.Fatalf("unexpected service annotations %#v", svc.Annotations)
 	}
 }
 

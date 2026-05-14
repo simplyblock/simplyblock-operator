@@ -311,7 +311,7 @@ func TestStorageNodeLabelingHelpers(t *testing.T) {
 				t.Fatalf("failed to fetch node %s: %v", nodeName, err)
 			}
 			got := n.Labels["io.simplyblock.node-type"]
-			want := "simplyblock-storage-plane-cluster-a"
+			want := "simplyblock-storage-plane-sn-label-all"
 			if got != want {
 				t.Fatalf("node %s label mismatch: got %q want %q", nodeName, got, want)
 			}
@@ -340,7 +340,7 @@ func TestStorageNodeLabelingHelpers(t *testing.T) {
 		if err := r.Get(context.Background(), client.ObjectKey{Name: "node-one"}, &out); err != nil {
 			t.Fatalf("failed to fetch node: %v", err)
 		}
-		if out.Labels["io.simplyblock.node-type"] != "simplyblock-storage-plane-cluster-b" {
+		if out.Labels["io.simplyblock.node-type"] != "simplyblock-storage-plane-sn-label-one" {
 			t.Fatalf("expected worker node label to be set")
 		}
 	})
@@ -362,7 +362,7 @@ func TestStorageNodeDaemonSetReconcileCreatesWhenMissing(t *testing.T) {
 	}
 
 	var ds appsv1.DaemonSet
-	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-ds-create", Namespace: "default"}, &ds); err != nil {
 		t.Fatalf("daemonset should be created: %v", err)
 	}
 	if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
@@ -381,7 +381,7 @@ func TestStorageNodeDaemonSetReconcileUpdatesExisting(t *testing.T) {
 	}
 	existing := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-storage-node-ds-cluster-a",
+			Name:      "simplyblock-storage-node-ds-sn-ds-update",
 			Namespace: "default",
 		},
 	}
@@ -392,7 +392,7 @@ func TestStorageNodeDaemonSetReconcileUpdatesExisting(t *testing.T) {
 	}
 
 	var ds appsv1.DaemonSet
-	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-ds-update", Namespace: "default"}, &ds); err != nil {
 		t.Fatalf("failed to fetch daemonset: %v", err)
 	}
 	if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
@@ -413,7 +413,7 @@ func TestStorageNodeDaemonSetReconcileTLSDisabled(t *testing.T) {
 	}
 
 	var ds appsv1.DaemonSet
-	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-ds-tls-off", Namespace: "default"}, &ds); err != nil {
 		t.Fatalf("failed to fetch daemonset: %v", err)
 	}
 	for _, v := range ds.Spec.Template.Spec.Volumes {
@@ -489,7 +489,7 @@ func TestStorageNodeDaemonSetReconcileTLSEnabled(t *testing.T) {
 	}
 
 	var ds appsv1.DaemonSet
-	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-ds-tls-on", Namespace: "default"}, &ds); err != nil {
 		t.Fatalf("failed to fetch daemonset: %v", err)
 	}
 
@@ -509,7 +509,7 @@ func TestStorageNodeDaemonSetReconcileTLSEnabled(t *testing.T) {
 	var gotSecret, gotCA bool
 	for _, src := range tlsVol.Projected.Sources {
 		switch {
-		case src.Secret != nil && src.Secret.Name == "simplyblock-storage-node-api-tls":
+		case src.Secret != nil && src.Secret.Name == "simplyblock-storage-node-api-tls-sn-ds-tls-on":
 			gotSecret = true
 		case src.ConfigMap != nil && src.ConfigMap.Name == "simplyblock-certificate-authority":
 			gotCA = true
@@ -558,7 +558,7 @@ func TestStorageNodeDaemonSetReconcileTLSCertManagerProvider(t *testing.T) {
 	}
 
 	var ds appsv1.DaemonSet
-	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-ds-tls-cert-manager", Namespace: "default"}, &ds); err != nil {
 		t.Fatalf("failed to fetch daemonset: %v", err)
 	}
 
@@ -578,8 +578,8 @@ func TestStorageNodeDaemonSetReconcileTLSCertManagerProvider(t *testing.T) {
 	if tlsVol.Projected != nil {
 		t.Fatalf("expected plain Secret volume for cert-manager provider, got projected: %#v", tlsVol.Projected)
 	}
-	if tlsVol.Secret == nil || tlsVol.Secret.SecretName != "simplyblock-storage-node-api-tls" {
-		t.Fatalf("expected Secret volume referencing simplyblock-storage-node-api-tls, got %#v", tlsVol.Secret)
+	if tlsVol.Secret == nil || tlsVol.Secret.SecretName != "simplyblock-storage-node-api-tls-sn-ds-tls-cert-manager" {
+		t.Fatalf("expected Secret volume referencing node-group TLS secret, got %#v", tlsVol.Secret)
 	}
 
 	if len(ds.Spec.Template.Spec.InitContainers) != 1 {
@@ -1018,7 +1018,7 @@ func TestStorageNodeReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
 	}
 }
 
-func TestStorageNodeReconcileServiceAccountHasOwnerReference(t *testing.T) {
+func TestStorageNodeReconcileServiceAccountIsSharedWithoutOwnerReference(t *testing.T) {
 	const namespace = "default"
 	const clusterName = "cluster-ownerref-sa"
 	const clusterUUID = "cluster-uuid-ownerref-sa"
@@ -1064,8 +1064,8 @@ func TestStorageNodeReconcileServiceAccountHasOwnerReference(t *testing.T) {
 		t.Fatalf("failed to fetch serviceaccount: %v", err)
 	}
 
-	if len(sa.OwnerReferences) == 0 {
-		t.Fatalf("expected ServiceAccount to carry ownerReference to storagenode CR")
+	if len(sa.OwnerReferences) != 0 {
+		t.Fatalf("expected shared ServiceAccount to have no StorageNode ownerReference, got %#v", sa.OwnerReferences)
 	}
 }
 
@@ -1135,6 +1135,63 @@ func TestStorageNodeReconcileCreatesNamespaceSpecificClusterRoleBindings(t *test
 		}
 		if len(binding.Subjects) != 1 || binding.Subjects[0].Namespace != namespace {
 			t.Fatalf("expected binding %s to target namespace %s, got %#v", key.Name, namespace, binding.Subjects)
+		}
+	}
+}
+
+func TestStorageNodeReconcileMultipleNodeGroupsSameClusterCreateDistinctResources(t *testing.T) {
+	const namespace = "default"
+	const clusterName = "cluster-a"
+	const clusterUUID = "cluster-uuid-a"
+
+	cluster := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-cluster-" + clusterName,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			"uuid":   []byte(clusterUUID),
+			"secret": []byte("s3cr3t"),
+		},
+	}
+	groupA := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "group-a", Namespace: namespace, Finalizers: []string{utils.FinalizerStorageNode}},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: clusterName},
+	}
+	groupB := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "group-b", Namespace: namespace, Finalizers: []string{utils.FinalizerStorageNode}},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: clusterName},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, groupA, groupB, cluster, secret)
+	for _, sn := range []*simplyblockv1alpha1.StorageNode{groupA, groupB} {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)}); err != nil {
+			t.Fatalf("reconcile %s returned error: %v", sn.Name, err)
+		}
+	}
+
+	for _, groupName := range []string{"group-a", "group-b"} {
+		ds := &appsv1.DaemonSet{}
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-" + groupName, Namespace: namespace}, ds); err != nil {
+			t.Fatalf("expected DaemonSet for %s: %v", groupName, err)
+		}
+		if got := ds.Spec.Template.Spec.NodeSelector["io.simplyblock.node-type"]; got != "simplyblock-storage-plane-"+groupName {
+			t.Fatalf("DaemonSet %s node selector = %q", ds.Name, got)
+		}
+
+		svc := &corev1.Service{}
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-api-" + groupName, Namespace: namespace}, svc); err != nil {
+			t.Fatalf("expected storage-node-api Service for %s: %v", groupName, err)
+		}
+
+		proxySvc := &corev1.Service{}
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-spdk-proxy-" + groupName, Namespace: namespace}, proxySvc); err != nil {
+			t.Fatalf("expected spdk-proxy Service for %s: %v", groupName, err)
 		}
 	}
 }
@@ -1241,7 +1298,7 @@ func TestStorageNodeReconcileUnreachableNodeInfoRequeues(t *testing.T) {
 
 func TestCheckNodeInfoReachable(t *testing.T) {
 	// Use an unroutable test-net address to deterministically exercise error path.
-	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", false, false)
+	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", "simplyblock-storage-node-api-test", false, false)
 	if err == nil {
 		t.Fatalf("expected error when node info endpoint is unreachable")
 	}
@@ -1250,7 +1307,7 @@ func TestCheckNodeInfoReachable(t *testing.T) {
 func TestCheckNodeInfoReachableTLSMissingCA(t *testing.T) {
 	// With TLS enabled and the default CA path (which won't exist in unit tests),
 	// the function must surface a build-client error before attempting any I/O.
-	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", true, false)
+	err := checkNodeInfoReachable(context.Background(), "192.0.2.1", "default", "simplyblock-storage-node-api-test", true, false)
 	if err == nil {
 		t.Fatalf("expected error when CA bundle is missing")
 	}
@@ -1273,12 +1330,12 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 		attempts := 0
 		waitForNodeInfoReachableMaxRetries = 3
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool, bool) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, string, bool, bool) error {
 			attempts++
 			return nil
 		}
 
-		if err := waitForNodeInfoReachable(context.Background(), "node-a", "default", false, false); err != nil {
+		if err := waitForNodeInfoReachable(context.Background(), "node-a", "default", "simplyblock-storage-node-api-test", false, false); err != nil {
 			t.Fatalf("waitForNodeInfoReachable returned error: %v", err)
 		}
 		if attempts != 1 {
@@ -1290,7 +1347,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 		attempts := 0
 		waitForNodeInfoReachableMaxRetries = 4
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool, bool) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, string, bool, bool) error {
 			attempts++
 			if attempts < 3 {
 				return errors.New("temporary failure")
@@ -1298,7 +1355,7 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 			return nil
 		}
 
-		if err := waitForNodeInfoReachable(context.Background(), "node-b", "default", false, false); err != nil {
+		if err := waitForNodeInfoReachable(context.Background(), "node-b", "default", "simplyblock-storage-node-api-test", false, false); err != nil {
 			t.Fatalf("waitForNodeInfoReachable returned error: %v", err)
 		}
 		if attempts != 3 {
@@ -1309,13 +1366,13 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 	t.Run("returns context cancellation", func(t *testing.T) {
 		waitForNodeInfoReachableMaxRetries = 5
 		waitForNodeInfoReachableRetryDelay = time.Second
-		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool, bool) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, string, bool, bool) error {
 			return errors.New("still down")
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := waitForNodeInfoReachable(ctx, "node-c", "default", false, false)
+		err := waitForNodeInfoReachable(ctx, "node-c", "default", "simplyblock-storage-node-api-test", false, false)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context canceled error, got %v", err)
 		}
@@ -1324,11 +1381,11 @@ func TestWaitForNodeInfoReachable(t *testing.T) {
 	t.Run("returns wrapped error after max retries", func(t *testing.T) {
 		waitForNodeInfoReachableMaxRetries = 3
 		waitForNodeInfoReachableRetryDelay = time.Millisecond
-		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool, bool) error {
+		waitForNodeInfoReachableCheckFn = func(context.Context, string, string, string, bool, bool) error {
 			return errors.New("permanent failure")
 		}
 
-		err := waitForNodeInfoReachable(context.Background(), "node-d", "default", false, false)
+		err := waitForNodeInfoReachable(context.Background(), "node-d", "default", "simplyblock-storage-node-api-test", false, false)
 		if err == nil {
 			t.Fatalf("expected timeout error after retries")
 		}
@@ -2080,7 +2137,7 @@ func TestReconcileSpdkProxyService(t *testing.T) {
 	}
 
 	var svc corev1.Service
-	if err := r.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "simplyblock-spdk-proxy"}, &svc); err != nil {
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "simplyblock-spdk-proxy-sn"}, &svc); err != nil {
 		t.Fatalf("expected simplyblock-spdk-proxy Service to be created: %v", err)
 	}
 	if svc.Spec.ClusterIP != "None" {
@@ -2089,7 +2146,7 @@ func TestReconcileSpdkProxyService(t *testing.T) {
 	if len(svc.Spec.Ports) != 0 {
 		t.Fatalf("expected no ports on Service, got %#v", svc.Spec.Ports)
 	}
-	if got := svc.Annotations["service.beta.openshift.io/serving-cert-secret-name"]; got != "simplyblock-spdk-proxy-tls" {
+	if got := svc.Annotations["service.beta.openshift.io/serving-cert-secret-name"]; got != "simplyblock-spdk-proxy-tls-sn" {
 		t.Fatalf("missing/incorrect serving-cert annotation: %q", got)
 	}
 	if len(svc.OwnerReferences) != 1 || svc.OwnerReferences[0].UID != "sn-uid" {
@@ -2123,7 +2180,7 @@ func TestReconcileServicesAndServingCertificatesForCertManagerProvider(t *testin
 		t.Fatalf("reconcileServingCertificates: %v", err)
 	}
 
-	for _, serviceName := range []string{"simplyblock-storage-node-api", "simplyblock-spdk-proxy"} {
+	for _, serviceName := range []string{"simplyblock-storage-node-api-sn", "simplyblock-spdk-proxy-sn"} {
 		var svc corev1.Service
 		if err := r.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: serviceName}, &svc); err != nil {
 			t.Fatalf("expected Service %s to be created: %v", serviceName, err)
@@ -2134,8 +2191,8 @@ func TestReconcileServicesAndServingCertificatesForCertManagerProvider(t *testin
 	}
 
 	for serviceName, secretName := range map[string]string{
-		"simplyblock-storage-node-api": "simplyblock-storage-node-api-tls",
-		"simplyblock-spdk-proxy":       "simplyblock-spdk-proxy-tls",
+		"simplyblock-storage-node-api-sn": "simplyblock-storage-node-api-tls-sn",
+		"simplyblock-spdk-proxy-sn":       "simplyblock-spdk-proxy-tls-sn",
 	} {
 		cert := &unstructured.Unstructured{}
 		cert.SetAPIVersion("cert-manager.io/v1")
@@ -2173,7 +2230,10 @@ func TestReconcileServicesAndServingCertificatesForCertManagerProvider(t *testin
 func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns", UID: "sn-uid"},
-		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
+			ClusterName: "cluster-a",
+			WorkerNodes: []string{"node-a", "node-b"},
+		},
 	}
 
 	podReady := func(name, node, ip, rpcPort string) *corev1.Pod {
@@ -2224,7 +2284,7 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 	var slices discoveryv1.EndpointSliceList
 	if err := r.List(ctx, &slices,
 		client.InNamespace("ns"),
-		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy-sn"},
 	); err != nil {
 		t.Fatalf("list slices: %v", err)
 	}
@@ -2237,9 +2297,9 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 		byName[s.Name] = s
 	}
 
-	slice9001, ok := byName["spdk-proxy-endpoints-9001"]
+	slice9001, ok := byName["spdk-proxy-endpoints-sn-9001"]
 	if !ok {
-		t.Fatalf("missing slice spdk-proxy-endpoints-9001; got %v", sliceNames(slices.Items))
+		t.Fatalf("missing slice spdk-proxy-endpoints-sn-9001; got %v", sliceNames(slices.Items))
 	}
 	if len(slice9001.Endpoints) != 2 {
 		t.Fatalf("slice 9001: expected 2 endpoints, got %d", len(slice9001.Endpoints))
@@ -2262,7 +2322,7 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 		t.Fatalf("slice 9001: expected owner reference to StorageNode")
 	}
 
-	slice9002 := byName["spdk-proxy-endpoints-9002"]
+	slice9002 := byName["spdk-proxy-endpoints-sn-9002"]
 	if len(slice9002.Endpoints) != 1 || *slice9002.Endpoints[0].Hostname != "node-a" {
 		t.Fatalf("slice 9002: unexpected endpoints %#v", slice9002.Endpoints)
 	}
@@ -2279,19 +2339,25 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 	slices = discoveryv1.EndpointSliceList{}
 	if err := r.List(ctx, &slices,
 		client.InNamespace("ns"),
-		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy-sn"},
 	); err != nil {
 		t.Fatalf("list slices after delete: %v", err)
 	}
-	if len(slices.Items) != 1 || slices.Items[0].Name != "spdk-proxy-endpoints-9001" {
-		t.Fatalf("expected only spdk-proxy-endpoints-9001 after pod2 deletion, got %v", sliceNames(slices.Items))
+	if len(slices.Items) != 1 || slices.Items[0].Name != "spdk-proxy-endpoints-sn-9001" {
+		t.Fatalf("expected only spdk-proxy-endpoints-sn-9001 after pod2 deletion, got %v", sliceNames(slices.Items))
 	}
 }
 
 func TestReconcileSpdkProxyEndpointSlices_DuplicateFirstSegment(t *testing.T) {
 	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns", UID: "sn-uid"},
-		Spec:       simplyblockv1alpha1.StorageNodeSpec{ClusterName: "cluster-a"},
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
+			ClusterName: "cluster-a",
+			WorkerNodes: []string{
+				"worker.us-east-1.local",
+				"worker.eu-west-1.local",
+			},
+		},
 	}
 
 	podReady := func(name, node, ip, rpcPort string) *corev1.Pod {
@@ -2339,7 +2405,7 @@ func TestReconcileSpdkProxyEndpointSlices_DuplicateFirstSegment(t *testing.T) {
 	var slices discoveryv1.EndpointSliceList
 	if err := r.List(ctx, &slices,
 		client.InNamespace("ns"),
-		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy-sn"},
 	); err != nil {
 		t.Fatalf("list slices: %v", err)
 	}
@@ -2375,7 +2441,7 @@ func TestStorageNodeDaemonSetTLSSecretRevisionAnnotation(t *testing.T) {
 	const (
 		ns          = "default"
 		clusterName = "cluster-a"
-		dsName      = "simplyblock-storage-node-ds-cluster-a"
+		dsName      = "simplyblock-storage-node-ds-sn-ds-rv"
 	)
 
 	cases := []struct {
@@ -2419,7 +2485,7 @@ func TestStorageNodeDaemonSetTLSSecretRevisionAnnotation(t *testing.T) {
 			if tc.seedSecret {
 				objs = append(objs, &corev1.Secret{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:            utils.SecretNameStorageNodeAPITLS,
+						Name:            "simplyblock-storage-node-api-tls-sn-ds-rv",
 						Namespace:       ns,
 						ResourceVersion: tc.secretRV,
 					},
@@ -2459,7 +2525,7 @@ func TestStorageNodeDaemonSetReconcileRollsOnTLSSecretRevisionChange(t *testing.
 	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            utils.SecretNameStorageNodeAPITLS,
+			Name:            "simplyblock-storage-node-api-tls-sn-ds-roll",
 			Namespace:       ns,
 			ResourceVersion: "1",
 		},
@@ -2472,7 +2538,7 @@ func TestStorageNodeDaemonSetReconcileRollsOnTLSSecretRevisionChange(t *testing.
 		t.Fatalf("first reconcileDaemonSet: %v", err)
 	}
 
-	dsKey := client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: ns}
+	dsKey := client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-ds-roll", Namespace: ns}
 	var first appsv1.DaemonSet
 	if err := r.Get(context.Background(), dsKey, &first); err != nil {
 		t.Fatalf("fetch first daemonset: %v", err)
@@ -2480,7 +2546,7 @@ func TestStorageNodeDaemonSetReconcileRollsOnTLSSecretRevisionChange(t *testing.
 
 	// Simulate cert-manager rotating the Secret: any Update bumps
 	// metadata.resourceVersion via the fake client's bookkeeping.
-	if err := r.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: utils.SecretNameStorageNodeAPITLS}, secret); err != nil {
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "simplyblock-storage-node-api-tls-sn-ds-roll"}, secret); err != nil {
 		t.Fatalf("refetch secret: %v", err)
 	}
 	secret.Data = map[string][]byte{"tls.crt": []byte("rotated")}
@@ -2557,7 +2623,7 @@ func TestStorageNodeDaemonSetSBTLSServeEnv(t *testing.T) {
 			}
 
 			var ds appsv1.DaemonSet
-			if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+			if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-env", Namespace: "default"}, &ds); err != nil {
 				t.Fatalf("failed to fetch daemonset: %v", err)
 			}
 			if len(ds.Spec.Template.Spec.Containers) != 1 {
