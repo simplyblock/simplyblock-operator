@@ -297,12 +297,19 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 				if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
 					return ctrl.Result{}, err
 				}
-				ensureNodeStatus(snCR, nodeName, ip)
+				var matchingNodes []SNODEAPIResponse
+				for _, n := range allNodes {
+					if n.IP == ip {
+						matchingNodes = append(matchingNodes, n)
+					}
+				}
+				adoptStorageNodeStatus(snCR, nodeName, matchingNodes)
 				if err := r.Status().Update(ctx, snCR); err != nil {
-					log.Error(err, "Failed to set node placeholder status for adoption")
+					log.Error(err, "Failed to set node status for adoption")
 					return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 				}
-				hasPlaceholder = true
+				log.Info("Storage node(s) adopted from backend", "node", nodeName, "count", existingCount)
+				return ctrl.Result{}, nil
 			}
 		}
 		if !hasPlaceholder {
@@ -952,6 +959,37 @@ func ensureNodeStatus(
 	})
 
 	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
+}
+
+func adoptStorageNodeStatus(snCR *simplyblockv1alpha1.StorageNode, nodeName string, nodes []SNODEAPIResponse) {
+	for _, res := range nodes {
+		entry := simplyblockv1alpha1.NodeStatus{
+			Hostname: nodeName,
+			UUID:     res.UUID,
+			Status:   res.Status,
+			MgmtIp:   res.IP,
+			Health:   res.Health,
+			Devices:  fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
+			CPU:      utils.IntToInt32Ptr(res.CPU),
+			Memory:   utils.HumanBytes(res.Memory, "iec"),
+			Volumes:  utils.IntToInt32Ptr(res.Volumes),
+			RpcPort:  utils.IntToInt32Ptr(res.RPC_PORT),
+			LvolPort: utils.IntToInt32Ptr(res.LVOL_PORT),
+			NvmfPort: utils.IntToInt32Ptr(res.NVMF_PORT),
+		}
+		matched := false
+		for i := range snCR.Status.Nodes {
+			n := &snCR.Status.Nodes[i]
+			if n.Hostname == nodeName && (n.UUID == res.UUID || n.UUID == "") {
+				*n = entry
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			snCR.Status.Nodes = append(snCR.Status.Nodes, entry)
+		}
+	}
 }
 
 func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tlsEnabled, tlsMutualEnabled bool) error {
