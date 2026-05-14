@@ -117,7 +117,7 @@ func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
 		t.Fatalf("failed to get created PV: %v", err)
 	}
 
-	wantStorageClass := "simplyblock-mycluster-pool-a"
+	wantStorageClass := "simplyblock-default-mycluster-pool-a"
 	if pv.Spec.StorageClassName != wantStorageClass {
 		t.Fatalf("storageClassName = %q, want %q", pv.Spec.StorageClassName, wantStorageClass)
 	}

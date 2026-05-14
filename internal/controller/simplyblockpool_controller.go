@@ -255,7 +255,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 // deleteStorageClass deletes the StorageClass associated with the pool, ignoring not-found errors.
 func (r *PoolReconciler) deleteStorageClass(ctx context.Context, poolCR *simplyblockv1alpha1.Pool) error {
 	sc := &storagev1.StorageClass{}
-	name := fmt.Sprintf("simplyblock-%s-%s", poolCR.Spec.ClusterName, poolCR.Name)
+	name := simplyblockStorageClassName(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name)
 	if err := r.Get(ctx, client.ObjectKey{Name: name}, sc); err != nil {
 		return client.IgnoreNotFound(err)
 	}
@@ -279,7 +279,12 @@ func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyb
 
 	sc := &storagev1.StorageClass{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("simplyblock-%s-%s", poolCR.Spec.ClusterName, poolCR.Name),
+			Name: simplyblockStorageClassName(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name),
+			Labels: map[string]string{
+				"storage.simplyblock.io/namespace": poolCR.Namespace,
+				"storage.simplyblock.io/cluster":   poolCR.Spec.ClusterName,
+				"storage.simplyblock.io/pool":      poolCR.Name,
+			},
 		},
 		Provisioner:          utils.CSIProvisioner,
 		Parameters:           params,
