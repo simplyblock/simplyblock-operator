@@ -1318,7 +1318,8 @@ spec:
                   refreshSNodeAPI:
                     description: |-
                       RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
-                      before shutting it down, ensuring the latest image is running.
+                      after the backend node is shut down and before it is restarted, ensuring
+                      the latest image is running before the node comes back online.
                     type: boolean
                 type: object
               nvmfBasePort:
@@ -1854,10 +1855,11 @@ spec:
         - message: nodeUUID is required when action is specified
           rule: '!(has(self.spec.action) && self.spec.action != "" && (!has(self.spec.nodeUUID)
             || self.spec.nodeUUID == ""))'
-        - message: maxLogicalVolumeCount and workerNodes are required when action
-            is not specified
+        - message: maxLogicalVolumeCount, workerNodes, and mgmtIfname are required
+            when action is not specified
           rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.maxLogicalVolumeCount)
-            && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)
+            && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname)
+            && self.spec.mgmtIfname != "")
     served: true
     storage: true
     subresources:

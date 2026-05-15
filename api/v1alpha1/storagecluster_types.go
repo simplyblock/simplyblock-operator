@@ -38,7 +38,8 @@ type StripeSpec struct {
 // NodeRecycleSpec configures the node-recycle action behaviour.
 type NodeRecycleSpec struct {
 	// RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
-	// before shutting it down, ensuring the latest image is running.
+	// after the backend node is shut down and before it is restarted, ensuring
+	// the latest image is running before the node comes back online.
 	RefreshSNodeAPI bool `json:"refreshSNodeAPI,omitempty"`
 }
 
