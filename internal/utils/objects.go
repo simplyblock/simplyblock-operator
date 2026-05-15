@@ -463,9 +463,9 @@ type PoolListEntry struct {
 
 // GetPoolByName lists all pools for a cluster and returns the one matching name.
 // Returns nil if no match is found.
-func GetPoolByName(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID, name string) (*PoolListEntry, error) {
+func GetPoolByName(ctx context.Context, apiClient *webapi.Client, clusterUUID, name string) (*PoolListEntry, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		return nil, fmt.Errorf("list pools failed, status %d: %v, body: %s", status, err, string(body))
 	}

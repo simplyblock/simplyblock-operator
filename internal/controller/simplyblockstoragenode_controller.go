@@ -294,7 +294,7 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 		// For multi-socket deployments (expectedPerHost > 1) a single POST creates all
 		// NUMA-socket nodes at once, so we skip POST if ANY node for this IP already
 		// exists. pollNodeOnline then waits for all expectedPerHost nodes to be online.
-		allNodes, lookupErr := listStorageNodesForCluster(ctx, apiClient, clusterSecret, clusterUUID)
+		allNodes, lookupErr := listStorageNodesForCluster(ctx, apiClient, clusterUUID)
 		if lookupErr == nil {
 			existingCount := 0
 			for _, n := range allNodes {
@@ -322,10 +322,6 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 				return ctrl.Result{}, nil
 			}
 		}
-		if !hasPlaceholder {
-			if res, err := r.postStorageNode(ctx, req, snCR, nodeName, ip, clusterUUID, clusterSecret, apiClient); err != nil || res.RequeueAfter > 0 {
-				return res, err
-			}
 		if res, err := r.postStorageNode(ctx, req, snCR, nodeName, ip, clusterUUID, apiClient); err != nil || res.RequeueAfter > 0 {
 			return res, err
 		}
@@ -938,9 +934,9 @@ func getNodeInternalIP(ctx context.Context, c client.Client, nodeName string) (s
 }
 
 // listStorageNodesForCluster fetches all backend storage nodes for the given cluster.
-func listStorageNodesForCluster(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID string) ([]SNODEAPIResponse, error) {
+func listStorageNodesForCluster(ctx context.Context, apiClient *webapi.Client, clusterUUID string) ([]SNODEAPIResponse, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		return nil, fmt.Errorf("list storage nodes failed, status %d: %v", status, err)
 	}

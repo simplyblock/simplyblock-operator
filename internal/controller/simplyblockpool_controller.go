@@ -233,7 +233,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	if pool.Status.UUID == "" {
 		// Proactive: check if pool already exists on backend (e.g. from Helm deployment).
-		if existing, lookupErr := utils.GetPoolByName(ctx, apiClient, clusterSecret, clusterUUID, poolCR.Name); lookupErr == nil && existing != nil {
+		if existing, lookupErr := utils.GetPoolByName(ctx, apiClient, clusterUUID, poolCR.Name); lookupErr == nil && existing != nil {
 			log.Info("Pool already exists on backend, adopting", "name", poolCR.Name, "uuid", existing.UUID)
 			return r.adoptExistingPool(ctx, poolCR, existing)
 		}
