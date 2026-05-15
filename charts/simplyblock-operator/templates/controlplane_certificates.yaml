@@ -1,4 +1,13 @@
 {{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") }}
+{{- if index .Values.tls "cert-manager" "createSelfSignedIssuer" }}
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ index .Values.tls "cert-manager" "cluster-issuer" | quote }}
+spec:
+  selfSigned: {}
+{{- end }}
 ---
 # The CA Certificate must live in the cert-manager namespace so that the
 # ClusterIssuer below can read its backing secret. ClusterIssuers always look
