@@ -52,7 +52,7 @@ type StorageNodeSpec struct {
 	// MaxLogicalVolumeCount is the maximum number of logical volumes per node.
 	MaxLogicalVolumeCount *int32 `json:"maxLogicalVolumeCount,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Size"
-	// MaxSize is the maximum allocatable size of the storage node.
+	// MaxSize is the maximum allocatable size of huge pages.
 	MaxSize string `json:"maxSize,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="SPDK Image"
 	// SpdkImage is the SPDK image reference used by node services.
