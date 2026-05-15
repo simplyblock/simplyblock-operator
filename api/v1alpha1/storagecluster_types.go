@@ -81,10 +81,6 @@ type BackupSpec struct {
 
 // StorageClusterSpec defines the desired state of StorageCluster
 type StorageClusterSpec struct {
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Management Interface"
-	// MgmtIfname is the management network interface name used for cluster communication.
-	// FIXME: Unused for now
-	MgmtIfname string `json:"mgmtIfname,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Node Affinity"
 	// EnableNodeAffinity enables node-affinity placement for storage components.
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
@@ -142,10 +138,6 @@ type StorageClusterSpec struct {
 	// SnodeApiPort defines the storage-node API port.
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
 
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="QoS Classes"
-	// QoSClasses defines backend QosSpec class configuration.
-	// FIXME: Unused for now
-	QoSClasses string `json:"qosClasses,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Warning Threshold"
 	// WarningThresholdSpec defines warning-level capacity thresholds.
 	WarningThresholdSpec *CapacityThresholdSpec `json:"warningThreshold,omitempty"`
@@ -154,16 +146,7 @@ type StorageClusterSpec struct {
 	CriticalThresholdSpec *CapacityThresholdSpec `json:"criticalThreshold,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Client Queue Pair Count"
 	// ClientQpairCount defines client-side queue-pair count.
-	// FIXME: Unused for now
 	ClientQpairCount *int32 `json:"clientQpairCount,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Include Event Log"
-	// IncludeEventLog controls whether event logs are included in responses/exports.
-	// FIXME: Unused for now
-	IncludeEventLog *bool `json:"includeEventLog,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Event Log Entries"
-	// EventLogEntries limits the number of event-log entries returned/retained.
-	// FIXME: Unused for now
-	EventLogEntries *int32 `json:"eventLogEntries,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup"
 	// Backup specifies the specification for backup to S3 configuration
 	Backup *BackupSpec `json:"backup,omitempty"`

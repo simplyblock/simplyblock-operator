@@ -24,6 +24,7 @@ type ClusterAddParams struct {
 	DistrChunkBs           int           `json:"distr_chunk_bs,omitempty"`
 	HAType                 string        `json:"ha_type,omitempty"`
 	QpairCount             int           `json:"qpair_count,omitempty"`
+	ClientQpairCount       int           `json:"client_qpair_count,omitempty"`
 	MaxQueueSize           int           `json:"max_queue_size,omitempty"`
 	InflightIOThreshold    int           `json:"inflight_io_threshold,omitempty"`
 	EnableNodeAffinity     bool          `json:"enable_node_affinity,omitempty"`
