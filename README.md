@@ -23,6 +23,14 @@ helm install simplyblock-operator charts/simplyblock-operator \
   --create-namespace
 ```
 
+After the Helm installation completes, wait for the Simplyblock control plane to be ready before creating custom resources such as `StorageCluster`, `Pool`, or `StorageNode`:
+
+```bash
+kubectl -n simplyblock wait controlplane simplyblock \
+  --for=jsonpath='{.status.phase}'=Ready \
+  --timeout=180s
+```
+
 ### Upgrade
 
 ```bash

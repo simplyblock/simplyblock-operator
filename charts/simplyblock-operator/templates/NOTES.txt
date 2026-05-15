@@ -8,7 +8,15 @@ The following components are being installed or updated:
 
 {{- if .Values.operator.enabled }}
 
-The Operator components and its CRDs are installed. Please refer to our documentation to get started:
+The Operator components and its CRDs are installed.
+
+ait for the ControlPlane to become Ready:
+
+  kubectl --namespace={{ .Release.Namespace }} wait controlplane simplyblock --for=jsonpath='{.status.phase}'=Ready --timeout=180s
+
+Once the ControlPlane is Ready, you can start creating Simplyblock resources.
+
+Please refer to our documentation to get started:
 
   https://docs.simplyblock.io/dev/deployments/kubernetes/k8s-storage-plane/
 {{- else }}
