@@ -194,6 +194,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		DistrChunkBs:           4096,
 		HAType:                 clusterCR.Spec.HAType,
 		QpairCount:             utils.IntPtrOrDefault(clusterCR.Spec.QpairCount, 256),
+		ClientQpairCount:       utils.IntPtrOrDefault(clusterCR.Spec.ClientQpairCount, 3),
 		MaxQueueSize:           utils.IntPtrOrDefault(clusterCR.Spec.MaxQueueSize, 128),
 		InflightIOThreshold:    utils.IntPtrOrDefault(clusterCR.Spec.InflightIOThreshold, 4),
 		EnableNodeAffinity:     utils.BoolPtrOrFalse(clusterCR.Spec.EnableNodeAffinity),
@@ -359,22 +360,6 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	}
 
 	log.Info("Cluster successfully created", "name", clusterCR.Name)
-
-	// // --- Handle update ---
-	// updateParams := utils.ClusterUpdateParams{
-	// 	CapWarn:                utils.IntPtrOrZero(clusterCR.Spec.CapWarn),
-	// 	CapCrit:                utils.IntPtrOrZero(clusterCR.Spec.CapCrit),
-	// 	ProvCapWarn:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapWarn),
-	// 	ProvCapCrit:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapCrit),
-	// 	QoSClasses:             clusterCR.Spec.QoSClasses,
-	// 	LogDelInterval:         clusterCR.Spec.LogDelInterval,
-	// 	MetricsRetentionPeriod: clusterCR.Spec.MetricsRetentionPeriod,
-	// 	ClientQpairCount:       utils.IntPtrOrZero(clusterCR.Spec.ClientQpairCount),
-	// 	IncludeStats:           utils.BoolPtrOrFalse(clusterCR.Spec.IncludeStats),
-	// 	StatsHistoryInSeconds:  utils.IntPtrOrZero(clusterCR.Spec.StatsHistoryInSeconds),
-	// 	IncludeEventLog:        utils.BoolPtrOrFalse(clusterCR.Spec.IncludeEventLog),
-	// 	EventLogEntries:        utils.IntPtrOrZero(clusterCR.Spec.EventLogEntries),
-	// }
 
 	// clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	// if err != nil {

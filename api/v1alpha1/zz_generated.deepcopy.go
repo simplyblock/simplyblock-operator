@@ -1377,16 +1377,6 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		*out = new(int32)
 		**out = **in
 	}
-	if in.IncludeEventLog != nil {
-		in, out := &in.IncludeEventLog, &out.IncludeEventLog
-		*out = new(bool)
-		**out = **in
-	}
-	if in.EventLogEntries != nil {
-		in, out := &in.EventLogEntries, &out.EventLogEntries
-		*out = new(int32)
-		**out = **in
-	}
 	if in.Backup != nil {
 		in, out := &in.Backup, &out.Backup
 		*out = new(BackupSpec)
