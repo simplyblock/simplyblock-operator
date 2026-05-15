@@ -1322,8 +1322,9 @@ func (r *StorageNodeReconciler) performNodeAction(
 	switch snCR.Spec.Action {
 
 	case "restart":
-		payload := map[string]bool{
-			"force": true,
+		payload := map[string]any{
+			"force":           nodeActionForce(snCR, true),
+			"reattach_volume": utils.BoolPtrOrFalse(snCR.Spec.ReattachVolume),
 		}
 
 		if snCR.Spec.WorkerNode != "" {
@@ -1337,8 +1338,9 @@ func (r *StorageNodeReconciler) performNodeAction(
 			}
 
 			body = map[string]any{
-				"force":        true,
-				"node_address": utils.StorageNodeAPIAddress(snCR.Spec.WorkerNode, snCR.Namespace),
+				"force":           nodeActionForce(snCR, true),
+				"reattach_volume": utils.BoolPtrOrFalse(snCR.Spec.ReattachVolume),
+				"node_address":    utils.StorageNodeAPIAddress(snCR.Spec.WorkerNode, snCR.Namespace),
 			}
 		} else {
 			body = payload
@@ -1354,9 +1356,10 @@ func (r *StorageNodeReconciler) performNodeAction(
 		method = http.MethodDelete
 		body = nil
 		endpoint = fmt.Sprintf(
-			"/api/v2/clusters/%s/storage-nodes/%s?force_remove=true",
+			"/api/v2/clusters/%s/storage-nodes/%s?force_remove=%t",
 			clusterUUID,
 			snCR.Spec.NodeUUID,
+			nodeActionForce(snCR, true),
 		)
 
 	default:
@@ -1409,6 +1412,13 @@ func (r *StorageNodeReconciler) performNodeAction(
 	)
 
 	return nil
+}
+
+func nodeActionForce(snCR *simplyblockv1alpha1.StorageNode, defaultValue bool) bool {
+	if snCR.Spec.Force == nil {
+		return defaultValue
+	}
+	return *snCR.Spec.Force
 }
 
 func (r *StorageNodeReconciler) waitForActionCompletion(
