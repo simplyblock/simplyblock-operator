@@ -30,9 +30,6 @@ type JournalManagerSpec struct {
 	Count *int32 `json:"count,omitempty"`
 	// PercentPerDevice is the journal manager capacity percentage per device.
 	PercentPerDevice *int32 `json:"percentPerDevice,omitempty"`
-	// UseSeparateJournalDevice enables using separate journal devices.
-	// FIXME: Unused for now
-	UseSeparateJournalDevice *bool `json:"useSeparateJournalDevice,omitempty"`
 }
 
 // StorageNodeSpec defines the desired state of StorageNode
@@ -102,6 +99,9 @@ type StorageNodeSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Worker Node"
 	// WorkerNode is a single worker node used by action flows.
 	WorkerNode string `json:"workerNode,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Reattach Volume"
+	// ReattachVolume reattaches volumes during restart where supported by the backend.
+	ReattachVolume *bool `json:"reattachVolume,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="OpenShift Cluster"
 	// OpenShiftCluster indicates OpenShift-specific behavior should be enabled.
 	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
@@ -128,17 +128,8 @@ type StorageNodeSpec struct {
 	// Tolerations configures pod tolerations for storage-node pods.
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Add PCIe To Allow List"
-	// AddPcieToAllowList appends devices to the allow-list during restart actions.
-	// FIXME: Unused for now
-	AddPcieToAllowList []string `json:"addPcieToAllowList,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node Address"
-	// NodeAddr is the explicit node address used by action flows.
-	// FIXME: Unused for now
-	NodeAddr string `json:"nodeAddr,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
 	// Force enables forced action execution where supported.
-	// FIXME: Unused for now
 	Force *bool `json:"force,omitempty"`
 }
 
