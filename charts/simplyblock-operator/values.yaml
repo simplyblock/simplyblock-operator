@@ -330,12 +330,12 @@ controlplane:
       monitor:
         repository: quay.io/simplyblock-io/fdb-kubernetes-monitor
         tag: "7.3.63"
-      # Set baseImage to use a custom FDB image registry.
-      # When empty, no imageConfigs block is rendered and the operator uses its default.
+      # Set baseImage to use a custom FDB image registry. With imageType: unified
+      # the same fdb-kubernetes-monitor image runs as the foundationdb container,
+      # so this points at the monitor repo. When empty, no imageConfigs block is
+      # rendered and the operator uses its default.
       mainContainer:
-        baseImage: "quay.io/simplyblock-io/foundationdb"
-      sidecarContainer:
-        baseImage: "quay.io/simplyblock-io/foundationdb-kubernetes-sidecar"
+        baseImage: "quay.io/simplyblock-io/fdb-kubernetes-monitor"
 
 operator:
   enabled: true

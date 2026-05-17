@@ -143,9 +143,49 @@ to land them at the right column inside an `env:` list.
   value: "required"
 - name: SB_TLS_CONNECT
   value: "authenticated"
+- name: FDB_TLS_CERTIFICATE_FILE
+  value: "/etc/simplyblock/tls/tls.crt"
+- name: FDB_TLS_KEY_FILE
+  value: "/etc/simplyblock/tls/tls.key"
+- name: FDB_TLS_CA_FILE
+  value: "/etc/simplyblock/tls/ca.crt"
 {{- else if .Values.tls.enabled }}
 - name: SB_TLS_CONNECT
   value: "anonymous"
+{{- end }}
+{{- end -}}
+
+{{/*
+Volume entry for the FDB peer cert. Pipes into a podTemplate's `volumes:` list.
+The FDB operator fully replaces general.podTemplate with the per-class one when
+a class override exists, so the volume must be repeated in each podTemplate that
+sets one (general, storage, log).
+*/}}
+{{- define "simplyblock.foundationdbCertVolume" -}}
+{{- if .Values.tls.mutual_enabled }}
+- name: tls-fdb
+  secret:
+    secretName: simplyblock-foundationdb-tls
+{{- end }}
+{{- end -}}
+
+{{/*
+TLS env vars + volumeMount for the unified-image `foundationdb` container.
+Pipes into a container entry at the same indent as `name`/`resources`.
+*/}}
+{{- define "simplyblock.foundationdbContainerTls" -}}
+{{- if .Values.tls.mutual_enabled }}
+env:
+- name: FDB_TLS_CERTIFICATE_FILE
+  value: /var/fdb/tls/tls.crt
+- name: FDB_TLS_KEY_FILE
+  value: /var/fdb/tls/tls.key
+- name: FDB_TLS_CA_FILE
+  value: /var/fdb/tls/ca.crt
+volumeMounts:
+- name: tls-fdb
+  mountPath: /var/fdb/tls
+  readOnly: true
 {{- end }}
 {{- end -}}
 

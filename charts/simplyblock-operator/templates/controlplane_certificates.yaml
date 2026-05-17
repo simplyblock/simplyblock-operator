@@ -56,6 +56,31 @@ spec:
     - key encipherment
 {{- if .Values.tls.mutual_enabled }}
 ---
+# Peer cert for the FoundationDB cluster pods (server + client auth, since FDB
+# peers communicate symmetrically). Also used by the FDB operator's fdbcli.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: simplyblock-foundationdb
+  namespace: {{ .Release.Namespace }}
+spec:
+  commonName: simplyblock-foundationdb
+  secretName: simplyblock-foundationdb-tls
+  issuerRef:
+    kind: ClusterIssuer
+    name: simplyblock-certificate-authority-issuer
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+    - client auth
+  dnsNames:
+    - simplyblock-fdb-cluster
+    - simplyblock-fdb-cluster.{{ .Release.Namespace }}
+    - simplyblock-fdb-cluster.{{ .Release.Namespace }}.svc
+    - simplyblock-fdb-cluster.{{ .Release.Namespace }}.svc.cluster.local
+    - '*.simplyblock-fdb-cluster.{{ .Release.Namespace }}.svc.cluster.local'
+---
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
