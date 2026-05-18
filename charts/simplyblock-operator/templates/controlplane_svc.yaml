@@ -24,6 +24,7 @@ metadata:
   name: simplyblock-webappapi
   namespace: {{ .Release.Namespace }}
 spec:
+  commonName: simplyblock-webappapi
   secretName: simplyblock-webappapi-tls
   issuerRef:
     kind: ClusterIssuer
