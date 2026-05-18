@@ -5,7 +5,6 @@ metadata:
   namespace: simplyblock
 spec:
   clusterName: simplyblock-cluster
-  mgmtIfname: br-ex
   fabricType: tcp
   isSingleNode: false
   enableNodeAffinity: false
@@ -27,7 +26,6 @@ metadata:
   name: simplyblock-pool
   namespace: simplyblock
 spec:
-  name: simplyblock-pool
   clusterName: simplyblock-cluster
 
 ---
@@ -43,7 +41,6 @@ spec:
   maxLogicalVolumeCount: 100
   partitions: 1
   corePercentage: 25
-  coreIsolation: false
   socketsToUse:
     - "0"
   dataIfname:
