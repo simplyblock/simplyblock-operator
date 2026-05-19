@@ -253,6 +253,8 @@ controlplane:
       repository: quay.io/simplyblock-io/thanos
       tag: v0.31.0
       pullPolicy: Always
+      storageSize: 50Gi
+      storageClass:
     fluentbit:
       repository: quay.io/simplyblock-io/fluent-bit
       tag: "1.8.11"
@@ -476,6 +478,8 @@ prometheus:
             mountPath: /prometheus
           - name: objstore-config
             mountPath: /etc/thanos
+          - name: thanos-store-dir
+            mountPath: /mnt/thanos
         resources:
           requests:
             cpu: "100m"
@@ -498,6 +502,9 @@ prometheus:
       - name: objstore-config
         configMap:
           name: simplyblock-objstore-config
+      - name: thanos-store-dir
+        persistentVolumeClaim:
+          claimName: simplyblock-thanos-store-pvc
     extraVolumeMounts:
       - name: simplyblock-prometheus-config
         mountPath: /etc/simplyblock-config
