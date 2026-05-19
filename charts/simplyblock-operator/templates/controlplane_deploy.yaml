@@ -698,20 +698,109 @@ spec:
         {{- include "simplyblock.tlsVolume" (dict "ctx" . "secret" "simplyblock-webappapi-tls") | nindent 8 }}
 
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
+apiVersion: apps/v1
+kind: StatefulSet
 metadata:
-  name: simplyblock-thanos-store-pvc
+  name: simplyblock-minio
   namespace: {{ .Release.Namespace }}
 spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: {{ .Values.controlplane.observability.thanos.storageSize }}
-  {{- if .Values.controlplane.observability.thanos.storageClass }}
-  storageClassName: {{ .Values.controlplane.observability.thanos.storageClass }}
-  {{- end }}
+  serviceName: simplyblock-minio
+  replicas: 1
+  selector:
+    matchLabels:
+      app: simplyblock-minio
+  template:
+    metadata:
+      labels:
+        app: simplyblock-minio
+    spec:
+      {{- if .Values.controlplane.nodeSelector.create }}
+      nodeSelector:
+        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value }}
+      {{- end }}
+      containers:
+        - name: minio
+          image: "{{ .Values.controlplane.observability.minio.repository }}:{{ .Values.controlplane.observability.minio.tag }}"
+          imagePullPolicy: {{ .Values.controlplane.observability.minio.pullPolicy }}
+          args:
+            - server
+            - /data
+            - --console-address=:9001
+          env:
+            - name: MINIO_ROOT_USER
+              value: {{ .Values.controlplane.observability.minio.accessKey | quote }}
+            - name: MINIO_ROOT_PASSWORD
+              value: {{ .Values.controlplane.observability.minio.secretKey | quote }}
+          ports:
+            - containerPort: 9000
+              name: api
+            - containerPort: 9001
+              name: console
+          volumeMounts:
+            - name: minio-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+  volumeClaimTemplates:
+    - metadata:
+        name: minio-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ .Values.controlplane.observability.minio.storageSize }}
+        {{- if .Values.controlplane.observability.minio.storageClass }}
+        storageClassName: {{ .Values.controlplane.observability.minio.storageClass }}
+        {{- end }}
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: simplyblock-minio-bucket-init
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: quay.io/minio/mc:latest
+          command:
+            - sh
+            - -c
+            - |
+              until mc alias set minio http://simplyblock-minio:9000 {{ .Values.controlplane.observability.minio.accessKey | quote }} {{ .Values.controlplane.observability.minio.secretKey | quote }}; do
+                echo "Waiting for MinIO..."; sleep 3;
+              done
+              mc mb --ignore-existing minio/{{ .Values.controlplane.observability.minio.bucket }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: simplyblock-minio
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: simplyblock-minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
 
 ---
 {{- if .Values.controlplane.observability.enabled }}
@@ -890,8 +979,6 @@ spec:
               mountPath: /etc/thanos
             - name: data
               mountPath: /data
-            - name: thanos-store-dir
-              mountPath: /mnt/thanos
           resources:
             requests:
               cpu: "100m"
@@ -906,8 +993,13 @@ spec:
             - query
             - --grpc-address=0.0.0.0:10911
             - --http-address=0.0.0.0:9091
+            - --query.replica-label=replica
             - --store=simplyblock-thanos:10901
-            - --store=simplyblock-prometheus:10901
+            {{- $replicas := int .Values.prometheus.server.replicaCount }}
+            {{- $ns := .Release.Namespace }}
+            {{- range $i := until $replicas }}
+            - --store=simplyblock-prometheus-{{ $i }}.simplyblock-prometheus-headless.{{ $ns }}.svc.cluster.local:10901
+            {{- end }}
           ports:
             - containerPort: 9091
               name: query-http
@@ -941,8 +1033,6 @@ spec:
               mountPath: /etc/thanos
             - name: data
               mountPath: /data
-            - name: thanos-store-dir
-              mountPath: /mnt/thanos
           resources:
             requests:
               cpu: "100m"
@@ -958,10 +1048,6 @@ spec:
 
         - name: data
           emptyDir: {}
-
-        - name: thanos-store-dir
-          persistentVolumeClaim:
-            claimName: simplyblock-thanos-store-pvc
 
 ---
 apiVersion: apps/v1

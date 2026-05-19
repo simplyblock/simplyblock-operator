@@ -133,9 +133,13 @@ metadata:
   namespace: {{ .Release.Namespace }}
 data:
   objstore.yml: |
-    type: FILESYSTEM
+    type: S3
     config:
-      directory: /mnt/thanos
+      bucket: {{ .Values.controlplane.observability.minio.bucket }}
+      endpoint: simplyblock-minio:9000
+      access_key: {{ .Values.controlplane.observability.minio.accessKey }}
+      secret_key: {{ .Values.controlplane.observability.minio.secretKey }}
+      insecure: true
 {{- if .Values.controlplane.observability.enabled }}
 ---
 apiVersion: v1

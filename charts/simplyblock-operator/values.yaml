@@ -253,7 +253,14 @@ controlplane:
       repository: quay.io/simplyblock-io/thanos
       tag: v0.31.0
       pullPolicy: Always
-      storageSize: 50Gi
+    minio:
+      repository: quay.io/minio/minio
+      tag: RELEASE.2024-01-16T16-07-38Z
+      pullPolicy: IfNotPresent
+      bucket: thanos
+      accessKey: minioadmin
+      secretKey: minioadmin
+      storageSize: 100Gi
       storageClass:
     fluentbit:
       repository: quay.io/simplyblock-io/fluent-bit
@@ -457,9 +464,18 @@ prometheus:
       enabled: true
       size: 20Gi
       storageClass:
+    global:
+      external_labels:
+        replica: $(POD_NAME)
     extraArgs:
       storage.tsdb.min-block-duration: 2h
       storage.tsdb.max-block-duration: 2h
+      enable-feature: expand-external-labels
+    extraEnvVars:
+      - name: POD_NAME
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.name
     sidecarContainers:
       thanos-sidecar:
         image: quay.io/simplyblock-io/thanos:v0.31.0
@@ -478,8 +494,6 @@ prometheus:
             mountPath: /prometheus
           - name: objstore-config
             mountPath: /etc/thanos
-          - name: thanos-store-dir
-            mountPath: /mnt/thanos
         resources:
           requests:
             cpu: "100m"
@@ -502,9 +516,6 @@ prometheus:
       - name: objstore-config
         configMap:
           name: simplyblock-objstore-config
-      - name: thanos-store-dir
-        persistentVolumeClaim:
-          claimName: simplyblock-thanos-store-pvc
     extraVolumeMounts:
       - name: simplyblock-prometheus-config
         mountPath: /etc/simplyblock-config
