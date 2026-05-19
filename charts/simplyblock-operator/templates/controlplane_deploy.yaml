@@ -746,6 +746,30 @@ spec:
             limits:
               cpu: "500m"
               memory: "1Gi"
+        - name: bucket-init
+          image: "{{ .Values.controlplane.observability.minio.mcRepository }}:{{ .Values.controlplane.observability.minio.mcTag }}"
+          imagePullPolicy: {{ .Values.controlplane.observability.minio.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              until mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
+                echo "Waiting for MinIO..."; sleep 3;
+              done
+              mc mb --ignore-existing local/{{ .Values.controlplane.observability.minio.bucket }}
+              sleep infinity
+          env:
+            - name: MINIO_ROOT_USER
+              value: {{ .Values.controlplane.observability.minio.accessKey | quote }}
+            - name: MINIO_ROOT_PASSWORD
+              value: {{ .Values.controlplane.observability.minio.secretKey | quote }}
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "50m"
+              memory: "64Mi"
   volumeClaimTemplates:
     - metadata:
         name: minio-data
@@ -933,17 +957,6 @@ spec:
         {{- end }}
       {{- end }}
       {{- end }}
-      initContainers:
-        - name: minio-bucket-init
-          image: "{{ .Values.controlplane.observability.minio.mcRepository }}:{{ .Values.controlplane.observability.minio.mcTag }}"
-          command:
-            - sh
-            - -c
-            - |
-              until mc alias set minio http://simplyblock-minio:9000 {{ .Values.controlplane.observability.minio.accessKey | quote }} {{ .Values.controlplane.observability.minio.secretKey | quote }}; do
-                echo "Waiting for MinIO..."; sleep 3;
-              done
-              mc mb --ignore-existing minio/{{ .Values.controlplane.observability.minio.bucket }}
       containers:
         - name: thanos-store
           image: "{{ .Values.controlplane.observability.thanos.repository }}:{{ .Values.controlplane.observability.thanos.tag }}"
