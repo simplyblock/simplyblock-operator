@@ -4,11 +4,22 @@ metadata:
   name: simplyblock-cluster
   namespace: simplyblock
 spec:
-  clusterName: simplyblock-cluster
   fabricType: tcp
-  isSingleNode: false
-  enableNodeAffinity: false
-  strictNodeAntiAffinity: false
+  haType: ha
+  # isSingleNode: false
+  # enableNodeAffinity: false
+  # strictNodeAntiAffinity: false
+  # blockSize: 4096
+  # clientDataIfname: eth1
+  # clientQpairCount: 4
+  # qpairCount: 4
+  # nvmfBasePort: 4420
+  # rpcBasePort: 9502
+  # snodeApiPort: 8090
+  # pageSizeInBlocks: 128
+  # maxQueueSize: 64
+  # maxFaultTolerance: 1
+  # inflightIOThreshold: 128
   stripe:
     dataChunks: 1
     parityChunks: 1
@@ -18,6 +29,8 @@ spec:
   criticalThreshold:
     capacity: 90
     provisionedCapacity: 90
+  hashicorpVaultSettings:
+    baseURL: https://vault.example.com:8200
 
 ---
 apiVersion: storage.simplyblock.io/v1alpha1
@@ -27,6 +40,33 @@ metadata:
   namespace: simplyblock
 spec:
   clusterName: simplyblock-cluster
+  # capacityLimit: 500G
+  # logicalVolumeMaxSize: 50G
+  # dhchap: false
+  # allowedNodes:
+  #   - worker-node-1
+  #   - worker-node-2
+  #   - worker-node-3
+  # qos:
+  #   iops: 10000
+  #   throughput:
+  #     read: 500
+  #     write: 250
+  #     readWrite: 750
+  # storageClassParameters:
+  #   compression: "False"
+  #   encryption: false
+  #   fabric: tcp
+  #   lvolPriorityClass: "0"
+  #   maxNamespacePerSubsys: "1"
+  #   numDataChunks: "1"
+  #   numParityChunks: "1"
+  #   qosRMbytes: "0"
+  #   qosWMbytes: "0"
+  #   qosRwMbytes: "0"
+  #   qosRwIops: "0"
+  #   replicate: false
+  #   tune2fsReservedBlocks: "0"
 
 ---
 apiVersion: storage.simplyblock.io/v1alpha1
@@ -36,21 +76,43 @@ metadata:
   namespace: simplyblock
 spec:
   clusterName: simplyblock-cluster
-  clusterImage: "quay.io/simplyblock-io/simplyblock:26.2.2-PRE"
+  # clusterImage: "quay.io/simplyblock-io/simplyblock:26.2.2-PRE"
+  # spdkImage: "quay.io/simplyblock-io/spdk:26.2.2-PRE"
+  # spdkProxyImage: "quay.io/simplyblock-io/spdk-proxy:26.2.2-PRE"
   mgmtIfname: br-ex
+  dataIfname:
+    - br-ex
+  workerNodes: []
+    # - worker-node-1
+    # - worker-node-2
+    # - worker-node-3
   maxLogicalVolumeCount: 100
   partitions: 1
   corePercentage: 25
+  nodesPerSocket: 1
+  # maxSize: 0
+  reservedSystemCPU: "0,1"
   socketsToUse:
     - "0"
-  dataIfname:
-    - br-ex
   journalManager:
     count: 3
     percentPerDevice: 3
+  # deviceNames:
+  #   - nvme0n1
+  #   - nvme1n1
+  # pcieAllowList:
+  #   - "0000:01:00.0"
+  # pcieDenyList:
+  #   - "0000:02:00.0"
+  # pcieModel: "INTEL SSDPE2KX010T8"
+  # driveSizeRange: "100G-2T"
   skipKubeletConfiguration: false
   enableCpuTopology: true
   openShiftCluster: true
   ubuntuHost: false
   forceFormat4K: true
-  workerNodes: []
+  # tolerations:
+  #   - key: node-role.kubernetes.io/storage
+  #     operator: Equal
+  #     value: "true"
+  #     effect: NoSchedule

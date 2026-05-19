@@ -246,21 +246,23 @@ controlplane:
     grafana:
       repository: quay.io/simplyblock-io/grafana
       tag: 10.0.12
-      pullPolicy: Always
+      pullPolicy: IfNotPresent
       endpoint: ""
       contactPoint: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
     thanos:
       repository: quay.io/simplyblock-io/thanos
       tag: v0.31.0
-      pullPolicy: Always
+      pullPolicy: IfNotPresent
     minio:
-      repository: quay.io/minio/minio
+      repository: quay.io/simplyblock-io/minio
       tag: RELEASE.2024-01-16T16-07-38Z
       pullPolicy: IfNotPresent
+      mcRepository: quay.io/simplyblock-io/minio-client
+      mcTag: RELEASE.2024-01-16T16-06-34Z
       bucket: thanos
       accessKey: minioadmin
       secretKey: minioadmin
-      storageSize: 100Gi
+      storageSize: 50Gi
       storageClass:
     fluentbit:
       repository: quay.io/simplyblock-io/fluent-bit
@@ -464,18 +466,9 @@ prometheus:
       enabled: true
       size: 20Gi
       storageClass:
-    global:
-      external_labels:
-        replica: $(POD_NAME)
     extraArgs:
       storage.tsdb.min-block-duration: 2h
       storage.tsdb.max-block-duration: 2h
-      enable-feature: expand-external-labels
-    extraEnvVars:
-      - name: POD_NAME
-        valueFrom:
-          fieldRef:
-            fieldPath: metadata.name
     sidecarContainers:
       thanos-sidecar:
         image: quay.io/simplyblock-io/thanos:v0.31.0

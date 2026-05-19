@@ -760,32 +760,6 @@ spec:
         {{- end }}
 
 ---
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: simplyblock-minio-bucket-init
-  namespace: {{ .Release.Namespace }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "0"
-    "helm.sh/hook-delete-policy": before-hook-creation
-spec:
-  template:
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: mc
-          image: quay.io/minio/mc:latest
-          command:
-            - sh
-            - -c
-            - |
-              until mc alias set minio http://simplyblock-minio:9000 {{ .Values.controlplane.observability.minio.accessKey | quote }} {{ .Values.controlplane.observability.minio.secretKey | quote }}; do
-                echo "Waiting for MinIO..."; sleep 3;
-              done
-              mc mb --ignore-existing minio/{{ .Values.controlplane.observability.minio.bucket }}
-
----
 apiVersion: v1
 kind: Service
 metadata:
@@ -958,7 +932,18 @@ spec:
         value: {{ .value | quote }}
         {{- end }}
       {{- end }}
-      {{- end }} 
+      {{- end }}
+      initContainers:
+        - name: minio-bucket-init
+          image: "{{ .Values.controlplane.observability.minio.mcRepository }}:{{ .Values.controlplane.observability.minio.mcTag }}"
+          command:
+            - sh
+            - -c
+            - |
+              until mc alias set minio http://simplyblock-minio:9000 {{ .Values.controlplane.observability.minio.accessKey | quote }} {{ .Values.controlplane.observability.minio.secretKey | quote }}; do
+                echo "Waiting for MinIO..."; sleep 3;
+              done
+              mc mb --ignore-existing minio/{{ .Values.controlplane.observability.minio.bucket }}
       containers:
         - name: thanos-store
           image: "{{ .Values.controlplane.observability.thanos.repository }}:{{ .Values.controlplane.observability.thanos.tag }}"
