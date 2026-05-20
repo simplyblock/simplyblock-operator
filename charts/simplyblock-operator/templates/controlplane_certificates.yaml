@@ -59,6 +59,22 @@ spec:
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
+  name: simplyblock-prometheus-client
+  namespace: {{ .Release.Namespace }}
+spec:
+  commonName: simplyblock-prometheus
+  secretName: simplyblock-prometheus-client-tls
+  issuerRef:
+    kind: ClusterIssuer
+    name: simplyblock-certificate-authority-issuer
+  usages:
+    - digital signature
+    - key encipherment
+    - client auth
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
   name: simplyblock-operator-client
   namespace: {{ .Release.Namespace }}
 spec:

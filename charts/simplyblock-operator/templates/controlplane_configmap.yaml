@@ -118,6 +118,15 @@ data:
           - targets: ['simplyblock-webappapi:5000']
         honor_labels: true
         metrics_path: '/api/v1/cluster/metrics'
+        {{- if .Values.tls.enabled }}
+        scheme: https
+        tls_config:
+          insecure_skip_verify: true
+          {{- if .Values.tls.mutual_enabled }}
+          cert_file: /etc/prometheus/certs/tls.crt
+          key_file: /etc/prometheus/certs/tls.key
+          {{- end }}
+        {{- end }}
         basic_auth:
           username:
           password:

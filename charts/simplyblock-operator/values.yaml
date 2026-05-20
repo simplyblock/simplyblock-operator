@@ -509,9 +509,16 @@ prometheus:
       - name: objstore-config
         configMap:
           name: simplyblock-objstore-config
+      - name: prometheus-client-tls
+        secret:
+          secretName: simplyblock-prometheus-client-tls
+          optional: true
     extraVolumeMounts:
       - name: simplyblock-prometheus-config
         mountPath: /etc/simplyblock-config
+      - name: prometheus-client-tls
+        mountPath: /etc/prometheus/certs
+        readOnly: true
   alertmanager:
     enabled: false
 
