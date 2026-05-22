@@ -2,10 +2,12 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -23,7 +25,6 @@ func TestPoolReconcileAddsFinalizer(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
 	}
@@ -56,7 +57,6 @@ func TestPoolReconcileDeletionWithoutUUIDDoesNotProgress(t *testing.T) {
 			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
 	}
@@ -97,7 +97,6 @@ func TestPoolReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
 			},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
 			ClusterName: "cluster-missing",
 		},
 		Status: simplyblockv1alpha1.PoolStatus{
@@ -136,7 +135,6 @@ func TestPoolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 			Namespace: ns,
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
 			ClusterName: clusterName,
 		},
 	}
@@ -164,6 +162,79 @@ func TestPoolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 	}
 	if current.Spec.ClusterName != clusterName {
 		t.Fatalf("clusterName changed unexpectedly: got %q want %q", current.Spec.ClusterName, clusterName)
+	}
+}
+
+func TestPoolReconcileStorageClassNameIncludesNamespace(t *testing.T) {
+	const clusterName = "simplyblock-cluster-a"
+	pool1 := &simplyblockv1alpha1.Pool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pool1",
+			Namespace:  "cluster1",
+			Finalizers: []string{utils.FinalizerPool},
+		},
+		Spec: simplyblockv1alpha1.PoolSpec{
+			ClusterName: clusterName,
+		},
+		Status: simplyblockv1alpha1.PoolStatus{
+			UUID: "pool-uuid-1",
+		},
+	}
+	pool2 := &simplyblockv1alpha1.Pool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pool1",
+			Namespace:  "cluster2",
+			Finalizers: []string{utils.FinalizerPool},
+		},
+		Spec: simplyblockv1alpha1.PoolSpec{
+			ClusterName: clusterName,
+		},
+		Status: simplyblockv1alpha1.PoolStatus{
+			UUID: "pool-uuid-2",
+		},
+	}
+
+	r := newPoolStateTestReconciler(t,
+		pool1,
+		pool2,
+		testCluster("cluster1", clusterName, "cluster-uuid-1"),
+		testClusterSecret("cluster1", clusterName, "cluster-uuid-1", "secret-1"),
+		testCluster("cluster2", clusterName, "cluster-uuid-2"),
+		testClusterSecret("cluster2", clusterName, "cluster-uuid-2", "secret-2"),
+	)
+
+	for _, pool := range []*simplyblockv1alpha1.Pool{pool1, pool2} {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)}); err != nil {
+			t.Fatalf("reconcile %s/%s returned error: %v", pool.Namespace, pool.Name, err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name        string
+		clusterUUID string
+		namespace   string
+	}{
+		{
+			name:        "simplyblock-cluster1-simplyblock-cluster-a-pool1",
+			clusterUUID: "cluster-uuid-1",
+			namespace:   "cluster1",
+		},
+		{
+			name:        "simplyblock-cluster2-simplyblock-cluster-a-pool1",
+			clusterUUID: "cluster-uuid-2",
+			namespace:   "cluster2",
+		},
+	} {
+		sc := &storagev1.StorageClass{}
+		if err := r.Get(context.Background(), client.ObjectKey{Name: tc.name}, sc); err != nil {
+			t.Fatalf("failed to get StorageClass %q: %v", tc.name, err)
+		}
+		if sc.Parameters["cluster_id"] != tc.clusterUUID {
+			t.Fatalf("StorageClass %q cluster_id = %q, want %q", tc.name, sc.Parameters["cluster_id"], tc.clusterUUID)
+		}
+		if sc.Labels["storage.simplyblock.io/namespace"] != tc.namespace {
+			t.Fatalf("StorageClass %q namespace label = %q, want %q", tc.name, sc.Labels["storage.simplyblock.io/namespace"], tc.namespace)
+		}
 	}
 }
 
@@ -203,8 +274,8 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
-			ClusterName: "cluster-a",
+			ClusterName:          "cluster-a",
+			LogicalVolumeMaxSize: "20G",
 		},
 	}
 
@@ -232,6 +303,15 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 	reqs := mock.Requests()
 	if len(reqs) != 1 || reqs[0].Path != "/api/v2/clusters/"+clusterUUID+"/storage-pools" {
 		t.Fatalf("expected pool API call with cluster UUID %q, got %#v", clusterUUID, reqs)
+	}
+	var body struct {
+		VolumeMaxSize int `json:"volume_max_size"`
+	}
+	if err := json.Unmarshal(reqs[0].Body, &body); err != nil {
+		t.Fatalf("failed to decode pool create request body %q: %v", string(reqs[0].Body), err)
+	}
+	if body.VolumeMaxSize != 20_000_000_000 {
+		t.Fatalf("volume_max_size got %d want %d; body=%s", body.VolumeMaxSize, 20_000_000_000, string(reqs[0].Body))
 	}
 }
 
@@ -262,7 +342,6 @@ func TestPoolReconcileCreatePoolNon2xxRequeues(t *testing.T) {
 			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
 	}
@@ -318,7 +397,6 @@ func TestPoolReconcileDeleteNon2xxKeepsFinalizerAndRequeues(t *testing.T) {
 			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        "p1",
 			ClusterName: "cluster-a",
 		},
 		Status: simplyblockv1alpha1.PoolStatus{
@@ -355,7 +433,7 @@ func TestPoolReconcileDeleteNon2xxKeepsFinalizerAndRequeues(t *testing.T) {
 func newPoolStateTestReconciler(t *testing.T, objects ...client.Object) *PoolReconciler {
 	t.Helper()
 
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme, storagev1.AddToScheme)
 	cl := newTestClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.Pool{},
 		&simplyblockv1alpha1.StorageCluster{},

@@ -64,6 +64,7 @@ type poolHostParams struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -122,6 +123,13 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
 
+			// Clear pool node labels from all nodes.
+			poolCR.Spec.AllowedNodes = nil
+			if err := r.syncNodeLabels(ctx, poolCR); err != nil {
+				log.Error(err, "Failed to clear node labels on pool deletion")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+
 			poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, utils.FinalizerPool)
 			if err := r.Update(ctx, poolCR); err != nil {
 				log.Error(err, "Failed to remove finalizer")
@@ -145,9 +153,9 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	if pool.Status.UUID == "" {
 		params := utils.PoolAddParams{
-			Name:          poolCR.Spec.Name,
-			PoolMax:       utils.IntPtrOrDefault(utils.ParseSize(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
-			VolumeMaxSize: 0,
+			Name:          poolCR.Name,
+			PoolMax:       utils.Int64PtrOrDefault(utils.ParseSizeInt64(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
+			VolumeMaxSize: utils.Int64PtrOrDefault(utils.ParseSizeInt64(poolCR.Spec.LogicalVolumeMaxSize, "si/iec", "", false), 0),
 			MaxRwMB:       poolSpecQoSThroughputReadWrite(poolCR.Spec.QosSpec),
 			MaxRwIOPS:     poolSpecQoSIOPS(poolCR.Spec.QosSpec),
 			MaxRMB:        poolSpecQoSThroughputRead(poolCR.Spec.QosSpec),
@@ -207,10 +215,15 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	if err := r.syncNodeLabels(ctx, poolCR); err != nil {
+		log.Error(err, "Failed to sync node labels for pool")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	if changed, err := r.syncPoolHosts(ctx, apiClient, clusterSecret, clusterUUID, poolCR); err != nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	} else if changed {
-		poolCR.Status.AllowedHosts = poolCR.Spec.AllowedHosts
+		poolCR.Status.AllowedNodes = poolCR.Spec.AllowedNodes
 		if err := r.Status().Update(ctx, poolCR); err != nil {
 			log.Error(err, "Failed to update pool status after host sync")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -219,7 +232,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	// // --- Handle update ---
 	// updateParams := utils.PoolUpdateParams{
-	// 	Name:    poolCR.Spec.Name,
+	// 	Name:    poolCR.Name,
 	// 	PoolMax: utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
 	// 	// VolumeMaxSize: poolCR.Spec.CapacityLimitIntPtr(),
 	// 	MaxRwIOPS: utils.IntPtrOrDefault(poolCR.Spec.QoSIOPSLimit, 0),
@@ -242,7 +255,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 // deleteStorageClass deletes the StorageClass associated with the pool, ignoring not-found errors.
 func (r *PoolReconciler) deleteStorageClass(ctx context.Context, poolCR *simplyblockv1alpha1.Pool) error {
 	sc := &storagev1.StorageClass{}
-	name := fmt.Sprintf("simplyblock-%s-%s", poolCR.Spec.ClusterName, poolCR.Spec.Name)
+	name := simplyblockStorageClassName(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name)
 	if err := r.Get(ctx, client.ObjectKey{Name: name}, sc); err != nil {
 		return client.IgnoreNotFound(err)
 	}
@@ -259,20 +272,38 @@ func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyb
 
 	params := map[string]string{
 		"cluster_id":                clusterUUID,
-		"pool_name":                 poolCR.Spec.Name,
+		"pool_name":                 poolCR.Name,
 		"csi.storage.k8s.io/fstype": "ext4",
 	}
 	mergeStorageClassParameters(params, poolCR.Spec.StorageClassParameters)
 
 	sc := &storagev1.StorageClass{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("simplyblock-%s-%s", poolCR.Spec.ClusterName, poolCR.Spec.Name),
+			Name: simplyblockStorageClassName(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name),
+			Labels: map[string]string{
+				"storage.simplyblock.io/namespace": poolCR.Namespace,
+				"storage.simplyblock.io/cluster":   poolCR.Spec.ClusterName,
+				"storage.simplyblock.io/pool":      poolCR.Name,
+			},
 		},
 		Provisioner:          utils.CSIProvisioner,
 		Parameters:           params,
 		VolumeBindingMode:    &bindingMode,
 		ReclaimPolicy:        &reclaimPolicy,
 		AllowVolumeExpansion: &allowExpansion,
+	}
+
+	if poolCR.Spec.DHCHAP && len(poolCR.Spec.AllowedNodes) > 0 {
+		sc.AllowedTopologies = []corev1.TopologySelectorTerm{
+			{
+				MatchLabelExpressions: []corev1.TopologySelectorLabelRequirement{
+					{
+						Key:    poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name),
+						Values: []string{"allowed"},
+					},
+				},
+			},
+		}
 	}
 
 	if err := r.Create(ctx, sc); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -313,6 +344,68 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 // syncPoolHosts reconciles the pool's allowed hosts: fetches the current host list from the
 // backend, adds hosts in spec but not on the backend, and removes hosts on the backend but
 // no longer in spec. Returns true if any change was made.
+func poolNodeLabelKey(namespace, clusterName, poolName string) string {
+	return fmt.Sprintf("simplyblock.io/pool.%s.%s.%s", namespace, clusterName, poolName)
+}
+
+// syncNodeLabels ensures the label simplyblock.io/pool.<name>=allowed is present on every
+// node in spec.allowedNodes and absent from nodes no longer in the list.
+func (r *PoolReconciler) syncNodeLabels(ctx context.Context, poolCR *simplyblockv1alpha1.Pool) error {
+	log := logf.FromContext(ctx)
+	labelKey := poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name)
+
+	// Find all nodes currently carrying this pool's label.
+	nodeList := &corev1.NodeList{}
+	if err := r.List(ctx, nodeList, client.MatchingLabels{labelKey: "allowed"}); err != nil {
+		return fmt.Errorf("failed to list labeled nodes: %w", err)
+	}
+
+	desiredSet := make(map[string]struct{}, len(poolCR.Spec.AllowedNodes))
+	for _, n := range poolCR.Spec.AllowedNodes {
+		desiredSet[n] = struct{}{}
+	}
+
+	// Remove label from nodes no longer desired.
+	for i := range nodeList.Items {
+		node := &nodeList.Items[i]
+		if _, ok := desiredSet[node.Name]; ok {
+			continue
+		}
+		patch := client.MergeFrom(node.DeepCopy())
+		delete(node.Labels, labelKey)
+		if err := r.Patch(ctx, node, patch); err != nil {
+			return fmt.Errorf("failed to remove label from node %s: %w", node.Name, err)
+		}
+		log.Info("Removed pool label from node", "node", node.Name, "label", labelKey)
+	}
+
+	// Add label to newly desired nodes.
+	currentSet := make(map[string]struct{}, len(nodeList.Items))
+	for _, node := range nodeList.Items {
+		currentSet[node.Name] = struct{}{}
+	}
+	for _, nodeName := range poolCR.Spec.AllowedNodes {
+		if _, ok := currentSet[nodeName]; ok {
+			continue
+		}
+		var node corev1.Node
+		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
+			return fmt.Errorf("failed to get node %s: %w", nodeName, err)
+		}
+		patch := client.MergeFrom(node.DeepCopy())
+		if node.Labels == nil {
+			node.Labels = make(map[string]string)
+		}
+		node.Labels[labelKey] = "allowed"
+		if err := r.Patch(ctx, &node, patch); err != nil {
+			return fmt.Errorf("failed to label node %s: %w", nodeName, err)
+		}
+		log.Info("Added pool label to node", "node", nodeName, "label", labelKey)
+	}
+
+	return nil
+}
+
 func (r *PoolReconciler) syncPoolHosts(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -320,7 +413,15 @@ func (r *PoolReconciler) syncPoolHosts(
 	poolCR *simplyblockv1alpha1.Pool,
 ) (bool, error) {
 	log := logf.FromContext(ctx)
-	desired := poolCR.Spec.AllowedHosts
+	desired := make([]string, 0, len(poolCR.Spec.AllowedNodes))
+
+	for _, nodeName := range poolCR.Spec.AllowedNodes {
+		var node corev1.Node
+		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
+			return false, fmt.Errorf("failed to get node %s: %w", nodeName, err)
+		}
+		desired = append(desired, fmt.Sprintf("nqn.2014-08.io.simplyblock:uuid:%s", node.UID))
+	}
 
 	// Fetch current backend state to use as applied list.
 	getEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)

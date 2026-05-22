@@ -71,7 +71,7 @@ func (r *StorageClusterReconciler) reconcileShutdown(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
 		return r.failAction(ctx, clusterCR, err)
 	}
@@ -151,7 +151,7 @@ func (r *StorageClusterReconciler) reconcileStart(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
 		return r.failAction(ctx, clusterCR, err)
 	}
@@ -235,7 +235,7 @@ func (r *StorageClusterReconciler) reconcileRestart(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
 		return r.failAction(ctx, clusterCR, err)
 	}
@@ -337,7 +337,7 @@ func (r *StorageClusterReconciler) reconcileNodeRecycle(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
 		return r.failAction(ctx, clusterCR, err)
 	}
@@ -692,7 +692,7 @@ func (r *StorageClusterReconciler) deleteStorageNodePod(
 		return false, fmt.Errorf("find k8s node for IP %s: %w", nodeIP, err)
 	}
 
-	pod, err := r.findStorageNodePod(ctx, clusterCR.Namespace, clusterCR.Spec.ClusterName, k8sNodeName)
+	pod, err := r.findStorageNodePod(ctx, clusterCR.Namespace, clusterCR.Name, k8sNodeName)
 	if err != nil {
 		return false, fmt.Errorf("find storage node pod on %s: %w", k8sNodeName, err)
 	}
@@ -730,7 +730,7 @@ func (r *StorageClusterReconciler) isStorageNodePodReady(
 		return false, err
 	}
 
-	pod, err := r.findStorageNodePod(ctx, clusterCR.Namespace, clusterCR.Spec.ClusterName, k8sNodeName)
+	pod, err := r.findStorageNodePod(ctx, clusterCR.Namespace, clusterCR.Name, k8sNodeName)
 	if err != nil {
 		return false, err
 	}

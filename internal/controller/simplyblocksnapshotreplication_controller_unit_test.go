@@ -48,7 +48,7 @@ func snapRepClusterSecret(clusterName, uuid, secret string) *corev1.Secret {
 func snapRepClusterCR(clusterName, uuid string) *simplyblockv1alpha1.StorageCluster {
 	return &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: "default"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: clusterName},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: uuid, SecretName: "simplyblock-cluster-" + clusterName},
 	}
 }
@@ -151,7 +151,7 @@ func TestSnapshotReplicationEnsureConfigured(t *testing.T) {
 		tgtCluster := snapRepClusterCR(tgtUUID, tgtUUID)
 		tgtPool := &simplyblockv1alpha1.Pool{
 			ObjectMeta: metav1.ObjectMeta{Name: poolUUID, Namespace: "default"},
-			Spec:       simplyblockv1alpha1.PoolSpec{ClusterName: tgtUUID, Name: poolUUID},
+			Spec:       simplyblockv1alpha1.PoolSpec{ClusterName: tgtUUID},
 			Status:     simplyblockv1alpha1.PoolStatus{UUID: poolUUID},
 		}
 		r := newSnapRepTestReconciler(t, cr, srcSecret, srcCluster, tgtCluster, tgtPool)

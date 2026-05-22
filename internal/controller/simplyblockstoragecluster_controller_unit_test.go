@@ -28,8 +28,7 @@ func TestReconcileActivateTransitions(t *testing.T) {
 				Generation: 9,
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				Action:      utils.ClusterActionActivate,
-				ClusterName: "c1",
+				Action: utils.ClusterActionActivate,
 			},
 		}
 
@@ -57,8 +56,7 @@ func TestReconcileActivateTransitions(t *testing.T) {
 				Generation: 4,
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				Action:      utils.ClusterActionActivate,
-				ClusterName: "c1",
+				Action: utils.ClusterActionActivate,
 			},
 			Status: simplyblockv1alpha1.StorageClusterStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
@@ -90,8 +88,7 @@ func TestReconcileActivateTransitions(t *testing.T) {
 				Generation: 2,
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				Action:      utils.ClusterActionActivate,
-				ClusterName: "c1",
+				Action: utils.ClusterActionActivate,
 			},
 			Status: simplyblockv1alpha1.StorageClusterStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
@@ -123,8 +120,7 @@ func TestReconcileActivateInitializesObservedGeneration(t *testing.T) {
 			Generation: 17,
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			Action:      utils.ClusterActionActivate,
-			ClusterName: "c1",
+			Action: utils.ClusterActionActivate,
 		},
 	}
 
@@ -155,8 +151,7 @@ func TestReconcileExpandTransitions(t *testing.T) {
 				Generation: 11,
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				Action:      utils.ClusterActionExpand,
-				ClusterName: "c1",
+				Action: utils.ClusterActionExpand,
 			},
 		}
 
@@ -184,8 +179,7 @@ func TestReconcileExpandTransitions(t *testing.T) {
 				Generation: 3,
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				Action:      utils.ClusterActionExpand,
-				ClusterName: "c1",
+				Action: utils.ClusterActionExpand,
 			},
 			Status: simplyblockv1alpha1.StorageClusterStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
@@ -214,8 +208,7 @@ func TestReconcileExpandTransitions(t *testing.T) {
 				Generation: 6,
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				Action:      utils.ClusterActionExpand,
-				ClusterName: "c1",
+				Action: utils.ClusterActionExpand,
 			},
 			Status: simplyblockv1alpha1.StorageClusterStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
@@ -303,8 +296,7 @@ func TestReconcileActivateRejectsIllegalSuccessState(t *testing.T) {
 			Generation: 8,
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			Action:      utils.ClusterActionActivate,
-			ClusterName: "c1",
+			Action: utils.ClusterActionActivate,
 		},
 		Status: simplyblockv1alpha1.StorageClusterStatus{
 			// Illegal/stale success: generation gate does not match.
@@ -338,8 +330,7 @@ func TestReconcileExpandRejectsIllegalSuccessState(t *testing.T) {
 			Generation: 12,
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			Action:      utils.ClusterActionExpand,
-			ClusterName: "c1",
+			Action: utils.ClusterActionExpand,
 		},
 		Status: simplyblockv1alpha1.StorageClusterStatus{
 			// Illegal/stale success: generation gate does not match.
@@ -387,7 +378,7 @@ func TestClusterDeleteClusterSecret(t *testing.T) {
 	t.Run("deletes named status secret", func(t *testing.T) {
 		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-secret-delete", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-a"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 			Status:     simplyblockv1alpha1.StorageClusterStatus{SecretName: "custom-secret-name"},
 		}
 		secret := &corev1.Secret{
@@ -407,8 +398,8 @@ func TestClusterDeleteClusterSecret(t *testing.T) {
 
 	t.Run("uses default secret name fallback", func(t *testing.T) {
 		cluster := &simplyblockv1alpha1.StorageCluster{
-			ObjectMeta: metav1.ObjectMeta{Name: "cluster-secret-default", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-b"},
+			ObjectMeta: metav1.ObjectMeta{Name: "cluster-b", Namespace: "default"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 		}
 		secretName := "simplyblock-cluster-cluster-b"
 		secret := &corev1.Secret{
@@ -457,8 +448,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 				DeletionTimestamp: &now,
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				Action:      utils.ClusterActionActivate,
-				ClusterName: "cluster-a",
+				Action: utils.ClusterActionActivate,
 			},
 		}
 		r := newClusterStateTestReconciler(t, cluster)
@@ -483,9 +473,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 				Finalizers:        []string{utils.FinalizerStorageCluster},
 				DeletionTimestamp: &now,
 			},
-			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				ClusterName: "cluster-auth-missing",
-			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
 			Status: simplyblockv1alpha1.StorageClusterStatus{
 				UUID: "cluster-uuid-auth-missing",
 			},
@@ -527,9 +515,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 				Finalizers:        []string{utils.FinalizerStorageCluster},
 				DeletionTimestamp: &now,
 			},
-			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				ClusterName: clusterName,
-			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
 			Status: simplyblockv1alpha1.StorageClusterStatus{
 				UUID:       clusterUUID,
 				SecretName: "secret-custom-delete-ok",
@@ -601,7 +587,7 @@ func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
 	t.Run("adds finalizer on first reconcile", func(t *testing.T) {
 		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-top-finalizer", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-top-finalizer"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 		}
 		r := newClusterStateTestReconciler(t, cluster)
 
@@ -625,9 +611,7 @@ func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
 				Namespace:  "default",
 				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
-			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				ClusterName: "cluster-top-noop",
-			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
 			Status: simplyblockv1alpha1.StorageClusterStatus{
 				UUID: "cluster-uuid-top-noop",
 			},
@@ -681,8 +665,7 @@ func TestStorageClusterReconcileActivateViaMock(t *testing.T) {
 			Finalizers: []string{utils.FinalizerStorageCluster},
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			ClusterName: clusterName,
-			Action:      utils.ClusterActionActivate,
+			Action: utils.ClusterActionActivate,
 		},
 		Status: simplyblockv1alpha1.StorageClusterStatus{
 			UUID: clusterUUID,
@@ -773,8 +756,7 @@ func TestStorageClusterReconcileExpandViaMock(t *testing.T) {
 			Finalizers: []string{utils.FinalizerStorageCluster},
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			ClusterName: clusterName,
-			Action:      utils.ClusterActionExpand,
+			Action: utils.ClusterActionExpand,
 		},
 		Status: simplyblockv1alpha1.StorageClusterStatus{
 			UUID: clusterUUID,
@@ -854,9 +836,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 				Namespace:  "default",
 				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
-			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				ClusterName: "cluster-health-fail",
-			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
 		}
 		r := newClusterStateTestReconciler(t, cluster)
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
@@ -884,13 +864,11 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 				Namespace:  "default",
 				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
-			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				ClusterName: "cluster-auth-fail",
-			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
 		}
 		existing := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-existing", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-existing"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-existing-uuid"},
 		}
 		r := newClusterStateTestReconciler(t, cluster, existing)
@@ -924,9 +902,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 				Namespace:  "default",
 				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
-			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				ClusterName: "cluster-create-fail",
-			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
 		}
 		r := newClusterStateTestReconciler(t, cluster)
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
@@ -959,9 +935,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 				Namespace:  "default",
 				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
-			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				ClusterName: "cluster-create-parse-fail",
-			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
 		}
 		r := newClusterStateTestReconciler(t, cluster)
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
@@ -994,13 +968,11 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 				Namespace:  "default",
 				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
-			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				ClusterName: "cluster-v2-parse-fail",
-			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
 		}
 		existing := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-existing-v2", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-existing-v2"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-existing-v2-uuid"},
 		}
 		existingSecret := &corev1.Secret{
@@ -1055,9 +1027,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 				Namespace:  "default",
 				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
-			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				ClusterName: "cluster-create-first-ok",
-			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
 		}
 		r := newClusterStateTestReconciler(t, cluster)
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
@@ -1117,13 +1087,11 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 				Namespace:  "default",
 				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
-			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				ClusterName: "cluster-create-v2-ok",
-			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
 		}
 		existing := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-existing-ok", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-existing-ok"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-existing-ok-uuid"},
 		}
 		existingSecret := &corev1.Secret{
@@ -1192,13 +1160,11 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 				Namespace:  "default",
 				Finalizers: []string{utils.FinalizerStorageCluster},
 			},
-			Spec: simplyblockv1alpha1.StorageClusterSpec{
-				ClusterName: "cluster-create-v2-dto",
-			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
 		}
 		existing := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: "cluster-existing-dto", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{ClusterName: "cluster-existing-dto"},
+			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 			Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-existing-dto-uuid"},
 		}
 		existingSecret := &corev1.Secret{
@@ -1265,9 +1231,7 @@ func TestStorageClusterCreateFirstSecretHasOwnerReference(t *testing.T) {
 			Namespace:  "default",
 			Finalizers: []string{utils.FinalizerStorageCluster},
 		},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			ClusterName: "cluster-ownerref",
-		},
+		Spec: simplyblockv1alpha1.StorageClusterSpec{},
 	}
 
 	r := newClusterStateTestReconciler(t, cluster)

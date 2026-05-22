@@ -1,9 +1,0 @@
-apiVersion: storage.simplyblock.io/v1alpha1
-kind: Device
-metadata:
-  labels:
-    app.kubernetes.io/name: simplyblock-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: device-sample
-spec:
-  clusterName: sample-cluster

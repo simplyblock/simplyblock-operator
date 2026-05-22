@@ -10,35 +10,41 @@ type BackupConfig struct {
 	LocalTesting    *bool  `json:"local_testing,omitempty"`
 }
 
+type HashicorpVaultConfig struct {
+	BaseURL string `json:"base_url,omitempty"`
+}
+
 type ClusterAddParams struct {
-	Name                   string        `json:"name"`
-	BlkSize                int           `json:"blk_size,omitempty"` // 512 or 4096
-	PageSizeInBlocks       int           `json:"page_size_in_blocks,omitempty"`
-	CapWarn                int           `json:"cap_warn,omitempty"`
-	CapCrit                int           `json:"cap_crit,omitempty"`
-	ProvCapWarn            int           `json:"prov_cap_warn,omitempty"`
-	ProvCapCrit            int           `json:"prov_cap_crit,omitempty"`
-	DistrNdcs              int           `json:"distr_ndcs,omitempty"`
-	DistrNpcs              int           `json:"distr_npcs,omitempty"`
-	DistrBs                int           `json:"distr_bs,omitempty"`
-	DistrChunkBs           int           `json:"distr_chunk_bs,omitempty"`
-	HAType                 string        `json:"ha_type,omitempty"`
-	QpairCount             int           `json:"qpair_count,omitempty"`
-	MaxQueueSize           int           `json:"max_queue_size,omitempty"`
-	InflightIOThreshold    int           `json:"inflight_io_threshold,omitempty"`
-	EnableNodeAffinity     bool          `json:"enable_node_affinity,omitempty"`
-	StrictNodeAntiAffinity bool          `json:"strict_node_anti_affinity,omitempty"`
-	IsSingleNode           bool          `json:"is_single_node,omitempty"`
-	Fabric                 string        `json:"fabric,omitempty"`
-	CRName                 string        `json:"cr_name,omitempty"`
-	CRNameSpace            string        `json:"cr_namespace,omitempty"`
-	CRPlural               string        `json:"cr_plural,omitempty"`
-	ClientDataIfname       string        `json:"client_data_ifname,omitempty"`
-	MaxFaultTolerance      int           `json:"max_fault_tolerance,omitempty"`
-	NvmfBasePort           int           `json:"nvmf_base_port,omitempty"`
-	RpcBasePort            int           `json:"rpc_base_port,omitempty"`
-	SnodeApiPort           int           `json:"snode_api_port,omitempty"`
-	BackupConfig           *BackupConfig `json:"backup_config,omitempty"`
+	Name                   string                `json:"name"`
+	BlkSize                int                   `json:"blk_size,omitempty"` // 512 or 4096
+	PageSizeInBlocks       int                   `json:"page_size_in_blocks,omitempty"`
+	CapWarn                int                   `json:"cap_warn,omitempty"`
+	CapCrit                int                   `json:"cap_crit,omitempty"`
+	ProvCapWarn            int                   `json:"prov_cap_warn,omitempty"`
+	ProvCapCrit            int                   `json:"prov_cap_crit,omitempty"`
+	DistrNdcs              int                   `json:"distr_ndcs,omitempty"`
+	DistrNpcs              int                   `json:"distr_npcs,omitempty"`
+	DistrBs                int                   `json:"distr_bs,omitempty"`
+	DistrChunkBs           int                   `json:"distr_chunk_bs,omitempty"`
+	HAType                 string                `json:"ha_type,omitempty"`
+	QpairCount             int                   `json:"qpair_count,omitempty"`
+	ClientQpairCount       int                   `json:"client_qpair_count,omitempty"`
+	MaxQueueSize           int                   `json:"max_queue_size,omitempty"`
+	InflightIOThreshold    int                   `json:"inflight_io_threshold,omitempty"`
+	EnableNodeAffinity     bool                  `json:"enable_node_affinity,omitempty"`
+	StrictNodeAntiAffinity bool                  `json:"strict_node_anti_affinity,omitempty"`
+	IsSingleNode           bool                  `json:"is_single_node,omitempty"`
+	Fabric                 string                `json:"fabric,omitempty"`
+	CRName                 string                `json:"cr_name,omitempty"`
+	CRNameSpace            string                `json:"cr_namespace,omitempty"`
+	CRPlural               string                `json:"cr_plural,omitempty"`
+	ClientDataIfname       string                `json:"client_data_ifname,omitempty"`
+	MaxFaultTolerance      int                   `json:"max_fault_tolerance,omitempty"`
+	NvmfBasePort           int                   `json:"nvmf_base_port,omitempty"`
+	RpcBasePort            int                   `json:"rpc_base_port,omitempty"`
+	SnodeApiPort           int                   `json:"snode_api_port,omitempty"`
+	BackupConfig           *BackupConfig         `json:"backup_config,omitempty"`
+	HashicorpVaultSettings *HashicorpVaultConfig `json:"hashicorp_vault_settings,omitempty"`
 }
 
 type ClusterUpdateParams struct {
@@ -64,8 +70,8 @@ type ReplicationAddParams struct {
 
 type PoolAddParams struct {
 	Name          string `json:"name"`
-	PoolMax       int    `json:"pool_max,omitempty"`
-	VolumeMaxSize int    `json:"volume_max_size,omitempty"`
+	PoolMax       int64  `json:"pool_max,omitempty"`
+	VolumeMaxSize int64  `json:"volume_max_size,omitempty"`
 	MaxRwIOPS     int    `json:"max_rw_iops,omitempty"`
 	MaxRwMB       int    `json:"max_rw_mbytes,omitempty"`
 	MaxRMB        int    `json:"max_r_mbytes,omitempty"`
@@ -78,8 +84,8 @@ type PoolAddParams struct {
 
 type PoolUpdateParams struct {
 	Name            string `json:"name,omitempty"`
-	PoolMax         int    `json:"pool_max,omitempty"`
-	VolumeMaxSize   int    `json:"lvol_max,omitempty"`
+	PoolMax         int64  `json:"pool_max,omitempty"`
+	VolumeMaxSize   int64  `json:"lvol_max,omitempty"`
 	MaxRwIOPS       int    `json:"max_rw_iops,omitempty"`
 	MaxRwMB         int    `json:"max_rw_mbytes,omitempty"`
 	MaxRMB          int    `json:"max_r_mbytes,omitempty"`

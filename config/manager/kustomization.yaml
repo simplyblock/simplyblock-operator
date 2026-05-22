@@ -3,7 +3,6 @@ resources:
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
-- digest: sha256:b7db1d324fa1d6d272f40d696a46c11147de541ca54eb95e67760bc821dec4d8
-  name: controller
+- name: controller
   newName: quay.io/simplyblock-io/simplyblock-operator
   newTag: 0.1.0

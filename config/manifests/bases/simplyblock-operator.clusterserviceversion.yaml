@@ -37,6 +37,9 @@ spec:
         name: restored-volume
         version: v1
       specDescriptors:
+      - description: BackupRef references the StorageBackup resource to restore from.
+        displayName: Backup Ref
+        path: backupRef
       - description: Name is the StorageBackup resource name.
         displayName: Backup Name
         path: backupRef.name
@@ -74,67 +77,46 @@ spec:
         displayName: Restored LVOL ID
         path: restoredLvolID
       version: v1alpha1
-    - description: Device is the Schema for the devices API
-      displayName: Device
-      kind: Device
-      name: devices.storage.simplyblock.io
-      specDescriptors:
-      - description: Action triggers an imperative device operation.
-        displayName: Action
-        path: action
-      - description: ClusterName is the target storage cluster name.
-        displayName: Cluster Name
-        path: clusterName
-      - description: DeviceID is the backend device identifier used for actions.
-        displayName: Device ID
-        path: deviceID
-      - description: NodeUUID scopes operations to a single storage node when set.
-        displayName: Node UUID
-        path: nodeUUID
-      statusDescriptors:
-      - description: Message is a human-readable action result or error.
-        displayName: Action Message
-        path: actionStatus.message
-      - displayName: Action State
-        path: actionStatus.state
-      - description: Nodes contains observed devices grouped by storage node.
-        displayName: Devices
-        path: nodes
-      version: v1alpha1
-    - description: Lvol is the Schema for the lvols API
-      displayName: Lvol
-      kind: Lvol
-      name: lvols.storage.simplyblock.io
-      specDescriptors:
-      - description: ClusterName is the target storage cluster name.
-        displayName: Cluster Name
-        path: clusterName
-      - description: PoolName is the target storage pool name.
-        displayName: Pool Name
-        path: poolName
-      statusDescriptors:
-      - description: Configured indicates whether initial Lvol reconciliation has
-          completed.
-        displayName: Configured
-        path: configured
-      - description: Lvols contains observed logical volume entries.
-        displayName: Logical Volumes
-        path: lvols
-      version: v1alpha1
     - description: Pool is the Schema for the pools API
       displayName: Pool
       kind: Pool
       name: pools.storage.simplyblock.io
       specDescriptors:
+      - description: |-
+          Action triggers an imperative pool operation.
+          FIXME: Unused for now
+        displayName: Action
+        path: action
+      - description: |-
+          AllowedNodes is the list of Kubernetes worker node names allowed to access volumes
+          in this pool. The operator resolves each node name to a deterministic NQN derived
+          from the node's UID: nqn.2014-08.io.simplyblock:uuid:<node-uid>.
+          The CSI node uses the same formula so no manual NQN management is required.
+        displayName: Allowed Nodes
+        path: allowedNodes
       - description: CapacityLimit is the maximum pool capacity.
         displayName: Capacity Limit
         path: capacityLimit
       - description: ClusterName is the target storage cluster name.
         displayName: Cluster Name
         path: clusterName
-      - description: Name is the backend pool name.
-        displayName: Pool Name
-        path: name
+      - description: |-
+          DHCHAP enables DH-HMAC-CHAP key generation for the pool. Authentication is only
+          enforced when allowedNodes is non-empty
+        displayName: DHCHAP
+        path: dhchap
+      - description: QosSpec defines QosSpec limits for the pool.
+        displayName: QoS
+        path: qos
+      - description: |-
+          Status is an optional desired-status hint for backend workflows.
+          FIXME: Unused for now
+        displayName: Status
+        path: status
+      - description: StorageClassParameters sets default StorageClass parameter values
+          for volumes in this pool.
+        displayName: Storage Class Parameters
+        path: storageClassParameters
       - description: Fabric is the transport fabric (e.g. tcp).
         displayName: Fabric
         path: storageClassParameters.fabric
@@ -160,18 +142,35 @@ spec:
       specDescriptors:
       - displayName: Action
         path: action
+      - description: 'Optional: volumes to exclude from failback.'
+        displayName: Exclude Volume IDs
+        path: excludeVolumeIDs
+      - description: |-
+          Optional: only these volumes are included in failback.
+          If empty, all volumes are candidates unless excluded below.
+        displayName: Include Volume IDs
+        path: includeVolumeIDs
       - description: 'snapshot replication interval in seconds (default: 300sec)'
         displayName: Interval
         path: interval
       - description: Source cluster for the snapshots
         displayName: Source Cluster
         path: sourceCluster
+      - description: required for failback to a fresh source cluster
+        displayName: Source Pool
+        path: sourcePool
       - description: Target cluster for replication
         displayName: Target Cluster
         path: targetCluster
       - description: Target cluster pool for replication
         displayName: Target Pool
         path: targetPool
+      - description: snapshot replication timeout
+        displayName: Timeout
+        path: timeout
+      - description: 'Optional: list of volumes to replicate. Empty means all volumes'
+        displayName: Volume IDs
+        path: volumeIDs
       statusDescriptors:
       - description: Conditions provides human-readable status conditions for kubectl
           get output.
@@ -198,6 +197,11 @@ spec:
       - description: ClusterName is the target storage cluster name.
         displayName: Cluster Name
         path: clusterName
+      - description: |-
+          PVCRef identifies the PVC whose backing Simplyblock volume should be snapshotted and backed up.
+          Not required when SourceClusterUUID is set (imported backup).
+        displayName: PVC Ref
+        path: pvcRef
       - description: Name is the PVC name.
         displayName: PVC Name
         path: pvcRef.name
@@ -209,6 +213,12 @@ spec:
           name.
         displayName: Snapshot Name
         path: snapshotName
+      - description: |-
+          SourceClusterUUID, when non-empty, marks this StorageBackup as imported from another cluster.
+          The StorageBackup controller will not create snapshots or backups for imported resources.
+          Set by the BackupImport controller; do not set manually.
+        displayName: Source Cluster UUID
+        path: sourceClusterUUID
       statusDescriptors:
       - description: BackupID is the backend backup UUID.
         displayName: Backup ID
@@ -232,23 +242,82 @@ spec:
         name: simplyblock-cluster-credentials
         version: v1
       specDescriptors:
+      - description: Action triggers a cluster-level action.
+        displayName: Action
+        path: action
+      - description: Backup specifies the specification for backup to S3 configuration
+        displayName: Backup
+        path: backup
       - description: Name is the name of the Secret in the same namespace as the cluster
           CR.
         displayName: Backup Credentials Secret
         path: backup.credentialsSecretRef.name
-      - description: ClusterName is the user-facing cluster identifier.
-        displayName: Cluster Name
-        path: clusterName
+      - description: BlockSize defines the logical block size in bytes.
+        displayName: Block Size
+        path: blockSize
+      - description: ClientDataIfname defines the client data network interface.
+        displayName: Client Data Interface
+        path: clientDataIfname
+      - description: ClientQpairCount defines client-side queue-pair count.
+        displayName: Client Queue Pair Count
+        path: clientQpairCount
+      - description: CriticalThresholdSpec defines critical-level capacity thresholds.
+        displayName: Critical Threshold
+        path: criticalThreshold
+      - description: EnableNodeAffinity enables node-affinity placement for storage
+          components.
+        displayName: Enable Node Affinity
+        path: enableNodeAffinity
       - description: FabricType defines the storage fabric type.
         displayName: Fabric Type
         path: fabricType
       - description: HAType defines the backend high-availability mode.
         displayName: HA Type
         path: haType
+      - description: InflightIOThreshold defines the inflight I/O threshold.
+        displayName: Inflight IO Threshold
+        path: inflightIOThreshold
+      - description: IsSingleNode enables single-node cluster mode.
+        displayName: Single Node
+        path: isSingleNode
+      - description: MaxFaultTolerance defines the maximum tolerated concurrent faults.
+        displayName: Max Fault Tolerance
+        path: maxFaultTolerance
+      - description: MaxQueueSize defines the maximum backend queue size.
+        displayName: Max Queue Size
+        path: maxQueueSize
+      - description: NodeRecycle configures the node-recycle action.
+        displayName: Node Recycle
+        path: nodeRecycle
+      - description: NvmfBasePort defines the base NVMf service port.
+        displayName: NVMf Base Port
+        path: nvmfBasePort
+      - description: PageSizeInBlocks defines page size expressed in blocks.
+        displayName: Page Size In Blocks
+        path: pageSizeInBlocks
+      - description: QpairCount defines the NVMe queue-pair count used by the cluster.
+        displayName: Queue Pair Count
+        path: qpairCount
+      - description: RpcBasePort defines the base RPC service port.
+        displayName: RPC Base Port
+        path: rpcBasePort
+      - description: SnodeApiPort defines the storage-node API port.
+        displayName: Storage Node API Port
+        path: snodeApiPort
+      - description: StrictNodeAntiAffinity enforces strict anti-affinity between
+          storage nodes.
+        displayName: Strict Node Anti-Affinity
+        path: strictNodeAntiAffinity
+      - description: StripeSpec configures erasure-coding data/parity chunk counts.
+        displayName: Stripe
+        path: stripe
       - description: DataChunks defines the number of data chunks in the erasure-coding
           layout.
         displayName: Data Chunks
         path: stripe.dataChunks
+      - description: WarningThresholdSpec defines warning-level capacity thresholds.
+        displayName: Warning Threshold
+        path: warningThreshold
       statusDescriptors:
       - description: Message is a human-readable action result or error.
         displayName: Action Message
@@ -298,10 +367,96 @@ spec:
       - description: ClusterName is the target storage cluster name.
         displayName: Cluster Name
         path: clusterName
+      - description: CorePercentage is the percentage of cores to be used for spdk
+          (0-99).
+        displayName: Core Percentage
+        path: corePercentage
+      - description: DataIfname lists data-plane network interfaces.
+        displayName: Data Interfaces
+        path: dataIfname
+      - description: DeviceNames explicitly defines a comma separated list of nvme
+          namespace names like nvme0n1,nvme1n1...
+        displayName: Device Names
+        path: deviceNames
+      - description: DriveSizeRange filters devices by size range.
+        displayName: Drive Size Range
+        path: driveSizeRange
+      - description: EnableCpuTopology enables topology-aware CPU handling.
+        displayName: Enable CPU Topology
+        path: enableCpuTopology
+      - description: Force enables forced action execution where supported.
+        displayName: Force
+        path: force
+      - description: ForceFormat4K forces 4K blocksize formatting of the NVMe device
+          where supported.
+        displayName: Force Format 4K
+        path: forceFormat4K
+      - description: JournalManagerSpec configures journal manager behavior.
+        displayName: Journal Manager
+        path: journalManager
       - description: MaxLogicalVolumeCount is the maximum number of logical volumes
           per node.
         displayName: Max Logical Volume Count
         path: maxLogicalVolumeCount
+      - description: MaxSize is the maximum allocatable size of the storage node.
+        displayName: Max Size
+        path: maxSize
+      - description: MgmtIfname is the management interface name used by storage nodes.
+        displayName: Management Interface
+        path: mgmtIfname
+      - description: NodeUUID is required when action is specified
+        displayName: Node UUID
+        path: nodeUUID
+      - description: NodesPerSocket defines how many storage nodes are created per
+          NUMA socket.
+        displayName: Nodes Per Socket
+        path: nodesPerSocket
+      - description: OpenShiftCluster indicates OpenShift-specific behavior should
+          be enabled.
+        displayName: OpenShift Cluster
+        path: openShiftCluster
+      - description: Partitions is the number of partitions created per backend storage
+          device.
+        displayName: Partitions
+        path: partitions
+      - description: PcieAllowList is the list of PCI addresses allowed for use.
+        displayName: PCIe Allow List
+        path: pcieAllowList
+      - description: PcieDenyList is the list of PCI addresses excluded from use.
+        displayName: PCIe Deny List
+        path: pcieDenyList
+      - description: PcieModel filters devices by PCI model.
+        displayName: PCIe Model
+        path: pcieModel
+      - description: ReattachVolume reattaches volumes during restart where supported
+          by the backend.
+        displayName: Reattach Volume
+        path: reattachVolume
+      - description: ReservedSystemCPU defines CPUs reserved for system workloads.
+        displayName: Reserved System CPU
+        path: reservedSystemCPU
+      - description: SkipKubeletConfiguration skips kubelet configuration changes.
+        displayName: Skip Kubelet Configuration
+        path: skipKubeletConfiguration
+      - description: SocketsToUse restricts deployment to selected NUMA sockets.
+        displayName: Sockets To Use
+        path: socketsToUse
+      - description: SpdkImage is the SPDK image reference used by node services.
+        displayName: SPDK Image
+        path: spdkImage
+      - description: SpdkProxyImage is the SPDK proxy image reference used by node
+          services.
+        displayName: SPDK Proxy Image
+        path: spdkProxyImage
+      - description: Tolerations configures pod tolerations for storage-node pods.
+        displayName: Tolerations
+        path: tolerations
+      - description: UbuntuHost indicates the node host OS is Ubuntu.
+        displayName: Ubuntu Host
+        path: ubuntuHost
+      - description: WorkerNode is a single worker node used by action flows.
+        displayName: Worker Node
+        path: workerNode
       - description: WorkerNodes is the set of Kubernetes worker nodes to manage.
         displayName: Worker Nodes
         path: workerNodes
@@ -326,6 +481,11 @@ spec:
       - description: ClusterName is the target storage cluster name.
         displayName: Cluster Name
         path: clusterName
+      - description: |-
+          Subtasks includes related child subtasks when supported by the backend.
+          FIXME: Unused for now
+        displayName: Subtasks
+        path: subtasks
       - description: TaskID filters results to a specific backend task when set.
         displayName: Task ID
         path: taskID

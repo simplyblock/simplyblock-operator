@@ -52,6 +52,7 @@ import (
 type StorageNodeReconciler struct {
 	client.Client
 	Scheme           *runtime.Scheme
+	Namespace        string // operator namespace, used to look up the singleton ControlPlane CR
 	TLSEnabled       bool
 	TLSProvider      string
 	TLSMutualEnabled bool
@@ -167,19 +168,33 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
 	}
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error { return nil })
+	desiredSAOwnerRefs := sa.OwnerReferences
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
+		sa.OwnerReferences = desiredSAOwnerRefs
+		return nil
+	})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ServiceAccount: %w", err)
 	}
 
 	cr := utils.BuildStorageNodeClusterRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster))
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error { return nil })
+	desiredCRRules := cr.Rules
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
+		cr.Rules = desiredCRRules
+		return nil
+	})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRole: %w", err)
 	}
 
 	crb := utils.BuildStorageNodeClusterRoleBinding(snCR.Namespace)
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error { return nil })
+	desiredCRBSubjects := crb.Subjects
+	desiredCRBRoleRef := crb.RoleRef
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
+		crb.Subjects = desiredCRBSubjects
+		crb.RoleRef = desiredCRBRoleRef
+		return nil
+	})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
 	}
@@ -368,6 +383,11 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.tlsSecretToStorageNodeRequests),
 			builder.WithPredicates(predicate.NewPredicateFuncs(isStorageNodeTLSSecret)),
 		).
+		Watches(
+			&simplyblockv1alpha1.ControlPlane{},
+			handler.EnqueueRequestsFromMapFunc(r.controlPlaneToStorageNodeRequests),
+			builder.WithPredicates(predicate.NewPredicateFuncs(isSimplyblockControlPlane)),
+		).
 		Complete(r)
 }
 
@@ -377,6 +397,27 @@ func isSpdkProxyPod(obj client.Object) bool {
 
 func isStorageNodeTLSSecret(obj client.Object) bool {
 	return obj.GetName() == utils.SecretNameStorageNodeAPITLS
+}
+
+func isSimplyblockControlPlane(obj client.Object) bool {
+	return obj.GetName() == SingletonControlPlaneName
+}
+
+func (r *StorageNodeReconciler) controlPlaneToStorageNodeRequests(
+	ctx context.Context,
+	obj client.Object,
+) []reconcile.Request {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(snList.Items))
+	for _, sn := range snList.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: sn.Namespace, Name: sn.Name},
+		})
+	}
+	return reqs
 }
 
 // tlsSecretToStorageNodeRequests enqueues every StorageNode CR in the
@@ -505,6 +546,18 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
+
+	if snCR.Spec.ClusterImage == "" {
+		cp := &simplyblockv1alpha1.ControlPlane{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: SingletonControlPlaneName}, cp); err != nil {
+			return fmt.Errorf("clusterImage not set and ControlPlane %q not found: %w", SingletonControlPlaneName, err)
+		}
+		if cp.Spec.Image == "" {
+			return fmt.Errorf("clusterImage not set and ControlPlane %q has no spec.image", SingletonControlPlaneName)
+		}
+		snCR = snCR.DeepCopy()
+		snCR.Spec.ClusterImage = cp.Spec.Image
+	}
 
 	tlsSecretRV, err := r.getTLSSecretResourceVersion(ctx, snCR.Namespace)
 	if err != nil {
@@ -1269,8 +1322,9 @@ func (r *StorageNodeReconciler) performNodeAction(
 	switch snCR.Spec.Action {
 
 	case "restart":
-		payload := map[string]bool{
-			"force": true,
+		payload := map[string]any{
+			"force":           nodeActionForce(snCR, true),
+			"reattach_volume": utils.BoolPtrOrFalse(snCR.Spec.ReattachVolume),
 		}
 
 		if snCR.Spec.WorkerNode != "" {
@@ -1284,8 +1338,9 @@ func (r *StorageNodeReconciler) performNodeAction(
 			}
 
 			body = map[string]any{
-				"force":        true,
-				"node_address": utils.StorageNodeAPIAddress(snCR.Spec.WorkerNode, snCR.Namespace),
+				"force":           nodeActionForce(snCR, true),
+				"reattach_volume": utils.BoolPtrOrFalse(snCR.Spec.ReattachVolume),
+				"node_address":    utils.StorageNodeAPIAddress(snCR.Spec.WorkerNode, snCR.Namespace),
 			}
 		} else {
 			body = payload
@@ -1301,9 +1356,10 @@ func (r *StorageNodeReconciler) performNodeAction(
 		method = http.MethodDelete
 		body = nil
 		endpoint = fmt.Sprintf(
-			"/api/v2/clusters/%s/storage-nodes/%s?force_remove=true",
+			"/api/v2/clusters/%s/storage-nodes/%s?force_remove=%t",
 			clusterUUID,
 			snCR.Spec.NodeUUID,
+			nodeActionForce(snCR, true),
 		)
 
 	default:
@@ -1356,6 +1412,13 @@ func (r *StorageNodeReconciler) performNodeAction(
 	)
 
 	return nil
+}
+
+func nodeActionForce(snCR *simplyblockv1alpha1.StorageNode, defaultValue bool) bool {
+	if snCR.Spec.Force == nil {
+		return defaultValue
+	}
+	return *snCR.Spec.Force
 }
 
 func (r *StorageNodeReconciler) waitForActionCompletion(

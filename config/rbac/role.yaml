@@ -133,8 +133,7 @@ rules:
   - backupimports
   - backuppolicies
   - backuprestores
-  - devices
-  - lvols
+  - controlplanes
   - pools
   - snapshotreplications
   - storagebackups
@@ -155,8 +154,6 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
-  - devices/finalizers
-  - lvols/finalizers
   - pools/finalizers
   - snapshotreplications/finalizers
   - storagebackups/finalizers
@@ -171,8 +168,7 @@ rules:
   - backupimports/status
   - backuppolicies/status
   - backuprestores/status
-  - devices/status
-  - lvols/status
+  - controlplanes/status
   - pools/status
   - snapshotreplications/status
   - storagebackups/status

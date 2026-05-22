@@ -66,10 +66,10 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{RequeueAfter: backupSyncRequeue}, nil
 	}
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Spec.ClusterName)
+	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
 		log.Info("Skipping backup sync — cannot get cluster auth",
-			"cluster", clusterCR.Spec.ClusterName, "reason", err.Error())
+			"cluster", clusterCR.Name, "reason", err.Error())
 		return ctrl.Result{RequeueAfter: backupSyncRequeue}, nil
 	}
 
@@ -79,7 +79,7 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	delegate := &StorageBackupReconciler{Client: r.Client, Scheme: r.Scheme, APIClient: apiClient}
 	backendBackups, err := delegate.listBackups(ctx, apiClient, clusterSecret, clusterUUID)
 	if err != nil {
-		log.Error(err, "Failed to list backend backups", "cluster", clusterCR.Spec.ClusterName)
+		log.Error(err, "Failed to list backend backups", "cluster", clusterCR.Name)
 		return ctrl.Result{RequeueAfter: backupSyncRequeue}, nil
 	}
 	if len(backendBackups) == 0 {
@@ -131,7 +131,7 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				},
 			},
 			Spec: simplyblockv1alpha1.StorageBackupSpec{
-				ClusterName: clusterCR.Spec.ClusterName,
+				ClusterName: clusterCR.Name,
 				PVCRef: &simplyblockv1alpha1.PersistentVolumeClaimRef{
 					Name:      pvcName,
 					Namespace: pvcNamespace,
@@ -142,7 +142,7 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 		if err := r.Create(ctx, imported); err != nil {
 			log.Error(err, "Failed to create StorageBackup CR for imported backup",
-				"backupID", bp.ID, "cluster", clusterCR.Spec.ClusterName)
+				"backupID", bp.ID, "cluster", clusterCR.Name)
 			r.Recorder.Eventf(clusterCR, "Warning", "StorageBackupImportFailed",
 				"Failed to import backend backup %q: %v", bp.ID, err)
 			continue
@@ -176,7 +176,7 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 
 		log.Info("Imported backend backup as StorageBackup CR",
-			"backupID", bp.ID, "pvc", pvcName, "cluster", clusterCR.Spec.ClusterName)
+			"backupID", bp.ID, "pvc", pvcName, "cluster", clusterCR.Name)
 		r.Recorder.Eventf(clusterCR, "Normal", "StorageBackupImported",
 			"Imported backend backup %q (PVC %s) as StorageBackup CR", bp.ID, pvcName)
 	}

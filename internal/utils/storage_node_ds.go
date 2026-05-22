@@ -55,7 +55,6 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 	}
 
 	mainEnv := []corev1.EnvVar{
-		{Name: "CORE_ISOLATION", Value: BoolPtrToString(sn.Spec.CoreIsolation)},
 		{Name: "UBUNTU_HOST", Value: BoolPtrToString(sn.Spec.UbuntuHost)},
 		{Name: "OPENSHIFT_CLUSTER", Value: BoolPtrToString(sn.Spec.OpenShiftCluster)},
 		{Name: "CPU_TOPOLOGY_ENABLED", Value: BoolPtrToString(sn.Spec.EnableCpuTopology)},
@@ -499,7 +498,7 @@ func BuildStorageNodeClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBin
 			APIVersion: "rbac.authorization.k8s.io/v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "simplyblock-storage-node-binding",
+			Name: fmt.Sprintf("simplyblock-storage-node-binding-%s", namespace),
 		},
 		Subjects: []rbacv1.Subject{
 			{

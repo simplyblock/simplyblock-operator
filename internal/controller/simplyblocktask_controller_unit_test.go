@@ -332,50 +332,6 @@ func TestTaskReconcileNon2xxTaskAPIRequeuesAndPreservesStatus(t *testing.T) {
 	}
 }
 
-func testCluster(namespace, clusterName, uuid string) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cluster-" + clusterName,
-			Namespace: namespace,
-		},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			ClusterName: clusterName,
-		},
-		Status: simplyblockv1alpha1.StorageClusterStatus{
-			UUID: uuid,
-		},
-	}
-}
-
-func testClusterSecret(namespace, clusterName, uuid, secret string) *corev1.Secret {
-	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-cluster-" + clusterName,
-			Namespace: namespace,
-		},
-		Data: map[string][]byte{
-			"uuid":   []byte(uuid),
-			"secret": []byte(secret),
-		},
-	}
-}
-
-func testPool(namespace, poolName, clusterName, uuid string) *simplyblockv1alpha1.Pool {
-	return &simplyblockv1alpha1.Pool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      poolName,
-			Namespace: namespace,
-		},
-		Spec: simplyblockv1alpha1.PoolSpec{
-			Name:        poolName,
-			ClusterName: clusterName,
-		},
-		Status: simplyblockv1alpha1.PoolStatus{
-			UUID: uuid,
-		},
-	}
-}
-
 func newTaskStateTestReconciler(t *testing.T, objects ...client.Object) *TaskReconciler {
 	t.Helper()
 

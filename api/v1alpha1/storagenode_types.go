@@ -30,9 +30,6 @@ type JournalManagerSpec struct {
 	Count *int32 `json:"count,omitempty"`
 	// PercentPerDevice is the journal manager capacity percentage per device.
 	PercentPerDevice *int32 `json:"percentPerDevice,omitempty"`
-	// UseSeparateJournalDevice enables using separate journal devices.
-	// FIXME: Unused for now
-	UseSeparateJournalDevice *bool `json:"useSeparateJournalDevice,omitempty"`
 }
 
 // StorageNodeSpec defines the desired state of StorageNode
@@ -55,7 +52,7 @@ type StorageNodeSpec struct {
 	// MaxLogicalVolumeCount is the maximum number of logical volumes per node.
 	MaxLogicalVolumeCount *int32 `json:"maxLogicalVolumeCount,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Size"
-	// MaxSize is the maximum allocatable size of the storage node.
+	// MaxSize is the maximum allocatable size of huge pages.
 	MaxSize string `json:"maxSize,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="SPDK Image"
 	// SpdkImage is the SPDK image reference used by node services.
@@ -72,9 +69,6 @@ type StorageNodeSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Journal Manager"
 	// JournalManagerSpec configures journal manager behavior.
 	JournalManagerSpec *JournalManagerSpec `json:"journalManager,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Core Isolation"
-	// CoreIsolation enables CPU core isolation mode.
-	CoreIsolation *bool `json:"coreIsolation,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Core Percentage"
 	// CorePercentage is the percentage of cores to be used for spdk (0-99).
 	CorePercentage *int32 `json:"corePercentage,omitempty"`
@@ -105,6 +99,9 @@ type StorageNodeSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Worker Node"
 	// WorkerNode is a single worker node used by action flows.
 	WorkerNode string `json:"workerNode,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Reattach Volume"
+	// ReattachVolume reattaches volumes during restart where supported by the backend.
+	ReattachVolume *bool `json:"reattachVolume,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="OpenShift Cluster"
 	// OpenShiftCluster indicates OpenShift-specific behavior should be enabled.
 	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
@@ -131,17 +128,8 @@ type StorageNodeSpec struct {
 	// Tolerations configures pod tolerations for storage-node pods.
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Add PCIe To Allow List"
-	// AddPcieToAllowList appends devices to the allow-list during restart actions.
-	// FIXME: Unused for now
-	AddPcieToAllowList []string `json:"addPcieToAllowList,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node Address"
-	// NodeAddr is the explicit node address used by action flows.
-	// FIXME: Unused for now
-	NodeAddr string `json:"nodeAddr,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
 	// Force enables forced action execution where supported.
-	// FIXME: Unused for now
 	Force *bool `json:"force,omitempty"`
 }
 
@@ -243,7 +231,7 @@ type ActionStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && (!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\"))",message="nodeUUID is required when action is specified"
-// +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.clusterImage) && self.spec.clusterImage != \"\" && has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)",message="clusterImage, maxLogicalVolumeCount, and workerNodes are required when action is not specified"
+// +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname) && self.spec.mgmtIfname != \"\")",message="maxLogicalVolumeCount, workerNodes, and mgmtIfname are required when action is not specified"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Storage Node",resources={{ServiceAccount,v1,simplyblock-storage-node},{Service,v1,simplyblock-storage-node},{DaemonSet,v1,simplyblock-storage-node},{ClusterRole,v1,simplyblock-storage-node},{ClusterRoleBinding,v1,simplyblock-storage-node}}
 // StorageNode is the Schema for the storagenodes API
 type StorageNode struct {
