@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"reflect"
 	"time"
 
@@ -217,7 +218,9 @@ func (r *BackupImportReconciler) exportBackup(
 	apiClient *webapi.Client,
 	srcSecret, srcClusterUUID, backupID string,
 ) (json.RawMessage, error) {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/export?backup_id=%s", srcClusterUUID, backupID)
+	params := url.Values{"backup_id": {backupID}}
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/export?%s",
+		url.PathEscape(srcClusterUUID), params.Encode())
 	body, status, err := apiClient.Do(ctx, srcSecret, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -245,7 +248,7 @@ func (r *BackupImportReconciler) importBackup(
 	targetSecret, targetClusterUUID string,
 	exportedData json.RawMessage,
 ) (int, error) {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/import", targetClusterUUID)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/import", url.PathEscape(targetClusterUUID))
 	reqBody := importBackupsRequest{Metadata: exportedData}
 	body, status, err := apiClient.Do(ctx, targetSecret, http.MethodPost, endpoint, reqBody)
 	if err != nil {
