@@ -310,21 +310,39 @@ func BuildStorageNodeServiceAccount(namespace string) *corev1.ServiceAccount {
 func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 	baseRules := []rbacv1.PolicyRule{
 		{
+			// create: spdk_process_start() creates the SPDK pod (snode-spdk-pod-*) and
+			//         the Fluentd sidecar pod (simplyblock-fluentd-*) directly via
+			//         create_namespaced_pod() after the init Job completes.
+			// delete: spdk_process_kill() removes both pods via delete_namespaced_pod().
+			// list/get/watch: _is_pod_up() and _is_pod_present() poll list_namespaced_pod()
+			//         to check whether the SPDK container is running before proceeding.
 			APIGroups: []string{""},
-			Resources: []string{"pods", "pods/exec"},
+			Resources: []string{"pods"},
 			Verbs:     []string{"list", "get", "create", "delete", "watch"},
 		},
 		{
-			APIGroups: []string{"apps"},
-			Resources: []string{"deployments"},
-			Verbs:     []string{"create", "delete"},
-		},
-		{
+			// create: spdk_process_start() submits three namespaced Jobs sequentially:
+			//         storage_init_job (hugepages + SPDK driver binding),
+			//         ubuntu_kernel_extra (Ubuntu-specific kernel module setup, optional),
+			//         and a core-isolation / CPU-topology Job when those features are enabled.
+			// delete: each Job is deleted immediately after it completes to keep the
+			//         namespace clean; a pre-existing stale Job is also deleted before
+			//         re-creation to handle crash-restart scenarios.
+			// get/list/watch: read_namespaced_job() checks for a pre-existing Job before
+			//         creation; wait_for_job_completion() polls job status until done.
 			APIGroups: []string{"batch"},
 			Resources: []string{"jobs"},
 			Verbs:     []string{"create", "delete", "get", "list", "watch"},
 		},
 		{
+			// get/list: spdk_process_start() calls read_node() in a retry loop to detect
+			//         whether the node has been cordoned (spec.unschedulable) before
+			//         starting SPDK, avoiding a race with drain operations.
+			// update/patch: the storage node writes back labels and annotations to its own
+			//         Node object (e.g. storage.simplyblock.io/* status labels) so the
+			//         operator and control plane can observe node-level storage state
+			//         without querying the storage node API directly.
+			// watch: used by the retry/wait loops that monitor node cordon state.
 			APIGroups: []string{""},
 			Resources: []string{"nodes"},
 			Verbs:     []string{"list", "get", "update", "patch", "watch"},
@@ -334,6 +352,10 @@ func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 	if isOpenShift {
 		baseRules = append(baseRules,
 			rbacv1.PolicyRule{
+				// OpenShift-only: the storage node configures kubelet CPU management policy
+				// and core isolation by creating or patching MachineConfig and KubeletConfig
+				// objects (oc_storage_cpu_topology.yaml.j2 / oc_storage_core_isolation.yaml.j2).
+				// MachineConfigPool is watched to track rollout progress after a config change.
 				APIGroups: []string{"machineconfiguration.openshift.io"},
 				Resources: []string{"machineconfigs", "machineconfigpools", "kubeletconfigs"},
 				Verbs:     []string{"list", "get", "create", "update", "patch", "watch"},
