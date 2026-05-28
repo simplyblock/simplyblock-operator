@@ -37,6 +37,10 @@ fi
 command -v kubectl &>/dev/null || die "kubectl not found"
 command -v helm    &>/dev/null || die "helm not found"
 
+info "Checking for ClusterIssuer simplyblock-certificate-authority-issuer..."
+kubectl get clusterissuer simplyblock-certificate-authority-issuer &>/dev/null \
+  || die "ClusterIssuer 'simplyblock-certificate-authority-issuer' not found — ensure cert-manager is installed, the issuer exists, and the ControlPlane is installed with TLS enabled"
+g
 # ── Install ────────────────────────────────────────────────────────────────────
 info "Installing OpenBao..."
 helm repo add openbao https://openbao.github.io/openbao-helm
