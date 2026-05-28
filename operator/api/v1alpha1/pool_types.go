@@ -169,6 +169,10 @@ type PoolStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.status",description="Backend pool status"
+// +kubebuilder:printcolumn:name="UUID",type="string",JSONPath=".status.uuid",description="Backend pool UUID"
+// +kubebuilder:printcolumn:name="Capacity",type="string",JSONPath=".spec.capacityLimit",description="Configured capacity limit"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Pool"
 
 // Pool is the Schema for the pools API
