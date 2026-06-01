@@ -62,7 +62,7 @@ func TestNewClientInitErrSurfacesFromDo(t *testing.T) {
 		t.Skip("CA bundle unexpectedly present in test environment")
 	}
 
-	_, _, err := c.Do(context.Background(), "secret", http.MethodGet, "/api/v2/anything", nil)
+	_, _, err := c.Do(context.Background(), http.MethodGet, "/api/v2/anything", nil)
 	if err == nil {
 		t.Fatalf("expected init error from Do")
 	}

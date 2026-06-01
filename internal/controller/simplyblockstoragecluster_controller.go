@@ -58,10 +58,6 @@ const (
 	// it from choosing the correct API endpoint.
 	eventReasonClusterLookupError = "ClusterLookupError"
 
-	// eventReasonClusterAuthError is emitted when cluster credentials cannot
-	// be retrieved from the cluster Secret, blocking any authenticated API call.
-	eventReasonClusterAuthError = "ClusterAuthError"
-
 	// eventReasonClusterCreationFailed is emitted when the cluster creation API
 	// call returns a non-2xx status. The event message includes the HTTP status
 	// code and the full response body so the root cause is visible without
@@ -159,7 +155,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	apiClient := webapi.NewClient()
 	/* -------------------- Health Check -------------------- */
 	endpoint := "/api/v1/health/fdb/"
-	body, status, err := apiClient.Do(ctx, "", http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -214,9 +210,8 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	}
 
 	endpoint = "/api/v1/cluster/create_first/"
-	clusterSecret := ""
 
-	exists, clusterUUID, clusterName, clusterNamespace, err := utils.ExistingClusterUUID(ctx, r.Client)
+	exists, _, _, _, err := utils.ExistingClusterUUID(ctx, r.Client)
 	if err != nil {
 		log.Error(err, "Failed to check existing cluster")
 		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterLookupError, "Failed to check existing cluster: %v", err)
@@ -225,26 +220,14 @@ func (r *StorageClusterReconciler) reconcileCreate(
 
 	if exists {
 		endpoint = "/api/v2/clusters/"
-
-		_, clusterSecret, err = utils.GetClusterAuth(ctx, r.Client, clusterNamespace, clusterName)
-		if err != nil {
-			log.Error(
-				err,
-				"Failed to get cluster auth",
-				"clusterName", clusterName,
-				"clusterUUID", clusterUUID,
-			)
-			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterAuthError, "Failed to get cluster auth for %s: %v", clusterName, err)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
 	}
 
-	body, status, err = apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
+	body, status, err = apiClient.Do(ctx, http.MethodPost, endpoint, params)
 	if err != nil || status >= 300 {
 		// POST failed — the cluster may already exist on the backend (race between
 		// two reconciles both seeing UUID="" before the first one patches status).
 		// Try to look it up by name and adopt it instead of failing.
-		existing, lookupErr := utils.GetClusterByName(ctx, apiClient, clusterSecret, clusterCR.Name)
+		existing, lookupErr := utils.GetClusterByName(ctx, apiClient, clusterCR.Name)
 		if lookupErr != nil || existing == nil {
 			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterCreationFailed, "Cluster creation failed (status=%d): %s", status, string(body))
 
@@ -370,7 +353,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 
 	// endpoint := fmt.Sprintf("/api/v2/clusters/%s/update", clusterUUID)
 
-	// body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, updateParams)
+	// body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, updateParams)
 	// if err != nil || status >= 300 {
 	// 	log.Error(err, "Cluster update failed", "status", status, "response", string(body))
 	// 	return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
@@ -515,17 +498,17 @@ func (r *StorageClusterReconciler) handleDeletion(
 		return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 	}
 
-	clusterUUID, clusterSecret, err :=
-		utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	clusterUUID, err :=
+		utils.GetClusterUUID(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
-		log.Error(err, "Failed to get cluster auth during deletion, will retry", "name", clusterCR.Name)
+		log.Error(err, "Failed to get cluster UUID during deletion, will retry", "name", clusterCR.Name)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
 	}
 
 	apiClient := webapi.NewClient()
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
 
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -619,8 +602,8 @@ func (r *StorageClusterReconciler) reconcileActivate(
 	if clusterCR.Status.ActionStatus.State == utils.ActionStateRunning &&
 		!clusterCR.Status.ActionStatus.Triggered {
 
-		clusterUUID, clusterSecret, err :=
-			utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+		clusterUUID, err :=
+			utils.GetClusterUUID(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 		if err != nil {
 			return r.failActivate(ctx, clusterCR, err)
 		}
@@ -628,7 +611,7 @@ func (r *StorageClusterReconciler) reconcileActivate(
 		apiClient := webapi.NewClient()
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/activate", clusterUUID)
 
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d", status)
@@ -664,14 +647,8 @@ func (r *StorageClusterReconciler) reconcileActivate(
 		return r.failActivate(ctx, clusterCR, err)
 	}
 
-	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
-	if err != nil {
-		log.Error(err, "Failed to get cluster auth")
-		return r.failActivate(ctx, clusterCR, err)
-	}
-
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -739,8 +716,8 @@ func (r *StorageClusterReconciler) reconcileExpand(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, clusterSecret, err :=
-		utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	clusterUUID, err :=
+		utils.GetClusterUUID(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
 		return r.failExpand(ctx, clusterCR, err)
 	}
@@ -752,7 +729,7 @@ func (r *StorageClusterReconciler) reconcileExpand(
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/expand", clusterUUID)
 
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d", status)
@@ -773,7 +750,7 @@ func (r *StorageClusterReconciler) reconcileExpand(
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -944,21 +921,10 @@ func (r *StorageClusterReconciler) syncStatus(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
-	if err != nil {
-		log.Error(err, "syncStatus: failed to get cluster auth", "name", clusterCR.Name)
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
-
-	if err := r.upsertCSICredentialsSecret(ctx, r.Namespace, clusterCR.Status.UUID, utils.ENDPOINT, clusterSecret); err != nil {
-		log.Error(err, "syncStatus: failed to upsert CSI credentials secret", "name", clusterCR.Name)
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
-
 	apiClient := webapi.NewClient()
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterCR.Status.UUID)
 
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)

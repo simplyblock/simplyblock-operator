@@ -66,9 +66,9 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{RequeueAfter: backupSyncRequeue}, nil
 	}
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	clusterUUID, err := utils.GetClusterUUID(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
-		log.Info("Skipping backup sync — cannot get cluster auth",
+		log.Info("Skipping backup sync — cannot get cluster UUID",
 			"cluster", clusterCR.Name, "reason", err.Error())
 		return ctrl.Result{RequeueAfter: backupSyncRequeue}, nil
 	}
@@ -77,7 +77,7 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Use StorageBackupReconciler's listBackups so the HTTP logic stays in one place.
 	delegate := &StorageBackupReconciler{Client: r.Client, Scheme: r.Scheme, APIClient: apiClient}
-	backendBackups, err := delegate.listBackups(ctx, apiClient, clusterSecret, clusterUUID)
+	backendBackups, err := delegate.listBackups(ctx, apiClient, clusterUUID)
 	if err != nil {
 		log.Error(err, "Failed to list backend backups", "cluster", clusterCR.Name)
 		return ctrl.Result{RequeueAfter: backupSyncRequeue}, nil

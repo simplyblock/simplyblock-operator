@@ -13,18 +13,16 @@ import (
 
 func (c *Client) Do(
 	ctx context.Context,
-	clusterSecret string,
 	method string,
 	endpoint string,
 	body interface{},
 ) ([]byte, int, error) {
-	data, _, status, err := c.DoWithHeaders(ctx, clusterSecret, method, endpoint, body)
+	data, _, status, err := c.DoWithHeaders(ctx, method, endpoint, body)
 	return data, status, err
 }
 
 func (c *Client) DoWithHeaders(
 	ctx context.Context,
-	clusterSecret string,
 	method string,
 	endpoint string,
 	body interface{},
@@ -54,7 +52,7 @@ func (c *Client) DoWithHeaders(
 	}
 
 	// Attach auth header
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", clusterSecret))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.saToken))
 	req.Header.Set("Content-Type", "application/json")
 
 	// Execute the request
