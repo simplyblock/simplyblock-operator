@@ -56,7 +56,6 @@ const (
 // Event reason constants for BackupPolicy reconciliation.
 const (
 	eventReasonPolicyClusterLookupError = "PolicyClusterLookupError"
-	eventReasonPolicyClusterAuthError   = "PolicyClusterAuthError"
 	eventReasonPolicyCreateFailed       = "PolicyCreateFailed"
 	eventReasonPolicyDeleteFailed       = "PolicyDeleteFailed"
 	eventReasonPolicyAttachFailed       = "PolicyAttachFailed"
@@ -137,25 +136,11 @@ func (r *BackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{RequeueAfter: backupPolicyReconcileRequeue}, nil
 	}
 
-	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, policyCR.Namespace, policyCR.Spec.ClusterName)
-	if err != nil {
-		r.Recorder.Eventf(policyCR, corev1.EventTypeWarning, eventReasonPolicyClusterAuthError,
-			"Failed to get cluster auth for %s: %v", policyCR.Spec.ClusterName, err)
-		if patchErr := r.patchStatus(ctx, policyCR, func(s *simplyblockv1alpha1.BackupPolicyStatus) {
-			s.Phase = simplyblockv1alpha1.BackupPolicyPhasePending
-			s.ClusterUUID = clusterUUID
-			s.Message = err.Error()
-		}); patchErr != nil {
-			return ctrl.Result{}, patchErr
-		}
-		return ctrl.Result{RequeueAfter: backupPolicyReconcileRequeue}, nil
-	}
-
 	apiClient := r.apiClient()
 
 	// ── 2. Ensure the policy exists in the backend ───────────────────────────
 
-	policyID, err := r.ensurePolicy(ctx, apiClient, clusterSecret, clusterUUID, policyCR)
+	policyID, err := r.ensurePolicy(ctx, apiClient, clusterUUID, policyCR)
 	if err != nil {
 		log.Error(err, "Failed to ensure backup policy in backend")
 		r.Recorder.Eventf(policyCR, corev1.EventTypeWarning, eventReasonPolicyCreateFailed,
@@ -203,7 +188,7 @@ func (r *BackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	var attachErrors []string
 
 	for _, a := range toAttach {
-		if attachErr := r.attachPolicy(ctx, apiClient, clusterSecret, clusterUUID, policyID, a.LvolID); attachErr != nil {
+		if attachErr := r.attachPolicy(ctx, apiClient, clusterUUID, policyID, a.LvolID); attachErr != nil {
 			log.Error(attachErr, "Failed to attach policy to lvol", "lvolID", a.LvolID, "pvc", a.PVCName)
 			r.Recorder.Eventf(policyCR, corev1.EventTypeWarning, eventReasonPolicyAttachFailed,
 				"Failed to attach policy to lvol %s (PVC %s/%s): %v", a.LvolID, a.PVCNamespace, a.PVCName, attachErr)
@@ -215,7 +200,7 @@ func (r *BackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	for _, d := range toDetach {
-		if detachErr := r.detachPolicy(ctx, apiClient, clusterSecret, clusterUUID, policyID, d.LvolID); detachErr != nil {
+		if detachErr := r.detachPolicy(ctx, apiClient, clusterUUID, policyID, d.LvolID); detachErr != nil {
 			log.Error(detachErr, "Failed to detach policy from lvol", "lvolID", d.LvolID, "pvc", d.PVCName)
 			r.Recorder.Eventf(policyCR, corev1.EventTypeWarning, eventReasonPolicyDetachFailed,
 				"Failed to detach policy from lvol %s (PVC %s/%s): %v", d.LvolID, d.PVCNamespace, d.PVCName, detachErr)
@@ -303,27 +288,21 @@ func (r *BackupPolicyReconciler) handleDeletion(
 	}
 
 	clusterUUID := policyCR.Status.ClusterUUID
-	clusterSecret := ""
 
 	if clusterUUID == "" {
 		if resolved, err := utils.ResolveClusterUUID(ctx, r.Client, policyCR.Namespace, policyCR.Spec.ClusterName); err == nil {
 			clusterUUID = resolved
 		}
 	}
-	if clusterUUID != "" {
-		if _, secret, err := utils.GetClusterAuth(ctx, r.Client, policyCR.Namespace, policyCR.Spec.ClusterName); err == nil {
-			clusterSecret = secret
-		}
-	}
 
 	policyID := policyCR.Status.PolicyID
 
-	if clusterUUID != "" && clusterSecret != "" && policyID != "" {
+	if clusterUUID != "" && policyID != "" {
 		apiClient := r.apiClient()
 
 		// Detach from every currently-attached lvol.
 		for _, a := range policyCR.Status.AttachedLvols {
-			if err := r.detachPolicy(ctx, apiClient, clusterSecret, clusterUUID, policyID, a.LvolID); err != nil {
+			if err := r.detachPolicy(ctx, apiClient, clusterUUID, policyID, a.LvolID); err != nil {
 				log.Error(err, "Failed to detach policy from lvol during deletion",
 					"lvolID", a.LvolID, "pvc", a.PVCName)
 				r.Recorder.Eventf(policyCR, corev1.EventTypeWarning, eventReasonPolicyDetachFailed,
@@ -334,7 +313,7 @@ func (r *BackupPolicyReconciler) handleDeletion(
 
 		// Delete the policy itself.
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/backup-policies/%s", clusterUUID, policyID)
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 		if err != nil {
 			log.Error(err, "Failed to delete backup policy from backend")
 			r.Recorder.Eventf(policyCR, corev1.EventTypeWarning, eventReasonPolicyDeleteFailed,
@@ -365,13 +344,12 @@ func (r *BackupPolicyReconciler) handleDeletion(
 func (r *BackupPolicyReconciler) ensurePolicy(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 	policyCR *simplyblockv1alpha1.BackupPolicy,
 ) (string, error) {
 	// If we already have an ID stored, verify it still exists.
 	if policyCR.Status.PolicyID != "" {
-		existing, err := r.listPolicies(ctx, apiClient, clusterSecret, clusterUUID)
+		existing, err := r.listPolicies(ctx, apiClient, clusterUUID)
 		if err != nil {
 			return "", err
 		}
@@ -385,7 +363,7 @@ func (r *BackupPolicyReconciler) ensurePolicy(
 
 	// Search by name in case a previous CR left a policy behind.
 	policyName := policyBackendName(policyCR)
-	existing, err := r.listPolicies(ctx, apiClient, clusterSecret, clusterUUID)
+	existing, err := r.listPolicies(ctx, apiClient, clusterUUID)
 	if err != nil {
 		return "", err
 	}
@@ -396,18 +374,17 @@ func (r *BackupPolicyReconciler) ensurePolicy(
 	}
 
 	// Create new policy.
-	return r.createPolicy(ctx, apiClient, clusterSecret, clusterUUID, policyCR)
+	return r.createPolicy(ctx, apiClient, clusterUUID, policyCR)
 }
 
 // listPolicies fetches all backup policies for the given cluster.
 func (r *BackupPolicyReconciler) listPolicies(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 ) ([]backupPolicyAPIResponse, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/backup-policies/", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -426,7 +403,6 @@ func (r *BackupPolicyReconciler) listPolicies(
 func (r *BackupPolicyReconciler) createPolicy(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 	policyCR *simplyblockv1alpha1.BackupPolicy,
 ) (string, error) {
@@ -438,7 +414,7 @@ func (r *BackupPolicyReconciler) createPolicy(
 		Schedule: policyCR.Spec.Schedule,
 	}
 
-	body, headers, status, err := apiClient.DoWithHeaders(ctx, clusterSecret, http.MethodPost, endpoint, req)
+	body, headers, status, err := apiClient.DoWithHeaders(ctx, http.MethodPost, endpoint, req)
 	if err != nil {
 		return "", err
 	}
@@ -457,13 +433,12 @@ func (r *BackupPolicyReconciler) createPolicy(
 func (r *BackupPolicyReconciler) attachPolicy(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 	policyID string,
 	lvolID string,
 ) error {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/backup-policies/%s/attach", clusterUUID, policyID)
-	body, _, status, err := apiClient.DoWithHeaders(ctx, clusterSecret, http.MethodPost, endpoint, backupPolicyAttachRequest{
+	body, _, status, err := apiClient.DoWithHeaders(ctx, http.MethodPost, endpoint, backupPolicyAttachRequest{
 		TargetType: "lvol",
 		TargetID:   lvolID,
 	})
@@ -485,13 +460,12 @@ func (r *BackupPolicyReconciler) attachPolicy(
 func (r *BackupPolicyReconciler) detachPolicy(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 	policyID string,
 	lvolID string,
 ) error {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/backup-policies/%s/detach", clusterUUID, policyID)
-	body, _, status, err := apiClient.DoWithHeaders(ctx, clusterSecret, http.MethodPost, endpoint, backupPolicyAttachRequest{
+	body, _, status, err := apiClient.DoWithHeaders(ctx, http.MethodPost, endpoint, backupPolicyAttachRequest{
 		TargetType: "lvol",
 		TargetID:   lvolID,
 	})

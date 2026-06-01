@@ -66,7 +66,7 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	orig := cp.DeepCopy()
 
 	apiClient := webapi.NewClient()
-	body, status, err := apiClient.Do(ctx, "", http.MethodGet, "/api/v1/health/fdb/", nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, "/api/v1/health/fdb/", nil)
 	if err != nil || status >= 300 {
 		msg := string(body)
 		if err != nil {

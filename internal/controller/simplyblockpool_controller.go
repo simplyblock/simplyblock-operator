@@ -157,18 +157,12 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, poolCR.Namespace, poolCR.Spec.ClusterName)
-	if err != nil {
-		log.Error(err, "Failed to get cluster auth")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
 	apiClient := webapi.NewClient()
 
 	if !poolCR.DeletionTimestamp.IsZero() {
 		if utils.ContainsString(poolCR.Finalizers, utils.FinalizerPool) && poolCR.Status.UUID != "" {
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
-			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+			body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 			if err != nil || status >= 300 {
 				if err == nil {
 					err = fmt.Errorf("unexpected status %d", status)
@@ -226,7 +220,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, params)
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d", status)
@@ -276,7 +270,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	if changed, err := r.syncPoolHosts(ctx, apiClient, clusterSecret, clusterUUID, poolCR); err != nil {
+	if changed, err := r.syncPoolHosts(ctx, apiClient, clusterUUID, poolCR); err != nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	} else if changed {
 		poolCR.Status.AllowedNodes = poolCR.Spec.AllowedNodes
@@ -298,7 +292,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	// }
 
 	// endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
-	// body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPut, endpoint, updateParams)
+	// body, status, err := apiClient.Do(ctx, http.MethodPut, endpoint, updateParams)
 	// if err != nil || status >= 300 {
 	// 	log.Error(err, "Pool update failed", "status", status, "response", string(body))
 	// 	return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
@@ -465,7 +459,7 @@ func (r *PoolReconciler) syncNodeLabels(ctx context.Context, poolCR *simplyblock
 func (r *PoolReconciler) syncPoolHosts(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID string,
+	clusterUUID string,
 	poolCR *simplyblockv1alpha1.Pool,
 ) (bool, error) {
 	log := logf.FromContext(ctx)
@@ -481,7 +475,7 @@ func (r *PoolReconciler) syncPoolHosts(
 
 	// Fetch current backend state to use as applied list.
 	getEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, getEndpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, getEndpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d: %s", status, string(body))
@@ -516,7 +510,7 @@ func (r *PoolReconciler) syncPoolHosts(
 		if _, ok := appliedSet[h]; ok {
 			continue
 		}
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, poolHostParams{HostNQN: h})
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, poolHostParams{HostNQN: h})
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d: %s", status, string(body))
@@ -532,7 +526,7 @@ func (r *PoolReconciler) syncPoolHosts(
 		if _, ok := desiredSet[h]; ok {
 			continue
 		}
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, poolHostParams{HostNQN: h})
+		body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, poolHostParams{HostNQN: h})
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d: %s", status, string(body))

@@ -45,9 +45,7 @@ const (
 
 const (
 	eventReasonImportSourceClusterLookupError  = "ImportSourceClusterLookupError"
-	eventReasonImportSourceClusterAuthError    = "ImportSourceClusterAuthError"
 	eventReasonImportTargetClusterLookupError  = "ImportTargetClusterLookupError"
-	eventReasonImportTargetClusterAuthError    = "ImportTargetClusterAuthError"
 	eventReasonImportExportFailed              = "ImportExportFailed"
 	eventReasonImportFailed                    = "ImportFailed"
 	eventReasonImportStorageBackupCreateFailed = "ImportStorageBackupCreateFailed"
@@ -97,16 +95,6 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			"Failed to resolve source cluster UUID: %v", err)
 		return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
 	}
-	_, srcSecret, err := utils.GetClusterAuth(ctx, r.Client, importCR.Namespace, importCR.Spec.SourceClusterName)
-	if err != nil {
-		if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending, err.Error()); patchErr != nil {
-			return ctrl.Result{}, patchErr
-		}
-		r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportSourceClusterAuthError,
-			"Failed to get source cluster auth: %v", err)
-		return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
-	}
-
 	// Resolve target cluster credentials.
 	targetClusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, importCR.Namespace, importCR.Spec.TargetClusterName)
 	if err != nil {
@@ -115,15 +103,6 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportTargetClusterLookupError,
 			"Failed to resolve target cluster UUID: %v", err)
-		return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
-	}
-	_, targetSecret, err := utils.GetClusterAuth(ctx, r.Client, importCR.Namespace, importCR.Spec.TargetClusterName)
-	if err != nil {
-		if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending, err.Error()); patchErr != nil {
-			return ctrl.Result{}, patchErr
-		}
-		r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportTargetClusterAuthError,
-			"Failed to get target cluster auth: %v", err)
 		return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
 	}
 
@@ -149,7 +128,7 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, err
 		}
 
-		exportedData, err := r.exportBackup(ctx, apiClient, srcSecret, srcClusterUUID, importCR.Spec.SourceBackupID)
+		exportedData, err := r.exportBackup(ctx, apiClient, srcClusterUUID, importCR.Spec.SourceBackupID)
 		if err != nil {
 			if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending,
 				fmt.Sprintf("Export failed: %v", err)); patchErr != nil {
@@ -166,7 +145,7 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, err
 		}
 
-		imported, err := r.importBackup(ctx, apiClient, targetSecret, targetClusterUUID, exportedData)
+		imported, err := r.importBackup(ctx, apiClient, targetClusterUUID, exportedData)
 		if err != nil {
 			if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending,
 				fmt.Sprintf("Import failed: %v", err)); patchErr != nil {
@@ -216,12 +195,12 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 func (r *BackupImportReconciler) exportBackup(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	srcSecret, srcClusterUUID, backupID string,
+	srcClusterUUID, backupID string,
 ) (json.RawMessage, error) {
 	params := url.Values{"backup_id": {backupID}}
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/export?%s",
 		url.PathEscape(srcClusterUUID), params.Encode())
-	body, status, err := apiClient.Do(ctx, srcSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -245,12 +224,12 @@ func (r *BackupImportReconciler) exportBackup(
 func (r *BackupImportReconciler) importBackup(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	targetSecret, targetClusterUUID string,
+	targetClusterUUID string,
 	exportedData json.RawMessage,
 ) (int, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/import", url.PathEscape(targetClusterUUID))
 	reqBody := importBackupsRequest{Metadata: exportedData}
-	body, status, err := apiClient.Do(ctx, targetSecret, http.MethodPost, endpoint, reqBody)
+	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, reqBody)
 	if err != nil {
 		return 0, err
 	}

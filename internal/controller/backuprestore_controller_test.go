@@ -32,7 +32,7 @@ func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
 				if req.URL.Path != "/api/v2/clusters/cluster-uuid/storage-pools/pool-uuid/volumes/lvol-uuid/connect" {
 					t.Fatalf("path = %s", req.URL.Path)
 				}
-				if got := req.Header.Get("Authorization"); got != "Bearer cluster-secret" {
+				if got := req.Header.Get("Authorization"); !strings.HasPrefix(got, "Bearer ") {
 					t.Fatalf("authorization = %q", got)
 				}
 
@@ -107,7 +107,6 @@ func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
 		"restore-pvc",
 		"default",
 		"cluster-uuid",
-		"cluster-secret",
 	); err != nil {
 		t.Fatalf("ensurePV returned error: %v", err)
 	}

@@ -140,12 +140,6 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
-	if err != nil {
-		log.Error(err, "Failed to get cluster auth")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
 	/* -------------------- Deletion -------------------- */
 	if updated, err := r.handleDeletion(ctx, snCR); updated || err != nil {
 		return ctrl.Result{}, err
@@ -159,7 +153,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	apiClient := webapi.NewClient()
 
 	if snCR.Spec.Action != "" {
-		return r.reconcileAction(ctx, snCR, clusterUUID, clusterSecret)
+		return r.reconcileAction(ctx, snCR, clusterUUID)
 	}
 
 	if err := r.labelWorkerNodes(ctx, snCR); err != nil {
@@ -231,7 +225,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	expectedPerHost := utils.ExpectedNodesPerHost(snCR)
 
 	for _, nodeName := range snCR.Spec.WorkerNodes {
-		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, clusterSecret, apiClient, expectedPerHost)
+		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
 		if err != nil || res.RequeueAfter > 0 {
 			return res, err
 		}
@@ -259,7 +253,7 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 	ctx context.Context,
 	req ctrl.Request,
 	snCR *simplyblockv1alpha1.StorageNode,
-	nodeName, clusterUUID, clusterSecret string,
+	nodeName, clusterUUID string,
 	apiClient *webapi.Client,
 	expectedPerHost int,
 ) (ctrl.Result, error) {
@@ -295,12 +289,12 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 	}
 
 	if !hasPlaceholder {
-		if res, err := r.postStorageNode(ctx, req, snCR, nodeName, ip, clusterUUID, clusterSecret, apiClient); err != nil || res.RequeueAfter > 0 {
+		if res, err := r.postStorageNode(ctx, req, snCR, nodeName, ip, clusterUUID, apiClient); err != nil || res.RequeueAfter > 0 {
 			return res, err
 		}
 	}
 
-	return r.pollNodeOnline(ctx, apiClient, clusterSecret, clusterUUID, ip, nodeName, expectedPerHost, snCR)
+	return r.pollNodeOnline(ctx, apiClient, clusterUUID, ip, nodeName, expectedPerHost, snCR)
 }
 
 // postStorageNode calls the backend storage-node creation API and records the
@@ -309,7 +303,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 	ctx context.Context,
 	req ctrl.Request,
 	snCR *simplyblockv1alpha1.StorageNode,
-	nodeName, ip, clusterUUID, clusterSecret string,
+	nodeName, ip, clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -357,7 +351,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 		)
 	}
 
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
+	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, params)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -1016,14 +1010,14 @@ func waitForNodeInfoReachable(
 func (r *StorageNodeReconciler) pollNodeOnline(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, ip, nodeName string,
+	clusterUUID, ip, nodeName string,
 	expectedPerHost int,
 	snCR *simplyblockv1alpha1.StorageNode,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
 
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	log.Info("SNODE LIST raw API response", "endpoint", endpoint, "status", status, "body", string(body))
 
 	if err != nil || status >= 300 {
@@ -1064,7 +1058,7 @@ func (r *StorageNodeReconciler) pollNodeOnline(
 	}
 
 	// All socket nodes are online — sync status and check cluster activation.
-	if err := onAllSocketNodesOnline(ctx, apiClient, clusterSecret, clusterUUID, snCR, nodeName, onlineForHost, r); err != nil {
+	if err := onAllSocketNodesOnline(ctx, apiClient, clusterUUID, snCR, nodeName, onlineForHost, r); err != nil {
 		return ctrl.Result{}, err
 	}
 	log.Info("Storage node created successfully", "node", nodeName)
@@ -1118,7 +1112,7 @@ func (r *StorageNodeReconciler) nodeOnlineRequeueOrTimeout(
 func onAllSocketNodesOnline(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID string,
+	clusterUUID string,
 	snCR *simplyblockv1alpha1.StorageNode,
 	nodeName string,
 	onlineForHost []SNODEAPIResponse,
@@ -1173,7 +1167,7 @@ func onAllSocketNodesOnline(
 
 	log.Info("All socket nodes online", "node", nodeName, "count", len(onlineForHost))
 
-	return maybeActivateCluster(ctx, apiClient, clusterSecret, clusterUUID, snCR, r)
+	return maybeActivateCluster(ctx, apiClient, clusterUUID, snCR, r)
 }
 
 // syncTrackedNodesStatus refreshes all tracked (UUID != "") NodeStatus entries
@@ -1266,7 +1260,7 @@ func (r *StorageNodeReconciler) syncTrackedNodesStatus(
 func maybeActivateCluster(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID string,
+	clusterUUID string,
 	snCR *simplyblockv1alpha1.StorageNode,
 	r *StorageNodeReconciler,
 ) error {
@@ -1303,7 +1297,7 @@ func maybeActivateCluster(
 	if utils.ShouldActivateCluster(requiredEc, onlineHealthy, snCR) {
 		waitForNodeOnlineSleepFn(waitForNodeOnlineActivationDelay)
 		log.Info("Activation conditions met — activating cluster")
-		if err := utils.ActivateClusterAndWait(ctx, apiClient, clusterSecret, clusterUUID); err != nil {
+		if err := utils.ActivateClusterAndWait(ctx, apiClient, clusterUUID); err != nil {
 			log.Error(err, "Cluster activation did not complete")
 			return err
 		}
@@ -1335,7 +1329,6 @@ func (r *StorageNodeReconciler) reconcileAction(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
 	clusterUUID string,
-	clusterSecret string,
 ) (ctrl.Result, error) {
 
 	apiClient := webapi.NewClient()
@@ -1345,7 +1338,6 @@ func (r *StorageNodeReconciler) reconcileAction(
 		apiClient,
 		snCR,
 		clusterUUID,
-		clusterSecret,
 	); err != nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -1357,7 +1349,7 @@ func (r *StorageNodeReconciler) handleNodeAction(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	snCR *simplyblockv1alpha1.StorageNode,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 ) error {
 	log := logf.FromContext(ctx)
 
@@ -1384,7 +1376,7 @@ func (r *StorageNodeReconciler) handleNodeAction(
 		return err
 	}
 
-	if err := r.performNodeAction(ctx, apiClient, clusterUUID, clusterSecret, snCR); err != nil {
+	if err := r.performNodeAction(ctx, apiClient, clusterUUID, snCR); err != nil {
 		log.Error(err, "Action failed", "action", snCR.Spec.Action, "nodeUUID", snCR.Spec.NodeUUID)
 		snCR.Status.ActionStatus.State = utils.ActionStateFailed
 		snCR.Status.ActionStatus.Message = err.Error()
@@ -1409,7 +1401,6 @@ func (r *StorageNodeReconciler) performNodeAction(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
-	clusterSecret string,
 	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
 
@@ -1474,7 +1465,7 @@ func (r *StorageNodeReconciler) performNodeAction(
 		)
 	}
 
-	respBody, status, err := apiClient.Do(ctx, clusterSecret, method, endpoint, body)
+	respBody, status, err := apiClient.Do(ctx, method, endpoint, body)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -1496,7 +1487,6 @@ func (r *StorageNodeReconciler) performNodeAction(
 		ctx,
 		apiClient,
 		clusterUUID,
-		clusterSecret,
 		snCR.Spec.NodeUUID,
 		snCR.Spec.Action,
 	); err != nil {
@@ -1527,7 +1517,6 @@ func (r *StorageNodeReconciler) waitForActionCompletion(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
-	clusterSecret string,
 	nodeUUID string,
 	action string,
 ) error {
@@ -1554,7 +1543,7 @@ func (r *StorageNodeReconciler) waitForActionCompletion(
 	)
 
 	for i := 0; i < waitForActionCompletionRetries; i++ {
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 
 		if action == "remove" && status == http.StatusNotFound {
 			log.Info(

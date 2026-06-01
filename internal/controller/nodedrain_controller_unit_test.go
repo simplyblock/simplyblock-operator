@@ -185,7 +185,7 @@ func TestCountActiveDrainsControllerState(t *testing.T) {
 		},
 	}
 
-	got := countActiveDrains(context.Background(), snCR, webapi.NewClient("http://127.0.0.1:1"), "cluster", "secret")
+	got := countActiveDrains(context.Background(), snCR, webapi.NewClient("http://127.0.0.1:1"), "cluster")
 	if got != 3 {
 		t.Fatalf("expected 3 active drains (shutdown_called, draining, restart_called), got %d", got)
 	}
@@ -202,7 +202,7 @@ func TestCountActiveDrainsBackendConservative(t *testing.T) {
 	}
 
 	// Use an unreachable address to force backend error.
-	got := countActiveDrains(context.Background(), snCR, webapi.NewClient("http://127.0.0.1:1"), "cluster", "secret")
+	got := countActiveDrains(context.Background(), snCR, webapi.NewClient("http://127.0.0.1:1"), "cluster")
 	if got < 1 {
 		t.Fatalf("expected at least 1 (conservative count on API error), got %d", got)
 	}
@@ -226,7 +226,7 @@ func TestCountActiveDrainsBackendTakesPrecedence(t *testing.T) {
 		},
 	}
 
-	got := countActiveDrains(context.Background(), snCR, webapi.NewClient(srv.URL), "cluster", "secret")
+	got := countActiveDrains(context.Background(), snCR, webapi.NewClient(srv.URL), "cluster")
 	if got != 2 {
 		t.Fatalf("expected backend count of 2, got %d", got)
 	}
@@ -603,7 +603,7 @@ func TestProcessWorkerUncordonedNoState(t *testing.T) {
 
 	requeue, shouldBreak := r.processWorker(
 		context.Background(), snCR, "node-g",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", "secret", 1,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1,
 	)
 	if requeue != 0 || shouldBreak {
 		t.Fatalf("expected (0, false) for uncordoned node with no state, got (%v, %v)", requeue, shouldBreak)
@@ -627,7 +627,7 @@ func TestProcessWorkerSkipsCordonedNotYetOnline(t *testing.T) {
 
 	requeue, shouldBreak := r.processWorker(
 		context.Background(), snCR, "node-h",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", "secret", 1,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1,
 	)
 	if requeue != 0 || shouldBreak {
 		t.Fatalf("expected (0, false) for cordoned node not yet online, got (%v, %v)", requeue, shouldBreak)
@@ -656,7 +656,7 @@ func TestProcessWorkerCordonedOnlineInitializesState(t *testing.T) {
 
 	r.processWorker(
 		context.Background(), snCR, "node-i",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", "secret", 1,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1,
 	)
 
 	// Drain state must have been initialized (phase may be detected or failed
@@ -673,7 +673,7 @@ func TestIsClusterRebalancingTrue(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	rebalancing, err := isClusterRebalancing(context.Background(), webapi.NewClient(srv.URL), "secret", "cluster-uuid")
+	rebalancing, err := isClusterRebalancing(context.Background(), webapi.NewClient(srv.URL), "cluster-uuid")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -689,7 +689,7 @@ func TestIsClusterRebalancingFalse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	rebalancing, err := isClusterRebalancing(context.Background(), webapi.NewClient(srv.URL), "secret", "cluster-uuid")
+	rebalancing, err := isClusterRebalancing(context.Background(), webapi.NewClient(srv.URL), "cluster-uuid")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -700,7 +700,7 @@ func TestIsClusterRebalancingFalse(t *testing.T) {
 
 func TestIsClusterRebalancingAPIError(t *testing.T) {
 	// Unreachable address → error expected.
-	_, err := isClusterRebalancing(context.Background(), webapi.NewClient("http://127.0.0.1:1"), "secret", "cluster-uuid")
+	_, err := isClusterRebalancing(context.Background(), webapi.NewClient("http://127.0.0.1:1"), "cluster-uuid")
 	if err == nil {
 		t.Fatalf("expected error when API is unreachable")
 	}
@@ -713,7 +713,7 @@ func TestIsClusterRebalancingNonOKStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := isClusterRebalancing(context.Background(), webapi.NewClient(srv.URL), "secret", "cluster-uuid")
+	_, err := isClusterRebalancing(context.Background(), webapi.NewClient(srv.URL), "cluster-uuid")
 	if err == nil {
 		t.Fatalf("expected error on non-2xx response")
 	}
@@ -764,7 +764,7 @@ func TestHandleRestartCalledHoldsDrainSlotWhileRebalancing(t *testing.T) {
 	}
 
 	r := newNodeDrainTestReconciler(t, snCR, k8sNode)
-	requeue, err := r.handleRestartCalled(context.Background(), snCR, state, webapi.NewClient(srv.URL), "cluster-uuid", "secret")
+	requeue, err := r.handleRestartCalled(context.Background(), snCR, state, webapi.NewClient(srv.URL), "cluster-uuid")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -819,7 +819,7 @@ func TestHandleRestartCalledCompletesWhenNotRebalancing(t *testing.T) {
 	}
 
 	r := newNodeDrainTestReconciler(t, snCR, k8sNode)
-	requeue, err := r.handleRestartCalled(context.Background(), snCR, state, webapi.NewClient(srv.URL), "cluster-uuid", "secret")
+	requeue, err := r.handleRestartCalled(context.Background(), snCR, state, webapi.NewClient(srv.URL), "cluster-uuid")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

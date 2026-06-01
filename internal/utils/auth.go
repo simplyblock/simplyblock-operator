@@ -9,14 +9,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// GetClusterAuth retrieves UUID and secret for a given cluster name.
-// 'cli' is a controller-runtime client (e.g., r.Client from a reconciler)
-func GetClusterAuth(ctx context.Context, cli client.Client, namespace, clusterIdentifier string) (string, string, error) {
+// GetClusterUUID retrieves the cluster UUID for a given cluster name from its Kubernetes secret.
+func GetClusterUUID(ctx context.Context, cli client.Client, namespace, clusterIdentifier string) (string, error) {
 	var clusterName string
 	if IsUUID(clusterIdentifier) {
 		name, err := GetClusterNameByUUID(ctx, cli, namespace, clusterIdentifier)
 		if err != nil {
-			return "", "", err
+			return "", err
 		}
 		clusterName = name
 	} else {
@@ -29,18 +28,13 @@ func GetClusterAuth(ctx context.Context, cli client.Client, namespace, clusterId
 		Name:      secretName,
 		Namespace: namespace,
 	}, secret); err != nil {
-		return "", "", fmt.Errorf("failed to get cluster secret '%s': %w", secretName, err)
+		return "", fmt.Errorf("failed to get cluster secret '%s': %w", secretName, err)
 	}
 
 	uuidBytes, ok := secret.Data["uuid"]
 	if !ok {
-		return "", "", fmt.Errorf("secret %s missing 'uuid'", secretName)
+		return "", fmt.Errorf("secret %s missing 'uuid'", secretName)
 	}
 
-	secretBytes, ok := secret.Data["secret"]
-	if !ok {
-		return "", "", fmt.Errorf("secret %s missing 'secret'", secretName)
-	}
-
-	return string(uuidBytes), string(secretBytes), nil
+	return string(uuidBytes), nil
 }
