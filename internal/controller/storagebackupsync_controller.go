@@ -62,18 +62,14 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if clusterCR.Status.UUID == "" {
-		return ctrl.Result{RequeueAfter: backupSyncRequeue}, nil
-	}
+	apiClient := r.apiClient()
 
-	clusterUUID, err := utils.GetClusterUUID(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	clusterUUID, err := utils.GetClusterID(ctx, apiClient, clusterCR)
 	if err != nil {
 		log.Info("Skipping backup sync — cannot get cluster UUID",
 			"cluster", clusterCR.Name, "reason", err.Error())
 		return ctrl.Result{RequeueAfter: backupSyncRequeue}, nil
 	}
-
-	apiClient := r.apiClient()
 
 	// Use StorageBackupReconciler's listBackups so the HTTP logic stays in one place.
 	delegate := &StorageBackupReconciler{Client: r.Client, Scheme: r.Scheme, APIClient: apiClient}

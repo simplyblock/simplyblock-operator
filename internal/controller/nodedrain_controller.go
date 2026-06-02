@@ -112,7 +112,7 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	// Cluster UUID must be available before we can call the simplyblock API.
-	clusterUUID, err := utils.GetClusterUUID(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
+	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
 	if err != nil {
 		// Not yet provisioned; nothing to gate.
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
