@@ -212,16 +212,21 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 			}
 		}
 
-		// Populate ConfigMap entry for the fio-bench-probe sidecar.
-		cfg := fioBenchNodeConfig{
-			NQN:         conn.NQN,
-			Addr:        conn.Addr,
-			Port:        conn.Port,
-			NodeUUID:    node.UUID,
-			ClusterName: snode.Spec.ClusterName,
+		// Only expose the ConfigMap entry to the sidecar once the baseline is stored.
+		// This prevents the sidecar's continuous fio loop from running concurrently
+		// with the one-shot baseline Job — both would write to the same NVMe device
+		// and corrupt each other's measurements.
+		if m.BaselineP99NS > 0 {
+			cfg := fioBenchNodeConfig{
+				NQN:         conn.NQN,
+				Addr:        conn.Addr,
+				Port:        conn.Port,
+				NodeUUID:    node.UUID,
+				ClusterName: snode.Spec.ClusterName,
+			}
+			raw, _ := json.Marshal(cfg)
+			configData[hostname] = string(raw)
 		}
-		raw, _ := json.Marshal(cfg)
-		configData[hostname] = string(raw)
 
 		latencyMetrics = r.setEntry(latencyMetrics, m)
 	}
