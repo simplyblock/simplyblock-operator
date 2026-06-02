@@ -1045,13 +1045,6 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		if current.Status.UUID != "cluster-new-uuid" || !current.Status.Configured {
 			t.Fatalf("unexpected cluster status after create_first: %#v", current.Status)
 		}
-		authSecret := &corev1.Secret{}
-		if err := r.Get(context.Background(), client.ObjectKey{
-			Name:      "simplyblock-cluster-cluster-create-first-ok",
-			Namespace: "default",
-		}, authSecret); err != nil {
-			t.Fatalf("expected auth secret to be created: %v", err)
-		}
 	})
 
 	t.Run("create_v2 success populates status and secret", func(t *testing.T) {
@@ -1116,13 +1109,6 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		}
 		if current.Status.UUID != "cluster-v2-new-uuid" || !current.Status.Configured {
 			t.Fatalf("unexpected cluster status after create_v2: %#v", current.Status)
-		}
-		authSecret := &corev1.Secret{}
-		if err := r.Get(context.Background(), client.ObjectKey{
-			Name:      "simplyblock-cluster-cluster-create-v2-ok",
-			Namespace: "default",
-		}, authSecret); err != nil {
-			t.Fatalf("expected create_v2 auth secret to be created: %v", err)
 		}
 	})
 
@@ -1194,64 +1180,6 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			t.Fatalf("expected dto coding tuple to map to erasureCodingScheme, got %#v", current.Status)
 		}
 	})
-}
-
-func TestStorageClusterCreateFirstSecretHasOwnerReference(t *testing.T) {
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
-	defer mock.Close()
-	mock.Register(
-		http.MethodGet,
-		"/api/v1/health/fdb/",
-		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
-	)
-	mock.Register(
-		http.MethodPost,
-		"/api/v1/cluster/create_first/",
-		webapimock.RouteResponse{
-			Status: http.StatusOK,
-			Body: `{
-				"results":{
-					"uuid":"cluster-ownerref-uuid",
-					"secret":"cluster-ownerref-secret",
-					"nqn":"nqn.2026-04.io.simplyblock:cluster-ownerref",
-					"distr_ndcs":2,
-					"distr_npcs":1,
-					"is_re_balancing":false,
-					"status":"online"
-				}
-			}`,
-			Headers: map[string]string{"Content-Type": "application/json"},
-		},
-	)
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
-
-	cluster := &simplyblockv1alpha1.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "cluster-ownerref",
-			Namespace:  "default",
-			Finalizers: []string{utils.FinalizerStorageCluster},
-		},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{},
-	}
-
-	r := newClusterStateTestReconciler(t, cluster)
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
-	if err != nil {
-		t.Fatalf("reconcile returned error: %v", err)
-	}
-
-	secret := &corev1.Secret{}
-	if err := r.Get(
-		context.Background(),
-		client.ObjectKey{Name: "simplyblock-cluster-cluster-ownerref", Namespace: "default"},
-		secret,
-	); err != nil {
-		t.Fatalf("expected auth secret to be created: %v", err)
-	}
-
-	if len(secret.OwnerReferences) == 0 {
-		t.Fatalf("expected auth secret to carry ownerReference to storagecluster CR")
-	}
 }
 
 func newClusterStateTestReconciler(t *testing.T, objects ...client.Object) *StorageClusterReconciler {

@@ -164,20 +164,6 @@ func ExistingClusterUUID(
 	return false, "", "", "", nil
 }
 
-func GetClusterNameByUUID(ctx context.Context, cli client.Client, namespace, uuid string) (string, error) {
-	clusterList := &simplyblockv1alpha1.StorageClusterList{}
-	if err := cli.List(ctx, clusterList, client.InNamespace(namespace)); err != nil {
-		return "", fmt.Errorf("failed to list clusters: %w", err)
-	}
-
-	for _, c := range clusterList.Items {
-		if c.Status.UUID == uuid {
-			return c.Name, nil
-		}
-	}
-	return "", fmt.Errorf("no cluster found with UUID %s", uuid)
-}
-
 func CountOnlineHealthyNodes(
 	nodes []simplyblockv1alpha1.NodeStatus,
 ) int {
@@ -265,6 +251,27 @@ type ClusterListEntry struct {
 	Status string `json:"status"`
 	NDCS   int    `json:"distr_ndcs"`
 	NPCS   int    `json:"distr_npcs"`
+}
+
+// GetClusterID returns the UUID for clusterCR. It uses Status.UUID when
+// already populated; otherwise it falls back to querying the API by cluster
+// name. Returns an error if the cluster cannot be found.
+func GetClusterID(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+) (string, error) {
+	if clusterCR.Status.UUID != "" {
+		return clusterCR.Status.UUID, nil
+	}
+	entry, err := GetClusterByName(ctx, apiClient, clusterCR.Name)
+	if err != nil {
+		return "", fmt.Errorf("GetClusterID: %w", err)
+	}
+	if entry == nil {
+		return "", fmt.Errorf("GetClusterID: cluster %q not found in API", clusterCR.Name)
+	}
+	return entry.UUID, nil
 }
 
 // GetClusterByName lists all clusters and returns the one matching name.

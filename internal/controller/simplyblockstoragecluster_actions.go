@@ -71,12 +71,12 @@ func (r *StorageClusterReconciler) reconcileShutdown(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, err := utils.GetClusterUUID(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	apiClient := webapi.NewClient()
+
+	clusterUUID, err := utils.GetClusterID(ctx, apiClient, clusterCR)
 	if err != nil {
 		return r.failAction(ctx, clusterCR, err)
 	}
-
-	apiClient := webapi.NewClient()
 
 	if !clusterCR.Status.ActionStatus.Triggered {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/shutdown", clusterUUID)
@@ -151,12 +151,12 @@ func (r *StorageClusterReconciler) reconcileStart(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, err := utils.GetClusterUUID(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	apiClient := webapi.NewClient()
+
+	clusterUUID, err := utils.GetClusterID(ctx, apiClient, clusterCR)
 	if err != nil {
 		return r.failAction(ctx, clusterCR, err)
 	}
-
-	apiClient := webapi.NewClient()
 
 	if !clusterCR.Status.ActionStatus.Triggered {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/start", clusterUUID)
@@ -235,12 +235,13 @@ func (r *StorageClusterReconciler) reconcileRestart(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, err := utils.GetClusterUUID(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	apiClient := webapi.NewClient()
+
+	clusterUUID, err := utils.GetClusterID(ctx, apiClient, clusterCR)
 	if err != nil {
 		return r.failAction(ctx, clusterCR, err)
 	}
 
-	apiClient := webapi.NewClient()
 	phase := clusterCR.Status.ActionStatus.Message // "shutdown" or "start"
 
 	if !clusterCR.Status.ActionStatus.Triggered {
@@ -337,12 +338,12 @@ func (r *StorageClusterReconciler) reconcileNodeRecycle(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, err := utils.GetClusterUUID(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	apiClient := webapi.NewClient()
+
+	clusterUUID, err := utils.GetClusterID(ctx, apiClient, clusterCR)
 	if err != nil {
 		return r.failAction(ctx, clusterCR, err)
 	}
-
-	apiClient := webapi.NewClient()
 
 	// Populate PendingNodes once from the API.
 	if clusterCR.Status.NodeRecycleStatus == nil {
