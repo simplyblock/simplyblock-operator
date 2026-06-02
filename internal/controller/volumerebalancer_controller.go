@@ -237,6 +237,18 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	// Enrich volumes with IOPS and throughput from Prometheus.
+	// The control plane exports lvol_read_io_ps, lvol_write_io_ps,
+	// lvol_read_bytes_ps, lvol_write_bytes_ps keyed by lvol UUID.
+	// On query failure we fall back to whatever the REST API returned (may be zero).
+	if volumeIOProvider, err := promlatency.New(*spec.PrometheusURL); err != nil {
+		log.Error(err, "Cannot create volume IO provider; scoring will use REST API values")
+	} else if prometheusVolumeIO, err := volumeIOProvider.GetClusterVolumeIO(ctx, clusterUUID); err != nil {
+		log.Error(err, "Cannot query volume IO from Prometheus; scoring will use REST API values")
+	} else {
+		overrideVolumeIO(volumesByNode, prometheusVolumeIO)
+	}
+
 	// Build pinned-volume set from PVC annotations.
 	pinnedVolumeUUIDs, err := r.buildPinnedSet(ctx, clusterUUID)
 	if err != nil {
@@ -543,6 +555,21 @@ func (r *VolumeRebalancerReconciler) collectVolumesByNode(
 	return volumesByNode, allVolumes, avgUsed, nil
 }
 
+// overrideVolumeIO replaces the IOPS and ThroughputBytesPerSec fields in volumesByNode
+// with values from Prometheus. Volumes not present in the Prometheus result are left
+// unchanged (REST API fallback).
+func overrideVolumeIO(volumesByNode map[string][]webapi.VolumeInfo, io map[string]promlatency.VolumeIOMetrics) {
+	for nodeUUID, vols := range volumesByNode {
+		for i, v := range vols {
+			if m, ok := io[v.UUID]; ok {
+				vols[i].IOPS = m.IOPS
+				vols[i].ThroughputBytesPerSec = m.ThroughputBytesPerSec
+			}
+		}
+		volumesByNode[nodeUUID] = vols
+	}
+}
+
 // buildPinnedSet returns the set of volume UUIDs whose PVC carries the pinned annotation.
 // It looks up PVCs across all namespaces using the CSI volume handle pattern
 // "clusterUUID:poolName:volumeUUID".
@@ -739,7 +766,7 @@ func (r *VolumeRebalancerReconciler) collectLatencyState(
 	ctx context.Context,
 	namespace, clusterUUID, prometheusURL string,
 ) (map[string]nodeLatencyData, error) {
-	provider, err := promlatency.NewLatencyProvider(prometheusURL)
+	provider, err := promlatency.New(prometheusURL)
 	if err != nil {
 		return nil, fmt.Errorf("create prometheus latency provider: %w", err)
 	}
