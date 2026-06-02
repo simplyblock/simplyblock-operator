@@ -195,6 +195,30 @@ type NodeDrainState struct {
 	ActiveNodeUUID string `json:"activeNodeUUID,omitempty"`
 }
 
+// NodeLatencyMetrics holds fio-measured 4K NVMe-oF latency for a single backend storage node.
+// The benchmark volume NQN and connection details are derived at runtime from the node UUID
+// and the cluster NQN — they are not stored here.
+type NodeLatencyMetrics struct {
+	// NodeUUID is the backend storage node UUID.
+	NodeUUID string `json:"nodeUUID"`
+	// BaselineP50NS is the p50 read latency (nanoseconds) from the initial empty-cluster benchmark.
+	BaselineP50NS int64 `json:"baselineP50NS,omitempty"`
+	// BaselineP99NS is the p99 read latency (nanoseconds) from the initial empty-cluster benchmark.
+	BaselineP99NS int64 `json:"baselineP99NS,omitempty"`
+	// BaselineMeasuredAt is when the baseline was established.
+	BaselineMeasuredAt *metav1.Time `json:"baselineMeasuredAt,omitempty"`
+	// CurrentP50NS is the most recent p50 read latency in nanoseconds.
+	CurrentP50NS int64 `json:"currentP50NS,omitempty"`
+	// CurrentP99NS is the most recent p99 read latency in nanoseconds.
+	CurrentP99NS int64 `json:"currentP99NS,omitempty"`
+	// LastMeasuredAt is when the most recent benchmark completed.
+	LastMeasuredAt *metav1.Time `json:"lastMeasuredAt,omitempty"`
+	// LastLogReadAt is the timestamp up to which the fio-bench-probe sidecar
+	// logs have been consumed. Used to avoid re-processing old log lines after
+	// a reconciler restart.
+	LastLogReadAt *metav1.Time `json:"lastLogReadAt,omitempty"`
+}
+
 // StorageNodeStatus defines the observed state of StorageNode.
 type StorageNodeStatus struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Nodes"
@@ -215,6 +239,9 @@ type StorageNodeStatus struct {
 	// a FailedScheduling event during node add. Used to emit a recovery event
 	// when the node subsequently comes online.
 	SchedulingFailedWorkers map[string]bool `json:"schedulingFailedWorkers,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Latency Metrics"
+	// LatencyMetrics holds per-backend-node fio-measured latency data for rebalancing decisions.
+	LatencyMetrics []NodeLatencyMetrics `json:"latencyMetrics,omitempty"`
 }
 
 type NodeStatus struct {

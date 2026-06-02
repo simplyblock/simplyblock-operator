@@ -57,6 +57,93 @@ type NodeRecycleStatus struct {
 	PhaseTriggered bool `json:"phaseTriggered,omitempty"`
 }
 
+// MetricsBackend selects the NodeMetricsProvider implementation.
+// +kubebuilder:validation:Enum=controlplane;prometheus;uniform
+type MetricsBackend string
+
+const (
+	MetricsBackendControlPlane MetricsBackend = "controlplane"
+	MetricsBackendPrometheus   MetricsBackend = "prometheus"
+	// MetricsBackendUniform returns IOPS=1 for every node, disabling
+	// IOPS-based scoring while keeping capacity/volume-count balancing active.
+	MetricsBackendUniform MetricsBackend = "uniform"
+)
+
+// VolumeRebalancingSpec controls the automatic volume rebalancing behaviour.
+type VolumeRebalancingSpec struct {
+	// Enabled activates automatic rebalancing for this cluster. Defaults to true.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+	// EvaluationInterval is how often the rebalancer evaluates load. Defaults to 60s.
+	// +optional
+	EvaluationInterval *metav1.Duration `json:"evaluationInterval,omitempty"`
+	// ImbalanceThreshold is the minimum p99 latency deviation from baseline (in percent)
+	// that a node must exhibit before it is considered a rebalancing source.
+	// Defaults to 20.
+	// +optional
+	ImbalanceThreshold *int32 `json:"imbalanceThreshold,omitempty"`
+	// DefaultCoolDownSeconds is the default cool-down period (in seconds) applied to a
+	// volume after it has been migrated. Defaults to 60.
+	// +optional
+	DefaultCoolDownSeconds *int32 `json:"defaultCoolDownSeconds,omitempty"`
+	// MaxVolumeMigrationsPerCycle defines the maximum number of volumes that may be moved
+	// in a single evaluation cycle. Defaults to 10.
+	// +optional
+	MaxVolumeMigrationsPerCycle *int32 `json:"maxVolumeMigrationsPerCycle,omitempty"`
+	// StorageNodeCandidateCount is the number of top-loaded nodes evaluated each cycle to
+	// find the best migration source. Defaults to 3.
+	// +optional
+	StorageNodeCandidateCount *int32 `json:"storageNodeCandidateCount,omitempty"`
+	// MetricsBackend selects the data source for I/O metrics. Defaults to "prometheus".
+	// +optional
+	MetricsBackend *MetricsBackend `json:"metricsBackend,omitempty"`
+	// PrometheusURL is required when MetricsBackend is "prometheus".
+	// +optional
+	PrometheusURL *string `json:"prometheusURL,omitempty"`
+	// LatencyBenchmarkEnabled enables fio-based NVMe-oF latency measurement via Kubernetes Jobs.
+	// Defaults to false; set to true once a FioBenchmarkImage is configured.
+	// +optional
+	LatencyBenchmarkEnabled *bool `json:"latencyBenchmarkEnabled,omitempty"`
+	// LatencyBenchmarkInterval is how often fio benchmark Jobs run against each storage node.
+	// Defaults to 5m.
+	// +optional
+	LatencyBenchmarkInterval *metav1.Duration `json:"latencyBenchmarkInterval,omitempty"`
+	// FioBenchmarkImage is the container image for fio benchmark Jobs.
+	// The image must include fio, nvme-cli, and jq.
+	// +optional
+	FioBenchmarkImage *string `json:"fioBenchmarkImage,omitempty"`
+	// IOPSWeight is the weight applied to per-volume IOPS when computing the volume IO score.
+	// Defaults to 1.0.
+	// +optional
+	IOPSWeight *float64 `json:"iopsWeight,omitempty"`
+	// ThroughputWeight is the weight applied to per-volume throughput (in MB/s) when computing
+	// the volume IO score. Defaults to 0.1.
+	// +optional
+	ThroughputWeight *float64 `json:"throughputWeight,omitempty"`
+}
+
+// NodeLoadMetrics holds the latency deviation state for a single storage node.
+type NodeLoadMetrics struct {
+	NodeUUID            string      `json:"nodeUUID"`
+	LatencyDeviationPct float64     `json:"latencyDeviationPct"`
+	VolumeCount         int         `json:"volumeCount"`
+	LastUpdated         metav1.Time `json:"lastUpdated"`
+}
+
+// RebalancingMetrics is written by the VolumeRebalancerReconciler each evaluation cycle.
+type RebalancingMetrics struct {
+	// AvgDeviationPct is the mean latency deviation across all nodes.
+	AvgDeviationPct float64 `json:"avgDeviationPct"`
+	// MaxDeviationPct is the highest per-node latency deviation (used as ImbalancePercent).
+	MaxDeviationPct  float64           `json:"maxDeviationPct"`
+	HottestNodeUUID  string            `json:"hottestNodeUUID"`
+	CoolestNodeUUID  string            `json:"coolestNodeUUID"`
+	ImbalancePercent float64           `json:"imbalancePercent"`
+	LastEvaluatedAt  *metav1.Time      `json:"lastEvaluatedAt,omitempty"`
+	LastMigrationAt  *metav1.Time      `json:"lastMigrationAt,omitempty"`
+	NodeMetrics      []NodeLoadMetrics `json:"nodeMetrics,omitempty"`
+}
+
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
@@ -171,6 +258,9 @@ type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="HashiCorp Vault Settings"
 	// HashicorpVaultSettings configures the Vault endpoint used by the cluster for key storage.
 	HashicorpVaultSettings *HashicorpVaultSettings `json:"hashicorpVaultSettings,omitempty"`
+	// VolumeRebalancing controls automatic I/O-load based volume migration.
+	// +optional
+	VolumeRebalancing *VolumeRebalancingSpec `json:"volumeRebalancing,omitempty"`
 }
 
 // StorageClusterStatus defines the observed state of StorageCluster.
@@ -212,6 +302,9 @@ type StorageClusterStatus struct {
 	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 	// NodeRecycleStatus tracks in-progress state for the node-recycle action.
 	NodeRecycleStatus *NodeRecycleStatus `json:"nodeRecycleStatus,omitempty"`
+	// RebalancingMetrics is updated by the auto-rebalancer each evaluation cycle.
+	// +optional
+	RebalancingMetrics *RebalancingMetrics `json:"rebalancingMetrics,omitempty"`
 }
 
 // +kubebuilder:object:root=true

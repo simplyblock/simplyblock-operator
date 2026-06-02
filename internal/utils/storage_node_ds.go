@@ -42,8 +42,120 @@ var defaultContainerResources = corev1.ResourceRequirements{
 	},
 }
 
-func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
+// FioBenchSidecarConfig carries the parameters needed to inject the fio-bench
+// probe sidecar into the storage-node DaemonSet pod.
+type FioBenchSidecarConfig struct {
+	// Image is the container image (must include fio, nvme-cli, jq).
+	Image string
+	// ConfigMapName is the ConfigMap that maps k8s node hostname → benchmark config JSON.
+	ConfigMapName string
+}
 
+// FioBenchConfigMapName returns the deterministic ConfigMap name for a cluster.
+func FioBenchConfigMapName(clusterName string) string {
+	return "simplyblock-fio-bench-" + clusterName
+}
+
+// FioBenchMetricsPort is the port on which the fio-bench-probe sidecar exposes
+// Prometheus metrics via the node_exporter textfile collector.
+const FioBenchMetricsPort = 9199
+
+// fioBenchSidecarScript is the entrypoint for the fio-bench-probe sidecar container.
+//
+// Lifecycle:
+//  1. Starts prometheus-node-exporter in textfile mode on FioBenchMetricsPort.
+//  2. Waits for the operator to populate /etc/simplyblock/fio-bench/${HOSTNAME}.
+//  3. Establishes a persistent NVMe-oF connection to the benchmark volume.
+//  4. Runs a 30s baseline fio measurement, then repeats every ~5 minutes.
+//
+// Each measurement writes Prometheus .prom files to /var/lib/fio-exporter/ and
+// also emits an "SB_FIO_RESULT: {json}" line to stdout for the operator's log reader.
+const fioBenchSidecarScript = `#!/bin/sh
+set -e
+
+METRICS_DIR="/var/lib/fio-exporter"
+CONFIG_DIR="/etc/simplyblock/fio-bench"
+CONFIG_FILE="${CONFIG_DIR}/${HOSTNAME}"
+
+mkdir -p "${METRICS_DIR}"
+
+# Expose metrics via prometheus-node-exporter textfile collector.
+prometheus-node-exporter \
+  --web.listen-address=:9199 \
+  --collector.textfile.directory="${METRICS_DIR}" \
+  >/dev/null 2>&1 &
+
+until [ -f "${CONFIG_FILE}" ]; do
+  echo "fio-bench-probe: waiting for config ${CONFIG_FILE}"
+  sleep 10
+done
+
+NQN=$(jq -r '.nqn'         "${CONFIG_FILE}")
+ADDR=$(jq -r '.addr'       "${CONFIG_FILE}")
+PORT=$(jq -r '.port'       "${CONFIG_FILE}")
+NODE_UUID=$(jq -r '.nodeUUID'    "${CONFIG_FILE}")
+CLUSTER_NAME=$(jq -r '.clusterName' "${CONFIG_FILE}")
+
+nvme connect -t tcp -a "${ADDR}" -s "${PORT}" -n "${NQN}"
+
+DEVICE=""
+for i in $(seq 1 30); do
+  DEVICE=$(nvme list -o json 2>/dev/null \
+    | jq -r --arg n "${NQN}" \
+        '.Devices[]|select(.SubsystemNQN==$n)|.DevicePath' 2>/dev/null || true)
+  [ -n "${DEVICE}" ] && break
+  sleep 1
+done
+
+[ -z "${DEVICE}" ] && {
+  echo "fio-bench-probe: ERROR: device for NQN ${NQN} not found" >&2
+  nvme disconnect -n "${NQN}" 2>/dev/null || true
+  exit 1
+}
+
+run_fio() {
+  TYPE="${1}"
+  OUTPUT=$(fio \
+    --filename="${DEVICE}" \
+    --ioengine=libaio \
+    --direct=1 \
+    --rw=randwrite \
+    --bs=4k \
+    --numjobs=1 \
+    --iodepth=1 \
+    --time_based \
+    --runtime=30 \
+    --group_reporting \
+    --percentile_list=50:99 \
+    --output-format=json 2>/dev/null)
+
+  P50=$(printf '%s' "${OUTPUT}" | jq '.jobs[0].write.lat_ns.percentile["50.000000"]')
+  P99=$(printf '%s' "${OUTPUT}" | jq '.jobs[0].write.lat_ns.percentile["99.000000"]')
+
+  # Overwrite current latency metrics on every run.
+  cat > "${METRICS_DIR}/fio_current.prom" <<PROM
+# HELP simplyblock_node_fio_write_latency_p50_ns fio 4K randwrite p50 write latency (ns)
+# TYPE simplyblock_node_fio_write_latency_p50_ns gauge
+simplyblock_node_fio_write_latency_p50_ns{cluster="${CLUSTER_NAME}",node="${NODE_UUID}"} ${P50}
+# HELP simplyblock_node_fio_write_latency_p99_ns fio 4K randwrite p99 write latency (ns)
+# TYPE simplyblock_node_fio_write_latency_p99_ns gauge
+simplyblock_node_fio_write_latency_p99_ns{cluster="${CLUSTER_NAME}",node="${NODE_UUID}"} ${P99}
+PROM
+
+  # Emit to stdout for the operator's log-based result reader.
+  printf 'SB_FIO_RESULT: %s\n' "$(printf '%s' "${OUTPUT}" | jq -c \
+    --arg t "${TYPE}" \
+    '{type:$t,p50_ns:.jobs[0].write.lat_ns.percentile["50.000000"],p99_ns:.jobs[0].write.lat_ns.percentile["99.000000"]}')"
+}
+
+run_fio baseline
+while true; do
+  sleep 270
+  run_fio runtime
+done
+`
+
+func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string, sidecar *FioBenchSidecarConfig) *appsv1.DaemonSet {
 	labels := map[string]string{
 		"app":                 "storage-node",
 		"simplyblock-cluster": sn.Spec.ClusterName,
@@ -218,6 +330,57 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 		mainMounts = append(mainMounts, tlsMounts...)
 	}
 
+	var extraContainers []corev1.Container
+	if sidecar != nil && sidecar.Image != "" {
+		optional := true
+		volumes = append(volumes, corev1.Volume{
+			Name: "fio-bench-config",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: sidecar.ConfigMapName,
+					},
+					// Optional so the pod starts before the operator writes the ConfigMap.
+					Optional: &optional,
+				},
+			},
+		})
+		extraContainers = append(extraContainers, corev1.Container{
+			Name:            "fio-bench-probe",
+			Image:           sidecar.Image,
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			Command:         []string{"/bin/sh", "-c"},
+			Args:            []string{fioBenchSidecarScript},
+			SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("100m"),
+					corev1.ResourceMemory: resource.MustParse("25Mi"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("100m"),
+					corev1.ResourceMemory: resource.MustParse("25Mi"),
+				},
+			},
+			Ports: []corev1.ContainerPort{
+				{
+					Name:          "fio-metrics",
+					ContainerPort: FioBenchMetricsPort,
+					Protocol:      corev1.ProtocolTCP,
+				},
+			},
+			Env: []corev1.EnvVar{
+				{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
+					FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+				}},
+			},
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: "fio-bench-config", MountPath: "/etc/simplyblock/fio-bench", ReadOnly: true},
+				{Name: "dev-vol", MountPath: "/dev"},
+			},
+		})
+	}
+
 	var podAnnotations map[string]string
 	if tlsEnabled && tlsSecretResourceVersion != "" {
 		podAnnotations = map[string]string{
@@ -276,7 +439,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 						},
 					},
 
-					Containers: []corev1.Container{
+					Containers: append([]corev1.Container{
 						{
 							Name:            "s-node-api-container",
 							Image:           image,
@@ -290,7 +453,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 							Env:             mainEnv,
 							VolumeMounts:    mainMounts,
 						},
-					},
+					}, extraContainers...),
 				},
 			},
 		},

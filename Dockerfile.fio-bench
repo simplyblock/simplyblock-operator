@@ -1,0 +1,30 @@
+# Dockerfile for the fio NVMe-oF latency benchmark job.
+#
+# The container is launched as a privileged Kubernetes Job by the
+# StorageNodeLatencyReconciler. The benchmark script is injected inline
+# by the Job spec (Command: ["/bin/sh", "-c"], Args: [<fioScript>]).
+#
+# Required tools:
+#   fio        — I/O benchmark (libaio engine, raw block device)
+#   nvme-cli   — NVMe-oF connect/list/disconnect over TCP
+#   jq         — parse "nvme list -o json" to locate the device path
+#
+# The container MUST run privileged so it can open /dev/nvme-fabrics and
+# access the NVMe block device created by the host kernel after connect.
+
+FROM ubuntu:22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        fio \
+        nvme-cli \
+        jq \
+        prometheus-node-exporter \
+    && rm -rf /var/lib/apt/lists/*
+
+LABEL name="simplyblock-fio-bench" \
+      vendor="Simplyblock" \
+      maintainer="developers@simplyblock.io" \
+      summary="Privileged fio benchmark container for NVMe-oF latency measurement."

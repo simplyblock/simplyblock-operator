@@ -1370,6 +1370,81 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              volumeRebalancing:
+                description: VolumeRebalancing controls automatic I/O-load based volume
+                  migration.
+                properties:
+                  defaultCoolDownSeconds:
+                    description: |-
+                      DefaultCoolDownSeconds is the default cool-down period (in seconds) applied to a
+                      volume after it has been migrated. Defaults to 60.
+                    format: int32
+                    type: integer
+                  enabled:
+                    description: Enabled activates automatic rebalancing for this
+                      cluster. Defaults to true.
+                    type: boolean
+                  evaluationInterval:
+                    description: EvaluationInterval is how often the rebalancer evaluates
+                      load. Defaults to 60s.
+                    type: string
+                  fioBenchmarkImage:
+                    description: |-
+                      FioBenchmarkImage is the container image for fio benchmark Jobs.
+                      The image must include fio, nvme-cli, and jq.
+                    type: string
+                  imbalanceThreshold:
+                    description: |-
+                      ImbalanceThreshold is the minimum p99 latency deviation from baseline (in percent)
+                      that a node must exhibit before it is considered a rebalancing source.
+                      Defaults to 20.
+                    format: int32
+                    type: integer
+                  iopsWeight:
+                    description: |-
+                      IOPSWeight is the weight applied to per-volume IOPS when computing the volume IO score.
+                      Defaults to 1.0.
+                    type: number
+                  latencyBenchmarkEnabled:
+                    description: |-
+                      LatencyBenchmarkEnabled enables fio-based NVMe-oF latency measurement via Kubernetes Jobs.
+                      Defaults to false; set to true once a FioBenchmarkImage is configured.
+                    type: boolean
+                  latencyBenchmarkInterval:
+                    description: |-
+                      LatencyBenchmarkInterval is how often fio benchmark Jobs run against each storage node.
+                      Defaults to 5m.
+                    type: string
+                  maxVolumeMigrationsPerCycle:
+                    description: |-
+                      MaxVolumeMigrationsPerCycle defines the maximum number of volumes that may be moved
+                      in a single evaluation cycle. Defaults to 10.
+                    format: int32
+                    type: integer
+                  metricsBackend:
+                    description: MetricsBackend selects the data source for I/O metrics.
+                      Defaults to "prometheus".
+                    enum:
+                    - controlplane
+                    - prometheus
+                    - uniform
+                    type: string
+                  prometheusURL:
+                    description: PrometheusURL is required when MetricsBackend is
+                      "prometheus".
+                    type: string
+                  storageNodeCandidateCount:
+                    description: |-
+                      StorageNodeCandidateCount is the number of top-loaded nodes evaluated each cycle to
+                      find the best migration source. Defaults to 3.
+                    format: int32
+                    type: integer
+                  throughputWeight:
+                    description: |-
+                      ThroughputWeight is the weight applied to per-volume throughput (in MB/s) when computing
+                      the volume IO score. Defaults to 0.1.
+                    type: number
+                type: object
               warningThreshold:
                 description: WarningThresholdSpec defines warning-level capacity thresholds.
                 properties:
@@ -1505,6 +1580,58 @@ spec:
                 description: Rebalancing indicates whether cluster rebalancing is
                   currently active.
                 type: boolean
+              rebalancingMetrics:
+                description: RebalancingMetrics is updated by the auto-rebalancer
+                  each evaluation cycle.
+                properties:
+                  avgDeviationPct:
+                    description: AvgDeviationPct is the mean latency deviation across
+                      all nodes.
+                    type: number
+                  coolestNodeUUID:
+                    type: string
+                  hottestNodeUUID:
+                    type: string
+                  imbalancePercent:
+                    type: number
+                  lastEvaluatedAt:
+                    format: date-time
+                    type: string
+                  lastMigrationAt:
+                    format: date-time
+                    type: string
+                  maxDeviationPct:
+                    description: MaxDeviationPct is the highest per-node latency deviation
+                      (used as ImbalancePercent).
+                    type: number
+                  nodeMetrics:
+                    items:
+                      description: NodeLoadMetrics holds the latency deviation state
+                        for a single storage node.
+                      properties:
+                        lastUpdated:
+                          format: date-time
+                          type: string
+                        latencyDeviationPct:
+                          type: number
+                        nodeUUID:
+                          type: string
+                        volumeCount:
+                          type: integer
+                      required:
+                      - lastUpdated
+                      - latencyDeviationPct
+                      - nodeUUID
+                      - volumeCount
+                      type: object
+                    type: array
+                required:
+                - avgDeviationPct
+                - coolestNodeUUID
+                - hottestNodeUUID
+                - imbalancePercent
+                - maxDeviationPct
+                type: object
               status:
                 description: Status is the backend-reported lifecycle status.
                 type: string
@@ -1969,6 +2096,58 @@ spec:
                   - startedAt
                   type: object
                 type: array
+              latencyMetrics:
+                description: LatencyMetrics holds per-backend-node fio-measured latency
+                  data for rebalancing decisions.
+                items:
+                  description: |-
+                    NodeLatencyMetrics holds fio-measured 4K NVMe-oF latency for a single backend storage node.
+                    The benchmark volume NQN and connection details are derived at runtime from the node UUID
+                    and the cluster NQN — they are not stored here.
+                  properties:
+                    baselineMeasuredAt:
+                      description: BaselineMeasuredAt is when the baseline was established.
+                      format: date-time
+                      type: string
+                    baselineP50NS:
+                      description: BaselineP50NS is the p50 read latency (nanoseconds)
+                        from the initial empty-cluster benchmark.
+                      format: int64
+                      type: integer
+                    baselineP99NS:
+                      description: BaselineP99NS is the p99 read latency (nanoseconds)
+                        from the initial empty-cluster benchmark.
+                      format: int64
+                      type: integer
+                    currentP50NS:
+                      description: CurrentP50NS is the most recent p50 read latency
+                        in nanoseconds.
+                      format: int64
+                      type: integer
+                    currentP99NS:
+                      description: CurrentP99NS is the most recent p99 read latency
+                        in nanoseconds.
+                      format: int64
+                      type: integer
+                    lastLogReadAt:
+                      description: |-
+                        LastLogReadAt is the timestamp up to which the fio-bench-probe sidecar
+                        logs have been consumed. Used to avoid re-processing old log lines after
+                        a reconciler restart.
+                      format: date-time
+                      type: string
+                    lastMeasuredAt:
+                      description: LastMeasuredAt is when the most recent benchmark
+                        completed.
+                      format: date-time
+                      type: string
+                    nodeUUID:
+                      description: NodeUUID is the backend storage node UUID.
+                      type: string
+                  required:
+                  - nodeUUID
+                  type: object
+                type: array
               nodes:
                 description: Nodes is the observed state of each managed storage node.
                 items:
@@ -2229,6 +2408,16 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
+  verbs:
+  - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - events
   verbs:
   - create
@@ -2270,6 +2459,12 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
   - secrets
   - serviceaccounts
   - services
@@ -2292,6 +2487,16 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
   - watch
 - apiGroups:
   - cert-manager.io

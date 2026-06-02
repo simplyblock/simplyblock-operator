@@ -35,6 +35,8 @@ type Lvol struct {
 	DoReplicate bool   `json:"do_replicate"`
 	NQN         string `json:"nqn"`
 	Status      string `json:"status"`
+	// Migrating is true while a volume migration is in progress.
+	Migrating bool `json:"migrating"`
 
 	RepInfo *ReplicationInfo `json:"rep_info,omitempty"`
 }

@@ -5,6 +5,12 @@ IMG_TAG  ?= $(VERSION)
 IMG      ?= $(IMG_BASE):$(IMG_TAG)
 ECR_IMG_BASE ?= public.ecr.aws/simply-block/simplyblock-operator
 ECR_IMG      ?= $(ECR_IMG_BASE):$(IMG_TAG)
+
+# fio benchmark job image (built from Dockerfile.fio-bench)
+FIO_BENCH_IMG_BASE     ?= quay.io/simplyblock-io/simplyblock-fio-bench
+FIO_BENCH_IMG          ?= $(FIO_BENCH_IMG_BASE):$(IMG_TAG)
+ECR_FIO_BENCH_IMG_BASE ?= public.ecr.aws/simply-block/simplyblock-fio-bench
+ECR_FIO_BENCH_IMG      ?= $(ECR_FIO_BENCH_IMG_BASE):$(IMG_TAG)
 BUNDLE_IMG ?= quay.io/simplyblock-io/simplyblock-operator-bundle:$(VERSION)
 OPENSHIFT_VERSION ?= v4.19
 
@@ -17,7 +23,8 @@ SPDK_IMAGE_TAG     ?= R26.2-PRE-latest
 YQ_CSV_EXPR = .metadata.annotations.containerImage = strenv(OPERATOR_IMG) \
   | .spec.relatedImages = [{"name": "simplyblock-operator", "image": strenv(OPERATOR_IMG)}, \
     {"name": "simplyblock", "image": strenv(CLUSTER_IMG)}, \
-    {"name": "ultra-spdk", "image": strenv(SPDK_IMG)}] \
+    {"name": "ultra-spdk", "image": strenv(SPDK_IMG)}, \
+    {"name": "simplyblock-fio-bench", "image": strenv(FIO_BENCH_IMG)}] \
   | .spec.install.spec.deployments[0].spec.template.spec.containers[0].image = strenv(OPERATOR_IMG)
 YQ_ANNOTATIONS_EXPR = .annotations."com.redhat.openshift.versions" = strenv(OPENSHIFT_VERSION)
 
@@ -63,7 +70,7 @@ help: ## Display this help.
 
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd:allowDangerousTypes=true webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -177,6 +184,28 @@ docker-buildx-ecr: ## Build and push docker image to ECR public for cross-platfo
 	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
 	rm Dockerfile.cross
 
+.PHONY: docker-build-fio-bench
+docker-build-fio-bench: ## Build the fio benchmark job image.
+	$(CONTAINER_TOOL) build -t ${FIO_BENCH_IMG} -f Dockerfile.fio-bench .
+
+.PHONY: docker-push-fio-bench
+docker-push-fio-bench: ## Push the fio benchmark job image.
+	$(CONTAINER_TOOL) push ${FIO_BENCH_IMG}
+
+.PHONY: docker-buildx-fio-bench
+docker-buildx-fio-bench: ## Build and push multi-arch fio benchmark job image to quay.io.
+	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
+	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${FIO_BENCH_IMG} -f Dockerfile.fio-bench .
+	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
+
+.PHONY: docker-buildx-ecr-fio-bench
+docker-buildx-ecr-fio-bench: ## Build and push multi-arch fio benchmark job image to ECR.
+	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
+	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${ECR_FIO_BENCH_IMG} -f Dockerfile.fio-bench .
+	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
+
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
@@ -209,11 +238,18 @@ bundle: yq ## Generate bundle manifests with digest-pinned images (operator imag
 	  "https://quay.io/v2/simplyblock-io/ultra/manifests/$(SPDK_IMAGE_TAG)" \
 	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	FIO_BENCH_DIGEST=$$(curl -sI \
+	  "https://quay.io/v2/simplyblock-io/simplyblock-fio-bench/manifests/$(IMG_TAG)" \
+	  -H "Accept: $(MANIFEST_ACCEPT)" \
+	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	test -n "$$FIO_BENCH_DIGEST" \
+	  || { echo "ERROR: could not fetch digest for $(FIO_BENCH_IMG_BASE):$(IMG_TAG) — is the image pushed?"; exit 1; }; \
 	(cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
 	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
 	OPERATOR_IMG="$(IMG_BASE)@$$OPERATOR_DIGEST" \
 	CLUSTER_IMG="$(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)@$$CLUSTER_DIGEST" \
 	SPDK_IMG="$(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)@$$SPDK_DIGEST" \
+	FIO_BENCH_IMG="$(FIO_BENCH_IMG_BASE)@$$FIO_BENCH_DIGEST" \
 	"$(YQ)" e '$(YQ_CSV_EXPR)' -i bundle/manifests/simplyblock-operator.clusterserviceversion.yaml; \
 	OPENSHIFT_VERSION="$(OPENSHIFT_VERSION)" \
 	"$(YQ)" e '$(YQ_ANNOTATIONS_EXPR)' -i bundle/metadata/annotations.yaml;
