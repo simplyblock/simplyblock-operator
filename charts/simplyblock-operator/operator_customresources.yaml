@@ -78,7 +78,7 @@ spec:
   clusterName: simplyblock-cluster
   # clusterImage: "quay.io/simplyblock-io/simplyblock:26.2.2-PRE"
   # spdkImage: "quay.io/simplyblock-io/spdk:26.2.2-PRE"
-  # spdkProxyImage: "quay.io/simplyblock-io/spdk-proxy:26.2.2-PRE"
+  # spdkProxyImage: "quay.io/simplyblock-io/simplyblock:26.2.2-PRE"
   mgmtIfname: br-ex
   dataIfname:
     - br-ex
