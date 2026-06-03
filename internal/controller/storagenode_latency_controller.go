@@ -160,7 +160,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// characteristics, so every node UUID is measured separately.
 	nodesByUUID := map[string]simplyblockv1alpha1.NodeStatus{}
 	for _, n := range snode.Status.Nodes {
-		if n.UUID == "" || n.Status != "online" || !n.Health || n.Hostname == "" {
+		if n.UUID == "" || n.Status != nodeStatusOnline || !n.Health || n.Hostname == "" {
 			continue
 		}
 		if _, seen := nodesByUUID[n.UUID]; !seen {
