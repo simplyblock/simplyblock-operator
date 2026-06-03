@@ -225,7 +225,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		log.V(1).Info("No node exceeds latency deviation threshold; skipping",
 			"maxDeviationPct", maxDev, "threshold", imbalanceThreshold)
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		r.patchRebalancingMetrics(ctx, clusterCR, deviations, maxDev, avgDev, hottestNode, coolestNode, now)
+		r.patchRebalancingMetrics(ctx, clusterCR, deviations, nil, maxDev, avgDev, hottestNode, coolestNode, now)
 		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, evalInterval)}, nil
 	}
 
@@ -343,7 +343,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if hasPending {
 		log.V(1).Info("Pending migrations exist; deferring new migrations to next cycle")
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		r.patchRebalancingMetrics(ctx, clusterCR, deviations, maxDev, avgDev, hottestNode, coolestNode, now)
+		r.patchRebalancingMetrics(ctx, clusterCR, deviations, volumesByNode, maxDev, avgDev, hottestNode, coolestNode, now)
 		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, evalInterval)}, nil
 	}
 
@@ -405,7 +405,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		migratedCount++
 	}
 
-	r.patchRebalancingMetrics(ctx, clusterCR, deviations, maxDev, avgDev, hottestNode, coolestNode, now)
+	r.patchRebalancingMetrics(ctx, clusterCR, deviations, volumesByNode, maxDev, avgDev, hottestNode, coolestNode, now)
 
 	r.mu.Lock()
 	activeCooldowns := r.countClusterCooldowns(clusterUUID, now)
@@ -699,10 +699,13 @@ func (r *VolumeRebalancerReconciler) setRebalancing(
 }
 
 // patchRebalancingMetrics updates status.rebalancingMetrics with the current deviation state.
+// volumesByNode may be nil when called before volume collection (early-exit paths); in that
+// case VolumeCount is left as 0.
 func (r *VolumeRebalancerReconciler) patchRebalancingMetrics(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	deviations map[string]float64,
+	volumesByNode map[string][]webapi.VolumeInfo,
 	maxDev, avgDev float64,
 	hottestNode, coolestNode string,
 	now time.Time,
@@ -715,6 +718,7 @@ func (r *VolumeRebalancerReconciler) patchRebalancingMetrics(
 		nodeMetricsList = append(nodeMetricsList, simplyblockv1alpha1.NodeLoadMetrics{
 			NodeUUID:            uuid,
 			LatencyDeviationPct: dev,
+			VolumeCount:         len(volumesByNode[uuid]),
 			LastUpdated:         metav1.NewTime(now),
 		})
 	}
