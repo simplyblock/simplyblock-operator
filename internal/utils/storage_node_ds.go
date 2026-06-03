@@ -65,11 +65,11 @@ const FioBenchMetricsPort = 9199
 // Lifecycle:
 //  1. Starts prometheus-node-exporter in textfile mode on FioBenchMetricsPort.
 //  2. Waits for the operator to populate /etc/simplyblock/fio-bench/${HOSTNAME}.
-//  3. Establishes a persistent NVMe-oF connection to the benchmark volume.
-//  4. Runs a 30s baseline fio measurement, then repeats every ~5 minutes.
+//  3. Reads the JSON array of node configs (one entry per NUMA node on this host).
+//  4. Launches one independent NVMe-oF connection and fio measurement loop per node.
 //
-// Each measurement writes Prometheus .prom files to /var/lib/fio-exporter/ and
-// also emits an "SB_FIO_RESULT: {json}" line to stdout for the operator's log reader.
+// Each measurement writes a per-node Prometheus .prom file to /var/lib/fio-exporter/.
+// The operator's one-shot baseline Job handles initial baseline measurement separately.
 const fioBenchSidecarScript = `#!/bin/sh
 set -e
 
@@ -90,50 +90,47 @@ until [ -f "${CONFIG_FILE}" ]; do
   sleep 10
 done
 
-NQN=$(jq -r '.nqn'         "${CONFIG_FILE}")
-ADDR=$(jq -r '.addr'       "${CONFIG_FILE}")
-PORT=$(jq -r '.port'       "${CONFIG_FILE}")
-NODE_UUID=$(jq -r '.nodeUUID'    "${CONFIG_FILE}")
-CLUSTER_NAME=$(jq -r '.clusterName' "${CONFIG_FILE}")
+# CONFIG_FILE contains a JSON array — one entry per NUMA node on this host.
+# Launch one independent measurement loop per node in the background.
+run_node() {
+  NQN="${1}" ADDR="${2}" PORT="${3}" NODE_UUID="${4}" CLUSTER_NAME="${5}"
 
-nvme connect -t tcp -a "${ADDR}" -s "${PORT}" -n "${NQN}"
+  nvme connect -t tcp -a "${ADDR}" -s "${PORT}" -n "${NQN}"
 
-DEVICE=""
-for i in $(seq 1 30); do
-  DEVICE=$(nvme list -o json 2>/dev/null \
-    | jq -r --arg n "${NQN}" \
-        '.Devices[]|select(.SubsystemNQN==$n)|.DevicePath' 2>/dev/null || true)
-  [ -n "${DEVICE}" ] && break
-  sleep 1
-done
+  DEVICE=""
+  for i in $(seq 1 30); do
+    DEVICE=$(nvme list -o json 2>/dev/null \
+      | jq -r --arg n "${NQN}" \
+          '.Devices[]|select(.SubsystemNQN==$n)|.DevicePath' 2>/dev/null || true)
+    [ -n "${DEVICE}" ] && break
+    sleep 1
+  done
 
-[ -z "${DEVICE}" ] && {
-  echo "fio-bench-probe: ERROR: device for NQN ${NQN} not found" >&2
-  nvme disconnect -n "${NQN}" 2>/dev/null || true
-  exit 1
-}
+  if [ -z "${DEVICE}" ]; then
+    echo "fio-bench-probe: ERROR: device for NQN ${NQN} not found" >&2
+    nvme disconnect -n "${NQN}" 2>/dev/null || true
+    return 1
+  fi
 
-run_fio() {
-  TYPE="${1}"
-  OUTPUT=$(fio \
-    --filename="${DEVICE}" \
-    --ioengine=libaio \
-    --direct=1 \
-    --rw=randwrite \
-    --bs=4k \
-    --numjobs=1 \
-    --iodepth=1 \
-    --time_based \
-    --runtime=30 \
-    --group_reporting \
-    --percentile_list=50:99 \
-    --output-format=json 2>/dev/null)
+  while true; do
+    OUTPUT=$(fio \
+      --filename="${DEVICE}" \
+      --ioengine=libaio \
+      --direct=1 \
+      --rw=randwrite \
+      --bs=4k \
+      --numjobs=1 \
+      --iodepth=1 \
+      --time_based \
+      --runtime=30 \
+      --group_reporting \
+      --percentile_list=50:99 \
+      --output-format=json 2>/dev/null)
 
-  P50=$(printf '%s' "${OUTPUT}" | jq '.jobs[0].write.lat_ns.percentile["50.000000"]')
-  P99=$(printf '%s' "${OUTPUT}" | jq '.jobs[0].write.lat_ns.percentile["99.000000"]')
+    P50=$(printf '%s' "${OUTPUT}" | jq '.jobs[0].write.lat_ns.percentile["50.000000"]')
+    P99=$(printf '%s' "${OUTPUT}" | jq '.jobs[0].write.lat_ns.percentile["99.000000"]')
 
-  # Overwrite current latency metrics on every run.
-  cat > "${METRICS_DIR}/fio_current.prom" <<PROM
+    cat > "${METRICS_DIR}/fio_${NODE_UUID}.prom" <<PROM
 # HELP simplyblock_node_fio_write_latency_p50_ns fio 4K randwrite p50 write latency (ns)
 # TYPE simplyblock_node_fio_write_latency_p50_ns gauge
 simplyblock_node_fio_write_latency_p50_ns{cluster="${CLUSTER_NAME}",node="${NODE_UUID}"} ${P50}
@@ -142,17 +139,23 @@ simplyblock_node_fio_write_latency_p50_ns{cluster="${CLUSTER_NAME}",node="${NODE
 simplyblock_node_fio_write_latency_p99_ns{cluster="${CLUSTER_NAME}",node="${NODE_UUID}"} ${P99}
 PROM
 
-  # Emit to stdout for the operator's log-based result reader.
-  printf 'SB_FIO_RESULT: %s\n' "$(printf '%s' "${OUTPUT}" | jq -c \
-    --arg t "${TYPE}" \
-    '{type:$t,p50_ns:.jobs[0].write.lat_ns.percentile["50.000000"],p99_ns:.jobs[0].write.lat_ns.percentile["99.000000"]}')"
+    sleep 270
+  done
 }
 
-run_fio baseline
-while true; do
-  sleep 270
-  run_fio runtime
+COUNT=$(jq 'length' "${CONFIG_FILE}")
+i=0
+while [ "${i}" -lt "${COUNT}" ]; do
+  run_node \
+    "$(jq -r ".[${i}].nqn"         "${CONFIG_FILE}")" \
+    "$(jq -r ".[${i}].addr"        "${CONFIG_FILE}")" \
+    "$(jq -r ".[${i}].port"        "${CONFIG_FILE}")" \
+    "$(jq -r ".[${i}].nodeUUID"    "${CONFIG_FILE}")" \
+    "$(jq -r ".[${i}].clusterName" "${CONFIG_FILE}")" &
+  i=$((i + 1))
 done
+
+wait
 `
 
 func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string, sidecar *FioBenchSidecarConfig) *appsv1.DaemonSet {
