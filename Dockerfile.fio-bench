@@ -31,9 +31,23 @@ RUN dnf install -y --nodocs \
         fio \
         nvme-cli \
         jq \
+        sudo \
     && dnf clean all
 
 COPY --from=exporter /bin/node_exporter /usr/local/bin/prometheus-node-exporter
+
+# Run as non-root (uid 65532, gid 0) to satisfy OpenShift SCC and Red Hat
+# certification requirements. sudo grants the specific binaries that require
+# kernel-level access (NVMe-fabrics and raw block devices).
+RUN groupadd --gid 65532 nonroot \
+    && useradd --uid 65532 --gid 65532 --no-create-home --shell /sbin/nologin nonroot \
+    && echo "ALL ALL=(root) NOPASSWD: /usr/sbin/nvme, /usr/bin/fio" \
+        > /etc/sudoers.d/fio-bench \
+    && chmod 0440 /etc/sudoers.d/fio-bench \
+    && mkdir -p /var/lib/fio-exporter \
+    && chmod 1777 /var/lib/fio-exporter
+
+USER 65532:65532
 
 LABEL name="simplyblock-fio-bench" \
       vendor="Simplyblock" \

@@ -95,11 +95,11 @@ done
 run_node() {
   NQN="${1}" ADDR="${2}" PORT="${3}" NODE_UUID="${4}" CLUSTER_NAME="${5}"
 
-  nvme connect -t tcp -a "${ADDR}" -s "${PORT}" -n "${NQN}"
+  sudo nvme connect -t tcp -a "${ADDR}" -s "${PORT}" -n "${NQN}"
 
   DEVICE=""
   for i in $(seq 1 30); do
-    DEVICE=$(nvme list -o json 2>/dev/null \
+    DEVICE=$(sudo nvme list -o json 2>/dev/null \
       | jq -r --arg n "${NQN}" \
           '.Devices[]|select(.SubsystemNQN==$n)|.DevicePath' 2>/dev/null || true)
     [ -n "${DEVICE}" ] && break
@@ -108,12 +108,12 @@ run_node() {
 
   if [ -z "${DEVICE}" ]; then
     echo "fio-bench-probe: ERROR: device for NQN ${NQN} not found" >&2
-    nvme disconnect -n "${NQN}" 2>/dev/null || true
+    sudo nvme disconnect -n "${NQN}" 2>/dev/null || true
     return 1
   fi
 
   while true; do
-    OUTPUT=$(fio \
+    OUTPUT=$(sudo fio \
       --filename="${DEVICE}" \
       --ioengine=libaio \
       --direct=1 \

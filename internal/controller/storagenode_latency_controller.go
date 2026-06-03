@@ -52,10 +52,10 @@ const (
 // capability. Writes a JSON result to /dev/termination-log and exits.
 const fioBenchBaselineScript = `#!/bin/sh
 set -e
-nvme connect -t tcp -a "${FIO_NODE_ADDR}" -s "${FIO_NODE_PORT}" -n "${FIO_VOLUME_NQN}"
+sudo nvme connect -t tcp -a "${FIO_NODE_ADDR}" -s "${FIO_NODE_PORT}" -n "${FIO_VOLUME_NQN}"
 DEVICE=""
 for i in $(seq 1 30); do
-  DEVICE=$(nvme list -o json 2>/dev/null | \
+  DEVICE=$(sudo nvme list -o json 2>/dev/null | \
     jq -r --arg nqn "${FIO_VOLUME_NQN}" \
     '.Devices[] | select(.SubsystemNQN == $nqn) | .DevicePath' 2>/dev/null || true)
   [ -n "$DEVICE" ] && break
@@ -63,10 +63,10 @@ for i in $(seq 1 30); do
 done
 if [ -z "$DEVICE" ]; then
   echo "ERROR: NVMe device for NQN ${FIO_VOLUME_NQN} not found" >&2
-  nvme disconnect -n "${FIO_VOLUME_NQN}" 2>/dev/null || true
+  sudo nvme disconnect -n "${FIO_VOLUME_NQN}" 2>/dev/null || true
   exit 1
 fi
-OUTPUT=$(fio \
+OUTPUT=$(sudo fio \
   --filename="${DEVICE}" \
   --ioengine=libaio \
   --direct=1 \
@@ -82,7 +82,7 @@ OUTPUT=$(fio \
 printf '%s' "${OUTPUT}" | jq -c \
   '{p50_ns:.jobs[0].write.lat_ns.percentile["50.000000"],p99_ns:.jobs[0].write.lat_ns.percentile["99.000000"]}' \
   > /dev/termination-log
-nvme disconnect -n "${FIO_VOLUME_NQN}" 2>/dev/null || true
+sudo nvme disconnect -n "${FIO_VOLUME_NQN}" 2>/dev/null || true
 `
 
 // fioBenchNodeConfig is one element of the JSON array stored per k8s hostname in the
