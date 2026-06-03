@@ -22,6 +22,9 @@ FROM quay.io/prometheus/node-exporter:v1.8.2 AS exporter
 
 FROM registry.access.redhat.com/ubi10/ubi
 
+ARG VERSION=0.1.0
+ARG RELEASE=1
+
 RUN dnf install -y --nodocs \
         https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm && \
     dnf install -y --nodocs \
@@ -35,4 +38,7 @@ COPY --from=exporter /bin/node_exporter /usr/local/bin/prometheus-node-exporter
 LABEL name="simplyblock-fio-bench" \
       vendor="Simplyblock" \
       maintainer="developers@simplyblock.io" \
-      summary="Privileged fio benchmark container for NVMe-oF latency measurement."
+      version="${VERSION}" \
+      release="${RELEASE}" \
+      summary="Privileged fio benchmark container for NVMe-oF latency measurement." \
+      description="Provides fio, nvme-cli, jq, and prometheus-node-exporter for NVMe-oF write latency benchmarking. Used by the Simplyblock Operator as a one-shot baseline Job and as a continuous sidecar probe."
