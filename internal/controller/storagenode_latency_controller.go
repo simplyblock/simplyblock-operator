@@ -17,11 +17,9 @@ limitations under the License.
 package controller
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -31,7 +29,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -43,7 +40,6 @@ import (
 
 const (
 	defaultLatencyBenchmarkInterval = 5 * time.Minute
-	fioBenchResultPrefix            = "SB_FIO_RESULT: "
 
 	baselineJobLabelKey           = "simplyblock.io/fio-baseline"
 	baselineJobNodeLabelKey       = "simplyblock.io/fio-baseline-node"
@@ -53,7 +49,7 @@ const (
 
 // fioBenchBaselineScript is the one-shot entrypoint for the baseline measurement Job.
 // It runs before the cluster has production traffic so the result reflects raw hardware
-// capability. Emits a single SB_FIO_RESULT line then exits.
+// capability. Writes a JSON result to /dev/termination-log and exits.
 const fioBenchBaselineScript = `#!/bin/sh
 set -e
 nvme connect -t tcp -a "${FIO_NODE_ADDR}" -s "${FIO_NODE_PORT}" -n "${FIO_VOLUME_NQN}"
@@ -83,8 +79,9 @@ OUTPUT=$(fio \
   --group_reporting \
   --percentile_list=50:99 \
   --output-format=json 2>/dev/null)
-printf 'SB_FIO_RESULT: %s\n' "$(printf '%s' "${OUTPUT}" | jq -c \
-  '{type:"baseline",p50_ns:.jobs[0].write.lat_ns.percentile["50.000000"],p99_ns:.jobs[0].write.lat_ns.percentile["99.000000"]}')"
+printf '%s' "${OUTPUT}" | jq -c \
+  '{p50_ns:.jobs[0].write.lat_ns.percentile["50.000000"],p99_ns:.jobs[0].write.lat_ns.percentile["99.000000"]}' \
+  > /dev/termination-log
 nvme disconnect -n "${FIO_VOLUME_NQN}" 2>/dev/null || true
 `
 
@@ -98,24 +95,19 @@ type fioBenchNodeConfig struct {
 	ClusterName string `json:"clusterName"`
 }
 
-// fioBenchResult is parsed from "SB_FIO_RESULT: {...}" log lines emitted by both
-// the baseline Job and the sidecar.
+// fioBenchResult is the JSON written to the container termination log by the baseline Job.
 type fioBenchResult struct {
-	Type  string `json:"type"` // "baseline" (Job) or "runtime" (sidecar)
-	P50NS int64  `json:"p50_ns"`
-	P99NS int64  `json:"p99_ns"`
+	P50NS int64 `json:"p50_ns"`
+	P99NS int64 `json:"p99_ns"`
 }
 
-// StorageNodeLatencyReconciler measures per-node NVMe-oF write latency using:
-//   - A one-shot Kubernetes Job for the initial empty-cluster baseline.
-//   - The fio-bench-probe sidecar (injected into the SPDK DaemonSet pod) for
-//     ongoing runtime measurements every ~5 minutes.
+// StorageNodeLatencyReconciler measures per-node NVMe-oF write latency using a
+// one-shot Kubernetes Job for the initial empty-cluster baseline. Ongoing runtime
+// measurements are pushed directly to Prometheus by the fio-bench-probe sidecar.
 type StorageNodeLatencyReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
 	Namespace string
-	// KubeClient streams container logs (controller-runtime client does not expose log streaming).
-	KubeClient kubernetes.Interface
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch
@@ -124,7 +116,6 @@ type StorageNodeLatencyReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=create;delete;get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=create;get;update;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
-// +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -233,21 +224,6 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	if err := r.reconcileConfigMap(ctx, snode.Namespace, snode.Spec.ClusterName, configData); err != nil {
 		log.Error(err, "Cannot reconcile fio-bench ConfigMap")
-	}
-
-	hostToNodeUUID := make(map[string]string, len(hostToNode))
-	for h, n := range hostToNode {
-		hostToNodeUUID[h] = n.UUID
-	}
-
-	latencyMetrics, sidecarChanged, err := r.readSidecarResults(
-		ctx, snode.Namespace, snode.Spec.ClusterName, hostToNodeUUID, latencyMetrics,
-	)
-	if err != nil {
-		log.Error(err, "Error reading sidecar results")
-	}
-	if sidecarChanged {
-		changed = true
 	}
 
 	if changed {
@@ -371,8 +347,7 @@ func nvmfPort(node simplyblockv1alpha1.NodeStatus) int32 {
 	return 4420
 }
 
-// readJobResult reads the fio-baseline container logs from the Job's pod and parses
-// the SB_FIO_RESULT baseline line.
+// readJobResult reads the fio result from the baseline container's termination message.
 func (r *StorageNodeLatencyReconciler) readJobResult(ctx context.Context, job *batchv1.Job) (*fioBenchResult, error) {
 	podList := &corev1.PodList{}
 	if err := r.List(ctx, podList,
@@ -385,22 +360,17 @@ func (r *StorageNodeLatencyReconciler) readJobResult(ctx context.Context, job *b
 		return nil, fmt.Errorf("no pods found for job %s", job.Name)
 	}
 
-	stream, err := r.KubeClient.CoreV1().Pods(job.Namespace).
-		GetLogs(podList.Items[0].Name, &corev1.PodLogOptions{Container: "fio-baseline"}).
-		Stream(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("stream job logs: %w", err)
+	for _, cs := range podList.Items[0].Status.ContainerStatuses {
+		if cs.Name != "fio-baseline" || cs.State.Terminated == nil {
+			continue
+		}
+		var result fioBenchResult
+		if err := json.Unmarshal([]byte(cs.State.Terminated.Message), &result); err != nil {
+			return nil, fmt.Errorf("parse termination message: %w", err)
+		}
+		return &result, nil
 	}
-	defer stream.Close()
-
-	baseline, _, err := parseFioBenchResults(stream)
-	if err != nil {
-		return nil, err
-	}
-	if baseline == nil {
-		return nil, fmt.Errorf("no baseline result in logs for job %s", job.Name)
-	}
-	return baseline, nil
+	return nil, fmt.Errorf("no termination message for job %s", job.Name)
 }
 
 // reconcileConfigMap creates or updates the per-cluster ConfigMap that maps k8s
@@ -424,110 +394,6 @@ func (r *StorageNodeLatencyReconciler) reconcileConfigMap(
 	}
 	existing.Data = data
 	return r.Update(ctx, &existing)
-}
-
-// readSidecarResults streams logs from the fio-bench-probe container in each
-// DaemonSet pod, parses SB_FIO_RESULT runtime lines, and updates current latency.
-func (r *StorageNodeLatencyReconciler) readSidecarResults(
-	ctx context.Context,
-	namespace, clusterName string,
-	hostToNodeUUID map[string]string,
-	latencyMetrics []simplyblockv1alpha1.NodeLatencyMetrics,
-) ([]simplyblockv1alpha1.NodeLatencyMetrics, bool, error) {
-	podList := &corev1.PodList{}
-	if err := r.List(ctx, podList,
-		client.InNamespace(namespace),
-		client.MatchingLabels{
-			"app":                 "storage-node",
-			"simplyblock-cluster": clusterName,
-		},
-	); err != nil {
-		return latencyMetrics, false, fmt.Errorf("list storage-node pods: %w", err)
-	}
-
-	changed := false
-	now := metav1.NewTime(time.Now())
-
-	for i := range podList.Items {
-		pod := &podList.Items[i]
-		if pod.Status.Phase != corev1.PodRunning {
-			continue
-		}
-
-		hasSidecar := false
-		for _, c := range pod.Spec.Containers {
-			if c.Name == "fio-bench-probe" {
-				hasSidecar = true
-				break
-			}
-		}
-		if !hasSidecar {
-			continue
-		}
-
-		nodeUUID, ok := hostToNodeUUID[pod.Spec.NodeName]
-		if !ok {
-			continue
-		}
-
-		m := r.findOrCreateEntry(latencyMetrics, nodeUUID)
-
-		stream, err := r.KubeClient.CoreV1().Pods(namespace).GetLogs(pod.Name, &corev1.PodLogOptions{
-			Container: "fio-bench-probe",
-			SinceTime: m.LastLogReadAt,
-		}).Stream(ctx)
-		if err != nil {
-			continue
-		}
-
-		_, runtime, parseErr := parseFioBenchResults(stream)
-		stream.Close()
-		if parseErr != nil || runtime == nil {
-			m.LastLogReadAt = &now
-			latencyMetrics = r.setEntry(latencyMetrics, m)
-			changed = true
-			continue
-		}
-
-		m.CurrentP50NS = runtime.P50NS
-		m.CurrentP99NS = runtime.P99NS
-		t := metav1.NewTime(time.Now())
-		m.LastMeasuredAt = &t
-		m.LastLogReadAt = &now
-		latencyMetrics = r.setEntry(latencyMetrics, m)
-		changed = true
-	}
-
-	return latencyMetrics, changed, nil
-}
-
-// parseFioBenchResults scans an io.Reader for SB_FIO_RESULT lines and returns
-// the last baseline and last runtime result found (nil if not present).
-func parseFioBenchResults(r io.Reader) (baseline, runtime *fioBenchResult, err error) {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := scanner.Text()
-		after, ok := strings.CutPrefix(line, fioBenchResultPrefix)
-		if !ok {
-			_, after, ok = strings.Cut(line, fioBenchResultPrefix)
-			if !ok {
-				continue
-			}
-		}
-		var res fioBenchResult
-		if jsonErr := json.Unmarshal([]byte(after), &res); jsonErr != nil {
-			continue
-		}
-		switch res.Type {
-		case "baseline":
-			cp := res
-			baseline = &cp
-		case "runtime":
-			cp := res
-			runtime = &cp
-		}
-	}
-	return baseline, runtime, scanner.Err()
 }
 
 func (r *StorageNodeLatencyReconciler) jobSucceeded(job *batchv1.Job) bool {

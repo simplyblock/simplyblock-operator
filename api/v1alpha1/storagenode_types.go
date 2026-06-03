@@ -207,16 +207,6 @@ type NodeLatencyMetrics struct {
 	BaselineP99NS int64 `json:"baselineP99NS,omitempty"`
 	// BaselineMeasuredAt is when the baseline was established.
 	BaselineMeasuredAt *metav1.Time `json:"baselineMeasuredAt,omitempty"`
-	// CurrentP50NS is the most recent p50 read latency in nanoseconds.
-	CurrentP50NS int64 `json:"currentP50NS,omitempty"`
-	// CurrentP99NS is the most recent p99 read latency in nanoseconds.
-	CurrentP99NS int64 `json:"currentP99NS,omitempty"`
-	// LastMeasuredAt is when the most recent benchmark completed.
-	LastMeasuredAt *metav1.Time `json:"lastMeasuredAt,omitempty"`
-	// LastLogReadAt is the timestamp up to which the fio-bench-probe sidecar
-	// logs have been consumed. Used to avoid re-processing old log lines after
-	// a reconciler restart.
-	LastLogReadAt *metav1.Time `json:"lastLogReadAt,omitempty"`
 }
 
 // StorageNodeStatus defines the observed state of StorageNode.
