@@ -160,6 +160,16 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.reconcileAction(ctx, snCR, clusterUUID, clusterSecret)
 	}
 
+	clusterCR, err := utils.ResolveClusterCR(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
+	if err != nil {
+		log.Error(err, "Failed to resolve cluster CR for validation")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	if err := validateJournalManagerCount(snCR, clusterCR); err != nil {
+		log.Error(err, "Invalid StorageNode configuration — fix spec.journalManager.count before nodes can be added")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	if err := r.labelWorkerNodes(ctx, snCR); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1223,10 +1233,42 @@ func journalManagerPercentPerDevice(
 func journalManagerCount(
 	snCR *simplyblockv1alpha1.StorageNode,
 ) int {
-	if snCR.Spec.JournalManagerSpec == nil {
-		return 3
+	if snCR.Spec.JournalManagerSpec == nil || snCR.Spec.JournalManagerSpec.Count == nil {
+		return 0 // omitempty: backend auto-resolves based on cluster fault tolerance
 	}
-	return utils.IntPtrOrDefault(snCR.Spec.JournalManagerSpec.Count, 3)
+	return int(*snCR.Spec.JournalManagerSpec.Count)
+}
+
+// validateJournalManagerCount returns an error if spec.journalManager.count is
+// explicitly set to a value too low for the cluster's parity chunk count.
+// When count is unset the backend auto-resolves the correct value, so no
+// validation is needed in that case.
+func validateJournalManagerCount(
+	snCR *simplyblockv1alpha1.StorageNode,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+) error {
+	if snCR.Spec.JournalManagerSpec == nil || snCR.Spec.JournalManagerSpec.Count == nil {
+		return nil
+	}
+
+	parityChunks := int32(0)
+	if clusterCR.Spec.StripeSpec != nil && clusterCR.Spec.StripeSpec.ParityChunks != nil {
+		parityChunks = *clusterCR.Spec.StripeSpec.ParityChunks
+	}
+
+	minCount := int32(3)
+	if parityChunks >= 2 {
+		minCount = 4
+	}
+
+	count := *snCR.Spec.JournalManagerSpec.Count
+	if count < minCount {
+		return fmt.Errorf(
+			"spec.journalManager.count=%d is too low for stripe.parityChunks=%d; minimum required is %d",
+			count, parityChunks, minCount,
+		)
+	}
+	return nil
 }
 
 func (r *StorageNodeReconciler) reconcileAction(
