@@ -88,8 +88,8 @@ The operator has existing primitives for drain-based rebalancing (triggered duri
 │  ┌──────────────────────────▼───────────────────────────┐   │
 │  │          StorageNodeLatencyReconciler (NEW)          │   │
 │  │                                                      │   │
-│  │  Manages fio baseline Jobs per backend node          │   │
-│  │  Reads baseline result from Job logs (once per node) │   │
+│  │  Manages fio baseline Jobs per backend node UUID     │   │
+│  │  Reads baseline result from Job termination message  │   │
 │  │  Stores BaselineP50NS/P99NS in StorageNode.status    │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                                                             │
@@ -121,7 +121,7 @@ The operator has existing primitives for drain-based rebalancing (triggered duri
 └──────────────────────────────────────────────────────────────┘
 ```
 
-The `VolumeRebalancerReconciler` is the only new component on the operator side for rebalancing decisions. The `StorageNodeLatencyReconciler` is the companion component that collects fio measurements. Both are triggered via `RequeueAfter` loops acting on their respective CRs.
+The `VolumeRebalancerReconciler` is the only new component on the operator side for rebalancing decisions. The `StorageNodeLatencyReconciler` is the companion component that collects fio measurements. Both use `RequeueAfter` for periodic reconciliation; the `StorageNodeLatencyReconciler` additionally watches owned Jobs (`.Owns(&batchv1.Job{})`) so it is triggered immediately when a baseline Job completes, without waiting for the next poll interval.
 
 ---
 
@@ -262,14 +262,10 @@ type NodeLatencyMetrics struct {
     BaselineP50NS      int64        `json:"baselineP50NS,omitempty"`
     BaselineP99NS      int64        `json:"baselineP99NS,omitempty"`
     BaselineMeasuredAt *metav1.Time `json:"baselineMeasuredAt,omitempty"`
-    CurrentP50NS       int64        `json:"currentP50NS,omitempty"`
-    CurrentP99NS       int64        `json:"currentP99NS,omitempty"`
-    LastMeasuredAt     *metav1.Time `json:"lastMeasuredAt,omitempty"`
-    // LastLogReadAt tracks the baseline Job log-stream cursor so the operator does
-    // not re-parse already-processed lines after each reconcile.
-    LastLogReadAt      *metav1.Time `json:"lastLogReadAt,omitempty"`
 }
 ```
+
+> **Note:** Current latency (`CurrentP50NS`, `CurrentP99NS`) is not stored in the CR. The `VolumeRebalancerReconciler` reads it directly from Prometheus (`simplyblock_node_fio_write_latency_p99_ns`) on every evaluation cycle. Only the baseline — a one-time, stable measurement — is persisted in the CR.
 
 > **Benchmark volume connection:** The benchmark volume exists automatically on every storage node. Its logical volume ID equals the storage node UUID, so the NVMe-oF NQN is derived as `<StorageCluster.Status.NQN>:lvol:<nodeUUID>`. The TCP address comes from `NodeStatus.MgmtIp` and the port from `NodeStatus.NvmfPort` (fallback: 4420). No API call is needed to discover these values.
 
@@ -288,23 +284,23 @@ After a restart the `Migrating` field on `VolumeInfo` (returned by the REST API)
 The rebalancing trigger in Phase 1 is per-node **p99 write latency deviation** from each node's own baseline, measured by `fio` running directly on the storage host. Two measurement modes collaborate:
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                  SPDK DaemonSet Pod (per node)                 │
-│                                                                │
-│  ┌─────────────────────┐    ┌──────────────────────────────┐   │
-│  │   spdk container    │    │  fio-bench-probe sidecar     │   │
-│  │   (storage I/O)     │    │  0.1 vCPU / 25 MiB           │   │
-│  │                     │    │  privileged, hostNetwork     │   │
-│  │                     │    │                              │   │
-│  │                     │    │  1. Read config from CM      │   │
-│  │                     │    │  2. nvme connect (TCP)       │   │
-│  │                     │    │  3. Run fio 30s every 5 min  │   │
-│  │                     │    │     4K randwrite, iodepth=1  │   │
-│  │                     │    │  4. Write fio_current.prom   │   │
-│  │                     │    │  5. Emit SB_FIO_RESULT: ...  │   │
-│  └─────────────────────┘    └────────────┬─────────────────┘   │
-│                                          │ :9199 (textfile)    │
-└──────────────────────────────────────────┼─────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                  SPDK DaemonSet Pod (per node)                   │
+│                                                                  │
+│  ┌─────────────────────┐    ┌────────────────────────────────┐   │
+│  │   spdk container    │    │  fio-bench-probe sidecar       │   │
+│  │   (storage I/O)     │    │  0.1 vCPU / 25 MiB             │   │
+│  │                     │    │  privileged, hostNetwork       │   │
+│  │                     │    │                                │   │
+│  │                     │    │  1. Read JSON array from CM    │   │
+│  │                     │    │  2. Per NUMA node (parallel):  │   │
+│  │                     │    │     nvme connect (TCP)         │   │
+│  │                     │    │     fio 30s every 5 min        │   │
+│  │                     │    │     Write fio_<nodeUUID>.prom  │   │
+│  │                     │    │                                │   │
+│  └─────────────────────┘    └────────────┬───────────────────┘   │
+│                                          │ :9199 (textfile)      │
+└──────────────────────────────────────────┼───────────────────────┘
                                            │
                      ┌─────────────────────▼────────────────────┐
                      │  prometheus-node-exporter (:9199)        │
@@ -312,9 +308,9 @@ The rebalancing trigger in Phase 1 is per-node **p99 write latency deviation** f
                      └──────────────────────────────────────────┘
 ```
 
-**Baseline Job** (`sb-fio-baseline-<nodeUUID>`): A one-shot Kubernetes Job runs immediately when a backend node comes online, before production volumes are attached. It connects via NVMe-oF, runs the same 30 s fio benchmark, emits `SB_FIO_RESULT: {"type":"baseline", "p50_ns":..., "p99_ns":...}` to stdout, then exits. The `StorageNodeLatencyReconciler` reads the Job logs and stores `BaselineP50NS` / `BaselineP99NS` in the `StorageNode` status. The Job is deleted after successful log extraction.
+**Baseline Job** (`sb-fio-baseline-<nodeUUID>`): A one-shot Kubernetes Job is created per backend node UUID when the node comes online, before production volumes are attached. It connects via NVMe-oF, runs the same 30 s fio benchmark, writes `{"p50_ns":..., "p99_ns":...}` to `/dev/termination-log`, then exits. The `StorageNodeLatencyReconciler` is notified immediately via the owned-Job watch (`.Owns(&batchv1.Job{})`), reads the result from `pod.Status.ContainerStatuses[*].State.Terminated.Message`, stores `BaselineP50NS` / `BaselineP99NS` in the `StorageNode` status, and deletes the Job.
 
-**Runtime sidecar** (`fio-bench-probe`): A persistent sidecar container injected into the SPDK DaemonSet pod by `BuildStorageNodeDaemonSet`. It starts the `prometheus-node-exporter` on port 9199, reads per-node NVMe-oF connection config from a ConfigMap (keyed by `$HOSTNAME`), connects to the benchmark volume, and then loops: `sleep 270s` → `run_fio` → repeat. Each `run_fio` overwrites `fio_current.prom` with the latest p50/p99 values and also emits `SB_FIO_RESULT: {"type":"runtime", ...}` to stdout (used only for log-based debugging; not parsed by the operator for current measurements).
+**Runtime sidecar** (`fio-bench-probe`): A persistent sidecar container injected into the SPDK DaemonSet pod by `BuildStorageNodeDaemonSet`. It starts the `prometheus-node-exporter` on port 9199, reads a **JSON array** of per-node NVMe-oF connection configs from a ConfigMap (keyed by `$HOSTNAME`), and launches one independent background loop per NUMA node. Each loop connects to its node's NVMe-oF volume and runs `fio` every ~5 minutes, writing per-node results to `fio_<nodeUUID>.prom` picked up by the textfile collector. On NUMA hosts with multiple backend nodes, all nodes are measured in parallel with independent NVMe connections and independent `.prom` files.
 
 > **Why a sidecar instead of a periodic Job?** The sidecar is colocated with the SPDK process on the same host kernel. `hostNetwork: true` eliminates TCP round-trip latency from the measurement, giving a true reflection of storage stack latency. A periodic Job would incur pod-scheduling overhead and NVMe-oF reconnect latency (~100 ms) on every benchmark run, polluting the results. The marginal resource cost of the sidecar (0.1 vCPU, 25 MiB) is negligible.
 
@@ -347,11 +343,11 @@ where `IOPS` and `ThroughputBytesPerSec` are queried from Prometheus using the m
 
 **Prometheus metric sources:**
 
-| Metric | Label | Value |
-|--------|-------|-------|
-| `lvol_read_io_ps{cluster, lvol}` | `lvol` = volume UUID | read IOPS |
-| `lvol_write_io_ps{cluster, lvol}` | `lvol` = volume UUID | write IOPS |
-| `lvol_read_bytes_ps{cluster, lvol}` | `lvol` = volume UUID | read throughput (bytes/s) |
+| Metric                               | Label                | Value                      |
+|--------------------------------------|----------------------|----------------------------|
+| `lvol_read_io_ps{cluster, lvol}`     | `lvol` = volume UUID | read IOPS                  |
+| `lvol_write_io_ps{cluster, lvol}`    | `lvol` = volume UUID | write IOPS                 |
+| `lvol_read_bytes_ps{cluster, lvol}`  | `lvol` = volume UUID | read throughput (bytes/s)  |
 | `lvol_write_bytes_ps{cluster, lvol}` | `lvol` = volume UUID | write throughput (bytes/s) |
 
 `IOPS = lvol_read_io_ps + lvol_write_io_ps`, `ThroughputBytesPerSec = lvol_read_bytes_ps + lvol_write_bytes_ps`.
@@ -724,11 +720,11 @@ Returns current migration status. `completed_at > 0` signals completion. `error_
 
 No API calls are needed to discover the benchmark volume. Each storage node automatically hosts a benchmark volume whose logical volume ID equals the storage node UUID. The operator derives all connection parameters independently:
 
-| Parameter | Source |
-|-----------|--------|
-| NQN | `fmt.Sprintf("%s:lvol:%s", StorageCluster.Status.NQN, nodeUUID)` |
-| TCP address | `NodeStatus.MgmtIp` |
-| TCP port | `NodeStatus.NvmfPort` (fallback: 4420) |
+| Parameter   | Source                                                           |
+|-------------|------------------------------------------------------------------|
+| NQN         | `fmt.Sprintf("%s:lvol:%s", StorageCluster.Status.NQN, nodeUUID)` |
+| TCP address | `NodeStatus.MgmtIp`                                              |
+| TCP port    | `NodeStatus.NvmfPort` (fallback: 4420)                           |
 
 The benchmark volume lifecycle is managed entirely by the backend; the operator neither creates nor deletes it.
 
@@ -744,20 +740,20 @@ The per-node, per-blocksize I/O metric endpoint described in earlier drafts is d
 
 ### 11.1 Cluster-Level Defaults
 
-| Field                         | Default  | Phase | Description                                                                                     |
-|-------------------------------|----------|-------|-------------------------------------------------------------------------------------------------|
-| `enabled`                     | `true`   | 1     | Activates the rebalancing loop                                                                  |
-| `evaluationInterval`          | `60s`    | 1     | How often the rebalancer runs                                                                   |
-| `imbalanceThreshold`          | `20` (%) | 1     | Minimum latency deviation % above baseline to trigger migration                                 |
-| `defaultCoolDownSeconds`      | `60`     | 1     | Cool-down after migration                                                                       |
-| `maxVolumeMigrationsPerCycle` | `10`     | 1     | Hard cap on volumes migrated per cycle                                                          |
-| `iopsWeight`                  | `1.0`    | 1     | Weight for per-volume IOPS in the volume priority score                                         |
-| `throughputWeight`            | `0.1`    | 1     | Weight for per-volume throughput (MB/s) in the volume priority score                            |
-| `prometheusURL`               | —        | 1     | **Required.** Prometheus endpoint scraped for `simplyblock_node_fio_write_latency_p99_ns`       |
-| `latencyBenchmarkEnabled`     | `false`  | 1     | Enables fio sidecar + baseline Job; requires `fioBenchmarkImage`                                |
-| `latencyBenchmarkInterval`    | `5m`     | 1     | Operator reconcile cadence for reading baseline Job logs                                        |
-| `fioBenchmarkImage`           | —        | 1     | Container image for fio Jobs and sidecar (requires fio, nvme-cli, jq, prometheus-node-exporter) |
-| `metricsBackend`              | —        | 2     | Data source for IOPS metrics (`prometheus` or `controlplane`); no-op in Phase 1                 |
+| Field                         | Default  | Phase | Description                                                                                                  |
+|-------------------------------|----------|-------|--------------------------------------------------------------------------------------------------------------|
+| `enabled`                     | `true`   | 1     | Activates the rebalancing loop                                                                               |
+| `evaluationInterval`          | `60s`    | 1     | How often the rebalancer runs                                                                                |
+| `imbalanceThreshold`          | `20` (%) | 1     | Minimum latency deviation % above baseline to trigger migration                                              |
+| `defaultCoolDownSeconds`      | `60`     | 1     | Cool-down after migration                                                                                    |
+| `maxVolumeMigrationsPerCycle` | `10`     | 1     | Hard cap on volumes migrated per cycle                                                                       |
+| `iopsWeight`                  | `1.0`    | 1     | Weight for per-volume IOPS in the volume priority score                                                      |
+| `throughputWeight`            | `0.1`    | 1     | Weight for per-volume throughput (MB/s) in the volume priority score                                         |
+| `prometheusURL`               | —        | 1     | **Required.** Prometheus endpoint scraped for `simplyblock_node_fio_write_latency_p99_ns`                    |
+| `latencyBenchmarkEnabled`     | `false`  | 1     | Enables fio sidecar + baseline Job; requires `fioBenchmarkImage`                                             |
+| `latencyBenchmarkInterval`    | `5m`     | 1     | Operator periodic reconcile cadence; baseline Job completion is also handled immediately via owned-Job watch |
+| `fioBenchmarkImage`           | —        | 1     | Container image for fio Jobs and sidecar (requires fio, nvme-cli, jq, prometheus-node-exporter)              |
+| `metricsBackend`              | —        | 2     | Data source for IOPS metrics (`prometheus` or `controlplane`); no-op in Phase 1                              |
 
 ### 11.2 Volume-Level Overrides (Annotations)
 
@@ -927,7 +923,7 @@ Run against a real SimplyBlock cluster with real fio latency measurements.
 
 | # | Question                                                                                                                                                                                                                                                                                                                                                                                                                             | Owner             |
 |---|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------|
-| 1 | ~~**IOPS/throughput per volume from REST API**~~ **Resolved.** Per-volume IOPS and throughput are read directly from Prometheus using `lvol_read_io_ps`, `lvol_write_io_ps`, `lvol_read_bytes_ps`, `lvol_write_bytes_ps` (exported by the control plane). The REST API values are used only as a fallback if Prometheus has no series for a given volume. | Resolved |
+| 1 | ~~**IOPS/throughput per volume from REST API**~~ **Resolved.** Per-volume IOPS and throughput are read directly from Prometheus using `lvol_read_io_ps`, `lvol_write_io_ps`, `lvol_read_bytes_ps`, `lvol_write_bytes_ps` (exported by the control plane). The REST API values are used only as a fallback if Prometheus has no series for a given volume.                                                                            | Resolved          |
 | 2 | **Phase 2 SPDK Prometheus metric schema:** What are the exact metric names and label keys for per-node, per-blocksize IOPS series? The schema in §9.4 is a proposal; it must be agreed with the SPDK team before Phase 2 implementation.                                                                                                                                                                                             | SPDK/Backend team |
 | 3 | **Helm/OLM RBAC sync:** Does the Helm chart include the generated RBAC manifests from `config/rbac/role.yaml` directly, or is there a hand-written `ClusterRole` that needs manual update? Same question for the OLM CSV `spec.install.spec.clusterPermissions`.                                                                                                                                                                     | DevOps            |
 | 4 | **`simplyblock.io/pinned-volume` — backend hard-pin:** Does the backend also enforce a hard-pin state on the lvol? If so, the operator should honour it in addition to the PVC annotation — currently only the PVC annotation is checked.                                                                                                                                                                                            | Backend team      |
