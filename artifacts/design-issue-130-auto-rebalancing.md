@@ -489,7 +489,7 @@ The `processPendingMigrations` function runs at the start of every cycle and pol
 
 ### Step 7 — Update status
 
-After each cycle, patch `status.rebalancingMetrics` with the current per-node deviation values, the worst/best node UUIDs, and `avgDeviationPct` / `maxDeviationPct`. The Prometheus gauge `simplyblock_rebalancer_imbalance_percent` is set to `maxDeviationPct`.
+After each cycle, patch `status.rebalancingMetrics` with the current per-node deviation values, the worst/best node UUIDs, and `avgDeviationPct` / `maxDeviationPct`. The Prometheus gauge `simplyblock_rebalancer_max_latency_deviation_pct` is set to `maxDeviationPct`.
 
 ### Algorithm Summary (Phase 1 pseudocode)
 
@@ -768,16 +768,16 @@ The per-node, per-blocksize I/O metric endpoint described in earlier drafts is d
 
 ### 12.1 Prometheus Metrics
 
-| Metric                                        | Type    | Labels                                  | Description                                                              |
-|-----------------------------------------------|---------|-----------------------------------------|--------------------------------------------------------------------------|
-| `simplyblock_rebalancer_evaluation_total`     | Counter | `cluster`, `result`                     | Evaluation cycles by outcome (`skipped`, `migrated`, `blocked`, `error`) |
-| `simplyblock_rebalancer_migrations_total`     | Counter | `cluster`, `source_node`, `target_node` | Volume migrations initiated                                              |
-| `simplyblock_rebalancer_imbalance_percent`    | Gauge   | `cluster`                               | Maximum latency deviation % across all nodes                             |
-| `simplyblock_rebalancer_node_weighted_score`  | Gauge   | `cluster`, `node`                       | Per-node latency deviation % (Phase 1) / weighted IOPS score (Phase 2)   |
-| `simplyblock_rebalancer_cooldown_volumes`     | Gauge   | `cluster`                               | Volumes currently in cool-down                                           |
-| `simplyblock_rebalancer_pinned_blocked_total` | Counter | `cluster`                               | Times rebalancing was blocked by pinned/cooling-down volumes             |
-| `simplyblock_node_fio_write_latency_p50_ns`   | Gauge   | `cluster`, `node`                       | Sidecar p50 4K write latency (ns)                                        |
-| `simplyblock_node_fio_write_latency_p99_ns`   | Gauge   | `cluster`, `node`                       | Sidecar p99 4K write latency (ns)                                        |
+| Metric                                              | Type    | Labels                                  | Description                                                                                            |
+|-----------------------------------------------------|---------|-----------------------------------------|--------------------------------------------------------------------------------------------------------|
+| `simplyblock_rebalancer_evaluation_total`           | Counter | `cluster`, `result`                     | Evaluation cycles by outcome (`skipped`, `migrated`, `blocked`, `error`)                               |
+| `simplyblock_rebalancer_migrations_total`           | Counter | `cluster`, `source_node`, `target_node` | Volume migrations initiated                                                                            |
+| `simplyblock_rebalancer_max_latency_deviation_pct`  | Gauge   | `cluster`                               | Maximum p99 write latency deviation from per-node baseline, in percent                                 |
+| `simplyblock_rebalancer_node_latency_deviation_pct` | Gauge   | `cluster`, `node`                       | Per-node p99 write latency deviation from baseline, in percent (Phase 1); weighted I/O score (Phase 2) |
+| `simplyblock_rebalancer_cooldown_volumes`           | Gauge   | `cluster`                               | Volumes currently in cool-down                                                                         |
+| `simplyblock_rebalancer_pinned_blocked_total`       | Counter | `cluster`                               | Times rebalancing was blocked by pinned/cooling-down volumes                                           |
+| `simplyblock_node_fio_write_latency_p50_ns`         | Gauge   | `cluster`, `node`                       | Sidecar p50 4K write latency (ns)                                                                      |
+| `simplyblock_node_fio_write_latency_p99_ns`         | Gauge   | `cluster`, `node`                       | Sidecar p99 4K write latency (ns)                                                                      |
 
 ### 12.2 Kubernetes Events
 

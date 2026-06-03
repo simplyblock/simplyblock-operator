@@ -38,18 +38,18 @@ var (
 		[]string{"cluster", "source_node", "target_node"},
 	)
 
-	rebalancerImbalancePct = prometheus.NewGaugeVec(
+	rebalancerMaxLatencyDeviationPct = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "simplyblock_rebalancer_imbalance_percent",
-			Help: "Current imbalance percentage (peak score vs cluster average).",
+			Name: "simplyblock_rebalancer_max_latency_deviation_pct",
+			Help: "Maximum p99 write latency deviation from per-node baseline, in percent, across all storage nodes in the cluster.",
 		},
 		[]string{"cluster"},
 	)
 
-	rebalancerNodeWeightedScore = prometheus.NewGaugeVec(
+	rebalancerNodeLatencyDeviationPct = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "simplyblock_rebalancer_node_weighted_score",
-			Help: "Current weighted I/O score per storage node.",
+			Name: "simplyblock_rebalancer_node_latency_deviation_pct",
+			Help: "Per-node p99 write latency deviation from baseline, in percent (Phase 1). Will reflect weighted I/O score in Phase 2.",
 		},
 		[]string{"cluster", "node"},
 	)
@@ -75,8 +75,8 @@ func init() {
 	ctrlmetrics.Registry.MustRegister(
 		rebalancerEvaluationTotal,
 		rebalancerMigrationsTotal,
-		rebalancerImbalancePct,
-		rebalancerNodeWeightedScore,
+		rebalancerMaxLatencyDeviationPct,
+		rebalancerNodeLatencyDeviationPct,
 		rebalancerCooldownVolumes,
 		rebalancerPinnedBlockedTotal,
 	)

@@ -201,12 +201,12 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Emit per-node deviation gauge.
 	for nodeUUID, dev := range deviations {
-		rebalancerNodeWeightedScore.WithLabelValues(clusterCR.Name, nodeUUID).Set(dev)
+		rebalancerNodeLatencyDeviationPct.WithLabelValues(clusterCR.Name, nodeUUID).Set(dev)
 	}
 
 	// Compute cluster-level deviation stats for status and the trigger check.
 	maxDev, avgDev, hottestNode, coolestNode := deviationStats(deviations)
-	rebalancerImbalancePct.WithLabelValues(clusterCR.Name).Set(maxDev)
+	rebalancerMaxLatencyDeviationPct.WithLabelValues(clusterCR.Name).Set(maxDev)
 
 	imbalanceThreshold := float64(defaultImbalanceThresholdPct)
 	if spec.ImbalanceThreshold != nil {
