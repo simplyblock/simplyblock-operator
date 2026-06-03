@@ -1,28 +1,36 @@
 # Dockerfile for the fio NVMe-oF latency benchmark job.
 #
-# The container is launched as a privileged Kubernetes Job by the
-# StorageNodeLatencyReconciler. The benchmark script is injected inline
-# by the Job spec (Command: ["/bin/sh", "-c"], Args: [<fioScript>]).
+# The container is launched in two roles by the operator:
+#   1. Privileged Kubernetes Job  — one-shot baseline measurement per storage node.
+#   2. Sidecar container          — continuous per-node fio loop, metrics via
+#                                   prometheus-node-exporter textfile collector.
+#
+# The benchmark script is injected inline by the Job spec or baked into the
+# DaemonSet pod spec; this image only provides the required tooling.
 #
 # Required tools:
-#   fio        — I/O benchmark (libaio engine, raw block device)
-#   nvme-cli   — NVMe-oF connect/list/disconnect over TCP
-#   jq         — parse "nvme list -o json" to locate the device path
+#   fio                       — I/O benchmark (libaio engine, raw block device)
+#   nvme-cli                  — NVMe-oF connect/list/disconnect over TCP
+#   jq                        — JSON parsing for nvme list output and config files
+#   prometheus-node-exporter  — textfile collector for sidecar Prometheus metrics
 #
-# The container MUST run privileged so it can open /dev/nvme-fabrics and
-# access the NVMe block device created by the host kernel after connect.
+# Base image: Red Hat UBI 10 (required for Red Hat container certification).
+# fio and nvme-cli are sourced from EPEL 10; prometheus-node-exporter is copied
+# from the official upstream image since it is not packaged in UBI or EPEL.
 
-FROM ubuntu:22.04
+FROM quay.io/prometheus/node-exporter:v1.8.2 AS exporter
 
-ARG DEBIAN_FRONTEND=noninteractive
+FROM registry.access.redhat.com/ubi10/ubi
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN dnf install -y --nodocs \
+        https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm && \
+    dnf install -y --nodocs \
         fio \
         nvme-cli \
         jq \
-        prometheus-node-exporter \
-    && rm -rf /var/lib/apt/lists/*
+    && dnf clean all
+
+COPY --from=exporter /bin/node_exporter /usr/local/bin/prometheus-node-exporter
 
 LABEL name="simplyblock-fio-bench" \
       vendor="Simplyblock" \
