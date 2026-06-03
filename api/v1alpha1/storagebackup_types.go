@@ -33,9 +33,6 @@ type PersistentVolumeClaimRef struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PVC Name"
 	// Name is the PVC name.
 	Name string `json:"name"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PVC Namespace"
-	// Namespace overrides the backup resource namespace for the PVC lookup.
-	Namespace string `json:"namespace,omitempty"`
 }
 
 // StorageBackupSpec defines the desired state of StorageBackup.

@@ -66,10 +66,6 @@ spec:
                   name:
                     description: Name is the PVC name.
                     type: string
-                  namespace:
-                    description: Namespace overrides the backup resource namespace
-                      for the PVC lookup.
-                    type: string
                 required:
                 - name
                 type: object

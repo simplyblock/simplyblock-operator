@@ -512,10 +512,7 @@ func (r *StorageBackupReconciler) resolveBackupSource(
 		return nil, fmt.Errorf("spec.pvcRef is required for non-imported StorageBackup resources")
 	}
 
-	pvcNamespace := backupCR.Spec.PVCRef.Namespace
-	if pvcNamespace == "" {
-		pvcNamespace = backupCR.Namespace
-	}
+	pvcNamespace := backupCR.Namespace
 
 	pvc := &corev1.PersistentVolumeClaim{}
 	if err := r.Get(ctx, client.ObjectKey{Name: backupCR.Spec.PVCRef.Name, Namespace: pvcNamespace}, pvc); err != nil {
