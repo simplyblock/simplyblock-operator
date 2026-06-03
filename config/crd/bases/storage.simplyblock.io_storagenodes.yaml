@@ -465,28 +465,6 @@ spec:
                         from the initial empty-cluster benchmark.
                       format: int64
                       type: integer
-                    currentP50NS:
-                      description: CurrentP50NS is the most recent p50 read latency
-                        in nanoseconds.
-                      format: int64
-                      type: integer
-                    currentP99NS:
-                      description: CurrentP99NS is the most recent p99 read latency
-                        in nanoseconds.
-                      format: int64
-                      type: integer
-                    lastLogReadAt:
-                      description: |-
-                        LastLogReadAt is the timestamp up to which the fio-bench-probe sidecar
-                        logs have been consumed. Used to avoid re-processing old log lines after
-                        a reconciler restart.
-                      format: date-time
-                      type: string
-                    lastMeasuredAt:
-                      description: LastMeasuredAt is when the most recent benchmark
-                        completed.
-                      format: date-time
-                      type: string
                     nodeUUID:
                       description: NodeUUID is the backend storage node UUID.
                       type: string
