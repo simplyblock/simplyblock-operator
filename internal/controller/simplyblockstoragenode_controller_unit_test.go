@@ -1013,8 +1013,8 @@ func TestStorageNodeReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
-	if res.RequeueAfter != 0 {
-		t.Fatalf("expected no delayed requeue when worker already known, got %+v", res)
+	if res.RequeueAfter != syncNodeStatusInterval {
+		t.Fatalf("expected requeue after %v for status sync, got %+v", syncNodeStatusInterval, res)
 	}
 }
 

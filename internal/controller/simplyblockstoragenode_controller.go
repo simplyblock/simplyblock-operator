@@ -90,6 +90,8 @@ var (
 	waitForActionCompletionRetries      = 50
 	waitForActionCompletionWaitInterval = 5 * time.Second
 	waitForActionCompletionSleepFn      = time.Sleep
+
+	syncNodeStatusInterval = 30 * time.Second
 )
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
@@ -235,7 +237,10 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	return ctrl.Result{}, nil
+	if err := r.syncTrackedNodesStatus(ctx, apiClient, clusterSecret, clusterUUID, snCR); err != nil {
+		log.Error(err, "Failed to sync storage node status")
+	}
+	return ctrl.Result{RequeueAfter: syncNodeStatusInterval}, nil
 }
 
 // reconcileWorkerNode handles provisioning and online-wait for a single worker node.
@@ -1158,6 +1163,91 @@ func onAllSocketNodesOnline(
 	log.Info("All socket nodes online", "node", nodeName, "count", len(onlineForHost))
 
 	return maybeActivateCluster(ctx, apiClient, clusterSecret, clusterUUID, snCR, r)
+}
+
+// syncTrackedNodesStatus refreshes all tracked (UUID != "") NodeStatus entries
+// from the backend API. It is called on every completed reconcile pass to keep
+// Health, Status, LvolPort and the other fields up-to-date after initial
+// provisioning. PostedAt is preserved because it is a creation timestamp.
+func (r *StorageNodeReconciler) syncTrackedNodesStatus(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterSecret, clusterUUID string,
+	snCR *simplyblockv1alpha1.StorageNode,
+) error {
+	log := logf.FromContext(ctx)
+
+	hasTracked := false
+	for _, n := range snCR.Status.Nodes {
+		if n.UUID != "" {
+			hasTracked = true
+			break
+		}
+	}
+	if !hasTracked {
+		return nil
+	}
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
+	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
+		return fmt.Errorf("sync: failed to list storage nodes: %w", err)
+	}
+
+	var apiResp []SNODEAPIResponse
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return fmt.Errorf("sync: failed to unmarshal storage node response: %w", err)
+	}
+
+	byUUID := make(map[string]SNODEAPIResponse, len(apiResp))
+	for _, res := range apiResp {
+		byUUID[res.UUID] = res
+	}
+
+	patch := client.MergeFrom(snCR.DeepCopy())
+	changed := false
+
+	for i := range snCR.Status.Nodes {
+		n := &snCR.Status.Nodes[i]
+		if n.UUID == "" {
+			continue
+		}
+		res, ok := byUUID[n.UUID]
+		if !ok {
+			continue
+		}
+		updated := simplyblockv1alpha1.NodeStatus{
+			Hostname: n.Hostname,
+			UUID:     res.UUID,
+			Health:   res.Health,
+			Status:   res.Status,
+			MgmtIp:   res.IP,
+			Devices:  fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
+			CPU:      utils.IntToInt32Ptr(res.CPU),
+			Memory:   utils.HumanBytes(res.Memory, "iec"),
+			Volumes:  utils.IntToInt32Ptr(res.Volumes),
+			RpcPort:  utils.IntToInt32Ptr(res.RPC_PORT),
+			LvolPort: utils.IntToInt32Ptr(res.LVOL_PORT),
+			NvmfPort: utils.IntToInt32Ptr(res.NVMF_PORT),
+			PostedAt: n.PostedAt,
+		}
+		if !reflect.DeepEqual(*n, updated) {
+			*n = updated
+			changed = true
+		}
+	}
+
+	if changed {
+		if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+			log.Error(err, "Failed to patch storage node status during sync")
+			return err
+		}
+		log.Info("Storage node status synced")
+	}
+	return nil
 }
 
 // maybeActivateCluster activates the cluster when online-node conditions are met.
