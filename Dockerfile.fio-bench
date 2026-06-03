@@ -14,20 +14,29 @@
 #   jq                        — JSON parsing for nvme list output and config files
 #   prometheus-node-exporter  — textfile collector for sidecar Prometheus metrics
 #
-# Base image: Red Hat UBI 10 (required for Red Hat container certification).
-# fio and nvme-cli are sourced from EPEL 10; prometheus-node-exporter is copied
-# from the official upstream image since it is not packaged in UBI or EPEL.
+# Base image: Red Hat UBI 9 (required for Red Hat container certification).
+# fio is sourced from EPEL 9; nvme-cli is in RHEL 9 BaseOS (no EPEL needed);
+# prometheus-node-exporter is copied from the official upstream image since it
+# is not packaged in UBI or EPEL.
 
 FROM quay.io/prometheus/node-exporter:v1.8.2 AS exporter
 
-FROM registry.access.redhat.com/ubi10/ubi
+FROM registry.access.redhat.com/ubi10/ubi:10.2
 
 ARG VERSION=0.1.0
 ARG RELEASE=1
+ARG TARGETPLATFORM
 
+RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
+        echo "ARM64 version"; \
+        dnf install -y https://yum.oracle.com/repo/OracleLinux/OL10/baseos/latest/aarch64/getPackage/oraclelinux-release-el10-1.0-17.el10.aarch64.rpm ; \
+    else \
+        echo "AMD64 version"; \
+        dnf install -y https://yum.oracle.com/repo/OracleLinux/OL10/baseos/latest/x86_64/getPackage/oraclelinux-release-el10-1.0-17.el10.x86_64.rpm ; \
+    fi
+
+RUN dnf update -y  --nogpgcheck
 RUN dnf install -y --nodocs \
-        https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm && \
-    dnf install -y --nodocs \
         fio \
         nvme-cli \
         jq \
