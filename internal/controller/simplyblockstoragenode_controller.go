@@ -240,6 +240,17 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.syncTrackedNodesStatus(ctx, apiClient, clusterSecret, clusterUUID, snCR); err != nil {
 		log.Error(err, "Failed to sync storage node status")
 	}
+
+	hasTracked := false
+	for _, n := range snCR.Status.Nodes {
+		if n.UUID != "" {
+			hasTracked = true
+			break
+		}
+	}
+	if !hasTracked {
+		return ctrl.Result{}, nil
+	}
 	return ctrl.Result{RequeueAfter: syncNodeStatusInterval}, nil
 }
 
@@ -869,8 +880,7 @@ func extractSpdkProxyRpcPort(pod *corev1.Pod) (int32, bool) {
 	}
 
 	const prefix = "snode-spdk-pod-"
-	if strings.HasPrefix(pod.Name, prefix) {
-		rest := strings.TrimPrefix(pod.Name, prefix)
+	if rest, ok := strings.CutPrefix(pod.Name, prefix); ok {
 		if dash := strings.Index(rest, "-"); dash > 0 {
 			if n, err := strconv.Atoi(rest[:dash]); err == nil {
 				return int32(n), true
@@ -1233,6 +1243,7 @@ func (r *StorageNodeReconciler) syncTrackedNodesStatus(
 			LvolPort: utils.IntToInt32Ptr(res.LVOL_PORT),
 			NvmfPort: utils.IntToInt32Ptr(res.NVMF_PORT),
 			PostedAt: n.PostedAt,
+			Uptime:   n.Uptime,
 		}
 		if !reflect.DeepEqual(*n, updated) {
 			*n = updated
