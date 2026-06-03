@@ -456,12 +456,12 @@ spec:
                       format: date-time
                       type: string
                     baselineP50NS:
-                      description: BaselineP50NS is the p50 read latency (nanoseconds)
+                      description: BaselineP50NS is the p50 write latency (nanoseconds)
                         from the initial empty-cluster benchmark.
                       format: int64
                       type: integer
                     baselineP99NS:
-                      description: BaselineP99NS is the p99 read latency (nanoseconds)
+                      description: BaselineP99NS is the p99 write latency (nanoseconds)
                         from the initial empty-cluster benchmark.
                       format: int64
                       type: integer

@@ -201,9 +201,9 @@ type NodeDrainState struct {
 type NodeLatencyMetrics struct {
 	// NodeUUID is the backend storage node UUID.
 	NodeUUID string `json:"nodeUUID"`
-	// BaselineP50NS is the p50 read latency (nanoseconds) from the initial empty-cluster benchmark.
+	// BaselineP50NS is the p50 write latency (nanoseconds) from the initial empty-cluster benchmark.
 	BaselineP50NS int64 `json:"baselineP50NS,omitempty"`
-	// BaselineP99NS is the p99 read latency (nanoseconds) from the initial empty-cluster benchmark.
+	// BaselineP99NS is the p99 write latency (nanoseconds) from the initial empty-cluster benchmark.
 	BaselineP99NS int64 `json:"baselineP99NS,omitempty"`
 	// BaselineMeasuredAt is when the baseline was established.
 	BaselineMeasuredAt *metav1.Time `json:"baselineMeasuredAt,omitempty"`
