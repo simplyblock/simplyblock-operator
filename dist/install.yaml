@@ -1803,8 +1803,10 @@ spec:
                 - remove
                 type: string
               clusterImage:
-                description: ClusterImage is the container image used for storage-node
-                  workloads.
+                description: |-
+                  ClusterImage is the container image used for storage-node workloads.
+                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
+                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               clusterName:
                 description: ClusterName is the target storage cluster name.
@@ -2084,11 +2086,16 @@ spec:
                   type: string
                 type: array
               spdkImage:
-                description: SpdkImage is the SPDK image reference used by node services.
+                description: |-
+                  SpdkImage is the SPDK image reference used by node services.
+                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
+                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               spdkProxyImage:
-                description: SpdkProxyImage is the SPDK proxy image reference used
-                  by node services.
+                description: |-
+                  SpdkProxyImage is the SPDK proxy image reference used by node services.
+                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
+                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               spdkSystemMemory:
                 description: |-
