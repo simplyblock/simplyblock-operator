@@ -1607,8 +1607,7 @@ spec:
                 format: int32
                 type: integer
               maxSize:
-                description: MaxSize is the maximum allocatable size of the storage
-                  node.
+                description: MaxSize is the maximum allocatable size of huge pages.
                 type: string
               mgmtIfname:
                 description: MgmtIfname is the management interface name used by storage

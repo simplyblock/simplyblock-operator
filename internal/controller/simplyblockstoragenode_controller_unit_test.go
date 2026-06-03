@@ -1013,8 +1013,8 @@ func TestStorageNodeReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
-	if res.RequeueAfter != 0 {
-		t.Fatalf("expected no delayed requeue when worker already known, got %+v", res)
+	if res.RequeueAfter != syncNodeStatusInterval {
+		t.Fatalf("expected requeue after %v for status sync, got %+v", syncNodeStatusInterval, res)
 	}
 }
 
@@ -2101,6 +2101,213 @@ func TestReconcileSpdkProxyService(t *testing.T) {
 	if err := r.reconcileSpdkProxyService(context.Background(), sn); err != nil {
 		t.Fatalf("second reconcileSpdkProxyService: %v", err)
 	}
+}
+
+func TestSyncTrackedNodesStatus(t *testing.T) {
+	const clusterUUID = "cluster-sync-uuid"
+	const clusterSecret = "sync-secret"
+
+	apiBody := func(uuid, status, ip string, health bool) string {
+		return fmt.Sprintf(`[{
+			"id":%q,
+			"status":%q,
+			"mgmt_ip":%q,
+			"health_check":%v,
+			"hostname":"node-a",
+			"device_count":2,
+			"online_device_count":2,
+			"cpu_spdk_count":4,
+			"spdk_mem":2147483648,
+			"lvols":3,
+			"rpc_port":9000,
+			"lvol_subsys_port":9001,
+			"nvmf_port":9002
+		}]`, uuid, status, ip, health)
+	}
+
+	t.Run("no-op when no tracked nodes", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-sync-noop", Namespace: "default"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-a", UUID: ""},
+				},
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+		// Unreachable server — if the function makes an HTTP call it will fail.
+		c := webapi.NewClient("http://127.0.0.1:1")
+		if err := r.syncTrackedNodesStatus(context.Background(), c, clusterSecret, clusterUUID, sn); err != nil {
+			t.Fatalf("expected no error when no tracked nodes, got: %v", err)
+		}
+	})
+
+	t.Run("updates tracked node fields by UUID", func(t *testing.T) {
+		postedAt := metav1.Now()
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-sync-update", Namespace: "default"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{
+						Hostname: "node-a",
+						UUID:     "node-uuid-1",
+						Status:   "in_creation",
+						Health:   false,
+						MgmtIp:   "10.0.0.1",
+						PostedAt: &postedAt,
+						Uptime:   "1d2h",
+					},
+				},
+			},
+		}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(apiBody("node-uuid-1", statusOnline, "10.0.0.99", true)))
+		}))
+		defer srv.Close()
+
+		r := newStorageNodeStateTestReconciler(t, sn)
+		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterSecret, clusterUUID, sn); err != nil {
+			t.Fatalf("syncTrackedNodesStatus returned error: %v", err)
+		}
+
+		n := sn.Status.Nodes[0]
+		if n.Status != statusOnline {
+			t.Errorf("expected Status %q, got %q", statusOnline, n.Status)
+		}
+		if !n.Health {
+			t.Errorf("expected Health=true")
+		}
+		if n.MgmtIp != "10.0.0.99" {
+			t.Errorf("expected MgmtIp 10.0.0.99, got %q", n.MgmtIp)
+		}
+		if n.UUID != "node-uuid-1" {
+			t.Errorf("expected UUID preserved, got %q", n.UUID)
+		}
+	})
+
+	t.Run("preserves PostedAt and Uptime across sync", func(t *testing.T) {
+		postedAt := metav1.NewTime(time.Now().Add(-1 * time.Hour).Truncate(time.Second))
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-sync-preserve", Namespace: "default"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{
+						Hostname: "node-a",
+						UUID:     "node-uuid-2",
+						Status:   statusOnline,
+						PostedAt: &postedAt,
+						Uptime:   "3d4h",
+					},
+				},
+			},
+		}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(apiBody("node-uuid-2", "online", "10.0.0.2", true)))
+		}))
+		defer srv.Close()
+
+		r := newStorageNodeStateTestReconciler(t, sn)
+		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterSecret, clusterUUID, sn); err != nil {
+			t.Fatalf("syncTrackedNodesStatus returned error: %v", err)
+		}
+
+		n := sn.Status.Nodes[0]
+		if n.PostedAt == nil || !n.PostedAt.Equal(&postedAt) {
+			t.Errorf("expected PostedAt to be preserved, got %v", n.PostedAt)
+		}
+		if n.Uptime != "3d4h" {
+			t.Errorf("expected Uptime to be preserved as %q, got %q", "3d4h", n.Uptime)
+		}
+	})
+
+	t.Run("skips nodes whose UUID is absent from API response", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-sync-missing", Namespace: "default"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-a", UUID: "node-uuid-known", Status: "in_creation"},
+					{Hostname: "node-b", UUID: "node-uuid-gone", Status: "in_creation"},
+				},
+			},
+		}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			// Only return node-uuid-known; node-uuid-gone is absent.
+			_, _ = w.Write([]byte(apiBody("node-uuid-known", statusOnline, "10.0.0.3", true)))
+		}))
+		defer srv.Close()
+
+		r := newStorageNodeStateTestReconciler(t, sn)
+		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterSecret, clusterUUID, sn); err != nil {
+			t.Fatalf("syncTrackedNodesStatus returned error: %v", err)
+		}
+
+		if sn.Status.Nodes[0].Status != statusOnline {
+			t.Errorf("expected known node to be updated, got status %q", sn.Status.Nodes[0].Status)
+		}
+		if sn.Status.Nodes[1].Status != "in_creation" {
+			t.Errorf("expected absent node to be left unchanged, got status %q", sn.Status.Nodes[1].Status)
+		}
+	})
+
+	t.Run("returns error when API call fails", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-sync-apierr", Namespace: "default"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-a", UUID: "node-uuid-err"},
+				},
+			},
+		}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		r := newStorageNodeStateTestReconciler(t, sn)
+		err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterSecret, clusterUUID, sn)
+		if err == nil {
+			t.Fatalf("expected error on API failure")
+		}
+		if !strings.Contains(err.Error(), "sync: failed to list storage nodes") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+
+	t.Run("returns error on invalid JSON response", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-sync-badjson", Namespace: "default"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-a", UUID: "node-uuid-json"},
+				},
+			},
+		}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{`))
+		}))
+		defer srv.Close()
+
+		r := newStorageNodeStateTestReconciler(t, sn)
+		err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterSecret, clusterUUID, sn)
+		if err == nil {
+			t.Fatalf("expected error on invalid JSON")
+		}
+		if !strings.Contains(err.Error(), "sync: failed to unmarshal") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
 }
 
 func TestReconcileServicesAndServingCertificatesForCertManagerProvider(t *testing.T) {
