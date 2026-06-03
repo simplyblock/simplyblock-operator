@@ -107,8 +107,7 @@ type fioBenchResult struct {
 // measurements are pushed directly to Prometheus by the fio-bench-probe sidecar.
 type StorageNodeLatencyReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	Namespace string
+	Scheme *runtime.Scheme
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch
@@ -262,7 +261,7 @@ func (r *StorageNodeLatencyReconciler) reconcileBaselineJob(
 ) (*fioBenchResult, bool, error) {
 	jobName := baselineJobNamePrefix + safeNodeID(node.UUID)
 	job := &batchv1.Job{}
-	err := r.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: jobName}, job)
+	err := r.Get(ctx, types.NamespacedName{Namespace: snode.Namespace, Name: jobName}, job)
 
 	if err != nil && !apierrors.IsNotFound(err) {
 		return nil, false, fmt.Errorf("get baseline job: %w", err)
@@ -308,7 +307,7 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 	return r.Create(ctx, &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      baselineJobNamePrefix + safeNodeID(node.UUID),
-			Namespace: r.Namespace,
+			Namespace: snode.Namespace,
 			Labels: map[string]string{
 				baselineJobLabelKey:     "true",
 				baselineJobNodeLabelKey: node.UUID,
