@@ -2153,7 +2153,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 						UUID:     "node-uuid-1",
 						Status:   "in_creation",
 						Health:   false,
-						MgmtIp:  "10.0.0.1",
+						MgmtIp:   "10.0.0.1",
 						PostedAt: &postedAt,
 						Uptime:   "1d2h",
 					},
