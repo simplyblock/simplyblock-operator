@@ -12,13 +12,13 @@ This repository contains the official Helm charts for Simplyblock.
 
 ### Install the Simplyblock Operator
 
-Clone the repository and install directly from the local path:
+Add the Simplyblock Helm repository and install:
 
 ```bash
-git clone https://github.com/simplyblock/helm-charts.git
-cd helm-charts
+helm repo add simplyblock https://simplyblock.github.io/helm-charts/charts
+helm repo update
 
-helm install simplyblock-operator charts/simplyblock-operator \
+helm install simplyblock-operator simplyblock/simplyblock-operator \
   --namespace simplyblock \
   --create-namespace
 ```
@@ -34,7 +34,8 @@ kubectl -n simplyblock wait controlplane simplyblock \
 ### Upgrade
 
 ```bash
-helm upgrade simplyblock-operator charts/simplyblock-operator \
+helm repo update
+helm upgrade simplyblock-operator simplyblock/simplyblock-operator \
   --namespace simplyblock
 ```
 
