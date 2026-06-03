@@ -85,8 +85,9 @@ printf '%s' "${OUTPUT}" | jq -c \
 nvme disconnect -n "${FIO_VOLUME_NQN}" 2>/dev/null || true
 `
 
-// fioBenchNodeConfig is the JSON structure written per-hostname into the fio-bench ConfigMap.
-// All fields are read by the fio-bench-probe sidecar script.
+// fioBenchNodeConfig is one element of the JSON array stored per k8s hostname in the
+// fio-bench ConfigMap. The sidecar iterates the array to benchmark every NUMA node on
+// its host independently.
 type fioBenchNodeConfig struct {
 	NQN         string `json:"nqn"`
 	Addr        string `json:"addr"`
@@ -155,24 +156,26 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// One baseline Job and one ConfigMap entry per unique k8s hostname.
-	// For multi-NUMA hosts with multiple backend nodes, only the first online node
-	// is used — its measurement is representative of the physical host's latency.
-	hostToNode := map[string]simplyblockv1alpha1.NodeStatus{}
+	// One baseline Job per node UUID. On NUMA hosts multiple backend nodes share the
+	// same k8s hostname but have independent NVMe devices and independent latency
+	// characteristics, so every node UUID is measured separately.
+	nodesByUUID := map[string]simplyblockv1alpha1.NodeStatus{}
 	for _, n := range snode.Status.Nodes {
 		if n.UUID == "" || n.Status != "online" || !n.Health || n.Hostname == "" {
 			continue
 		}
-		if _, seen := hostToNode[n.Hostname]; !seen {
-			hostToNode[n.Hostname] = n
+		if _, seen := nodesByUUID[n.UUID]; !seen {
+			nodesByUUID[n.UUID] = n
 		}
 	}
 
 	latencyMetrics := r.copyLatencyMetrics(snode.Status.LatencyMetrics)
-	configData := map[string]string{}
+	// hostConfigs accumulates per-node configs keyed by k8s hostname so the sidecar
+	// (one pod per host) receives a JSON array covering all NUMA nodes on its host.
+	hostConfigs := map[string][]fioBenchNodeConfig{}
 	changed := false
 
-	for hostname, node := range hostToNode {
+	for _, node := range nodesByUUID {
 		m := r.findOrCreateEntry(latencyMetrics, node.UUID)
 
 		// Derive the benchmark volume NQN from the cluster NQN and the storage node UUID.
@@ -208,20 +211,23 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 		// with the one-shot baseline Job — both would write to the same NVMe device
 		// and corrupt each other's measurements.
 		if m.BaselineP99NS > 0 {
-			cfg := fioBenchNodeConfig{
+			hostConfigs[node.Hostname] = append(hostConfigs[node.Hostname], fioBenchNodeConfig{
 				NQN:         conn.NQN,
 				Addr:        conn.Addr,
 				Port:        conn.Port,
 				NodeUUID:    node.UUID,
 				ClusterName: snode.Spec.ClusterName,
-			}
-			raw, _ := json.Marshal(cfg)
-			configData[hostname] = string(raw)
+			})
 		}
 
 		latencyMetrics = r.setEntry(latencyMetrics, m)
 	}
 
+	configData := make(map[string]string, len(hostConfigs))
+	for hostname, cfgs := range hostConfigs {
+		raw, _ := json.Marshal(cfgs)
+		configData[hostname] = string(raw)
+	}
 	if err := r.reconcileConfigMap(ctx, snode.Namespace, snode.Spec.ClusterName, configData); err != nil {
 		log.Error(err, "Cannot reconcile fio-bench ConfigMap")
 	}
