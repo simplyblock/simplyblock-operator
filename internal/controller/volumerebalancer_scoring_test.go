@@ -338,8 +338,8 @@ func TestSelectLatencyTarget_SkipsOfflineAndUnhealthy(t *testing.T) {
 	r := &VolumeRebalancerReconciler{}
 	nodeMap := map[string]webapi.StorageNodeInfo{
 		"src": makeNodeInfo("src", "online", true),
-		"B":   makeNodeInfo("B", "offline", true),  // offline → skip
-		"C":   makeNodeInfo("C", "online", false),   // unhealthy → skip
+		"B":   makeNodeInfo("B", "offline", true), // offline → skip
+		"C":   makeNodeInfo("C", "online", false), // unhealthy → skip
 		"D":   makeNodeInfo("D", "online", true),
 	}
 	deviations := map[string]float64{"src": 50, "B": 0, "C": 0, "D": 10}
@@ -463,7 +463,7 @@ func TestFilterEligibleVolumes_ActiveCoolDown(t *testing.T) {
 	r.mu.Unlock()
 
 	vols := []webapi.VolumeInfo{
-		makeVol("v-hot", "online", false),  // in cool-down
+		makeVol("v-hot", "online", false), // in cool-down
 		makeVol("v-ok", "online", false),
 	}
 	got := r.filterEligibleVolumes(vols, "cluster", map[string]bool{})
@@ -496,7 +496,7 @@ func TestFilterEligibleVolumes_Mixed(t *testing.T) {
 
 	vols := []webapi.VolumeInfo{
 		makeVol("pinned", "online", false),
-		makeVol("cd", "online", false),       // in cool-down
+		makeVol("cd", "online", false), // in cool-down
 		makeVol("offline", "degraded", false),
 		makeVol("migrating", "online", true),
 		makeVol("ok", "online", false),
