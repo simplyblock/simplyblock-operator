@@ -470,6 +470,7 @@ func (r *StorageNodeLatencyReconciler) setEntry(
 func (r *StorageNodeLatencyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageNode{}).
+		Owns(&batchv1.Job{}).
 		Named("storagenodelatency").
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
