@@ -123,6 +123,11 @@ type StorageNodeSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Reserved System CPU"
 	// ReservedSystemCPU defines CPUs reserved for system workloads.
 	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="SPDK System Memory"
+	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
+	// SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g. "4G", "512M").
+	// When omitted the backend default is used.
+	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Tolerations"
 	// Tolerations configures pod tolerations for storage-node pods.

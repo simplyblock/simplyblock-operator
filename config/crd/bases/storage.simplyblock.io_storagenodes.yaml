@@ -164,6 +164,12 @@ spec:
                 description: SpdkProxyImage is the SPDK proxy image reference used
                   by node services.
                 type: string
+              spdkSystemMemory:
+                description: |-
+                  SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g. "4G", "512M").
+                  When omitted the backend default is used.
+                pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
+                type: string
               tolerations:
                 description: Tolerations configures pod tolerations for storage-node
                   pods.

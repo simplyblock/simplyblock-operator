@@ -342,6 +342,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 		CRNameSpace:         snCR.Namespace,
 		CRPlural:            "storagenodes",
 		Format4K:            utils.BoolPtrOrFalse(snCR.Spec.ForceFormat4K),
+		SpdkSystemMemory:    snCR.Spec.SpdkSystemMemory,
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
