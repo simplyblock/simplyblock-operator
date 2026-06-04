@@ -123,6 +123,10 @@ type StorageNodeSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Reserved System CPU"
 	// ReservedSystemCPU defines CPUs reserved for system workloads.
 	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="SPDK System Memory"
+	// SpdkSysMem is the amount of memory reserved for SPDK system use.
+	// When omitted the backend default is used.
+	SpdkSysMem string `json:"spdkSysMem,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Tolerations"
 	// Tolerations configures pod tolerations for storage-node pods.
