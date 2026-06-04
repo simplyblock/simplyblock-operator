@@ -79,6 +79,7 @@ spec:
   # clusterImage: "quay.io/simplyblock-io/simplyblock:26.2.2-PRE"
   # spdkImage: "quay.io/simplyblock-io/spdk:26.2.2-PRE"
   # spdkProxyImage: "quay.io/simplyblock-io/simplyblock:26.2.2-PRE"
+  #spdkSystemMemory: 4G
   mgmtIfname: br-ex
   dataIfname:
     - br-ex
