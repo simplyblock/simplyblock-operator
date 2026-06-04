@@ -51,8 +51,10 @@ jobs:
       - name: Install operator-sdk
         run: |
           OPERATOR_SDK_VERSION="v1.42.2"
+          OPERATOR_SDK_SHA256="8847c45ea994ac62b3cd134f77934df2a16a56a39a634eb988e0d1db99d1a413"
           curl -sLo /usr/local/bin/operator-sdk \
             "https://github.com/operator-framework/operator-sdk/releases/download/${OPERATOR_SDK_VERSION}/operator-sdk_linux_amd64"
+          echo "${OPERATOR_SDK_SHA256}  /usr/local/bin/operator-sdk" | sha256sum -c -
           chmod +x /usr/local/bin/operator-sdk
           operator-sdk version
 
