@@ -136,6 +136,11 @@ func main() {
 	}
 	operatorNamespace := strings.TrimSpace(string(nsBytes))
 
+	operatorSA := os.Getenv("OPERATOR_SERVICE_ACCOUNT")
+	if operatorSA == "" {
+		operatorSA = "controller-manager"
+	}
+
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
 	// prevent from being vulnerable to the HTTP/2 Stream Cancellation and
@@ -251,10 +256,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageClusterReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorderFor("storagecluster-controller"),
-		Namespace: operatorNamespace,
+		Client:             mgr.GetClient(),
+		Scheme:             mgr.GetScheme(),
+		Recorder:           mgr.GetEventRecorderFor("storagecluster-controller"),
+		Namespace:          operatorNamespace,
+		ServiceAccountName: operatorSA,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
 		os.Exit(1)
