@@ -1,4 +1,3 @@
-apiVersion: v1
 kind: Namespace
 metadata:
   labels:
@@ -2110,37 +2109,15 @@ spec:
                       format: date-time
                       type: string
                     baselineP50NS:
-                      description: BaselineP50NS is the p50 read latency (nanoseconds)
+                      description: BaselineP50NS is the p50 write latency (nanoseconds)
                         from the initial empty-cluster benchmark.
                       format: int64
                       type: integer
                     baselineP99NS:
-                      description: BaselineP99NS is the p99 read latency (nanoseconds)
+                      description: BaselineP99NS is the p99 write latency (nanoseconds)
                         from the initial empty-cluster benchmark.
                       format: int64
                       type: integer
-                    currentP50NS:
-                      description: CurrentP50NS is the most recent p50 read latency
-                        in nanoseconds.
-                      format: int64
-                      type: integer
-                    currentP99NS:
-                      description: CurrentP99NS is the most recent p99 read latency
-                        in nanoseconds.
-                      format: int64
-                      type: integer
-                    lastLogReadAt:
-                      description: |-
-                        LastLogReadAt is the timestamp up to which the fio-bench-probe sidecar
-                        logs have been consumed. Used to avoid re-processing old log lines after
-                        a reconciler restart.
-                      format: date-time
-                      type: string
-                    lastMeasuredAt:
-                      description: LastMeasuredAt is when the most recent benchmark
-                        completed.
-                      format: date-time
-                      type: string
                     nodeUUID:
                       description: NodeUUID is the backend storage node UUID.
                       type: string
@@ -2456,12 +2433,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - ""
-  resources:
-  - pods/log
-  verbs:
-  - get
 - apiGroups:
   - ""
   resources:
