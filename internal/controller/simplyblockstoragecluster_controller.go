@@ -24,6 +24,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -72,9 +73,10 @@ const (
 // StorageClusterReconciler reconciles a StorageCluster object
 type StorageClusterReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
-	Namespace string // operator namespace
+	Scheme             *runtime.Scheme
+	Recorder           record.EventRecorder
+	Namespace          string // operator namespace
+	ServiceAccountName string // operator service account name
 }
 
 type CSICredentials struct {
@@ -90,11 +92,12 @@ type CSIClusterEntry struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -121,6 +124,13 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	/* -------------------- Finalizer -------------------- */
 	if updated, err := r.ensureFinalizer(ctx, clusterCR); updated || err != nil {
 		return ctrl.Result{}, err
+	}
+
+	/* -------------------- Secret RBAC -------------------- */
+	if clusterCR.Namespace != r.Namespace {
+		if err := r.ensureNamespaceSecretAccess(ctx, clusterCR.Namespace); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	switch clusterCR.Spec.Action {
@@ -584,6 +594,57 @@ func (r *StorageClusterReconciler) deleteClusterSecret(
 		if client.IgnoreNotFound(err) != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// ensureNamespaceSecretAccess creates a namespace-scoped Role and RoleBinding in
+// the given namespace so the operator can write secrets there. Called during
+// StorageCluster reconciliation for clusters deployed outside the operator's own
+// namespace (e.g. simplyblock-cluster-* credentials secrets).
+func (r *StorageClusterReconciler) ensureNamespaceSecretAccess(ctx context.Context, namespace string) error {
+	const roleName = "simplyblock-manager-secrets"
+
+	role := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      roleName,
+			Namespace: namespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, role, func() error {
+		role.Rules = []rbacv1.PolicyRule{{
+			APIGroups: []string{""},
+			Resources: []string{"secrets"},
+			Verbs:     []string{"create", "delete", "get", "patch", "update"},
+		}}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("ensure secret role in namespace %s: %w", namespace, err)
+	}
+
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      roleName,
+			Namespace: namespace,
+		},
+	}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, rb, func() error {
+		rb.Subjects = []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      r.ServiceAccountName,
+			Namespace: r.Namespace,
+		}}
+		if rb.RoleRef.Name == "" {
+			rb.RoleRef = rbacv1.RoleRef{
+				APIGroup: "rbac.authorization.k8s.io",
+				Kind:     "Role",
+				Name:     roleName,
+			}
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("ensure secret rolebinding in namespace %s: %w", namespace, err)
 	}
 
 	return nil
