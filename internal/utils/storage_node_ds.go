@@ -95,16 +95,10 @@ done
 run_node() {
   NQN="${1}" ADDR="${2}" PORT="${3}" NODE_UUID="${4}" CLUSTER_NAME="${5}"
 
-  sudo nvme connect -t tcp -a "${ADDR}" -s "${PORT}" -n "${NQN}"
-
-  DEVICE=""
-  for i in $(seq 1 30); do
-    DEVICE=$(sudo nvme list -o json 2>/dev/null \
-      | jq -r --arg n "${NQN}" \
-          '.Devices[]|select(.SubsystemNQN==$n)|.DevicePath' 2>/dev/null || true)
-    [ -n "${DEVICE}" ] && break
-    sleep 1
-  done
+  DEVICE="$(
+    sudo nvme connect -t tcp -a "${ADDR}" -s "${PORT}" -n "${NQN}" |
+      awk '/connecting to device:/ {print $NF}'
+  )"
 
   if [ -z "${DEVICE}" ]; then
     echo "fio-bench-probe: ERROR: device for NQN ${NQN} not found" >&2
@@ -112,6 +106,7 @@ run_node() {
     return 1
   fi
 
+  DEVICE="/dev/${DEVICE}n1"
   while true; do
     OUTPUT=$(sudo fio \
       --filename="${DEVICE}" \
