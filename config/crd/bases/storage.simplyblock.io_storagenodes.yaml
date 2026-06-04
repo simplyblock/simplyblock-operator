@@ -164,9 +164,9 @@ spec:
                 description: SpdkProxyImage is the SPDK proxy image reference used
                   by node services.
                 type: string
-              spdkSysMem:
+              spdkSystemMemory:
                 description: |-
-                  SpdkSysMem is the amount of memory reserved for SPDK system use.
+                  SpdkSystemMemory is the amount of memory reserved for SPDK system use.
                   When omitted the backend default is used.
                 type: string
               tolerations:
