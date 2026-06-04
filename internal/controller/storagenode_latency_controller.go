@@ -183,7 +183,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 		conn := benchmarkConnInfo{
 			NQN:  fmt.Sprintf("%s:lvol:%s", clusterCR.Status.NQN, node.UUID),
 			Addr: node.MgmtIp,
-			Port: nvmfPort(node),
+			Port: logicalVolumeConnectionPort(node),
 		}
 
 		// Drive the one-shot baseline Job until a result is stored.
@@ -344,12 +344,12 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 	})
 }
 
-// nvmfPort returns the NVMf TCP port for a node, falling back to 4420 if not reported.
-func nvmfPort(node simplyblockv1alpha1.NodeStatus) int32 {
-	if node.NvmfPort != nil && *node.NvmfPort > 0 {
-		return *node.NvmfPort
+// logicalVolumeConnectionPort returns the NVMe/TCP connection port for a node, falling back to 4430 if not reported.
+func logicalVolumeConnectionPort(node simplyblockv1alpha1.NodeStatus) int32 {
+	if node.LvolPort != nil && *node.LvolPort > 0 {
+		return *node.LvolPort
 	}
-	return 4420
+	return 4430
 }
 
 // readJobResult reads the fio result from the baseline container's termination message.
