@@ -34,8 +34,9 @@ import (
 )
 
 const (
-	backupSyncImportedLabel = "storage.simplyblock.io/imported"
-	backupSyncRequeue       = 60 * time.Second
+	backupSyncImportedLabel      = "storage.simplyblock.io/imported"
+	backupSyncImportedLabelValue = "true"
+	backupSyncRequeue            = 60 * time.Second
 )
 
 // StorageBackupSyncReconciler watches StorageCluster objects and creates
@@ -82,16 +83,24 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{RequeueAfter: backupSyncRequeue}, nil
 	}
 
-	// Build a set of backend backup IDs that are already tracked by a CR.
+	// Build a set of backend backup IDs that are already tracked by a CR, and a
+	// separate map of imported CRs whose status patch previously failed (BackupID
+	// still empty). These will have their status patch retried below rather than
+	// triggering a duplicate Create call.
 	var existingCRs simplyblockv1alpha1.StorageBackupList
 	if err := r.List(ctx, &existingCRs, client.InNamespace(clusterCR.Namespace)); err != nil {
 		log.Error(err, "Failed to list existing StorageBackup CRs")
 		return ctrl.Result{RequeueAfter: backupSyncRequeue}, nil
 	}
 	trackedIDs := make(map[string]struct{}, len(existingCRs.Items))
-	for _, cr := range existingCRs.Items {
+	pendingStatusCRs := make(map[string]*simplyblockv1alpha1.StorageBackup)
+	for i := range existingCRs.Items {
+		cr := &existingCRs.Items[i]
 		if cr.Status.BackupID != "" {
 			trackedIDs[cr.Status.BackupID] = struct{}{}
+		} else if cr.Labels[backupSyncImportedLabel] == backupSyncImportedLabelValue {
+			// CR was created by a previous sync cycle but its status patch failed.
+			pendingStatusCRs[cr.Name] = cr
 		}
 	}
 
@@ -107,6 +116,43 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		bp := &backendBackups[i]
 
 		if _, tracked := trackedIDs[bp.ID]; tracked {
+			continue
+		}
+
+		// A CR for this backup already exists but its status was never populated
+		// (operator was killed between Create and Status().Patch). Retry the patch.
+		if pending, hasPending := pendingStatusCRs[bp.ID]; hasPending {
+			// PVCRef may be nil if the original import happened without a matching
+			// PVC (best-effort import below); preserve that rather than dereferencing.
+			pendingPVCNamespace := ""
+			if pending.Spec.PVCRef != nil {
+				pendingPVCNamespace = pending.Spec.PVCRef.Namespace
+			}
+			patch := client.MergeFrom(pending.DeepCopy())
+			pending.Status = simplyblockv1alpha1.StorageBackupStatus{
+				Phase:        backupPhaseFromAPIStatus(bp.Status),
+				APIStatus:    bp.Status,
+				Message:      "Imported from storage cluster",
+				ClusterUUID:  clusterUUID,
+				PVCNamespace: pendingPVCNamespace,
+				LvolID:       bp.LvolID,
+				LvolName:     bp.LvolName,
+				SnapshotID:   bp.SnapshotID,
+				SnapshotName: bp.SnapshotName,
+				BackupID:     bp.ID,
+				S3ID:         bp.S3ID,
+				NodeID:       bp.NodeID,
+				PrevBackupID: bp.PrevBackupID,
+				Size:         bp.Size,
+				AllowedHosts: bp.AllowedHosts,
+				CreatedAt:    unixToTimePtr(bp.CreatedAt),
+				CompletedAt:  unixToTimePtr(bp.CompletedAt),
+			}
+			if err := r.Status().Patch(ctx, pending, patch); err != nil {
+				log.Error(err, "Failed to retry status patch for imported StorageBackup CR", "backupID", bp.ID)
+			} else {
+				log.Info("Retried status patch for imported StorageBackup CR", "backupID", bp.ID)
+			}
 			continue
 		}
 
@@ -129,7 +175,7 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				Name:      bp.ID,
 				Namespace: clusterCR.Namespace,
 				Labels: map[string]string{
-					backupSyncImportedLabel: "true",
+					backupSyncImportedLabel: backupSyncImportedLabelValue,
 				},
 			},
 			Spec: simplyblockv1alpha1.StorageBackupSpec{
