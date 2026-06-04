@@ -53,6 +53,19 @@ const (
 	// (missing, unreadable, or lacking required keys).
 	eventReasonBackupCredentialsError = "BackupCredentialsError"
 
+	// eventReasonClusterLookupError is emitted when the controller fails to
+	// determine whether a cluster already exists in the namespace, preventing
+	// it from choosing the correct API endpoint.
+	eventReasonClusterLookupError = "ClusterLookupError"
+
+	// eventReasonClusterAuthError is emitted when cluster credentials cannot
+	// be retrieved from the cluster Secret, blocking any authenticated API call.
+	eventReasonClusterAuthError = "ClusterAuthError"
+
+	// eventReasonInvalidConfig is emitted when a user-supplied field in the CR
+	// fails validation (e.g. a non-HTTPS or private-IP URL).
+	eventReasonInvalidConfig = "InvalidConfig"
+
 	// eventReasonClusterCreationFailed is emitted when the cluster creation API
 	// call returns a non-2xx status. The event message includes the HTTP status
 	// code and the full response body so the root cause is visible without
@@ -204,6 +217,13 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	}
 
+	vaultConfig, err := buildHashicorpVaultConfig(clusterCR.Spec.HashicorpVaultSettings)
+	if err != nil {
+		log.Error(err, "Invalid HashiCorp Vault configuration")
+		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonInvalidConfig, "Invalid HashiCorp Vault configuration: %v", err)
+		return ctrl.Result{}, err
+	}
+
 	params := utils.ClusterAddParams{
 		Name:             clusterCR.Name,
 		BlkSize:          utils.IntPtrOrDefault(clusterCR.Spec.BlockSize, 512),
@@ -236,7 +256,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		RpcBasePort:            utils.IntPtrOrDefault(clusterCR.Spec.RpcBasePort, 8080),
 		SnodeApiPort:           utils.IntPtrOrDefault(clusterCR.Spec.SnodeApiPort, 50001),
 		BackupConfig:           backupConfig,
-		HashicorpVaultSettings: buildHashicorpVaultConfig(clusterCR.Spec.HashicorpVaultSettings),
+		HashicorpVaultSettings: vaultConfig,
 		EnableFailureDomain:    utils.BoolPtrOrFalse(clusterCR.Spec.EnableFailureDomains),
 	}
 
@@ -384,6 +404,12 @@ func (r *StorageClusterReconciler) buildBackupConfig(
 		return nil, fmt.Errorf("secret %q missing key %q", secretName, "secret_access_key")
 	}
 
+	if ep := clusterCR.Spec.Backup.LocalEndpoint; ep != "" {
+		if err := utils.ValidateExternalURL(ep); err != nil {
+			return nil, fmt.Errorf("backup.localEndpoint: %w", err)
+		}
+	}
+
 	return &utils.BackupConfig{
 		AccessKeyID:     string(accessKeyID),
 		SecretAccessKey: string(secretAccessKey),
@@ -395,11 +421,14 @@ func (r *StorageClusterReconciler) buildBackupConfig(
 	}, nil
 }
 
-func buildHashicorpVaultConfig(s *simplyblockv1alpha1.HashicorpVaultSettings) *utils.HashicorpVaultConfig {
+func buildHashicorpVaultConfig(s *simplyblockv1alpha1.HashicorpVaultSettings) (*utils.HashicorpVaultConfig, error) {
 	if s == nil || s.BaseURL == "" {
-		return nil
+		return nil, nil
 	}
-	return &utils.HashicorpVaultConfig{BaseURL: s.BaseURL}
+	if err := utils.ValidateExternalURL(s.BaseURL); err != nil {
+		return nil, fmt.Errorf("hashicorpVault.baseURL: %w", err)
+	}
+	return &utils.HashicorpVaultConfig{BaseURL: s.BaseURL}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
