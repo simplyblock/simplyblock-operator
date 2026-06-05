@@ -132,8 +132,8 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	maxFaultTolerance := 1
-	if clusterCR.Spec.MaxFaultTolerance != nil && *clusterCR.Spec.MaxFaultTolerance > 0 {
-		maxFaultTolerance = int(*clusterCR.Spec.MaxFaultTolerance)
+	if clusterCR.Status.MaxFaultTolerance != nil && *clusterCR.Status.MaxFaultTolerance > 0 {
+		maxFaultTolerance = int(*clusterCR.Status.MaxFaultTolerance)
 	}
 
 	apiClient := webapi.NewClient()

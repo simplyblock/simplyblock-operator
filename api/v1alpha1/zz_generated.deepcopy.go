@@ -1435,6 +1435,11 @@ func (in *StorageClusterStatus) DeepCopyInto(out *StorageClusterStatus) {
 		in, out := &in.Created, &out.Created
 		*out = (*in).DeepCopy()
 	}
+	if in.MaxFaultTolerance != nil {
+		in, out := &in.MaxFaultTolerance, &out.MaxFaultTolerance
+		*out = new(int32)
+		**out = **in
+	}
 	if in.ActionStatus != nil {
 		in, out := &in.ActionStatus, &out.ActionStatus
 		*out = new(ActionStatus)

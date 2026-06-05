@@ -984,6 +984,10 @@ func (r *StorageClusterReconciler) syncStatus(
 	clusterCR.Status.NQN = resp.NQN
 	clusterCR.Status.Rebalancing = &resp.Rebalancing
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
+	if resp.MaxFaultTolerance > 0 {
+		v := int32(resp.MaxFaultTolerance)
+		clusterCR.Status.MaxFaultTolerance = &v
+	}
 
 	if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
 		log.Error(err, "syncStatus: failed to patch cluster status", "name", clusterCR.Name)
