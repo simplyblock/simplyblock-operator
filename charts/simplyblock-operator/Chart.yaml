@@ -6,7 +6,7 @@ apiVersion: v2
 appVersion: latest
 description: Simplyblock Operator for Kubernetes
 name: simplyblock-operator
-version: "26.2.5"
+version: "26.2.6"
 keywords:
 - spdk
 - csi
