@@ -59,6 +59,14 @@ type lvolActiveSidesResponse struct {
 
 var ErrLvolNotFound = errors.New("lvol not found")
 
+// ErrClusterNotFound is returned by cluster-lookup helpers when no
+// StorageCluster with the given name exists in the requested namespace.
+var ErrClusterNotFound = errors.New("storage cluster not found")
+
+// ErrClusterUUIDNotReady is returned by cluster-lookup helpers when a
+// matching StorageCluster exists but its Status.UUID has not been populated yet.
+var ErrClusterUUIDNotReady = errors.New("storage cluster UUID not yet populated")
+
 func ResolvePoolUUID(
 	ctx context.Context,
 	c client.Client,
@@ -96,12 +104,16 @@ func ResolveClusterUUID(
 	}
 
 	for _, cluster := range clusters.Items {
-		if cluster.Name == clusterName && cluster.Status.UUID != "" {
-			return cluster.Status.UUID, nil
+		if cluster.Name != clusterName {
+			continue
 		}
+		if cluster.Status.UUID == "" {
+			return "", fmt.Errorf("%w: cluster %q in namespace %q", ErrClusterUUIDNotReady, clusterName, namespace)
+		}
+		return cluster.Status.UUID, nil
 	}
 
-	return "", fmt.Errorf("cluster %q not found or UUID not ready", clusterName)
+	return "", fmt.Errorf("%w: cluster %q in namespace %q", ErrClusterNotFound, clusterName, namespace)
 }
 
 func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, namespace, cluster string) (string, error) {
