@@ -40,6 +40,7 @@ type CapacityStat struct {
 // GET /api/v2/clusters/{id}/storage-pools/{id}/volumes/.
 type VolumeInfo struct {
 	UUID                  string       `json:"id"`
+	Name                  string       `json:"name"`
 	PrimaryNodeUUID       string       `json:"storage_node_id"`
 	Status                string       `json:"status"`
 	Migrating             bool         `json:"migrating"`

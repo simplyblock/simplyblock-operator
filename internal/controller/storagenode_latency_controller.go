@@ -108,6 +108,12 @@ type fioBenchResult struct {
 type StorageNodeLatencyReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// Provisioner manages the benchmark storage pool and per-node volumes.
+	// Defaults to AutomaticBenchmarkProvisioner (no-op) when nil, which assumes the pool
+	// and volumes are created automatically during cluster setup.
+	// Set to WebAPIBenchmarkProvisioner for test environments that require explicit provisioning.
+	Provisioner BenchmarkProvisioner
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch
@@ -155,6 +161,12 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	poolUUID, err := r.Provisioner.EnsurePool(ctx, snode.Namespace, snode.Spec.ClusterName)
+	if err != nil {
+		log.Error(err, "Cannot ensure benchmark pool")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	// One baseline Job per node UUID. On NUMA hosts multiple backend nodes share the
 	// same k8s hostname but have independent NVMe devices and independent latency
 	// characteristics, so every node UUID is measured separately.
@@ -177,11 +189,17 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	for _, node := range nodesByUUID {
 		m := r.findOrCreateEntry(latencyMetrics, node.UUID)
 
-		// Derive the benchmark volume NQN from the cluster NQN and the storage node UUID.
-		// The benchmark volume is automatically present on every storage node and its
-		// logical volume ID equals the storage node UUID.
+		volumeUUID, err := r.Provisioner.EnsureVolume(
+			ctx, snode.Namespace, snode.Spec.ClusterName, poolUUID,
+			"fio-bench-"+node.UUID, node.UUID,
+		)
+		if err != nil {
+			log.Error(err, "Cannot ensure benchmark volume", "node", node.UUID)
+			continue
+		}
+
 		conn := benchmarkConnInfo{
-			NQN:  fmt.Sprintf("%s:lvol:%s", clusterCR.Status.NQN, node.UUID),
+			NQN:  r.Provisioner.BenchmarkNQN(clusterCR.Status.NQN, volumeUUID),
 			Addr: node.MgmtIp,
 			Port: logicalVolumeConnectionPort(node),
 		}
@@ -473,6 +491,9 @@ func (r *StorageNodeLatencyReconciler) setEntry(
 }
 
 func (r *StorageNodeLatencyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Provisioner == nil {
+		r.Provisioner = &AutomaticBenchmarkProvisioner{}
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageNode{}).
 		Owns(&batchv1.Job{}).
