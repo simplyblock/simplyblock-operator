@@ -231,7 +231,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	if err := r.syncTrackedNodesStatus(ctx, apiClient, clusterSecret, clusterUUID, snCR); err != nil {
+	if err := r.syncTrackedNodesStatus(ctx, apiClient, clusterUUID, snCR); err != nil {
 		log.Error(err, "Failed to sync storage node status")
 	}
 
@@ -1177,7 +1177,7 @@ func onAllSocketNodesOnline(
 func (r *StorageNodeReconciler) syncTrackedNodesStatus(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID string,
+	clusterUUID string,
 	snCR *simplyblockv1alpha1.StorageNode,
 ) error {
 	log := logf.FromContext(ctx)
@@ -1194,7 +1194,7 @@ func (r *StorageNodeReconciler) syncTrackedNodesStatus(
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)

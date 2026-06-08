@@ -63,12 +63,7 @@ func (r *SnapshotReplicationReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, nil
 	}
 
-	clusterUUID, res, err := r.resolveSourceClusterAuth(ctx, snapRepCR)
-	if err != nil {
-		log.Error(err, "Failed to resolve source cluster auth")
-		r.setCondition(ctx, snapRepCR, simplyblockv1alpha1.ConditionTypeReady, metav1.ConditionFalse, "AuthFailed", err.Error())
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
+	clusterUUID, res := r.resolveSourceClusterAuth(ctx, snapRepCR)
 	if res != nil {
 		return *res, nil
 	}
@@ -374,17 +369,17 @@ func (r *SnapshotReplicationReconciler) getSnapRepCR(
 func (r *SnapshotReplicationReconciler) resolveSourceClusterAuth(
 	ctx context.Context,
 	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
-) (clusterUUID string, res *ctrl.Result, err error) {
+) (clusterUUID string, res *ctrl.Result) {
 	log := logf.FromContext(ctx)
 
-	clusterUUID, err = utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.SourceCluster)
+	clusterUUID, err := utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.SourceCluster)
 	if err != nil {
 		log.Info("Cluster UUID not ready yet, requeuing", "cluster", snapRepCR.Spec.SourceCluster)
 		tmp := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return "", &tmp, nil
+		return "", &tmp
 	}
 
-	return clusterUUID, nil, nil
+	return clusterUUID, nil
 }
 
 func (r *SnapshotReplicationReconciler) resolveSourcePoolForFreshFailback(

@@ -2103,7 +2103,6 @@ func TestReconcileSpdkProxyService(t *testing.T) {
 
 func TestSyncTrackedNodesStatus(t *testing.T) {
 	const clusterUUID = "cluster-sync-uuid"
-	const clusterSecret = "sync-secret"
 
 	apiBody := func(uuid, status, ip string, health bool) string {
 		return fmt.Sprintf(`[{
@@ -2135,7 +2134,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		r := newStorageNodeStateTestReconciler(t, sn)
 		// Unreachable server — if the function makes an HTTP call it will fail.
 		c := webapi.NewClient("http://127.0.0.1:1")
-		if err := r.syncTrackedNodesStatus(context.Background(), c, clusterSecret, clusterUUID, sn); err != nil {
+		if err := r.syncTrackedNodesStatus(context.Background(), c, clusterUUID, sn); err != nil {
 			t.Fatalf("expected no error when no tracked nodes, got: %v", err)
 		}
 	})
@@ -2167,7 +2166,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		defer srv.Close()
 
 		r := newStorageNodeStateTestReconciler(t, sn)
-		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterSecret, clusterUUID, sn); err != nil {
+		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn); err != nil {
 			t.Fatalf("syncTrackedNodesStatus returned error: %v", err)
 		}
 
@@ -2211,7 +2210,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		defer srv.Close()
 
 		r := newStorageNodeStateTestReconciler(t, sn)
-		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterSecret, clusterUUID, sn); err != nil {
+		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn); err != nil {
 			t.Fatalf("syncTrackedNodesStatus returned error: %v", err)
 		}
 
@@ -2244,7 +2243,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		defer srv.Close()
 
 		r := newStorageNodeStateTestReconciler(t, sn)
-		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterSecret, clusterUUID, sn); err != nil {
+		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn); err != nil {
 			t.Fatalf("syncTrackedNodesStatus returned error: %v", err)
 		}
 
@@ -2272,7 +2271,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		defer srv.Close()
 
 		r := newStorageNodeStateTestReconciler(t, sn)
-		err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterSecret, clusterUUID, sn)
+		err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn)
 		if err == nil {
 			t.Fatalf("expected error on API failure")
 		}
@@ -2298,7 +2297,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		defer srv.Close()
 
 		r := newStorageNodeStateTestReconciler(t, sn)
-		err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterSecret, clusterUUID, sn)
+		err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn)
 		if err == nil {
 			t.Fatalf("expected error on invalid JSON")
 		}
