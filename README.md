@@ -66,6 +66,131 @@ make uninstall
 make undeploy
 ```
 
+## Access control (RBAC)
+
+The operator delegates user authorisation entirely to standard Kubernetes RBAC.
+It does not ship per-CR `admin`/`editor`/`viewer` ClusterRoles or any
+identity-bearing fields on its CRs; cluster admins write `Role`s,
+`RoleBinding`s and `ClusterRoleBinding`s using the normal K8s primitives.
+
+### Tenancy model: namespace-per-cluster
+
+Each `StorageCluster` is namespace-scoped, and **a `Pool` must live in the same
+namespace as the `StorageCluster` it references via `spec.clusterName`**. The
+Pool controller enforces this: if a Pool references a `StorageCluster` that
+does not exist in the Pool's namespace, the controller refuses to call the
+backend, sets `status.status = "InvalidClusterReference"`, and emits a
+`InvalidClusterReference` Event on the Pool.
+
+This converts "admin of cluster `foo`" into "admin of the namespace where
+StorageCluster `foo` lives" — a problem standard K8s RBAC already solves
+cleanly. The recommended layout is one namespace per logical storage cluster
+(e.g. `cluster-prod`, `cluster-staging`).
+
+### Aggregation into the built-in `view`/`edit`/`admin` roles
+
+The operator installs two `ClusterRole`s labelled to aggregate into the
+standard Kubernetes ClusterRoles:
+
+| Operator ClusterRole              | Aggregates into     | Grants on simplyblock CRs            |
+|-----------------------------------|---------------------|--------------------------------------|
+| `simplyblock-aggregate-to-view`   | `view`              | `get`, `list`, `watch`               |
+| `simplyblock-aggregate-to-edit`   | `edit`, `admin`     | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
+
+Effect: anyone already bound to the built-in `view`, `edit`, or `admin`
+ClusterRole in a namespace automatically gets the corresponding access to the
+`StorageCluster`s and `Pool`s in that namespace. No further configuration is
+needed for the common case.
+
+For example, to make `alice` an admin of cluster `prod` (assuming
+`StorageCluster/prod` lives in namespace `cluster-prod`):
+
+```sh
+kubectl create rolebinding alice-admin \
+    --clusterrole=admin \
+    --user=alice \
+    --namespace=cluster-prod
+```
+
+### Per-resource scoping with `resourceNames`
+
+For finer-grained delegation — e.g. admin only of `StorageCluster/prod`, not
+any other `StorageCluster` in the same namespace — write a `Role` with
+`resourceNames`:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prod-cluster-admin
+  namespace: cluster-prod
+rules:
+- apiGroups: ["storage.simplyblock.io"]
+  resources: ["storageclusters"]
+  resourceNames: ["prod"]
+  verbs: ["get", "update", "patch", "delete"]
+- apiGroups: ["storage.simplyblock.io"]
+  resources: ["storageclusters/status"]
+  resourceNames: ["prod"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: alice-prod-cluster-admin
+  namespace: cluster-prod
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prod-cluster-admin
+subjects:
+- kind: User
+  name: alice
+```
+
+> **K8s RBAC limitation**: `resourceNames` only filters verbs that target a
+> named object (`get`, `update`, `patch`, `delete`). It is silently ignored
+> for `list`, `watch`, and `create`. A user with only the Role above can
+> `kubectl get storagecluster prod` (a named GET) but not
+> `kubectl get storagecluster` (a LIST) — they will need a separate, broader
+> binding (e.g. the `view` ClusterRole) if you want them to enumerate. This is
+> a property of K8s RBAC, not the operator.
+
+### Delegating who can create clusters and grant admin
+
+There is no shipped "platform admin" ClusterRole — choose your own gate. Two
+common patterns:
+
+* **Gate by namespace ownership.** Whoever has the built-in `admin` ClusterRole
+  in a namespace can create and fully manage `StorageCluster`s there (the
+  aggregation role makes that work). To stop arbitrary users from creating
+  namespaces, restrict `create namespaces` at the cluster scope.
+* **Gate by SA.** Reserve `create storageclusters` for a small set of service
+  accounts (e.g. your platform automation) and have them stand up tenant
+  namespaces on demand.
+
+To let a "cluster owner" delegate admin to teammates *without* giving them
+`escalate` on RBAC, grant them the `bind` verb on the specific Role they're
+allowed to hand out:
+
+```yaml
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles"]
+  resourceNames: ["prod-cluster-admin"]
+  verbs: ["bind"]
+```
+
+See the upstream docs on [privilege escalation
+prevention](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#privilege-escalation-prevention-and-bootstrapping)
+for the full mechanism.
+
+### A note on webapi authentication
+
+The operator's pod is the sole caller of the simplyblock webapi; user
+identities are **not** propagated to the backend. K8s RBAC governs what users
+can do to the CRs, the operator then talks to webapi using its own service
+account token.
+
 ## Project Distribution
 
 Following the options to release and provide this solution to the users.

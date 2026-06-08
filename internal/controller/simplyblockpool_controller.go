@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -28,6 +29,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -38,10 +40,16 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
+const (
+	poolStatusInvalidClusterReference = "InvalidClusterReference"
+	poolEventInvalidClusterReference  = "InvalidClusterReference"
+)
+
 // PoolReconciler reconciles a Pool object
 type PoolReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // StoragePoolDTO mirrors the new API's storage pool response format.
@@ -124,6 +132,7 @@ type poolHostParams struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -150,7 +159,25 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		poolCR.Spec.ClusterName,
 	)
 
-	if err != nil {
+	switch {
+	case errors.Is(err, utils.ErrClusterNotFound):
+		log.Error(err, "Pool references a StorageCluster that does not exist in its namespace",
+			"namespace", poolCR.Namespace,
+			"cluster", poolCR.Spec.ClusterName,
+		)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(poolCR, corev1.EventTypeWarning, poolEventInvalidClusterReference,
+				"StorageCluster %q not found in namespace %q; Pools must reside in the same namespace as their StorageCluster",
+				poolCR.Spec.ClusterName, poolCR.Namespace)
+		}
+		if poolCR.Status.Status != poolStatusInvalidClusterReference {
+			poolCR.Status.Status = poolStatusInvalidClusterReference
+			if statusErr := r.Status().Update(ctx, poolCR); statusErr != nil {
+				log.Error(statusErr, "Failed to update pool status to InvalidClusterReference")
+			}
+		}
+		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+	case err != nil:
 		log.Info("Cluster UUID not ready yet, requeuing",
 			"cluster", poolCR.Spec.ClusterName,
 		)
