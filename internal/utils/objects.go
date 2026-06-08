@@ -156,26 +156,6 @@ func ResolveClusterCR(
 	return nil, fmt.Errorf("cluster %q not found", clusterName)
 }
 
-func ExistingClusterUUID(
-	ctx context.Context,
-	c client.Client,
-) (exists bool, uuid string, clusterName string, clusterNamespace string, err error) {
-
-	var clusters simplyblockv1alpha1.StorageClusterList
-
-	if err := c.List(ctx, &clusters); err != nil {
-		return false, "", "", "", err
-	}
-
-	for _, cluster := range clusters.Items {
-		if cluster.Status.UUID != "" {
-			return true, cluster.Status.UUID, cluster.Name, cluster.Namespace, nil
-		}
-	}
-
-	return false, "", "", "", nil
-}
-
 func CountOnlineHealthyNodes(
 	nodes []simplyblockv1alpha1.NodeStatus,
 ) int {

@@ -53,11 +53,6 @@ const (
 	// (missing, unreadable, or lacking required keys).
 	eventReasonBackupCredentialsError = "BackupCredentialsError"
 
-	// eventReasonClusterLookupError is emitted when the controller fails to
-	// determine whether a cluster already exists in the namespace, preventing
-	// it from choosing the correct API endpoint.
-	eventReasonClusterLookupError = "ClusterLookupError"
-
 	// eventReasonClusterCreationFailed is emitted when the cluster creation API
 	// call returns a non-2xx status. The event message includes the HTTP status
 	// code and the full response body so the root cause is visible without
@@ -209,18 +204,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		HashicorpVaultSettings: buildHashicorpVaultConfig(clusterCR.Spec.HashicorpVaultSettings),
 	}
 
-	endpoint = "/api/v1/cluster/create_first/"
-
-	exists, _, _, _, err := utils.ExistingClusterUUID(ctx, r.Client)
-	if err != nil {
-		log.Error(err, "Failed to check existing cluster")
-		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterLookupError, "Failed to check existing cluster: %v", err)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	if exists {
-		endpoint = "/api/v2/clusters/"
-	}
+	endpoint = "/api/v2/clusters/"
 
 	body, status, err = apiClient.Do(ctx, http.MethodPost, endpoint, params)
 	if err != nil || status >= 300 {
