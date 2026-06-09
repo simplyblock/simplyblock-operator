@@ -3,7 +3,46 @@ entries:
   simplyblock-operator:
   - apiVersion: v2
     appVersion: latest
-    created: "2026-06-03T10:29:22.383306+01:00"
+    created: "2026-06-09T15:57:24.897866+01:00"
+    dependencies:
+    - alias: mongodb-kubernetes
+      condition: controlplane.observability.enabled
+      name: mongodb-kubernetes
+      repository: https://mongodb.github.io/helm-charts
+      version: 1.4.0
+    - condition: controlplane.observability.enabled
+      name: opensearch
+      repository: https://opensearch-project.github.io/helm-charts
+      version: 2.9.0
+    - condition: operator.enabled
+      name: prometheus
+      repository: https://prometheus-community.github.io/helm-charts
+      version: 25.18.0
+    - alias: reloader
+      condition: operator.enabled
+      name: reloader
+      repository: https://stakater.github.io/stakater-charts
+      version: 1.3.0
+    description: Simplyblock Operator for Kubernetes
+    digest: 0a48f800ddd8f98c7be59b10ce9e4228fdf034216c4556d08e6c47273cc70984
+    home: https://github.com/simplyblock/helm-charts
+    keywords:
+    - spdk
+    - csi
+    - spdk-csi
+    - simplyblock
+    - controller
+    - mgmt
+    - sbcli
+    name: simplyblock-operator
+    sources:
+    - https://github.com/simplyblock/helm-charts/tree/master/charts/simplyblock-operator
+    urls:
+    - https://simplyblock.github.io/helm-charts/26.2.6/simplyblock-operator-26.2.6.tgz
+    version: 26.2.6
+  - apiVersion: v2
+    appVersion: latest
+    created: "2026-06-09T15:57:24.886353+01:00"
     dependencies:
     - alias: mongodb-kubernetes
       condition: controlplane.observability.enabled
@@ -38,6 +77,6 @@ entries:
     sources:
     - https://github.com/simplyblock/helm-charts/tree/master/charts/simplyblock-operator
     urls:
-    - https://simplyblock.github.io/helm-charts/charts/26.2.5/simplyblock-operator-26.2.5.tgz
+    - https://simplyblock.github.io/helm-charts/26.2.5/simplyblock-operator-26.2.5.tgz
     version: 26.2.5
-generated: "2026-06-03T10:29:22.366923+01:00"
+generated: "2026-06-09T15:57:24.871233+01:00"
