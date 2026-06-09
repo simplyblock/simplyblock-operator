@@ -38,7 +38,7 @@ entries:
     sources:
     - https://github.com/simplyblock/helm-charts/tree/master/charts/simplyblock-operator
     urls:
-    - https://simplyblock.github.io/helm-charts/26.2.6/simplyblock-operator-26.2.6.tgz
+    - https://simplyblock.github.io/helm-charts/charts/26.2.6/simplyblock-operator-26.2.6.tgz
     version: 26.2.6
   - apiVersion: v2
     appVersion: latest
@@ -77,6 +77,6 @@ entries:
     sources:
     - https://github.com/simplyblock/helm-charts/tree/master/charts/simplyblock-operator
     urls:
-    - https://simplyblock.github.io/helm-charts/26.2.5/simplyblock-operator-26.2.5.tgz
+    - https://simplyblock.github.io/helm-charts/charts/26.2.5/simplyblock-operator-26.2.5.tgz
     version: 26.2.5
 generated: "2026-06-09T15:57:24.871233+01:00"
