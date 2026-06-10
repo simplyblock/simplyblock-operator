@@ -535,7 +535,7 @@ func (r *StorageBackupReconciler) resolveBackupSource(
 		return nil, fmt.Errorf("PV %s is not a CSI volume", pv.Name)
 	}
 
-	handleClusterUUID, poolName, handleLvolID, err := parseSimplyblockVolumeHandle(pv.Spec.CSI.VolumeHandle)
+	handleClusterUUID, poolNameOrID, handleLvolID, err := parseSimplyblockVolumeHandle(pv.Spec.CSI.VolumeHandle)
 	if err != nil {
 		return nil, err
 	}
@@ -569,7 +569,7 @@ func (r *StorageBackupReconciler) resolveBackupSource(
 	return &backupSource{
 		PVCNamespace: pvcNamespace,
 		PVName:       pv.Name,
-		PoolName:     poolName,
+		PoolName:     poolNameOrID,
 		LvolID:       lvolID,
 	}, nil
 }
@@ -579,7 +579,7 @@ func (r *StorageBackupReconciler) lookupPoolUUID(
 	apiClient *webapi.Client,
 	clusterSecret string,
 	clusterUUID string,
-	poolName string,
+	poolNameOrID string,
 ) (string, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
 	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
@@ -596,12 +596,12 @@ func (r *StorageBackupReconciler) lookupPoolUUID(
 	}
 
 	for _, pool := range pools {
-		if pool.Name == poolName {
+		if pool.Name == poolNameOrID || pool.ID == poolNameOrID {
 			return pool.ID, nil
 		}
 	}
 
-	return "", fmt.Errorf("storage pool %q not found in cluster %s", poolName, clusterUUID)
+	return "", fmt.Errorf("storage pool %q not found in cluster %s", poolNameOrID, clusterUUID)
 }
 
 func (r *StorageBackupReconciler) createSnapshot(
@@ -737,7 +737,7 @@ func (r *StorageBackupReconciler) snapshotNameFor(backupCR *simplyblockv1alpha1.
 	return fmt.Sprintf("backup-%s", backupCR.Name)
 }
 
-func parseSimplyblockVolumeHandle(volumeHandle string) (clusterUUID, poolName, lvolID string, err error) {
+func parseSimplyblockVolumeHandle(volumeHandle string) (clusterUUID, poolNameOrID, lvolID string, err error) {
 	parts := strings.Split(volumeHandle, ":")
 	if len(parts) != 3 {
 		return "", "", "", fmt.Errorf("unexpected Simplyblock CSI volume handle %q", volumeHandle)
