@@ -3,6 +3,7 @@ package utils
 import (
 	"fmt"
 	"strings"
+	"encoding/json"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -54,12 +55,24 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 		initCmd = append(initCmd, "--cores-percentage="+Int32PtrToString(sn.Spec.CorePercentage))
 	}
 
+	imagePullSecretsJSON := ""
+	if len(sn.Spec.ImagePullSecrets) > 0 {
+		names := make([]string, len(sn.Spec.ImagePullSecrets))
+		for i, ref := range sn.Spec.ImagePullSecrets {
+			names[i] = ref.Name
+		}
+		if data, err := json.Marshal(names); err == nil {
+			imagePullSecretsJSON = string(data)
+		}
+	}
+
 	mainEnv := []corev1.EnvVar{
 		{Name: "UBUNTU_HOST", Value: BoolPtrToString(sn.Spec.UbuntuHost)},
 		{Name: "OPENSHIFT_CLUSTER", Value: BoolPtrToString(sn.Spec.OpenShiftCluster)},
 		{Name: "CPU_TOPOLOGY_ENABLED", Value: BoolPtrToString(sn.Spec.EnableCpuTopology)},
 		{Name: "SKIP_KUBELET_CONFIGURATION", Value: BoolPtrToString(sn.Spec.SkipKubeletConfiguration)},
 		{Name: "SIMPLY_BLOCK_DOCKER_IMAGE", Value: image},
+		{Name: "IMAGE_PULL_SECRETS", Value: imagePullSecretsJSON},
 		{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 		}},
@@ -206,6 +219,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 					ServiceAccountName: "simplyblock-storage-node-sa",
 					HostNetwork:        true,
 					Tolerations:        sn.Spec.Tolerations,
+					ImagePullSecrets:   sn.Spec.ImagePullSecrets,
 					NodeSelector: map[string]string{
 						"io.simplyblock.node-type": "simplyblock-storage-plane-" + sn.Spec.ClusterName,
 					},
