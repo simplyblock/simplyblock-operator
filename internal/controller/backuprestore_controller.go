@@ -128,7 +128,7 @@ func (r *BackupRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
-	clusterUUID, res, done, err := r.resolveClusterAuth(ctx, restoreCR)
+	clusterUUID, res, done, err := r.resolveClusterUUID(ctx, restoreCR)
 	if done {
 		return res, err
 	}
@@ -170,7 +170,7 @@ func (r *BackupRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return ctrl.Result{}, nil
 }
 
-func (r *BackupRestoreReconciler) resolveClusterAuth(
+func (r *BackupRestoreReconciler) resolveClusterUUID(
 	ctx context.Context,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
 ) (clusterUUID string, res ctrl.Result, done bool, err error) {

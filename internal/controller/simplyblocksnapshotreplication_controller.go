@@ -63,7 +63,7 @@ func (r *SnapshotReplicationReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, nil
 	}
 
-	clusterUUID, res := r.resolveSourceClusterAuth(ctx, snapRepCR)
+	clusterUUID, res := r.resolveSourceClusterUUID(ctx, snapRepCR)
 	if res != nil {
 		return *res, nil
 	}
@@ -366,7 +366,7 @@ func (r *SnapshotReplicationReconciler) getSnapRepCR(
 	return snapRepCR, nil
 }
 
-func (r *SnapshotReplicationReconciler) resolveSourceClusterAuth(
+func (r *SnapshotReplicationReconciler) resolveSourceClusterUUID(
 	ctx context.Context,
 	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
 ) (clusterUUID string, res *ctrl.Result) {

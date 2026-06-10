@@ -20,15 +20,14 @@ import (
 // ---- fixtures ----
 
 const (
-	syncTestClusterName   = "sync-test-cluster"
-	syncTestClusterUUID   = "sync-cuuid-1"
-	syncTestClusterSecret = "sync-csecret-1"
-	syncTestNamespace     = "default"
-	syncTestBackupID      = "bkp-sync-1"
-	syncTestSnapshotID    = "snap-sync-1"
-	syncTestLvolID        = "lvol-sync-1"
-	syncTestPVCName       = "pvc-sync-1"
-	syncTestPVName        = "pv-sync-1"
+	syncTestClusterName = "sync-test-cluster"
+	syncTestClusterUUID = "sync-cuuid-1"
+	syncTestNamespace   = "default"
+	syncTestBackupID    = "bkp-sync-1"
+	syncTestSnapshotID  = "snap-sync-1"
+	syncTestLvolID      = "lvol-sync-1"
+	syncTestPVCName     = "pvc-sync-1"
+	syncTestPVName      = "pv-sync-1"
 )
 
 func syncTestCluster() *simplyblockv1alpha1.StorageCluster {
@@ -40,19 +39,6 @@ func syncTestCluster() *simplyblockv1alpha1.StorageCluster {
 		Spec: simplyblockv1alpha1.StorageClusterSpec{},
 		Status: simplyblockv1alpha1.StorageClusterStatus{
 			UUID: syncTestClusterUUID,
-		},
-	}
-}
-
-func syncTestClusterAuthSecret() *corev1.Secret {
-	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-cluster-" + syncTestClusterName,
-			Namespace: syncTestNamespace,
-		},
-		Data: map[string][]byte{
-			"uuid":   []byte(syncTestClusterUUID),
-			"secret": []byte(syncTestClusterSecret),
 		},
 	}
 }
@@ -147,7 +133,6 @@ func TestStorageBackupSyncImportsBackup(t *testing.T) {
 	pv, pvc := syncTestPVAndPVC()
 	r := newSyncTestReconciler(t, srv.URL,
 		syncTestCluster(),
-		syncTestClusterAuthSecret(),
 		pv, pvc,
 	)
 
@@ -198,7 +183,6 @@ func TestStorageBackupSyncSkipsWhenNoPVCMatches(t *testing.T) {
 	// No PVC/PV in the cluster — the lvol ID has no matching PVC.
 	r := newSyncTestReconciler(t, srv.URL,
 		syncTestCluster(),
-		syncTestClusterAuthSecret(),
 	)
 
 	_, err := r.Reconcile(context.Background(), syncReconcileRequest())
@@ -236,7 +220,6 @@ func TestStorageBackupSyncSkipsAlreadyTracked(t *testing.T) {
 	pv, pvc := syncTestPVAndPVC()
 	r := newSyncTestReconciler(t, srv.URL,
 		syncTestCluster(),
-		syncTestClusterAuthSecret(),
 		pv, pvc,
 		existing,
 	)
@@ -273,7 +256,6 @@ func TestStorageBackupSyncSkipsAnnotationMismatch(t *testing.T) {
 
 	r := newSyncTestReconciler(t, srv.URL,
 		syncTestCluster(),
-		syncTestClusterAuthSecret(),
 		pv, pvc,
 	)
 
