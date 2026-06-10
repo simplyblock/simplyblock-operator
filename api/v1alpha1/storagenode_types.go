@@ -133,6 +133,10 @@ type StorageNodeSpec struct {
 	// Tolerations configures pod tolerations for storage-node pods.
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Image Pull Secrets"
+	// ImagePullSecrets is the list of image pull secrets for storage-node pods.
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
 	// Force enables forced action execution where supported.
 	Force *bool `json:"force,omitempty"`
