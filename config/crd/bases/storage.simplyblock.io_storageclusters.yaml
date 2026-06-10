@@ -272,6 +272,13 @@ spec:
                   FIXME: Unused for now (API update required?)
                 format: date-time
                 type: string
+              maxFaultTolerance:
+                description: |-
+                  MaxFaultTolerance is the backend-reported maximum number of nodes that can
+                  be simultaneously offline (failed, drained, or restarted) without violating
+                  the cluster's redundancy guarantees.
+                format: int32
+                type: integer
               mgmtNodes:
                 description: |-
                   MgmtNodes is the number of management nodes.

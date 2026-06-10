@@ -197,6 +197,10 @@ type StorageClusterStatus struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Configured"
 	// Configured indicates whether initial cluster setup completed.
 	Configured bool `json:"configured,omitempty"`
+	// MaxFaultTolerance is the backend-reported maximum number of nodes that can
+	// be simultaneously offline (failed, drained, or restarted) without violating
+	// the cluster's redundancy guarantees.
+	MaxFaultTolerance *int32 `json:"maxFaultTolerance,omitempty"`
 	// ActionStatus tracks the most recent action execution state.
 	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 	// NodeRecycleStatus tracks in-progress state for the node-recycle action.

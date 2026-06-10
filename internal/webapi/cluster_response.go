@@ -6,13 +6,14 @@ import (
 )
 
 type ClusterResponse struct {
-	UUID        string
-	Secret      string
-	NQN         string
-	Status      string
-	Rebalancing bool
-	NDCS        int
-	NPCS        int
+	UUID              string
+	Secret            string
+	NQN               string
+	Status            string
+	Rebalancing       bool
+	NDCS              int
+	NPCS              int
+	MaxFaultTolerance int
 }
 
 type clusterResponseEnvelope struct {
@@ -20,14 +21,15 @@ type clusterResponseEnvelope struct {
 }
 
 type clusterResponsePayload struct {
-	UUID        string `json:"uuid"`
-	ID          string `json:"id"`
-	Secret      string `json:"secret"`
-	NQN         string `json:"nqn"`
-	Status      string `json:"status"`
-	Rebalancing *bool  `json:"is_re_balancing"`
-	NDCS        *int   `json:"distr_ndcs"`
-	NPCS        *int   `json:"distr_npcs"`
+	UUID              string `json:"uuid"`
+	ID                string `json:"id"`
+	Secret            string `json:"secret"`
+	NQN               string `json:"nqn"`
+	Status            string `json:"status"`
+	Rebalancing       *bool  `json:"is_re_balancing"`
+	NDCS              *int   `json:"distr_ndcs"`
+	NPCS              *int   `json:"distr_npcs"`
+	MaxFaultTolerance *int   `json:"max_fault_tolerance"`
 }
 
 func ParseClusterResponse(body []byte) (ClusterResponse, error) {
@@ -61,6 +63,10 @@ func ParseClusterResponse(body []byte) (ClusterResponse, error) {
 	if payload.NDCS != nil && payload.NPCS != nil {
 		resp.NDCS = *payload.NDCS
 		resp.NPCS = *payload.NPCS
+	}
+
+	if payload.MaxFaultTolerance != nil {
+		resp.MaxFaultTolerance = *payload.MaxFaultTolerance
 	}
 
 	if resp.UUID == "" {
