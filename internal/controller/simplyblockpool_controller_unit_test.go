@@ -34,7 +34,6 @@ func TestPoolReconcileAddsFinalizer(t *testing.T) {
 	r := newPoolStateTestReconciler(t,
 		pool,
 		testCluster("default", "cluster-a", "cluster-uuid"),
-		testClusterSecret("default", "cluster-a", "cluster-uuid", "secret"),
 	)
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)})
@@ -66,7 +65,6 @@ func TestPoolReconcileDeletionWithoutUUIDDoesNotProgress(t *testing.T) {
 	r := newPoolStateTestReconciler(t,
 		pool,
 		testCluster("default", "cluster-a", "cluster-uuid"),
-		testClusterSecret("default", "cluster-a", "cluster-uuid", "secret"),
 	)
 	if err := r.Delete(context.Background(), pool); err != nil {
 		t.Fatalf("failed to trigger deletion: %v", err)
@@ -144,7 +142,6 @@ func TestPoolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 	r := newPoolStateTestReconciler(t,
 		pool,
 		testCluster(ns, clusterName, clusterUUID),
-		testClusterSecret(ns, clusterName, clusterUUID, "secret"),
 	)
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)})
@@ -200,9 +197,7 @@ func TestPoolReconcileStorageClassNameIncludesNamespace(t *testing.T) {
 		pool1,
 		pool2,
 		testCluster("cluster1", clusterName, "cluster-uuid-1"),
-		testClusterSecret("cluster1", clusterName, "cluster-uuid-1", "secret-1"),
 		testCluster("cluster2", clusterName, "cluster-uuid-2"),
-		testClusterSecret("cluster2", clusterName, "cluster-uuid-2", "secret-2"),
 	)
 
 	for _, pool := range []*simplyblockv1alpha1.Pool{pool1, pool2} {
@@ -284,7 +279,6 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 	r := newPoolStateTestReconciler(t,
 		pool,
 		testCluster("default", "cluster-a", clusterUUID),
-		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
 	)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)})
@@ -365,7 +359,6 @@ func TestPoolReconcileCreatesPoolViaDTOFormat(t *testing.T) {
 	r := newPoolStateTestReconciler(t,
 		pool,
 		testCluster("default", "cluster-a", clusterUUID),
-		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
 	)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)})
@@ -419,7 +412,6 @@ func TestPoolReconcileCreatePoolNon2xxRequeues(t *testing.T) {
 	r := newPoolStateTestReconciler(t,
 		pool,
 		testCluster("default", "cluster-a", clusterUUID),
-		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
 	)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)})
@@ -477,7 +469,6 @@ func TestPoolReconcileDeleteNon2xxKeepsFinalizerAndRequeues(t *testing.T) {
 	r := newPoolStateTestReconciler(t,
 		pool,
 		testCluster("default", "cluster-a", clusterUUID),
-		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
 	)
 	if err := r.Delete(context.Background(), pool); err != nil {
 		t.Fatalf("failed to trigger deletion: %v", err)

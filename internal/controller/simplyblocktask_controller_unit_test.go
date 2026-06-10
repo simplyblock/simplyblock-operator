@@ -155,7 +155,6 @@ func TestTaskReconcileWorksInNonDefaultNamespace(t *testing.T) {
 	const ns = "tenant-a"
 	const clusterName = "cluster-z"
 	const clusterUUID = "cluster-uuid-tenant-a"
-	const clusterSecret = "secret-tenant-a"
 
 	// Task endpoints are not present in current OpenAPI spec, so keep allowUnknown=true.
 	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
@@ -185,7 +184,6 @@ func TestTaskReconcileWorksInNonDefaultNamespace(t *testing.T) {
 	r := newTaskStateTestReconciler(t,
 		task,
 		testCluster(ns, clusterName, clusterUUID),
-		testClusterSecret(ns, clusterName, clusterUUID, clusterSecret),
 	)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(task)})
@@ -250,7 +248,6 @@ func TestTaskReconcileFiltersCompletedTasksViaMock(t *testing.T) {
 	r := newTaskStateTestReconciler(t,
 		task,
 		testCluster("default", "cluster-a", clusterUUID),
-		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
 	)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(task)})
@@ -312,7 +309,6 @@ func TestTaskReconcileNon2xxTaskAPIRequeuesAndPreservesStatus(t *testing.T) {
 	r := newTaskStateTestReconciler(t,
 		task,
 		testCluster("default", "cluster-a", clusterUUID),
-		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
 	)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(task)})

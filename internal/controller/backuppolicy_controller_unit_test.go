@@ -57,7 +57,6 @@ func TestBackupPolicyReconcileAnnotationAddAttachesLvol(t *testing.T) {
 	r := newBackupPolicyTestReconciler(t,
 		policy,
 		testCluster(namespace, clusterName, clusterUUID),
-		testClusterSecret(namespace, clusterName, clusterUUID, "secret"),
 		pv,
 		pvc,
 	)
@@ -124,7 +123,6 @@ func TestBackupPolicyReconcileAnnotationRemovalDetachesLvol(t *testing.T) {
 	r := newBackupPolicyTestReconciler(t,
 		policy,
 		testCluster(namespace, clusterName, clusterUUID),
-		testClusterSecret(namespace, clusterName, clusterUUID, "secret"),
 		pv,
 		pvc,
 	)
@@ -191,7 +189,6 @@ func TestBackupPolicyReconcilePolicySwitchMovesAttachment(t *testing.T) {
 		oldCR,
 		newCR,
 		testCluster(namespace, clusterName, clusterUUID),
-		testClusterSecret(namespace, clusterName, clusterUUID, "secret"),
 		pv,
 		pvc,
 	)
@@ -256,7 +253,6 @@ func TestBackupPolicyReconcileLvolAnnotationMismatchDetachesStaleAttachment(t *t
 	r := newBackupPolicyTestReconciler(t,
 		policy,
 		testCluster(namespace, clusterName, clusterUUID),
-		testClusterSecret(namespace, clusterName, clusterUUID, "secret"),
 		pv,
 		pvc,
 	)
@@ -314,7 +310,6 @@ func TestBackupPolicyReconcilePVCRebindSwapsLvolID(t *testing.T) {
 	r := newBackupPolicyTestReconciler(t,
 		policy,
 		testCluster(namespace, clusterName, clusterUUID),
-		testClusterSecret(namespace, clusterName, clusterUUID, "secret"),
 		pv,
 		pvc,
 	)

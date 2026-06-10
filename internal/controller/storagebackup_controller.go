@@ -210,7 +210,7 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return r.syncBackupProgress(ctx, backupCR, bctx)
 }
 
-// prepareBackupContext resolves all prerequisites (cluster UUID, auth, source, pool UUID)
+// prepareBackupContext resolves all prerequisites (cluster UUID, source, pool UUID)
 // and patches their resolved values into status. Returns done=true when the caller should
 // return result immediately (either an error or a requeue).
 func (r *StorageBackupReconciler) prepareBackupContext(

@@ -30,26 +30,12 @@ func newSnapRepTestReconciler(t *testing.T, objects ...client.Object) *SnapshotR
 	}
 }
 
-// clusterSecret builds the auth secret that resolveSourceClusterAuth looks up.
-func snapRepClusterSecret(clusterName, uuid, secret string) *corev1.Secret {
-	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-cluster-" + clusterName,
-			Namespace: "default",
-		},
-		Data: map[string][]byte{
-			"uuid":   []byte(uuid),
-			"secret": []byte(secret),
-		},
-	}
-}
-
 // clusterCR builds a StorageCluster CR with status.uuid set so ResolveClusterIdentifier resolves it.
 func snapRepClusterCR(clusterName, uuid string) *simplyblockv1alpha1.StorageCluster {
 	return &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: "default"},
 		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: uuid, SecretName: "simplyblock-cluster-" + clusterName},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: uuid},
 	}
 }
 
@@ -103,9 +89,8 @@ func TestSnapshotReplicationTopLevelPaths(t *testing.T) {
 				TargetPool:    "pool-tgt",
 			},
 		}
-		secret := snapRepClusterSecret("cluster-src", clusterUUID, "src-secret")
 		srcCluster := snapRepClusterCR("cluster-src", clusterUUID)
-		r := newSnapRepTestReconciler(t, cr, secret, srcCluster)
+		r := newSnapRepTestReconciler(t, cr, srcCluster)
 
 		_, _ = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cr)})
 
@@ -146,7 +131,6 @@ func TestSnapshotReplicationEnsureConfigured(t *testing.T) {
 				TargetPool:    poolUUID,
 			},
 		}
-		srcSecret := snapRepClusterSecret("cluster-src", srcUUID, "src-s")
 		srcCluster := snapRepClusterCR("cluster-src", srcUUID)
 		tgtCluster := snapRepClusterCR(tgtUUID, tgtUUID)
 		tgtPool := &simplyblockv1alpha1.Pool{
@@ -154,7 +138,7 @@ func TestSnapshotReplicationEnsureConfigured(t *testing.T) {
 			Spec:       simplyblockv1alpha1.PoolSpec{ClusterName: tgtUUID},
 			Status:     simplyblockv1alpha1.PoolStatus{UUID: poolUUID},
 		}
-		r := newSnapRepTestReconciler(t, cr, srcSecret, srcCluster, tgtCluster, tgtPool)
+		r := newSnapRepTestReconciler(t, cr, srcCluster, tgtCluster, tgtPool)
 
 		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cr)})
 		if err != nil {
@@ -192,9 +176,8 @@ func TestSnapshotReplicationEnsureConfigured(t *testing.T) {
 			},
 			Status: simplyblockv1alpha1.SnapshotReplicationStatus{Configured: false},
 		}
-		srcSecret := snapRepClusterSecret("cluster-src", srcUUID, "src-s")
 		srcCluster := snapRepClusterCR("cluster-src", srcUUID)
-		r := newSnapRepTestReconciler(t, cr, srcSecret, srcCluster)
+		r := newSnapRepTestReconciler(t, cr, srcCluster)
 
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cr)})
 		if err != nil {
@@ -238,9 +221,8 @@ func TestSnapshotReplicationEnsureConfigured(t *testing.T) {
 			},
 			Status: simplyblockv1alpha1.SnapshotReplicationStatus{Configured: true},
 		}
-		srcSecret := snapRepClusterSecret("cluster-src", srcUUID, "src-s")
 		srcCluster := snapRepClusterCR("cluster-src", srcUUID)
-		r := newSnapRepTestReconciler(t, cr, srcSecret, srcCluster)
+		r := newSnapRepTestReconciler(t, cr, srcCluster)
 
 		_, _ = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cr)})
 
@@ -303,9 +285,8 @@ func TestSnapshotReplicationNormalReplication(t *testing.T) {
 			},
 			Status: simplyblockv1alpha1.SnapshotReplicationStatus{Configured: true},
 		}
-		srcSecret := snapRepClusterSecret("cluster-src", srcUUID, "src-s")
 		srcCluster := snapRepClusterCR("cluster-src", srcUUID)
-		r := newSnapRepTestReconciler(t, cr, srcSecret, srcCluster)
+		r := newSnapRepTestReconciler(t, cr, srcCluster)
 
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cr)})
 		if err != nil {
@@ -364,9 +345,8 @@ func TestSnapshotReplicationNormalReplication(t *testing.T) {
 			},
 			Status: simplyblockv1alpha1.SnapshotReplicationStatus{Configured: true},
 		}
-		srcSecret := snapRepClusterSecret("cluster-src", srcUUID, "src-s")
 		srcCluster := snapRepClusterCR("cluster-src", srcUUID)
-		r := newSnapRepTestReconciler(t, cr, srcSecret, srcCluster)
+		r := newSnapRepTestReconciler(t, cr, srcCluster)
 
 		_, _ = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cr)})
 
@@ -407,9 +387,8 @@ func TestSnapshotReplicationFailbackGenerationGuard(t *testing.T) {
 				ObservedFailbackGeneration: 3, // already processed
 			},
 		}
-		srcSecret := snapRepClusterSecret(srcUUID, srcUUID, "src-s")
 		srcCluster := snapRepClusterCR(srcUUID, srcUUID)
-		r := newSnapRepTestReconciler(t, cr, srcSecret, srcCluster)
+		r := newSnapRepTestReconciler(t, cr, srcCluster)
 
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cr)})
 		if err != nil {
