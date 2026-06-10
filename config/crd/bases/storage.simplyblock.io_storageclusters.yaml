@@ -275,7 +275,8 @@ spec:
               maxFaultTolerance:
                 description: |-
                   MaxFaultTolerance is the backend-reported maximum number of nodes that can
-                  be simultaneously drained without violating the cluster's redundancy guarantees.
+                  be simultaneously offline (failed, drained, or restarted) without violating
+                  the cluster's redundancy guarantees.
                 format: int32
                 type: integer
               mgmtNodes:

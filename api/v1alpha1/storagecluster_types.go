@@ -198,7 +198,8 @@ type StorageClusterStatus struct {
 	// Configured indicates whether initial cluster setup completed.
 	Configured bool `json:"configured,omitempty"`
 	// MaxFaultTolerance is the backend-reported maximum number of nodes that can
-	// be simultaneously drained without violating the cluster's redundancy guarantees.
+	// be simultaneously offline (failed, drained, or restarted) without violating
+	// the cluster's redundancy guarantees.
 	MaxFaultTolerance *int32 `json:"maxFaultTolerance,omitempty"`
 	// ActionStatus tracks the most recent action execution state.
 	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
