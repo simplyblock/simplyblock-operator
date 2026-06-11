@@ -79,16 +79,6 @@ controller:
     key: 
     value:
 
-storageclass:
-  create: true
-  volumeBindingMode: WaitForFirstConsumer
-  zoneClusterMap: {}
-  allowedTopologyZones: []
-  annotations: {}
-  # example:
-  # annotations:
-  #   simplyblock.io/auto-restart-on-pathloss: "true"  
-
 snapshotclass:
   create: true
 
