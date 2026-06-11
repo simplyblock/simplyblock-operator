@@ -95,13 +95,14 @@ done
 run_node() {
   NQN="${1}" ADDR="${2}" PORT="${3}" NODE_UUID="${4}" CLUSTER_NAME="${5}"
 
-  sudo nvme connect -t tcp -a "${ADDR}" -s "${PORT}" -n "${NQN}"
+  sudo nvme connect --fast_io_fail_tmo=1 --nr-io-queues=3 --keep-alive-tmo=4 -t tcp -a "${ADDR}" -s "${PORT}" -n "${NQN}"
   for i in $(seq 1 30); do
     DEVICE_NAME="$(nvme list --output-format=json --verbose | \
       jq -r --arg nqn "${FIO_VOLUME_NQN}" \
-      '.Devices[].Subsystems.[] | select(.SubsystemNQN == $nqn) | .Controllers[].Namespaces[0].NameSpace' 2>/dev/null)"
-    if [ -n "$DEVICE_NAME" ]; then
-      DEVICE="/dev/${DEVICE_NAME}"
+        '.Devices[].Subsystems[] | select(.SubsystemNQN == $nqn) | .Namespaces[0].NameSpace')"
+    echo "${DEVICE_NAME}"
+    if [ "$DEVICE_NAME" != "null" ]; then
+      echo "Found ${DEVICE}"
       break
     fi
     sleep 1
@@ -114,19 +115,24 @@ run_node() {
   fi
 
   while true; do
+    echo "Running fio..."
     OUTPUT=$(sudo fio \
+      --name="latency" \
+      --size=512M \
       --filename="${DEVICE}" \
       --ioengine=libaio \
       --direct=1 \
       --rw=randwrite \
       --bs=4k \
+      --blockalign=4k \
       --numjobs=1 \
       --iodepth=1 \
       --time_based \
       --runtime=30 \
       --group_reporting \
       --percentile_list=50:99 \
-      --output-format=json 2>/dev/null)
+      --output-format=json)
+    echo "Fio finished..."
 
     P50=$(printf '%s' "${OUTPUT}" | jq '.jobs[0].write.lat_ns.percentile["50.000000"]')
     P99=$(printf '%s' "${OUTPUT}" | jq '.jobs[0].write.lat_ns.percentile["99.000000"]')

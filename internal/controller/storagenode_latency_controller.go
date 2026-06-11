@@ -52,39 +52,50 @@ const (
 // capability. Writes a JSON result to /dev/termination-log and exits.
 const fioBenchBaselineScript = `#!/bin/sh
 set -euo pipefail
-sudo nvme connect -t tcp -a "${FIO_NODE_ADDR}" -s "${FIO_NODE_PORT}" -n "${FIO_VOLUME_NQN}"
+sudo nvme connect --fast_io_fail_tmo=1 --nr-io-queues=3 --keep-alive-tmo=4 -t tcp -a "${FIO_NODE_ADDR}" -s "${FIO_NODE_PORT}" -n "${FIO_VOLUME_NQN}"
 DEVICE=""
 for i in $(seq 1 30); do
   DEVICE_NAME="$(nvme list --output-format=json --verbose | \
     jq -r --arg nqn "${FIO_VOLUME_NQN}" \
-    '.Devices[].Subsystems.[] | select(.SubsystemNQN == $nqn) | .Controllers[].Namespaces[0].NameSpace' 2>/dev/null)"
-  if [ -n "$DEVICE_NAME" ]; then
+    '.Devices[].Subsystems[] | select(.SubsystemNQN == $nqn) | .Namespaces[0].NameSpace')"
+  echo "${DEVICE_NAME}"
+  if [ "$DEVICE_NAME" != "null" ]; then
     DEVICE="/dev/${DEVICE_NAME}"
+    echo "Found ${DEVICE}"
     break
   fi
   sleep 1
 done
+
 function disconnect() {
   sudo nvme disconnect -n "${FIO_VOLUME_NQN}" 2>/dev/null || true
+  echo Cleanup finished
 }
 trap disconnect EXIT
+
 if [ -z "$DEVICE" ]; then
   echo "ERROR: NVMe device for NQN ${FIO_VOLUME_NQN} not found" >&2
   exit 1
 fi
+
+echo "Running fio..."
 OUTPUT=$(sudo fio \
+  --name="latency" \
+  --size=512M \
   --filename="${DEVICE}" \
   --ioengine=libaio \
   --direct=1 \
   --rw=randwrite \
   --bs=4k \
+  --blockalign=4k \
   --numjobs=1 \
   --iodepth=1 \
   --time_based \
   --runtime=30 \
   --group_reporting \
   --percentile_list=50:99 \
-  --output-format=json 2>/dev/null)
+  --output-format=json)
+echo "Fio finished..."
 printf '%s' "${OUTPUT}" | jq -c \
   '{p50_ns:.jobs[0].write.lat_ns.percentile["50.000000"],p99_ns:.jobs[0].write.lat_ns.percentile["99.000000"]}' \
   > /dev/termination-log
