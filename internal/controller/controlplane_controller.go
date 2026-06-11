@@ -22,8 +22,10 @@ import (
 	"net/http"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -40,10 +42,21 @@ const SingletonControlPlaneName = "simplyblock"
 // controlPlaneRequeueInterval is how often the FDB health check is repeated.
 const controlPlaneRequeueInterval = 30 * time.Second
 
+const (
+	// eventReasonFDBReady is emitted when the FDB health check recovers after a
+	// prior failure (phase transitions from Initializing → Ready).
+	eventReasonCPFDBReady = "FDBReady"
+
+	// eventReasonFDBNotReady is emitted when the FDB health check first fails
+	// (phase transitions from Ready → Initializing, or on the initial probe).
+	eventReasonCPFDBNotReady = "FDBNotReady"
+)
+
 // ControlPlaneReconciler reconciles the singleton ControlPlane object.
 type ControlPlaneReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=controlplanes,verbs=get;list;watch;create;update;patch;delete
@@ -65,6 +78,8 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	now := metav1.Now()
 	orig := cp.DeepCopy()
 
+	prevPhase := cp.Status.Phase
+
 	apiClient := webapi.NewClient()
 	body, status, err := apiClient.Do(ctx, "", http.MethodGet, "/api/v1/health/fdb/", nil)
 	if err != nil || status >= 300 {
@@ -83,6 +98,11 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if err := r.Status().Patch(ctx, cp, client.MergeFrom(orig)); err != nil {
 			log.Error(err, "failed to patch ControlPlane status")
 		}
+
+		// Only emit event on transition to avoid spamming every 30 s.
+		if prevPhase != utils.ClusterPhaseInitializing {
+			r.Recorder.Eventf(cp, corev1.EventTypeWarning, eventReasonCPFDBNotReady, "FDB health check failed: %s", msg)
+		}
 		return ctrl.Result{RequeueAfter: controlPlaneRequeueInterval}, nil
 	}
 
@@ -92,6 +112,11 @@ func (r *ControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	if err := r.Status().Patch(ctx, cp, client.MergeFrom(orig)); err != nil {
 		log.Error(err, "failed to patch ControlPlane status")
+	}
+
+	// Emit recovery event only when transitioning from Initializing → Ready.
+	if prevPhase == utils.ClusterPhaseInitializing {
+		r.Recorder.Eventf(cp, corev1.EventTypeNormal, eventReasonCPFDBReady, "FDB health check passed; control plane is ready")
 	}
 
 	log.Info("control plane ready")
