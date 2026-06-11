@@ -42,6 +42,7 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -355,7 +356,10 @@ func main() {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		// FIXME: temporary force creation of volumes creation
-		Provisioner: &controller.WebAPIBenchmarkProvisioner{},
+		Provisioner: &controller.WebAPIBenchmarkProvisioner{
+			APIClient: webapi.NewClient(),
+			K8sClient: mgr.GetClient(),
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeLatency")
 		os.Exit(1)
