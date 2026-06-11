@@ -51,19 +51,22 @@ const (
 // It runs before the cluster has production traffic so the result reflects raw hardware
 // capability. Writes a JSON result to /dev/termination-log and exits.
 const fioBenchBaselineScript = `#!/bin/sh
-set -e
+set -euo pipefail
 sudo nvme connect -t tcp -a "${FIO_NODE_ADDR}" -s "${FIO_NODE_PORT}" -n "${FIO_VOLUME_NQN}"
-DEVICE=""
 for i in $(seq 1 30); do
-  DEVICE=$(sudo nvme list -o json 2>/dev/null | \
+  DEVICE_NAME="$(nvme list --output-format=json --verbose | \
     jq -r --arg nqn "${FIO_VOLUME_NQN}" \
-    '.Devices[] | select(.SubsystemNQN == $nqn) | .DevicePath' 2>/dev/null || true)
-  [ -n "$DEVICE" ] && break
+    '.Devices[].Subsystems.[] | select(.SubsystemNQN == $nqn) | .Controllers[].Namespaces[0].NameSpace' 2>/dev/null)"
+  [ -n "$DEVICE_NAME" ] && break
+  DEVICE="/dev/${DEVICE_NAME}"
   sleep 1
 done
+function disconnect() {
+  sudo nvme disconnect -n "${FIO_VOLUME_NQN}" 2>/dev/null || true
+}
+trap disconnect EXIT
 if [ -z "$DEVICE" ]; then
   echo "ERROR: NVMe device for NQN ${FIO_VOLUME_NQN} not found" >&2
-  sudo nvme disconnect -n "${FIO_VOLUME_NQN}" 2>/dev/null || true
   exit 1
 fi
 OUTPUT=$(sudo fio \
@@ -82,7 +85,6 @@ OUTPUT=$(sudo fio \
 printf '%s' "${OUTPUT}" | jq -c \
   '{p50_ns:.jobs[0].write.lat_ns.percentile["50.000000"],p99_ns:.jobs[0].write.lat_ns.percentile["99.000000"]}' \
   > /dev/termination-log
-sudo nvme disconnect -n "${FIO_VOLUME_NQN}" 2>/dev/null || true
 `
 
 // fioBenchNodeConfig is one element of the JSON array stored per k8s hostname in the

@@ -95,10 +95,15 @@ done
 run_node() {
   NQN="${1}" ADDR="${2}" PORT="${3}" NODE_UUID="${4}" CLUSTER_NAME="${5}"
 
-  DEVICE="$(
-    sudo nvme connect -t tcp -a "${ADDR}" -s "${PORT}" -n "${NQN}" |
-      awk '/connecting to device:/ {print $NF}'
-  )"
+  sudo nvme connect -t tcp -a "${ADDR}" -s "${PORT}" -n "${NQN}"
+  for i in $(seq 1 30); do
+    DEVICE_NAME="$(nvme list --output-format=json --verbose | \
+      jq -r --arg nqn "${FIO_VOLUME_NQN}" \
+      '.Devices[].Subsystems.[] | select(.SubsystemNQN == $nqn) | .Controllers[].Namespaces[0].NameSpace' 2>/dev/null)"
+    [ -n "$DEVICE_NAME" ] && break
+    DEVICE="/dev/${DEVICE_NAME}"
+    sleep 1
+  done
 
   if [ -z "${DEVICE}" ]; then
     echo "fio-bench-probe: ERROR: device for NQN ${NQN} not found" >&2
@@ -106,7 +111,6 @@ run_node() {
     return 1
   fi
 
-  DEVICE="/dev/${DEVICE}n1"
   while true; do
     OUTPUT=$(sudo fio \
       --filename="${DEVICE}" \
@@ -134,7 +138,8 @@ simplyblock_node_fio_write_latency_p50_ns{cluster="${CLUSTER_NAME}",node="${NODE
 simplyblock_node_fio_write_latency_p99_ns{cluster="${CLUSTER_NAME}",node="${NODE_UUID}"} ${P99}
 PROM
 
-    sleep 270
+    sudo nvme disconnect -n "${NQN}" 2>/dev/null || true
+    sleep 300 # 5 minutes
   done
 }
 
