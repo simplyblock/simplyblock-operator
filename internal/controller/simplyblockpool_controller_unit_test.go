@@ -315,6 +315,74 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 	}
 }
 
+func TestPoolReconcileCreatesPoolViaDTOFormat(t *testing.T) {
+	const clusterUUID = "cluster-uuid-pool-create-dto"
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	defer mock.Close()
+
+	mock.Register(
+		http.MethodPost,
+		"/api/v2/clusters/"+clusterUUID+"/storage-pools/",
+		webapimock.RouteResponse{
+			Status: http.StatusOK,
+			Body: `{
+				"id":"pool-created-dto",
+				"cluster_id":"` + clusterUUID + `",
+				"name":"pool-mock-dto",
+				"status":"active",
+				"max_size":0,
+				"volume_max_size":20000000000,
+				"max_rw_iops":100,
+				"max_rw_mbytes":200,
+				"max_r_mbytes":50,
+				"max_w_mbytes":50,
+				"capacity":{"date":0,"size_total":0,"size_prov":0,"size_used":0,"size_free":0,"size_util":0},
+				"dhchap":false,
+				"allowed_hosts":[]
+			}`,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+		},
+	)
+
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	pool := &simplyblockv1alpha1.Pool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "pool-mock-dto",
+			Namespace:  "default",
+			Finalizers: []string{utils.FinalizerPool},
+		},
+		Spec: simplyblockv1alpha1.PoolSpec{
+			ClusterName: "cluster-a",
+		},
+	}
+
+	r := newPoolStateTestReconciler(t,
+		pool,
+		testCluster("default", "cluster-a", clusterUUID),
+		testClusterSecret("default", "cluster-a", clusterUUID, "secret"),
+	)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected terminal reconcile without delayed requeue after successful pool creation, got %+v", res)
+	}
+
+	current := &simplyblockv1alpha1.Pool{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
+		t.Fatalf("failed to get pool: %v", err)
+	}
+	if current.Status.UUID != "pool-created-dto" || current.Status.Status != "active" {
+		t.Fatalf("unexpected status after DTO pool create: %#v", current.Status)
+	}
+}
+
 func TestPoolReconcileCreatePoolNon2xxRequeues(t *testing.T) {
 	const clusterUUID = "cluster-uuid-pool-create-fail"
 
