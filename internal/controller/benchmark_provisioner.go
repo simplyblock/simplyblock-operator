@@ -140,20 +140,7 @@ func (p *WebAPIBenchmarkProvisioner) EnsureVolume(ctx context.Context, namespace
 	if err != nil {
 		return "", fmt.Errorf("create benchmark volume %q on node %s: %w", volumeName, nodeUUID, err)
 	}
-	if created != nil && created.UUID != "" {
-		return created.UUID, nil
-	}
-	// Server returned 2xx with empty body (async creation) — re-list to obtain UUID.
-	volumes, err = p.APIClient.GetPoolVolumes(ctx, clusterSecret, clusterUUID, poolUUID)
-	if err != nil {
-		return "", fmt.Errorf("list volumes after create: %w", err)
-	}
-	for _, vol := range volumes {
-		if vol.Name == volumeName {
-			return vol.UUID, nil
-		}
-	}
-	return "", fmt.Errorf("volume %q not found after successful create", volumeName)
+	return created.UUID, nil
 }
 
 func (*WebAPIBenchmarkProvisioner) BenchmarkNQN(clusterNQN, volumeUUID string) string {
