@@ -100,8 +100,10 @@ run_node() {
     DEVICE_NAME="$(nvme list --output-format=json --verbose | \
       jq -r --arg nqn "${FIO_VOLUME_NQN}" \
       '.Devices[].Subsystems.[] | select(.SubsystemNQN == $nqn) | .Controllers[].Namespaces[0].NameSpace' 2>/dev/null)"
-    [ -n "$DEVICE_NAME" ] && break
-    DEVICE="/dev/${DEVICE_NAME}"
+    if [ -n "$DEVICE_NAME" ]; then
+      DEVICE="/dev/${DEVICE_NAME}"
+      break
+    fi
     sleep 1
   done
 

@@ -53,12 +53,15 @@ const (
 const fioBenchBaselineScript = `#!/bin/sh
 set -euo pipefail
 sudo nvme connect -t tcp -a "${FIO_NODE_ADDR}" -s "${FIO_NODE_PORT}" -n "${FIO_VOLUME_NQN}"
+DEVICE=""
 for i in $(seq 1 30); do
   DEVICE_NAME="$(nvme list --output-format=json --verbose | \
     jq -r --arg nqn "${FIO_VOLUME_NQN}" \
     '.Devices[].Subsystems.[] | select(.SubsystemNQN == $nqn) | .Controllers[].Namespaces[0].NameSpace' 2>/dev/null)"
-  [ -n "$DEVICE_NAME" ] && break
-  DEVICE="/dev/${DEVICE_NAME}"
+  if [ -n "$DEVICE_NAME" ]; then
+    DEVICE="/dev/${DEVICE_NAME}"
+    break
+  fi
   sleep 1
 done
 function disconnect() {
