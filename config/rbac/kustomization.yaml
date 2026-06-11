@@ -37,3 +37,6 @@ resources:
 - storagebackup_admin_role.yaml
 - storagebackup_editor_role.yaml
 - storagebackup_viewer_role.yaml
+- storagenodeset_admin_role.yaml
+- storagenodeset_editor_role.yaml
+- storagenodeset_viewer_role.yaml

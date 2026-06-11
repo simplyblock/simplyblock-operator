@@ -1,0 +1,14 @@
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: StorageNodeSet
+metadata:
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: storagenodeset-sample
+spec:
+  clusterName: sample-cluster
+  clusterImage: simplyblock/snode:latest
+  maxLogicalVolumeCount: 256
+  mgmtIfname: eth0
+  workerNodes:
+    - worker-node-1

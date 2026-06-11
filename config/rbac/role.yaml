@@ -139,6 +139,7 @@ rules:
   - storagebackups
   - storageclusters
   - storagenodes
+  - storagenodesets
   - tasks
   verbs:
   - create
@@ -159,6 +160,7 @@ rules:
   - storagebackups/finalizers
   - storageclusters/finalizers
   - storagenodes/finalizers
+  - storagenodesets/finalizers
   - tasks/finalizers
   verbs:
   - update
@@ -174,6 +176,7 @@ rules:
   - storagebackups/status
   - storageclusters/status
   - storagenodes/status
+  - storagenodesets/status
   - tasks/status
   verbs:
   - get

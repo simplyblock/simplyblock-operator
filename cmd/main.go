@@ -270,6 +270,17 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
 	}
+	if err := (&controller.StorageNodeSetReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Namespace:        operatorNamespace,
+		TLSEnabled:       tlsEnabled,
+		TLSProvider:      tlsProvider,
+		TLSMutualEnabled: tlsMutualEnabled,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeSet")
+		os.Exit(1)
+	}
 	if err := (&controller.PoolReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
