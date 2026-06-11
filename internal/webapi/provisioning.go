@@ -17,6 +17,7 @@ limitations under the License.
 package webapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -54,6 +55,8 @@ func (c *Client) CreatePool(ctx context.Context, clusterSecret, clusterUUID stri
 }
 
 // CreateVolume creates a new volume in the given storage pool.
+// Returns nil when the server responds with a 2xx but an empty body (async creation).
+// Callers should re-list the pool to obtain the UUID in that case.
 func (c *Client) CreateVolume(ctx context.Context, clusterSecret, clusterUUID, poolUUID string, params VolumeCreateParams) (*VolumeInfo, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/", clusterUUID, poolUUID)
 	body, statusCode, err := c.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
@@ -62,6 +65,9 @@ func (c *Client) CreateVolume(ctx context.Context, clusterSecret, clusterUUID, p
 	}
 	if statusCode >= 300 {
 		return nil, fmt.Errorf("create volume %q: status %d: %s", params.Name, statusCode, string(body))
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, nil
 	}
 	var vol VolumeInfo
 	if err := json.Unmarshal(body, &vol); err != nil {
