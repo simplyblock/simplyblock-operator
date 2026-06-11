@@ -153,6 +153,12 @@ type PoolSpec struct {
 	StorageClassParameters *StorageClassParameters `json:"storageClassParameters,omitempty"`
 }
 
+// Condition type constants used in PoolStatus.Conditions.
+const (
+	// ConditionTypePoolReady indicates the pool is fully reconciled and operational.
+	ConditionTypePoolReady = "Ready"
+)
+
 // PoolStatus defines the observed state of Pool.
 type PoolStatus struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Pool UUID"
@@ -165,6 +171,13 @@ type PoolStatus struct {
 	QoS *PoolQoSStatus `json:"qos,omitempty"`
 	// AllowedNodes lists the Kubernetes node names currently registered on the backend.
 	AllowedNodes []string `json:"allowedNodes,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Conditions"
+	// Conditions provides human-readable status conditions for kubectl describe output.
+	// +listType=map
+	// +listMapKey=type
+	// +patchStrategy=merge
+	// +patchMergeKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
