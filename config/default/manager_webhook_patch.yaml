@@ -1,28 +1,20 @@
-# Add the --webhook-cert-* arguments for the webhook server TLS configuration.
-- op: add
-  path: /spec/template/spec/containers/0/args/-
-  value: --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
-
-- op: add
-  path: /spec/template/spec/containers/0/args/-
-  value: --webhook-cert-name=tls.crt
-
-- op: add
-  path: /spec/template/spec/containers/0/args/-
-  value: --webhook-cert-key=tls.key
-
-# Add the volume mount for the webhook serving certificate.
-- op: add
-  path: /spec/template/spec/containers/0/volumeMounts/-
-  value:
-    mountPath: /tmp/k8s-webhook-server/serving-certs
-    name: webhook-certs
-    readOnly: true
-
-# Add the webhook-certs secret volume.
-- op: add
-  path: /spec/template/spec/volumes/-
-  value:
-    name: webhook-certs
-    secret:
-      secretName: webhook-server-cert
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: system
+spec:
+  template:
+    spec:
+      containers:
+      - name: manager
+        # Mount the webhook serving cert at controller-runtime's default location
+        # (/tmp/k8s-webhook-server/serving-certs) so no --webhook-cert-path flag is needed.
+        volumeMounts:
+        - mountPath: /tmp/k8s-webhook-server/serving-certs
+          name: webhook-certs
+          readOnly: true
+      volumes:
+      - name: webhook-certs
+        secret:
+          secretName: webhook-server-cert
