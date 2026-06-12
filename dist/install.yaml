@@ -3025,9 +3025,33 @@ spec:
         secret:
           secretName: webhook-server-cert
 ---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: simplyblock-operator-serving-cert
+  namespace: simplyblock-operator-system
+spec:
+  dnsNames:
+  - simplyblock-operator-webhook-service.simplyblock-operator-system.svc
+  - simplyblock-operator-webhook-service.simplyblock-operator-system.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: selfsigned-issuer
+  secretName: webhook-server-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: simplyblock-operator-selfsigned-issuer
+  namespace: simplyblock-operator-system
+spec:
+  selfSigned: {}
+---
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: simplyblock-operator-system/simplyblock-operator-serving-cert
   name: simplyblock-operator-mutating-webhook-configuration
 webhooks:
 - admissionReviewVersions:
