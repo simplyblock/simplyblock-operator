@@ -1,11 +1,11 @@
 // fio-probe measures NVMe-oF write latency via fio and exposes results in two modes:
 //
-//   --mode=baseline  One-shot measurement. Writes {"p50_ns":...,"p99_ns":...} to
-//                    --termination-log and exits. Used by the one-shot Kubernetes Job.
+//	--mode=baseline  One-shot measurement. Writes {"p50_ns":...,"p99_ns":...} to
+//	                 --termination-log and exits. Used by the one-shot Kubernetes Job.
 //
-//   --mode=probe     Long-running. Measures latency on --interval and exposes the
-//                    results via a Prometheus /metrics endpoint on --metrics-addr.
-//                    No node-exporter or textfile collector required.
+//	--mode=probe     Long-running. Measures latency on --interval and exposes the
+//	                 results via a Prometheus /metrics endpoint on --metrics-addr.
+//	                 No node-exporter or textfile collector required.
 //
 // All flag values fall back to the corresponding environment variable when the flag
 // is not set explicitly (see the flag definitions below).
@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -84,17 +85,20 @@ func main() {
 	mode := flag.String("mode", "", "baseline or probe")
 
 	// Connection flags — used when --config is not provided.
-	addr := flag.String("addr", envOr("FIO_NODE_ADDR", ""), "NVMe-oF TCP address")
-	port := flag.String("port", envOr("FIO_NODE_PORT", ""), "NVMe-oF TCP port")
-	nqn := flag.String("nqn", envOr("FIO_VOLUME_NQN", ""), "NQN of the benchmark volume")
+	addr := flag.String("addr", os.Getenv("FIO_NODE_ADDR"), "NVMe-oF TCP address")
+	port := flag.String("port", os.Getenv("FIO_NODE_PORT"), "NVMe-oF TCP port")
+	nqn := flag.String("nqn", os.Getenv("FIO_VOLUME_NQN"), "NQN of the benchmark volume")
 
 	// Baseline-only.
 	terminationLog := flag.String("termination-log", "/tmp/termination-log", "path to write JSON result (baseline)")
 
 	// Probe-only.
-	configFile := flag.String("config", "", "path to JSON config file (probe); when set, --addr/--port/--nqn/--node-uuid/--cluster-uuid are ignored")
-	nodeUUID := flag.String("node-uuid", envOr("NODE_UUID", ""), "storage node UUID for Prometheus labels (probe, no --config)")
-	clusterUUID := flag.String("cluster-uuid", envOr("CLUSTER_UUID", ""), "cluster UUID for Prometheus labels (probe, no --config)")
+	configFile := flag.String("config", "",
+		"path to JSON config file (probe); when set, direct connection flags are ignored")
+	nodeUUID := flag.String("node-uuid", os.Getenv("NODE_UUID"),
+		"storage node UUID for Prometheus labels (probe, no --config)")
+	clusterUUID := flag.String("cluster-uuid", os.Getenv("CLUSTER_UUID"),
+		"cluster UUID for Prometheus labels (probe, no --config)")
 	metricsAddr := flag.String("metrics-addr", ":9199", "address for the Prometheus /metrics endpoint (probe)")
 	interval := flag.Duration("interval", 5*time.Minute, "measurement interval (probe)")
 
@@ -114,10 +118,12 @@ func main() {
 			if *addr == "" || *port == "" || *nqn == "" || *nodeUUID == "" || *clusterUUID == "" {
 				log.Fatal("probe mode without --config requires --addr, --port, --nqn, --node-uuid and --cluster-uuid")
 			}
-			portNum := int32(0)
-			fmt.Sscan(*port, &portNum)
+			portNum, err := strconv.ParseInt(*port, 10, 32)
+			if err != nil {
+				log.Fatalf("invalid --port %q: %v", *port, err)
+			}
 			probeNodes([]probeNodeConfig{{
-				NQN: *nqn, Addr: *addr, Port: portNum,
+				NQN: *nqn, Addr: *addr, Port: int32(portNum),
 				NodeUUID: *nodeUUID, ClusterUUID: *clusterUUID,
 			}}, *metricsAddr, *interval)
 		}
@@ -140,13 +146,6 @@ func readConfig(path string) []probeNodeConfig {
 		return nil
 	}
 	return nodes
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }
 
 // ── baseline mode ──────────────────────────────────────────────────────────────

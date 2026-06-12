@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	roleLabel        = "role"
-	roleStorageNode  = "simplyblock-storage-node"
-	clusterNameLabel = "simplyblock-cluster"
+	roleLabel          = "role"
+	roleStorageNode    = "simplyblock-storage-node"
+	clusterNameLabel   = "simplyblock-cluster"
 	injectedAnnotation = "simplyblock.io/fio-probe-injected"
+	annotationTrue     = "true"
 )
 
 // +kubebuilder:webhook:path=/mutate-v1-pod-fio-bench,mutating=true,failurePolicy=ignore,sideEffects=None,groups="",resources=pods,verbs=create,versions=v1,name=fio-bench-injector.simplyblock.io,admissionReviewVersions=v1
@@ -41,7 +42,7 @@ func (h *FioBenchInjector) Handle(ctx context.Context, req admission.Request) ad
 		return admission.Allowed("not a storage node pod")
 	}
 
-	if pod.Annotations[injectedAnnotation] == "true" {
+	if pod.Annotations[injectedAnnotation] == annotationTrue {
 		return admission.Allowed("already injected")
 	}
 	for _, c := range pod.Spec.Containers {
@@ -65,7 +66,7 @@ func (h *FioBenchInjector) Handle(ctx context.Context, req admission.Request) ad
 	if patched.Annotations == nil {
 		patched.Annotations = make(map[string]string)
 	}
-	patched.Annotations[injectedAnnotation] = "true"
+	patched.Annotations[injectedAnnotation] = annotationTrue
 	// Standard Prometheus pod annotations for annotation-based scrape discovery
 	// (used by Prometheus setups that don't run the Prometheus Operator).
 	// Prometheus Operator users rely on the PodMonitor in config/prometheus/ instead.
