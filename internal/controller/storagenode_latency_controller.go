@@ -67,7 +67,7 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-function disconnect() {
+disconnect() {
   sudo nvme disconnect -n "${FIO_VOLUME_NQN}" 2>/dev/null || true
   echo Cleanup finished
 }
@@ -98,7 +98,7 @@ OUTPUT=$(sudo fio \
 echo "Fio finished..."
 printf '%s' "${OUTPUT}" | jq -c \
   '{p50_ns:.jobs[0].write.lat_ns.percentile["50.000000"],p99_ns:.jobs[0].write.lat_ns.percentile["99.000000"]}' \
-  > /dev/termination-log
+  > /tmp/termination-log
 `
 
 // fioBenchNodeConfig is one element of the JSON array stored per k8s hostname in the
@@ -337,6 +337,7 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 	privileged := true
 	ttl := baselineJobTTLSeconds
 	backoffLimit := int32(2)
+	hostDevPath := "/dev"
 
 	return r.Create(ctx, &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -358,13 +359,25 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 					RestartPolicy: corev1.RestartPolicyNever,
 					NodeName:      node.Hostname,
 					HostNetwork:   true,
+					Volumes: []corev1.Volume{
+						{
+							Name: "host-dev",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{Path: hostDevPath},
+							},
+						},
+					},
 					Containers: []corev1.Container{
 						{
-							Name:            "fio-baseline",
-							Image:           image,
-							Command:         []string{"/bin/sh", "-c"},
-							Args:            []string{fioBenchBaselineScript},
-							SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
+							Name:                   "fio-baseline",
+							Image:                  image,
+							Command:                []string{"/bin/sh", "-c"},
+							Args:                   []string{fioBenchBaselineScript},
+							TerminationMessagePath: "/tmp/termination-log",
+							SecurityContext:        &corev1.SecurityContext{Privileged: &privileged},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "host-dev", MountPath: "/dev"},
+							},
 							Env: []corev1.EnvVar{
 								{Name: "FIO_NODE_ADDR", Value: conn.Addr},
 								{Name: "FIO_NODE_PORT", Value: fmt.Sprintf("%d", conn.Port)},

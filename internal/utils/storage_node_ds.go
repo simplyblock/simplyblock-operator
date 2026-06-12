@@ -96,12 +96,14 @@ run_node() {
   NQN="${1}" ADDR="${2}" PORT="${3}" NODE_UUID="${4}" CLUSTER_NAME="${5}"
 
   sudo nvme connect --fast_io_fail_tmo=1 --nr-io-queues=3 --keep-alive-tmo=4 -t tcp -a "${ADDR}" -s "${PORT}" -n "${NQN}"
+  DEVICE=""
   for i in $(seq 1 30); do
     DEVICE_NAME="$(nvme list --output-format=json --verbose | \
-      jq -r --arg nqn "${FIO_VOLUME_NQN}" \
+      jq -r --arg nqn "${NQN}" \
         '.Devices[].Subsystems[] | select(.SubsystemNQN == $nqn) | .Namespaces[0].NameSpace')"
     echo "${DEVICE_NAME}"
     if [ "$DEVICE_NAME" != "null" ]; then
+      DEVICE="/dev/${DEVICE_NAME}"
       echo "Found ${DEVICE}"
       break
     fi
