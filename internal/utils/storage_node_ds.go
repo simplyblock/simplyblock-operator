@@ -405,7 +405,7 @@ func BuildStorageNodeEndpointSlice(sn *simplyblockv1alpha1.StorageNode, nodeIPs 
 
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-storage-node-api-endpoints",
+			Name:      "simplyblock-storage-node-api-endpoints-" + sn.Spec.ClusterName,
 			Namespace: sn.Namespace,
 			Labels: map[string]string{
 				"kubernetes.io/service-name": "simplyblock-storage-node-api",
