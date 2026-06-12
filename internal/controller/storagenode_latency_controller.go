@@ -203,57 +203,10 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	changed := false
 
 	for _, node := range nodesByUUID {
-		m := r.findOrCreateEntry(latencyMetrics, node.UUID)
-
-		volumeUUID, err := r.Provisioner.EnsureVolume(
-			ctx, snode.Namespace, snode.Spec.ClusterName, poolUUID,
-			"fio-bench-"+node.UUID, node.UUID,
-		)
-		if err != nil {
-			log.Error(err, "Cannot ensure benchmark volume", "node", node.UUID)
-			continue
+		nodeChanged := r.processNodeBaseline(ctx, snode, clusterCR, poolUUID, node, *spec.FioBenchmarkImage, &latencyMetrics, hostConfigs)
+		if nodeChanged {
+			changed = true
 		}
-
-		conn := benchmarkConnInfo{
-			NQN:  r.Provisioner.BenchmarkNQN(clusterCR.Status.NQN, volumeUUID),
-			Addr: node.MgmtIp,
-			Port: logicalVolumeConnectionPort(node),
-		}
-
-		// Drive the one-shot baseline Job until a result is stored.
-		if m.BaselineP99NS == 0 {
-			baseline, jobChanged, err := r.reconcileBaselineJob(ctx, snode, node, conn, *spec.FioBenchmarkImage)
-			if err != nil {
-				log.Error(err, "Baseline job error", "node", node.UUID)
-			}
-			if baseline != nil {
-				now := metav1.NewTime(time.Now())
-				m.BaselineP50NS = baseline.P50NS
-				m.BaselineP99NS = baseline.P99NS
-				m.BaselineMeasuredAt = &now
-				log.Info("Baseline measured", "node", node.UUID, "p99ns", baseline.P99NS)
-				jobChanged = true
-			}
-			if jobChanged {
-				changed = true
-			}
-		}
-
-		// Only expose the ConfigMap entry to the sidecar once the baseline is stored.
-		// This prevents the sidecar's continuous fio loop from running concurrently
-		// with the one-shot baseline Job — both would write to the same NVMe device
-		// and corrupt each other's measurements.
-		if m.BaselineP99NS > 0 {
-			hostConfigs[node.Hostname] = append(hostConfigs[node.Hostname], fioBenchNodeConfig{
-				NQN:         conn.NQN,
-				Addr:        conn.Addr,
-				Port:        conn.Port,
-				NodeUUID:    node.UUID,
-				ClusterName: snode.Spec.ClusterName,
-			})
-		}
-
-		latencyMetrics = r.setEntry(latencyMetrics, m)
 	}
 
 	configData := make(map[string]string, len(hostConfigs))
@@ -273,6 +226,75 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	return ctrl.Result{RequeueAfter: benchInterval}, nil
+}
+
+// processNodeBaseline ensures the benchmark volume exists, drives the one-shot baseline Job,
+// and populates hostConfigs once the baseline has been recorded.
+// Returns true when latencyMetrics was changed and needs to be patched.
+func (r *StorageNodeLatencyReconciler) processNodeBaseline(
+	ctx context.Context,
+	snode *simplyblockv1alpha1.StorageNode,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+	poolUUID string,
+	node simplyblockv1alpha1.NodeStatus,
+	image string,
+	latencyMetrics *[]simplyblockv1alpha1.NodeLatencyMetrics,
+	hostConfigs map[string][]fioBenchNodeConfig,
+) bool {
+	log := logf.FromContext(ctx)
+
+	m := r.findOrCreateEntry(*latencyMetrics, node.UUID)
+
+	volumeUUID, err := r.Provisioner.EnsureVolume(
+		ctx, snode.Namespace, snode.Spec.ClusterName, poolUUID,
+		"fio-bench-"+node.UUID, node.UUID,
+	)
+	if err != nil {
+		log.Error(err, "Cannot ensure benchmark volume", "node", node.UUID)
+		return false
+	}
+
+	conn := benchmarkConnInfo{
+		NQN:  r.Provisioner.BenchmarkNQN(clusterCR.Status.NQN, volumeUUID),
+		Addr: node.MgmtIp,
+		Port: logicalVolumeConnectionPort(node),
+	}
+
+	changed := false
+	if m.BaselineP99NS == 0 {
+		baseline, jobChanged, err := r.reconcileBaselineJob(ctx, snode, node, conn, image)
+		if err != nil {
+			log.Error(err, "Baseline job error", "node", node.UUID)
+		}
+		if baseline != nil {
+			now := metav1.NewTime(time.Now())
+			m.BaselineP50NS = baseline.P50NS
+			m.BaselineP99NS = baseline.P99NS
+			m.BaselineMeasuredAt = &now
+			log.Info("Baseline measured", "node", node.UUID, "p99ns", baseline.P99NS)
+			jobChanged = true
+		}
+		if jobChanged {
+			changed = true
+		}
+	}
+
+	// Only expose the ConfigMap entry to the sidecar once the baseline is stored.
+	// This prevents the sidecar's continuous fio loop from running concurrently
+	// with the one-shot baseline Job — both would write to the same NVMe device
+	// and corrupt each other's measurements.
+	if m.BaselineP99NS > 0 {
+		hostConfigs[node.Hostname] = append(hostConfigs[node.Hostname], fioBenchNodeConfig{
+			NQN:         conn.NQN,
+			Addr:        conn.Addr,
+			Port:        conn.Port,
+			NodeUUID:    node.UUID,
+			ClusterName: snode.Spec.ClusterName,
+		})
+	}
+
+	*latencyMetrics = r.setEntry(*latencyMetrics, m)
+	return changed
 }
 
 // benchmarkConnInfo holds the NVMe-oF connection parameters for the benchmark volume.

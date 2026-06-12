@@ -28,6 +28,7 @@ import (
 
 // benchmarkPoolName is used by WebAPIBenchmarkProvisioner to name the benchmark storage pool.
 const benchmarkPoolName = "fio-benchmark"
+
 // defaultBenchmarkVolumeSizeBytes is the size of each per-node benchmark volume (1 GiB).
 // Sufficient for 4K random-write fio workloads without wasting storage.
 const defaultBenchmarkVolumeSizeBytes int64 = 1024 * 1024 * 1024
