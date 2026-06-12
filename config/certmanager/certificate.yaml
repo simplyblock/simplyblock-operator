@@ -1,0 +1,27 @@
+# Self-signed Issuer used only to bootstrap the webhook serving certificate.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned-issuer
+  namespace: system
+spec:
+  selfSigned: {}
+---
+# Certificate for the webhook server. cert-manager writes the TLS key pair into
+# the Secret named webhook-server-cert, which the manager pod mounts via the
+# manager_webhook_patch.yaml volume.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: serving-cert
+  namespace: system
+spec:
+  dnsNames:
+  # $(SERVICE_NAME) and $(SERVICE_NAMESPACE) are replaced by kustomize replacements
+  # in config/default/kustomization.yaml.
+  - $(SERVICE_NAME).$(SERVICE_NAMESPACE).svc
+  - $(SERVICE_NAME).$(SERVICE_NAMESPACE).svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: selfsigned-issuer
+  secretName: webhook-server-cert

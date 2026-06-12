@@ -3,6 +3,9 @@ apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
   name: mutating-webhook-configuration
+  annotations:
+    # cert-manager injects the CA bundle from the serving-cert Certificate.
+    cert-manager.io/inject-ca-from: $(CERTIFICATE_NAMESPACE)/$(CERTIFICATE_NAME)
 webhooks:
 - admissionReviewVersions:
   - v1
@@ -13,6 +16,9 @@ webhooks:
       path: /mutate-v1-pod-fio-bench
   failurePolicy: Ignore
   name: fio-bench-injector.simplyblock.io
+  objectSelector:
+    matchLabels:
+      role: simplyblock-storage-node
   rules:
   - apiGroups:
     - ""
