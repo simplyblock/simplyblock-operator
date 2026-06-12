@@ -97,7 +97,7 @@ OUTPUT=$(sudo fio \
   --output-format=json)
 echo "Fio finished..."
 printf '%s' "${OUTPUT}" | jq -c \
-  '{p50_ns:.jobs[0].write.lat_ns.percentile["50.000000"],p99_ns:.jobs[0].write.lat_ns.percentile["99.000000"]}' \
+  '{p50_ns:.jobs[0].write.clat_ns.percentile["50.000000"],p99_ns:.jobs[0].write.clat_ns.percentile["99.000000"]}' \
   > /tmp/termination-log
 `
 

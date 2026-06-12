@@ -136,8 +136,8 @@ run_node() {
       --output-format=json)
     echo "Fio finished..."
 
-    P50=$(printf '%s' "${OUTPUT}" | jq '.jobs[0].write.lat_ns.percentile["50.000000"]')
-    P99=$(printf '%s' "${OUTPUT}" | jq '.jobs[0].write.lat_ns.percentile["99.000000"]')
+    P50=$(printf '%s' "${OUTPUT}" | jq '.jobs[0].write.clat_ns.percentile["50.000000"]')
+    P99=$(printf '%s' "${OUTPUT}" | jq '.jobs[0].write.clat_ns.percentile["99.000000"]')
 
     cat > "${METRICS_DIR}/fio_${NODE_UUID}.prom" <<PROM
 # HELP simplyblock_node_fio_write_latency_p50_ns fio 4K randwrite p50 write latency (ns)
