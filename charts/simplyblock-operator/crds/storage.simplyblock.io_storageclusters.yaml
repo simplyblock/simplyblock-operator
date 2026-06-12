@@ -159,7 +159,8 @@ spec:
                   refreshSNodeAPI:
                     description: |-
                       RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
-                      before shutting it down, ensuring the latest image is running.
+                      after the backend node is shut down and before it is restarted, ensuring
+                      the latest image is running before the node comes back online.
                     type: boolean
                 type: object
               nvmfBasePort:

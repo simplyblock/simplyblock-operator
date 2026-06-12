@@ -194,6 +194,15 @@ spec:
           value: "False"
         - name: FLASK_ENV
           value: "production"
+        - name: SB_K8S_ADMIN_SERVICE_ACCOUNTS
+          {{- $accounts := list (printf "system:serviceaccount:%s:simplyblock-operator" .Release.Namespace) }}
+          {{- if .Values.controller.serviceAccountAuth.enabled }}
+          {{- $accounts = append $accounts (printf "system:serviceaccount:%s:simplyblock-csi-controller-sa" .Release.Namespace) }}
+          {{- end }}
+          {{- if .Values.node.serviceAccountAuth.enabled }}
+          {{- $accounts = append $accounts (printf "system:serviceaccount:%s:simplyblock-csi-node-sa" .Release.Namespace) }}
+          {{- end }}
+          value: {{ $accounts | join "," | quote }}
         volumeMounts:
         - name: fdb-cluster-file
           mountPath: /etc/foundationdb/fdb.cluster
