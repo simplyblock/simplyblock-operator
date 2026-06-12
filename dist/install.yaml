@@ -3035,14 +3035,14 @@ spec:
   - simplyblock-operator-webhook-service.simplyblock-operator-system.svc
   - simplyblock-operator-webhook-service.simplyblock-operator-system.svc.cluster.local
   issuerRef:
-    kind: Issuer
-    name: selfsigned-issuer
+    kind: ClusterIssuer
+    name: simplyblock-operator-selfsigned-cluster-issuer
   secretName: webhook-server-cert
 ---
 apiVersion: cert-manager.io/v1
-kind: Issuer
+kind: ClusterIssuer
 metadata:
-  name: simplyblock-operator-selfsigned-issuer
+  name: simplyblock-operator-selfsigned-cluster-issuer
   namespace: simplyblock-operator-system
 spec:
   selfSigned: {}

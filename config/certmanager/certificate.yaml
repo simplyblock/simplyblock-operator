@@ -1,15 +1,13 @@
-# Self-signed Issuer used only to bootstrap the webhook serving certificate.
+# ClusterIssuer is cluster-scoped. Its name gets the kustomize namePrefix
+# (simplyblock-operator-) applied. The Certificate's issuerRef must use the
+# same prefixed name because kustomize does not rewrite cert-manager cross-references.
 apiVersion: cert-manager.io/v1
-kind: Issuer
+kind: ClusterIssuer
 metadata:
-  name: selfsigned-issuer
-  namespace: system
+  name: selfsigned-cluster-issuer
 spec:
   selfSigned: {}
 ---
-# Certificate for the webhook server. cert-manager writes the TLS key pair into
-# the Secret named webhook-server-cert, which the manager pod mounts via the
-# manager_webhook_patch.yaml volume.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -17,11 +15,11 @@ metadata:
   namespace: system
 spec:
   dnsNames:
-  # $(SERVICE_NAME) and $(SERVICE_NAMESPACE) are replaced by kustomize replacements
-  # in config/default/kustomization.yaml.
   - $(SERVICE_NAME).$(SERVICE_NAMESPACE).svc
   - $(SERVICE_NAME).$(SERVICE_NAMESPACE).svc.cluster.local
   issuerRef:
-    kind: Issuer
-    name: selfsigned-issuer
+    kind: ClusterIssuer
+    # Must include the kustomize namePrefix (simplyblock-operator-) because
+    # kustomize rewrites the ClusterIssuer name but not this reference field.
+    name: simplyblock-operator-selfsigned-cluster-issuer
   secretName: webhook-server-cert
