@@ -2939,6 +2939,20 @@ spec:
     app.kubernetes.io/name: simplyblock-operator
     control-plane: controller-manager
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: simplyblock-operator-webhook-service
+  namespace: simplyblock-operator-system
+spec:
+  ports:
+  - port: 443
+    protocol: TCP
+    targetPort: 9443
+  selector:
+    app.kubernetes.io/name: simplyblock-operator
+    control-plane: controller-manager
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -2964,9 +2978,9 @@ spec:
     spec:
       containers:
       - args:
-        - --metrics-bind-address=:8443
-        - --leader-elect
-        - --health-probe-bind-address=:8081
+        - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
+        - --webhook-cert-name=tls.crt
+        - --webhook-cert-key=tls.key
         command:
         - /manager
         image: quay.io/simplyblock-io/simplyblock-operator:0.1.0
@@ -2996,9 +3010,42 @@ spec:
             drop:
             - ALL
           readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /tmp/k8s-webhook-server/serving-certs
+          name: webhook-certs
+          readOnly: true
       securityContext:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
       serviceAccountName: simplyblock-operator-controller-manager
       terminationGracePeriodSeconds: 10
+      volumes:
+      - name: webhook-certs
+        secret:
+          secretName: webhook-server-cert
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: simplyblock-operator-mutating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /mutate-v1-pod-fio-bench
+  failurePolicy: Ignore
+  name: fio-bench-injector.simplyblock.io
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - pods
+  sideEffects: None

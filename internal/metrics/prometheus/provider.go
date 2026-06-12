@@ -26,6 +26,7 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -37,6 +38,12 @@ import (
 
 	"github.com/simplyblock/simplyblock-operator/internal/metrics"
 )
+
+// ErrLatencyDataNotReady is returned by GetClusterCurrentP99 when Prometheus has not
+// yet received any latency samples — the fio-bench-probe sidecar has not completed
+// its first measurement cycle. Callers should treat this as a transient "not yet
+// available" condition and log a warning rather than an error.
+var ErrLatencyDataNotReady = errors.New("latency data not yet available from Prometheus")
 
 // Provider wraps a Prometheus API client and exposes all metric queries used by
 // the operator. Construct once per reconcile cycle via New.
@@ -135,6 +142,10 @@ func validScheme(s metrics.ErasureScheme) bool {
 func (p *Provider) GetClusterCurrentP99(ctx context.Context, clusterUUID string) (map[string]int64, error) {
 	vec, err := p.queryVector(ctx, fmt.Sprintf(`simplyblock_node_fio_write_latency_p99_ns{cluster=%q}`, clusterUUID))
 	if err != nil {
+		var apiErr *promv1.Error
+		if errors.As(err, &apiErr) && apiErr.Type == promv1.ErrClient {
+			return nil, fmt.Errorf("%w: %w", ErrLatencyDataNotReady, err)
+		}
 		return nil, err
 	}
 	out := make(map[string]int64, len(vec))

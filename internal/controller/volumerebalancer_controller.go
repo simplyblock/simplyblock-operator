@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -236,9 +237,14 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	deviations, maxDev, avgDev, hottestNode, coolestNode, err := r.computeLatencyDeviations(ctx, clusterCR, clusterUUID, cfg.prometheusURL)
 	if err != nil {
-		log.Error(err, "Cannot collect latency from Prometheus; requeuing")
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "error").Inc()
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		if errors.Is(err, promlatency.ErrLatencyDataNotReady) {
+			log.Info("Latency data not yet available; waiting for fio-bench-probe sidecar baseline")
+			rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
+		} else {
+			log.Error(err, "Cannot collect latency from Prometheus; requeuing")
+			rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "error").Inc()
+		}
+		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.evalInterval)}, nil
 	}
 
 	if hasOfflineNode(nodeMap) {

@@ -570,21 +570,7 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 		return err
 	}
 
-	var sidecar *utils.FioBenchSidecarConfig
-	clusterCR, clusterErr := utils.ResolveClusterCR(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
-	if clusterErr == nil {
-		rb := clusterCR.Spec.VolumeRebalancing
-		if rb != nil &&
-			rb.LatencyBenchmarkEnabled != nil && *rb.LatencyBenchmarkEnabled &&
-			rb.FioBenchmarkImage != nil && *rb.FioBenchmarkImage != "" {
-			sidecar = &utils.FioBenchSidecarConfig{
-				Image:         *rb.FioBenchmarkImage,
-				ConfigMapName: utils.FioBenchConfigMapName(snCR.Spec.ClusterName),
-			}
-		}
-	}
-
-	ds := utils.BuildStorageNodeDaemonSet(snCR, r.TLSEnabled, r.TLSMutualEnabled, r.TLSProvider, tlsSecretRV, sidecar)
+	ds := utils.BuildStorageNodeDaemonSet(snCR, r.TLSEnabled, r.TLSMutualEnabled, r.TLSProvider, tlsSecretRV)
 
 	if err := controllerutil.SetControllerReference(snCR, ds, r.Scheme); err != nil {
 		return err

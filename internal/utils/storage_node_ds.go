@@ -168,7 +168,7 @@ done
 wait
 `
 
-func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string, sidecar *FioBenchSidecarConfig) *appsv1.DaemonSet {
+func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
 	labels := map[string]string{
 		"app":                 "storage-node",
 		"simplyblock-cluster": sn.Spec.ClusterName,
@@ -344,56 +344,6 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 	}
 
 	var extraContainers []corev1.Container
-	if sidecar != nil && sidecar.Image != "" {
-		optional := true
-		volumes = append(volumes, corev1.Volume{
-			Name: "fio-bench-config",
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: sidecar.ConfigMapName,
-					},
-					// Optional so the pod starts before the operator writes the ConfigMap.
-					Optional: &optional,
-				},
-			},
-		})
-		extraContainers = append(extraContainers, corev1.Container{
-			Name:            "fio-bench-probe",
-			Image:           sidecar.Image,
-			ImagePullPolicy: corev1.PullIfNotPresent,
-			Command:         []string{"/bin/sh", "-c"},
-			Args:            []string{fioBenchSidecarScript},
-			SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("100m"),
-					corev1.ResourceMemory: resource.MustParse("25Mi"),
-				},
-				Limits: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("100m"),
-					corev1.ResourceMemory: resource.MustParse("25Mi"),
-				},
-			},
-			Ports: []corev1.ContainerPort{
-				{
-					Name:          "fio-metrics",
-					ContainerPort: FioBenchMetricsPort,
-					Protocol:      corev1.ProtocolTCP,
-				},
-			},
-			Env: []corev1.EnvVar{
-				{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
-					FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
-				}},
-			},
-			VolumeMounts: []corev1.VolumeMount{
-				{Name: "fio-bench-config", MountPath: "/etc/simplyblock/fio-bench", ReadOnly: true},
-				{Name: "dev-vol", MountPath: "/dev"},
-			},
-		})
-	}
-
 	var podAnnotations map[string]string
 	if tlsEnabled && tlsSecretResourceVersion != "" {
 		podAnnotations = map[string]string{

@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: fio-bench-probe
+  namespace: system
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  selector:
+    matchLabels:
+      role: simplyblock-storage-node
+  podMetricsEndpoints:
+  - port: fio-metrics
+    path: /metrics
+    scheme: http
