@@ -296,7 +296,7 @@ func probeNode(ctx context.Context, n probeNodeConfig, p50, p99 *prometheus.Gaug
 
 func connectAndWait(ctx context.Context, conn connConfig) (device string, disconnect func(), err error) {
 	out, err := exec.CommandContext(ctx,
-		"nvme", "connect",
+		"sudo", "nvme", "connect",
 		"--fast_io_fail_tmo=1", "--nr-io-queues=3", "--keep-alive-tmo=4",
 		"-t", "tcp",
 		"-a", conn.Addr,
@@ -308,7 +308,7 @@ func connectAndWait(ctx context.Context, conn connConfig) (device string, discon
 	}
 
 	disconnect = func() {
-		if err := exec.Command("nvme", "disconnect", "-n", conn.NQN).Run(); err != nil {
+		if err := exec.Command("sudo", "nvme", "disconnect", "-n", conn.NQN).Run(); err != nil {
 			log.Printf("nvme disconnect: %v", err)
 		}
 	}
@@ -332,7 +332,7 @@ func connectAndWait(ctx context.Context, conn connConfig) (device string, discon
 }
 
 func findDevice(ctx context.Context, nqn string) (string, error) {
-	out, err := exec.CommandContext(ctx, "nvme", "list", "--output-format=json", "--verbose").Output()
+	out, err := exec.CommandContext(ctx, "sudo", "nvme", "list", "--output-format=json", "--verbose").Output()
 	if err != nil {
 		return "", err
 	}
@@ -354,7 +354,7 @@ func findDevice(ctx context.Context, nqn string) (string, error) {
 
 func measure(ctx context.Context, device string) (*latencyResult, error) {
 	out, err := exec.CommandContext(ctx,
-		"fio",
+		"sudo", "fio",
 		"--name=latency",
 		"--size=512M",
 		"--filename="+device,
