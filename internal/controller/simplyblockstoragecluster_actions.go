@@ -483,19 +483,54 @@ func (r *StorageClusterReconciler) nodeRecycleShuttingDown(
 	nrs := clusterCR.Status.NodeRecycleStatus
 
 	if !nrs.PhaseTriggered {
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown", clusterUUID, nodeUUID)
-		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
-		if err != nil || status >= 300 {
-			if err == nil {
-				err = fmt.Errorf("unexpected status %d body=%s", status, string(body))
-			}
-			log.Error(err, "Node shutdown API call failed", "nodeUUID", nodeUUID)
+		// Idempotency: if the node is already shutting down or offline the API
+		// call already succeeded in a previous reconcile that crashed before
+		// persisting PhaseTriggered. Skip the call and mark as triggered.
+		nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
+		if err != nil {
+			log.Error(err, "Failed to fetch node status before shutdown API call", "nodeUUID", nodeUUID)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
-		log.Info("Node shutdown triggered", "nodeUUID", nodeUUID)
-		nrs.PhaseTriggered = true
-		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{Requeue: true}, nil
+		alreadyShuttingDown := false
+		for _, n := range nodes {
+			if n.UUID == nodeUUID {
+				s := strings.ToLower(n.Status)
+				if s == utils.NodeStatusInShutdown || s == utils.NodeStatusOffline || s == utils.NodeStatusInRestart {
+					log.Info("Node already in shutdown/offline state, skipping shutdown API call", "nodeUUID", nodeUUID, "status", s)
+					alreadyShuttingDown = true
+				}
+				break
+			}
+		}
+
+		if !alreadyShuttingDown {
+			// Persist PhaseTriggered=true before the API call so a crash between
+			// the call and the persist cannot trigger a duplicate shutdown on restart.
+			nrs.PhaseTriggered = true
+			if err := r.Status().Update(ctx, clusterCR); err != nil {
+				return ctrl.Result{Requeue: true}, nil
+			}
+
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown", clusterUUID, nodeUUID)
+			body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
+			if err != nil || status >= 300 {
+				if err == nil {
+					err = fmt.Errorf("unexpected status %d body=%s", status, string(body))
+				}
+				log.Error(err, "Node shutdown API call failed", "nodeUUID", nodeUUID)
+				// Revert PhaseTriggered so the call is retried on the next reconcile.
+				nrs.PhaseTriggered = false
+				if updateErr := r.Status().Update(ctx, clusterCR); updateErr != nil {
+					log.Error(updateErr, "Failed to revert PhaseTriggered after shutdown API failure")
+				}
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+			log.Info("Node shutdown triggered", "nodeUUID", nodeUUID)
+		} else {
+			nrs.PhaseTriggered = true
+			if err := r.Status().Update(ctx, clusterCR); err != nil {
+				return ctrl.Result{Requeue: true}, nil
+			}
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -552,19 +587,53 @@ func (r *StorageClusterReconciler) nodeRecycleRestarting(
 	nrs := clusterCR.Status.NodeRecycleStatus
 
 	if !nrs.PhaseTriggered {
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
-		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, map[string]bool{"force": true})
-		if err != nil || status >= 300 {
-			if err == nil {
-				err = fmt.Errorf("unexpected status %d body=%s", status, string(body))
-			}
-			log.Error(err, "Node restart API call failed", "nodeUUID", nodeUUID)
+		// Idempotency: if the node is already online the restart call already
+		// succeeded in a previous reconcile that crashed before persisting PhaseTriggered.
+		nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
+		if err != nil {
+			log.Error(err, "Failed to fetch node status before restart API call", "nodeUUID", nodeUUID)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
-		log.Info("Node restart triggered", "nodeUUID", nodeUUID)
-		nrs.PhaseTriggered = true
-		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{Requeue: true}, nil
+		alreadyRestarting := false
+		for _, n := range nodes {
+			if n.UUID == nodeUUID {
+				s := strings.ToLower(n.Status)
+				if s == utils.NodeStatusInRestart || s == utils.NodeStatusOnline {
+					log.Info("Node already restarting/online, skipping restart API call", "nodeUUID", nodeUUID, "status", s)
+					alreadyRestarting = true
+				}
+				break
+			}
+		}
+
+		if !alreadyRestarting {
+			// Persist PhaseTriggered=true before the API call so a crash between
+			// the call and the persist cannot trigger a duplicate restart on restart.
+			nrs.PhaseTriggered = true
+			if err := r.Status().Update(ctx, clusterCR); err != nil {
+				return ctrl.Result{Requeue: true}, nil
+			}
+
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
+			body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, map[string]bool{"force": true})
+			if err != nil || status >= 300 {
+				if err == nil {
+					err = fmt.Errorf("unexpected status %d body=%s", status, string(body))
+				}
+				log.Error(err, "Node restart API call failed", "nodeUUID", nodeUUID)
+				// Revert PhaseTriggered so the call is retried on the next reconcile.
+				nrs.PhaseTriggered = false
+				if updateErr := r.Status().Update(ctx, clusterCR); updateErr != nil {
+					log.Error(updateErr, "Failed to revert PhaseTriggered after restart API failure")
+				}
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+			log.Info("Node restart triggered", "nodeUUID", nodeUUID)
+		} else {
+			nrs.PhaseTriggered = true
+			if err := r.Status().Update(ctx, clusterCR); err != nil {
+				return ctrl.Result{Requeue: true}, nil
+			}
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
