@@ -122,6 +122,11 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if clusterCR.Status.UUID == "" || clusterCR.Status.NQN == "" {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
+	if clusterCR.Status.Status != utils.ClusterStatusActive {
+		log.Info("Cluster not yet active, deferring benchmark volume provisioning",
+			"clusterStatus", clusterCR.Status.Status)
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
 
 	poolUUID, err := r.Provisioner.EnsurePool(ctx, snode.Namespace, snode.Spec.ClusterName)
 	if err != nil {

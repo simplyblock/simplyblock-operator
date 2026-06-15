@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -15,9 +16,8 @@ import (
 )
 
 const (
-	roleLabel          = "role"
-	roleStorageNode    = "simplyblock-storage-node"
-	clusterNameLabel   = "simplyblock-cluster"
+	appLabel           = "app"
+	spdkAppPrefix      = "spdk-app-"
 	injectedAnnotation = "simplyblock.io/fio-probe-injected"
 	annotationTrue     = "true"
 )
@@ -38,8 +38,8 @@ func (h *FioBenchInjector) Handle(ctx context.Context, req admission.Request) ad
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
-	if pod.Labels[roleLabel] != roleStorageNode {
-		return admission.Allowed("not a storage node pod")
+	if !strings.HasPrefix(pod.Labels[appLabel], spdkAppPrefix) {
+		return admission.Allowed("not an spdk-app pod")
 	}
 
 	if pod.Annotations[injectedAnnotation] == annotationTrue {
@@ -51,12 +51,7 @@ func (h *FioBenchInjector) Handle(ctx context.Context, req admission.Request) ad
 		}
 	}
 
-	clusterName := pod.Labels[clusterNameLabel]
-	if clusterName == "" {
-		return admission.Allowed("no simplyblock-cluster label, skipping")
-	}
-
-	image, configMapName, ok := h.resolveConfig(ctx, clusterName)
+	image, configMapName, ok := h.resolveConfig(ctx, pod.Name)
 	if !ok {
 		return admission.Allowed("latency benchmark not enabled for cluster")
 	}
@@ -85,15 +80,18 @@ func (h *FioBenchInjector) Handle(ctx context.Context, req admission.Request) ad
 	return admission.PatchResponseFromRaw(original, patched2)
 }
 
-// resolveConfig searches for a StorageCluster with the given name across all namespaces
-// and returns the fio image + ConfigMap name when latency benchmarking is enabled.
-func (h *FioBenchInjector) resolveConfig(ctx context.Context, clusterName string) (image, configMapName string, ok bool) {
+// resolveConfig finds the StorageCluster whose UUID matches the cluster ID prefix
+// embedded in the snode-spdk pod name (snode-spdk-pod-<PORT>-<UUID_PREFIX>) and
+// returns the fio image + ConfigMap name when latency benchmarking is enabled.
+func (h *FioBenchInjector) resolveConfig(ctx context.Context, podName string) (image, configMapName string, ok bool) {
+	uuidPrefix := clusterUUIDFromPodName(podName)
+
 	var list simplyblockv1alpha1.StorageClusterList
 	if err := h.Client.List(ctx, &list); err != nil {
 		return "", "", false
 	}
 	for _, cr := range list.Items {
-		if cr.Name != clusterName {
+		if uuidPrefix != "" && !strings.HasPrefix(cr.Status.UUID, uuidPrefix) {
 			continue
 		}
 		rb := cr.Spec.VolumeRebalancing
@@ -103,9 +101,19 @@ func (h *FioBenchInjector) resolveConfig(ctx context.Context, clusterName string
 		if rb.FioBenchmarkImage == nil || *rb.FioBenchmarkImage == "" {
 			return "", "", false
 		}
-		return *rb.FioBenchmarkImage, utils.FioBenchConfigMapName(clusterName), true
+		return *rb.FioBenchmarkImage, utils.FioBenchConfigMapName(cr.Name), true
 	}
 	return "", "", false
+}
+
+// clusterUUIDFromPodName extracts the cluster UUID prefix from the snode-spdk pod
+// name pattern "snode-spdk-pod-<RPC_PORT>-<UUID_PREFIX>".
+func clusterUUIDFromPodName(podName string) string {
+	idx := strings.LastIndex(podName, "-")
+	if idx < 0 {
+		return ""
+	}
+	return podName[idx+1:]
 }
 
 func injectSidecar(pod *corev1.Pod, image, configMapName string) {
