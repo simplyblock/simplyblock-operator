@@ -342,8 +342,9 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 					},
 					Containers: []corev1.Container{
 						{
-							Name:  "fio-baseline",
-							Image: image,
+							Name:            "fio-baseline",
+							Image:           image,
+							ImagePullPolicy: corev1.PullAlways,
 							Command: []string{
 								"fio-probe",
 								"--mode=baseline",
