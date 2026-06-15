@@ -825,7 +825,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v1/health/fdb/",
+			"/api/v2/_meta/ready",
 			webapimock.RouteResponse{Status: http.StatusInternalServerError, Body: `{"error":"fdb down"}`},
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
@@ -853,7 +853,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v1/health/fdb/",
+			"/api/v2/_meta/ready",
 			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
 		)
 		mock.Register(
@@ -886,7 +886,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v1/health/fdb/",
+			"/api/v2/_meta/ready",
 			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
 		)
 		mock.Register(
@@ -919,7 +919,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v1/health/fdb/",
+			"/api/v2/_meta/ready",
 			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
 		)
 		mock.Register(
@@ -972,7 +972,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v1/health/fdb/",
+			"/api/v2/_meta/ready",
 			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
 		)
 		mock.Register(
