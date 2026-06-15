@@ -148,15 +148,15 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	log := logf.FromContext(ctx)
 
 	apiClient := webapi.NewClient()
-	/* -------------------- Health Check -------------------- */
-	endpoint := "/api/v1/health/fdb/"
+	/* -------------------- Readiness Check -------------------- */
+	endpoint := "/api/v2/_meta/ready"
 	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
 		}
-		log.Error(err, "FDB not ready", "status", status, "response", string(body))
-		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonFDBNotReady, "FDB health check failed (status=%d): %s", status, string(body))
+		log.Error(err, "control plane not ready", "status", status, "response", string(body))
+		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonFDBNotReady, "Control plane readiness check failed (status=%d): %s", status, string(body))
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
