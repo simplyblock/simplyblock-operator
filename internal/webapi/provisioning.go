@@ -70,7 +70,8 @@ func (c *Client) CreateVolume(ctx context.Context, clusterSecret, clusterUUID, p
 	if location == "" {
 		return nil, fmt.Errorf("create volume %q: no Location header in 201 response", params.Name)
 	}
-	uuid := strings.Trim(location[strings.LastIndex(location, "/")+1:], "/")
+	trimmed := strings.TrimRight(location, "/")
+	uuid := trimmed[strings.LastIndex(trimmed, "/")+1:]
 	if uuid == "" {
 		return nil, fmt.Errorf("create volume %q: cannot parse UUID from Location: %s", params.Name, location)
 	}
