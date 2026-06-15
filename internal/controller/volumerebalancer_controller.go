@@ -214,17 +214,17 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	cycleStart := time.Now()
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
 		log.Error(err, "Cannot get cluster auth; requeuing")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	r.processPendingMigrations(ctx, clusterCR, clusterUUID, clusterSecret)
+	r.processPendingMigrations(ctx, clusterCR, clusterUUID)
 
 	now := time.Now()
 
-	nodes, err := r.apiClient.GetStorageNodes(ctx, clusterSecret, clusterUUID)
+	nodes, err := r.apiClient.GetStorageNodes(ctx, clusterUUID)
 	if err != nil {
 		log.Error(err, "Cannot list storage nodes; requeuing")
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "error").Inc()
@@ -262,7 +262,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.evalInterval)}, nil
 	}
 
-	volumesByNode, allVolumes, err := r.collectAndEnrichVolumes(ctx, clusterSecret, clusterUUID, cfg.prometheusURL)
+	volumesByNode, allVolumes, err := r.collectAndEnrichVolumes(ctx, clusterUUID, cfg.prometheusURL)
 	if err != nil {
 		log.Error(err, "Cannot collect volume placement; requeuing")
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "error").Inc()
@@ -313,7 +313,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}()
 
 	migratedCount := r.executeMigrations(ctx, clusterCR, toMigrate,
-		sourceNodeUUID, clusterUUID, clusterSecret, nodeMap, deviations, cfg.coolDownSecs,
+		sourceNodeUUID, clusterUUID, nodeMap, deviations, cfg.coolDownSecs,
 		cycleStart.Add(cfg.evalInterval))
 
 	r.patchRebalancingMetrics(ctx, clusterCR, deviations, volumesByNode, maxDev, avgDev, hottestNode, coolestNode, now)
@@ -360,10 +360,10 @@ func (r *VolumeRebalancerReconciler) computeLatencyDeviations(
 // Prometheus. On Prometheus failure it falls back to REST API values (may be zero).
 func (r *VolumeRebalancerReconciler) collectAndEnrichVolumes(
 	ctx context.Context,
-	clusterSecret, clusterUUID, prometheusURL string,
+	clusterUUID, prometheusURL string,
 ) (volumesByNode map[string][]webapi.VolumeInfo, allVolumes map[string]volumePlacement, err error) {
 	log := logf.FromContext(ctx)
-	volumesByNode, allVolumes, _, err = r.collectVolumesByNode(ctx, clusterSecret, clusterUUID)
+	volumesByNode, allVolumes, _, err = r.collectVolumesByNode(ctx, clusterUUID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -431,7 +431,7 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	toMigrate []rankedCandidate,
-	sourceNodeUUID, clusterUUID, clusterSecret string,
+	sourceNodeUUID, clusterUUID string,
 	nodeMap map[string]webapi.StorageNodeInfo,
 	deviations map[string]float64,
 	coolDownSecs int64,
@@ -451,7 +451,7 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 			log.Info("No suitable target node for volume; skipping", "volume", rc.vol.UUID)
 			continue
 		}
-		migration, err := r.apiClient.CreateMigration(ctx, clusterSecret, clusterUUID, rc.vol.UUID, targetUUID)
+		migration, err := r.apiClient.CreateMigration(ctx, clusterUUID, rc.vol.UUID, targetUUID)
 		if err != nil {
 			log.Error(err, "CreateMigration failed", "volume", rc.vol.UUID, "target", targetUUID)
 			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingFailed",
@@ -483,7 +483,7 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 func (r *VolumeRebalancerReconciler) processPendingMigrations(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 ) {
 	log := logf.FromContext(ctx)
 	prefix := clusterUUID + "/"
@@ -518,7 +518,7 @@ func (r *VolumeRebalancerReconciler) processPendingMigrations(
 			continue
 		}
 
-		migration, err := r.apiClient.GetMigration(ctx, clusterSecret, clusterUUID, migrationID)
+		migration, err := r.apiClient.GetMigration(ctx, clusterUUID, migrationID)
 		if err != nil {
 			log.Error(err, "Cannot get migration status", "migration", migrationID, "volume", volumeUUID)
 			continue
@@ -563,9 +563,9 @@ func (r *VolumeRebalancerReconciler) processPendingMigrations(
 // - clusterAvgUsedBytes: mean used bytes across all volumes
 func (r *VolumeRebalancerReconciler) collectVolumesByNode(
 	ctx context.Context,
-	clusterSecret, clusterUUID string,
+	clusterUUID string,
 ) (map[string][]webapi.VolumeInfo, map[string]volumePlacement, int64, error) {
-	pools, err := r.apiClient.GetStoragePools(ctx, clusterSecret, clusterUUID)
+	pools, err := r.apiClient.GetStoragePools(ctx, clusterUUID)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -577,7 +577,7 @@ func (r *VolumeRebalancerReconciler) collectVolumesByNode(
 	var volumeCount int64
 
 	for _, pool := range pools {
-		vols, err := r.apiClient.GetPoolVolumes(ctx, clusterSecret, clusterUUID, pool.UUID)
+		vols, err := r.apiClient.GetPoolVolumes(ctx, clusterUUID, pool.UUID)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("pool %s: %w", pool.UUID, err)
 		}

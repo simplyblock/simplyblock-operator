@@ -58,10 +58,10 @@ type StoragePoolInfo struct {
 // GetStoragePools lists all storage pools for the given cluster.
 func (c *Client) GetStoragePools(
 	ctx context.Context,
-	clusterSecret, clusterUUID string,
+	clusterUUID string,
 ) ([]StoragePoolInfo, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
-	body, statusCode, err := c.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, statusCode, err := c.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("list storage pools: %w", err)
 	}
@@ -78,10 +78,10 @@ func (c *Client) GetStoragePools(
 // GetStorageNodes lists all storage nodes for the given cluster.
 func (c *Client) GetStorageNodes(
 	ctx context.Context,
-	clusterSecret, clusterUUID string,
+	clusterUUID string,
 ) ([]StorageNodeInfo, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
-	body, statusCode, err := c.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, statusCode, err := c.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("list storage nodes: %w", err)
 	}
@@ -98,10 +98,10 @@ func (c *Client) GetStorageNodes(
 // GetPoolVolumes lists all volumes in the given storage pool.
 func (c *Client) GetPoolVolumes(
 	ctx context.Context,
-	clusterSecret, clusterUUID, poolUUID string,
+	clusterUUID, poolUUID string,
 ) ([]VolumeInfo, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/", clusterUUID, poolUUID)
-	body, statusCode, err := c.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, statusCode, err := c.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("list pool volumes: %w", err)
 	}
@@ -142,10 +142,10 @@ type MigrationDTO struct {
 // Returns the migration record including the ID needed for subsequent status polls.
 func (c *Client) CreateMigration(
 	ctx context.Context,
-	clusterSecret, clusterUUID, volumeUUID, targetNodeID string,
+	clusterUUID, volumeUUID, targetNodeID string,
 ) (*MigrationDTO, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/migrations/", clusterUUID)
-	body, statusCode, err := c.Do(ctx, clusterSecret, http.MethodPost, endpoint, MigrateParams{
+	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, MigrateParams{
 		VolumeID:     volumeUUID,
 		TargetNodeID: targetNodeID,
 	})
@@ -165,10 +165,10 @@ func (c *Client) CreateMigration(
 // GetMigration fetches the current status of a migration by its ID.
 func (c *Client) GetMigration(
 	ctx context.Context,
-	clusterSecret, clusterUUID, migrationID string,
+	clusterUUID, migrationID string,
 ) (*MigrationDTO, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/migrations/%s/", clusterUUID, migrationID)
-	body, statusCode, err := c.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, statusCode, err := c.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("get migration %s: %w", migrationID, err)
 	}
@@ -185,10 +185,10 @@ func (c *Client) GetMigration(
 // CancelMigration cancels an in-progress migration by its ID.
 func (c *Client) CancelMigration(
 	ctx context.Context,
-	clusterSecret, clusterUUID, migrationID string,
+	clusterUUID, migrationID string,
 ) error {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/migrations/%s/cancel", clusterUUID, migrationID)
-	body, statusCode, err := c.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("cancel migration %s: %w", migrationID, err)
 	}

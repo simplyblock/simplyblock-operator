@@ -38,9 +38,9 @@ type VolumeCreateParams struct {
 }
 
 // CreatePool creates a new storage pool in the given cluster.
-func (c *Client) CreatePool(ctx context.Context, clusterSecret, clusterUUID string, params StoragePoolCreateParams) (*StoragePoolInfo, error) {
+func (c *Client) CreatePool(ctx context.Context, clusterUUID string, params StoragePoolCreateParams) (*StoragePoolInfo, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
-	body, statusCode, err := c.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
+	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, params)
 	if err != nil {
 		return nil, fmt.Errorf("create pool %q: %w", params.Name, err)
 	}
@@ -57,9 +57,9 @@ func (c *Client) CreatePool(ctx context.Context, clusterSecret, clusterUUID stri
 // CreateVolume creates a new volume in the given storage pool.
 // The API returns HTTP 201 with a Location header containing the resource URL;
 // the volume UUID is extracted from the trailing path segment of that URL.
-func (c *Client) CreateVolume(ctx context.Context, clusterSecret, clusterUUID, poolUUID string, params VolumeCreateParams) (*VolumeInfo, error) {
+func (c *Client) CreateVolume(ctx context.Context, clusterUUID, poolUUID string, params VolumeCreateParams) (*VolumeInfo, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/", clusterUUID, poolUUID)
-	body, headers, statusCode, err := c.DoWithHeaders(ctx, clusterSecret, http.MethodPost, endpoint, params)
+	body, headers, statusCode, err := c.DoWithHeaders(ctx, http.MethodPost, endpoint, params)
 	if err != nil {
 		return nil, fmt.Errorf("create volume %q: %w", params.Name, err)
 	}

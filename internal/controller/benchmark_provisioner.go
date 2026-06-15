@@ -97,11 +97,11 @@ type WebAPIBenchmarkProvisioner struct {
 // EnsurePool lists existing pools and returns the matching one's UUID; creates a new pool
 // if no pool with poolName exists.
 func (p *WebAPIBenchmarkProvisioner) EnsurePool(ctx context.Context, namespace, clusterName string) (string, error) {
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, p.K8sClient, namespace, clusterName)
+	clusterUUID, err := utils.ResolveClusterUUID(ctx, p.K8sClient, namespace, clusterName)
 	if err != nil {
 		return "", fmt.Errorf("get cluster auth: %w", err)
 	}
-	pools, err := p.APIClient.GetStoragePools(ctx, clusterSecret, clusterUUID)
+	pools, err := p.APIClient.GetStoragePools(ctx, clusterUUID)
 	if err != nil {
 		return "", fmt.Errorf("list pools: %w", err)
 	}
@@ -110,7 +110,7 @@ func (p *WebAPIBenchmarkProvisioner) EnsurePool(ctx context.Context, namespace, 
 			return pool.UUID, nil
 		}
 	}
-	created, err := p.APIClient.CreatePool(ctx, clusterSecret, clusterUUID, webapi.StoragePoolCreateParams{Name: benchmarkPoolName})
+	created, err := p.APIClient.CreatePool(ctx, clusterUUID, webapi.StoragePoolCreateParams{Name: benchmarkPoolName})
 	if err != nil {
 		return "", fmt.Errorf("create benchmark pool %q: %w", benchmarkPoolName, err)
 	}
@@ -120,11 +120,11 @@ func (p *WebAPIBenchmarkProvisioner) EnsurePool(ctx context.Context, namespace, 
 // EnsureVolume lists existing volumes in poolUUID and returns the matching one's UUID;
 // creates a new volume pinned to nodeUUID if no volume with volumeName exists.
 func (p *WebAPIBenchmarkProvisioner) EnsureVolume(ctx context.Context, namespace, clusterName, poolUUID, volumeName, nodeUUID string) (string, error) {
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, p.K8sClient, namespace, clusterName)
+	clusterUUID, err := utils.ResolveClusterUUID(ctx, p.K8sClient, namespace, clusterName)
 	if err != nil {
 		return "", fmt.Errorf("get cluster auth: %w", err)
 	}
-	volumes, err := p.APIClient.GetPoolVolumes(ctx, clusterSecret, clusterUUID, poolUUID)
+	volumes, err := p.APIClient.GetPoolVolumes(ctx, clusterUUID, poolUUID)
 	if err != nil {
 		return "", fmt.Errorf("list volumes: %w", err)
 	}
@@ -133,7 +133,7 @@ func (p *WebAPIBenchmarkProvisioner) EnsureVolume(ctx context.Context, namespace
 			return vol.UUID, nil
 		}
 	}
-	created, err := p.APIClient.CreateVolume(ctx, clusterSecret, clusterUUID, poolUUID, webapi.VolumeCreateParams{
+	created, err := p.APIClient.CreateVolume(ctx, clusterUUID, poolUUID, webapi.VolumeCreateParams{
 		Name:   volumeName,
 		Size:   defaultBenchmarkVolumeSizeBytes,
 		HostID: nodeUUID,
