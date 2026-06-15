@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -303,7 +304,7 @@ func connectAndWait(ctx context.Context, conn connConfig) (device string, discon
 		"-s", conn.Port,
 		"-n", conn.NQN,
 	).CombinedOutput()
-	if err != nil {
+	if err != nil && !strings.Contains(string(out), "already connected") {
 		return "", nil, fmt.Errorf("nvme connect: %w\n%s", err, out)
 	}
 
