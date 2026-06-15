@@ -1616,6 +1616,7 @@ func (in *StorageNodeSpec) DeepCopyInto(out *StorageNodeSpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	in.Resources.DeepCopyInto(&out.Resources)
 	if in.Force != nil {
 		in, out := &in.Force, &out.Force
 		*out = new(bool)

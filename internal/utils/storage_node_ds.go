@@ -54,6 +54,11 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 		initCmd = append(initCmd, "--cores-percentage="+Int32PtrToString(sn.Spec.CorePercentage))
 	}
 
+	imagePullPolicy := sn.Spec.ImagePullPolicy
+	if imagePullPolicy == "" {
+		imagePullPolicy = corev1.PullIfNotPresent
+	}
+
 	mainEnv := []corev1.EnvVar{
 		{Name: "UBUNTU_HOST", Value: BoolPtrToString(sn.Spec.UbuntuHost)},
 		{Name: "OPENSHIFT_CLUSTER", Value: BoolPtrToString(sn.Spec.OpenShiftCluster)},
@@ -226,10 +231,11 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 						{
 							Name:            "s-node-api-config-generator",
 							Image:           image,
-							ImagePullPolicy: corev1.PullAlways,
+							ImagePullPolicy: imagePullPolicy,
 							Command:         initCmd,
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
 							VolumeMounts:    initMounts,
+							Resources:       sn.Spec.Resources,
 							Env: []corev1.EnvVar{
 								{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
@@ -242,15 +248,15 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 						{
 							Name:            "s-node-api-container",
 							Image:           image,
-							ImagePullPolicy: corev1.PullAlways,
+							ImagePullPolicy: imagePullPolicy,
 							Command: []string{
 								"sudo", "-E", "python3", "simplyblock_web/node_webapp.py", "storage_node_k8s",
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
-
-							ReadinessProbe: readinessProbe,
-							Env:            mainEnv,
-							VolumeMounts:   mainMounts,
+							Resources:       sn.Spec.Resources,
+							ReadinessProbe:  readinessProbe,
+							Env:             mainEnv,
+							VolumeMounts:    mainMounts,
 						},
 					},
 				},

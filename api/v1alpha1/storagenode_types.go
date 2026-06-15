@@ -133,6 +133,15 @@ type StorageNodeSpec struct {
 	// Tolerations configures pod tolerations for storage-node pods.
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Resources"
+	// Resources sets CPU and memory requests/limits for the storage-node containers.
+	// When omitted no limits are enforced, which preserves the previous behaviour.
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Image Pull Policy"
+	// ImagePullPolicy controls when the container image is pulled. Defaults to IfNotPresent.
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
 	// Force enables forced action execution where supported.
 	Force *bool `json:"force,omitempty"`
