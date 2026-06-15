@@ -133,14 +133,14 @@ type StorageNodeSpec struct {
 	// Tolerations configures pod tolerations for storage-node pods.
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Resources"
-	// Resources sets CPU and memory requests/limits for the main storage-node container.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Container Resources"
+	// ContainerResources sets CPU and memory requests/limits for the main storage-node container.
 	// When omitted no limits are enforced, which preserves the previous behaviour.
-	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Init Resources"
-	// InitResources sets CPU and memory requests/limits for the init container.
+	ContainerResources corev1.ResourceRequirements `json:"containerResources,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Init Container Resources"
+	// InitContainerResources sets CPU and memory requests/limits for the init container.
 	// When omitted no limits are enforced.
-	InitResources corev1.ResourceRequirements `json:"initResources,omitempty"`
+	InitContainerResources corev1.ResourceRequirements `json:"initContainerResources,omitempty"`
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Image Pull Policy"
 	// ImagePullPolicy controls when the container image is pulled. Defaults to IfNotPresent.

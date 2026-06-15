@@ -235,7 +235,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 							Command:         initCmd,
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
 							VolumeMounts:    initMounts,
-							Resources:       sn.Spec.InitResources,
+							Resources:       sn.Spec.InitContainerResources,
 							Env: []corev1.EnvVar{
 								{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
@@ -253,7 +253,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 								"sudo", "-E", "python3", "simplyblock_web/node_webapp.py", "storage_node_k8s",
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
-							Resources:       sn.Spec.Resources,
+							Resources:       sn.Spec.ContainerResources,
 							ReadinessProbe:  readinessProbe,
 							Env:             mainEnv,
 							VolumeMounts:    mainMounts,
