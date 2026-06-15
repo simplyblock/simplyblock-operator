@@ -195,9 +195,6 @@ type StorageClusterStatus struct {
 	Rebalancing *bool `json:"rebalancing,omitempty"`
 	// ErasureCodingScheme is the active erasure-coding layout, for example "2x1".
 	ErasureCodingScheme string `json:"erasureCodingScheme,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Cluster Secret"
-	// SecretName is the Kubernetes Secret containing cluster credentials.
-	SecretName string `json:"secretName,omitempty"`
 	// LastUpdated is the last backend update timestamp.
 	// FIXME: Unused for now (API update required?)
 	LastUpdated *metav1.Time `json:"lastUpdated,omitempty"`
@@ -223,7 +220,7 @@ type StorageClusterStatus struct {
 // +kubebuilder:printcolumn:name="UUID",type="string",JSONPath=".status.uuid",description="Backend cluster UUID"
 // +kubebuilder:printcolumn:name="Configured",type="boolean",JSONPath=".status.configured",description="Whether initial cluster setup has completed"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-// +operator-sdk:csv:customresourcedefinitions:displayName="Storage Cluster",resources={{Secret,v1,simplyblock-cluster-credentials}}
+// +operator-sdk:csv:customresourcedefinitions:displayName="Storage Cluster"
 
 // StorageCluster is the Schema for the storageclusters API
 type StorageCluster struct {
