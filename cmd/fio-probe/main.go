@@ -371,9 +371,9 @@ func measure(ctx context.Context, device string) (*latencyResult, error) {
 		"--group_reporting",
 		"--percentile_list=50:99",
 		"--output-format=json",
-	).Output()
+	).CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("fio exec: %w", err)
+		return nil, fmt.Errorf("fio exec: %w\n%s", err, out)
 	}
 
 	var fio fioOutput
