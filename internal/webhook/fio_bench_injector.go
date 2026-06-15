@@ -138,7 +138,7 @@ skipVolume:
 	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
 		Name:            "fio-bench-probe",
 		Image:           image,
-		ImagePullPolicy: corev1.PullIfNotPresent,
+		ImagePullPolicy: corev1.PullAlways,
 		Command:         []string{"fio-probe"},
 		Args: []string{
 			"--mode=probe",
