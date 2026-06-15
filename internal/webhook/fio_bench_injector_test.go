@@ -5,19 +5,23 @@ import (
 	"encoding/json"
 	"testing"
 
+	jsonpatch "gomodules.xyz/jsonpatch/v2"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	jsonpatch "gomodules.xyz/jsonpatch/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 )
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+const (
+	testContainerName = "fio-bench-probe"
+	testVolumeName    = "fio-bench-config"
+	testScrapeValue   = "true"
+)
 
 func newScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
@@ -31,25 +35,27 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-func boolRef(b bool) *bool     { return &b }
-func strRef(s string) *string  { return &s }
+func boolRef(b bool) *bool    { return &b }
+func strRef(s string) *string { return &s }
 
-func makeCluster(name, uuid string, benchmarkEnabled bool, image string) *simplyblockv1alpha1.StorageCluster {
-	cr := &simplyblockv1alpha1.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+const testClusterUUID = "c03e1571-75e8-46d6-b76f-d08a4e2abe2f"
+
+func makeCluster(benchmarkEnabled bool, image string) *simplyblockv1alpha1.StorageCluster {
+	return &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster", Namespace: "default"},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			VolumeRebalancing: &simplyblockv1alpha1.VolumeRebalancingSpec{
 				LatencyBenchmarkEnabled: boolRef(benchmarkEnabled),
 				FioBenchmarkImage:       strRef(image),
 			},
 		},
-		Status: simplyblockv1alpha1.StorageClusterStatus{UUID: uuid},
+		Status: simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterUUID},
 	}
-	return cr
 }
 
 func makePod(name string, labels map[string]string, annotations map[string]string, extraContainers ...string) *corev1.Pod {
-	containers := []corev1.Container{{Name: "spdk-container", Image: "spdk-image"}}
+	containers := make([]corev1.Container, 0, 1+len(extraContainers))
+	containers = append(containers, corev1.Container{Name: "spdk-container", Image: "spdk-image"})
 	for _, c := range extraContainers {
 		containers = append(containers, corev1.Container{Name: c, Image: "some-image"})
 	}
@@ -102,9 +108,8 @@ func TestClusterUUIDFromPodName(t *testing.T) {
 
 func TestFioBenchInjector_Handle(t *testing.T) {
 	const (
-		clusterUUID = "c03e1571-75e8-46d6-b76f-d08a4e2abe2f"
-		benchImage  = "docker.io/simplyblock/simplyblock-fio-bench:test"
-		podName     = "snode-spdk-pod-4420-c03e15"
+		benchImage = "docker.io/simplyblock/simplyblock-fio-bench:test"
+		podName    = "snode-spdk-pod-4420-c03e15"
 	)
 
 	spdkLabels := map[string]string{"app": "spdk-app-4420"}
@@ -119,14 +124,14 @@ func TestFioBenchInjector_Handle(t *testing.T) {
 		{
 			name:        "non-spdk app label — skipped",
 			pod:         makePod(podName, map[string]string{"app": "other-app"}, nil),
-			cluster:     makeCluster("simplyblock-cluster", clusterUUID, true, benchImage),
+			cluster:     makeCluster(true, benchImage),
 			wantAllowed: true,
 			wantPatch:   false,
 		},
 		{
 			name:        "no app label — skipped",
 			pod:         makePod(podName, nil, nil),
-			cluster:     makeCluster("simplyblock-cluster", clusterUUID, true, benchImage),
+			cluster:     makeCluster(true, benchImage),
 			wantAllowed: true,
 			wantPatch:   false,
 		},
@@ -135,42 +140,42 @@ func TestFioBenchInjector_Handle(t *testing.T) {
 			pod: makePod(podName, spdkLabels, map[string]string{
 				injectedAnnotation: annotationTrue,
 			}),
-			cluster:     makeCluster("simplyblock-cluster", clusterUUID, true, benchImage),
+			cluster:     makeCluster(true, benchImage),
 			wantAllowed: true,
 			wantPatch:   false,
 		},
 		{
 			name:        "fio-bench-probe container already present — skipped",
-			pod:         makePod(podName, spdkLabels, nil, "fio-bench-probe"),
-			cluster:     makeCluster("simplyblock-cluster", clusterUUID, true, benchImage),
+			pod:         makePod(podName, spdkLabels, nil, testContainerName),
+			cluster:     makeCluster(true, benchImage),
 			wantAllowed: true,
 			wantPatch:   false,
 		},
 		{
 			name:        "no matching cluster UUID — skipped",
 			pod:         makePod("snode-spdk-pod-4420-000000", spdkLabels, nil),
-			cluster:     makeCluster("simplyblock-cluster", clusterUUID, true, benchImage),
+			cluster:     makeCluster(true, benchImage),
 			wantAllowed: true,
 			wantPatch:   false,
 		},
 		{
 			name:        "benchmark disabled — skipped",
 			pod:         makePod(podName, spdkLabels, nil),
-			cluster:     makeCluster("simplyblock-cluster", clusterUUID, false, benchImage),
+			cluster:     makeCluster(false, benchImage),
 			wantAllowed: true,
 			wantPatch:   false,
 		},
 		{
 			name:        "no fio image configured — skipped",
 			pod:         makePod(podName, spdkLabels, nil),
-			cluster:     makeCluster("simplyblock-cluster", clusterUUID, true, ""),
+			cluster:     makeCluster(true, ""),
 			wantAllowed: true,
 			wantPatch:   false,
 		},
 		{
 			name:        "sidecar injected",
 			pod:         makePod(podName, spdkLabels, nil),
-			cluster:     makeCluster("simplyblock-cluster", clusterUUID, true, benchImage),
+			cluster:     makeCluster(true, benchImage),
 			wantAllowed: true,
 			wantPatch:   true,
 		},
@@ -185,8 +190,7 @@ func TestFioBenchInjector_Handle(t *testing.T) {
 				WithStatusSubresource(tc.cluster).
 				Build()
 
-			// fake client doesn't persist status via WithObjects — patch it in.
-			tc.cluster.Status.UUID = clusterUUID
+			tc.cluster.Status.UUID = testClusterUUID
 			if err := c.Status().Update(context.Background(), tc.cluster); err != nil {
 				t.Fatalf("set cluster status: %v", err)
 			}
@@ -206,13 +210,11 @@ func TestFioBenchInjector_Handle(t *testing.T) {
 				return
 			}
 
-			// Verify the injected content by decoding the patched pod.
 			patched := applyPatches(t, tc.pod, resp.Patches)
 
-			// sidecar container present
 			found := false
 			for _, c := range patched.Spec.Containers {
-				if c.Name == "fio-bench-probe" {
+				if c.Name == testContainerName {
 					found = true
 					if c.Image != benchImage {
 						t.Errorf("sidecar image = %q, want %q", c.Image, benchImage)
@@ -226,53 +228,33 @@ func TestFioBenchInjector_Handle(t *testing.T) {
 				}
 			}
 			if !found {
-				t.Error("fio-bench-probe container not found in patched pod")
+				t.Errorf("%s container not found in patched pod", testContainerName)
 			}
 
-			// fio-bench-config volume present
 			volFound := false
 			for _, v := range patched.Spec.Volumes {
-				if v.Name == "fio-bench-config" {
+				if v.Name == testVolumeName {
 					volFound = true
 				}
 			}
 			if !volFound {
-				t.Error("fio-bench-config volume not found in patched pod")
+				t.Errorf("%s volume not found in patched pod", testVolumeName)
 			}
 
-			// injection annotations present
 			if patched.Annotations[injectedAnnotation] != annotationTrue {
 				t.Errorf("annotation %s = %q, want %q", injectedAnnotation, patched.Annotations[injectedAnnotation], annotationTrue)
 			}
-			if patched.Annotations["prometheus.io/scrape"] != "true" {
+			if patched.Annotations["prometheus.io/scrape"] != testScrapeValue {
 				t.Error("prometheus.io/scrape annotation missing")
 			}
 		})
 	}
 }
 
-// applyPatches applies JSON patch operations to the pod and returns the result.
+// applyPatches reconstructs the expected patched pod by re-running injectSidecar
+// with the image and configmap name extracted from the patch set.
 func applyPatches(t *testing.T, pod *corev1.Pod, patches []jsonpatch.JsonPatchOperation) *corev1.Pod {
 	t.Helper()
-	original, err := json.Marshal(pod)
-	if err != nil {
-		t.Fatalf("marshal original pod: %v", err)
-	}
-
-	patchBytes, err := json.Marshal(patches)
-	if err != nil {
-		t.Fatalf("marshal patches: %v", err)
-	}
-
-	// Use JSON merge via re-marshaling: apply each patch operation manually.
-	// For Add ops on arrays we rebuild the document via the jsonpatch library
-	// that controller-runtime already imports transitively. Since we don't want
-	// to import it directly, decode the diff by re-running the injector on a
-	// clean copy and comparing — or simply decode via the raw patch bytes.
-	_ = patchBytes
-
-	// Simpler: run injectSidecar directly (same logic as Handle) to get the
-	// expected final state, then compare against what was patched.
 	image, configMapName := extractImageAndConfigMap(t, patches)
 	result := pod.DeepCopy()
 	injectSidecar(result, image, configMapName)
@@ -280,17 +262,14 @@ func applyPatches(t *testing.T, pod *corev1.Pod, patches []jsonpatch.JsonPatchOp
 		result.Annotations = make(map[string]string)
 	}
 	result.Annotations[injectedAnnotation] = annotationTrue
-	result.Annotations["prometheus.io/scrape"] = "true"
+	result.Annotations["prometheus.io/scrape"] = testScrapeValue
 	result.Annotations["prometheus.io/port"] = "9199"
 	result.Annotations["prometheus.io/path"] = "/metrics"
-
-	_ = original
 	return result
 }
 
-// extractImageAndConfigMap finds the fio-bench-probe container image and the
-// fio-bench-config volume configmap name from the patch set by inspecting the
-// patches for container/volume additions.
+// extractImageAndConfigMap finds the fio-bench-probe image and fio-bench-config
+// configmap name from the patch set.
 func extractImageAndConfigMap(t *testing.T, patches []jsonpatch.JsonPatchOperation) (image, configMapName string) {
 	t.Helper()
 	for _, p := range patches {
@@ -301,14 +280,12 @@ func extractImageAndConfigMap(t *testing.T, patches []jsonpatch.JsonPatchOperati
 		if err != nil {
 			continue
 		}
-		// Try container
 		var c corev1.Container
-		if err := json.Unmarshal(raw, &c); err == nil && c.Name == "fio-bench-probe" {
+		if err := json.Unmarshal(raw, &c); err == nil && c.Name == testContainerName {
 			image = c.Image
 		}
-		// Try volume
 		var v corev1.Volume
-		if err := json.Unmarshal(raw, &v); err == nil && v.Name == "fio-bench-config" && v.ConfigMap != nil {
+		if err := json.Unmarshal(raw, &v); err == nil && v.Name == testVolumeName && v.ConfigMap != nil {
 			configMapName = v.ConfigMap.Name
 		}
 	}
