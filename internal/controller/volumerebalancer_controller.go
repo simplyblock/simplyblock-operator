@@ -241,7 +241,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			log.Info("Latency data not yet available; waiting for fio-bench-probe sidecar baseline")
 			rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
 		} else {
-			log.Error(err, "Cannot collect latency from Prometheus; requeuing")
+			log.Info("Cannot collect latency from Prometheus; requeuing", "error", err)
 			rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "error").Inc()
 		}
 		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.evalInterval)}, nil
