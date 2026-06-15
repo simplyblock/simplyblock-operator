@@ -338,10 +338,6 @@ spec:
                 description: Rebalancing indicates whether cluster rebalancing is
                   currently active.
                 type: boolean
-              secretName:
-                description: SecretName is the Kubernetes Secret containing cluster
-                  credentials.
-                type: string
               status:
                 description: Status is the backend-reported lifecycle status.
                 type: string
