@@ -330,7 +330,7 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
-					NodeName:      node.Hostname,
+					NodeSelector:  map[string]string{"kubernetes.io/hostname": node.Hostname},
 					HostNetwork:   true,
 					Volumes: []corev1.Volume{
 						{
