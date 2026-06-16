@@ -112,12 +112,6 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, taskCR.Namespace, taskCR.Spec.ClusterName)
-	if err != nil {
-		log.Error(err, "Failed to get cluster auth")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
 	var endpoint string
 	if taskCR.Spec.TaskID != "" {
 		endpoint = fmt.Sprintf(
@@ -133,7 +127,7 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 	apiClient := webapi.NewClient()
 
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if status == http.StatusNotFound {
 		taskCR.Status.Tasks = nil
 		if err := r.Status().Update(ctx, taskCR); err != nil {

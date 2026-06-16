@@ -101,9 +101,7 @@ spec:
                 description: ClientDataIfname defines the client data network interface.
                 type: string
               clientQpairCount:
-                description: |-
-                  ClientQpairCount defines client-side queue-pair count.
-                  FIXME: Unused for now
+                description: ClientQpairCount defines client-side queue-pair count.
                 format: int32
                 type: integer
               criticalThreshold:
@@ -125,23 +123,20 @@ spec:
                 description: EnableNodeAffinity enables node-affinity placement for
                   storage components.
                 type: boolean
-              eventLogEntries:
-                description: |-
-                  EventLogEntries limits the number of event-log entries returned/retained.
-                  FIXME: Unused for now
-                format: int32
-                type: integer
               fabricType:
                 description: FabricType defines the storage fabric type.
                 type: string
               haType:
                 description: HAType defines the backend high-availability mode.
                 type: string
-              includeEventLog:
-                description: |-
-                  IncludeEventLog controls whether event logs are included in responses/exports.
-                  FIXME: Unused for now
-                type: boolean
+              hashicorpVaultSettings:
+                description: HashicorpVaultSettings configures the Vault endpoint
+                  used by the cluster for key storage.
+                properties:
+                  baseURL:
+                    description: BaseURL is the HashiCorp Vault endpoint (e.g. https://vault.example.com:8200).
+                    type: string
+                type: object
               inflightIOThreshold:
                 description: InflightIOThreshold defines the inflight I/O threshold.
                 format: int32
@@ -158,18 +153,14 @@ spec:
                 description: MaxQueueSize defines the maximum backend queue size.
                 format: int32
                 type: integer
-              mgmtIfname:
-                description: |-
-                  MgmtIfname is the management network interface name used for cluster communication.
-                  FIXME: Unused for now
-                type: string
               nodeRecycle:
                 description: NodeRecycle configures the node-recycle action.
                 properties:
                   refreshSNodeAPI:
                     description: |-
                       RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
-                      before shutting it down, ensuring the latest image is running.
+                      after the backend node is shut down and before it is restarted, ensuring
+                      the latest image is running before the node comes back online.
                     type: boolean
                 type: object
               nvmfBasePort:
@@ -180,11 +171,6 @@ spec:
                 description: PageSizeInBlocks defines page size expressed in blocks.
                 format: int32
                 type: integer
-              qosClasses:
-                description: |-
-                  QoSClasses defines backend QosSpec class configuration.
-                  FIXME: Unused for now
-                type: string
               qpairCount:
                 description: QpairCount defines the NVMe queue-pair count used by
                   the cluster.
@@ -232,6 +218,26 @@ spec:
                     type: integer
                 type: object
             type: object
+            x-kubernetes-validations:
+            - message: haType is immutable
+              rule: self.haType == oldSelf.haType
+            - message: fabricType is immutable
+              rule: self.fabricType == oldSelf.fabricType
+            - message: hashicorpVaultSettings is immutable once set
+              rule: '!has(oldSelf.hashicorpVaultSettings) || self.hashicorpVaultSettings
+                == oldSelf.hashicorpVaultSettings'
+            - message: stripe is immutable once set
+              rule: '!has(oldSelf.stripe) || self.stripe == oldSelf.stripe'
+            - message: blockSize is immutable once set
+              rule: '!has(oldSelf.blockSize) || self.blockSize == oldSelf.blockSize'
+            - message: isSingleNode is immutable once set
+              rule: '!has(oldSelf.isSingleNode) || self.isSingleNode == oldSelf.isSingleNode'
+            - message: nvmfBasePort is immutable once set
+              rule: '!has(oldSelf.nvmfBasePort) || self.nvmfBasePort == oldSelf.nvmfBasePort'
+            - message: rpcBasePort is immutable once set
+              rule: '!has(oldSelf.rpcBasePort) || self.rpcBasePort == oldSelf.rpcBasePort'
+            - message: snodeApiPort is immutable once set
+              rule: '!has(oldSelf.snodeApiPort) || self.snodeApiPort == oldSelf.snodeApiPort'
           status:
             description: status defines the observed state of StorageCluster
             properties:
@@ -286,6 +292,13 @@ spec:
                   FIXME: Unused for now (API update required?)
                 format: date-time
                 type: string
+              maxFaultTolerance:
+                description: |-
+                  MaxFaultTolerance is the backend-reported maximum number of nodes that can
+                  be simultaneously offline (failed, drained, or restarted) without violating
+                  the cluster's redundancy guarantees.
+                format: int32
+                type: integer
               mgmtNodes:
                 description: |-
                   MgmtNodes is the number of management nodes.

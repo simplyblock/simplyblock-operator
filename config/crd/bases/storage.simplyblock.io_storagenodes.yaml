@@ -48,13 +48,6 @@ spec:
                 - resume
                 - remove
                 type: string
-              addPcieToAllowList:
-                description: |-
-                  AddPcieToAllowList appends devices to the allow-list during restart actions.
-                  FIXME: Unused for now
-                items:
-                  type: string
-                type: array
               clusterImage:
                 description: ClusterImage is the container image used for storage-node
                   workloads.
@@ -85,9 +78,7 @@ spec:
                 description: EnableCpuTopology enables topology-aware CPU handling.
                 type: boolean
               force:
-                description: |-
-                  Force enables forced action execution where supported.
-                  FIXME: Unused for now
+                description: Force enables forced action execution where supported.
                 type: boolean
               forceFormat4K:
                 description: ForceFormat4K forces 4K blocksize formatting of the NVMe
@@ -105,11 +96,6 @@ spec:
                       percentage per device.
                     format: int32
                     type: integer
-                  useSeparateJournalDevice:
-                    description: |-
-                      UseSeparateJournalDevice enables using separate journal devices.
-                      FIXME: Unused for now
-                    type: boolean
                 type: object
               maxLogicalVolumeCount:
                 description: MaxLogicalVolumeCount is the maximum number of logical
@@ -117,17 +103,11 @@ spec:
                 format: int32
                 type: integer
               maxSize:
-                description: MaxSize is the maximum allocatable size of the storage
-                  node.
+                description: MaxSize is the maximum allocatable size of huge pages.
                 type: string
               mgmtIfname:
                 description: MgmtIfname is the management interface name used by storage
                   nodes.
-                type: string
-              nodeAddr:
-                description: |-
-                  NodeAddr is the explicit node address used by action flows.
-                  FIXME: Unused for now
                 type: string
               nodeUUID:
                 description: NodeUUID is required when action is specified
@@ -141,6 +121,12 @@ spec:
                 description: OpenShiftCluster indicates OpenShift-specific behavior
                   should be enabled.
                 type: boolean
+              openShiftMachineConfigPool:
+                description: |-
+                  OpenShiftMachineConfigPool is the name of the MachineConfigPool that storage nodes belong to.
+                  Generated MachineConfig resources will carry the machineconfiguration.openshift.io/role label
+                  set to this value. Defaults to "worker" when unset.
+                type: string
               partitions:
                 description: Partitions is the number of partitions created per backend
                   storage device.
@@ -161,6 +147,10 @@ spec:
               pcieModel:
                 description: PcieModel filters devices by PCI model.
                 type: string
+              reattachVolume:
+                description: ReattachVolume reattaches volumes during restart where
+                  supported by the backend.
+                type: boolean
               reservedSystemCPU:
                 description: ReservedSystemCPU defines CPUs reserved for system workloads.
                 type: string
@@ -179,6 +169,12 @@ spec:
               spdkProxyImage:
                 description: SpdkProxyImage is the SPDK proxy image reference used
                   by node services.
+                type: string
+              spdkSystemMemory:
+                description: |-
+                  SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g. "4G", "512M").
+                  When omitted the backend default is used.
+                pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                 type: string
               tolerations:
                 description: Tolerations configures pod tolerations for storage-node
@@ -374,10 +370,11 @@ spec:
         - message: nodeUUID is required when action is specified
           rule: '!(has(self.spec.action) && self.spec.action != "" && (!has(self.spec.nodeUUID)
             || self.spec.nodeUUID == ""))'
-        - message: maxLogicalVolumeCount and workerNodes are required when action
-            is not specified
+        - message: maxLogicalVolumeCount, workerNodes, and mgmtIfname are required
+            when action is not specified
           rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.maxLogicalVolumeCount)
-            && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)
+            && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname)
+            && self.spec.mgmtIfname != "")
     served: true
     storage: true
     subresources:

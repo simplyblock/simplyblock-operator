@@ -53,15 +53,6 @@ const (
 	// (missing, unreadable, or lacking required keys).
 	eventReasonBackupCredentialsError = "BackupCredentialsError"
 
-	// eventReasonClusterLookupError is emitted when the controller fails to
-	// determine whether a cluster already exists in the namespace, preventing
-	// it from choosing the correct API endpoint.
-	eventReasonClusterLookupError = "ClusterLookupError"
-
-	// eventReasonClusterAuthError is emitted when cluster credentials cannot
-	// be retrieved from the cluster Secret, blocking any authenticated API call.
-	eventReasonClusterAuthError = "ClusterAuthError"
-
 	// eventReasonClusterCreationFailed is emitted when the cluster creation API
 	// call returns a non-2xx status. The event message includes the HTTP status
 	// code and the full response body so the root cause is visible without
@@ -157,15 +148,15 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	log := logf.FromContext(ctx)
 
 	apiClient := webapi.NewClient()
-	/* -------------------- Health Check -------------------- */
-	endpoint := "/api/v1/health/fdb/"
-	body, status, err := apiClient.Do(ctx, "", http.MethodGet, endpoint, nil)
+	/* -------------------- Readiness Check -------------------- */
+	endpoint := "/api/v2/_meta/ready"
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
 		}
-		log.Error(err, "FDB not ready", "status", status, "response", string(body))
-		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonFDBNotReady, "FDB health check failed (status=%d): %s", status, string(body))
+		log.Error(err, "control plane not ready", "status", status, "response", string(body))
+		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonFDBNotReady, "Control plane readiness check failed (status=%d): %s", status, string(body))
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -229,6 +220,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		DistrChunkBs:           4096,
 		HAType:                 clusterCR.Spec.HAType,
 		QpairCount:             utils.IntPtrOrDefault(clusterCR.Spec.QpairCount, 256),
+		ClientQpairCount:       utils.IntPtrOrDefault(clusterCR.Spec.ClientQpairCount, 3),
 		MaxQueueSize:           utils.IntPtrOrDefault(clusterCR.Spec.MaxQueueSize, 128),
 		InflightIOThreshold:    utils.IntPtrOrDefault(clusterCR.Spec.InflightIOThreshold, 4),
 		EnableNodeAffinity:     utils.BoolPtrOrFalse(clusterCR.Spec.EnableNodeAffinity),
@@ -244,40 +236,17 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		RpcBasePort:            utils.IntPtrOrDefault(clusterCR.Spec.RpcBasePort, 8080),
 		SnodeApiPort:           utils.IntPtrOrDefault(clusterCR.Spec.SnodeApiPort, 50001),
 		BackupConfig:           backupConfig,
+		HashicorpVaultSettings: buildHashicorpVaultConfig(clusterCR.Spec.HashicorpVaultSettings),
 	}
 
-	endpoint = "/api/v1/cluster/create_first/"
-	clusterSecret := ""
+	endpoint = "/api/v2/clusters/"
 
-	exists, clusterUUID, clusterName, clusterNamespace, err := utils.ExistingClusterUUID(ctx, r.Client)
-	if err != nil {
-		log.Error(err, "Failed to check existing cluster")
-		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterLookupError, "Failed to check existing cluster: %v", err)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	if exists {
-		endpoint = "/api/v2/clusters/"
-
-		_, clusterSecret, err = utils.GetClusterAuth(ctx, r.Client, clusterNamespace, clusterName)
-		if err != nil {
-			log.Error(
-				err,
-				"Failed to get cluster auth",
-				"clusterName", clusterName,
-				"clusterUUID", clusterUUID,
-			)
-			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterAuthError, "Failed to get cluster auth for %s: %v", clusterName, err)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-	}
-
-	body, status, err = apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
+	body, status, err = apiClient.Do(ctx, http.MethodPost, endpoint, params)
 	if err != nil || status >= 300 {
 		// POST failed — the cluster may already exist on the backend (race between
 		// two reconciles both seeing UUID="" before the first one patches status).
 		// Try to look it up by name and adopt it instead of failing.
-		existing, lookupErr := utils.GetClusterByName(ctx, apiClient, clusterSecret, clusterCR.Name)
+		existing, lookupErr := utils.GetClusterByName(ctx, apiClient, clusterCR.Name)
 		if lookupErr != nil || existing == nil {
 			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterCreationFailed, "Cluster creation failed (status=%d): %s", status, string(body))
 
@@ -293,19 +262,6 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		"response", string(body),
 	)
 
-	secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Name)
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: clusterCR.Namespace,
-		},
-	}
-	if err := controllerutil.SetControllerReference(clusterCR, secret, r.Scheme); err != nil {
-		log.Error(err, "Failed to set owner reference on cluster secret")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
 	// original := clusterCR.DeepCopy()
 
 	apiResp, err := webapi.ParseClusterResponse(body)
@@ -314,76 +270,24 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	if endpoint == "/api/v1/cluster/create_first/" {
-		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
-			if secret.Data == nil {
-				secret.Data = map[string][]byte{}
-			}
-			secret.Data["uuid"] = []byte(apiResp.UUID)
-			secret.Data["secret"] = []byte(apiResp.Secret)
-			return nil
-		})
-
-		if err != nil {
-			log.Error(err, "Failed to create/update Secret for cluster")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
-		err := r.upsertCSICredentialsSecret(
-			ctx,
-			r.Namespace,
-			apiResp.UUID,
-			utils.ENDPOINT,
-			apiResp.Secret,
-		)
-
-		if err != nil {
-			log.Error(err, "Failed to update CSI credentials secret")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
-		clusterCR.Status.UUID = apiResp.UUID
-		clusterCR.Status.Rebalancing = &apiResp.Rebalancing
-		clusterCR.Status.Status = apiResp.Status
-		clusterCR.Status.NQN = apiResp.NQN
-		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
-	} else {
-		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
-			if secret.Data == nil {
-				secret.Data = map[string][]byte{}
-			}
-			secret.Data["uuid"] = []byte(apiResp.UUID)
-			secret.Data["secret"] = []byte(apiResp.Secret)
-			return nil
-		})
-
-		if err != nil {
-			log.Error(err, "Failed to create/update Secret for cluster")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
-		err := r.upsertCSICredentialsSecret(
-			ctx,
-			r.Namespace,
-			apiResp.UUID,
-			utils.ENDPOINT,
-			apiResp.Secret,
-		)
-
-		if err != nil {
-			log.Error(err, "Failed to update CSI credentials secret")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
-		clusterCR.Status.UUID = apiResp.UUID
-		clusterCR.Status.Rebalancing = &apiResp.Rebalancing
-		clusterCR.Status.Status = apiResp.Status
-		clusterCR.Status.NQN = apiResp.NQN
-		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
+	if err = r.upsertCSICredentialsSecret(
+		ctx,
+		r.Namespace,
+		apiResp.UUID,
+		utils.ENDPOINT,
+		apiResp.Secret,
+	); err != nil {
+		log.Error(err, "Failed to update CSI credentials secret")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	clusterCR.Status.UUID = apiResp.UUID
+	clusterCR.Status.Rebalancing = &apiResp.Rebalancing
+	clusterCR.Status.Status = apiResp.Status
+	clusterCR.Status.NQN = apiResp.NQN
+	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
+
 	clusterCR.Status.ClusterName = clusterCR.Name
-	clusterCR.Status.SecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Name)
 	clusterCR.Status.Configured = true
 
 	patch := client.MergeFrom(cluster)
@@ -395,22 +299,6 @@ func (r *StorageClusterReconciler) reconcileCreate(
 
 	log.Info("Cluster successfully created", "name", clusterCR.Name)
 
-	// // --- Handle update ---
-	// updateParams := utils.ClusterUpdateParams{
-	// 	CapWarn:                utils.IntPtrOrZero(clusterCR.Spec.CapWarn),
-	// 	CapCrit:                utils.IntPtrOrZero(clusterCR.Spec.CapCrit),
-	// 	ProvCapWarn:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapWarn),
-	// 	ProvCapCrit:            utils.IntPtrOrZero(clusterCR.Spec.ProvCapCrit),
-	// 	QoSClasses:             clusterCR.Spec.QoSClasses,
-	// 	LogDelInterval:         clusterCR.Spec.LogDelInterval,
-	// 	MetricsRetentionPeriod: clusterCR.Spec.MetricsRetentionPeriod,
-	// 	ClientQpairCount:       utils.IntPtrOrZero(clusterCR.Spec.ClientQpairCount),
-	// 	IncludeStats:           utils.BoolPtrOrFalse(clusterCR.Spec.IncludeStats),
-	// 	StatsHistoryInSeconds:  utils.IntPtrOrZero(clusterCR.Spec.StatsHistoryInSeconds),
-	// 	IncludeEventLog:        utils.BoolPtrOrFalse(clusterCR.Spec.IncludeEventLog),
-	// 	EventLogEntries:        utils.IntPtrOrZero(clusterCR.Spec.EventLogEntries),
-	// }
-
 	// clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	// if err != nil {
 	// 	log.Error(err, "Failed to get cluster auth")
@@ -419,7 +307,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 
 	// endpoint := fmt.Sprintf("/api/v2/clusters/%s/update", clusterUUID)
 
-	// body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, updateParams)
+	// body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, updateParams)
 	// if err != nil || status >= 300 {
 	// 	log.Error(err, "Cluster update failed", "status", status, "response", string(body))
 	// 	return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
@@ -436,29 +324,6 @@ func (r *StorageClusterReconciler) adoptExistingCluster(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Name)
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: clusterCR.Namespace,
-		},
-	}
-	if err := controllerutil.SetControllerReference(clusterCR, secret, r.Scheme); err != nil {
-		log.Error(err, "Failed to set owner reference on cluster secret")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
-		if secret.Data == nil {
-			secret.Data = map[string][]byte{}
-		}
-		secret.Data["uuid"] = []byte(existing.UUID)
-		secret.Data["secret"] = []byte(existing.Secret)
-		return nil
-	})
-	if err != nil {
-		log.Error(err, "Failed to create/update Secret for adopted cluster")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
 	if err := r.upsertCSICredentialsSecret(ctx, r.Namespace, existing.UUID, utils.ENDPOINT, existing.Secret); err != nil {
 		log.Error(err, "Failed to update CSI credentials secret for adopted cluster")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -470,7 +335,6 @@ func (r *StorageClusterReconciler) adoptExistingCluster(
 	clusterCR.Status.Status = existing.Status
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", existing.NDCS, existing.NPCS)
 	clusterCR.Status.ClusterName = clusterCR.Name
-	clusterCR.Status.SecretName = secretName
 	clusterCR.Status.Configured = true
 	if err := r.Status().Patch(ctx, clusterCR, client.MergeFrom(orig)); err != nil {
 		log.Error(err, "Failed to patch cluster status after adoption")
@@ -521,6 +385,13 @@ func (r *StorageClusterReconciler) buildBackupConfig(
 	}, nil
 }
 
+func buildHashicorpVaultConfig(s *simplyblockv1alpha1.HashicorpVaultSettings) *utils.HashicorpVaultConfig {
+	if s == nil || s.BaseURL == "" {
+		return nil
+	}
+	return &utils.HashicorpVaultConfig{BaseURL: s.BaseURL}
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *StorageClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
@@ -557,17 +428,12 @@ func (r *StorageClusterReconciler) handleDeletion(
 		return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 	}
 
-	clusterUUID, clusterSecret, err :=
-		utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
-	if err != nil {
-		log.Error(err, "Failed to get cluster auth during deletion, will retry", "name", clusterCR.Name)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
-	}
+	clusterUUID := clusterCR.Status.UUID
 
 	apiClient := webapi.NewClient()
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
 
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -661,16 +527,15 @@ func (r *StorageClusterReconciler) reconcileActivate(
 	if clusterCR.Status.ActionStatus.State == utils.ActionStateRunning &&
 		!clusterCR.Status.ActionStatus.Triggered {
 
-		clusterUUID, clusterSecret, err :=
-			utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+		apiClient := webapi.NewClient()
+		clusterUUID, err := utils.GetClusterID(ctx, apiClient, clusterCR)
 		if err != nil {
 			return r.failActivate(ctx, clusterCR, err)
 		}
 
-		apiClient := webapi.NewClient()
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/activate", clusterUUID)
 
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d", status)
@@ -706,14 +571,8 @@ func (r *StorageClusterReconciler) reconcileActivate(
 		return r.failActivate(ctx, clusterCR, err)
 	}
 
-	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
-	if err != nil {
-		log.Error(err, "Failed to get cluster auth")
-		return r.failActivate(ctx, clusterCR, err)
-	}
-
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -781,20 +640,18 @@ func (r *StorageClusterReconciler) reconcileExpand(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, clusterSecret, err :=
-		utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	apiClient := webapi.NewClient()
+	clusterUUID, err := utils.GetClusterID(ctx, apiClient, clusterCR)
 	if err != nil {
 		return r.failExpand(ctx, clusterCR, err)
 	}
-
-	apiClient := webapi.NewClient()
 
 	if clusterCR.Status.ActionStatus.State == utils.ActionStateRunning &&
 		!clusterCR.Status.ActionStatus.Triggered {
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/expand", clusterUUID)
 
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d", status)
@@ -815,7 +672,7 @@ func (r *StorageClusterReconciler) reconcileExpand(
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -986,21 +843,10 @@ func (r *StorageClusterReconciler) syncStatus(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
-	if err != nil {
-		log.Error(err, "syncStatus: failed to get cluster auth", "name", clusterCR.Name)
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
-
-	if err := r.upsertCSICredentialsSecret(ctx, r.Namespace, clusterCR.Status.UUID, utils.ENDPOINT, clusterSecret); err != nil {
-		log.Error(err, "syncStatus: failed to upsert CSI credentials secret", "name", clusterCR.Name)
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
-
 	apiClient := webapi.NewClient()
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterCR.Status.UUID)
 
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -1026,6 +872,10 @@ func (r *StorageClusterReconciler) syncStatus(
 	clusterCR.Status.NQN = resp.NQN
 	clusterCR.Status.Rebalancing = &resp.Rebalancing
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
+	if resp.MaxFaultTolerance > 0 {
+		v := int32(resp.MaxFaultTolerance)
+		clusterCR.Status.MaxFaultTolerance = &v
+	}
 
 	if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
 		log.Error(err, "syncStatus: failed to patch cluster status", "name", clusterCR.Name)

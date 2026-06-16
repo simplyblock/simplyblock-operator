@@ -119,12 +119,4 @@ func TestResolveClusterAndPoolUUID(t *testing.T) {
 	if _, err := ResolvePoolUUID(ctx, c, "ns1", "cluster-a", "silver"); err == nil {
 		t.Fatalf("ResolvePoolUUID should fail for missing pool")
 	}
-
-	exists, uuid, name, _, err := ExistingClusterUUID(ctx, c)
-	if err != nil {
-		t.Fatalf("ExistingClusterUUID unexpected error: %v", err)
-	}
-	if !exists || uuid != "uuid-a" || name != "cluster-a" {
-		t.Fatalf("ExistingClusterUUID unexpected result: exists=%v uuid=%q name=%q", exists, uuid, name)
-	}
 }

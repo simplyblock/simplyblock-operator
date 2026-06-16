@@ -51,7 +51,6 @@ const (
 	eventReasonRestoreBackupNotFound     = "RestoreBackupNotFound"
 	eventReasonRestoreBackupNotReady     = "RestoreBackupNotReady"
 	eventReasonRestoreClusterLookupError = "RestoreClusterLookupError"
-	eventReasonRestoreClusterAuthError   = "RestoreClusterAuthError"
 	eventReasonRestorePoolLookupError    = "RestorePoolLookupError"
 	eventReasonRestoreAPIFailed          = "RestoreAPIFailed"
 	eventReasonRestoreLvolPollFailed     = "RestoreLvolPollFailed"
@@ -129,85 +128,72 @@ func (r *BackupRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
-	clusterUUID, clusterSecret, res, done, err := r.resolveClusterAuth(ctx, restoreCR)
+	clusterUUID, res, done, err := r.resolveClusterUUID(ctx, restoreCR)
 	if done {
 		return res, err
 	}
 
 	apiClient := r.apiClient()
 
-	if res, done, err = r.reconcileBackupAndPool(ctx, restoreCR, clusterUUID, clusterSecret, apiClient); done {
+	if res, done, err = r.reconcileBackupAndPool(ctx, restoreCR, clusterUUID, apiClient); done {
 		return res, err
 	}
 
 	// For cross-cluster restores, source-switch the target cluster before submitting the restore task.
 	if isCrossCluster(restoreCR) && restoreCR.Status.SourceSwitchedAt == nil {
-		if res, done, err = r.reconcileSourceSwitch(ctx, restoreCR, clusterUUID, clusterSecret, apiClient); done {
+		if res, done, err = r.reconcileSourceSwitch(ctx, restoreCR, clusterUUID, apiClient); done {
 			return res, err
 		}
 	}
 
-	if res, done, err = r.reconcileRestoreTask(ctx, restoreCR, clusterUUID, clusterSecret, apiClient); done {
+	if res, done, err = r.reconcileRestoreTask(ctx, restoreCR, clusterUUID, apiClient); done {
 		return res, err
 	}
 
 	if restoreCR.Status.Phase == simplyblockv1alpha1.RestorePhaseInProgress {
-		if res, done, err = r.reconcileInProgress(ctx, restoreCR, clusterUUID, clusterSecret, apiClient); done {
+		if res, done, err = r.reconcileInProgress(ctx, restoreCR, clusterUUID, apiClient); done {
 			return res, err
 		}
 	}
 
 	// After the lvol comes online, switch the target cluster back to its local bucket.
 	if restoreCR.Status.Phase == simplyblockv1alpha1.RestorePhaseSwitchingSourceLocal {
-		if res, done, err = r.reconcileSourceSwitchLocal(ctx, restoreCR, clusterUUID, clusterSecret, apiClient); done {
+		if res, done, err = r.reconcileSourceSwitchLocal(ctx, restoreCR, clusterUUID, apiClient); done {
 			return res, err
 		}
 	}
 
 	if restoreCR.Status.Phase == simplyblockv1alpha1.RestorePhasePVCBinding {
-		return r.reconcilePVCBinding(ctx, restoreCR, clusterUUID, clusterSecret)
+		return r.reconcilePVCBinding(ctx, restoreCR, clusterUUID)
 	}
 
 	return ctrl.Result{}, nil
 }
 
-func (r *BackupRestoreReconciler) resolveClusterAuth(
+func (r *BackupRestoreReconciler) resolveClusterUUID(
 	ctx context.Context,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
-) (clusterUUID, clusterSecret string, res ctrl.Result, done bool, err error) {
+) (clusterUUID string, res ctrl.Result, done bool, err error) {
 	clusterUUID, err = utils.ResolveClusterUUID(ctx, r.Client, restoreCR.Namespace, restoreCR.Spec.ClusterName)
 	if err != nil {
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 			s.Phase = simplyblockv1alpha1.RestorePhasePending
 			s.Message = err.Error()
 		}); patchErr != nil {
-			return "", "", ctrl.Result{}, true, patchErr
+			return "", ctrl.Result{}, true, patchErr
 		}
 		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreClusterLookupError,
 			"Failed to resolve cluster UUID for %s: %v", restoreCR.Spec.ClusterName, err)
-		return "", "", ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
+		return "", ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
 	}
 
-	_, clusterSecret, err = utils.GetClusterAuth(ctx, r.Client, restoreCR.Namespace, restoreCR.Spec.ClusterName)
-	if err != nil {
-		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
-			s.Phase = simplyblockv1alpha1.RestorePhasePending
-			s.Message = err.Error()
-		}); patchErr != nil {
-			return "", "", ctrl.Result{}, true, patchErr
-		}
-		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreClusterAuthError,
-			"Failed to get cluster auth for %s: %v", restoreCR.Spec.ClusterName, err)
-		return "", "", ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
-	}
-
-	return clusterUUID, clusterSecret, ctrl.Result{}, false, nil
+	return clusterUUID, ctrl.Result{}, false, nil
 }
 
 func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 	ctx context.Context,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, bool, error) {
 	backup := &simplyblockv1alpha1.StorageBackup{}
@@ -280,7 +266,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 		return ctrl.Result{}, false, nil
 	}
 
-	poolName, poolUUID, err := r.resolvePool(ctx, apiClient, clusterSecret, clusterUUID, restoreCR, backup)
+	poolName, poolUUID, err := r.resolvePool(ctx, apiClient, clusterUUID, restoreCR, backup)
 	if err != nil {
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 			s.Message = err.Error()
@@ -304,7 +290,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 func (r *BackupRestoreReconciler) reconcileRestoreTask(
 	ctx context.Context,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, bool, error) {
 	if restoreCR.Status.RestoredLvolID != "" {
@@ -313,7 +299,7 @@ func (r *BackupRestoreReconciler) reconcileRestoreTask(
 
 	log := logf.FromContext(ctx)
 	lvolName := fmt.Sprintf("restore-%s", restoreCR.UID)
-	lvolID, err := r.callRestoreAPI(ctx, apiClient, clusterSecret, clusterUUID,
+	lvolID, err := r.callRestoreAPI(ctx, apiClient, clusterUUID,
 		restoreCR.Status.BackupID, lvolName, restoreCR.Status.PoolName, restoreCR.Spec.TargetNode)
 	if err != nil {
 		log.Error(err, "Restore API call failed", "restore", restoreCR.Name)
@@ -339,10 +325,10 @@ func (r *BackupRestoreReconciler) reconcileRestoreTask(
 func (r *BackupRestoreReconciler) reconcileInProgress(
 	ctx context.Context,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, bool, error) {
-	lvolStatus, err := r.pollLvolStatus(ctx, apiClient, clusterSecret,
+	lvolStatus, err := r.pollLvolStatus(ctx, apiClient,
 		clusterUUID, restoreCR.Status.PoolUUID, restoreCR.Status.RestoredLvolID)
 	if err != nil {
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
@@ -392,13 +378,12 @@ func (r *BackupRestoreReconciler) reconcilePVCBinding(
 	ctx context.Context,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
 	clusterUUID string,
-	clusterSecret string,
 ) (ctrl.Result, error) {
 	pvcName, pvcNamespace := r.resolvedPVCNamespacedName(restoreCR)
 
 	if restoreCR.Status.PVName == "" {
 		pvName := fmt.Sprintf("restore-%s", restoreCR.UID)
-		if err := r.ensurePV(ctx, restoreCR, pvName, pvcName, pvcNamespace, clusterUUID, clusterSecret); err != nil {
+		if err := r.ensurePV(ctx, restoreCR, pvName, pvcName, pvcNamespace, clusterUUID); err != nil {
 			r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestorePVCreateFailed,
 				"Failed to create PV: %v", err)
 			if isNonRetryableCreateError(err) {
@@ -480,13 +465,13 @@ func isCrossCluster(restoreCR *simplyblockv1alpha1.BackupRestore) bool {
 func (r *BackupRestoreReconciler) reconcileSourceSwitch(
 	ctx context.Context,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, bool, error) {
 	log := logf.FromContext(ctx)
 
 	// Guard: check current active source to detect concurrent cross-cluster restores.
-	activeSrc, err := r.getActiveBackupSource(ctx, apiClient, clusterSecret, clusterUUID)
+	activeSrc, err := r.getActiveBackupSource(ctx, apiClient, clusterUUID)
 	if err != nil {
 		// Non-fatal: proceed if the sources endpoint is unavailable.
 		log.Info("Could not read active backup source; proceeding with source-switch", "err", err)
@@ -503,7 +488,7 @@ func (r *BackupRestoreReconciler) reconcileSourceSwitch(
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/source-switch", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, sourceSwitchRequest{
+	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, sourceSwitchRequest{
 		SourceClusterID: restoreCR.Status.SourceClusterUUID,
 	})
 	if err != nil || status >= 300 {
@@ -536,11 +521,11 @@ func (r *BackupRestoreReconciler) reconcileSourceSwitch(
 func (r *BackupRestoreReconciler) reconcileSourceSwitchLocal(
 	ctx context.Context,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, bool, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/source-switch", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, sourceSwitchRequest{
+	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, sourceSwitchRequest{
 		SourceClusterID: "local",
 	})
 	if err != nil || status >= 300 {
@@ -572,10 +557,10 @@ func (r *BackupRestoreReconciler) reconcileSourceSwitchLocal(
 func (r *BackupRestoreReconciler) getActiveBackupSource(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID string,
+	clusterUUID string,
 ) (string, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/sources", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", err
 	}
@@ -611,13 +596,13 @@ func (r *BackupRestoreReconciler) apiClient() *webapi.Client {
 func (r *BackupRestoreReconciler) resolvePool(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID string,
+	clusterUUID string,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
 	backup *simplyblockv1alpha1.StorageBackup,
 ) (poolName, poolUUID string, err error) {
 	if restoreCR.Spec.TargetPool != "" {
 		poolName = restoreCR.Spec.TargetPool
-		poolUUID, err = r.lookupPoolUUID(ctx, apiClient, clusterSecret, clusterUUID, poolName)
+		poolUUID, err = r.lookupPoolUUID(ctx, apiClient, clusterUUID, poolName)
 		return
 	}
 	poolName = backup.Status.PoolName
@@ -627,7 +612,7 @@ func (r *BackupRestoreReconciler) resolvePool(
 	}
 	poolUUID = backup.Status.PoolUUID
 	if poolUUID == "" {
-		poolUUID, err = r.lookupPoolUUID(ctx, apiClient, clusterSecret, clusterUUID, poolName)
+		poolUUID, err = r.lookupPoolUUID(ctx, apiClient, clusterUUID, poolName)
 	}
 	return
 }
@@ -635,10 +620,10 @@ func (r *BackupRestoreReconciler) resolvePool(
 func (r *BackupRestoreReconciler) lookupPoolUUID(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, poolName string,
+	clusterUUID, poolName string,
 ) (string, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", err
 	}
@@ -660,10 +645,10 @@ func (r *BackupRestoreReconciler) lookupPoolUUID(
 func (r *BackupRestoreReconciler) callRestoreAPI(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, backupID, lvolName, poolName, targetNodeID string,
+	clusterUUID, backupID, lvolName, poolName, targetNodeID string,
 ) (string, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/restore", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, restoreAPIRequest{
+	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, restoreAPIRequest{
 		BackupID:     backupID,
 		LvolName:     lvolName,
 		Pool:         poolName,
@@ -688,11 +673,11 @@ func (r *BackupRestoreReconciler) callRestoreAPI(
 func (r *BackupRestoreReconciler) pollLvolStatus(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, poolUUID, lvolID string,
+	clusterUUID, poolUUID, lvolID string,
 ) (string, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
 		clusterUUID, poolUUID, lvolID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", err
 	}
@@ -720,7 +705,6 @@ func (r *BackupRestoreReconciler) ensurePV(
 	ctx context.Context,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
 	pvName, pvcName, pvcNamespace, clusterUUID string,
-	clusterSecret string,
 ) error {
 	existing := &corev1.PersistentVolume{}
 	if err := r.Get(ctx, client.ObjectKey{Name: pvName}, existing); err == nil {
@@ -764,7 +748,6 @@ func (r *BackupRestoreReconciler) ensurePV(
 	)
 	volumeAttributes, err := r.restoreVolumeAttributes(
 		ctx,
-		clusterSecret,
 		clusterUUID,
 		restoreCR.Status.PoolUUID,
 		restoreCR.Status.RestoredLvolID,
@@ -807,7 +790,7 @@ func (r *BackupRestoreReconciler) ensurePV(
 
 func (r *BackupRestoreReconciler) restoreVolumeAttributes(
 	ctx context.Context,
-	clusterSecret, clusterUUID, poolUUID, lvolID string,
+	clusterUUID, poolUUID, lvolID string,
 ) (map[string]string, error) {
 	endpoint := fmt.Sprintf(
 		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/connect",
@@ -815,7 +798,7 @@ func (r *BackupRestoreReconciler) restoreVolumeAttributes(
 		poolUUID,
 		lvolID,
 	)
-	body, status, err := r.apiClient().Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := r.apiClient().Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("get volume connect info: %w", err)
 	}

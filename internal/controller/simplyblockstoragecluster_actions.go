@@ -71,16 +71,16 @@ func (r *StorageClusterReconciler) reconcileShutdown(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	apiClient := webapi.NewClient()
+
+	clusterUUID, err := utils.GetClusterID(ctx, apiClient, clusterCR)
 	if err != nil {
 		return r.failAction(ctx, clusterCR, err)
 	}
 
-	apiClient := webapi.NewClient()
-
 	if !clusterCR.Status.ActionStatus.Triggered {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/shutdown", clusterUUID)
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d body=%s", status, string(body))
@@ -97,7 +97,7 @@ func (r *StorageClusterReconciler) reconcileShutdown(
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -151,16 +151,16 @@ func (r *StorageClusterReconciler) reconcileStart(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	apiClient := webapi.NewClient()
+
+	clusterUUID, err := utils.GetClusterID(ctx, apiClient, clusterCR)
 	if err != nil {
 		return r.failAction(ctx, clusterCR, err)
 	}
 
-	apiClient := webapi.NewClient()
-
 	if !clusterCR.Status.ActionStatus.Triggered {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/start", clusterUUID)
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d body=%s", status, string(body))
@@ -177,7 +177,7 @@ func (r *StorageClusterReconciler) reconcileStart(
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -235,12 +235,13 @@ func (r *StorageClusterReconciler) reconcileRestart(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	apiClient := webapi.NewClient()
+
+	clusterUUID, err := utils.GetClusterID(ctx, apiClient, clusterCR)
 	if err != nil {
 		return r.failAction(ctx, clusterCR, err)
 	}
 
-	apiClient := webapi.NewClient()
 	phase := clusterCR.Status.ActionStatus.Message // "shutdown" or "start"
 
 	if !clusterCR.Status.ActionStatus.Triggered {
@@ -250,7 +251,7 @@ func (r *StorageClusterReconciler) reconcileRestart(
 		} else {
 			apiEndpoint = fmt.Sprintf("/api/v2/clusters/%s/start", clusterUUID)
 		}
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, apiEndpoint, nil)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, apiEndpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d body=%s", status, string(body))
@@ -267,7 +268,7 @@ func (r *StorageClusterReconciler) reconcileRestart(
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -337,16 +338,16 @@ func (r *StorageClusterReconciler) reconcileNodeRecycle(
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
 	}
 
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+	apiClient := webapi.NewClient()
+
+	clusterUUID, err := utils.GetClusterID(ctx, apiClient, clusterCR)
 	if err != nil {
 		return r.failAction(ctx, clusterCR, err)
 	}
 
-	apiClient := webapi.NewClient()
-
 	// Populate PendingNodes once from the API.
 	if clusterCR.Status.NodeRecycleStatus == nil {
-		nodes, err := listClusterStorageNodes(ctx, apiClient, clusterSecret, clusterUUID)
+		nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
 		if err != nil {
 			log.Error(err, "Failed to list storage nodes for node-recycle init")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -391,15 +392,15 @@ func (r *StorageClusterReconciler) reconcileNodeRecycle(
 
 	switch nrs.NodePhase {
 	case utils.NodeRecyclePhaseSnodeRefresh:
-		return r.nodeRecycleSnodeRefresh(ctx, clusterCR, apiClient, clusterSecret, clusterUUID, currentNodeUUID)
+		return r.nodeRecycleSnodeRefresh(ctx, clusterCR, apiClient, clusterUUID, currentNodeUUID)
 	case utils.NodeRecyclePhaseSnodeRefreshWait:
-		return r.nodeRecycleSnodeRefreshWait(ctx, clusterCR, apiClient, clusterSecret, clusterUUID, currentNodeUUID)
+		return r.nodeRecycleSnodeRefreshWait(ctx, clusterCR, apiClient, clusterUUID, currentNodeUUID)
 	case utils.NodeRecyclePhaseShuttingDown:
-		return r.nodeRecycleShuttingDown(ctx, clusterCR, apiClient, clusterSecret, clusterUUID, currentNodeUUID)
+		return r.nodeRecycleShuttingDown(ctx, clusterCR, apiClient, clusterUUID, currentNodeUUID)
 	case utils.NodeRecyclePhaseRestarting:
-		return r.nodeRecycleRestarting(ctx, clusterCR, apiClient, clusterSecret, clusterUUID, currentNodeUUID)
+		return r.nodeRecycleRestarting(ctx, clusterCR, apiClient, clusterUUID, currentNodeUUID)
 	case utils.NodeRecyclePhaseRebalancing:
-		return r.nodeRecycleRebalancing(ctx, clusterCR, apiClient, clusterSecret, clusterUUID, currentNodeUUID)
+		return r.nodeRecycleRebalancing(ctx, clusterCR, apiClient, clusterUUID, currentNodeUUID)
 	default:
 		return r.failAction(ctx, clusterCR, fmt.Errorf("unknown node-recycle phase: %q", nrs.NodePhase))
 	}
@@ -415,12 +416,12 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefresh(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, nodeUUID string,
+	clusterUUID, nodeUUID string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	nrs := clusterCR.Status.NodeRecycleStatus
 
-	found, err := r.deleteStorageNodePod(ctx, clusterCR, apiClient, clusterSecret, clusterUUID, nodeUUID)
+	found, err := r.deleteStorageNodePod(ctx, clusterCR, apiClient, clusterUUID, nodeUUID)
 	if err != nil {
 		log.Error(err, "Failed to delete storage node pod for refresh", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -449,11 +450,11 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefreshWait(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, nodeUUID string,
+	clusterUUID, nodeUUID string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	ready, err := r.isStorageNodePodReady(ctx, clusterCR, apiClient, clusterSecret, clusterUUID, nodeUUID)
+	ready, err := r.isStorageNodePodReady(ctx, clusterCR, apiClient, clusterUUID, nodeUUID)
 	if err != nil {
 		log.Error(err, "Failed to check storage node pod readiness", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -476,14 +477,14 @@ func (r *StorageClusterReconciler) nodeRecycleShuttingDown(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, nodeUUID string,
+	clusterUUID, nodeUUID string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	nrs := clusterCR.Status.NodeRecycleStatus
 
 	if !nrs.PhaseTriggered {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown", clusterUUID, nodeUUID)
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d body=%s", status, string(body))
@@ -499,7 +500,7 @@ func (r *StorageClusterReconciler) nodeRecycleShuttingDown(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterSecret, clusterUUID)
+	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
 	if err != nil {
 		log.Error(err, "Failed to list storage nodes during shutdown poll", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -545,14 +546,14 @@ func (r *StorageClusterReconciler) nodeRecycleRestarting(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, nodeUUID string,
+	clusterUUID, nodeUUID string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	nrs := clusterCR.Status.NodeRecycleStatus
 
 	if !nrs.PhaseTriggered {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, map[string]bool{"force": true})
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, map[string]bool{"force": true})
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d body=%s", status, string(body))
@@ -568,7 +569,7 @@ func (r *StorageClusterReconciler) nodeRecycleRestarting(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterSecret, clusterUUID)
+	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
 	if err != nil {
 		log.Error(err, "Failed to list storage nodes during restart poll", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -598,13 +599,13 @@ func (r *StorageClusterReconciler) nodeRecycleRebalancing(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, nodeUUID string,
+	clusterUUID, nodeUUID string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	nrs := clusterCR.Status.NodeRecycleStatus
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -644,10 +645,10 @@ func (r *StorageClusterReconciler) nodeRecycleRebalancing(
 func listClusterStorageNodes(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID string,
+	clusterUUID string,
 ) ([]utils.NodeStatusResponse, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
@@ -670,9 +671,9 @@ func (r *StorageClusterReconciler) deleteStorageNodePod(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, nodeUUID string,
+	clusterUUID, nodeUUID string,
 ) (bool, error) {
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterSecret, clusterUUID)
+	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
 	if err != nil {
 		return false, err
 	}
@@ -708,9 +709,9 @@ func (r *StorageClusterReconciler) isStorageNodePodReady(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, nodeUUID string,
+	clusterUUID, nodeUUID string,
 ) (bool, error) {
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterSecret, clusterUUID)
+	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
 	if err != nil {
 		return false, err
 	}

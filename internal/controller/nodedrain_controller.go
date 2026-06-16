@@ -111,8 +111,8 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Cluster credentials must be available before we can call the simplyblock API.
-	clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
+	// Cluster UUID must be available before we can call the simplyblock API.
+	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
 	if err != nil {
 		// Not yet provisioned; nothing to gate.
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
@@ -132,8 +132,8 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	maxFaultTolerance := 1
-	if clusterCR.Spec.MaxFaultTolerance != nil && *clusterCR.Spec.MaxFaultTolerance > 0 {
-		maxFaultTolerance = int(*clusterCR.Spec.MaxFaultTolerance)
+	if clusterCR.Status.MaxFaultTolerance != nil && *clusterCR.Status.MaxFaultTolerance > 0 {
+		maxFaultTolerance = int(*clusterCR.Status.MaxFaultTolerance)
 	}
 
 	apiClient := webapi.NewClient()
@@ -173,7 +173,7 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 
 	for _, workerName := range snCR.Spec.WorkerNodes {
 		requeue, shouldBreak := r.processWorker(
-			ctx, snCR, workerName, apiClient, clusterUUID, clusterSecret, maxFaultTolerance,
+			ctx, snCR, workerName, apiClient, clusterUUID, maxFaultTolerance,
 		)
 		if requeue > 0 && (nextRequeue == 0 || requeue < nextRequeue) {
 			nextRequeue = requeue
@@ -202,7 +202,7 @@ func (r *NodeDrainCoordinatorReconciler) processWorker(
 	snCR *simplyblockv1alpha1.StorageNode,
 	workerName string,
 	apiClient *webapi.Client,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 	maxFaultTolerance int,
 ) (requeue time.Duration, shouldBreak bool) {
 	log := logf.FromContext(ctx)
@@ -225,7 +225,7 @@ func (r *NodeDrainCoordinatorReconciler) processWorker(
 
 	// Node was uncordoned (possibly after reboot + MCO uncordon).
 	if !cordoned && state != nil {
-		return r.processUncordoned(ctx, snCR, workerName, state, apiClient, clusterUUID, clusterSecret)
+		return r.processUncordoned(ctx, snCR, workerName, state, apiClient, clusterUUID)
 	}
 
 	// Node is cordoned: initialise state if first observation.
@@ -250,7 +250,7 @@ func (r *NodeDrainCoordinatorReconciler) processWorker(
 
 	prevPhase := state.Phase
 	advRequeue, advErr := r.advanceStateMachine(
-		ctx, snCR, state, apiClient, clusterUUID, clusterSecret, maxFaultTolerance,
+		ctx, snCR, state, apiClient, clusterUUID, maxFaultTolerance,
 	)
 	if advErr != nil {
 		log.Error(advErr, "Drain state machine error", "node", workerName, "phase", state.Phase)
@@ -294,7 +294,7 @@ func (r *NodeDrainCoordinatorReconciler) processUncordoned(
 	workerName string,
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 ) (requeue time.Duration, shouldBreak bool) {
 	log := logf.FromContext(ctx)
 
@@ -305,7 +305,7 @@ func (r *NodeDrainCoordinatorReconciler) processUncordoned(
 	case simplyblockv1alpha1.DrainPhaseDraining:
 		// Node uncordoned after reboot — call restart.
 		log.Info("Node uncordoned after drain; calling restart", "node", workerName)
-		requeue = r.handleDraining(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
+		requeue = r.handleDraining(ctx, snCR, state, apiClient, clusterUUID)
 		upsertDrainState(snCR, *state)
 	case simplyblockv1alpha1.DrainPhaseRestartCalled:
 		// Node uncordoned while restart polling is in progress — this is expected
@@ -313,7 +313,7 @@ func (r *NodeDrainCoordinatorReconciler) processUncordoned(
 		log.Info("Node uncordoned during restart polling; continuing", "node", workerName)
 		prevPhase := state.Phase
 		var err error
-		requeue, err = r.handleRestartCalled(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
+		requeue, err = r.handleRestartCalled(ctx, snCR, state, apiClient, clusterUUID)
 		if err != nil {
 			log.Error(err, "handleRestartCalled failed after uncordon", "node", workerName)
 		}
@@ -332,7 +332,7 @@ func (r *NodeDrainCoordinatorReconciler) processUncordoned(
 		// Node uncordoned while waiting for backend to go offline — continue polling.
 		log.Info("Node uncordoned during shutdown polling; continuing", "node", workerName)
 		var err error
-		requeue, err = r.handleShutdownCalled(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
+		requeue, err = r.handleShutdownCalled(ctx, snCR, state, apiClient, clusterUUID)
 		if err != nil {
 			log.Error(err, "handleShutdownCalled failed after uncordon", "node", workerName)
 		}
@@ -354,21 +354,21 @@ func (r *NodeDrainCoordinatorReconciler) advanceStateMachine(
 	snCR *simplyblockv1alpha1.StorageNode,
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 	maxFaultTolerance int,
 ) (time.Duration, error) {
 	switch state.Phase {
 	case simplyblockv1alpha1.DrainPhaseDetected:
-		return r.handleDetected(ctx, snCR, state, apiClient, clusterUUID, clusterSecret, maxFaultTolerance)
+		return r.handleDetected(ctx, snCR, state, apiClient, clusterUUID, maxFaultTolerance)
 	case simplyblockv1alpha1.DrainPhaseShutdownCalled:
-		return r.handleShutdownCalled(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
+		return r.handleShutdownCalled(ctx, snCR, state, apiClient, clusterUUID)
 	case simplyblockv1alpha1.DrainPhaseDraining:
 		// Restart is only triggered from the uncordon path — not while the node
 		// is still cordoned. Just wait here.
 		state.Message = "waiting for node to be uncordoned after reboot"
 		return 15 * time.Second, nil
 	case simplyblockv1alpha1.DrainPhaseRestartCalled:
-		return r.handleRestartCalled(ctx, snCR, state, apiClient, clusterUUID, clusterSecret)
+		return r.handleRestartCalled(ctx, snCR, state, apiClient, clusterUUID)
 	case simplyblockv1alpha1.DrainPhaseComplete, simplyblockv1alpha1.DrainPhaseFailed:
 		return 0, nil
 	}
@@ -387,7 +387,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 	snCR *simplyblockv1alpha1.StorageNode,
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 	maxFaultTolerance int,
 ) (time.Duration, error) {
 	log := logf.FromContext(ctx)
@@ -423,7 +423,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 		log.Info("Storage PDB in place; released manager self-PDB — manager will migrate to another node", "node", state.Hostname)
 	}
 
-	activeDrains := countActiveDrains(ctx, snCR, apiClient, clusterUUID, clusterSecret)
+	activeDrains := countActiveDrains(ctx, snCR, apiClient, clusterUUID)
 	if activeDrains >= maxFaultTolerance {
 		state.Message = fmt.Sprintf("waiting for drain slot (%d/%d active)", activeDrains, maxFaultTolerance)
 		log.Info("No drain slot available, blocking PDB in place", "node", state.Hostname, "active", activeDrains, "max", maxFaultTolerance)
@@ -442,7 +442,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 	type nodeStatusEntry struct{ uuid, status string }
 	statuses := make([]nodeStatusEntry, 0, len(nodeUUIDs))
 	for _, uuid := range nodeUUIDs {
-		nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, uuid)
+		nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterUUID, uuid)
 		if err != nil {
 			log.Info("Failed to query backend node status before shutdown, retrying", "node", state.Hostname, "err", err)
 			return 15 * time.Second, nil
@@ -482,7 +482,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 			state.Message = fmt.Sprintf("node %s already in_shutdown; waiting for offline", s.uuid)
 		} else {
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown", clusterUUID, s.uuid)
-			body, httpStatus, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+			body, httpStatus, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 			if err != nil || httpStatus >= 300 {
 				if err == nil {
 					err = fmt.Errorf("status %d: %s", httpStatus, string(body))
@@ -507,7 +507,7 @@ func (r *NodeDrainCoordinatorReconciler) handleShutdownCalled(
 	snCR *simplyblockv1alpha1.StorageNode,
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 ) (time.Duration, error) {
 	log := logf.FromContext(ctx)
 
@@ -523,7 +523,7 @@ func (r *NodeDrainCoordinatorReconciler) handleShutdownCalled(
 		state.ActiveNodeUUID = activeUUID
 	}
 
-	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, activeUUID)
+	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterUUID, activeUUID)
 	if err != nil {
 		log.Info("Failed to poll backend node status, retrying", "node", state.Hostname, "err", err)
 		return 10 * time.Second, nil
@@ -539,7 +539,7 @@ func (r *NodeDrainCoordinatorReconciler) handleShutdownCalled(
 	// Advance to the next socket node in sequence.
 	if nextUUID := nextUUIDInList(nodeUUIDs, activeUUID); nextUUID != "" {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown", clusterUUID, nextUUID)
-		body, httpStatus, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, nil)
+		body, httpStatus, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || httpStatus >= 300 {
 			if err == nil {
 				err = fmt.Errorf("status %d: %s", httpStatus, string(body))
@@ -571,7 +571,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 	snCR *simplyblockv1alpha1.StorageNode,
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 ) time.Duration {
 	log := logf.FromContext(ctx)
 
@@ -592,7 +592,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 	firstUUID := nodeUUIDs[0]
 
 	// Hold off if the secondary is currently restarting or shutting down.
-	busy, err := isPeerBusy(ctx, apiClient, clusterSecret, clusterUUID, firstUUID)
+	busy, err := isPeerBusy(ctx, apiClient, clusterUUID, firstUUID)
 	if err != nil {
 		log.Info("Failed to check peer node status, retrying", "node", state.Hostname, "nodeUUID", firstUUID, "err", err)
 		return 15 * time.Second
@@ -603,7 +603,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 		return 15 * time.Second
 	}
 
-	firstNodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, firstUUID)
+	firstNodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterUUID, firstUUID)
 	if err != nil {
 		log.Info("Failed to check node status before restart, retrying", "node", state.Hostname, "nodeUUID", firstUUID, "err", err)
 		return 15 * time.Second
@@ -621,7 +621,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 		"node_address": utils.StorageNodeAPIAddress(state.Hostname, snCR.Namespace),
 	}
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, firstUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, restartPayload)
+	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, restartPayload)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))
@@ -646,7 +646,7 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 	snCR *simplyblockv1alpha1.StorageNode,
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 ) (time.Duration, error) {
 	log := logf.FromContext(ctx)
 
@@ -676,7 +676,7 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 		state.ActiveNodeUUID = activeUUID
 	}
 
-	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, activeUUID)
+	nodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterUUID, activeUUID)
 	if err != nil {
 		log.Info("Failed to poll backend node status after restart, retrying", "node", state.Hostname, "err", err)
 		return 10 * time.Second, nil
@@ -697,7 +697,7 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 	// Advance to the next socket node in sequence.
 	if nextUUID := nextUUIDInList(nodeUUIDs, activeUUID); nextUUID != "" {
 		// Hold off if the next node's secondary is currently restarting or shutting down.
-		busy, err := isPeerBusy(ctx, apiClient, clusterSecret, clusterUUID, nextUUID)
+		busy, err := isPeerBusy(ctx, apiClient, clusterUUID, nextUUID)
 		if err != nil {
 			log.Info("Failed to check peer node status, retrying", "node", state.Hostname, "nodeUUID", nextUUID, "err", err)
 			return 15 * time.Second, nil
@@ -708,7 +708,7 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 			return 15 * time.Second, nil
 		}
 
-		nextNodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, nextUUID)
+		nextNodeInfo, err := getBackendNodeInfo(ctx, apiClient, clusterUUID, nextUUID)
 		if err != nil {
 			log.Info("Failed to check node status before restart, retrying", "node", state.Hostname, "nodeUUID", nextUUID, "err", err)
 			return 15 * time.Second, nil
@@ -725,7 +725,7 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 			"node_address": utils.StorageNodeAPIAddress(state.Hostname, snCR.Namespace),
 		}
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nextUUID)
-		body, httpStatus, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, restartPayload)
+		body, httpStatus, err := apiClient.Do(ctx, http.MethodPost, endpoint, restartPayload)
 		if err != nil || httpStatus >= 300 {
 			if err == nil {
 				err = fmt.Errorf("status %d: %s", httpStatus, string(body))
@@ -741,7 +741,7 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 
 	// All socket nodes are back online — wait for the cluster to finish
 	// rebalancing before releasing this drain slot to the next worker.
-	rebalancing, err := isClusterRebalancing(ctx, apiClient, clusterSecret, clusterUUID)
+	rebalancing, err := isClusterRebalancing(ctx, apiClient, clusterUUID)
 	if err != nil {
 		log.Info("Failed to check cluster rebalancing status, retrying", "node", state.Hostname, "err", err)
 		return 30 * time.Second, nil
@@ -1061,10 +1061,10 @@ type backendNodeInfo struct {
 func getBackendNodeInfo(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, nodeUUID string,
+	clusterUUID, nodeUUID string,
 ) (backendNodeInfo, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
-	body, statusCode, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, statusCode, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || statusCode >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", statusCode, string(body))
@@ -1125,7 +1125,7 @@ func countActiveDrains(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNode,
 	apiClient *webapi.Client,
-	clusterUUID, clusterSecret string,
+	clusterUUID string,
 ) int {
 	// Count workers in the active drain window from controller state.
 	// DrainCoordination has one entry per worker, so no grouping needed.
@@ -1151,7 +1151,7 @@ func countActiveDrains(
 		if activeWorkers[n.Hostname] {
 			continue // already counted this worker
 		}
-		info, err := getBackendNodeInfo(ctx, apiClient, clusterSecret, clusterUUID, n.UUID)
+		info, err := getBackendNodeInfo(ctx, apiClient, clusterUUID, n.UUID)
 		if err != nil {
 			activeWorkers[n.Hostname] = true
 			continue
@@ -1232,10 +1232,10 @@ func isNodeReady(node *corev1.Node) bool {
 func isPeerBusy(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID, nodeUUID string,
+	clusterUUID, nodeUUID string,
 ) (bool, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
-	body, statusCode, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, statusCode, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || statusCode >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", statusCode, string(body))
@@ -1262,10 +1262,10 @@ func isPeerBusy(
 func isClusterRebalancing(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID string,
+	clusterUUID string,
 ) (bool, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
-	body, statusCode, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, statusCode, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || statusCode >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", statusCode, string(body))

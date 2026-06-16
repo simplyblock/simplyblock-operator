@@ -34,6 +34,7 @@ type BackupImportSpec struct {
 	// SourceClusterName is the StorageCluster CR name of the cluster that owns the backup.
 	SourceClusterName string `json:"sourceClusterName"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source Backup ID"
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9_-]{1,128}$`
 	// SourceBackupID is the UUID of the backup on the source cluster to import.
 	SourceBackupID string `json:"sourceBackupID"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Target Cluster Name"

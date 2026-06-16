@@ -580,7 +580,9 @@ spec:
                   type: string
                 type: array
               capacityLimit:
-                description: CapacityLimit is the maximum pool capacity.
+                description: |-
+                  CapacityLimit is the maximum aggregate capacity that can be allocated from this pool.
+                  This maps to sbctl pool add --pool-max. Use sizes like 20M, 20G, or 0 for unlimited.
                 type: string
               clusterName:
                 description: ClusterName is the target storage cluster name.
@@ -591,6 +593,12 @@ spec:
                   DHCHAP enables DH-HMAC-CHAP key generation for the pool. Authentication is only
                   enforced when allowedNodes is non-empty
                 type: boolean
+              logicalVolumeMaxSize:
+                description: |-
+                  LogicalVolumeMaxSize is the maximum size allowed for any single logical volume
+                  created in this pool. This maps to sbctl pool add --lvol-max. Use sizes like
+                  20M, 20G, or 0 for unlimited.
+                type: string
               qos:
                 description: QosSpec defines QosSpec limits for the pool.
                 properties:
@@ -1260,9 +1268,7 @@ spec:
                 description: ClientDataIfname defines the client data network interface.
                 type: string
               clientQpairCount:
-                description: |-
-                  ClientQpairCount defines client-side queue-pair count.
-                  FIXME: Unused for now
+                description: ClientQpairCount defines client-side queue-pair count.
                 format: int32
                 type: integer
               criticalThreshold:
@@ -1284,23 +1290,20 @@ spec:
                 description: EnableNodeAffinity enables node-affinity placement for
                   storage components.
                 type: boolean
-              eventLogEntries:
-                description: |-
-                  EventLogEntries limits the number of event-log entries returned/retained.
-                  FIXME: Unused for now
-                format: int32
-                type: integer
               fabricType:
                 description: FabricType defines the storage fabric type.
                 type: string
               haType:
                 description: HAType defines the backend high-availability mode.
                 type: string
-              includeEventLog:
-                description: |-
-                  IncludeEventLog controls whether event logs are included in responses/exports.
-                  FIXME: Unused for now
-                type: boolean
+              hashicorpVaultSettings:
+                description: HashicorpVaultSettings configures the Vault endpoint
+                  used by the cluster for key storage.
+                properties:
+                  baseURL:
+                    description: BaseURL is the HashiCorp Vault endpoint (e.g. https://vault.example.com:8200).
+                    type: string
+                type: object
               inflightIOThreshold:
                 description: InflightIOThreshold defines the inflight I/O threshold.
                 format: int32
@@ -1317,18 +1320,14 @@ spec:
                 description: MaxQueueSize defines the maximum backend queue size.
                 format: int32
                 type: integer
-              mgmtIfname:
-                description: |-
-                  MgmtIfname is the management network interface name used for cluster communication.
-                  FIXME: Unused for now
-                type: string
               nodeRecycle:
                 description: NodeRecycle configures the node-recycle action.
                 properties:
                   refreshSNodeAPI:
                     description: |-
                       RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
-                      before shutting it down, ensuring the latest image is running.
+                      after the backend node is shut down and before it is restarted, ensuring
+                      the latest image is running before the node comes back online.
                     type: boolean
                 type: object
               nvmfBasePort:
@@ -1339,11 +1338,6 @@ spec:
                 description: PageSizeInBlocks defines page size expressed in blocks.
                 format: int32
                 type: integer
-              qosClasses:
-                description: |-
-                  QoSClasses defines backend QosSpec class configuration.
-                  FIXME: Unused for now
-                type: string
               qpairCount:
                 description: QpairCount defines the NVMe queue-pair count used by
                   the cluster.
@@ -1445,6 +1439,13 @@ spec:
                   FIXME: Unused for now (API update required?)
                 format: date-time
                 type: string
+              maxFaultTolerance:
+                description: |-
+                  MaxFaultTolerance is the backend-reported maximum number of nodes that can
+                  be simultaneously offline (failed, drained, or restarted) without violating
+                  the cluster's redundancy guarantees.
+                format: int32
+                type: integer
               mgmtNodes:
                 description: |-
                   MgmtNodes is the number of management nodes.
@@ -1558,13 +1559,6 @@ spec:
                 - resume
                 - remove
                 type: string
-              addPcieToAllowList:
-                description: |-
-                  AddPcieToAllowList appends devices to the allow-list during restart actions.
-                  FIXME: Unused for now
-                items:
-                  type: string
-                type: array
               clusterImage:
                 description: ClusterImage is the container image used for storage-node
                   workloads.
@@ -1595,9 +1589,7 @@ spec:
                 description: EnableCpuTopology enables topology-aware CPU handling.
                 type: boolean
               force:
-                description: |-
-                  Force enables forced action execution where supported.
-                  FIXME: Unused for now
+                description: Force enables forced action execution where supported.
                 type: boolean
               forceFormat4K:
                 description: ForceFormat4K forces 4K blocksize formatting of the NVMe
@@ -1615,11 +1607,6 @@ spec:
                       percentage per device.
                     format: int32
                     type: integer
-                  useSeparateJournalDevice:
-                    description: |-
-                      UseSeparateJournalDevice enables using separate journal devices.
-                      FIXME: Unused for now
-                    type: boolean
                 type: object
               maxLogicalVolumeCount:
                 description: MaxLogicalVolumeCount is the maximum number of logical
@@ -1627,17 +1614,11 @@ spec:
                 format: int32
                 type: integer
               maxSize:
-                description: MaxSize is the maximum allocatable size of the storage
-                  node.
+                description: MaxSize is the maximum allocatable size of huge pages.
                 type: string
               mgmtIfname:
                 description: MgmtIfname is the management interface name used by storage
                   nodes.
-                type: string
-              nodeAddr:
-                description: |-
-                  NodeAddr is the explicit node address used by action flows.
-                  FIXME: Unused for now
                 type: string
               nodeUUID:
                 description: NodeUUID is required when action is specified
@@ -1671,6 +1652,10 @@ spec:
               pcieModel:
                 description: PcieModel filters devices by PCI model.
                 type: string
+              reattachVolume:
+                description: ReattachVolume reattaches volumes during restart where
+                  supported by the backend.
+                type: boolean
               reservedSystemCPU:
                 description: ReservedSystemCPU defines CPUs reserved for system workloads.
                 type: string
@@ -1689,6 +1674,12 @@ spec:
               spdkProxyImage:
                 description: SpdkProxyImage is the SPDK proxy image reference used
                   by node services.
+                type: string
+              spdkSystemMemory:
+                description: |-
+                  SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g. "4G", "512M").
+                  When omitted the backend default is used.
+                pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                 type: string
               tolerations:
                 description: Tolerations configures pod tolerations for storage-node
@@ -1884,10 +1875,11 @@ spec:
         - message: nodeUUID is required when action is specified
           rule: '!(has(self.spec.action) && self.spec.action != "" && (!has(self.spec.nodeUUID)
             || self.spec.nodeUUID == ""))'
-        - message: maxLogicalVolumeCount and workerNodes are required when action
-            is not specified
+        - message: maxLogicalVolumeCount, workerNodes, and mgmtIfname are required
+            when action is not specified
           rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.maxLogicalVolumeCount)
-            && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)
+            && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname)
+            && self.spec.mgmtIfname != "")
     served: true
     storage: true
     subresources:
@@ -2264,44 +2256,27 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-pool-admin-role
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+  name: simplyblock-operator-simplyblock-aggregate-to-edit
 rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - storageclusters
   - pools
-  verbs:
-  - '*'
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - pools/status
   verbs:
   - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-pool-editor-role
-rules:
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - pools
-  verbs:
+  - list
+  - watch
   - create
-  - delete
-  - get
-  - list
-  - patch
   - update
-  - watch
+  - patch
+  - delete
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - storageclusters/status
   - pools/status
   verbs:
   - get
@@ -2312,22 +2287,20 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-pool-viewer-role
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+  name: simplyblock-operator-simplyblock-aggregate-to-view
 rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - storageclusters
   - pools
+  - storageclusters/status
+  - pools/status
   verbs:
   - get
   - list
   - watch
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - pools/status
-  verbs:
-  - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -2424,77 +2397,6 @@ rules:
   - storage.simplyblock.io
   resources:
   - storagebackups/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-storagecluster-admin-role
-rules:
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - storageclusters
-  verbs:
-  - '*'
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - storageclusters/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-storagecluster-editor-role
-rules:
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - storageclusters
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - storageclusters/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-storagecluster-viewer-role
-rules:
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - storageclusters
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - storageclusters/status
   verbs:
   - get
 ---

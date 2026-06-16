@@ -30,9 +30,6 @@ type JournalManagerSpec struct {
 	Count *int32 `json:"count,omitempty"`
 	// PercentPerDevice is the journal manager capacity percentage per device.
 	PercentPerDevice *int32 `json:"percentPerDevice,omitempty"`
-	// UseSeparateJournalDevice enables using separate journal devices.
-	// FIXME: Unused for now
-	UseSeparateJournalDevice *bool `json:"useSeparateJournalDevice,omitempty"`
 }
 
 // StorageNodeSpec defines the desired state of StorageNode
@@ -55,7 +52,7 @@ type StorageNodeSpec struct {
 	// MaxLogicalVolumeCount is the maximum number of logical volumes per node.
 	MaxLogicalVolumeCount *int32 `json:"maxLogicalVolumeCount,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Size"
-	// MaxSize is the maximum allocatable size of the storage node.
+	// MaxSize is the maximum allocatable size of huge pages.
 	MaxSize string `json:"maxSize,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="SPDK Image"
 	// SpdkImage is the SPDK image reference used by node services.
@@ -102,9 +99,17 @@ type StorageNodeSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Worker Node"
 	// WorkerNode is a single worker node used by action flows.
 	WorkerNode string `json:"workerNode,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Reattach Volume"
+	// ReattachVolume reattaches volumes during restart where supported by the backend.
+	ReattachVolume *bool `json:"reattachVolume,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="OpenShift Cluster"
 	// OpenShiftCluster indicates OpenShift-specific behavior should be enabled.
 	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="OpenShift MachineConfigPool"
+	// OpenShiftMachineConfigPool is the name of the MachineConfigPool that storage nodes belong to.
+	// Generated MachineConfig resources will carry the machineconfiguration.openshift.io/role label
+	// set to this value. Defaults to "worker" when unset.
+	OpenShiftMachineConfigPool string `json:"openShiftMachineConfigPool,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Device Names"
 	// DeviceNames explicitly defines a comma separated list of nvme namespace names like nvme0n1,nvme1n1...
 	DeviceNames []string `json:"deviceNames,omitempty"`
@@ -123,22 +128,18 @@ type StorageNodeSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Reserved System CPU"
 	// ReservedSystemCPU defines CPUs reserved for system workloads.
 	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="SPDK System Memory"
+	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
+	// SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g. "4G", "512M").
+	// When omitted the backend default is used.
+	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Tolerations"
 	// Tolerations configures pod tolerations for storage-node pods.
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Add PCIe To Allow List"
-	// AddPcieToAllowList appends devices to the allow-list during restart actions.
-	// FIXME: Unused for now
-	AddPcieToAllowList []string `json:"addPcieToAllowList,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node Address"
-	// NodeAddr is the explicit node address used by action flows.
-	// FIXME: Unused for now
-	NodeAddr string `json:"nodeAddr,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
 	// Force enables forced action execution where supported.
-	// FIXME: Unused for now
 	Force *bool `json:"force,omitempty"`
 }
 
@@ -240,7 +241,7 @@ type ActionStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && (!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\"))",message="nodeUUID is required when action is specified"
-// +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0)",message="maxLogicalVolumeCount and workerNodes are required when action is not specified"
+// +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname) && self.spec.mgmtIfname != \"\")",message="maxLogicalVolumeCount, workerNodes, and mgmtIfname are required when action is not specified"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Storage Node",resources={{ServiceAccount,v1,simplyblock-storage-node},{Service,v1,simplyblock-storage-node},{DaemonSet,v1,simplyblock-storage-node},{ClusterRole,v1,simplyblock-storage-node},{ClusterRoleBinding,v1,simplyblock-storage-node}}
 // StorageNode is the Schema for the storagenodes API
 type StorageNode struct {

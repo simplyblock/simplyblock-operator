@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -28,6 +29,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -38,13 +40,35 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
+const (
+	poolStatusInvalidClusterReference = "InvalidClusterReference"
+	poolEventInvalidClusterReference  = "InvalidClusterReference"
+)
+
 // PoolReconciler reconciles a Pool object
 type PoolReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
-type POOLAPIResponse struct {
+// StoragePoolDTO mirrors the new API's storage pool response format.
+type StoragePoolDTO struct {
+	ID           string   `json:"id"`
+	ClusterID    string   `json:"cluster_id"`
+	Name         string   `json:"name"`
+	Status       string   `json:"status"`
+	MaxRwIOPS    int64    `json:"max_rw_iops"`
+	MaxRwMbytes  int64    `json:"max_rw_mbytes"`
+	MaxRMbytes   int64    `json:"max_r_mbytes"`
+	MaxWMbytes   int64    `json:"max_w_mbytes"`
+	DHCHAP       bool     `json:"dhchap"`
+	AllowedHosts []string `json:"allowed_hosts"`
+}
+
+// legacyPoolAPIResponse is the pre-DTO pool response format.
+// FIXME: Remove thisonce all deployments have migrated to the new API that returns StoragePoolDTO.
+type legacyPoolAPIResponse struct {
 	UUID         string   `json:"uuid"`
 	QoSIOPSLimit int64    `json:"max_rw_ios_per_sec"`
 	RWLimit      int64    `json:"max_rw_mbytes_per_sec"`
@@ -56,6 +80,49 @@ type POOLAPIResponse struct {
 	AllowedHosts []string `json:"allowed_hosts,omitempty"`
 }
 
+// toDTO converts the legacy response to the canonical StoragePoolDTO.
+// Fields absent from the DTO format (e.g. qos_host) are not carried over.
+func (r *legacyPoolAPIResponse) toDTO() StoragePoolDTO {
+	return StoragePoolDTO{
+		ID:           r.UUID,
+		Status:       r.Status,
+		MaxRwIOPS:    r.QoSIOPSLimit,
+		MaxRwMbytes:  r.RWLimit,
+		MaxRMbytes:   r.RLimit,
+		MaxWMbytes:   r.WLimit,
+		DHCHAP:       r.DHCHAP,
+		AllowedHosts: r.AllowedHosts,
+	}
+}
+
+// parsePoolAPIResponse parses raw JSON into a StoragePoolDTO. It tries the DTO format first
+// (detected by the "id" field), then falls back to the legacy format (detected by the "uuid"
+// field). Returns an error if neither format is recognised.
+func parsePoolAPIResponse(data []byte) (StoragePoolDTO, error) {
+	var probe struct {
+		ID   string `json:"id"`
+		UUID string `json:"uuid"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return StoragePoolDTO{}, fmt.Errorf("failed to parse pool API response: %w", err)
+	}
+	if probe.ID != "" {
+		var dto StoragePoolDTO
+		if err := json.Unmarshal(data, &dto); err != nil {
+			return StoragePoolDTO{}, fmt.Errorf("failed to parse StoragePoolDTO: %w", err)
+		}
+		return dto, nil
+	}
+	if probe.UUID != "" {
+		var legacy legacyPoolAPIResponse
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return StoragePoolDTO{}, fmt.Errorf("failed to parse legacy pool response: %w", err)
+		}
+		return legacy.toDTO(), nil
+	}
+	return StoragePoolDTO{}, fmt.Errorf("pool API response contains neither 'id' (DTO) nor 'uuid' (legacy): %s", string(data))
+}
+
 type poolHostParams struct {
 	HostNQN string `json:"host_nqn"`
 }
@@ -65,6 +132,7 @@ type poolHostParams struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -91,16 +159,28 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		poolCR.Spec.ClusterName,
 	)
 
-	if err != nil {
+	switch {
+	case errors.Is(err, utils.ErrClusterNotFound):
+		log.Error(err, "Pool references a StorageCluster that does not exist in its namespace",
+			"namespace", poolCR.Namespace,
+			"cluster", poolCR.Spec.ClusterName,
+		)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(poolCR, corev1.EventTypeWarning, poolEventInvalidClusterReference,
+				"StorageCluster %q not found in namespace %q; Pools must reside in the same namespace as their StorageCluster",
+				poolCR.Spec.ClusterName, poolCR.Namespace)
+		}
+		if poolCR.Status.Status != poolStatusInvalidClusterReference {
+			poolCR.Status.Status = poolStatusInvalidClusterReference
+			if statusErr := r.Status().Update(ctx, poolCR); statusErr != nil {
+				log.Error(statusErr, "Failed to update pool status to InvalidClusterReference")
+			}
+		}
+		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+	case err != nil:
 		log.Info("Cluster UUID not ready yet, requeuing",
 			"cluster", poolCR.Spec.ClusterName,
 		)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, poolCR.Namespace, poolCR.Spec.ClusterName)
-	if err != nil {
-		log.Error(err, "Failed to get cluster auth")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -109,7 +189,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if !poolCR.DeletionTimestamp.IsZero() {
 		if utils.ContainsString(poolCR.Finalizers, utils.FinalizerPool) && poolCR.Status.UUID != "" {
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
-			body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+			body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 			if err != nil || status >= 300 {
 				if err == nil {
 					err = fmt.Errorf("unexpected status %d", status)
@@ -160,8 +240,8 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 		params := utils.PoolAddParams{
 			Name:          poolCR.Name,
-			PoolMax:       utils.IntPtrOrDefault(utils.ParseSize(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
-			VolumeMaxSize: 0,
+			PoolMax:       utils.Int64PtrOrDefault(utils.ParseSizeInt64(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
+			VolumeMaxSize: utils.Int64PtrOrDefault(utils.ParseSizeInt64(poolCR.Spec.LogicalVolumeMaxSize, "si/iec", "", false), 0),
 			MaxRwMB:       poolSpecQoSThroughputReadWrite(poolCR.Spec.QosSpec),
 			MaxRwIOPS:     poolSpecQoSIOPS(poolCR.Spec.QosSpec),
 			MaxRMB:        poolSpecQoSThroughputRead(poolCR.Spec.QosSpec),
@@ -173,7 +253,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, params)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, params)
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d", status)
@@ -188,22 +268,19 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			"response", string(body),
 		)
 
-		var apiResp POOLAPIResponse
-
-		if err := json.Unmarshal(body, &apiResp); err != nil {
+		poolDTO, err := parsePoolAPIResponse(body)
+		if err != nil {
 			log.Error(err, "Failed to parse pool creation response", "raw", string(body))
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
-		// API returns UUID of the created pool
-		poolCR.Status.UUID = apiResp.UUID
-		poolCR.Status.Status = apiResp.Status
+		poolCR.Status.UUID = poolDTO.ID
+		poolCR.Status.Status = poolDTO.Status
 		poolCR.Status.QoS = &simplyblockv1alpha1.PoolQoSStatus{
-			Host: apiResp.QoSHost,
-			IOPS: utils.ToInt32Ptr(apiResp.QoSIOPSLimit),
+			IOPS: utils.ToInt32Ptr(poolDTO.MaxRwIOPS),
 			Throughput: &simplyblockv1alpha1.PoolQoSThroughputStatus{
-				Read:      utils.ToInt32Ptr(apiResp.RLimit),
-				ReadWrite: utils.ToInt32Ptr(apiResp.RWLimit),
-				Write:     utils.ToInt32Ptr(apiResp.WLimit),
+				Read:      utils.ToInt32Ptr(poolDTO.MaxRMbytes),
+				ReadWrite: utils.ToInt32Ptr(poolDTO.MaxRwMbytes),
+				Write:     utils.ToInt32Ptr(poolDTO.MaxWMbytes),
 			},
 		}
 
@@ -226,7 +303,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	if changed, err := r.syncPoolHosts(ctx, apiClient, clusterSecret, clusterUUID, poolCR); err != nil {
+	if changed, err := r.syncPoolHosts(ctx, apiClient, clusterUUID, poolCR); err != nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	} else if changed {
 		poolCR.Status.AllowedNodes = poolCR.Spec.AllowedNodes
@@ -248,7 +325,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	// }
 
 	// endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
-	// body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPut, endpoint, updateParams)
+	// body, status, err := apiClient.Do(ctx, http.MethodPut, endpoint, updateParams)
 	// if err != nil || status >= 300 {
 	// 	log.Error(err, "Pool update failed", "status", status, "response", string(body))
 	// 	return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
@@ -415,7 +492,7 @@ func (r *PoolReconciler) syncNodeLabels(ctx context.Context, poolCR *simplyblock
 func (r *PoolReconciler) syncPoolHosts(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret, clusterUUID string,
+	clusterUUID string,
 	poolCR *simplyblockv1alpha1.Pool,
 ) (bool, error) {
 	log := logf.FromContext(ctx)
@@ -431,7 +508,7 @@ func (r *PoolReconciler) syncPoolHosts(
 
 	// Fetch current backend state to use as applied list.
 	getEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, getEndpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, getEndpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d: %s", status, string(body))
@@ -439,12 +516,12 @@ func (r *PoolReconciler) syncPoolHosts(
 		log.Error(err, "Failed to fetch pool for host sync")
 		return false, err
 	}
-	var poolResp POOLAPIResponse
-	if err := json.Unmarshal(body, &poolResp); err != nil {
+	poolDTO, err := parsePoolAPIResponse(body)
+	if err != nil {
 		log.Error(err, "Failed to parse pool GET response")
 		return false, err
 	}
-	applied := poolResp.AllowedHosts
+	applied := poolDTO.AllowedHosts
 
 	if len(desired) == 0 && len(applied) == 0 {
 		return false, nil
@@ -466,7 +543,7 @@ func (r *PoolReconciler) syncPoolHosts(
 		if _, ok := appliedSet[h]; ok {
 			continue
 		}
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodPost, endpoint, poolHostParams{HostNQN: h})
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, poolHostParams{HostNQN: h})
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d: %s", status, string(body))
@@ -482,7 +559,7 @@ func (r *PoolReconciler) syncPoolHosts(
 		if _, ok := desiredSet[h]; ok {
 			continue
 		}
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, poolHostParams{HostNQN: h})
+		body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, poolHostParams{HostNQN: h})
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d: %s", status, string(body))

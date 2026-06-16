@@ -28,10 +28,10 @@ func TestDoAgainstSpecMockSendsHeadersBodyAndReturnsResponse(t *testing.T) {
 	)
 
 	c := NewClient(mock.URL())
+	c.saToken = "top-secret"
 
 	respBody, status, err := c.Do(
 		context.Background(),
-		"top-secret",
 		http.MethodPost,
 		"/api/v2/clusters/cluster-uuid/storage-pools/",
 		map[string]any{"name": "pool-a"},
@@ -80,7 +80,6 @@ func TestDoAgainstStrictSpecMockReturns400ForUnknownPath(t *testing.T) {
 	c := NewClient(mock.URL())
 	body, status, err := c.Do(
 		context.Background(),
-		"secret",
 		http.MethodGet,
 		"/api/v2/clusters/cluster-uuid/nonexistent-endpoint/",
 		nil,
@@ -102,7 +101,6 @@ func TestDoReturnsMarshalErrorForUnsupportedBody(t *testing.T) {
 	c := NewClient(ts.URL)
 	_, _, err := c.Do(
 		context.Background(),
-		"secret",
 		http.MethodPost,
 		"/api/v2/clusters/cluster-uuid/storage-pools/",
 		map[string]any{"bad": make(chan int)},
@@ -121,7 +119,6 @@ func TestDoReturnsHTTPErrorForUnreachableServer(t *testing.T) {
 	c := NewClient(ts.URL)
 	_, status, err := c.Do(
 		context.Background(),
-		"secret",
 		http.MethodGet,
 		"/api/v2/clusters/cluster-uuid/storage-pools/",
 		nil,

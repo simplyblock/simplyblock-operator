@@ -63,7 +63,7 @@ func TestEnsureNodeStatus(t *testing.T) {
 func TestWaitForActionCompletionUnknownAction(t *testing.T) {
 	r := &StorageNodeReconciler{}
 	c := webapi.NewClient("http://127.0.0.1:1")
-	err := r.waitForActionCompletion(context.Background(), c, "cluster", "secret", "node", "invalid-action")
+	err := r.waitForActionCompletion(context.Background(), c, "cluster", "node", "invalid-action")
 	if err == nil {
 		t.Fatalf("expected error for unknown action")
 	}
@@ -124,7 +124,7 @@ func TestWaitForActionCompletionValidTransitions(t *testing.T) {
 
 			r := &StorageNodeReconciler{}
 			c := webapi.NewClient(srv.URL)
-			err := r.waitForActionCompletion(context.Background(), c, "cluster", "secret", "node", tc.action)
+			err := r.waitForActionCompletion(context.Background(), c, "cluster", "node", tc.action)
 			if err != nil {
 				t.Fatalf("waitForActionCompletion returned error: %v", err)
 			}
@@ -153,7 +153,7 @@ func TestHandleNodeActionTransitions(t *testing.T) {
 		}
 
 		r := newStorageNodeStateTestReconciler(t, sn)
-		err := r.handleNodeAction(context.Background(), webapi.NewClient("http://127.0.0.1:1"), sn, "cluster", "secret")
+		err := r.handleNodeAction(context.Background(), webapi.NewClient("http://127.0.0.1:1"), sn, "cluster")
 		if err != nil {
 			t.Fatalf("handleNodeAction returned error: %v", err)
 		}
@@ -175,7 +175,7 @@ func TestHandleNodeActionTransitions(t *testing.T) {
 		}
 
 		r := newStorageNodeStateTestReconciler(t, sn)
-		err := r.handleNodeAction(context.Background(), webapi.NewClient("http://127.0.0.1:1"), sn, "cluster", "secret")
+		err := r.handleNodeAction(context.Background(), webapi.NewClient("http://127.0.0.1:1"), sn, "cluster")
 		if err == nil {
 			t.Fatalf("expected action failure")
 		}
@@ -217,7 +217,7 @@ func TestHandleNodeActionRejectsIllegalSuccessIdentity(t *testing.T) {
 	}
 
 	r := newStorageNodeStateTestReconciler(t, sn)
-	err := r.handleNodeAction(context.Background(), webapi.NewClient("http://127.0.0.1:1"), sn, "cluster", "secret")
+	err := r.handleNodeAction(context.Background(), webapi.NewClient("http://127.0.0.1:1"), sn, "cluster")
 	if err == nil {
 		t.Fatalf("expected failure after rejecting illegal success identity")
 	}
@@ -651,7 +651,7 @@ func TestStorageNodeReconcileActionFastPaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
 
-		res, err := r.reconcileAction(context.Background(), sn, "cluster", "secret")
+		res, err := r.reconcileAction(context.Background(), sn, "cluster")
 		if err != nil {
 			t.Fatalf("reconcileAction returned error: %v", err)
 		}
@@ -670,7 +670,7 @@ func TestStorageNodeReconcileActionFastPaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
 
-		res, err := r.reconcileAction(context.Background(), sn, "cluster", "secret")
+		res, err := r.reconcileAction(context.Background(), sn, "cluster")
 		if err != nil {
 			t.Fatalf("reconcileAction returned unexpected error: %v", err)
 		}
@@ -737,7 +737,10 @@ func TestStorageNodeReconcileClusterUnavailableRequeues(t *testing.T) {
 	}
 }
 
-func TestStorageNodeReconcileSecretMissingRequeues(t *testing.T) {
+func TestStorageNodeReconcileWithClusterUUIDProceeds(t *testing.T) {
+	// With SA-token auth, the cluster secret is no longer required.
+	// Reconcile should proceed (not requeue waiting for a secret) when
+	// the cluster UUID is available.
 	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "default"},
 		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
@@ -752,13 +755,12 @@ func TestStorageNodeReconcileSecretMissingRequeues(t *testing.T) {
 	}
 	r := newStorageNodeStateTestReconciler(t, sn, cluster)
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)})
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)})
 	if err != nil {
-		t.Fatalf("reconcile returned error: %v", err)
+		t.Fatalf("reconcile returned unexpected error: %v", err)
 	}
-	if res.RequeueAfter == 0 {
-		t.Fatalf("expected delayed requeue when cluster secret is unavailable")
-	}
+	// No assertion on RequeueAfter — the reconciler may requeue for other
+	// reasons (e.g., waiting for nodes to join), but it must not error.
 }
 
 func TestStorageNodeReconcileNotFoundReturnsNil(t *testing.T) {
@@ -1013,8 +1015,8 @@ func TestStorageNodeReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
-	if res.RequeueAfter != 0 {
-		t.Fatalf("expected no delayed requeue when worker already known, got %+v", res)
+	if res.RequeueAfter != syncNodeStatusInterval {
+		t.Fatalf("expected requeue after %v for status sync, got %+v", syncNodeStatusInterval, res)
 	}
 }
 
@@ -1405,7 +1407,7 @@ func TestPollNodeOnlinePaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, cluster, sn)
 
-		res, err := r.pollNodeOnline(context.Background(), apiClient, "secret", clusterUUID, mgmtIP, "node-a", 1, sn)
+		res, err := r.pollNodeOnline(context.Background(), apiClient, clusterUUID, mgmtIP, "node-a", 1, sn)
 		if err != nil {
 			t.Fatalf("pollNodeOnline returned error: %v", err)
 		}
@@ -1470,7 +1472,7 @@ func TestPollNodeOnlinePaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, cluster, sn)
 
-		res, err := r.pollNodeOnline(context.Background(), apiClient, "secret", clusterUUID, "10.0.0.2", "node-b", 1, sn)
+		res, err := r.pollNodeOnline(context.Background(), apiClient, clusterUUID, "10.0.0.2", "node-b", 1, sn)
 		if err != nil {
 			t.Fatalf("pollNodeOnline returned unexpected error: %v", err)
 		}
@@ -1512,7 +1514,7 @@ func TestPollNodeOnlinePaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
 
-		res, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), "secret", clusterUUID, mgmtIP, "node-a", 1, sn)
+		res, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), clusterUUID, mgmtIP, "node-a", 1, sn)
 		if err != nil {
 			t.Fatalf("pollNodeOnline returned unexpected error: %v", err)
 		}
@@ -1561,7 +1563,7 @@ func TestPollNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
 
-		_, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), "secret", clusterUUID, mgmtIP, "node-a", 1, sn)
+		_, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), clusterUUID, mgmtIP, "node-a", 1, sn)
 		if err == nil {
 			t.Fatalf("expected unmarshal error for invalid payload")
 		}
@@ -1612,7 +1614,7 @@ func TestPollNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
 
-		_, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), "secret", clusterUUID, "10.0.0.3", "node-c", 1, sn)
+		_, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), clusterUUID, "10.0.0.3", "node-c", 1, sn)
 		if err == nil {
 			t.Fatalf("expected cluster resolution error")
 		}
@@ -1651,7 +1653,7 @@ func TestPollNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
 
-		res, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), "secret", clusterUUID, "10.0.0.4", "node-timeout", 1, sn)
+		res, err := r.pollNodeOnline(context.Background(), webapi.NewClient(mock.URL()), clusterUUID, "10.0.0.4", "node-timeout", 1, sn)
 		if err != nil {
 			t.Fatalf("expected no error on timeout, got: %v", err)
 		}
@@ -1695,7 +1697,6 @@ func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
 			context.Background(),
 			webapi.NewClient(srv.URL),
 			"cluster-a",
-			"secret",
 			"node-a",
 			"restart",
 		)
@@ -1732,7 +1733,6 @@ func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
 			context.Background(),
 			webapi.NewClient(srv.URL),
 			"cluster-b",
-			"secret",
 			"node-b",
 			"restart",
 		)
@@ -1772,7 +1772,7 @@ func TestPerformNodeActionRemoveHappyPath(t *testing.T) {
 	}
 	r := newStorageNodeStateTestReconciler(t, sn)
 
-	if err := r.performNodeAction(context.Background(), apiClient, clusterUUID, "secret", sn); err != nil {
+	if err := r.performNodeAction(context.Background(), apiClient, clusterUUID, sn); err != nil {
 		t.Fatalf("performNodeAction(remove) returned error: %v", err)
 	}
 }
@@ -1795,7 +1795,6 @@ func TestPerformNodeActionRestartWorkerNodeLabelFailure(t *testing.T) {
 		context.Background(),
 		webapi.NewClient("http://127.0.0.1:1"),
 		clusterUUID,
-		"secret",
 		sn,
 	)
 	if err == nil {
@@ -1837,7 +1836,6 @@ func TestPerformNodeActionRestartWorkerNodeReachabilityCanceled(t *testing.T) {
 		ctx,
 		webapi.NewClient("http://127.0.0.1:1"),
 		clusterUUID,
-		"secret",
 		sn,
 	)
 	if !errors.Is(err, context.Canceled) {
@@ -1872,7 +1870,7 @@ func TestPerformNodeActionAPIFailure(t *testing.T) {
 			},
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
-		err := r.performNodeAction(context.Background(), webapi.NewClient(mock.URL()), clusterUUID, "secret", sn)
+		err := r.performNodeAction(context.Background(), webapi.NewClient(mock.URL()), clusterUUID, sn)
 		if err == nil {
 			t.Fatalf("expected restart API failure")
 		}
@@ -1907,7 +1905,7 @@ func TestPerformNodeActionAPIFailure(t *testing.T) {
 			},
 		}
 		r := newStorageNodeStateTestReconciler(t, sn)
-		err := r.performNodeAction(context.Background(), webapi.NewClient(mock.URL()), clusterUUID, "secret", sn)
+		err := r.performNodeAction(context.Background(), webapi.NewClient(mock.URL()), clusterUUID, sn)
 		if err == nil {
 			t.Fatalf("expected default-action API failure")
 		}
@@ -1963,7 +1961,7 @@ func TestPerformNodeActionDefaultActionSuccess(t *testing.T) {
 		},
 	}
 	r := newStorageNodeStateTestReconciler(t, sn)
-	if err := r.performNodeAction(context.Background(), webapi.NewClient(mock.URL()), clusterUUID, "secret", sn); err != nil {
+	if err := r.performNodeAction(context.Background(), webapi.NewClient(mock.URL()), clusterUUID, sn); err != nil {
 		t.Fatalf("performNodeAction(default suspend) returned error: %v", err)
 	}
 }
@@ -2003,7 +2001,7 @@ func TestHandleNodeActionTransitionsToSuccess(t *testing.T) {
 	}
 	r := newStorageNodeStateTestReconciler(t, sn)
 
-	if err := r.handleNodeAction(context.Background(), webapi.NewClient(mock.URL()), sn, clusterUUID, "secret"); err != nil {
+	if err := r.handleNodeAction(context.Background(), webapi.NewClient(mock.URL()), sn, clusterUUID); err != nil {
 		t.Fatalf("handleNodeAction returned error: %v", err)
 	}
 
@@ -2101,6 +2099,212 @@ func TestReconcileSpdkProxyService(t *testing.T) {
 	if err := r.reconcileSpdkProxyService(context.Background(), sn); err != nil {
 		t.Fatalf("second reconcileSpdkProxyService: %v", err)
 	}
+}
+
+func TestSyncTrackedNodesStatus(t *testing.T) {
+	const clusterUUID = "cluster-sync-uuid"
+
+	apiBody := func(uuid, status, ip string, health bool) string {
+		return fmt.Sprintf(`[{
+			"id":%q,
+			"status":%q,
+			"mgmt_ip":%q,
+			"health_check":%v,
+			"hostname":"node-a",
+			"device_count":2,
+			"online_device_count":2,
+			"cpu_spdk_count":4,
+			"spdk_mem":2147483648,
+			"lvols":3,
+			"rpc_port":9000,
+			"lvol_subsys_port":9001,
+			"nvmf_port":9002
+		}]`, uuid, status, ip, health)
+	}
+
+	t.Run("no-op when no tracked nodes", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-sync-noop", Namespace: "default"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-a", UUID: ""},
+				},
+			},
+		}
+		r := newStorageNodeStateTestReconciler(t, sn)
+		// Unreachable server — if the function makes an HTTP call it will fail.
+		c := webapi.NewClient("http://127.0.0.1:1")
+		if err := r.syncTrackedNodesStatus(context.Background(), c, clusterUUID, sn); err != nil {
+			t.Fatalf("expected no error when no tracked nodes, got: %v", err)
+		}
+	})
+
+	t.Run("updates tracked node fields by UUID", func(t *testing.T) {
+		postedAt := metav1.Now()
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-sync-update", Namespace: "default"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{
+						Hostname: "node-a",
+						UUID:     "node-uuid-1",
+						Status:   "in_creation",
+						Health:   false,
+						MgmtIp:   "10.0.0.1",
+						PostedAt: &postedAt,
+						Uptime:   "1d2h",
+					},
+				},
+			},
+		}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(apiBody("node-uuid-1", statusOnline, "10.0.0.99", true)))
+		}))
+		defer srv.Close()
+
+		r := newStorageNodeStateTestReconciler(t, sn)
+		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn); err != nil {
+			t.Fatalf("syncTrackedNodesStatus returned error: %v", err)
+		}
+
+		n := sn.Status.Nodes[0]
+		if n.Status != statusOnline {
+			t.Errorf("expected Status %q, got %q", statusOnline, n.Status)
+		}
+		if !n.Health {
+			t.Errorf("expected Health=true")
+		}
+		if n.MgmtIp != "10.0.0.99" {
+			t.Errorf("expected MgmtIp 10.0.0.99, got %q", n.MgmtIp)
+		}
+		if n.UUID != "node-uuid-1" {
+			t.Errorf("expected UUID preserved, got %q", n.UUID)
+		}
+	})
+
+	t.Run("preserves PostedAt and Uptime across sync", func(t *testing.T) {
+		postedAt := metav1.NewTime(time.Now().Add(-1 * time.Hour).Truncate(time.Second))
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-sync-preserve", Namespace: "default"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{
+						Hostname: "node-a",
+						UUID:     "node-uuid-2",
+						Status:   statusOnline,
+						PostedAt: &postedAt,
+						Uptime:   "3d4h",
+					},
+				},
+			},
+		}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(apiBody("node-uuid-2", "online", "10.0.0.2", true)))
+		}))
+		defer srv.Close()
+
+		r := newStorageNodeStateTestReconciler(t, sn)
+		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn); err != nil {
+			t.Fatalf("syncTrackedNodesStatus returned error: %v", err)
+		}
+
+		n := sn.Status.Nodes[0]
+		if n.PostedAt == nil || !n.PostedAt.Equal(&postedAt) {
+			t.Errorf("expected PostedAt to be preserved, got %v", n.PostedAt)
+		}
+		if n.Uptime != "3d4h" {
+			t.Errorf("expected Uptime to be preserved as %q, got %q", "3d4h", n.Uptime)
+		}
+	})
+
+	t.Run("skips nodes whose UUID is absent from API response", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-sync-missing", Namespace: "default"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-a", UUID: "node-uuid-known", Status: "in_creation"},
+					{Hostname: "node-b", UUID: "node-uuid-gone", Status: "in_creation"},
+				},
+			},
+		}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			// Only return node-uuid-known; node-uuid-gone is absent.
+			_, _ = w.Write([]byte(apiBody("node-uuid-known", statusOnline, "10.0.0.3", true)))
+		}))
+		defer srv.Close()
+
+		r := newStorageNodeStateTestReconciler(t, sn)
+		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn); err != nil {
+			t.Fatalf("syncTrackedNodesStatus returned error: %v", err)
+		}
+
+		if sn.Status.Nodes[0].Status != statusOnline {
+			t.Errorf("expected known node to be updated, got status %q", sn.Status.Nodes[0].Status)
+		}
+		if sn.Status.Nodes[1].Status != "in_creation" {
+			t.Errorf("expected absent node to be left unchanged, got status %q", sn.Status.Nodes[1].Status)
+		}
+	})
+
+	t.Run("returns error when API call fails", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-sync-apierr", Namespace: "default"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-a", UUID: "node-uuid-err"},
+				},
+			},
+		}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		r := newStorageNodeStateTestReconciler(t, sn)
+		err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn)
+		if err == nil {
+			t.Fatalf("expected error on API failure")
+		}
+		if !strings.Contains(err.Error(), "sync: failed to list storage nodes") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+
+	t.Run("returns error on invalid JSON response", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-sync-badjson", Namespace: "default"},
+			Status: simplyblockv1alpha1.StorageNodeStatus{
+				Nodes: []simplyblockv1alpha1.NodeStatus{
+					{Hostname: "node-a", UUID: "node-uuid-json"},
+				},
+			},
+		}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{`))
+		}))
+		defer srv.Close()
+
+		r := newStorageNodeStateTestReconciler(t, sn)
+		err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn)
+		if err == nil {
+			t.Fatalf("expected error on invalid JSON")
+		}
+		if !strings.Contains(err.Error(), "sync: failed to unmarshal") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
 }
 
 func TestReconcileServicesAndServingCertificatesForCertManagerProvider(t *testing.T) {

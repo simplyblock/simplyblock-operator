@@ -59,6 +59,14 @@ type lvolActiveSidesResponse struct {
 
 var ErrLvolNotFound = errors.New("lvol not found")
 
+// ErrClusterNotFound is returned by cluster-lookup helpers when no
+// StorageCluster with the given name exists in the requested namespace.
+var ErrClusterNotFound = errors.New("storage cluster not found")
+
+// ErrClusterUUIDNotReady is returned by cluster-lookup helpers when a
+// matching StorageCluster exists but its Status.UUID has not been populated yet.
+var ErrClusterUUIDNotReady = errors.New("storage cluster UUID not yet populated")
+
 func ResolvePoolUUID(
 	ctx context.Context,
 	c client.Client,
@@ -96,12 +104,16 @@ func ResolveClusterUUID(
 	}
 
 	for _, cluster := range clusters.Items {
-		if cluster.Name == clusterName && cluster.Status.UUID != "" {
-			return cluster.Status.UUID, nil
+		if cluster.Name != clusterName {
+			continue
 		}
+		if cluster.Status.UUID == "" {
+			return "", fmt.Errorf("%w: cluster %q in namespace %q", ErrClusterUUIDNotReady, clusterName, namespace)
+		}
+		return cluster.Status.UUID, nil
 	}
 
-	return "", fmt.Errorf("cluster %q not found or UUID not ready", clusterName)
+	return "", fmt.Errorf("%w: cluster %q in namespace %q", ErrClusterNotFound, clusterName, namespace)
 }
 
 func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, namespace, cluster string) (string, error) {
@@ -142,40 +154,6 @@ func ResolveClusterCR(
 	}
 
 	return nil, fmt.Errorf("cluster %q not found", clusterName)
-}
-
-func ExistingClusterUUID(
-	ctx context.Context,
-	c client.Client,
-) (exists bool, uuid string, clusterName string, clusterNamespace string, err error) {
-
-	var clusters simplyblockv1alpha1.StorageClusterList
-
-	if err := c.List(ctx, &clusters); err != nil {
-		return false, "", "", "", err
-	}
-
-	for _, cluster := range clusters.Items {
-		if cluster.Status.UUID != "" {
-			return true, cluster.Status.UUID, cluster.Name, cluster.Namespace, nil
-		}
-	}
-
-	return false, "", "", "", nil
-}
-
-func GetClusterNameByUUID(ctx context.Context, cli client.Client, namespace, uuid string) (string, error) {
-	clusterList := &simplyblockv1alpha1.StorageClusterList{}
-	if err := cli.List(ctx, clusterList, client.InNamespace(namespace)); err != nil {
-		return "", fmt.Errorf("failed to list clusters: %w", err)
-	}
-
-	for _, c := range clusterList.Items {
-		if c.Status.UUID == uuid {
-			return c.Name, nil
-		}
-	}
-	return "", fmt.Errorf("no cluster found with UUID %s", uuid)
 }
 
 func CountOnlineHealthyNodes(
@@ -230,14 +208,12 @@ func ActivateCluster(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
-	clusterSecret string,
 ) error {
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/activate", clusterUUID)
 
 	body, status, err := apiClient.Do(
 		ctx,
-		clusterSecret,
 		http.MethodPost,
 		endpoint,
 		nil,
@@ -269,10 +245,31 @@ type ClusterListEntry struct {
 	NPCS   int    `json:"distr_npcs"`
 }
 
+// GetClusterID returns the UUID for clusterCR. It uses Status.UUID when
+// already populated; otherwise it falls back to querying the API by cluster
+// name. Returns an error if the cluster cannot be found.
+func GetClusterID(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+) (string, error) {
+	if clusterCR.Status.UUID != "" {
+		return clusterCR.Status.UUID, nil
+	}
+	entry, err := GetClusterByName(ctx, apiClient, clusterCR.Name)
+	if err != nil {
+		return "", fmt.Errorf("GetClusterID: %w", err)
+	}
+	if entry == nil {
+		return "", fmt.Errorf("GetClusterID: cluster %q not found in API", clusterCR.Name)
+	}
+	return entry.UUID, nil
+}
+
 // GetClusterByName lists all clusters and returns the one matching name.
 // Returns nil if no match is found.
-func GetClusterByName(ctx context.Context, apiClient *webapi.Client, clusterSecret, name string) (*ClusterListEntry, error) {
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, "/api/v2/clusters/", nil)
+func GetClusterByName(ctx context.Context, apiClient *webapi.Client, name string) (*ClusterListEntry, error) {
+	body, status, err := apiClient.Do(ctx, http.MethodGet, "/api/v2/clusters/", nil)
 	if err != nil || status >= 300 {
 		return nil, fmt.Errorf("list clusters failed, status %d: %v, body: %s", status, err, string(body))
 	}
@@ -291,7 +288,6 @@ func GetClusterByName(ctx context.Context, apiClient *webapi.Client, clusterSecr
 func IsClusterActive(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 ) (bool, string, error) {
 
@@ -299,7 +295,6 @@ func IsClusterActive(
 
 	body, status, err := apiClient.Do(
 		ctx,
-		clusterSecret,
 		http.MethodGet,
 		endpoint,
 		nil,
@@ -327,7 +322,6 @@ func IsClusterActive(
 func WaitForClusterActive(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 	timeout time.Duration,
 	pollInterval time.Duration,
@@ -344,7 +338,6 @@ func WaitForClusterActive(
 		active, status, err := IsClusterActive(
 			ctx,
 			apiClient,
-			clusterSecret,
 			clusterUUID,
 		)
 		if err != nil {
@@ -372,27 +365,25 @@ func WaitForClusterActive(
 func ActivateClusterAndWait(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 ) error {
 
-	if err := ActivateCluster(ctx, apiClient, clusterUUID, clusterSecret); err != nil {
+	if err := ActivateCluster(ctx, apiClient, clusterUUID); err != nil {
 		return err
 	}
 
 	return WaitForClusterActive(
 		ctx,
 		apiClient,
-		clusterSecret,
 		clusterUUID,
 		5*time.Minute,  // total timeout
 		10*time.Second, // poll interval
 	)
 }
 
-func ClusterSuspended(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID string) (bool, error) {
+func ClusterSuspended(ctx context.Context, apiClient *webapi.Client, clusterUUID string) (bool, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		return false, fmt.Errorf("failed to get cluster %s, status %d: %v, body: %s", clusterUUID, status, err, string(body))
 	}
@@ -408,13 +399,12 @@ func ClusterSuspended(ctx context.Context, apiClient *webapi.Client, clusterSecr
 func AllStorageNodesUnreachable(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret,
 	clusterUUID string,
 ) (bool, error) {
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
 
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		return false, fmt.Errorf(
 			"failed to list storage nodes for cluster %s, status %d: %v, body: %s",
@@ -491,10 +481,10 @@ func GetPoolByName(ctx context.Context, apiClient *webapi.Client, clusterSecret,
 	return nil, nil
 }
 
-func GetPoolUUIDs(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID string) ([]string, error) {
+func GetPoolUUIDs(ctx context.Context, apiClient *webapi.Client, clusterUUID string) ([]string, error) {
 	log := logf.FromContext(ctx)
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		return nil, fmt.Errorf("failed to list pools, status %d: %v, body: %s", status, err, string(body))
 	}
@@ -520,14 +510,14 @@ func GetPoolUUIDs(ctx context.Context, apiClient *webapi.Client, clusterSecret, 
 	return uuids, nil
 }
 
-func GetLvols(ctx context.Context, apiClient *webapi.Client, clusterSecret, clusterUUID, poolUUID string) ([]Lvol, error) {
+func GetLvols(ctx context.Context, apiClient *webapi.Client, clusterUUID, poolUUID string) ([]Lvol, error) {
 	log := logf.FromContext(ctx)
 	endpoint := fmt.Sprintf(
 		"/api/v2/clusters/%s/storage-pools/%s/volumes/",
 		clusterUUID,
 		poolUUID,
 	)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		return nil, fmt.Errorf("failed to list lvols for pool %s, status %d: %v, body: %s", poolUUID, status, err, string(body))
 	}
@@ -549,7 +539,6 @@ func GetLvols(ctx context.Context, apiClient *webapi.Client, clusterSecret, clus
 func GetLvol(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 	poolUUID string,
 	lvolUUID string,
@@ -563,7 +552,7 @@ func GetLvol(
 		lvolUUID,
 	)
 
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"failed to get lvol %s for pool %s: %w",
@@ -599,16 +588,15 @@ func GetLvol(
 func ShouldFailoverToRepCluster(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret,
 	clusterUUID string,
 ) (bool, error) {
 
-	suspended, err := ClusterSuspended(ctx, apiClient, clusterSecret, clusterUUID)
+	suspended, err := ClusterSuspended(ctx, apiClient, clusterUUID)
 	if err != nil || !suspended {
 		return suspended, err
 	}
 
-	allUnreachable, err := AllStorageNodesUnreachable(ctx, apiClient, clusterSecret, clusterUUID)
+	allUnreachable, err := AllStorageNodesUnreachable(ctx, apiClient, clusterUUID)
 	if err != nil {
 		return false, err
 	}
@@ -619,7 +607,6 @@ func ShouldFailoverToRepCluster(
 func GetSnapshotTasks(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 	poolUUID string,
 	lvolUUID string,
@@ -636,7 +623,6 @@ func GetSnapshotTasks(
 
 	body, status, err := apiClient.Do(
 		ctx,
-		clusterSecret,
 		http.MethodGet,
 		endpoint,
 		nil,
@@ -669,7 +655,6 @@ func GetSnapshotTasks(
 func GetLastSnapshotTaskDoneStatus(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 	poolUUID string,
 	lvolUUID string,
@@ -677,7 +662,6 @@ func GetLastSnapshotTaskDoneStatus(
 	tasks, err := GetSnapshotTasks(
 		ctx,
 		apiClient,
-		clusterSecret,
 		clusterUUID,
 		poolUUID,
 		lvolUUID,
@@ -700,7 +684,6 @@ func GetLastSnapshotTaskDoneStatus(
 func GetReplicationActiveSides(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 	poolUUID string,
 	lvolUUID string,
@@ -712,7 +695,7 @@ func GetReplicationActiveSides(
 		lvolUUID,
 	)
 
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to get lvol %s: %w", lvolUUID, err)
 	}

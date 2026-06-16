@@ -38,7 +38,8 @@ type StripeSpec struct {
 // NodeRecycleSpec configures the node-recycle action behaviour.
 type NodeRecycleSpec struct {
 	// RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
-	// before shutting it down, ensuring the latest image is running.
+	// after the backend node is shut down and before it is restarted, ensuring
+	// the latest image is running before the node comes back online.
 	RefreshSNodeAPI bool `json:"refreshSNodeAPI,omitempty"`
 }
 
@@ -65,6 +66,13 @@ type BackupCredentialsSecretRef struct {
 	Name string `json:"name"`
 }
 
+// HashicorpVaultSettings configures the HashiCorp Vault endpoint the cluster uses to store keys.
+type HashicorpVaultSettings struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Vault Base URL"
+	// BaseURL is the HashiCorp Vault endpoint (e.g. https://vault.example.com:8200).
+	BaseURL string `json:"baseURL,omitempty"`
+}
+
 type BackupSpec struct {
 	LocalEndpoint string `json:"localEndpoint,omitempty"`
 	// +optional
@@ -80,11 +88,17 @@ type BackupSpec struct {
 }
 
 // StorageClusterSpec defines the desired state of StorageCluster
+//
+// +kubebuilder:validation:XValidation:rule="self.haType == oldSelf.haType",message="haType is immutable"
+// +kubebuilder:validation:XValidation:rule="self.fabricType == oldSelf.fabricType",message="fabricType is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.hashicorpVaultSettings) || self.hashicorpVaultSettings == oldSelf.hashicorpVaultSettings",message="hashicorpVaultSettings is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.stripe) || self.stripe == oldSelf.stripe",message="stripe is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.blockSize) || self.blockSize == oldSelf.blockSize",message="blockSize is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.isSingleNode) || self.isSingleNode == oldSelf.isSingleNode",message="isSingleNode is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.nvmfBasePort) || self.nvmfBasePort == oldSelf.nvmfBasePort",message="nvmfBasePort is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.rpcBasePort) || self.rpcBasePort == oldSelf.rpcBasePort",message="rpcBasePort is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.snodeApiPort) || self.snodeApiPort == oldSelf.snodeApiPort",message="snodeApiPort is immutable once set"
 type StorageClusterSpec struct {
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Management Interface"
-	// MgmtIfname is the management network interface name used for cluster communication.
-	// FIXME: Unused for now
-	MgmtIfname string `json:"mgmtIfname,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Node Affinity"
 	// EnableNodeAffinity enables node-affinity placement for storage components.
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
@@ -142,10 +156,6 @@ type StorageClusterSpec struct {
 	// SnodeApiPort defines the storage-node API port.
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
 
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="QoS Classes"
-	// QoSClasses defines backend QosSpec class configuration.
-	// FIXME: Unused for now
-	QoSClasses string `json:"qosClasses,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Warning Threshold"
 	// WarningThresholdSpec defines warning-level capacity thresholds.
 	WarningThresholdSpec *CapacityThresholdSpec `json:"warningThreshold,omitempty"`
@@ -154,19 +164,13 @@ type StorageClusterSpec struct {
 	CriticalThresholdSpec *CapacityThresholdSpec `json:"criticalThreshold,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Client Queue Pair Count"
 	// ClientQpairCount defines client-side queue-pair count.
-	// FIXME: Unused for now
 	ClientQpairCount *int32 `json:"clientQpairCount,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Include Event Log"
-	// IncludeEventLog controls whether event logs are included in responses/exports.
-	// FIXME: Unused for now
-	IncludeEventLog *bool `json:"includeEventLog,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Event Log Entries"
-	// EventLogEntries limits the number of event-log entries returned/retained.
-	// FIXME: Unused for now
-	EventLogEntries *int32 `json:"eventLogEntries,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup"
 	// Backup specifies the specification for backup to S3 configuration
 	Backup *BackupSpec `json:"backup,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="HashiCorp Vault Settings"
+	// HashicorpVaultSettings configures the Vault endpoint used by the cluster for key storage.
+	HashicorpVaultSettings *HashicorpVaultSettings `json:"hashicorpVaultSettings,omitempty"`
 }
 
 // StorageClusterStatus defines the observed state of StorageCluster.
@@ -203,6 +207,10 @@ type StorageClusterStatus struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Configured"
 	// Configured indicates whether initial cluster setup completed.
 	Configured bool `json:"configured,omitempty"`
+	// MaxFaultTolerance is the backend-reported maximum number of nodes that can
+	// be simultaneously offline (failed, drained, or restarted) without violating
+	// the cluster's redundancy guarantees.
+	MaxFaultTolerance *int32 `json:"maxFaultTolerance,omitempty"`
 	// ActionStatus tracks the most recent action execution state.
 	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 	// NodeRecycleStatus tracks in-progress state for the node-recycle action.

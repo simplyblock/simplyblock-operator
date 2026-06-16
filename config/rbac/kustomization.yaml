@@ -18,22 +18,22 @@ resources:
 - metrics_auth_role.yaml
 - metrics_auth_role_binding.yaml
 - metrics_reader_role.yaml
-# For each installed CRD, "Admin", "Editor" and "Viewer" roles are scaffolded by
-# default, aiding admins in cluster management. Those roles are
-# not used by the simplyblock-operator itself. You can comment the following lines
-# if you do not want those helpers be installed with your Project.
-- pool_admin_role.yaml
-- pool_editor_role.yaml
-- pool_viewer_role.yaml
+# Aggregate the simplyblock CR verbs into the built-in Kubernetes view/edit/admin
+# ClusterRoles. With the namespace-per-cluster convention, binding view/edit/admin
+# in a namespace gives that tenant the appropriate level of access to the
+# StorageClusters and Pools in their namespace, and nothing outside it.
+- aggregate_view_role.yaml
+- aggregate_edit_role.yaml
+# The Kubebuilder scaffold also produces "Admin", "Editor" and "Viewer" ClusterRoles
+# for the remaining CRDs below. Those are not consumed by the operator itself.
+# They will be replaced with aggregation roles in a follow-up; until then they
+# remain installed for backward compatibility.
 - task_admin_role.yaml
 - task_editor_role.yaml
 - task_viewer_role.yaml
 - storagenode_admin_role.yaml
 - storagenode_editor_role.yaml
 - storagenode_viewer_role.yaml
-- storagecluster_admin_role.yaml
-- storagecluster_editor_role.yaml
-- storagecluster_viewer_role.yaml
 - storagebackup_admin_role.yaml
 - storagebackup_editor_role.yaml
 - storagebackup_viewer_role.yaml

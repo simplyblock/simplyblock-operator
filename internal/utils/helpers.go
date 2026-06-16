@@ -19,6 +19,13 @@ func IntPtrOrDefault(ptr *int32, defaultVal int32) int {
 	return int(defaultVal)
 }
 
+func Int64PtrOrDefault(ptr *int64, defaultVal int64) int64 {
+	if ptr != nil {
+		return *ptr
+	}
+	return defaultVal
+}
+
 func IntPtrOrZero(ptr *int32) int {
 	if ptr != nil {
 		return int(*ptr)
@@ -91,6 +98,10 @@ func ToInt32Ptr(v int64) *int32 {
 	return &val
 }
 
+func ToInt64Ptr(v int64) *int64 {
+	return &v
+}
+
 func parseUnit(unit string, mode string, strict bool) (int, int, error) {
 	unit = strings.TrimSpace(unit)
 
@@ -158,17 +169,25 @@ func parseUnit(unit string, mode string, strict bool) (int, int, error) {
 }
 
 func ParseSize(input string, mode string, assumeUnit string, strict bool) *int32 {
+	size := ParseSizeInt64(input, mode, assumeUnit, strict)
+	if size == nil {
+		return nil
+	}
+	return ToInt32Ptr(*size)
+}
+
+func ParseSizeInt64(input string, mode string, assumeUnit string, strict bool) *int64 {
 	input = strings.TrimSpace(input)
 
 	if n, err := strconv.ParseInt(input, 10, 64); err == nil {
 		if assumeUnit == "" {
-			return ToInt32Ptr(n)
+			return ToInt64Ptr(n)
 		}
 		base, exp, err := parseUnit(assumeUnit, mode, strict)
 		if err != nil {
 			return nil
 		}
-		return ToInt32Ptr(n * int64Pow(base, exp))
+		return ToInt64Ptr(n * int64Pow(base, exp))
 	}
 
 	re := regexp.MustCompile(`^(?P<size>[0-9]+)\s*(?P<unit>\w+)?$`)
@@ -188,7 +207,7 @@ func ParseSize(input string, mode string, assumeUnit string, strict bool) *int32
 		return nil
 	}
 
-	return ToInt32Ptr(sizeVal * int64Pow(base, exp))
+	return ToInt64Ptr(sizeVal * int64Pow(base, exp))
 }
 
 func ternary(cond bool, a, b string) string {

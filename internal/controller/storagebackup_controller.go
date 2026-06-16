@@ -69,10 +69,6 @@ const (
 	// resolve the cluster UUID for the target cluster name.
 	eventReasonBackupClusterLookupError = "BackupClusterLookupError"
 
-	// eventReasonBackupClusterAuthError is emitted when cluster credentials
-	// cannot be retrieved, blocking any authenticated API call.
-	eventReasonBackupClusterAuthError = "BackupClusterAuthError"
-
 	// eventReasonBackupSourceResolutionError is emitted when the PVC/PV source
 	// cannot be resolved (e.g. PVC not found, not bound, or missing lvol metadata).
 	eventReasonBackupSourceResolutionError = "BackupSourceResolutionError"
@@ -157,11 +153,10 @@ type backupAPIResponse struct {
 
 // backupContext holds the resolved prerequisites needed across reconciliation phases.
 type backupContext struct {
-	clusterUUID   string
-	clusterSecret string
-	apiClient     *webapi.Client
-	source        *backupSource
-	poolUUID      string
+	clusterUUID string
+	apiClient   *webapi.Client
+	source      *backupSource
+	poolUUID    string
 }
 
 func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -215,7 +210,7 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return r.syncBackupProgress(ctx, backupCR, bctx)
 }
 
-// prepareBackupContext resolves all prerequisites (cluster UUID, auth, source, pool UUID)
+// prepareBackupContext resolves all prerequisites (cluster UUID, source, pool UUID)
 // and patches their resolved values into status. Returns done=true when the caller should
 // return result immediately (either an error or a requeue).
 func (r *StorageBackupReconciler) prepareBackupContext(
@@ -234,19 +229,6 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 		return nil, ctrl.Result{RequeueAfter: backupReconcileRequeue}, true, nil
 	}
 
-	_, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, backupCR.Namespace, backupCR.Spec.ClusterName)
-	if err != nil {
-		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
-			status.Phase = simplyblockv1alpha1.BackupPhasePending
-			status.ClusterUUID = clusterUUID
-			status.Message = err.Error()
-		}); patchErr != nil {
-			return nil, ctrl.Result{}, true, patchErr
-		}
-		r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupClusterAuthError, "Failed to get cluster auth for %s: %v", backupCR.Spec.ClusterName, err)
-		return nil, ctrl.Result{RequeueAfter: backupReconcileRequeue}, true, nil
-	}
-
 	apiClient := r.apiClient()
 
 	source, err := r.resolveBackupSource(ctx, backupCR, clusterUUID)
@@ -262,7 +244,7 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 		return nil, ctrl.Result{RequeueAfter: backupReconcileRequeue}, true, nil
 	}
 
-	poolUUID, err := r.lookupPoolUUID(ctx, apiClient, clusterSecret, clusterUUID, source.PoolName)
+	poolUUID, err := r.lookupPoolUUID(ctx, apiClient, clusterUUID, source.PoolName)
 	if err != nil {
 		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
 			status.Phase = simplyblockv1alpha1.BackupPhasePending
@@ -294,11 +276,10 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 	}
 
 	return &backupContext{
-		clusterUUID:   clusterUUID,
-		clusterSecret: clusterSecret,
-		apiClient:     apiClient,
-		source:        source,
-		poolUUID:      poolUUID,
+		clusterUUID: clusterUUID,
+		apiClient:   apiClient,
+		source:      source,
+		poolUUID:    poolUUID,
 	}, ctrl.Result{}, false, nil
 }
 
@@ -320,7 +301,7 @@ func (r *StorageBackupReconciler) ensureSnapshotAndBackup(
 	}
 
 	if backupCR.Status.SnapshotID == "" {
-		snapshotID, createErr := r.createSnapshot(ctx, bctx.apiClient, bctx.clusterSecret, bctx.clusterUUID, bctx.poolUUID, bctx.source.LvolID, backupCR.Status.SnapshotName)
+		snapshotID, createErr := r.createSnapshot(ctx, bctx.apiClient, bctx.clusterUUID, bctx.poolUUID, bctx.source.LvolID, backupCR.Status.SnapshotName)
 		if createErr != nil {
 			log.Error(createErr, "Failed to create snapshot", "backup", backupCR.Name)
 			r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupSnapshotCreateFailed, "Failed to create snapshot: %v", createErr)
@@ -337,7 +318,7 @@ func (r *StorageBackupReconciler) ensureSnapshotAndBackup(
 	}
 
 	if backupCR.Status.BackupID == "" {
-		backupID, createErr := r.createBackup(ctx, bctx.apiClient, bctx.clusterSecret, bctx.clusterUUID, backupCR.Status.SnapshotID)
+		backupID, createErr := r.createBackup(ctx, bctx.apiClient, bctx.clusterUUID, backupCR.Status.SnapshotID)
 		if createErr != nil {
 			log.Error(createErr, "Failed to create backup", "backup", backupCR.Name, "snapshotID", backupCR.Status.SnapshotID)
 			r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupCreateFailed, "Failed to create backup: %v", createErr)
@@ -362,7 +343,7 @@ func (r *StorageBackupReconciler) syncBackupProgress(
 	backupCR *simplyblockv1alpha1.StorageBackup,
 	bctx *backupContext,
 ) (ctrl.Result, error) {
-	backups, err := r.listBackups(ctx, bctx.apiClient, bctx.clusterSecret, bctx.clusterUUID)
+	backups, err := r.listBackups(ctx, bctx.apiClient, bctx.clusterUUID)
 	if err != nil {
 		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
 			status.Message = err.Error()
@@ -437,7 +418,6 @@ func (r *StorageBackupReconciler) handleDeletion(
 	}
 
 	clusterUUID := backupCR.Status.ClusterUUID
-	clusterSecret := ""
 
 	if clusterUUID == "" {
 		resolvedClusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, backupCR.Namespace, backupCR.Spec.ClusterName)
@@ -445,17 +425,11 @@ func (r *StorageBackupReconciler) handleDeletion(
 			clusterUUID = resolvedClusterUUID
 		}
 	}
-	if clusterUUID != "" {
-		_, secret, err := utils.GetClusterAuth(ctx, r.Client, backupCR.Namespace, backupCR.Spec.ClusterName)
-		if err == nil {
-			clusterSecret = secret
-		}
-	}
 
 	apiClient := r.apiClient()
-	if clusterUUID != "" && clusterSecret != "" && backupCR.Status.LvolID != "" {
+	if clusterUUID != "" && backupCR.Status.LvolID != "" {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/%s", clusterUUID, backupCR.Status.LvolID)
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 		if err != nil {
 			log.Error(err, "Failed to delete backup chain", "backup", backupCR.Name)
 			r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupDeleteFailed, "Failed to delete backup chain: %v", err)
@@ -468,14 +442,14 @@ func (r *StorageBackupReconciler) handleDeletion(
 		}
 	}
 
-	if clusterUUID != "" && clusterSecret != "" && backupCR.Status.PoolUUID != "" && backupCR.Status.SnapshotID != "" {
+	if clusterUUID != "" && backupCR.Status.PoolUUID != "" && backupCR.Status.SnapshotID != "" {
 		endpoint := fmt.Sprintf(
 			"/api/v2/clusters/%s/storage-pools/%s/snapshots/%s/",
 			clusterUUID,
 			backupCR.Status.PoolUUID,
 			backupCR.Status.SnapshotID,
 		)
-		body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodDelete, endpoint, nil)
+		body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 		if err != nil {
 			log.Error(err, "Failed to delete internal snapshot", "backup", backupCR.Name, "snapshotID", backupCR.Status.SnapshotID)
 			r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupSnapshotDeleteFailed, "Failed to delete internal snapshot %s: %v", backupCR.Status.SnapshotID, err)
@@ -535,7 +509,7 @@ func (r *StorageBackupReconciler) resolveBackupSource(
 		return nil, fmt.Errorf("PV %s is not a CSI volume", pv.Name)
 	}
 
-	handleClusterUUID, poolName, handleLvolID, err := parseSimplyblockVolumeHandle(pv.Spec.CSI.VolumeHandle)
+	handleClusterUUID, poolNameOrID, handleLvolID, err := parseSimplyblockVolumeHandle(pv.Spec.CSI.VolumeHandle)
 	if err != nil {
 		return nil, err
 	}
@@ -569,7 +543,7 @@ func (r *StorageBackupReconciler) resolveBackupSource(
 	return &backupSource{
 		PVCNamespace: pvcNamespace,
 		PVName:       pv.Name,
-		PoolName:     poolName,
+		PoolName:     poolNameOrID,
 		LvolID:       lvolID,
 	}, nil
 }
@@ -577,12 +551,11 @@ func (r *StorageBackupReconciler) resolveBackupSource(
 func (r *StorageBackupReconciler) lookupPoolUUID(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
-	poolName string,
+	poolNameOrID string,
 ) (string, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", err
 	}
@@ -596,18 +569,17 @@ func (r *StorageBackupReconciler) lookupPoolUUID(
 	}
 
 	for _, pool := range pools {
-		if pool.Name == poolName {
+		if pool.Name == poolNameOrID || pool.ID == poolNameOrID {
 			return pool.ID, nil
 		}
 	}
 
-	return "", fmt.Errorf("storage pool %q not found in cluster %s", poolName, clusterUUID)
+	return "", fmt.Errorf("storage pool %q not found in cluster %s", poolNameOrID, clusterUUID)
 }
 
 func (r *StorageBackupReconciler) createSnapshot(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 	poolUUID string,
 	lvolID string,
@@ -619,7 +591,7 @@ func (r *StorageBackupReconciler) createSnapshot(
 		poolUUID,
 		lvolID,
 	)
-	body, headers, status, err := apiClient.DoWithHeaders(ctx, clusterSecret, http.MethodPost, endpoint, snapshotCreateRequest{
+	body, headers, status, err := apiClient.DoWithHeaders(ctx, http.MethodPost, endpoint, snapshotCreateRequest{
 		Name:   snapshotName,
 		Backup: false,
 	})
@@ -640,12 +612,11 @@ func (r *StorageBackupReconciler) createSnapshot(
 func (r *StorageBackupReconciler) createBackup(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 	snapshotID string,
 ) (string, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/", clusterUUID)
-	body, headers, status, err := apiClient.DoWithHeaders(ctx, clusterSecret, http.MethodPost, endpoint, backupCreateRequest{
+	body, headers, status, err := apiClient.DoWithHeaders(ctx, http.MethodPost, endpoint, backupCreateRequest{
 		SnapshotID: snapshotID,
 	})
 	if err != nil {
@@ -665,11 +636,10 @@ func (r *StorageBackupReconciler) createBackup(
 func (r *StorageBackupReconciler) listBackups(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterSecret string,
 	clusterUUID string,
 ) ([]backupAPIResponse, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/", clusterUUID)
-	body, status, err := apiClient.Do(ctx, clusterSecret, http.MethodGet, endpoint, nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -737,7 +707,7 @@ func (r *StorageBackupReconciler) snapshotNameFor(backupCR *simplyblockv1alpha1.
 	return fmt.Sprintf("backup-%s", backupCR.Name)
 }
 
-func parseSimplyblockVolumeHandle(volumeHandle string) (clusterUUID, poolName, lvolID string, err error) {
+func parseSimplyblockVolumeHandle(volumeHandle string) (clusterUUID, poolNameOrID, lvolID string, err error) {
 	parts := strings.Split(volumeHandle, ":")
 	if len(parts) != 3 {
 		return "", "", "", fmt.Errorf("unexpected Simplyblock CSI volume handle %q", volumeHandle)

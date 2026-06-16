@@ -5,11 +5,14 @@ package webapi
 import (
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/simplyblock/simplyblock-operator/internal/tlsutil"
 )
+
+var ServiceAccountTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
 type Client struct {
 	BaseURL    string
@@ -19,6 +22,7 @@ type Client struct {
 	// callers see a real error instead of silently dropping back to a
 	// non-functional client.
 	initErr error
+	saToken string
 }
 
 var (
@@ -74,9 +78,16 @@ func NewClient(baseURL ...string) *Client {
 		url = baseURL[0]
 	}
 
-	return &Client{
+	c := &Client{
 		BaseURL:    url,
 		HttpClient: httpClient,
 		initErr:    initErr,
 	}
+
+	// Read SA token (best-effort; empty string if unavailable)
+	if data, err := os.ReadFile(ServiceAccountTokenPath); err == nil {
+		c.saToken = strings.TrimSpace(string(data))
+	}
+
+	return c
 }

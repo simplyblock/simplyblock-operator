@@ -258,9 +258,7 @@ spec:
       - description: ClientDataIfname defines the client data network interface.
         displayName: Client Data Interface
         path: clientDataIfname
-      - description: |-
-          ClientQpairCount defines client-side queue-pair count.
-          FIXME: Unused for now
+      - description: ClientQpairCount defines client-side queue-pair count.
         displayName: Client Queue Pair Count
         path: clientQpairCount
       - description: CriticalThresholdSpec defines critical-level capacity thresholds.
@@ -270,22 +268,12 @@ spec:
           components.
         displayName: Enable Node Affinity
         path: enableNodeAffinity
-      - description: |-
-          EventLogEntries limits the number of event-log entries returned/retained.
-          FIXME: Unused for now
-        displayName: Event Log Entries
-        path: eventLogEntries
       - description: FabricType defines the storage fabric type.
         displayName: Fabric Type
         path: fabricType
       - description: HAType defines the backend high-availability mode.
         displayName: HA Type
         path: haType
-      - description: |-
-          IncludeEventLog controls whether event logs are included in responses/exports.
-          FIXME: Unused for now
-        displayName: Include Event Log
-        path: includeEventLog
       - description: InflightIOThreshold defines the inflight I/O threshold.
         displayName: Inflight IO Threshold
         path: inflightIOThreshold
@@ -298,11 +286,6 @@ spec:
       - description: MaxQueueSize defines the maximum backend queue size.
         displayName: Max Queue Size
         path: maxQueueSize
-      - description: |-
-          MgmtIfname is the management network interface name used for cluster communication.
-          FIXME: Unused for now
-        displayName: Management Interface
-        path: mgmtIfname
       - description: NodeRecycle configures the node-recycle action.
         displayName: Node Recycle
         path: nodeRecycle
@@ -312,11 +295,6 @@ spec:
       - description: PageSizeInBlocks defines page size expressed in blocks.
         displayName: Page Size In Blocks
         path: pageSizeInBlocks
-      - description: |-
-          QoSClasses defines backend QosSpec class configuration.
-          FIXME: Unused for now
-        displayName: QoS Classes
-        path: qosClasses
       - description: QpairCount defines the NVMe queue-pair count used by the cluster.
         displayName: Queue Pair Count
         path: qpairCount
@@ -383,11 +361,6 @@ spec:
       - description: Action triggers an imperative node operation.
         displayName: Action
         path: action
-      - description: |-
-          AddPcieToAllowList appends devices to the allow-list during restart actions.
-          FIXME: Unused for now
-        displayName: Add PCIe To Allow List
-        path: addPcieToAllowList
       - description: ClusterImage is the container image used for storage-node workloads.
         displayName: Cluster Image
         path: clusterImage
@@ -411,9 +384,7 @@ spec:
       - description: EnableCpuTopology enables topology-aware CPU handling.
         displayName: Enable CPU Topology
         path: enableCpuTopology
-      - description: |-
-          Force enables forced action execution where supported.
-          FIXME: Unused for now
+      - description: Force enables forced action execution where supported.
         displayName: Force
         path: force
       - description: ForceFormat4K forces 4K blocksize formatting of the NVMe device
@@ -433,11 +404,6 @@ spec:
       - description: MgmtIfname is the management interface name used by storage nodes.
         displayName: Management Interface
         path: mgmtIfname
-      - description: |-
-          NodeAddr is the explicit node address used by action flows.
-          FIXME: Unused for now
-        displayName: Node Address
-        path: nodeAddr
       - description: NodeUUID is required when action is specified
         displayName: Node UUID
         path: nodeUUID
@@ -462,6 +428,10 @@ spec:
       - description: PcieModel filters devices by PCI model.
         displayName: PCIe Model
         path: pcieModel
+      - description: ReattachVolume reattaches volumes during restart where supported
+          by the backend.
+        displayName: Reattach Volume
+        path: reattachVolume
       - description: ReservedSystemCPU defines CPUs reserved for system workloads.
         displayName: Reserved System CPU
         path: reservedSystemCPU
