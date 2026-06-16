@@ -244,7 +244,7 @@ func TestFioBenchInjector_Handle(t *testing.T) {
 			if patched.Annotations[injectedAnnotation] != annotationTrue {
 				t.Errorf("annotation %s = %q, want %q", injectedAnnotation, patched.Annotations[injectedAnnotation], annotationTrue)
 			}
-			if patched.Annotations["prometheus.io/scrape"] != testScrapeValue {
+			if patched.Annotations["prometheus.simplyblock.io/scrape"] != testScrapeValue {
 				t.Error("prometheus.io/scrape annotation missing")
 			}
 		})
@@ -262,9 +262,9 @@ func applyPatches(t *testing.T, pod *corev1.Pod, patches []jsonpatch.JsonPatchOp
 		result.Annotations = make(map[string]string)
 	}
 	result.Annotations[injectedAnnotation] = annotationTrue
-	result.Annotations["prometheus.io/scrape"] = testScrapeValue
-	result.Annotations["prometheus.io/port"] = "9199"
-	result.Annotations["prometheus.io/path"] = "/metrics"
+	result.Annotations["prometheus.simplyblock.io/scrape"] = testScrapeValue
+	result.Annotations["prometheus.simplyblock.io/port"] = "9199"
+	result.Annotations["prometheus.simplyblock.io/path"] = "/metrics"
 	return result
 }
 
