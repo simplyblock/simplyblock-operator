@@ -181,6 +181,12 @@ type StorageNodeStatus struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Drain Coordination"
 	// DrainCoordination tracks the upgrade-drain state per worker node.
 	DrainCoordination []NodeDrainState `json:"drainCoordination,omitempty"`
+	// PendingNodeAdds records the timestamp when a node-add POST was sent for
+	// each worker hostname. Entries are removed only when all socket nodes for
+	// that worker come online. This is the authoritative guard against duplicate
+	// POSTs — it is a separate map field so patches to Status.Nodes never
+	// inadvertently delete it.
+	PendingNodeAdds map[string]metav1.Time `json:"pendingNodeAdds,omitempty"`
 }
 
 type NodeStatus struct {
