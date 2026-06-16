@@ -295,6 +295,7 @@ func probeNode(ctx context.Context, n probeNodeConfig, p50, p99 *prometheus.Gaug
 // ── NVMe helpers ───────────────────────────────────────────────────────────────
 
 func nvmeConnect(ctx context.Context, conn connConfig) error {
+	log.Printf("nvme connect addr=%s port=%s nqn=%s", conn.Addr, conn.Port, conn.NQN)
 	out, err := exec.CommandContext(ctx,
 		"sudo", "nvme", "connect",
 		"--fast_io_fail_tmo=1", "--nr-io-queues=3", "--keep-alive-tmo=4",
@@ -306,18 +307,21 @@ func nvmeConnect(ctx context.Context, conn connConfig) error {
 	if err != nil {
 		return fmt.Errorf("nvme connect: %w\n%s", err, out)
 	}
+	log.Printf("nvme connect ok")
 	return nil
 }
 
 func nvmeDisconnect(nqn string) {
+	log.Printf("nvme disconnect nqn=%s", nqn)
 	if err := exec.Command("sudo", "nvme", "disconnect", "-n", nqn).Run(); err != nil {
-		log.Printf("nvme disconnect: %v", err)
+		log.Printf("nvme disconnect error: %v", err)
 	}
 }
 
 func connectAndWait(ctx context.Context, conn connConfig) (device string, disconnect func(), err error) {
 	// Always disconnect first to ensure a clean device state that supports O_DIRECT.
 	nvmeDisconnect(conn.NQN)
+	log.Printf("nvme reconnect after disconnect")
 	if err := nvmeConnect(ctx, conn); err != nil {
 		return "", nil, err
 	}
