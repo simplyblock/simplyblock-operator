@@ -105,6 +105,11 @@ type StorageNodeSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="OpenShift Cluster"
 	// OpenShiftCluster indicates OpenShift-specific behavior should be enabled.
 	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="OpenShift MachineConfigPool"
+	// OpenShiftMachineConfigPool is the name of the MachineConfigPool that storage nodes belong to.
+	// Generated MachineConfig resources will carry the machineconfiguration.openshift.io/role label
+	// set to this value. Defaults to "worker" when unset.
+	OpenShiftMachineConfigPool string `json:"openShiftMachineConfigPool,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Device Names"
 	// DeviceNames explicitly defines a comma separated list of nvme namespace names like nvme0n1,nvme1n1...
 	DeviceNames []string `json:"deviceNames,omitempty"`

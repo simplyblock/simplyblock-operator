@@ -64,6 +64,9 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 		}},
 	}
+	if sn.Spec.OpenShiftMachineConfigPool != "" {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "OPENSHIFT_MCP", Value: sn.Spec.OpenShiftMachineConfigPool})
+	}
 	if sn.Spec.ReservedSystemCPU != "" {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: sn.Spec.ReservedSystemCPU})
 	}
