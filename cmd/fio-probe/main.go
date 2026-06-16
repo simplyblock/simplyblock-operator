@@ -327,8 +327,16 @@ func connectAndWait(ctx context.Context, conn connConfig) (device string, discon
 	for i := range 30 {
 		dev, findErr := findDevice(ctx, conn.NQN)
 		if findErr == nil && dev != "" {
-			log.Printf("found /dev/%s (attempt %d)", dev, i+1)
-			return "/dev/" + dev, disconnect, nil
+			path := "/dev/" + dev
+			if isBlockDevice(path) {
+				log.Printf("found %s (attempt %d)", path, i+1)
+				return path, disconnect, nil
+			}
+			// Device node exists but is not a block device (e.g. a stub left by
+			// SPDK). Remove it so the host's devtmpfs/udevd can create the
+			// proper block special file in its place.
+			log.Printf("found %s but it is not a block device — removing stub (attempt %d)", path, i+1)
+			_ = os.Remove(path)
 		}
 		select {
 		case <-ctx.Done():
@@ -340,6 +348,14 @@ func connectAndWait(ctx context.Context, conn connConfig) (device string, discon
 
 	disconnect()
 	return "", nil, fmt.Errorf("device for NQN %s not found after 30s", conn.NQN)
+}
+
+func isBlockDevice(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeDevice != 0 && info.Mode()&os.ModeCharDevice == 0
 }
 
 func findDevice(ctx context.Context, nqn string) (string, error) {
