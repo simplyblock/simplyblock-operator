@@ -382,6 +382,7 @@ func findDevice(ctx context.Context, nqn string) (string, error) {
 func measure(ctx context.Context, device string) (*latencyResult, error) {
 	out, err := exec.CommandContext(ctx,
 		"sudo", "fio",
+		"--allow_file_create=0",
 		"--name=latency",
 		"--size=512M",
 		"--filename="+device,
