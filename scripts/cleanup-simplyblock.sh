@@ -159,6 +159,18 @@ for pv in $released_pvs; do
 done
 
 # ---------------------------------------------------------------------------
+# 4b. Remove Deployments in kube-system owned by this Helm release
+# ---------------------------------------------------------------------------
+section "Removing kube-system Deployments owned by '$HELM_RELEASE'"
+
+deployments=$($KUBECTL get deployment -n kube-system --ignore-not-found \
+    -o jsonpath='{range .items[?(@.metadata.annotations.meta\.helm\.sh/release-name=="'"$HELM_RELEASE"'")]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+for deploy in $deployments; do
+    info "Deleting Deployment $deploy in kube-system (owned by $HELM_RELEASE)..."
+    $KUBECTL delete deployment "$deploy" -n kube-system --ignore-not-found --timeout=60s 2>/dev/null || true
+done
+
+# ---------------------------------------------------------------------------
 # 5. Remove CRDs
 # ---------------------------------------------------------------------------
 section "Removing CRDs"
