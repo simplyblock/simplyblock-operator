@@ -224,11 +224,48 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	expectedPerHost := utils.ExpectedNodesPerHost(snCR)
 
+	// Separate workers that host FDB processes from those that do not.
+	// Non-FDB workers can be added in parallel — their reboots do not affect
+	// FDB fault tolerance. FDB workers are added one at a time so that only
+	// one FDB node is ever rebooting at a given moment.
+	fdbWorkers := r.fdbWorkerSet(ctx, snCR)
+
+	var parallelWorkers, sequentialWorkers []string
 	for _, nodeName := range snCR.Spec.WorkerNodes {
-		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
-		if err != nil || res.RequeueAfter > 0 {
-			return res, err
+		if fdbWorkers[nodeName] {
+			sequentialWorkers = append(sequentialWorkers, nodeName)
+		} else {
+			parallelWorkers = append(parallelWorkers, nodeName)
 		}
+	}
+
+	// Non-FDB workers: process all in the same reconcile pass — do not return
+	// early on a pending node; just remember to requeue.
+	var parallelRequeueAfter time.Duration
+	for _, nodeName := range parallelWorkers {
+		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if res.RequeueAfter > parallelRequeueAfter {
+			parallelRequeueAfter = res.RequeueAfter
+		}
+	}
+
+	// FDB workers: process sequentially — return early if one is still pending
+	// so the next one is never started until the current one is fully online.
+	for _, nodeName := range sequentialWorkers {
+		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if res.RequeueAfter > 0 {
+			return res, nil
+		}
+	}
+
+	if parallelRequeueAfter > 0 {
+		return ctrl.Result{RequeueAfter: parallelRequeueAfter}, nil
 	}
 
 	if err := r.syncTrackedNodesStatus(ctx, apiClient, clusterUUID, snCR); err != nil {
@@ -861,6 +898,34 @@ func (r *StorageNodeReconciler) reconcileSpdkProxyEndpointSlices(
 	}
 
 	return nil
+}
+
+// fdbWorkerSet returns the set of worker node names (from snCR.Spec.WorkerNodes)
+// that currently host at least one FDB pod. These workers must be added
+// sequentially to avoid simultaneous reboots that reduce FDB fault tolerance.
+func (r *StorageNodeReconciler) fdbWorkerSet(ctx context.Context, snCR *simplyblockv1alpha1.StorageNode) map[string]bool {
+	workerSet := make(map[string]bool, len(snCR.Spec.WorkerNodes))
+	for _, w := range snCR.Spec.WorkerNodes {
+		workerSet[w] = false
+	}
+
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList,
+		client.InNamespace(snCR.Namespace),
+		client.HasLabels{"foundationdb.org/fdb-cluster-name"},
+	); err != nil {
+		return workerSet
+	}
+
+	fdbWorkers := make(map[string]bool)
+	for _, pod := range podList.Items {
+		if pod.Spec.NodeName != "" {
+			if _, isWorker := workerSet[pod.Spec.NodeName]; isWorker {
+				fdbWorkers[pod.Spec.NodeName] = true
+			}
+		}
+	}
+	return fdbWorkers
 }
 
 func isSpdkProxyPodReady(pod *corev1.Pod) bool {
