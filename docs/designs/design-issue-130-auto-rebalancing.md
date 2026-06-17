@@ -71,52 +71,52 @@ The operator has existing primitives for drain-based rebalancing (triggered duri
 ## 3. Architecture Overview
 
 ```
-┌───────────────────────────────────────────────────────────────────────┐
-│                        Kubernetes Control Plane                       │
-│                                                                       │
-│  ┌────────────────────────────────────────────────────────────────┐   │
-│  │            VolumeRebalancerReconciler                          │   │
-│  │                                                                │   │
-│  │  1. Periodic poll (configurable interval)                      │   │
-│  │  2. Compute latency deviation per node (Prometheus + CR)       │   │
-│  │  3. Delegate selection to autobalancing.Rebalancer             │   │
-│  │     ├── StorageNodeSelector  (which nodes are hot/cool)        │   │
-│  │     └── LogicalVolumeSelector (which volumes to migrate)       │   │
-│  │  4. executeMigrations: POST /migrations/ per candidate         │   │
-│  │  5. processPendingMigrations: poll GET /migrations/{id}/       │   │
-│  │  6. Record cool-down state in MigrationState                   │   │
-│  └──────────────────────────────┬─────────────────────────────────┘   │
-│                                 │ reads latency state                 │
-│  ┌──────────────────────────────▼─────────────────────────────────┐   │
-│  │            StorageNodeLatencyReconciler                        │   │
-│  │                                                                │   │
-│  │  Manages fio baseline Jobs per backend node UUID               │   │
-│  │  Stores BaselineP50NS/P99NS in StorageNode.status              │   │
-│  └────────────────────────────────────────────────────────────────┘   │
-│                                                                       │
-│  ┌────────────────────────────────────────────────────────────────┐   │
-│  │            VolumeMigrationReconciler (NEW §9)                  │   │
-│  │                                                                │   │
-│  │  User-triggered migration via VolumeMigration CR               │   │
-│  │  Pending → Validating → Running → Completed/Failed/Aborted     │   │
-│  │  Spawns nvme-validation Job; calls CreateMigration +           │   │
-│  │  ContinueMigration; polls GetMigration to track completion     │   │
-│  └────────────────────────────────────────────────────────────────┘   │
-│                                                                       │
-│  StorageCluster CR  spec.volumeRebalancing.*  status.rebalancing      │
-│  StorageNode CR     status.latencyMetrics[]                           │
-│  VolumeMigration CR (NEW §9)  spec.pvName  spec.targetNodeUUID        │
-└───────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                               Kubernetes Control Plane                               │
+│                                                                                      │
+│   ┌──────────────────────────────────────────────────────────────────────────────┐   │
+│   │                          VolumeRebalancerReconciler                          │   │
+│   │                                                                              │   │
+│   │  1. Periodic poll (configurable interval)                                    │   │
+│   │  2. Compute latency deviation per node (Prometheus + CR)                     │   │
+│   │  3. Delegate selection to autobalancing.Rebalancer                           │   │
+│   │     ├── StorageNodeSelector  (which nodes are hot/cool)                      │   │
+│   │     └── LogicalVolumeSelector (which volumes to migrate)                     │   │
+│   │  4. executeMigrations: POST .../storage-pools/{id}/volumes/{id}/migrations   │   │
+│   │  5. processPendingMigrations: poll GET .../migrations/{id}                   │   │
+│   │  6. Record cool-down state in MigrationState                                 │   │
+│   └────────────────────────────────────┬─────────────────────────────────────────┘   │
+│                                         │ reads latency state                        │
+│          ┌──────────────────────────────▼─────────────────────────────────┐          │
+│          │            StorageNodeLatencyReconciler                        │          │
+│          │                                                                │          │
+│          │  Manages fio baseline Jobs per backend node UUID               │          │
+│          │  Stores BaselineP50NS/P99NS in StorageNode.status              │          │
+│          └────────────────────────────────────────────────────────────────┘          │
+│                                                                                      │
+│          ┌────────────────────────────────────────────────────────────────┐          │
+│          │            VolumeMigrationReconciler (NEW §9)                  │          │
+│          │                                                                │          │
+│          │  User-triggered migration via VolumeMigration CR               │          │
+│          │  Pending → Validating → Running → Completed/Failed/Aborted     │          │
+│          │  Spawns nvme-validation Job; calls CreateMigration +           │          │
+│          │  ContinueMigration; polls GetMigration to track completion     │          │
+│          └────────────────────────────────────────────────────────────────┘          │
+│                                                                                      │
+│  StorageCluster CR  spec.volumeRebalancing.*  status.rebalancing                     │
+│  StorageNode CR     status.latencyMetrics[]                                          │
+│  VolumeMigration CR (NEW §9)  spec.pvName  spec.targetNodeUUID                       │
+└──────────────────────────────────────────────────────────────────────────────────────┘
               │ HTTP (webapi client, service-account bearer token)
-┌─────────────▼──────────────────────────────────────────────────────────┐
-│              SimplyBlock Backend API                                   │
-│  GET  /api/v2/clusters/{id}/storage-nodes/                             │
-│  GET  /api/v2/clusters/{id}/storage-pools/{id}/volumes/                │
-│  POST /api/v2/clusters/{id}/migrations/          (returns connections) │
-│  POST /api/v2/clusters/{id}/migrations/continue  (NEW — two-phase)    │
-│  GET  /api/v2/clusters/{id}/migrations/{id}/                           │
-│  POST /api/v2/clusters/{id}/migrations/{id}/cancel                     │
-└────────────────────────────────────────────────────────────────────────┘
+┌─────────────▼────────────────────────────────────────────────────────────────────────┐
+│              SimplyBlock Backend API                                                 │
+│  GET  /api/v2/clusters/{id}/storage-nodes/                                           │
+│  GET  /api/v2/clusters/{id}/storage-pools/{id}/volumes/                              │
+│  POST /api/v2/clusters/{id}/storage-pools/{id}/volumes/{id}/migrations               │
+│  POST /api/v2/clusters/{id}/storage-pools/{id}/volumes/{id}/migrations/{id}/continue │
+│  GET  /api/v2/clusters/{id}/storage-pools/{id}/volumes/{id}/migrations/{id}          │
+│  POST /api/v2/clusters/{id}/storage-pools/{id}/volumes/{id}/migrations/{id}/cancel   │
+└──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Key change from initial design:** The `VolumeRebalancerReconciler` now delegates the full selection algorithm to the `autobalancing` package (§10), which provides three testable components — `StorageNodeSelector`, `LogicalVolumeSelector`, and `Rebalancer`. The reconciler only orchestrates API calls and status writes.
@@ -483,11 +483,11 @@ Nodes with no latency data (not yet measured, `deviation = 0`) are treated as th
 
 Volumes are migrated sequentially within the cycle budget (`cycle_deadline = cycle_start + evaluationInterval`). Each migration:
 
-1. Calls `POST /api/v2/clusters/{id}/migrations/` with `{volume_id, target_node_id}`.
+1. Calls `POST /api/v2/clusters/{id}/storage-pools/{id}/volumes/{id}/migrations` with `{target_node_id}` (volume identified by URL path).
 2. On failure: log error, emit `VolumeRebalancingFailed` Warning, try next candidate.
 3. On success: record in `coolDownMap` and `pendingMigrations{state: waiting_for_completion}`, emit `VolumeRebalancingStarted` Normal event.
 
-The `processPendingMigrations` function runs at the start of every cycle and polls `GET /api/v2/clusters/{id}/migrations/{id}/` for all tracked entries. When `CompletedAt > 0`, the entry is removed and a `VolumeRebalancingComplete` (or `VolumeRebalancingFailed`) event is emitted. Entries not completing within 30 minutes trigger a `VolumeRebalancingStuck` Warning event.
+The `processPendingMigrations` function runs at the start of every cycle and polls `GET /api/v2/clusters/{id}/storage-pools/{id}/volumes/{id}/migrations/{id}` for all tracked entries. When `CompletedAt > 0`, the entry is removed and a `VolumeRebalancingComplete` (or `VolumeRebalancingFailed`) event is emitted. Entries not completing within 30 minutes trigger a `VolumeRebalancingStuck` Warning event.
 
 ### Step 7 — Update status
 
@@ -642,7 +642,7 @@ Key status fields: `migrationID`, `clusterUUID`, `volumeUUID`, `poolUUID`, `sour
 reconcileStart
   1. Resolve PV → CSI volume handle → volumeUUID
   2. Scan StorageClusters for the owning cluster/pool
-  3. POST /migrations/  → MigrationDTO { id, connections[] }
+  3. POST /storage-pools/{poolId}/volumes/{volumeId}/migrations  → CreateMigrationResponse
   4. Store connections + migrationID in status → phase=Validating
 
 reconcileValidating
@@ -650,16 +650,16 @@ reconcileValidating
      get FioBenchmarkImage from StorageCluster, spawn Job on target node
   6. Job runs: nvme connect for each connection, then
      nvme list --verbose → verify all NQNs present with ANA state "inaccessible"
-  7. Job success  → POST /migrations/continue → phase=Running
-     Job failure  → POST /migrations/{id}/cancel → phase=Failed
+  7. Job success  → POST /storage-pools/{poolId}/volumes/{volumeId}/migrations/{id}/continue → phase=Running
+     Job failure  → POST /storage-pools/{poolId}/volumes/{volumeId}/migrations/{id}/cancel → phase=Failed
 
 reconcileRunning
-  8. Poll GET /migrations/{id}/ (via shared PollMigration helper)
+  8. Poll GET /storage-pools/{poolId}/volumes/{volumeId}/migrations/{id} (via shared PollMigration helper)
      CompletedAt>0 && no error → phase=Completed
      CompletedAt>0 && error    → phase=Failed
 
 reconcileAbort (valid in Validating or Running)
-  9. POST /migrations/{id}/cancel → phase=Aborted
+  9. POST /storage-pools/{poolId}/volumes/{volumeId}/migrations/{id}/cancel → phase=Aborted
 ```
 
 The `VolumeMigrationReconciler` watches owned `batchv1.Job` objects so step 7 fires immediately when the validation Job terminates, without a polling delay.
@@ -822,23 +822,23 @@ Volume migration requires two separate API calls separated by an NVMe path
 establishment step performed by the operator on the target storage node:
 
 ```
-Operator                           Backend API                     Target node kernel
-   │                                    │                                │
-   │── POST /migrations/ ──────────────▶│                                │
-   │◀─ MigrationDTO {id, connections} ──│                                │
-   │                                    │                                │
-   │── spawn Job on target node ────────────────────────────────────────▶│
-   │        nvme connect (each LvolConnectResp)                          │
-   │◀─ Job completed ────────────────────────────────────────────────────│
-   │                                    │                                │
-   │── POST /migrations/continue ──────▶│                                │
-   │◀─ MigrationDTO (updated status) ───│                                │
-   │                                    │                                │
-   │── GET /migrations/{id}/ (poll) ───▶│                                │
-   │◀─ MigrationDTO {completed_at>0} ───│                                │
+Operator                                                            Backend API    Target node kernel
+   │                                                                     │                  │
+   │── POST .../storage-pools/{poolId}/volumes/{volumeId}/migrations ───▶│                  │
+   │◀─ MigrationDTO {id, connections} ───────────────────────────────────│                  │
+   │                                                                     │                  │
+   │── spawn Job on target node ───────────────────────────────────────────────────────────▶│
+   │        nvme connect (each LvolConnectResp)                          │                  │
+   │◀─ Job completed ───────────────────────────────────────────────────────────────────────│
+   │                                                                     │                  │
+   │── POST .../migrations/{id}/continue ───────────────────────────────▶│                  │
+   │◀─ MigrationDTO (updated status) ────────────────────────────────────│                  │
+   │                                                                     │                  │
+   │── GET  .../migrations/{id} (poll) ─────────────────────────────────▶│                  │
+   │◀─ MigrationDTO {completed_at>0} ────────────────────────────────────│                  │
 ```
 
-**`POST /api/v2/clusters/{clusterUUID}/migrations/`**
+**`POST /api/v2/clusters/{clusterUUID}/storage-pools/{poolUUID}/volumes/{volumeUUID}/migrations`**
 
 Creates the internal infrastructure for the migration on both the control plane
 and storage plane. Returns new NVMe-oF connection parameters for the target-side
@@ -846,7 +846,7 @@ paths that the operator must establish before the data movement can begin.
 
 Request:
 ```json
-{ "volume_id": "<uuid>", "target_node_id": "<uuid>" }
+{ "target_node_id": "<uuid>" }
 ```
 
 Response (`MigrationDTO`):
@@ -893,7 +893,7 @@ The Job mounts `/dev` from the host (`hostPath: /dev`) and runs with
 operator calls `ContinueMigration`. On failure the migration is cancelled via
 `CancelMigration`.
 
-**`POST /api/v2/clusters/{clusterUUID}/migrations/continue`**
+**`POST /api/v2/clusters/{clusterUUID}/storage-pools/{poolUUID}/volumes/{volumeUUID}/migrations/{migrationUUID}/continue`**
 
 Kicks off the actual data movement after the operator has confirmed that all
 NVMe paths returned by `CreateMigration` are reachable on the target node.
@@ -905,7 +905,7 @@ Request:
 
 Response: updated `MigrationDTO`.
 
-**`GET /api/v2/clusters/{clusterUUID}/migrations/{migrationUUID}/`**
+**`GET /api/v2/clusters/{clusterUUID}/storage-pools/{poolUUID}/volumes/{volumeUUID}/migrations/{migrationUUID}`**
 
 Returns current migration status. `completed_at > 0` signals completion. `error_message` non-empty signals failure.
 

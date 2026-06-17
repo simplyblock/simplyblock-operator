@@ -61,32 +61,40 @@ type LvolConnectResp struct {
 	HostIface      string `json:"host-iface,omitempty"`
 }
 
-// MigrateParams is the request body for POST /api/v2/clusters/{id}/migrations/.
+// MigrateParams is the request body for
+// POST /api/v2/clusters/{id}/storage-pools/{id}/volumes/{id}/migrations.
 type MigrateParams struct {
-	VolumeID     string `json:"volume_id"`
 	TargetNodeID string `json:"target_node_id"`
 }
 
-// MigrationDTO is returned by POST /api/v2/clusters/{id}/migrations/ (create)
-// and GET /api/v2/clusters/{id}/migrations/{migration_id}/ (status poll).
-// Connections is populated on create and contains the new NVMe-oF paths on the
-// target node that the operator must connect and validate before calling
-// ContinueMigration.
+// CreateMigrationResponse is returned by POST /api/v2/clusters/{id}/migrations/.
+// It contains only the migration ID and the NVMe-oF connection strings for the
+// new target-side paths that the operator must establish and validate before
+// calling ContinueMigration.
+type CreateMigrationResponse struct {
+	// MigrationID is the UUID of the newly created migration record.
+	MigrationID    string            `json:"migration_id"`
+	ConnectStrings []LvolConnectResp `json:"connect_strings"`
+}
+
+// MigrationDTO is returned by GET /api/v2/clusters/{id}/migrations/{id}/
+// and by ContinueMigration. Used for status polling.
 type MigrationDTO struct {
-	ID            string            `json:"id"`
-	LvolID        string            `json:"lvol_id"`
-	SourceNodeID  string            `json:"source_node_id"`
-	TargetNodeID  string            `json:"target_node_id"`
-	Phase         string            `json:"phase"`
-	Status        string            `json:"status"`
-	SnapsTotal    int               `json:"snaps_total"`
-	SnapsMigrated int               `json:"snaps_migrated"`
-	RetryCount    int               `json:"retry_count"`
-	MaxRetries    int               `json:"max_retries"`
-	ErrorMessage  string            `json:"error_message"`
-	StartedAt     int64             `json:"started_at"`
-	CompletedAt   int64             `json:"completed_at"`
-	Connections   []LvolConnectResp `json:"connections,omitempty"`
+	ID                        string `json:"id"`
+	LvolID                    string `json:"lvol_id"`
+	SourceNodeID              string `json:"source_node_id"`
+	TargetNodeID              string `json:"target_node_id"`
+	Phase                     string `json:"phase"`
+	Status                    string `json:"status"`
+	SnapsTotal                int    `json:"snaps_total"`
+	SnapsMigrated             int    `json:"snaps_migrated"`
+	IntermediateSnapRounds    int    `json:"intermediate_snap_rounds"`
+	MaxIntermediateSnapRounds int    `json:"max_intermediate_snap_rounds"`
+	RetryCount                int    `json:"retry_count"`
+	MaxRetries                int    `json:"max_retries"`
+	ErrorMessage              string `json:"error_message"`
+	StartedAt                 int64  `json:"started_at"`
+	CompletedAt               int64  `json:"completed_at"`
 }
 
 // GetStoragePools lists all storage pools for the given cluster.
@@ -149,15 +157,16 @@ func (c *Client) GetPoolVolumes(
 	return volumes, nil
 }
 
-// CreateMigration starts a new volume migration to targetNodeID.
-// Returns the migration record including the ID needed for subsequent status polls.
+// CreateMigration submits a new volume migration request.
+// Returns a CreateMigrationResponse containing the migration ID and the NVMe-oF
+// connection strings for the target-side paths. The caller must establish and
+// validate those paths before calling ContinueMigration.
 func (c *Client) CreateMigration(
 	ctx context.Context,
-	clusterUUID, volumeUUID, targetNodeID string,
-) (*MigrationDTO, error) {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/migrations/", clusterUUID)
+	clusterUUID, poolUUID, volumeUUID, targetNodeID string,
+) (*CreateMigrationResponse, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/migrations", clusterUUID, poolUUID, volumeUUID)
 	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, MigrateParams{
-		VolumeID:     volumeUUID,
 		TargetNodeID: targetNodeID,
 	})
 	if err != nil {
@@ -166,19 +175,39 @@ func (c *Client) CreateMigration(
 	if statusCode >= 300 {
 		return nil, fmt.Errorf("create migration for volume %s: status %d: %s", volumeUUID, statusCode, string(body))
 	}
-	var m MigrationDTO
+	var m CreateMigrationResponse
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, fmt.Errorf("unmarshal migration response: %w", err)
 	}
 	return &m, nil
 }
 
+// GetMigrations lists all migrations for the given volume.
+func (c *Client) GetMigrations(
+	ctx context.Context,
+	clusterUUID, poolUUID, volumeUUID string,
+) ([]MigrationDTO, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/migrations", clusterUUID, poolUUID, volumeUUID)
+	body, statusCode, err := c.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list migrations for cluster %s: %w", clusterUUID, err)
+	}
+	if statusCode >= 300 {
+		return nil, fmt.Errorf("list migrations for cluster %s: status %d: %s", clusterUUID, statusCode, string(body))
+	}
+	var migrations []MigrationDTO
+	if err := json.Unmarshal(body, &migrations); err != nil {
+		return nil, fmt.Errorf("unmarshal migrations response: %w", err)
+	}
+	return migrations, nil
+}
+
 // GetMigration fetches the current status of a migration by its ID.
 func (c *Client) GetMigration(
 	ctx context.Context,
-	clusterUUID, migrationID string,
+	clusterUUID, poolUUID, volumeUUID, migrationID string,
 ) (*MigrationDTO, error) {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/migrations/%s/", clusterUUID, migrationID)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/migrations/%s", clusterUUID, poolUUID, volumeUUID, migrationID)
 	body, statusCode, err := c.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("get migration %s: %w", migrationID, err)
@@ -198,9 +227,9 @@ func (c *Client) GetMigration(
 // It must be called after CreateMigration and a successful path validation.
 func (c *Client) ContinueMigration(
 	ctx context.Context,
-	clusterUUID, migrationID string,
+	clusterUUID, poolUUID, volumeUUID, migrationID string,
 ) (*MigrationDTO, error) {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/migrations/continue", clusterUUID)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/migrations/%s/continue", clusterUUID, poolUUID, volumeUUID, migrationID)
 	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, ContinueMigrationParams{
 		MigrationID: migrationID,
 	})
@@ -220,9 +249,9 @@ func (c *Client) ContinueMigration(
 // CancelMigration cancels an in-progress migration by its ID.
 func (c *Client) CancelMigration(
 	ctx context.Context,
-	clusterUUID, migrationID string,
+	clusterUUID, poolUUID, volumeUUID, migrationID string,
 ) error {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/migrations/cancel", clusterUUID)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/migrations/%s/cancel", clusterUUID, poolUUID, volumeUUID, migrationID)
 	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("cancel migration %s: %w", migrationID, err)

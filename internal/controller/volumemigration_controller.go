@@ -105,14 +105,14 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 	log.Info("Submitting volume migration",
 		"volume", volumeUUID, "cluster", clusterUUID, "target", vm.Spec.TargetNodeUUID)
 
-	migration, err := r.apiClient.CreateMigration(ctx, clusterUUID, volumeUUID, vm.Spec.TargetNodeUUID)
+	migration, err := r.apiClient.CreateMigration(ctx, clusterUUID, poolUUID, volumeUUID, vm.Spec.TargetNodeUUID)
 	if err != nil {
 		return r.setFailed(ctx, vm, fmt.Sprintf("CreateMigration: %v", err))
 	}
 
 	now := metav1.Now()
-	conns := make([]simplyblockv1alpha1.MigrationConnection, 0, len(migration.Connections))
-	for _, c := range migration.Connections {
+	conns := make([]simplyblockv1alpha1.MigrationConnection, 0, len(migration.ConnectStrings))
+	for _, c := range migration.ConnectStrings {
 		conns = append(conns, simplyblockv1alpha1.MigrationConnection{
 			NQN:            c.Nqn,
 			IP:             c.IP,
@@ -126,12 +126,12 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 
 	patch := client.MergeFrom(vm.DeepCopy())
 	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseValidating
-	vm.Status.MigrationID = migration.ID
+	vm.Status.MigrationID = migration.MigrationID
 	vm.Status.ClusterUUID = clusterUUID
 	vm.Status.VolumeUUID = volumeUUID
 	vm.Status.PoolUUID = poolUUID
-	vm.Status.SourceNodeUUID = migration.SourceNodeID
-	vm.Status.SnapsTotal = migration.SnapsTotal
+	// SourceNodeUUID and SnapsTotal are not in the create response;
+	// they will be populated from GetMigration once status=Running.
 	vm.Status.Connections = conns
 	vm.Status.StartedAt = &now
 	if err := r.Status().Patch(ctx, vm, patch); err != nil {
@@ -140,7 +140,7 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 
 	r.Recorder.Eventf(vm, corev1.EventTypeNormal, "MigrationCreated",
 		"Migration %s created: validating %d connection(s) to node %s",
-		migration.ID, len(conns), vm.Spec.TargetNodeUUID)
+		migration.MigrationID, len(conns), vm.Spec.TargetNodeUUID)
 	return ctrl.Result{Requeue: true}, nil
 }
 
@@ -222,15 +222,15 @@ func (r *VolumeMigrationReconciler) pollValidationJob(
 	if failed {
 		log.Error(nil, "Validation job failed; cancelling migration",
 			"job", vm.Status.ValidationJobName, "migration", vm.Status.MigrationID)
-		_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.MigrationID)
+		_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID)
 		return r.setFailed(ctx, vm, "NVMe path validation failed; migration cancelled")
 	}
 
 	log.Info("Validation job succeeded; calling ContinueMigration",
 		"migration", vm.Status.MigrationID)
 
-	if _, err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.MigrationID); err != nil {
-		_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.MigrationID)
+	if _, err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID); err != nil {
+		_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID)
 		return r.setFailed(ctx, vm, fmt.Sprintf("ContinueMigration: %v", err))
 	}
 
@@ -412,7 +412,7 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 	log := logf.FromContext(ctx)
 
 	migrationStart := vm.Status.StartedAt.Time
-	result, err := volumemigration.PollMigration(ctx, r.apiClient, vm.Status.ClusterUUID, vm.Status.MigrationID, migrationStart)
+	result, err := volumemigration.PollMigration(ctx, r.apiClient, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID, migrationStart)
 	if err != nil {
 		log.Error(err, "Cannot poll migration; requeuing", "migration", vm.Status.MigrationID)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
@@ -470,7 +470,7 @@ func (r *VolumeMigrationReconciler) reconcileAbort(
 	log := logf.FromContext(ctx)
 	log.Info("Aborting migration", "migration", vm.Status.MigrationID)
 
-	if err := r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.MigrationID); err != nil {
+	if err := r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID); err != nil {
 		log.Error(err, "CancelMigration failed; requeuing")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}

@@ -344,14 +344,14 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 				len(toMigrate)-migratedCount)
 			break
 		}
-		migration, err := r.apiClient.CreateMigration(ctx, mc.ClusterUUID, mc.Volume.UUID, mc.TargetNodeUUID)
+		migration, err := r.apiClient.CreateMigration(ctx, mc.ClusterUUID, mc.Volume.PoolUUID, mc.Volume.UUID, mc.TargetNodeUUID)
 		if err != nil {
 			log.Error(err, "CreateMigration failed", "volume", mc.Volume.UUID, "target", mc.TargetNodeUUID)
 			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingFailed",
 				"Migration of volume %s to node %s failed: %v", mc.Volume.UUID, mc.TargetNodeUUID, err)
 			continue
 		}
-		r.migrationState.PushMigration(mc.ClusterUUID, mc.Volume.PoolUUID, mc.Volume.UUID, migration.ID, coolDownSecs)
+		r.migrationState.PushMigration(mc.ClusterUUID, mc.Volume.PoolUUID, mc.Volume.UUID, migration.MigrationID, coolDownSecs)
 		r.Recorder.Eventf(clusterCR, corev1.EventTypeNormal, "VolumeRebalancingStarted",
 			"Initiating migration of volume %s from node %s to %s (latency deviation: %.1f%%)",
 			mc.Volume.UUID, mc.SourceNodeUUID, mc.TargetNodeUUID, deviations[mc.SourceNodeUUID])
@@ -383,7 +383,7 @@ func (r *VolumeRebalancerReconciler) processPendingMigrations(
 		stuckWarned := pm.StuckWarned
 		volumeUUID := pm.VolumeUUID
 
-		result, err := volumemigration.PollMigration(ctx, r.apiClient, clusterUUID, migrationID, migStart)
+		result, err := volumemigration.PollMigration(ctx, r.apiClient, clusterUUID, pm.PoolUUID, pm.VolumeUUID, migrationID, migStart)
 		if err != nil {
 			log.Error(err, "Cannot get migration status", "migration", migrationID, "volume", volumeUUID)
 			continue
