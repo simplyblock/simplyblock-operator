@@ -102,6 +102,14 @@ spec:
                   volumes per node.
                 format: int32
                 type: integer
+              maxParallelNodeAdds:
+                description: |-
+                  MaxParallelNodeAdds limits how many non-FDB worker nodes can be in the
+                  add process simultaneously. When unset all non-FDB workers are added in
+                  parallel. FDB workers are always sequential regardless of this setting.
+                format: int32
+                minimum: 1
+                type: integer
               maxSize:
                 description: MaxSize is the maximum allocatable size of huge pages.
                 type: string
@@ -121,6 +129,12 @@ spec:
                 description: OpenShiftCluster indicates OpenShift-specific behavior
                   should be enabled.
                 type: boolean
+              openShiftMachineConfigPool:
+                description: |-
+                  OpenShiftMachineConfigPool is the name of the MachineConfigPool that storage nodes belong to.
+                  Generated MachineConfig resources will carry the machineconfiguration.openshift.io/role label
+                  set to this value. Defaults to "worker" when unset.
+                type: string
               partitions:
                 description: Partitions is the number of partitions created per backend
                   storage device.

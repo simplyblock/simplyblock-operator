@@ -315,6 +315,13 @@ controlplane:
     # "double" = 3 coordinators (suitable for 3 workers, tolerates 1 failure)
     # "triple" = 5 coordinators (suitable for 5+ workers, tolerates 2 failures)
     redundancyMode: double
+    # nodeSelector pins FDB pods to dedicated nodes, leaving the remaining
+    # storage workers as non-FDB nodes that can be added in parallel.
+    # Label target nodes first: kubectl label node <node> simplyblock.io/fdb-node=true
+    # Example:
+    #   nodeSelector:
+    #     simplyblock.io/fdb-node: "true"
+    nodeSelector: {}
     image:
       operator:
         repository: quay.io/simplyblock-io/fdb-kubernetes-operator
