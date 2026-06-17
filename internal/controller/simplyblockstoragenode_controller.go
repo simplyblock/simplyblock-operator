@@ -160,39 +160,8 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	sa := utils.BuildStorageNodeServiceAccount(snCR.Namespace)
-	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
-	}
-	desiredSAOwnerRefs := sa.OwnerReferences
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
-		sa.OwnerReferences = desiredSAOwnerRefs
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to apply ServiceAccount: %w", err)
-	}
-
-	cr := utils.BuildStorageNodeClusterRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster))
-	desiredCRRules := cr.Rules
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
-		cr.Rules = desiredCRRules
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRole: %w", err)
-	}
-
-	crb := utils.BuildStorageNodeClusterRoleBinding(snCR.Namespace)
-	desiredCRBSubjects := crb.Subjects
-	desiredCRBRoleRef := crb.RoleRef
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
-		crb.Subjects = desiredCRBSubjects
-		crb.RoleRef = desiredCRBRoleRef
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
+	if err := r.reconcileRBAC(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if err := r.reconcileService(ctx, snCR); err != nil {
@@ -224,75 +193,8 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	expectedPerHost := utils.ExpectedNodesPerHost(snCR)
 
-	// Separate workers that host FDB processes from those that do not.
-	// Non-FDB workers can be added in parallel — their reboots do not affect
-	// FDB fault tolerance. FDB workers are added one at a time so that only
-	// one FDB node is ever rebooting at a given moment.
-	fdbWorkers := r.fdbWorkerSet(ctx, snCR)
-
-	var parallelWorkers, sequentialWorkers []string
-	for _, nodeName := range snCR.Spec.WorkerNodes {
-		if fdbWorkers[nodeName] {
-			sequentialWorkers = append(sequentialWorkers, nodeName)
-		} else {
-			parallelWorkers = append(parallelWorkers, nodeName)
-		}
-	}
-
-	// Non-FDB workers: process in parallel up to MaxParallelNodeAdds slots.
-	// Workers already in-flight (PendingNodeAdds set or legacy UUID==""
-	// placeholder) are always polled regardless of the slot limit — slots only
-	// cap how many NEW POSTs can be sent in a single reconcile pass.
-	// When MaxParallelNodeAdds is unset, all non-FDB workers are processed.
-	maxParallel := len(parallelWorkers)
-	if snCR.Spec.MaxParallelNodeAdds != nil && *snCR.Spec.MaxParallelNodeAdds > 0 {
-		maxParallel = int(*snCR.Spec.MaxParallelNodeAdds)
-	}
-
-	inFlight := 0
-	for _, nodeName := range parallelWorkers {
-		if workerIsInFlight(snCR, nodeName) {
-			inFlight++
-		}
-	}
-	availableSlots := maxParallel - inFlight
-
-	var parallelRequeueAfter time.Duration
-	for _, nodeName := range parallelWorkers {
-		alreadyInFlight := workerIsInFlight(snCR, nodeName)
-		if !alreadyInFlight {
-			if availableSlots <= 0 {
-				// Slot limit reached — skip this worker for now and requeue.
-				if waitForNodeOnlineWaitInterval > parallelRequeueAfter {
-					parallelRequeueAfter = waitForNodeOnlineWaitInterval
-				}
-				continue
-			}
-			availableSlots--
-		}
-		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if res.RequeueAfter > parallelRequeueAfter {
-			parallelRequeueAfter = res.RequeueAfter
-		}
-	}
-
-	// FDB workers: process sequentially — return early if one is still pending
-	// so the next one is never started until the current one is fully online.
-	for _, nodeName := range sequentialWorkers {
-		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if res.RequeueAfter > 0 {
-			return res, nil
-		}
-	}
-
-	if parallelRequeueAfter > 0 {
-		return ctrl.Result{RequeueAfter: parallelRequeueAfter}, nil
+	if res, err := r.reconcileWorkerNodes(ctx, req, snCR, clusterUUID, apiClient, expectedPerHost); err != nil || res.RequeueAfter > 0 {
+		return res, err
 	}
 
 	if err := r.syncTrackedNodesStatus(ctx, apiClient, clusterUUID, snCR); err != nil {
@@ -940,6 +842,111 @@ func workerIsInFlight(snCR *simplyblockv1alpha1.StorageNode, nodeName string) bo
 		}
 	}
 	return false
+}
+
+// reconcileWorkerNodes fans out the node-add loop across parallel (non-FDB) and
+// sequential (FDB) workers, respecting MaxParallelNodeAdds.
+func (r *StorageNodeReconciler) reconcileWorkerNodes(
+	ctx context.Context,
+	req ctrl.Request,
+	snCR *simplyblockv1alpha1.StorageNode,
+	clusterUUID string,
+	apiClient *webapi.Client,
+	expectedPerHost int,
+) (ctrl.Result, error) {
+	fdbWorkers := r.fdbWorkerSet(ctx, snCR)
+
+	var parallelWorkers, sequentialWorkers []string
+	for _, nodeName := range snCR.Spec.WorkerNodes {
+		if fdbWorkers[nodeName] {
+			sequentialWorkers = append(sequentialWorkers, nodeName)
+		} else {
+			parallelWorkers = append(parallelWorkers, nodeName)
+		}
+	}
+
+	maxParallel := len(parallelWorkers)
+	if snCR.Spec.MaxParallelNodeAdds != nil && *snCR.Spec.MaxParallelNodeAdds > 0 {
+		maxParallel = int(*snCR.Spec.MaxParallelNodeAdds)
+	}
+
+	inFlight := 0
+	for _, nodeName := range parallelWorkers {
+		if workerIsInFlight(snCR, nodeName) {
+			inFlight++
+		}
+	}
+	availableSlots := maxParallel - inFlight
+
+	var parallelRequeueAfter time.Duration
+	for _, nodeName := range parallelWorkers {
+		alreadyInFlight := workerIsInFlight(snCR, nodeName)
+		if !alreadyInFlight {
+			if availableSlots <= 0 {
+				if waitForNodeOnlineWaitInterval > parallelRequeueAfter {
+					parallelRequeueAfter = waitForNodeOnlineWaitInterval
+				}
+				continue
+			}
+			availableSlots--
+		}
+		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if res.RequeueAfter > parallelRequeueAfter {
+			parallelRequeueAfter = res.RequeueAfter
+		}
+	}
+
+	for _, nodeName := range sequentialWorkers {
+		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if res.RequeueAfter > 0 {
+			return res, nil
+		}
+	}
+
+	return ctrl.Result{RequeueAfter: parallelRequeueAfter}, nil
+}
+
+// reconcileRBAC ensures the ServiceAccount, ClusterRole, and ClusterRoleBinding
+// required by the storage-node DaemonSet are present and up to date.
+func (r *StorageNodeReconciler) reconcileRBAC(ctx context.Context, snCR *simplyblockv1alpha1.StorageNode) error {
+	sa := utils.BuildStorageNodeServiceAccount(snCR.Namespace)
+	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
+	}
+	desiredSAOwnerRefs := sa.OwnerReferences
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
+		sa.OwnerReferences = desiredSAOwnerRefs
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to apply ServiceAccount: %w", err)
+	}
+
+	cr := utils.BuildStorageNodeClusterRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster))
+	desiredCRRules := cr.Rules
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
+		cr.Rules = desiredCRRules
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to apply ClusterRole: %w", err)
+	}
+
+	crb := utils.BuildStorageNodeClusterRoleBinding(snCR.Namespace)
+	desiredCRBSubjects := crb.Subjects
+	desiredCRBRoleRef := crb.RoleRef
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
+		crb.Subjects = desiredCRBSubjects
+		crb.RoleRef = desiredCRBRoleRef
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
+	}
+	return nil
 }
 
 // fdbWorkerSet returns the set of worker node names (from snCR.Spec.WorkerNodes)
