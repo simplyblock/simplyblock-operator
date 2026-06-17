@@ -277,19 +277,43 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 		return ctrl.Result{RequeueAfter: time.Second * 10}, nil
 	}
 
-	// Only send the POST if no placeholder entry exists yet for this host.
-	// A placeholder (UUID=="") means the POST was already sent and we are
-	// still waiting for the backend to bring the node(s) online.
-	hasPlaceholder := false
-	for _, n := range snCR.Status.Nodes {
-		if n.Hostname == nodeName && n.UUID == "" {
-			hasPlaceholder = true
-			break
+	// PendingNodeAdds is the authoritative guard against duplicate POSTs.
+	// It is a separate map field so patches to Status.Nodes by
+	// syncTrackedNodesStatus can never inadvertently delete it.
+	// The legacy UUID=="" placeholder check is kept as a fallback for
+	// CRs that existed before PendingNodeAdds was introduced.
+	_, isPending := snCR.Status.PendingNodeAdds[nodeName]
+	if !isPending {
+		for _, n := range snCR.Status.Nodes {
+			if n.Hostname == nodeName && n.UUID == "" {
+				isPending = true
+				break
+			}
 		}
 	}
 
-	if !hasPlaceholder {
+	if !isPending {
+		// Persist the pending marker BEFORE the POST so that every future
+		// reconcile — including those triggered while sbcli is retrying
+		// internally after a failure — sees the marker and skips the POST.
+		patch := client.MergeFrom(snCR.DeepCopy())
+		if snCR.Status.PendingNodeAdds == nil {
+			snCR.Status.PendingNodeAdds = make(map[string]metav1.Time)
+		}
+		snCR.Status.PendingNodeAdds[nodeName] = metav1.Now()
+		if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+			log.Error(err, "Failed to persist pending node add marker before POST, retrying", "node", nodeName)
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+
 		if res, err := r.postStorageNode(ctx, req, snCR, nodeName, ip, clusterUUID, apiClient); err != nil || res.RequeueAfter > 0 {
+			// POST failed — clear the pending marker so the next reconcile
+			// retries the POST rather than waiting on a node that was never created.
+			clearPatch := client.MergeFrom(snCR.DeepCopy())
+			delete(snCR.Status.PendingNodeAdds, nodeName)
+			if patchErr := r.Status().Patch(ctx, snCR, clearPatch); patchErr != nil {
+				log.Error(patchErr, "Failed to clear pending node add marker after POST failure", "node", nodeName)
+			}
 			return res, err
 		}
 	}
@@ -1075,16 +1099,24 @@ func (r *StorageNodeReconciler) nodeOnlineRequeueOrTimeout(
 	log := logf.FromContext(ctx)
 	timeout := time.Duration(waitForNodeOnlineRetries) * waitForNodeOnlineWaitInterval
 
-	for i := range snCR.Status.Nodes {
-		n := &snCR.Status.Nodes[i]
-		if n.Hostname == nodeName && n.UUID == "" && n.PostedAt != nil {
-			if time.Since(n.PostedAt.Time) <= timeout {
-				return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
+	// PendingNodeAdds is the primary source for the post timestamp.
+	// Fall back to the legacy UUID=="" PostedAt for backward compatibility.
+	if postedAt, ok := snCR.Status.PendingNodeAdds[nodeName]; ok {
+		if time.Since(postedAt.Time) <= timeout {
+			return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
+		}
+	} else {
+		for i := range snCR.Status.Nodes {
+			n := &snCR.Status.Nodes[i]
+			if n.Hostname == nodeName && n.UUID == "" && n.PostedAt != nil {
+				if time.Since(n.PostedAt.Time) <= timeout {
+					return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
+				}
 			}
 		}
 	}
 
-	// Timed out (or PostedAt missing — treat as timed-out to avoid infinite requeue).
+	// Timed out (or no post timestamp found — treat as timed-out).
 	log.Error(nil, "Timeout waiting for node to become online", "node", nodeName)
 	updated := false
 	for i := range snCR.Status.Nodes {
@@ -1157,6 +1189,13 @@ func onAllSocketNodesOnline(
 			snCR.Status.Nodes = append(snCR.Status.Nodes, updated)
 			changed = true
 		}
+	}
+
+	// All socket nodes confirmed online — remove the pending marker so the
+	// worker is no longer considered in-flight.
+	if _, ok := snCR.Status.PendingNodeAdds[nodeName]; ok {
+		delete(snCR.Status.PendingNodeAdds, nodeName)
+		changed = true
 	}
 
 	if changed {

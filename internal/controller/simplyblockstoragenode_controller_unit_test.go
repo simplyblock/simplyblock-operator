@@ -2759,3 +2759,99 @@ func TestTLSSecretToStorageNodeRequestsEnqueuesAllInNamespace(t *testing.T) {
 		t.Fatalf("did not expect cross-namespace StorageNode to be enqueued: %v", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// PendingNodeAdds guard — duplicate POST prevention
+// ---------------------------------------------------------------------------
+
+func TestPendingNodeAddsBlocksDuplicatePost(t *testing.T) {
+	const namespace = "default"
+	const clusterUUID = "cluster-uuid-pending"
+	const workerName = "worker-pending"
+
+	postCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodPost {
+			postCalled = true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	now := metav1.Now()
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-pending", Namespace: namespace, Finalizers: []string{utils.FinalizerStorageNode}},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{WorkerNodes: []string{workerName}},
+		Status: simplyblockv1alpha1.StorageNodeStatus{
+			PendingNodeAdds: map[string]metav1.Time{workerName: now},
+		},
+	}
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: workerName},
+		Status:     corev1.NodeStatus{Addresses: []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "10.0.0.1"}}},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn, node)
+	res, err := r.reconcileWorkerNode(
+		context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)},
+		sn, workerName, clusterUUID, webapi.NewClient(srv.URL), 1,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if postCalled {
+		t.Error("POST should not be called when PendingNodeAdds entry exists")
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("expected RequeueAfter while node is not yet online")
+	}
+}
+
+func TestPendingNodeAddsLegacyPlaceholderBlocksPost(t *testing.T) {
+	const namespace = "default"
+	const clusterUUID = "cluster-uuid-legacy"
+	const workerName = "worker-legacy"
+
+	postCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodPost {
+			postCalled = true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	postedAt := metav1.Now()
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-legacy", Namespace: namespace, Finalizers: []string{utils.FinalizerStorageNode}},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{WorkerNodes: []string{workerName}},
+		Status: simplyblockv1alpha1.StorageNodeStatus{
+			// No PendingNodeAdds — only the legacy UUID=="" placeholder.
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: workerName, UUID: "", Status: "in_creation", PostedAt: &postedAt},
+			},
+		},
+	}
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: workerName},
+		Status:     corev1.NodeStatus{Addresses: []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "10.0.0.1"}}},
+	}
+
+	r := newStorageNodeStateTestReconciler(t, sn, node)
+	_, err := r.reconcileWorkerNode(
+		context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)},
+		sn, workerName, clusterUUID, webapi.NewClient(srv.URL), 1,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if postCalled {
+		t.Error("POST should not be called when legacy UUID=empty placeholder exists")
+	}
+}

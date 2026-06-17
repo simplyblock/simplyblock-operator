@@ -1889,6 +1889,17 @@ spec:
                       type: integer
                   type: object
                 type: array
+              pendingNodeAdds:
+                additionalProperties:
+                  format: date-time
+                  type: string
+                description: |-
+                  PendingNodeAdds records the timestamp when a node-add POST was sent for
+                  each worker hostname. Entries are removed only when all socket nodes for
+                  that worker come online. This is the authoritative guard against duplicate
+                  POSTs — it is a separate map field so patches to Status.Nodes never
+                  inadvertently delete it.
+                type: object
             type: object
         required:
         - spec
