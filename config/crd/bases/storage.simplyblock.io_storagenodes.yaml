@@ -251,6 +251,12 @@ spec:
                 description: OpenShiftCluster indicates OpenShift-specific behavior
                   should be enabled.
                 type: boolean
+              openShiftMachineConfigPool:
+                description: |-
+                  OpenShiftMachineConfigPool is the name of the MachineConfigPool that storage nodes belong to.
+                  Generated MachineConfig resources will carry the machineconfiguration.openshift.io/role label
+                  set to this value. Defaults to "worker" when unset.
+                type: string
               partitions:
                 description: Partitions is the number of partitions created per backend
                   storage device.
