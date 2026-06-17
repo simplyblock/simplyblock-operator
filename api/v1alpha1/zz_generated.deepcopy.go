@@ -1616,6 +1616,11 @@ func (in *StorageNodeSpec) DeepCopyInto(out *StorageNodeSpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.MaxParallelNodeAdds != nil {
+		in, out := &in.MaxParallelNodeAdds, &out.MaxParallelNodeAdds
+		*out = new(int32)
+		**out = **in
+	}
 	if in.Force != nil {
 		in, out := &in.Force, &out.Force
 		*out = new(bool)

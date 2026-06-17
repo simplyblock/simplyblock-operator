@@ -138,6 +138,13 @@ type StorageNodeSpec struct {
 	// Tolerations configures pod tolerations for storage-node pods.
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
+	// +kubebuilder:validation:Minimum=1
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Parallel Node Adds"
+	// MaxParallelNodeAdds limits how many non-FDB worker nodes can be in the
+	// add process simultaneously. When unset all non-FDB workers are added in
+	// parallel. FDB workers are always sequential regardless of this setting.
+	MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
+
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
 	// Force enables forced action execution where supported.
 	Force *bool `json:"force,omitempty"`

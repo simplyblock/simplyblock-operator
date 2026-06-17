@@ -239,10 +239,37 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	// Non-FDB workers: process all in the same reconcile pass — do not return
-	// early on a pending node; just remember to requeue.
+	// Non-FDB workers: process in parallel up to MaxParallelNodeAdds slots.
+	// Workers already in-flight (PendingNodeAdds set or legacy UUID==""
+	// placeholder) are always polled regardless of the slot limit — slots only
+	// cap how many NEW POSTs can be sent in a single reconcile pass.
+	// When MaxParallelNodeAdds is unset, all non-FDB workers are processed.
+	maxParallel := len(parallelWorkers)
+	if snCR.Spec.MaxParallelNodeAdds != nil && *snCR.Spec.MaxParallelNodeAdds > 0 {
+		maxParallel = int(*snCR.Spec.MaxParallelNodeAdds)
+	}
+
+	inFlight := 0
+	for _, nodeName := range parallelWorkers {
+		if workerIsInFlight(snCR, nodeName) {
+			inFlight++
+		}
+	}
+	availableSlots := maxParallel - inFlight
+
 	var parallelRequeueAfter time.Duration
 	for _, nodeName := range parallelWorkers {
+		alreadyInFlight := workerIsInFlight(snCR, nodeName)
+		if !alreadyInFlight {
+			if availableSlots <= 0 {
+				// Slot limit reached — skip this worker for now and requeue.
+				if waitForNodeOnlineWaitInterval > parallelRequeueAfter {
+					parallelRequeueAfter = waitForNodeOnlineWaitInterval
+				}
+				continue
+			}
+			availableSlots--
+		}
 		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -898,6 +925,21 @@ func (r *StorageNodeReconciler) reconcileSpdkProxyEndpointSlices(
 	}
 
 	return nil
+}
+
+// workerIsInFlight returns true if a node-add POST has already been sent for
+// nodeName and is still being tracked — either via PendingNodeAdds (primary)
+// or the legacy UUID=="" placeholder (backward compatibility).
+func workerIsInFlight(snCR *simplyblockv1alpha1.StorageNode, nodeName string) bool {
+	if _, ok := snCR.Status.PendingNodeAdds[nodeName]; ok {
+		return true
+	}
+	for _, n := range snCR.Status.Nodes {
+		if n.Hostname == nodeName && n.UUID == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // fdbWorkerSet returns the set of worker node names (from snCR.Spec.WorkerNodes)
