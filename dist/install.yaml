@@ -2359,6 +2359,7 @@ rules:
   - storageclusters
   - storagenodes
   - tasks
+  - volumemigrations
   verbs:
   - create
   - delete
@@ -2379,6 +2380,7 @@ rules:
   - storageclusters/finalizers
   - storagenodes/finalizers
   - tasks/finalizers
+  - volumemigrations/finalizers
   verbs:
   - update
 - apiGroups:
@@ -2394,6 +2396,7 @@ rules:
   - storageclusters/status
   - storagenodes/status
   - tasks/status
+  - volumemigrations/status
   verbs:
   - get
   - patch
@@ -2433,44 +2436,27 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-pool-admin-role
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+  name: simplyblock-operator-simplyblock-aggregate-to-edit
 rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - storageclusters
   - pools
-  verbs:
-  - '*'
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - pools/status
   verbs:
   - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-pool-editor-role
-rules:
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - pools
-  verbs:
+  - list
+  - watch
   - create
-  - delete
-  - get
-  - list
-  - patch
   - update
-  - watch
+  - patch
+  - delete
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - storageclusters/status
   - pools/status
   verbs:
   - get
@@ -2481,22 +2467,20 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-pool-viewer-role
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+  name: simplyblock-operator-simplyblock-aggregate-to-view
 rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
+  - storageclusters
   - pools
+  - storageclusters/status
+  - pools/status
   verbs:
   - get
   - list
   - watch
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - pools/status
-  verbs:
-  - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -2593,77 +2577,6 @@ rules:
   - storage.simplyblock.io
   resources:
   - storagebackups/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-storagecluster-admin-role
-rules:
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - storageclusters
-  verbs:
-  - '*'
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - storageclusters/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-storagecluster-editor-role
-rules:
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - storageclusters
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - storageclusters/status
-  verbs:
-  - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-storagecluster-viewer-role
-rules:
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - storageclusters
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - storage.simplyblock.io
-  resources:
-  - storageclusters/status
   verbs:
   - get
 ---

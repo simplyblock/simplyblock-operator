@@ -1,0 +1,127 @@
+package autobalancing
+
+import (
+	"context"
+	"fmt"
+)
+
+// MigrationCandidate is the concrete output of the rebalancing algorithm: a single
+// volume that should be migrated from SourceNodeUUID to TargetNodeUUID.
+type MigrationCandidate struct {
+	// ClusterUUID is the storage cluster that owns the volume.
+	ClusterUUID string
+	// SourceNodeUUID is the hot node the volume currently resides on.
+	SourceNodeUUID string
+	// TargetNodeUUID is the coolest node in the cluster, chosen as the migration destination.
+	TargetNodeUUID string
+	// Volume is the volume to migrate, including its pool association and IO metrics.
+	Volume VolumePlacement
+}
+
+type clusterWork struct {
+	// hotNodes is the ordered list of source node UUIDs (worst deviation first).
+	hotNodes []string
+	// targetBySource maps each source node UUID to its assigned migration target.
+	targetBySource map[string]string
+}
+
+// Rebalancer wires StorageNodeSelector and LogicalVolumeSelector together to
+// produce the concrete set of volume migrations for a single evaluation cycle.
+// It is the top-level entry point for the auto-rebalancing algorithm.
+type Rebalancer struct {
+	nodeSelector   *StorageNodeSelector
+	volumeSelector *LogicalVolumeSelector
+}
+
+// NewRebalancer creates a Rebalancer from pre-constructed selectors.
+func NewRebalancer(nodeSelector *StorageNodeSelector, volumeSelector *LogicalVolumeSelector) *Rebalancer {
+	return &Rebalancer{nodeSelector: nodeSelector, volumeSelector: volumeSelector}
+}
+
+// SelectMigrations runs the full rebalancing algorithm for one evaluation cycle:
+//
+//  1. StorageNodeSelector identifies hot nodes and pairs each with the cluster's
+//     coolest node as the migration target.
+//  2. For each affected cluster, LogicalVolumeSelector builds the pinned-volume
+//     set, collects and Prometheus-enriches volumes, then selects the ranked
+//     migration set (up to cfg.MaxMigrations, 10 % IO-budget cap).
+//  3. Each selected volume is returned as a MigrationCandidate with its
+//     source and target node already resolved.
+//
+// isCoolingDown is called per volume to check the post-migration cool-down
+// window. The first argument is the cluster UUID, the second the volume UUID.
+// Pass nil to skip the cool-down check.
+func (rb *Rebalancer) SelectMigrations(
+	ctx context.Context,
+	cfg RebalancingConfig,
+	isCoolingDown func(clusterUUID, volumeUUID string) bool,
+	inputs ...StorageNodeSelectorInput,
+) ([]MigrationCandidate, error) {
+	// Step 1 — identify hot→cool node pairs across all clusters.
+	nodePairs, err := rb.nodeSelector.SelectStorageNodes(ctx, cfg, inputs...)
+	if err != nil {
+		return nil, err
+	}
+	if len(nodePairs) == 0 {
+		return nil, nil
+	}
+
+	// Step 2 — group pairs by cluster, preserving the worst-first ordering
+	// produced by StorageNodeSelector so volume selection starts from the
+	// hottest node.
+	byCluster := make(map[string]*clusterWork)
+	for _, p := range nodePairs {
+		cw := byCluster[p.ClusterUUID]
+		if cw == nil {
+			cw = &clusterWork{targetBySource: make(map[string]string)}
+			byCluster[p.ClusterUUID] = cw
+		}
+		cw.hotNodes = append(cw.hotNodes, p.SourceNodeUUID)
+		cw.targetBySource[p.SourceNodeUUID] = p.TargetNodeUUID
+	}
+
+	// Step 3 — for each cluster, collect volumes and select the migration set.
+	var candidates []MigrationCandidate
+	for clusterUUID, cw := range byCluster {
+		pinned, err := rb.volumeSelector.BuildPinnedSet(ctx, clusterUUID)
+		if err != nil {
+			return nil, fmt.Errorf("cluster %s: build pinned set: %w", clusterUUID, err)
+		}
+
+		lvInput := LogicalVolumeSelectorInput{
+			ClusterUUID:   clusterUUID,
+			PrometheusURL: cfg.PrometheusURL,
+			Pinned:        pinned,
+		}
+		if isCoolingDown != nil {
+			// Force capture clusterUUID for the closure.
+			lvInput.IsCoolingDown = func(clusterUUID string) func(string) bool {
+				return func(volumeUUID string) bool {
+					return isCoolingDown(clusterUUID, volumeUUID)
+				}
+			}(clusterUUID)
+		}
+
+		volumesByNode, _, err := rb.volumeSelector.CollectVolumes(ctx, lvInput)
+		if err != nil {
+			return nil, fmt.Errorf("cluster %s: collect volumes: %w", clusterUUID, err)
+		}
+
+		sourceNodeUUID, toMigrate := rb.volumeSelector.SelectVolumesForMigration(lvInput, cw.hotNodes, volumesByNode, cfg)
+		if sourceNodeUUID == "" {
+			// Every hot node in this cluster had no eligible volumes.
+			continue
+		}
+
+		targetNodeUUID := cw.targetBySource[sourceNodeUUID]
+		for _, rc := range toMigrate {
+			candidates = append(candidates, MigrationCandidate{
+				ClusterUUID:    clusterUUID,
+				SourceNodeUUID: sourceNodeUUID,
+				TargetNodeUUID: targetNodeUUID,
+				Volume:         rc.Vol,
+			})
+		}
+	}
+	return candidates, nil
+}

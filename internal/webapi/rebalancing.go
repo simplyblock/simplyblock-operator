@@ -1,19 +1,3 @@
-/*
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package webapi
 
 import (
@@ -53,6 +37,56 @@ type VolumeInfo struct {
 type StoragePoolInfo struct {
 	UUID string `json:"id"`
 	Name string `json:"name"`
+}
+
+// ContinueMigrationParams is the request body for
+// POST /api/v2/clusters/{id}/migrations/continue.
+type ContinueMigrationParams struct {
+	MigrationID string `json:"migration_id"`
+}
+
+// LvolConnectResp holds the NVMe-oF connection parameters for a logical volume,
+// as returned by CreateMigration for the new target-side paths that must be
+// connected and validated before calling ContinueMigration.
+type LvolConnectResp struct {
+	Nqn            string `json:"nqn"`
+	ReconnectDelay int    `json:"reconnect-delay"`
+	NrIoQueues     int    `json:"nr-io-queues"`
+	CtrlLossTmo    int    `json:"ctrl-loss-tmo"`
+	Port           int    `json:"port"`
+	TargetType     string `json:"transport"`
+	IP             string `json:"ip"`
+	Connect        string `json:"connect"`
+	NSID           int    `json:"ns_id"`
+	HostIface      string `json:"host-iface,omitempty"`
+}
+
+// MigrateParams is the request body for POST /api/v2/clusters/{id}/migrations/.
+type MigrateParams struct {
+	VolumeID     string `json:"volume_id"`
+	TargetNodeID string `json:"target_node_id"`
+}
+
+// MigrationDTO is returned by POST /api/v2/clusters/{id}/migrations/ (create)
+// and GET /api/v2/clusters/{id}/migrations/{migration_id}/ (status poll).
+// Connections is populated on create and contains the new NVMe-oF paths on the
+// target node that the operator must connect and validate before calling
+// ContinueMigration.
+type MigrationDTO struct {
+	ID            string            `json:"id"`
+	LvolID        string            `json:"lvol_id"`
+	SourceNodeID  string            `json:"source_node_id"`
+	TargetNodeID  string            `json:"target_node_id"`
+	Phase         string            `json:"phase"`
+	Status        string            `json:"status"`
+	SnapsTotal    int               `json:"snaps_total"`
+	SnapsMigrated int               `json:"snaps_migrated"`
+	RetryCount    int               `json:"retry_count"`
+	MaxRetries    int               `json:"max_retries"`
+	ErrorMessage  string            `json:"error_message"`
+	StartedAt     int64             `json:"started_at"`
+	CompletedAt   int64             `json:"completed_at"`
+	Connections   []LvolConnectResp `json:"connections,omitempty"`
 }
 
 // GetStoragePools lists all storage pools for the given cluster.
@@ -115,29 +149,6 @@ func (c *Client) GetPoolVolumes(
 	return volumes, nil
 }
 
-// MigrateParams is the request body for POST /api/v2/clusters/{id}/migrations/.
-type MigrateParams struct {
-	VolumeID     string `json:"volume_id"`
-	TargetNodeID string `json:"target_node_id"`
-}
-
-// MigrationDTO is returned by GET /api/v2/clusters/{id}/migrations/{migration_id}/.
-type MigrationDTO struct {
-	ID            string `json:"id"`
-	LvolID        string `json:"lvol_id"`
-	SourceNodeID  string `json:"source_node_id"`
-	TargetNodeID  string `json:"target_node_id"`
-	Phase         string `json:"phase"`
-	Status        string `json:"status"`
-	SnapsTotal    int    `json:"snaps_total"`
-	SnapsMigrated int    `json:"snaps_migrated"`
-	RetryCount    int    `json:"retry_count"`
-	MaxRetries    int    `json:"max_retries"`
-	ErrorMessage  string `json:"error_message"`
-	StartedAt     int64  `json:"started_at"`
-	CompletedAt   int64  `json:"completed_at"`
-}
-
 // CreateMigration starts a new volume migration to targetNodeID.
 // Returns the migration record including the ID needed for subsequent status polls.
 func (c *Client) CreateMigration(
@@ -182,12 +193,36 @@ func (c *Client) GetMigration(
 	return &m, nil
 }
 
+// ContinueMigration kicks off the actual data migration after the caller has
+// created and validated the new NVMe-oF connection paths on the target node.
+// It must be called after CreateMigration and a successful path validation.
+func (c *Client) ContinueMigration(
+	ctx context.Context,
+	clusterUUID, migrationID string,
+) (*MigrationDTO, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/migrations/continue", clusterUUID)
+	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, ContinueMigrationParams{
+		MigrationID: migrationID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("continue migration %s: %w", migrationID, err)
+	}
+	if statusCode >= 300 {
+		return nil, fmt.Errorf("continue migration %s: status %d: %s", migrationID, statusCode, string(body))
+	}
+	var m MigrationDTO
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, fmt.Errorf("unmarshal continue migration response: %w", err)
+	}
+	return &m, nil
+}
+
 // CancelMigration cancels an in-progress migration by its ID.
 func (c *Client) CancelMigration(
 	ctx context.Context,
 	clusterUUID, migrationID string,
 ) error {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/migrations/%s/cancel", clusterUUID, migrationID)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/migrations/cancel", clusterUUID)
 	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("cancel migration %s: %w", migrationID, err)

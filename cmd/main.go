@@ -353,6 +353,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeRebalancer")
 		os.Exit(1)
 	}
+	if err := (&controller.VolumeMigrationReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("volumemigration-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "VolumeMigration")
+		os.Exit(1)
+	}
 	if err := (&controller.StorageNodeLatencyReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),

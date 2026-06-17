@@ -1,19 +1,3 @@
-/*
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package controller
 
 import (
@@ -22,9 +6,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
+	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -47,98 +32,17 @@ const (
 	pinnedVolumeAnnotation = "simplyblock.io/pinned-volume"
 
 	// Defaults applied when the spec field is nil.
-	defaultEvaluationInterval          = 60 * time.Second
-	defaultImbalanceThresholdPct       = 20
-	defaultCoolDownSeconds             = 60
-	defaultMaxVolumeMigrationsPerCycle = 10
-
-	// migrationInitialDelay is the minimum time after calling CreateMigration before
-	// Phase 6b begins polling the migration status. Prevents a race between the API
-	// call and the control-plane migration tracker.
-	migrationInitialDelay = 20 * time.Second
-	// migrationStuckWarningTimeout triggers a Warning event when a migration has
-	// not switched over within this duration.
-	migrationStuckWarningTimeout = 30 * time.Minute
+	defaultEvaluationInterval = 60 * time.Second
 
 	// migrationBudgetFraction is the fraction of the source node's total volume IO score
 	// that may be migrated in a single evaluation cycle.
 	migrationBudgetFraction = 0.10
-
-	// defaultIOPSWeight is the default weight applied to per-volume IOPS in volumeIOScore.
-	defaultIOPSWeight = 1.0
-	// defaultThroughputMBWeight is the default weight applied to per-volume throughput (MB/s).
-	defaultThroughputMBWeight = 0.1
 )
-
-// pendingMigrationState tracks a volume through the async migration lifecycle.
-type pendingMigrationState string
-
-const (
-	// pendingStateWaitingForCompletion is set immediately after CreateMigration.
-	// The reconciler polls GetMigration until CompletedAt > 0.
-	pendingStateWaitingForCompletion pendingMigrationState = "waiting_for_completion"
-)
-
-type pendingMigration struct {
-	state          pendingMigrationState
-	migrationStart time.Time
-	migrationID    string // ID returned by CreateMigration
-	clusterUUID    string
-	poolUUID       string
-	stuckWarned    bool
-}
 
 // nodeLatencyData holds the fio p99 latency measurements for one storage node.
 type nodeLatencyData struct {
 	baselineP99NS int64
 	currentP99NS  int64
-}
-
-// rebalancingConfig holds resolved (defaults applied) values from VolumeRebalancingSpec.
-type rebalancingConfig struct {
-	evalInterval       time.Duration
-	prometheusURL      string
-	imbalanceThreshold float64
-	iopsWeight         float64
-	throughputWeight   float64
-	maxMigrations      int
-	coolDownSecs       int64
-}
-
-// resolveRebalancingConfig applies defaults and validates the spec. It returns an error
-// when prometheusURL is missing, which is the only hard requirement.
-func resolveRebalancingConfig(spec *simplyblockv1alpha1.VolumeRebalancingSpec) (rebalancingConfig, error) {
-	cfg := rebalancingConfig{
-		evalInterval:       defaultEvaluationInterval,
-		imbalanceThreshold: defaultImbalanceThresholdPct,
-		iopsWeight:         defaultIOPSWeight,
-		throughputWeight:   defaultThroughputMBWeight,
-		maxMigrations:      defaultMaxVolumeMigrationsPerCycle,
-		coolDownSecs:       defaultCoolDownSeconds,
-	}
-	if spec.EvaluationInterval != nil && spec.EvaluationInterval.Duration > 0 {
-		cfg.evalInterval = spec.EvaluationInterval.Duration
-	}
-	if spec.PrometheusURL == nil || *spec.PrometheusURL == "" {
-		return cfg, fmt.Errorf("spec.volumeRebalancing.prometheusURL is required")
-	}
-	cfg.prometheusURL = *spec.PrometheusURL
-	if spec.ImbalanceThreshold != nil {
-		cfg.imbalanceThreshold = float64(*spec.ImbalanceThreshold)
-	}
-	if spec.IOPSWeight != nil && *spec.IOPSWeight > 0 {
-		cfg.iopsWeight = *spec.IOPSWeight
-	}
-	if spec.ThroughputWeight != nil && *spec.ThroughputWeight > 0 {
-		cfg.throughputWeight = *spec.ThroughputWeight
-	}
-	if spec.MaxVolumeMigrationsPerCycle != nil && *spec.MaxVolumeMigrationsPerCycle > 0 {
-		cfg.maxMigrations = int(*spec.MaxVolumeMigrationsPerCycle)
-	}
-	if spec.DefaultCoolDownSeconds != nil {
-		cfg.coolDownSecs = int64(*spec.DefaultCoolDownSeconds)
-	}
-	return cfg, nil
 }
 
 // volumePlacement associates a VolumeInfo with the pool it belongs to.
@@ -166,20 +70,16 @@ type VolumeRebalancerReconciler struct {
 	Recorder  record.EventRecorder
 	apiClient *webapi.Client
 
-	mu sync.Mutex
-	// coolDownMap keys: "clusterUUID/volumeUUID" → expiry time
-	coolDownMap map[string]time.Time
-	// pendingMigrations keys: "clusterUUID/volumeUUID"
-	pendingMigrations map[string]*pendingMigration
+	migrationState *volumemigration.MigrationState
+	rebalancer     *autobalancing.Rebalancer
 }
 
 func (r *VolumeRebalancerReconciler) init() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.coolDownMap == nil {
-		r.coolDownMap = make(map[string]time.Time)
-		r.pendingMigrations = make(map[string]*pendingMigration)
-	}
+	r.migrationState = volumemigration.NewMigrationState()
+	r.rebalancer = autobalancing.NewRebalancer(
+		autobalancing.NewStorageNodeSelector(r.Client),
+		autobalancing.NewLogicalVolumeSelector(r.apiClient, r.Client),
+	)
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
@@ -189,7 +89,10 @@ func (r *VolumeRebalancerReconciler) init() {
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
 
-func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *VolumeRebalancerReconciler) Reconcile(
+	ctx context.Context,
+	req ctrl.Request,
+) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	r.init()
 
@@ -206,7 +109,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	cfg, err := resolveRebalancingConfig(spec)
+	cfg, err := autobalancing.ResolveRebalancingConfig(spec)
 	if err != nil {
 		log.Error(err, "Invalid rebalancing configuration; skipping cycle")
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
@@ -235,7 +138,13 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		nodeMap[n.UUID] = n
 	}
 
-	deviations, maxDev, avgDev, hottestNode, coolestNode, err := r.computeLatencyDeviations(ctx, clusterCR, clusterUUID, cfg.prometheusURL)
+	if hasOfflineNode(nodeMap) {
+		log.Info("Cluster has offline node(s); skipping rebalancing cycle")
+		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
+		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
+	}
+
+	deviations, maxDev, avgDev, hottestNode, coolestNode, err := r.computeLatencyDeviations(ctx, clusterCR, clusterUUID, cfg.PrometheusURL)
 	if err != nil {
 		if errors.Is(err, promlatency.ErrLatencyDataNotReady) {
 			log.Info("Latency data not yet available; waiting for fio-bench-probe sidecar baseline")
@@ -244,63 +153,53 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			log.Info("Cannot collect latency from Prometheus; requeuing", "error", err)
 			rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "error").Inc()
 		}
-		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.evalInterval)}, nil
+		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
 	}
 
-	if hasOfflineNode(nodeMap) {
-		log.Info("Cluster has offline node(s); skipping rebalancing cycle")
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.evalInterval)}, nil
-	}
-
-	hotNodes := nodesAboveThreshold(deviations, cfg.imbalanceThreshold)
+	hotNodes := volumemigration.NodesAboveThreshold(deviations, cfg.ImbalanceThreshold)
 	if len(hotNodes) == 0 {
 		log.V(1).Info("No node exceeds latency deviation threshold; skipping",
-			"maxDeviationPct", maxDev, "threshold", cfg.imbalanceThreshold)
+			"maxDeviationPct", maxDev, "threshold", cfg.ImbalanceThreshold)
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
 		r.patchRebalancingMetrics(ctx, clusterCR, deviations, nil, maxDev, avgDev, hottestNode, coolestNode, now)
-		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.evalInterval)}, nil
+		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
 	}
 
-	volumesByNode, allVolumes, err := r.collectAndEnrichVolumes(ctx, clusterUUID, cfg.prometheusURL)
+	if r.migrationState.HasPendingMigrationForCluster(clusterUUID) {
+		log.V(1).Info("Pending migrations exist; deferring new migrations to next cycle")
+		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
+		r.patchRebalancingMetrics(ctx, clusterCR, deviations, nil, maxDev, avgDev, hottestNode, coolestNode, now)
+		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
+	}
+
+	// Build the input for the rebalancer from the nodes already fetched above.
+	storageNodes := make([]volumemigration.StorageNode, 0, len(nodeMap))
+	for uuid := range nodeMap {
+		storageNodes = append(storageNodes, volumemigration.StorageNode{UUID: uuid, ClusterUUID: clusterUUID})
+	}
+	selectorInput := autobalancing.StorageNodeSelectorInput{
+		Namespace:    clusterCR.Namespace,
+		StorageNodes: storageNodes,
+	}
+
+	isCoolingDown := func(cUUID, volumeUUID string) bool {
+		return r.migrationState.IsVolumeCooledDown(cUUID, volumeUUID, time.Now())
+	}
+
+	toMigrate, err := r.rebalancer.SelectMigrations(ctx, cfg, isCoolingDown, selectorInput)
 	if err != nil {
-		log.Error(err, "Cannot collect volume placement; requeuing")
+		log.Error(err, "Cannot select migration candidates; requeuing")
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "error").Inc()
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
-
-	pinnedVolumeUUIDs, err := r.buildPinnedSet(ctx, clusterUUID)
-	if err != nil {
-		log.Error(err, "Cannot build pinned volume set; requeuing")
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "error").Inc()
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
-
-	sourceNodeUUID, candidates := r.selectSourceNode(hotNodes, volumesByNode, allVolumes, clusterUUID, pinnedVolumeUUIDs, cfg.iopsWeight, cfg.throughputWeight)
-	if sourceNodeUUID == "" {
+	if len(toMigrate) == 0 {
 		log.Info("All latency-hot nodes have no eligible migration candidates (pinned or in cool-down)")
 		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingBlocked",
 			"All %d latency-degraded node(s) have no eligible migration candidates. Pinned volumes or active cool-downs are preventing rebalancing.",
 			len(hotNodes))
 		rebalancerPinnedBlockedTotal.WithLabelValues(clusterCR.Name).Inc()
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "blocked").Inc()
-		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.evalInterval)}, nil
-	}
-
-	toMigrate := selectMigrationSet(candidates, cfg.maxMigrations)
-	if len(toMigrate) == 0 {
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.evalInterval)}, nil
-	}
-
-	r.mu.Lock()
-	hasPending := r.hasPendingMigrationsForCluster(clusterUUID)
-	r.mu.Unlock()
-	if hasPending {
-		log.V(1).Info("Pending migrations exist; deferring new migrations to next cycle")
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		r.patchRebalancingMetrics(ctx, clusterCR, deviations, volumesByNode, maxDev, avgDev, hottestNode, coolestNode, now)
-		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.evalInterval)}, nil
+		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
 	}
 
 	if err := r.setRebalancing(ctx, clusterCR, true); err != nil {
@@ -312,16 +211,12 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}()
 
-	migratedCount := r.executeMigrations(ctx, clusterCR, toMigrate,
-		sourceNodeUUID, clusterUUID, nodeMap, deviations, cfg.coolDownSecs,
-		cycleStart.Add(cfg.evalInterval))
+	migratedCount := r.executeMigrations(ctx, clusterCR, toMigrate, deviations, cfg.CoolDownSecs, cycleStart.Add(cfg.EvalInterval))
 
-	r.patchRebalancingMetrics(ctx, clusterCR, deviations, volumesByNode, maxDev, avgDev, hottestNode, coolestNode, now)
+	r.patchRebalancingMetrics(ctx, clusterCR, deviations, nil, maxDev, avgDev, hottestNode, coolestNode, now)
 
-	r.mu.Lock()
-	activeCooldowns := r.countClusterCooldowns(clusterUUID, now)
-	r.mu.Unlock()
-	rebalancerCooldownVolumes.WithLabelValues(clusterCR.Name).Set(float64(activeCooldowns))
+	activeCooldowns := r.migrationState.GetCooldownCountByCluster(clusterUUID, now)
+	autobalancing.SetCooldownVolumes(clusterCR.Name, float64(activeCooldowns))
 
 	if migratedCount > 0 {
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "migrated").Inc()
@@ -329,7 +224,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
 	}
 
-	return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.evalInterval)}, nil
+	return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
 }
 
 // computeLatencyDeviations collects per-node latency from Prometheus and StorageNode CRs,
@@ -338,21 +233,19 @@ func (r *VolumeRebalancerReconciler) Reconcile(ctx context.Context, req ctrl.Req
 func (r *VolumeRebalancerReconciler) computeLatencyDeviations(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
-	clusterUUID, prometheusURL string,
+	clusterUUID, PrometheusURL string,
 ) (deviations map[string]float64, maxDev, avgDev float64, hottestNode, coolestNode string, err error) {
-	latencyByNode, err := r.collectLatencyState(ctx, clusterCR.Namespace, clusterUUID, prometheusURL)
+	latencyByNode, err := r.collectLatencyState(ctx, clusterCR.Namespace, clusterUUID, PrometheusURL)
 	if err != nil {
 		return nil, 0, 0, "", "", err
 	}
 	deviations = make(map[string]float64, len(latencyByNode))
 	for nodeUUID, ld := range latencyByNode {
-		deviations[nodeUUID] = computeLatencyDeviationPct(ld.baselineP99NS, ld.currentP99NS)
+		deviations[nodeUUID] = volumemigration.ComputeLatencyDeviationPct(ld.baselineP99NS, ld.currentP99NS)
 	}
-	for nodeUUID, dev := range deviations {
-		rebalancerNodeLatencyDeviationPct.WithLabelValues(clusterCR.Name, nodeUUID).Set(dev)
-	}
+	// Gauges (rebalancerNodeLatencyDeviationPct, rebalancerMaxLatencyDeviationPct)
+	// are emitted by StorageNodeSelector inside the Rebalancer; no duplicate update here.
 	maxDev, avgDev, hottestNode, coolestNode = deviationStats(deviations)
-	rebalancerMaxLatencyDeviationPct.WithLabelValues(clusterCR.Name).Set(maxDev)
 	return deviations, maxDev, avgDev, hottestNode, coolestNode, nil
 }
 
@@ -360,14 +253,14 @@ func (r *VolumeRebalancerReconciler) computeLatencyDeviations(
 // Prometheus. On Prometheus failure it falls back to REST API values (may be zero).
 func (r *VolumeRebalancerReconciler) collectAndEnrichVolumes(
 	ctx context.Context,
-	clusterUUID, prometheusURL string,
+	clusterUUID, PrometheusURL string,
 ) (volumesByNode map[string][]webapi.VolumeInfo, allVolumes map[string]volumePlacement, err error) {
 	log := logf.FromContext(ctx)
 	volumesByNode, allVolumes, _, err = r.collectVolumesByNode(ctx, clusterUUID)
 	if err != nil {
 		return nil, nil, err
 	}
-	if ioProvider, pErr := promlatency.New(prometheusURL); pErr != nil {
+	if ioProvider, pErr := promlatency.New(PrometheusURL); pErr != nil {
 		log.Error(pErr, "Cannot create volume IO provider; scoring will use REST API values")
 	} else if prometheusVolumeIO, pErr := ioProvider.GetClusterVolumeIO(ctx, clusterUUID); pErr != nil {
 		log.Error(pErr, "Cannot query volume IO from Prometheus; scoring will use REST API values")
@@ -386,7 +279,7 @@ func (r *VolumeRebalancerReconciler) selectSourceNode(
 	allVolumes map[string]volumePlacement,
 	clusterUUID string,
 	pinnedVolumeUUIDs map[string]bool,
-	iopsWeight, throughputWeight float64,
+	IopsWeight, ThroughputWeight float64,
 ) (sourceNodeUUID string, candidates []rankedCandidate) {
 	for _, nodeUUID := range hotNodes {
 		eligible := r.filterEligibleVolumes(volumesByNode[nodeUUID], clusterUUID, pinnedVolumeUUIDs)
@@ -395,7 +288,7 @@ func (r *VolumeRebalancerReconciler) selectSourceNode(
 		}
 		ranked := make([]rankedCandidate, 0, len(eligible))
 		for _, vol := range eligible {
-			cs := volumeIOScore(vol.IOPS, vol.ThroughputBytesPerSec, iopsWeight, throughputWeight)
+			cs := volumemigration.VolumeIOScore(vol.IOPS, vol.ThroughputBytesPerSec, IopsWeight, ThroughputWeight)
 			ranked = append(ranked, rankedCandidate{vol: vol, score: cs, pool: allVolumes[vol.UUID].poolUUID})
 		}
 		sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
@@ -404,21 +297,24 @@ func (r *VolumeRebalancerReconciler) selectSourceNode(
 	return "", nil
 }
 
-// selectMigrationSet selects at most maxMigrations candidates from the ranked list,
+// selectMigrationSet selects at most MaxMigrations candidates from the ranked list,
 // capped by a 10% IO-budget fraction of the total candidate score.
-func selectMigrationSet(candidates []rankedCandidate, maxMigrations int) []rankedCandidate {
+func selectMigrationSet(
+	candidates []rankedCandidate,
+	MaxMigrations int,
+) []rankedCandidate {
 	var totalScore float64
 	for _, rc := range candidates {
 		totalScore += rc.score
 	}
 	budget := migrationBudgetFraction * totalScore
-	toMigrate := make([]rankedCandidate, 0, maxMigrations)
+	toMigrate := make([]rankedCandidate, 0, MaxMigrations)
 	for _, rc := range candidates {
 		if len(toMigrate) == 0 || rc.score <= budget {
 			toMigrate = append(toMigrate, rc)
 			budget -= rc.score
 		}
-		if len(toMigrate) >= maxMigrations {
+		if len(toMigrate) >= MaxMigrations {
 			break
 		}
 	}
@@ -427,52 +323,39 @@ func selectMigrationSet(candidates []rankedCandidate, maxMigrations int) []ranke
 
 // executeMigrations calls CreateMigration for each candidate, tracks cool-down and
 // pending state, and returns the number of migrations successfully initiated.
+// executeMigrations submits each MigrationCandidate to the storage API, records
+// cool-down and pending state, and returns the number of migrations initiated.
+// Source and target are already resolved by the Rebalancer; this function only
+// owns API submission and event emission.
 func (r *VolumeRebalancerReconciler) executeMigrations(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
-	toMigrate []rankedCandidate,
-	sourceNodeUUID, clusterUUID string,
-	nodeMap map[string]webapi.StorageNodeInfo,
+	toMigrate []autobalancing.MigrationCandidate,
 	deviations map[string]float64,
 	coolDownSecs int64,
 	cycleDeadline time.Time,
 ) int {
 	log := logf.FromContext(ctx)
 	migratedCount := 0
-	for _, rc := range toMigrate {
+	for _, mc := range toMigrate {
 		if time.Now().After(cycleDeadline) {
 			r.Recorder.Eventf(clusterCR, corev1.EventTypeNormal, "VolumeRebalancingDeferred",
 				"Cycle deadline reached; %d migration candidate(s) deferred to next cycle",
 				len(toMigrate)-migratedCount)
 			break
 		}
-		targetUUID := r.selectLatencyTarget(nodeMap, deviations, sourceNodeUUID)
-		if targetUUID == "" {
-			log.Info("No suitable target node for volume; skipping", "volume", rc.vol.UUID)
-			continue
-		}
-		migration, err := r.apiClient.CreateMigration(ctx, clusterUUID, rc.vol.UUID, targetUUID)
+		migration, err := r.apiClient.CreateMigration(ctx, mc.ClusterUUID, mc.Volume.UUID, mc.TargetNodeUUID)
 		if err != nil {
-			log.Error(err, "CreateMigration failed", "volume", rc.vol.UUID, "target", targetUUID)
+			log.Error(err, "CreateMigration failed", "volume", mc.Volume.UUID, "target", mc.TargetNodeUUID)
 			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingFailed",
-				"Migration of volume %s to node %s failed: %v", rc.vol.UUID, targetUUID, err)
+				"Migration of volume %s to node %s failed: %v", mc.Volume.UUID, mc.TargetNodeUUID, err)
 			continue
 		}
-		cdKey := clusterUUID + "/" + rc.vol.UUID
-		r.mu.Lock()
-		r.coolDownMap[cdKey] = time.Now().Add(time.Duration(coolDownSecs) * time.Second)
-		r.pendingMigrations[cdKey] = &pendingMigration{
-			state:          pendingStateWaitingForCompletion,
-			migrationStart: time.Now(),
-			migrationID:    migration.ID,
-			clusterUUID:    clusterUUID,
-			poolUUID:       rc.pool,
-		}
-		r.mu.Unlock()
+		r.migrationState.PushMigration(mc.ClusterUUID, mc.Volume.PoolUUID, mc.Volume.UUID, migration.ID, coolDownSecs)
 		r.Recorder.Eventf(clusterCR, corev1.EventTypeNormal, "VolumeRebalancingStarted",
 			"Initiating migration of volume %s from node %s to %s (latency deviation: %.1f%%)",
-			rc.vol.UUID, sourceNodeUUID, targetUUID, deviations[sourceNodeUUID])
-		rebalancerMigrationsTotal.WithLabelValues(clusterCR.Name, sourceNodeUUID, targetUUID).Inc()
+			mc.Volume.UUID, mc.SourceNodeUUID, mc.TargetNodeUUID, deviations[mc.SourceNodeUUID])
+		rebalancerMigrationsTotal.WithLabelValues(clusterCR.Name, mc.SourceNodeUUID, mc.TargetNodeUUID).Inc()
 		migratedCount++
 	}
 	return migratedCount
@@ -487,72 +370,50 @@ func (r *VolumeRebalancerReconciler) processPendingMigrations(
 ) {
 	log := logf.FromContext(ctx)
 	prefix := clusterUUID + "/"
-	now := time.Now()
 
-	r.mu.Lock()
-	keys := make([]string, 0)
-	for k := range r.pendingMigrations {
-		if strings.HasPrefix(k, prefix) {
-			keys = append(keys, k)
-		}
-	}
-	r.mu.Unlock()
-
+	keys := r.migrationState.GetPendingMigrationKeysWithPrefix(prefix)
 	for _, key := range keys {
-		r.mu.Lock()
-		pm, ok := r.pendingMigrations[key]
+		pm, ok := r.migrationState.GetPendingMigrationByKey(key)
 		if !ok {
-			r.mu.Unlock()
-			continue
-		}
-		migrationID := pm.migrationID
-		migStart := pm.migrationStart
-		stuckWarned := pm.stuckWarned
-		r.mu.Unlock()
-
-		volumeUUID := strings.TrimPrefix(key, prefix)
-
-		// Enforce the initial delay to avoid a race between CreateMigration and
-		// the control-plane tracker populating the migration record.
-		if now.Before(migStart.Add(migrationInitialDelay)) {
 			continue
 		}
 
-		migration, err := r.apiClient.GetMigration(ctx, clusterUUID, migrationID)
+		migrationID := pm.MigrationID
+		migStart := pm.MigrationStart
+		stuckWarned := pm.StuckWarned
+		volumeUUID := pm.VolumeUUID
+
+		result, err := volumemigration.PollMigration(ctx, r.apiClient, clusterUUID, migrationID, migStart)
 		if err != nil {
 			log.Error(err, "Cannot get migration status", "migration", migrationID, "volume", volumeUUID)
 			continue
 		}
 
-		if migration.CompletedAt > 0 {
-			r.mu.Lock()
-			delete(r.pendingMigrations, key)
-			r.mu.Unlock()
-			if migration.ErrorMessage != "" {
-				log.Error(nil, "Volume migration completed with error",
-					"volume", volumeUUID, "migration", migrationID, "error", migration.ErrorMessage)
-				r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingFailed",
-					"Migration %s of volume %s completed with error: %s",
-					migrationID, volumeUUID, migration.ErrorMessage)
-			} else {
-				log.Info("Volume migration complete", "volume", volumeUUID, "migration", migrationID)
-				r.Recorder.Eventf(clusterCR, corev1.EventTypeNormal, "VolumeRebalancingComplete",
-					"Migration %s of volume %s completed successfully", migrationID, volumeUUID)
-			}
-			continue
-		}
-
-		if !stuckWarned && now.After(migStart.Add(migrationStuckWarningTimeout)) {
+		if result.Stuck && !stuckWarned {
 			log.Error(nil, "Volume migration has not completed within 30 minutes",
 				"volume", volumeUUID, "migration", migrationID)
 			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingStuck",
 				"Migration %s of volume %s has not completed after 30 minutes (phase: %s, status: %s)",
-				migrationID, volumeUUID, migration.Phase, migration.Status)
-			r.mu.Lock()
-			if m, exists := r.pendingMigrations[key]; exists {
-				m.stuckWarned = true
-			}
-			r.mu.Unlock()
+				migrationID, volumeUUID, result.Migration.Phase, result.Migration.Status)
+
+			r.migrationState.MarkMigrationStuck(clusterUUID, volumeUUID)
+		}
+
+		if !result.Done {
+			continue
+		}
+
+		r.migrationState.DeletePendingMigration(clusterUUID, volumeUUID)
+		if result.Succeeded {
+			log.Info("Volume migration complete", "volume", volumeUUID, "migration", migrationID)
+			r.Recorder.Eventf(clusterCR, corev1.EventTypeNormal, "VolumeRebalancingComplete",
+				"Migration %s of volume %s completed successfully", migrationID, volumeUUID)
+		} else {
+			log.Error(nil, "Volume migration completed with error",
+				"volume", volumeUUID, "migration", migrationID, "error", result.Migration.ErrorMessage)
+			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingFailed",
+				"Migration %s of volume %s completed with error: %s",
+				migrationID, volumeUUID, result.Migration.ErrorMessage)
 		}
 	}
 }
@@ -599,7 +460,10 @@ func (r *VolumeRebalancerReconciler) collectVolumesByNode(
 // overrideVolumeIO replaces the IOPS and ThroughputBytesPerSec fields in volumesByNode
 // with values from Prometheus. Volumes not present in the Prometheus result are left
 // unchanged (REST API fallback).
-func overrideVolumeIO(volumesByNode map[string][]webapi.VolumeInfo, io map[string]promlatency.VolumeIOMetrics) {
+func overrideVolumeIO(
+	volumesByNode map[string][]webapi.VolumeInfo,
+	io map[string]promlatency.VolumeIOMetrics,
+) {
 	for nodeUUID, vols := range volumesByNode {
 		for i, v := range vols {
 			if m, ok := io[v.UUID]; ok {
@@ -614,7 +478,10 @@ func overrideVolumeIO(volumesByNode map[string][]webapi.VolumeInfo, io map[strin
 // buildPinnedSet returns the set of volume UUIDs whose PVC carries the pinned annotation.
 // It looks up PVCs across all namespaces using the CSI volume handle pattern
 // "clusterUUID:poolName:volumeUUID".
-func (r *VolumeRebalancerReconciler) buildPinnedSet(ctx context.Context, clusterUUID string) (map[string]bool, error) {
+func (r *VolumeRebalancerReconciler) buildPinnedSet(
+	ctx context.Context,
+	clusterUUID string,
+) (map[string]bool, error) {
 	pinned := make(map[string]bool)
 
 	var pvList corev1.PersistentVolumeList
@@ -677,15 +544,13 @@ func (r *VolumeRebalancerReconciler) filterEligibleVolumes(
 	pinned map[string]bool,
 ) []webapi.VolumeInfo {
 	now := time.Now()
-	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	out := vols[:0:0]
 	for _, v := range vols {
 		if pinned[v.UUID] {
 			continue
 		}
-		if expiry, inCD := r.coolDownMap[clusterUUID+"/"+v.UUID]; inCD && now.Before(expiry) {
+		if r.migrationState.IsVolumeCooledDown(clusterUUID, v.UUID, now) {
 			continue
 		}
 		if v.Status != "online" {
@@ -780,38 +645,14 @@ func (r *VolumeRebalancerReconciler) patchRebalancingMetrics(
 	}
 }
 
-// hasPendingMigrationsForCluster reports whether any migration is still tracked in the
-// 6b/6c state machine for the given cluster. Must be called with r.mu held.
-func (r *VolumeRebalancerReconciler) hasPendingMigrationsForCluster(clusterUUID string) bool {
-	prefix := clusterUUID + "/"
-	for k := range r.pendingMigrations {
-		if strings.HasPrefix(k, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// countClusterCooldowns returns the number of non-expired cool-down entries for the cluster.
-func (r *VolumeRebalancerReconciler) countClusterCooldowns(clusterUUID string, now time.Time) int {
-	prefix := clusterUUID + "/"
-	count := 0
-	for k, expiry := range r.coolDownMap {
-		if strings.HasPrefix(k, prefix) && now.Before(expiry) {
-			count++
-		}
-	}
-	return count
-}
-
 // collectLatencyState builds a nodeUUID → nodeLatencyData map by combining:
 //   - current p99 write latency queried from Prometheus (written by the fio-bench-probe sidecar)
 //   - baseline p99 write latency read from StorageNode CR status (set once by the baseline Job)
 func (r *VolumeRebalancerReconciler) collectLatencyState(
 	ctx context.Context,
-	namespace, clusterUUID, prometheusURL string,
+	namespace, clusterUUID, PrometheusURL string,
 ) (map[string]nodeLatencyData, error) {
-	provider, err := promlatency.New(prometheusURL)
+	provider, err := promlatency.New(PrometheusURL)
 	if err != nil {
 		return nil, fmt.Errorf("create prometheus latency provider: %w", err)
 	}
@@ -834,7 +675,10 @@ func (r *VolumeRebalancerReconciler) collectLatencyState(
 
 // readBaselineFromCRs returns a nodeUUID → BaselineP99NS map from all StorageNode CRs
 // in the given namespace. The baseline is set exactly once by the one-shot baseline Job.
-func (r *VolumeRebalancerReconciler) readBaselineFromCRs(ctx context.Context, namespace string) map[string]int64 {
+func (r *VolumeRebalancerReconciler) readBaselineFromCRs(
+	ctx context.Context,
+	namespace string,
+) map[string]int64 {
 	result := make(map[string]int64)
 	var snodeList simplyblockv1alpha1.StorageNodeList
 	if err := r.List(ctx, &snodeList, client.InNamespace(namespace)); err != nil {
@@ -853,7 +697,10 @@ func (r *VolumeRebalancerReconciler) readBaselineFromCRs(ctx context.Context, na
 // deviationStats computes aggregate statistics from a nodeUUID → deviationPct map.
 // Returns maxDeviation, avgDeviation, hottestNodeUUID (highest deviation),
 // and coolestNodeUUID (lowest deviation). All values are 0 / empty when the map is empty.
-func deviationStats(deviations map[string]float64) (maxDev, avgDev float64, hottest, coolest string) {
+func deviationStats(deviations map[string]float64) (
+	maxDev, avgDev float64,
+	hottest, coolest string,
+) {
 	if len(deviations) == 0 {
 		return
 	}
@@ -876,7 +723,9 @@ func deviationStats(deviations map[string]float64) (maxDev, avgDev float64, hott
 }
 
 // hasOfflineNode returns true if any node in the map is not online or is unreachable.
-func hasOfflineNode(nodeMap map[string]webapi.StorageNodeInfo) bool {
+func hasOfflineNode(
+	nodeMap map[string]webapi.StorageNodeInfo,
+) bool {
 	for _, n := range nodeMap {
 		switch n.Status {
 		case "offline", "in_restart", "unreachable":
@@ -887,15 +736,20 @@ func hasOfflineNode(nodeMap map[string]webapi.StorageNodeInfo) bool {
 }
 
 // requeueAfter returns the time remaining until the next evaluation, clamped to 0.
-func requeueAfter(cycleStart time.Time, evalInterval time.Duration) time.Duration {
-	remaining := evalInterval - time.Since(cycleStart)
+func requeueAfter(
+	cycleStart time.Time,
+	EvalInterval time.Duration,
+) time.Duration {
+	remaining := EvalInterval - time.Since(cycleStart)
 	if remaining < 0 {
 		return 0
 	}
 	return remaining
 }
 
-func (r *VolumeRebalancerReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *VolumeRebalancerReconciler) SetupWithManager(
+	mgr ctrl.Manager,
+) error {
 	r.apiClient = webapi.NewClient()
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageCluster{},

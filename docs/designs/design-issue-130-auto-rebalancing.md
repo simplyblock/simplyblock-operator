@@ -1,8 +1,8 @@
 # Design Document: Automatic Volume Rebalancing (Issue #130)
 
-**Status:** Phase 1 Implemented  
+**Status:** Phase 1 Implemented (including VolumeMigration CRD and autobalancing refactor)  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-06-02  
+**Date:** 2026-06-02 (last updated 2026-06-17)  
 **Issue:** https://github.com/simplyblock/simplyblock-operator/issues/130
 
 ---
@@ -28,12 +28,14 @@ The Phase 1 implementation is self-contained and does not require a Prometheus d
 6. [Volume Migration Algorithm](#6-volume-migration-algorithm)
 7. [Cool-Down Mechanism](#7-cool-down-mechanism)
 8. [New Controller: VolumeRebalancer](#8-new-controller-volumerebalancer)
-9. [Metrics Provider Interface](#9-metrics-provider-interface)
-10. [Backend API Requirements](#10-backend-api-requirements)
-11. [Configuration](#11-configuration)
-12. [Observability](#12-observability)
-13. [Testing Strategy](#13-testing-strategy)
-14. [Open Questions](#14-open-questions)
+9. [New CRD: VolumeMigration](#9-new-crd-volumemigration)
+10. [Autobalancing Package](#10-autobalancing-package)
+11. [Metrics Provider Interface](#11-metrics-provider-interface)
+12. [Backend API Requirements](#12-backend-api-requirements)
+13. [Configuration](#13-configuration)
+14. [Observability](#14-observability)
+15. [Testing Strategy](#15-testing-strategy)
+16. [Open Questions](#16-open-questions)
 
 ---
 
@@ -69,59 +71,59 @@ The operator has existing primitives for drain-based rebalancing (triggered duri
 ## 3. Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  Kubernetes Control Plane                   │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │          VolumeRebalancerReconciler (NEW)            │   │
-│  │                                                      │   │
-│  │  1. Periodic poll (configurable interval)            │   │
-│  │  2. Read current latency from Prometheus             │   │
-│  │     Read baseline latency from StorageNode CRs       │   │
-│  │  3. Compute deviation % from baseline per node       │   │
-│  │  4. Select source (worst deviation) and target       │   │
-│  │  5. Rank volumes by IOPS + throughput score          │   │
-│  │  6. Call backend migration API                       │   │
-│  │  7. Record cool-down state                           │   │
-│  └──────────────────────────┬───────────────────────────┘   │
-│         reads latency state │                               │
-│  ┌──────────────────────────▼───────────────────────────┐   │
-│  │          StorageNodeLatencyReconciler (NEW)          │   │
-│  │                                                      │   │
-│  │  Manages fio baseline Jobs per backend node UUID     │   │
-│  │  Reads baseline result from Job termination message  │   │
-│  │  Stores BaselineP50NS/P99NS in StorageNode.status    │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  StorageCluster CR                                   │   │
-│  │  spec.volumeRebalancing.*   (policy config)          │   │
-│  │  status.rebalancing         (active flag)            │   │
-│  │  status.rebalancingMetrics  (deviation summary) NEW  │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  StorageNode CR                                      │   │
-│  │  status.latencyMetrics[]    (per-node p50/p99) NEW   │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │       Existing Controllers (unchanged)               │   │
-│  │  - SimplybockStorageClusterReconciler                │   │
-│  │  - NodeDrainController (uses Rebalancing flag)       │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-              │ HTTP (existing webapi client)
-┌─────────────▼────────────────────────────────────────────────┐
-│              SimplyBlock Backend API                         │
-│  GET  /api/v2/clusters/{id}/storage-nodes/                   │
-│  GET  /api/v2/clusters/{id}/storage-pools/{id}/volumes/      │
-│  POST /api/v2/clusters/{id}/migrations/                      │ (NEW)
-│  GET  /api/v2/clusters/{id}/migrations/{id}/                 │ (NEW)
-└──────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│                        Kubernetes Control Plane                       │
+│                                                                       │
+│  ┌────────────────────────────────────────────────────────────────┐   │
+│  │            VolumeRebalancerReconciler                          │   │
+│  │                                                                │   │
+│  │  1. Periodic poll (configurable interval)                      │   │
+│  │  2. Compute latency deviation per node (Prometheus + CR)       │   │
+│  │  3. Delegate selection to autobalancing.Rebalancer             │   │
+│  │     ├── StorageNodeSelector  (which nodes are hot/cool)        │   │
+│  │     └── LogicalVolumeSelector (which volumes to migrate)       │   │
+│  │  4. executeMigrations: POST /migrations/ per candidate         │   │
+│  │  5. processPendingMigrations: poll GET /migrations/{id}/       │   │
+│  │  6. Record cool-down state in MigrationState                   │   │
+│  └──────────────────────────────┬─────────────────────────────────┘   │
+│                                 │ reads latency state                 │
+│  ┌──────────────────────────────▼─────────────────────────────────┐   │
+│  │            StorageNodeLatencyReconciler                        │   │
+│  │                                                                │   │
+│  │  Manages fio baseline Jobs per backend node UUID               │   │
+│  │  Stores BaselineP50NS/P99NS in StorageNode.status              │   │
+│  └────────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│  ┌────────────────────────────────────────────────────────────────┐   │
+│  │            VolumeMigrationReconciler (NEW §9)                  │   │
+│  │                                                                │   │
+│  │  User-triggered migration via VolumeMigration CR               │   │
+│  │  Pending → Validating → Running → Completed/Failed/Aborted     │   │
+│  │  Spawns nvme-validation Job; calls CreateMigration +           │   │
+│  │  ContinueMigration; polls GetMigration to track completion     │   │
+│  └────────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+│  StorageCluster CR  spec.volumeRebalancing.*  status.rebalancing      │
+│  StorageNode CR     status.latencyMetrics[]                           │
+│  VolumeMigration CR (NEW §9)  spec.pvName  spec.targetNodeUUID        │
+└───────────────────────────────────────────────────────────────────────┘
+              │ HTTP (webapi client, service-account bearer token)
+┌─────────────▼──────────────────────────────────────────────────────────┐
+│              SimplyBlock Backend API                                   │
+│  GET  /api/v2/clusters/{id}/storage-nodes/                             │
+│  GET  /api/v2/clusters/{id}/storage-pools/{id}/volumes/                │
+│  POST /api/v2/clusters/{id}/migrations/          (returns connections) │
+│  POST /api/v2/clusters/{id}/migrations/continue  (NEW — two-phase)    │
+│  GET  /api/v2/clusters/{id}/migrations/{id}/                           │
+│  POST /api/v2/clusters/{id}/migrations/{id}/cancel                     │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-The `VolumeRebalancerReconciler` is the only new component on the operator side for rebalancing decisions. The `StorageNodeLatencyReconciler` is the companion component that collects fio measurements. Both use `RequeueAfter` for periodic reconciliation; the `StorageNodeLatencyReconciler` additionally watches owned Jobs (`.Owns(&batchv1.Job{})`) so it is triggered immediately when a baseline Job completes, without waiting for the next poll interval.
+**Key change from initial design:** The `VolumeRebalancerReconciler` now delegates the full selection algorithm to the `autobalancing` package (§10), which provides three testable components — `StorageNodeSelector`, `LogicalVolumeSelector`, and `Rebalancer`. The reconciler only orchestrates API calls and status writes.
+
+Both the `StorageNodeLatencyReconciler` and the `VolumeMigrationReconciler` watch owned `batchv1.Job` objects (`.Owns(&batchv1.Job{})`) so they are triggered immediately when a Job terminates rather than waiting for the next poll interval.
+
+**Authentication change:** The `webapi.Client` now authenticates via the operator pod's Kubernetes service-account token (`/var/run/secrets/kubernetes.io/serviceaccount/token`) rather than per-cluster secrets. All `Do` / `DoWithHeaders` calls no longer take a `clusterSecret` parameter.
 
 ---
 
@@ -597,7 +599,132 @@ The existing `NodeDrainController` blocks new drains while `status.rebalancing =
 
 ---
 
-## 9. Metrics Provider Interface
+## 9. New CRD: VolumeMigration
+
+`VolumeMigration` (`storage.simplyblock.io/v1alpha1`) exposes manual volume migration as a first-class Kubernetes resource. It is the user-facing counterpart of the automatic rebalancer and reuses the same two-phase backend migration protocol.
+
+### 9.1 Spec
+
+```go
+type VolumeMigrationSpec struct {
+    // PVName is the PersistentVolume whose backing logical volume should be moved.
+    PVName         string `json:"pvName"`
+    // TargetNodeUUID is the destination storage node.
+    TargetNodeUUID string `json:"targetNodeUUID"`
+    // Abort requests cancellation of an in-progress migration.
+    Abort          bool   `json:"abort,omitempty"`
+}
+```
+
+### 9.2 Status and Phases
+
+```
+Pending → Validating → Running → Completed
+                    ↓              ↓
+                 Failed         Failed
+         (abort) Aborted     (abort) Aborted
+```
+
+| Phase        | Meaning                                                                                              |
+|--------------|------------------------------------------------------------------------------------------------------|
+| `Pending`    | Accepted; PV and cluster/pool not yet resolved                                                       |
+| `Validating` | `CreateMigration` called; NVMe paths being established and ANA-validated by a Job on the target node |
+| `Running`    | `ContinueMigration` called; data transfer in progress                                                |
+| `Completed`  | Migration finished successfully                                                                      |
+| `Failed`     | Unrecoverable error (NVMe validation failed, API error, etc.)                                        |
+| `Aborted`    | `spec.abort=true` was set; `CancelMigration` was called                                              |
+
+Key status fields: `migrationID`, `clusterUUID`, `volumeUUID`, `poolUUID`, `sourceNodeUUID`, `connections []MigrationConnection`, `validationJobName`, `snapsTotal`, `snapsMigrated`, `startedAt`, `completedAt`, `errorMessage`.
+
+### 9.3 Reconcile Flow
+
+```
+reconcileStart
+  1. Resolve PV → CSI volume handle → volumeUUID
+  2. Scan StorageClusters for the owning cluster/pool
+  3. POST /migrations/  → MigrationDTO { id, connections[] }
+  4. Store connections + migrationID in status → phase=Validating
+
+reconcileValidating
+  5. If no ValidationJob yet: resolve target node k8s hostname,
+     get FioBenchmarkImage from StorageCluster, spawn Job on target node
+  6. Job runs: nvme connect for each connection, then
+     nvme list --verbose → verify all NQNs present with ANA state "inaccessible"
+  7. Job success  → POST /migrations/continue → phase=Running
+     Job failure  → POST /migrations/{id}/cancel → phase=Failed
+
+reconcileRunning
+  8. Poll GET /migrations/{id}/ (via shared PollMigration helper)
+     CompletedAt>0 && no error → phase=Completed
+     CompletedAt>0 && error    → phase=Failed
+
+reconcileAbort (valid in Validating or Running)
+  9. POST /migrations/{id}/cancel → phase=Aborted
+```
+
+The `VolumeMigrationReconciler` watches owned `batchv1.Job` objects so step 7 fires immediately when the validation Job terminates, without a polling delay.
+
+### 9.4 Starting a migration programmatically
+
+Internal callers (e.g. the rebalancer) use `volumemigration.StartMigration(ctx, k8sClient, volumeUUID, targetNodeUUID, name, namespace, ownerRefs)`, which resolves the volume UUID to a PV name and creates the `VolumeMigration` CR.
+
+---
+
+## 10. Autobalancing Package
+
+The selection algorithm originally embedded in `VolumeRebalancerReconciler` was extracted into `internal/volumemigration/autobalancing` for testability and reuse.
+
+### 10.1 Components
+
+| Component               | File                         | Responsibility                                                                                                                                                          |
+|-------------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `StorageNodeSelector`   | `storage_node_selector.go`   | Combines Prometheus current p99 + CR baseline per node; computes deviation per cluster; returns `[]NodeMigrationPair` (source→target, worst-first)                      |
+| `LogicalVolumeSelector` | `logical_volume_selector.go` | Collects volumes from API, enriches with Prometheus IOPS/throughput, filters eligibility, selects the ranked migration set (10 % IO-budget cap + `MaxMigrations` limit) |
+| `Rebalancer`            | `rebalancer.go`              | Wires the two selectors; produces `[]MigrationCandidate{ClusterUUID, SourceNodeUUID, TargetNodeUUID, Volume}`                                                           |
+
+### 10.2 Key Types
+
+```go
+// StorageNodeSelectorInput groups nodes by namespace (for baseline CR lookup).
+type StorageNodeSelectorInput struct {
+    Namespace    string
+    StorageNodes []volumemigration.StorageNode
+}
+
+// NodeMigrationPair is one source→target pairing from StorageNodeSelector.
+type NodeMigrationPair struct {
+    ClusterUUID, SourceNodeUUID, TargetNodeUUID string
+}
+
+// MigrationCandidate is the final output: one volume ready to migrate.
+type MigrationCandidate struct {
+    ClusterUUID, SourceNodeUUID, TargetNodeUUID string
+    Volume VolumePlacement
+}
+
+// ClusterDeviationStats holds per-cluster aggregate stats after one cycle.
+type ClusterDeviationStats struct {
+    MaxDeviationPct, AvgDeviationPct float64
+    HottestNodeUUID, CoolestNodeUUID string
+}
+```
+
+### 10.3 Multi-cluster Prometheus query
+
+`StorageNodeSelector` calls `promlatency.GetClustersCurrentP99(ctx, clusterUUIDs)` which issues a single PromQL query with a `cluster=~"uuid1|uuid2|..."` regex matcher, returning `map[clusterUUID]map[nodeUUID]int64`. This replaces the former per-cluster `GetClusterCurrentP99` loop.
+
+### 10.4 Rebalancer entry point
+
+```go
+candidates, err := rebalancer.SelectMigrations(ctx, cfg, isCoolingDown, inputs...)
+// isCoolingDown func(clusterUUID, volumeUUID string) bool
+```
+
+`VolumeRebalancerReconciler` calls this once per cycle, then calls `executeMigrations` on the returned candidates. The `isCoolingDown` closure bridges the reconciler's in-memory `MigrationState` into the Rebalancer.
+
+---
+
+## 11. Metrics Provider Interface
 
 > **Phase 2.** The interface exists and the `PrometheusMetricsProvider` and `UniformMetricsProvider` implementations are present in the codebase, but `VolumeRebalancerReconciler` does not invoke them in Phase 1. They will be wired in Phase 2 for the sliding-window IOPS scoring.
 
@@ -667,9 +794,9 @@ Label names must be agreed upon with the SPDK team for Phase 2.
 
 ---
 
-## 10. Backend API Requirements
+## 12. Backend API Requirements
 
-### 10.1 Volume listing — placement and status fields (Phase 1)
+### 12.1 Volume listing — placement and status fields (Phase 1)
 
 The `GET /api/v2/clusters/{id}/storage-pools/{id}/volumes/` endpoint is used exclusively for volume placement and eligibility checks. Per-volume IOPS and throughput are now read from Prometheus (see §5.3) — not from this endpoint.
 
@@ -689,9 +816,33 @@ The `iops` and `throughput_bytes_per_sec` fields are consumed if present (REST A
 
 ### 10.2 Migration API
 
+### Migration is a two-phase API protocol
+
+Volume migration requires two separate API calls separated by an NVMe path
+establishment step performed by the operator on the target storage node:
+
+```
+Operator                           Backend API                     Target node kernel
+   │                                    │                                │
+   │── POST /migrations/ ──────────────▶│                                │
+   │◀─ MigrationDTO {id, connections} ──│                                │
+   │                                    │                                │
+   │── spawn Job on target node ────────────────────────────────────────▶│
+   │        nvme connect (each LvolConnectResp)                          │
+   │◀─ Job completed ────────────────────────────────────────────────────│
+   │                                    │                                │
+   │── POST /migrations/continue ──────▶│                                │
+   │◀─ MigrationDTO (updated status) ───│                                │
+   │                                    │                                │
+   │── GET /migrations/{id}/ (poll) ───▶│                                │
+   │◀─ MigrationDTO {completed_at>0} ───│                                │
+```
+
 **`POST /api/v2/clusters/{clusterUUID}/migrations/`**
 
-Creates a new volume migration.
+Creates the internal infrastructure for the migration on both the control plane
+and storage plane. Returns new NVMe-oF connection parameters for the target-side
+paths that the operator must establish before the data movement can begin.
 
 Request:
 ```json
@@ -708,9 +859,51 @@ Response (`MigrationDTO`):
   "phase": "string",
   "status": "string",
   "started_at": 1748000000,
-  "completed_at": 0
+  "completed_at": 0,
+  "connections": [
+    {
+      "nqn": "nqn.2023-02.io.simplyblock:...",
+      "ip": "192.168.10.69",
+      "port": 4430,
+      "transport": "tcp",
+      "nr-io-queues": 3,
+      "reconnect-delay": 1,
+      "ctrl-loss-tmo": 4
+    }
+  ]
 }
 ```
+
+**NVMe path establishment (operator-side, between the two API calls)**
+
+After receiving the `connections` array the operator spawns a short-lived
+Kubernetes Job on the **target storage node** (pinned via
+`nodeSelector: kubernetes.io/hostname`). The Job uses the same fio-bench image
+(which includes `nvme-cli`) and runs `nvme connect` for each entry:
+
+```
+sudo nvme connect -t <transport> -a <ip> -s <port> -n <nqn> \
+    --nr-io-queues=<nr-io-queues> \
+    --reconnect-delay=<reconnect-delay> \
+    --ctrl-loss-tmo=<ctrl-loss-tmo>
+```
+
+The Job mounts `/dev` from the host (`hostPath: /dev`) and runs with
+`HostNetwork: true`, identical to the baseline Job. On success (exit 0) the
+operator calls `ContinueMigration`. On failure the migration is cancelled via
+`CancelMigration`.
+
+**`POST /api/v2/clusters/{clusterUUID}/migrations/continue`**
+
+Kicks off the actual data movement after the operator has confirmed that all
+NVMe paths returned by `CreateMigration` are reachable on the target node.
+
+Request:
+```json
+{ "migration_id": "<migrationUUID>" }
+```
+
+Response: updated `MigrationDTO`.
 
 **`GET /api/v2/clusters/{clusterUUID}/migrations/{migrationUUID}/`**
 
@@ -736,9 +929,9 @@ The per-node, per-blocksize I/O metric endpoint described in earlier drafts is d
 
 ---
 
-## 11. Configuration
+## 13. Configuration
 
-### 11.1 Cluster-Level Defaults
+### 13.1 Cluster-Level Defaults
 
 | Field                         | Default  | Phase | Description                                                                                                  |
 |-------------------------------|----------|-------|--------------------------------------------------------------------------------------------------------------|
@@ -764,9 +957,9 @@ The per-node, per-blocksize I/O metric endpoint described in earlier drafts is d
 
 ---
 
-## 12. Observability
+## 14. Observability
 
-### 12.1 Prometheus Metrics
+### 14.1 Prometheus Metrics
 
 | Metric                                              | Type    | Labels                                  | Description                                                                                            |
 |-----------------------------------------------------|---------|-----------------------------------------|--------------------------------------------------------------------------------------------------------|
@@ -794,9 +987,9 @@ All events are emitted on the `StorageCluster` object.
 
 ---
 
-## 13. Testing Strategy
+## 15. Testing Strategy
 
-### 13.1 Unit Tests (Phase 1 — Implemented)
+### 15.1 Unit Tests (Phase 1 — Implemented)
 
 All pure functions in `volumerebalancer_scoring.go` and the controller helper methods are covered without external dependencies.
 
@@ -863,7 +1056,20 @@ All pure functions in `volumerebalancer_scoring.go` and the controller helper me
 
 ---
 
-### 13.1b Unit Tests — Phase 2 (Planned)
+### 15.1b Unit Tests — Autobalancing Package (Implemented)
+
+Tests live in `internal/volumemigration/autobalancing/autobalancing_test.go`.
+
+| #    | Function                          | Scenario                                                                                                                                                                                        |
+|------|-----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| A-01 | `distinctClusterUUIDs`            | Deduplication across multiple inputs; empty UUID skipped; nil input                                                                                                                             |
+| A-02 | `deviationStats`                  | Single/multi cluster grouping; hottest/coolest/avg/max correctness; node absent from latency map ignored                                                                                        |
+| A-03 | `FilterEligibleVolumes`           | All five exclusion reasons (pinned, cooling-down, not-online, migrating, all excluded); nil IsCoolingDown does not panic                                                                        |
+| A-04 | `SelectVolumesForMigration`       | Always includes first candidate; 10 % budget cap excludes mid-range; MaxMigrations hard cap; zero-score fallback includes all; skip node with no eligible volumes; descending IO-score ordering |
+| A-05 | `SelectStorageNodes` (pure logic) | Hot/cool pairing via deviationStats; single-node cluster produces no pair                                                                                                                       |
+| A-06 | `isCoolingDown` closure           | Correctly captures clusterUUID per cluster (loop variable capture guard)                                                                                                                        |
+
+### 15.1c Unit Tests — Phase 2 (Planned)
 
 When the sliding-window IOPS scoring is implemented the following test cases will be added:
 
@@ -919,13 +1125,15 @@ Run against a real SimplyBlock cluster with real fio latency measurements.
 
 ---
 
-## 14. Open Questions
+## 16. Open Questions
 
-| # | Question                                                                                                                                                                                                                                                                                                                                                                                                                             | Owner             |
-|---|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------|
-| 1 | ~~**IOPS/throughput per volume from REST API**~~ **Resolved.** Per-volume IOPS and throughput are read directly from Prometheus using `lvol_read_io_ps`, `lvol_write_io_ps`, `lvol_read_bytes_ps`, `lvol_write_bytes_ps` (exported by the control plane). The REST API values are used only as a fallback if Prometheus has no series for a given volume.                                                                            | Resolved          |
-| 2 | **Phase 2 SPDK Prometheus metric schema:** What are the exact metric names and label keys for per-node, per-blocksize IOPS series? The schema in §9.4 is a proposal; it must be agreed with the SPDK team before Phase 2 implementation.                                                                                                                                                                                             | SPDK/Backend team |
-| 3 | **Helm/OLM RBAC sync:** Does the Helm chart include the generated RBAC manifests from `config/rbac/role.yaml` directly, or is there a hand-written `ClusterRole` that needs manual update? Same question for the OLM CSV `spec.install.spec.clusterPermissions`.                                                                                                                                                                     | DevOps            |
-| 4 | **`simplyblock.io/pinned-volume` — backend hard-pin:** Does the backend also enforce a hard-pin state on the lvol? If so, the operator should honour it in addition to the PVC annotation — currently only the PVC annotation is checked.                                                                                                                                                                                            | Backend team      |
-| 5 | **Sidecar ConfigMap injection latency:** The `fio-bench-probe` sidecar polls for its config file (`/etc/simplyblock/fio-bench/<hostname>`) every 10 seconds. If the ConfigMap is not populated before the sidecar starts (e.g. during cluster bootstrap), the sidecar will wait indefinitely. Is there a race condition risk where a pod can be scheduled before the `StorageNodeLatencyReconciler` has written the ConfigMap entry? | —                 |
-| 6 | **Per-volume replica placement for scoring (Phase 2):** The `applyLatencyBoost` stub in Phase 1 only operates on the primary node. Secondary and tertiary LVS placement data is not available from the current API. Correlating secondary/tertiary hot nodes to specific volumes requires a backend API addition or Prometheus label.                                                                                                | SPDK/Backend team |
+| # | Question                                                                                                                                                                                                                                                                                                                                                                                | Owner             |
+|---|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------|
+| 1 | ~~**IOPS/throughput per volume from REST API**~~ **Resolved.** Per-volume IOPS and throughput are read directly from Prometheus. REST API values are the fallback.                                                                                                                                                                                                                      | Resolved          |
+| 2 | **Phase 2 SPDK Prometheus metric schema:** Exact metric names and label keys for per-node, per-blocksize IOPS series must be agreed with the SPDK team.                                                                                                                                                                                                                                 | SPDK/Backend team |
+| 3 | ~~**Helm/OLM RBAC sync**~~ **Resolved.** The Helm chart now includes hand-written RBAC for the new controllers and the VolumeMigration CRD.                                                                                                                                                                                                                                             | Resolved          |
+| 4 | **`simplyblock.io/pinned-volume` — backend hard-pin:** Does the backend also enforce a hard-pin? Currently only the PVC annotation is checked.                                                                                                                                                                                                                                          | Backend team      |
+| 5 | **Sidecar ConfigMap injection latency:** Race condition possible if a pod is scheduled before `StorageNodeLatencyReconciler` has written the ConfigMap entry.                                                                                                                                                                                                                           | —                 |
+| 6 | **Per-volume replica placement for scoring (Phase 2):** Secondary/tertiary LVS placement data not available from current API.                                                                                                                                                                                                                                                           | SPDK/Backend team |
+| 7 | **ANA state field name in nvme-cli JSON:** The validation Job checks `sub.get('ANA_State', '')` against `"inaccessible"`. The exact JSON field name produced by `nvme list --verbose --output-format=json` must be confirmed against the nvme-cli version shipped in the fio-bench image.                                                                                               | —                 |
+| 8 | **VolumeMigration and the rebalancer:** The `VolumeMigrationReconciler` and the `VolumeRebalancerReconciler` both call `CreateMigration` independently. If both attempt to migrate the same volume simultaneously the backend will reject one. A coordination mechanism (e.g. checking the `Migrating` field before creating a `VolumeMigration` CR in the rebalancer) should be added. | —                 |

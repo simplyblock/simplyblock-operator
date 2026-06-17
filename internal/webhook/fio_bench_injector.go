@@ -32,7 +32,10 @@ type FioBenchInjector struct {
 	Client client.Client
 }
 
-func (h *FioBenchInjector) Handle(ctx context.Context, req admission.Request) admission.Response {
+func (h *FioBenchInjector) Handle(
+	ctx context.Context,
+	req admission.Request,
+) admission.Response {
 	pod := &corev1.Pod{}
 	if err := json.Unmarshal(req.Object.Raw, pod); err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
@@ -83,7 +86,10 @@ func (h *FioBenchInjector) Handle(ctx context.Context, req admission.Request) ad
 // resolveConfig finds the StorageCluster whose UUID matches the cluster ID prefix
 // embedded in the snode-spdk pod name (snode-spdk-pod-<PORT>-<UUID_PREFIX>) and
 // returns the fio image + ConfigMap name when latency benchmarking is enabled.
-func (h *FioBenchInjector) resolveConfig(ctx context.Context, podName string) (image, configMapName string, ok bool) {
+func (h *FioBenchInjector) resolveConfig(
+	ctx context.Context,
+	podName string,
+) (image, configMapName string, ok bool) {
 	uuidPrefix := clusterUUIDFromPodName(podName)
 
 	var list simplyblockv1alpha1.StorageClusterList
@@ -108,7 +114,9 @@ func (h *FioBenchInjector) resolveConfig(ctx context.Context, podName string) (i
 
 // clusterUUIDFromPodName extracts the cluster UUID prefix from the snode-spdk pod
 // name pattern "snode-spdk-pod-<RPC_PORT>-<UUID_PREFIX>".
-func clusterUUIDFromPodName(podName string) string {
+func clusterUUIDFromPodName(
+	podName string,
+) string {
 	idx := strings.LastIndex(podName, "-")
 	if idx < 0 {
 		return ""
@@ -116,7 +124,10 @@ func clusterUUIDFromPodName(podName string) string {
 	return podName[idx+1:]
 }
 
-func injectSidecar(pod *corev1.Pod, image, configMapName string) {
+func injectSidecar(
+	pod *corev1.Pod,
+	image, configMapName string,
+) {
 	optional := true
 
 	for _, v := range pod.Spec.Volumes {
@@ -171,4 +182,8 @@ skipVolume:
 	})
 }
 
-func boolPtr(b bool) *bool { return &b }
+func boolPtr(
+	b bool,
+) *bool {
+	return &b
+}

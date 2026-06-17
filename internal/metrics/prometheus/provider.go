@@ -1,19 +1,3 @@
-/*
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 // Package prometheus implements metrics providers backed by a Prometheus instance.
 //
 // A single Provider wraps the Prometheus HTTP client and exposes methods for
@@ -30,6 +14,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	prometheusapi "github.com/prometheus/client_golang/api"
@@ -52,7 +37,9 @@ type Provider struct {
 }
 
 // New constructs a Provider that connects to the given Prometheus URL.
-func New(prometheusURL string) (*Provider, error) {
+func New(
+	prometheusURL string,
+) (*Provider, error) {
 	c, err := prometheusapi.NewClient(prometheusapi.Config{Address: prometheusURL})
 	if err != nil {
 		return nil, fmt.Errorf("create prometheus client: %w", err)
@@ -66,7 +53,10 @@ func New(prometheusURL string) (*Provider, error) {
 
 const nodeIOPSMetric = "simplyblock_node_iops_total"
 
-func (p *Provider) GetNodeMetrics(ctx context.Context, clusterUUID, nodeUUID string) (*metrics.NodeMetrics, error) {
+func (p *Provider) GetNodeMetrics(
+	ctx context.Context,
+	clusterUUID, nodeUUID string,
+) (*metrics.NodeMetrics, error) {
 	query := fmt.Sprintf(`%s{cluster=%q,node=%q}`, nodeIOPSMetric, clusterUUID, nodeUUID)
 	result, err := p.queryVector(ctx, query)
 	if err != nil {
@@ -80,7 +70,10 @@ func (p *Provider) GetNodeMetrics(ctx context.Context, clusterUUID, nodeUUID str
 	return m, nil
 }
 
-func (p *Provider) GetClusterMetrics(ctx context.Context, clusterUUID string) (map[string]*metrics.NodeMetrics, error) {
+func (p *Provider) GetClusterMetrics(
+	ctx context.Context,
+	clusterUUID string,
+) (map[string]*metrics.NodeMetrics, error) {
 	query := fmt.Sprintf(`%s{cluster=%q}`, nodeIOPSMetric, clusterUUID)
 	result, err := p.queryVector(ctx, query)
 	if err != nil {
@@ -89,7 +82,10 @@ func (p *Provider) GetClusterMetrics(ctx context.Context, clusterUUID string) (m
 	return parseNodeIOPSVector(result, time.Now()), nil
 }
 
-func parseNodeIOPSVector(vec model.Vector, collectedAt time.Time) map[string]*metrics.NodeMetrics {
+func parseNodeIOPSVector(
+	vec model.Vector,
+	collectedAt time.Time,
+) map[string]*metrics.NodeMetrics {
 	out := make(map[string]*metrics.NodeMetrics)
 	for _, sample := range vec {
 		nodeUUID := string(sample.Metric["node"])
@@ -123,7 +119,9 @@ func parseNodeIOPSVector(vec model.Vector, collectedAt time.Time) map[string]*me
 	return out
 }
 
-func validScheme(s metrics.ErasureScheme) bool {
+func validScheme(
+	s metrics.ErasureScheme,
+) bool {
 	switch s {
 	case metrics.ErasureScheme1Plus1, metrics.ErasureScheme2Plus1, metrics.ErasureScheme4Plus1,
 		metrics.ErasureScheme1Plus2, metrics.ErasureScheme2Plus2, metrics.ErasureScheme4Plus2:
@@ -139,8 +137,38 @@ func validScheme(s metrics.ErasureScheme) bool {
 // GetClusterCurrentP99 returns the most recent p99 write latency (nanoseconds) per node UUID
 // for all nodes in the given cluster. Nodes with no scraped measurement are omitted.
 // Baseline latency is not stored in Prometheus — it is kept in the StorageNode CR.
-func (p *Provider) GetClusterCurrentP99(ctx context.Context, clusterUUID string) (map[string]int64, error) {
-	vec, err := p.queryVector(ctx, fmt.Sprintf(`simplyblock_node_fio_write_latency_p99_ns{cluster=%q}`, clusterUUID))
+func (p *Provider) GetClusterCurrentP99(
+	ctx context.Context,
+	clusterUUID string,
+) (map[string]int64, error) {
+	all, err := p.GetClustersCurrentP99(ctx, []string{clusterUUID})
+	if err != nil {
+		return nil, err
+	}
+	return all[clusterUUID], nil
+}
+
+// GetClustersCurrentP99 returns the most recent p99 write latency per node for all
+// given clusters in a single Prometheus query, keyed by [clusterUUID][nodeUUID].
+// Clusters or nodes with no scraped measurement are omitted from the result.
+// Returns ErrLatencyDataNotReady (wrapped) on client-level connectivity errors.
+func (p *Provider) GetClustersCurrentP99(
+	ctx context.Context,
+	clusterUUIDs []string,
+) (map[string]map[string]int64, error) {
+	if len(clusterUUIDs) == 0 {
+		return map[string]map[string]int64{}, nil
+	}
+
+	var query string
+	if len(clusterUUIDs) == 1 {
+		query = fmt.Sprintf(`simplyblock_node_fio_write_latency_p99_ns{cluster=%q}`, clusterUUIDs[0])
+	} else {
+		query = fmt.Sprintf(`simplyblock_node_fio_write_latency_p99_ns{cluster=~%q}`,
+			strings.Join(clusterUUIDs, "|"))
+	}
+
+	vec, err := p.queryVector(ctx, query)
 	if err != nil {
 		var apiErr *promv1.Error
 		if errors.As(err, &apiErr) && apiErr.Type == promv1.ErrClient {
@@ -148,13 +176,18 @@ func (p *Provider) GetClusterCurrentP99(ctx context.Context, clusterUUID string)
 		}
 		return nil, err
 	}
-	out := make(map[string]int64, len(vec))
+
+	out := make(map[string]map[string]int64)
 	for _, sample := range vec {
+		clusterUUID := string(sample.Metric["cluster"])
 		nodeUUID := string(sample.Metric["node"])
-		if nodeUUID == "" {
+		if clusterUUID == "" || nodeUUID == "" {
 			continue
 		}
-		out[nodeUUID] = int64(math.Round(float64(sample.Value)))
+		if out[clusterUUID] == nil {
+			out[clusterUUID] = make(map[string]int64)
+		}
+		out[clusterUUID][nodeUUID] = int64(math.Round(float64(sample.Value)))
 	}
 	return out, nil
 }
@@ -176,7 +209,10 @@ type VolumeIOMetrics struct {
 //	lvol_read_bytes_ps / lvol_write_bytes_ps — read/write throughput (bytes/s)
 //
 // Volumes absent from Prometheus are omitted from the result.
-func (p *Provider) GetClusterVolumeIO(ctx context.Context, clusterUUID string) (map[string]VolumeIOMetrics, error) {
+func (p *Provider) GetClusterVolumeIO(
+	ctx context.Context,
+	clusterUUID string,
+) (map[string]VolumeIOMetrics, error) {
 	readIOPS, err := p.queryLvolScalar(ctx, "lvol_read_io_ps", clusterUUID)
 	if err != nil {
 		return nil, err
@@ -219,7 +255,10 @@ func (p *Provider) GetClusterVolumeIO(ctx context.Context, clusterUUID string) (
 }
 
 // queryLvolScalar runs an instant query and returns the value keyed by the `lvol` label.
-func (p *Provider) queryLvolScalar(ctx context.Context, metric, clusterUUID string) (map[string]float64, error) {
+func (p *Provider) queryLvolScalar(
+	ctx context.Context,
+	metric, clusterUUID string,
+) (map[string]float64, error) {
 	vec, err := p.queryVector(ctx, fmt.Sprintf(`%s{cluster=%q}`, metric, clusterUUID))
 	if err != nil {
 		return nil, err
@@ -239,7 +278,10 @@ func (p *Provider) queryLvolScalar(ctx context.Context, metric, clusterUUID stri
 // shared helpers
 // ---------------------------------------------------------------------------
 
-func (p *Provider) queryVector(ctx context.Context, query string) (model.Vector, error) {
+func (p *Provider) queryVector(
+	ctx context.Context,
+	query string,
+) (model.Vector, error) {
 	val, _, err := p.api.Query(ctx, query, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("prometheus query %q: %w", query, err)

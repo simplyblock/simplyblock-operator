@@ -163,6 +163,7 @@ rules:
   - storageclusters
   - storagenodes
   - tasks
+  - volumemigrations
   verbs:
   - create
   - delete
@@ -183,6 +184,7 @@ rules:
   - storageclusters/finalizers
   - storagenodes/finalizers
   - tasks/finalizers
+  - volumemigrations/finalizers
   verbs:
   - update
 - apiGroups:
@@ -198,6 +200,7 @@ rules:
   - storageclusters/status
   - storagenodes/status
   - tasks/status
+  - volumemigrations/status
   verbs:
   - get
   - patch
