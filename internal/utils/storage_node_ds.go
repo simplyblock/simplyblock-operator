@@ -56,7 +56,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 
 	imagePullPolicy := sn.Spec.ImagePullPolicy
 	if imagePullPolicy == "" {
-		imagePullPolicy = corev1.PullIfNotPresent
+		imagePullPolicy = corev1.PullAlways
 	}
 
 	mainEnv := []corev1.EnvVar{
