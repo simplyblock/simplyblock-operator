@@ -76,7 +76,7 @@ type VolumeMigrationSpec struct {
 // VolumeMigrationStatus defines the observed state of a VolumeMigration.
 type VolumeMigrationStatus struct {
 	// Phase is the current lifecycle phase of the migration.
-	// +kubebuilder:validation:Enum=Pending;Running;Completed;Failed;Aborted
+	// +kubebuilder:validation:Enum=Pending;Validating;Running;Completed;Failed;Aborted
 	Phase VolumeMigrationPhase `json:"phase,omitempty"`
 
 	// MigrationID is the identifier returned by the storage API when the
