@@ -87,7 +87,7 @@ func (ms *MigrationState) GetPendingMigrationKeysWithPrefix(prefix string) []str
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
-	keys := make([]string, 0)
+	keys := make([]string, 0, len(ms.pendingMigrations))
 	for key := range ms.pendingMigrations {
 		if strings.HasPrefix(key, prefix) {
 			keys = append(keys, key)
@@ -100,7 +100,7 @@ func (ms *MigrationState) GetPendingMigrationKeys() []string {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
-	keys := make([]string, 0)
+	keys := make([]string, 0, len(ms.pendingMigrations))
 	for key := range ms.pendingMigrations {
 		keys = append(keys, key)
 	}

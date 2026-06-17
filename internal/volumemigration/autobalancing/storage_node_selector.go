@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/prometheus/client_golang/prometheus"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	promlatency "github.com/simplyblock/simplyblock-operator/internal/metrics/prometheus"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
@@ -57,7 +56,6 @@ type nodeLatencyData struct {
 // baseline latency from StorageNode CRs and emits per-node deviation gauges.
 type StorageNodeSelector struct {
 	client.Client
-	metrics prometheus.Metric
 }
 
 // NewStorageNodeSelector creates a StorageNodeSelector backed by the given Kubernetes client.

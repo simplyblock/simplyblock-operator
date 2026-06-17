@@ -117,7 +117,6 @@ func PollMigration(
 	return result, nil
 }
 
-
 // nodesAboveThreshold returns the UUIDs of nodes whose latency deviation exceeds
 // threshold, sorted by deviation descending (worst node first).
 func NodesAboveThreshold(
