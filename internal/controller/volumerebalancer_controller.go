@@ -189,7 +189,7 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 				"Migration of volume %s to node %s failed: %v", mc.Volume.UUID, mc.TargetNodeUUID, err)
 			continue
 		}
-		r.migrationState.PushMigration(mc.ClusterUUID, mc.Volume.PoolUUID, mc.Volume.UUID, migration.MigrationID, coolDownSecs)
+		r.migrationState.PushMigration(mc.ClusterUUID, mc.Volume.PoolUUID, mc.Volume.UUID, migration.ID, coolDownSecs)
 		r.Recorder.Eventf(clusterCR, corev1.EventTypeNormal, "VolumeRebalancingStarted",
 			"Initiating migration of volume %s from node %s to %s",
 			mc.Volume.UUID, mc.SourceNodeUUID, mc.TargetNodeUUID)

@@ -105,6 +105,9 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 	if err != nil {
 		return r.setFailed(ctx, vm, fmt.Sprintf("CreateMigration: %v", err))
 	}
+	if migration.ID == "" {
+		return r.setFailed(ctx, vm, "CreateMigration returned empty migration ID")
+	}
 
 	now := metav1.Now()
 	conns := make([]simplyblockv1alpha1.MigrationConnection, 0, len(migration.ConnectStrings))
@@ -122,12 +125,11 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 
 	patch := client.MergeFrom(vm.DeepCopy())
 	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseValidating
-	vm.Status.MigrationID = migration.MigrationID
+	vm.Status.MigrationID = migration.ID
 	vm.Status.ClusterUUID = clusterUUID
 	vm.Status.VolumeUUID = volumeUUID
 	vm.Status.PoolUUID = poolUUID
-	// SourceNodeUUID and SnapsTotal are not in the create response;
-	// they will be populated from GetMigration once status=Running.
+	// SourceNodeUUID and SnapsTotal are populated from GetMigration once status=Running.
 	vm.Status.Connections = conns
 	vm.Status.StartedAt = &now
 	if err := r.Status().Patch(ctx, vm, patch); err != nil {
@@ -136,7 +138,7 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 
 	r.Recorder.Eventf(vm, corev1.EventTypeNormal, "MigrationCreated",
 		"Migration %s created: validating %d connection(s) to node %s",
-		migration.MigrationID, len(conns), vm.Spec.TargetNodeUUID)
+		migration.ID, len(conns), vm.Spec.TargetNodeUUID)
 	return ctrl.Result{Requeue: true}, nil
 }
 

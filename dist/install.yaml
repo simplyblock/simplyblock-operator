@@ -1461,10 +1461,10 @@ spec:
                 type: object
             type: object
             x-kubernetes-validations:
-            - message: haType is immutable
-              rule: self.haType == oldSelf.haType
-            - message: fabricType is immutable
-              rule: self.fabricType == oldSelf.fabricType
+            - message: haType is immutable once set
+              rule: '!has(oldSelf.haType) || self.haType == oldSelf.haType'
+            - message: fabricType is immutable once set
+              rule: '!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType'
             - message: hashicorpVaultSettings is immutable once set
               rule: '!has(oldSelf.hashicorpVaultSettings) || self.hashicorpVaultSettings
                 == oldSelf.hashicorpVaultSettings'
