@@ -19,7 +19,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
-	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -92,16 +91,13 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 	if pv.Spec.CSI == nil || pv.Spec.CSI.VolumeHandle == "" {
 		return r.setFailed(ctx, vm, fmt.Sprintf("PV %q has no CSI volume handle", vm.Spec.PVName))
 	}
-	volumeUUID := pv.Spec.CSI.VolumeHandle
-
-	// Find the StorageCluster and pool that own this volume.
-	clusterUUID, poolUUID, err := r.resolveVolumeLocation(ctx, vm.Namespace, volumeUUID)
-	if err != nil {
-		log.Error(err, "Cannot resolve volume location; requeuing", "volume", volumeUUID)
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	// CSI volume handle format: "<clusterUUID>:<poolUUID>:<volumeUUID>"
+	parts := strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return r.setFailed(ctx, vm, fmt.Sprintf("PV %q has unexpected CSI volume handle format %q (expected <clusterUUID>:<poolUUID>:<volumeUUID>)", vm.Spec.PVName, pv.Spec.CSI.VolumeHandle))
 	}
+	clusterUUID, poolUUID, volumeUUID := parts[0], parts[1], parts[2]
 
-	// Submit migration.
 	log.Info("Submitting volume migration",
 		"volume", volumeUUID, "cluster", clusterUUID, "target", vm.Spec.TargetNodeUUID)
 
@@ -501,44 +497,6 @@ func (r *VolumeMigrationReconciler) setFailed(
 	}
 	r.Recorder.Eventf(vm, corev1.EventTypeWarning, "MigrationFailed", reason)
 	return ctrl.Result{}, nil
-}
-
-// resolveVolumeLocation scans StorageClusters to find which cluster and pool
-// contains the given volume UUID.
-func (r *VolumeMigrationReconciler) resolveVolumeLocation(
-	ctx context.Context,
-	namespace, volumeUUID string,
-) (clusterUUID, poolUUID string, err error) {
-	var clusters simplyblockv1alpha1.StorageClusterList
-	if err := r.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
-		return "", "", fmt.Errorf("list StorageClusters: %w", err)
-	}
-
-	for _, cluster := range clusters.Items {
-		if cluster.Status.UUID == "" {
-			continue
-		}
-		clUUID, err := utils.ResolveClusterUUID(ctx, r.Client, namespace, cluster.Name)
-		if err != nil {
-			continue
-		}
-		pools, err := r.apiClient.GetStoragePools(ctx, clUUID)
-		if err != nil {
-			continue
-		}
-		for _, pool := range pools {
-			vols, err := r.apiClient.GetPoolVolumes(ctx, clUUID, pool.UUID)
-			if err != nil {
-				continue
-			}
-			for _, v := range vols {
-				if v.UUID == volumeUUID {
-					return clUUID, pool.UUID, nil
-				}
-			}
-		}
-	}
-	return "", "", fmt.Errorf("volume %q not found in any StorageCluster in namespace %q", volumeUUID, namespace)
 }
 
 func (r *VolumeMigrationReconciler) SetupWithManager(
