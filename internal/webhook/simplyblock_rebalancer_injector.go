@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
@@ -36,25 +38,30 @@ func (h *SimplyblockRebalancerInjector) Handle(
 	ctx context.Context,
 	req admission.Request,
 ) admission.Response {
+	log := logf.FromContext(ctx).WithValues("pod", req.Name, "namespace", req.Namespace)
+
 	pod := &corev1.Pod{}
 	if err := json.Unmarshal(req.Object.Raw, pod); err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
 	if !strings.HasPrefix(pod.Labels[appLabel], spdkAppPrefix) {
+		log.V(1).Info("Skipping: not an spdk-app pod", "app", pod.Labels[appLabel])
 		return admission.Allowed("not an spdk-app pod")
 	}
 
 	if pod.Annotations[injectedAnnotation] == annotationTrue {
+		log.Info("Skipping: sidecar already injected")
 		return admission.Allowed("already injected")
 	}
 	for _, c := range pod.Spec.Containers {
 		if c.Name == "simplyblock-rebalancer" {
+			log.Info("Skipping: simplyblock-rebalancer container already present")
 			return admission.Allowed("simplyblock-rebalancer already present")
 		}
 	}
 
-	image, configMapName, ok := h.resolveConfig(ctx, pod.Name)
+	image, configMapName, ok := h.resolveConfig(ctx, pod.Name, log)
 	if !ok {
 		return admission.Allowed("latency benchmark not enabled for cluster")
 	}
@@ -80,6 +87,7 @@ func (h *SimplyblockRebalancerInjector) Handle(
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
+	log.Info("Injecting simplyblock-rebalancer sidecar", "image", image, "configMap", configMapName)
 	return admission.PatchResponseFromRaw(original, patched2)
 }
 
@@ -89,26 +97,32 @@ func (h *SimplyblockRebalancerInjector) Handle(
 func (h *SimplyblockRebalancerInjector) resolveConfig(
 	ctx context.Context,
 	podName string,
+	log logr.Logger,
 ) (image, configMapName string, ok bool) {
 	uuidPrefix := clusterUUIDFromPodName(podName)
 
 	var list simplyblockv1alpha1.StorageClusterList
 	if err := h.Client.List(ctx, &list); err != nil {
+		log.Error(err, "Failed to list StorageClusters")
 		return "", "", false
 	}
 	for _, cr := range list.Items {
 		if uuidPrefix != "" && !strings.HasPrefix(cr.Status.UUID, uuidPrefix) {
+			log.V(1).Info("Skipping: cluster UUID prefix mismatch", "cluster", cr.Name, "clusterUUID", cr.Status.UUID, "podPrefix", uuidPrefix)
 			continue
 		}
 		rb := cr.Spec.VolumeRebalancing
 		if rb == nil || rb.LatencyBenchmarkEnabled == nil || !*rb.LatencyBenchmarkEnabled {
+			log.Info("Skipping: latency benchmark not enabled", "cluster", cr.Name)
 			return "", "", false
 		}
 		if rb.RebalancerImage == nil || *rb.RebalancerImage == "" {
+			log.Info("Skipping: rebalancerImage not configured", "cluster", cr.Name)
 			return "", "", false
 		}
 		return *rb.RebalancerImage, utils.SimplyblockRebalancerConfigMapName(cr.Name), true
 	}
+	log.Info("Skipping: no matching StorageCluster found", "podPrefix", uuidPrefix)
 	return "", "", false
 }
 
