@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - 'R[0-9]*'
     paths:
       - 'charts/simplyblock-operator/Chart.yaml'
 
@@ -45,7 +46,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           BRANCH="${{ steps.release_meta.outputs.branch }}"
-          git checkout -b "$BRANCH"
+          git fetch origin main
+          git checkout -b "$BRANCH" origin/main
 
           git add charts/index.yaml "charts/${{ env.VERSION }}/"
           git commit -m "helm release for simplyblock-operator ${{ env.VERSION }}" || echo "No changes to commit"
