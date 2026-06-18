@@ -1,9 +1,11 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -14,6 +16,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,14 +31,17 @@ import (
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
 
 // VolumeMigrationReconciler reconciles VolumeMigration resources.
 type VolumeMigrationReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
-	apiClient *webapi.Client
+	Scheme     *runtime.Scheme
+	Recorder   record.EventRecorder
+	apiClient  *webapi.Client
+	coreClient corev1client.CoreV1Interface
 }
 
 func (r *VolumeMigrationReconciler) Reconcile(
@@ -167,10 +174,11 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 		return r.pollValidationJob(ctx, vm)
 	}
 
-	// Resolve the k8s node name for the target storage node.
-	hostname, err := r.resolveNodeHostname(ctx, vm.Namespace, vm.Spec.TargetNodeUUID)
+	// Resolve the k8s node name of the worker running the pod that uses the PVC.
+	// NVMe connections must be established from that node, not the storage target node.
+	hostname, err := r.resolveConsumerNodeName(ctx, vm.Spec.PVName)
 	if err != nil {
-		log.Error(err, "Cannot resolve target node hostname; requeuing")
+		log.Error(err, "Cannot resolve consumer node name; requeuing")
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
@@ -222,6 +230,7 @@ func (r *VolumeMigrationReconciler) pollValidationJob(
 		// Job still in progress — we will be re-triggered via Owns(&batchv1.Job{}).
 		return ctrl.Result{}, nil
 	}
+	r.collectAndLogJobPodLogs(ctx, job)
 	_ = r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
 
 	if failed {
@@ -330,24 +339,67 @@ func connectionsToValidation(conns []simplyblockv1alpha1.MigrationConnection) []
 	return out
 }
 
-// resolveNodeHostname scans StorageNode CRs to find the k8s node name
-// for the given storage node UUID.
-func (r *VolumeMigrationReconciler) resolveNodeHostname(
+// resolveConsumerNodeName finds the Kubernetes node name of the worker node
+// running a pod that currently has the PVC (resolved from pvName) mounted.
+// NVMe connections must be established from that node so that the consuming
+// pod can reach the target subsystem after migration.
+func (r *VolumeMigrationReconciler) resolveConsumerNodeName(
 	ctx context.Context,
-	namespace, nodeUUID string,
+	pvName string,
 ) (string, error) {
-	var snList simplyblockv1alpha1.StorageNodeList
-	if err := r.List(ctx, &snList, client.InNamespace(namespace)); err != nil {
-		return "", fmt.Errorf("list StorageNodes: %w", err)
+	pv := &corev1.PersistentVolume{}
+	if err := r.Get(ctx, types.NamespacedName{Name: pvName}, pv); err != nil {
+		return "", fmt.Errorf("get PV %q: %w", pvName, err)
 	}
-	for _, sn := range snList.Items {
-		for _, n := range sn.Status.Nodes {
-			if n.UUID == nodeUUID && n.Hostname != "" {
-				return n.Hostname, nil
+	if pv.Spec.ClaimRef == nil {
+		return "", fmt.Errorf("PV %q has no claimRef; volume may not be bound", pvName)
+	}
+	pvcName := pv.Spec.ClaimRef.Name
+	pvcNamespace := pv.Spec.ClaimRef.Namespace
+
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList, client.InNamespace(pvcNamespace)); err != nil {
+		return "", fmt.Errorf("list pods in namespace %q: %w", pvcNamespace, err)
+	}
+	for _, pod := range podList.Items {
+		if pod.Spec.NodeName == "" || pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		for _, vol := range pod.Spec.Volumes {
+			if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == pvcName {
+				return pod.Spec.NodeName, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("no StorageNode found with node UUID %q in namespace %q", nodeUUID, namespace)
+	return "", fmt.Errorf("no running pod found using PVC %q/%q", pvcNamespace, pvcName)
+}
+
+// collectAndLogJobPodLogs fetches stdout/stderr from every pod that belongs to
+// the given Job and emits them as operator log lines. Must be called before
+// deleting the Job, since pod deletion follows immediately after.
+func (r *VolumeMigrationReconciler) collectAndLogJobPodLogs(ctx context.Context, job *batchv1.Job) {
+	log := logf.FromContext(ctx).WithValues("job", job.Name)
+
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList,
+		client.InNamespace(job.Namespace),
+		client.MatchingLabels{"job-name": job.Name},
+	); err != nil {
+		log.Error(err, "Failed to list validation job pods for log collection")
+		return
+	}
+	for _, pod := range podList.Items {
+		req := r.coreClient.Pods(pod.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{})
+		stream, err := req.Stream(ctx)
+		if err != nil {
+			log.Error(err, "Failed to stream logs from validation pod", "pod", pod.Name)
+			continue
+		}
+		buf := new(bytes.Buffer)
+		_, _ = io.Copy(buf, stream)
+		_ = stream.Close()
+		log.Info("Validation job pod output", "pod", pod.Name, "logs", buf.String())
+	}
 }
 
 // resolveRebalancerImage returns the simplyblock-rebalancer image configured on the
@@ -475,6 +527,11 @@ func (r *VolumeMigrationReconciler) SetupWithManager(
 	mgr ctrl.Manager,
 ) error {
 	r.apiClient = webapi.NewClient()
+	k8s, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		return fmt.Errorf("create k8s client for log collection: %w", err)
+	}
+	r.coreClient = k8s.CoreV1()
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.VolumeMigration{}).
 		Owns(&batchv1.Job{}).
