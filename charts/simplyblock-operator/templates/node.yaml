@@ -93,6 +93,10 @@ spec:
         - name: GUARDIAN_MIN_BROKEN_FOR
           value: "30s"
         {{- include "simplyblock.tlsEnv" . | nindent 8 }}
+        {{- if .Values.node.serviceAccountAuth.enabled }}
+        - name: SPDKCSI_API_TOKEN_PATH
+          value: /var/run/secrets/kubernetes.io/serviceaccount/token
+        {{- end }}
         lifecycle:
           postStart:
             exec:
