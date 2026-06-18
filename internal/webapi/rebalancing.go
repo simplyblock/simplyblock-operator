@@ -41,10 +41,11 @@ type StoragePoolInfo struct {
 	Name string `json:"name"`
 }
 
-// ContinueMigrationParams is the request body for
-// POST /api/v2/clusters/{id}/migrations/continue.
+// ContinueMigrationParams is the request body for the continue migration endpoint.
+// MigrationID is identified via the URL path; this body carries optional tuning params only.
 type ContinueMigrationParams struct {
-	MigrationID string `json:"migration_id"`
+	MaxRetries      int `json:"max_retries,omitempty"`
+	DeadlineSeconds int `json:"deadline_seconds,omitempty"`
 }
 
 // LvolConnectResp holds the NVMe-oF connection parameters for a logical volume,
@@ -264,9 +265,7 @@ func (c *Client) ContinueMigration(
 	clusterUUID, poolUUID, volumeUUID, migrationID string,
 ) (*MigrationDTO, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/migrations/%s/continue", clusterUUID, poolUUID, volumeUUID, migrationID)
-	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, ContinueMigrationParams{
-		MigrationID: migrationID,
-	})
+	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, ContinueMigrationParams{})
 	if err != nil {
 		return nil, fmt.Errorf("continue migration %s: %w", migrationID, err)
 	}
