@@ -10,8 +10,8 @@ on:
 env:
   IMAGE_NAME: simplyblock/simplyblock-operator
   ECR_IMAGE_NAME: simply-block/simplyblock-operator
-  FIO_BENCH_IMAGE_NAME: simplyblock/simplyblock-fio-bench
-  ECR_FIO_BENCH_IMAGE_NAME: simply-block/simplyblock-fio-bench
+  FIO_BENCH_IMAGE_NAME: simplyblock/simplyblock-rebalancer
+  ECR_FIO_BENCH_IMAGE_NAME: simply-block/simplyblock-rebalancer
 
 jobs:
   build-and-push:
@@ -60,11 +60,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build and push fio-bench multi-arch image (DockerHub + ECR)
+      - name: Build and push simplyblock-rebalancer multi-arch image (DockerHub + ECR)
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.fio-bench
+          file: Dockerfile.simplyblock-rebalancer
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |

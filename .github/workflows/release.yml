@@ -6,7 +6,7 @@ on:
 
 env:
   QUAY_IMAGE_BASE: quay.io/simplyblock-io/simplyblock-operator
-  QUAY_FIO_BENCH_IMAGE_BASE: quay.io/simplyblock-io/simplyblock-fio-bench
+  QUAY_FIO_BENCH_IMAGE_BASE: quay.io/simplyblock-io/simplyblock-rebalancer
 
 jobs:
   release:
@@ -49,9 +49,9 @@ jobs:
             IMG_TAG=${{ steps.version.outputs.tag }} \
             PLATFORMS="linux/amd64,linux/arm64"
 
-      - name: Build and push fio-bench multi-arch image to quay.io
+      - name: Build and push simplyblock-rebalancer multi-arch image to quay.io
         run: |
-          make docker-buildx-fio-bench \
+          make docker-buildx-simplyblock-rebalancer \
             IMG_TAG=${{ steps.version.outputs.tag }} \
             PLATFORMS="linux/amd64,linux/arm64"
 
