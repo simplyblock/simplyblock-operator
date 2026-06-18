@@ -315,7 +315,8 @@ func buildNVMeValidationScript(
 	var b strings.Builder
 	b.WriteString("set -e\n")
 
-	// Connect each path.
+	// Connect each path. "already connected" is a non-zero exit from nvme-cli
+	// but is not a failure — the ANA state check below is the real gate.
 	for _, c := range conns {
 		fmt.Fprintf(&b, "sudo nvme connect -t %s -a %s -s %d -n %s",
 			c.Transport, c.IP, c.Port, c.NQN)
@@ -328,7 +329,7 @@ func buildNVMeValidationScript(
 		if c.CtrlLossTmo > 0 {
 			fmt.Fprintf(&b, " --ctrl-loss-tmo=%d", c.CtrlLossTmo)
 		}
-		b.WriteString("\n")
+		b.WriteString(" || true\n")
 	}
 
 	// Verify all NQNs appear with ANA state "inaccessible".
