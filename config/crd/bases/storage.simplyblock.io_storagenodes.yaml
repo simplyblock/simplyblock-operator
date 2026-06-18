@@ -232,6 +232,15 @@ spec:
                   volumes per node.
                 format: int32
                 type: integer
+              maxParallelNodeAdds:
+                default: 1
+                description: |-
+                  MaxParallelNodeAdds limits how many non-FDB worker nodes can be in the
+                  add process simultaneously. Defaults to 1 (fully sequential).
+                  FDB workers are always sequential regardless of this setting.
+                format: int32
+                minimum: 1
+                type: integer
               maxSize:
                 description: MaxSize is the maximum allocatable size of huge pages.
                 type: string

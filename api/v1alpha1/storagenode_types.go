@@ -138,6 +138,13 @@ type StorageNodeSpec struct {
 	// Tolerations configures pod tolerations for storage-node pods.
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Parallel Node Adds"
+	// MaxParallelNodeAdds limits how many non-FDB worker nodes can be in the
+	// add process simultaneously. Defaults to 1 (fully sequential).
+	// FDB workers are always sequential regardless of this setting.
+	MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Container Resources"
 	// ContainerResources sets CPU and memory requests/limits for the main storage-node container.
 	// When omitted no limits are enforced, which preserves the previous behaviour.
@@ -150,7 +157,6 @@ type StorageNodeSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Image Pull Policy"
 	// ImagePullPolicy controls when the container image is pulled. Defaults to IfNotPresent.
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
-
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
 	// Force enables forced action execution where supported.
 	Force *bool `json:"force,omitempty"`
