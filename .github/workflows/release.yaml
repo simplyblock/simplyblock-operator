@@ -31,10 +31,6 @@ jobs:
           mkdir -p "charts/$VERSION"
           helm package charts/simplyblock-operator --destination "charts/$VERSION/"
 
-      - name: Update index.yaml
-        run: |
-          helm repo index charts/ --url https://simplyblock.github.io/helm-charts/charts
-
       - name: Prepare release metadata
         id: release_meta
         run: |
@@ -48,6 +44,8 @@ jobs:
           BRANCH="${{ steps.release_meta.outputs.branch }}"
           git fetch origin main
           git checkout -b "$BRANCH" origin/main
+
+          helm repo index charts/ --url https://simplyblock.github.io/helm-charts/charts
 
           git add charts/index.yaml "charts/${{ env.VERSION }}/"
           git commit -m "helm release for simplyblock-operator ${{ env.VERSION }}" || echo "No changes to commit"
