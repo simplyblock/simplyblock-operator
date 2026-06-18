@@ -141,8 +141,8 @@ type StorageNodeSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Parallel Node Adds"
 	// MaxParallelNodeAdds limits how many non-FDB worker nodes can be in the
-	// add process simultaneously. When unset all non-FDB workers are added in
-	// parallel. FDB workers are always sequential regardless of this setting.
+	// add process simultaneously. Defaults to 1 (fully sequential) when unset.
+	// FDB workers are always sequential regardless of this setting.
 	MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"

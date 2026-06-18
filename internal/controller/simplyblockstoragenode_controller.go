@@ -865,7 +865,7 @@ func (r *StorageNodeReconciler) reconcileWorkerNodes(
 		}
 	}
 
-	maxParallel := len(parallelWorkers)
+	maxParallel := 1
 	if snCR.Spec.MaxParallelNodeAdds != nil && *snCR.Spec.MaxParallelNodeAdds > 0 {
 		maxParallel = int(*snCR.Spec.MaxParallelNodeAdds)
 	}
