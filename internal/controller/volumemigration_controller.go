@@ -179,7 +179,7 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 	}
 
 	job := r.buildValidationJob(vm, hostname, image)
-	if err := r.Create(ctx, job); err != nil {
+	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 		return ctrl.Result{}, fmt.Errorf("create validation job: %w", err)
 	}
 
