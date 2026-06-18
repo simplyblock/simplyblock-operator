@@ -3,6 +3,7 @@ package volumemigration
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -122,9 +123,9 @@ func validatePaths(conns []Connection) error {
 					continue
 				}
 				for _, p := range ctrl.Paths {
+					log.Printf("connection nqn=%s addr=%s:%d ana_state=%s", k.NQN, ip, port, p.ANAState)
 					if p.ANAState == "inaccessible" {
 						found[k] = struct{}{}
-						break
 					}
 				}
 			}
