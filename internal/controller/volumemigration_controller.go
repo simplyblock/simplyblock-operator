@@ -155,6 +155,10 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
+	if vm.Status.MigrationID == "" {
+		return r.setFailed(ctx, vm, "migration ID is empty in Validating phase; status was likely written before a failed CreateMigration")
+	}
+
 	// If the Job already exists, poll it.
 	if vm.Status.ValidationJobName != "" {
 		return r.pollValidationJob(ctx, vm)
