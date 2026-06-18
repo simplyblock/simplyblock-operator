@@ -88,6 +88,8 @@ func (h *SimplyblockRebalancerInjector) Handle(
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
 	log.Info("Injecting simplyblock-rebalancer sidecar", "image", image, "configMap", configMapName)
+	log.Info("Original pod spec", "spec", string(original))
+	log.Info("Patched pod spec", "spec", string(patched2))
 	return admission.PatchResponseFromRaw(original, patched2)
 }
 
