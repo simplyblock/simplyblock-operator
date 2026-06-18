@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	testContainerName = "fio-bench-probe"
-	testVolumeName    = "fio-bench-config"
+	testContainerName = "simplyblock-rebalancer"
+	testVolumeName    = "simplyblock-rebalancer-config"
 	testScrapeValue   = "true"
 )
 
@@ -104,11 +104,11 @@ func TestClusterUUIDFromPodName(t *testing.T) {
 	}
 }
 
-// ── FioBenchInjector.Handle ───────────────────────────────────────────────────
+// ── SimplyblockRebalancerInjector.Handle ───────────────────────────────────────────────────
 
-func TestFioBenchInjector_Handle(t *testing.T) {
+func TestSimplyblockRebalancerInjector_Handle(t *testing.T) {
 	const (
-		benchImage = "docker.io/simplyblock/simplyblock-fio-bench:test"
+		benchImage = "docker.io/simplyblock/simplyblock-rebalancer:test"
 		podName    = "snode-spdk-pod-4420-c03e15"
 	)
 
@@ -145,7 +145,7 @@ func TestFioBenchInjector_Handle(t *testing.T) {
 			wantPatch:   false,
 		},
 		{
-			name:        "fio-bench-probe container already present — skipped",
+			name:        "simplyblock-rebalancer container already present — skipped",
 			pod:         makePod(podName, spdkLabels, nil, testContainerName),
 			cluster:     makeCluster(true, benchImage),
 			wantAllowed: true,
@@ -195,7 +195,7 @@ func TestFioBenchInjector_Handle(t *testing.T) {
 				t.Fatalf("set cluster status: %v", err)
 			}
 
-			h := &FioBenchInjector{Client: c}
+			h := &SimplyblockRebalancerInjector{Client: c}
 			resp := h.Handle(context.Background(), admissionRequest(t, tc.pod))
 
 			if resp.Allowed != tc.wantAllowed {
@@ -268,7 +268,7 @@ func applyPatches(t *testing.T, pod *corev1.Pod, patches []jsonpatch.JsonPatchOp
 	return result
 }
 
-// extractImageAndConfigMap finds the fio-bench-probe image and fio-bench-config
+// extractImageAndConfigMap finds the simplyblock-rebalancer image and simplyblock-rebalancer-config
 // configmap name from the patch set.
 func extractImageAndConfigMap(t *testing.T, patches []jsonpatch.JsonPatchOperation) (image, configMapName string) {
 	t.Helper()

@@ -2,11 +2,12 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
+	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -120,6 +121,8 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 			NrIoQueues:     c.NrIoQueues,
 			ReconnectDelay: c.ReconnectDelay,
 			CtrlLossTmo:    c.CtrlLossTmo,
+			FastIOFailTmo:  c.FastIOFailTmo,
+			KeepAliveTmo:   c.KeepAliveTmo,
 		})
 	}
 
@@ -171,10 +174,10 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	// Get the fio-bench image from the StorageCluster (it contains nvme-cli).
-	image, err := r.resolveFioBenchImage(ctx, vm.Namespace, vm.Status.ClusterUUID)
+	// Get the simplyblock-rebalancer image from the StorageCluster (it contains nvme-cli).
+	image, err := r.resolveRebalancerImage(ctx, vm.Namespace, vm.Status.ClusterUUID)
 	if err != nil {
-		log.Error(err, "Cannot resolve fio-bench image; requeuing")
+		log.Error(err, "Cannot resolve simplyblock-rebalancer image; requeuing")
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
@@ -247,11 +250,11 @@ func (r *VolumeMigrationReconciler) pollValidationJob(
 	r.Recorder.Eventf(vm, corev1.EventTypeNormal, "MigrationStarted",
 		"Migration %s started: volume %s → node %s",
 		vm.Status.MigrationID, vm.Status.VolumeUUID, vm.Spec.TargetNodeUUID)
-	return ctrl.Result{RequeueAfter: volumemigration.MigrationInitialDelay}, nil
+	return ctrl.Result{RequeueAfter: vmigration.MigrationInitialDelay}, nil
 }
 
 // buildValidationJob constructs the Job that connects NVMe paths and validates
-// ANA state on the target node.
+// ANA state on the target node using the simplyblock-rebalancer binary.
 func (r *VolumeMigrationReconciler) buildValidationJob(
 	vm *simplyblockv1alpha1.VolumeMigration,
 	hostname, image string,
@@ -260,8 +263,7 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 	ttl := int32(3600)
 	backoffLimit := int32(0) // no retries — fail fast and cancel the migration
 
-	// Build the shell script: connect each path, then verify ANA state.
-	script := buildNVMeValidationScript(vm.Status.Connections)
+	connsJSON, _ := json.Marshal(connectionsToValidation(vm.Status.Connections))
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -292,8 +294,10 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 							Name:            "nvme-validate",
 							Image:           image,
 							ImagePullPolicy: corev1.PullAlways,
-							Command:         []string{"sh", "-c"},
-							Args:            []string{script},
+							Command:         []string{"simplyblock-rebalancer", "--mode=validate-migration"},
+							Env: []corev1.EnvVar{
+								{Name: "VMIG_CONNECTIONS", Value: string(connsJSON)},
+							},
 							SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "host-dev", MountPath: "/dev"},
@@ -306,63 +310,24 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 	}
 }
 
-// buildNVMeValidationScript builds the shell script run inside the validation Job.
-// It connects each NVMe path and then verifies all NQNs appear with ANA state
-// "inaccessible" (connected to target but volume not yet migrated there).
-func buildNVMeValidationScript(
-	conns []simplyblockv1alpha1.MigrationConnection,
-) string {
-	var b strings.Builder
-	b.WriteString("set -e\n")
-
-	// Connect each path. "already connected" is a non-zero exit from nvme-cli
-	// but is not a failure — the ANA state check below is the real gate.
-	for _, c := range conns {
-		fmt.Fprintf(&b, "sudo nvme connect -t %s -a %s -s %d -n %s",
-			c.Transport, c.IP, c.Port, c.NQN)
-		if c.NrIoQueues > 0 {
-			fmt.Fprintf(&b, " --nr-io-queues=%d", c.NrIoQueues)
-		}
-		if c.ReconnectDelay > 0 {
-			fmt.Fprintf(&b, " --reconnect-delay=%d", c.ReconnectDelay)
-		}
-		if c.CtrlLossTmo > 0 {
-			fmt.Fprintf(&b, " --ctrl-loss-tmo=%d", c.CtrlLossTmo)
-		}
-		b.WriteString(" || true\n")
-	}
-
-	// Verify all NQNs appear with ANA state "inaccessible".
-	b.WriteString("sleep 2\n") // give the kernel a moment to register the paths
-	b.WriteString("sudo nvme list --verbose --output-format=json > /tmp/nvme_list.json\n")
-
-	// Build the list of expected NQNs as a Python set literal.
-	b.WriteString("python3 - <<'EOF'\n")
-	b.WriteString("import json, sys\n")
-	b.WriteString("data = json.load(open('/tmp/nvme_list.json'))\n")
-	b.WriteString("expected = {")
+// connectionsToValidation converts MigrationConnection status entries to the
+// vmigration.Connection type consumed by the simplyblock-rebalancer validate-migration mode.
+func connectionsToValidation(conns []simplyblockv1alpha1.MigrationConnection) []vmigration.Connection {
+	out := make([]vmigration.Connection, len(conns))
 	for i, c := range conns {
-		if i > 0 {
-			b.WriteString(", ")
+		out[i] = vmigration.Connection{
+			NQN:            c.NQN,
+			IP:             c.IP,
+			Port:           c.Port,
+			Transport:      c.Transport,
+			NrIoQueues:     c.NrIoQueues,
+			ReconnectDelay: c.ReconnectDelay,
+			CtrlLossTmo:    c.CtrlLossTmo,
+			FastIOFailTmo:  c.FastIOFailTmo,
+			KeepAliveTmo:   c.KeepAliveTmo,
 		}
-		fmt.Fprintf(&b, "%q", c.NQN)
 	}
-	b.WriteString("}\n")
-	b.WriteString("found = {}\n")
-	b.WriteString("for dev in data.get('Devices', []):\n")
-	b.WriteString("  for sub in dev.get('Subsystems', []):\n")
-	b.WriteString("    if sub.get('SubsystemNQN') in expected:\n")
-	b.WriteString("      found[sub['SubsystemNQN']] = sub.get('ANA_State', '')\n")
-	b.WriteString("missing = expected - set(found)\n")
-	b.WriteString("if missing:\n")
-	b.WriteString("  print('Missing NQNs:', missing, file=sys.stderr); sys.exit(1)\n")
-	b.WriteString("bad = {n: s for n, s in found.items() if s != 'inaccessible'}\n")
-	b.WriteString("if bad:\n")
-	b.WriteString("  print('Wrong ANA state:', bad, file=sys.stderr); sys.exit(1)\n")
-	b.WriteString("print('All paths validated: ANA state inaccessible')\n")
-	b.WriteString("EOF\n")
-
-	return b.String()
+	return out
 }
 
 // resolveNodeHostname scans StorageNode CRs to find the k8s node name
@@ -385,9 +350,9 @@ func (r *VolumeMigrationReconciler) resolveNodeHostname(
 	return "", fmt.Errorf("no StorageNode found with node UUID %q in namespace %q", nodeUUID, namespace)
 }
 
-// resolveFioBenchImage returns the fio benchmark image configured on the
+// resolveRebalancerImage returns the simplyblock-rebalancer image configured on the
 // StorageCluster that owns the migration's volume.
-func (r *VolumeMigrationReconciler) resolveFioBenchImage(
+func (r *VolumeMigrationReconciler) resolveRebalancerImage(
 	ctx context.Context,
 	namespace, clusterUUID string,
 ) (string, error) {
@@ -415,7 +380,7 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 	log := logf.FromContext(ctx)
 
 	migrationStart := vm.Status.StartedAt.Time
-	result, err := volumemigration.PollMigration(ctx, r.apiClient, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID, migrationStart)
+	result, err := vmigration.PollMigration(ctx, r.apiClient, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID, migrationStart)
 	if err != nil {
 		log.Error(err, "Cannot poll migration; requeuing", "migration", vm.Status.MigrationID)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil

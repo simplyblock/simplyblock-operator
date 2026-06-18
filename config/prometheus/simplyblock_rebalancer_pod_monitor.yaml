@@ -1,7 +1,7 @@
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
-  name: fio-bench-probe
+  name: simplyblock-rebalancer
   namespace: system
   labels:
     app.kubernetes.io/name: simplyblock-operator
@@ -11,6 +11,6 @@ spec:
     matchLabels:
       role: simplyblock-storage-node
   podMetricsEndpoints:
-  - port: fio-metrics
+  - port: rebalancer-metrics
     path: /metrics
     scheme: http

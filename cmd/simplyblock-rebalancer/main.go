@@ -1,4 +1,4 @@
-// fio-probe measures NVMe-oF write latency via fio and exposes results in two modes:
+// simplyblock-rebalancer measures NVMe-oF write latency via fio and exposes results in two modes:
 //
 //	--mode=baseline  One-shot measurement. Writes {"p50_ns":...,"p99_ns":...} to
 //	                 --termination-log and exits. Used by the one-shot Kubernetes Job.
@@ -70,7 +70,7 @@ type nvmeListOutput struct {
 }
 
 // probeNodeConfig matches one element of the JSON array the operator writes to
-// the fio-bench ConfigMap (keyed by k8s hostname). Used by --config in probe mode.
+// the simplyblock-rebalancer ConfigMap (keyed by k8s hostname). Used by --config in probe mode.
 type probeNodeConfig struct {
 	NQN         string `json:"nqn"`
 	Addr        string `json:"addr"`
@@ -82,7 +82,7 @@ type probeNodeConfig struct {
 // ── main ───────────────────────────────────────────────────────────────────────
 
 func main() {
-	mode := flag.String("mode", "", "baseline or probe")
+	mode := flag.String("mode", "", "baseline, probe, or validate-migration")
 
 	// Connection flags — used when --config is not provided.
 	addr := flag.String("addr", os.Getenv("FIO_NODE_ADDR"), "NVMe-oF TCP address")
@@ -105,6 +105,9 @@ func main() {
 	flag.Parse()
 
 	switch *mode {
+	case "validate-migration":
+		validateMigration()
+
 	case "baseline":
 		if *addr == "" || *port == "" || *nqn == "" {
 			log.Fatal("--addr, --port and --nqn (or FIO_NODE_ADDR/FIO_NODE_PORT/FIO_VOLUME_NQN) are required")
@@ -129,7 +132,7 @@ func main() {
 		}
 
 	default:
-		log.Fatalf("--mode must be baseline or probe, got %q", *mode)
+		log.Fatalf("--mode must be baseline, probe, or validate-migration, got %q", *mode)
 	}
 }
 

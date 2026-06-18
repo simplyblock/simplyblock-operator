@@ -109,8 +109,12 @@ spec:
                   properties:
                     ctrlLossTmo:
                       type: integer
+                    fastIOFailTmo:
+                      type: integer
                     ip:
                       type: string
+                    keepAliveTmo:
+                      type: integer
                     nqn:
                       type: string
                     nrIoQueues:

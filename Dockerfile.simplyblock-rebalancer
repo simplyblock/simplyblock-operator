@@ -1,16 +1,16 @@
-# Dockerfile for the fio-probe NVMe-oF latency benchmark binary.
+# Dockerfile for the simplyblock-rebalancer NVMe-oF latency benchmark binary.
 #
 # The container is launched in two roles by the operator:
 #   1. Privileged Kubernetes Job  — one-shot baseline measurement per storage node
-#                                   (fio-probe --mode=baseline)
+#                                   (simplyblock-rebalancer --mode=baseline)
 #   2. Injected sidecar           — continuous per-node latency probe, exposes
 #                                   Prometheus /metrics directly
-#                                   (fio-probe --mode=probe)
+#                                   (simplyblock-rebalancer --mode=probe)
 #
 # Required tools:
-#   fio-probe   — Go binary built from cmd/fio-probe; handles NVMe connect/measure/metrics
-#   fio         — I/O benchmark backend (libaio engine, raw block device)
-#   nvme-cli    — NVMe-oF connect/list/disconnect over TCP (called by fio-probe)
+#   simplyblock-rebalancer — Go binary built from cmd/simplyblock-rebalancer; handles NVMe connect/measure/metrics
+#   fio                    — I/O benchmark backend (libaio engine, raw block device)
+#   nvme-cli               — NVMe-oF connect/list/disconnect over TCP (called by simplyblock-rebalancer)
 #
 # Base image: Red Hat UBI 10 (required for Red Hat container certification).
 # fio is sourced from EPEL / Oracle Linux 10 repos; nvme-cli is in RHEL 10 BaseOS.
@@ -25,9 +25,9 @@ RUN go mod download
 
 COPY . .
 
-# CGO disabled — fio-probe has no CGO dependencies.
+# CGO disabled — simplyblock-rebalancer has no CGO dependencies.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -o fio-probe ./cmd/fio-probe
+    go build -a -o simplyblock-rebalancer ./cmd/simplyblock-rebalancer
 
 FROM registry.access.redhat.com/ubi10/ubi:10.2
 
@@ -50,7 +50,7 @@ RUN dnf update -y --nogpgcheck && \
         sudo \
     && dnf clean all
 
-COPY --from=builder /workspace/fio-probe /usr/local/bin/fio-probe
+COPY --from=builder /workspace/simplyblock-rebalancer /usr/local/bin/simplyblock-rebalancer
 
 # Run as non-root (uid 65532, gid 0) to satisfy OpenShift SCC and Red Hat
 # certification requirements. sudo grants nvme-cli and fio the kernel-level
@@ -58,15 +58,17 @@ COPY --from=builder /workspace/fio-probe /usr/local/bin/fio-probe
 RUN groupadd --gid 65532 nonroot \
     && useradd --uid 65532 --gid 65532 --no-create-home --shell /sbin/nologin nonroot \
     && echo "ALL ALL=(root) NOPASSWD: /usr/sbin/nvme, /usr/bin/fio" \
-        > /etc/sudoers.d/fio-bench \
-    && chmod 0440 /etc/sudoers.d/fio-bench
+        > /etc/sudoers.d/simplyblock-rebalancer \
+    && chmod 0440 /etc/sudoers.d/simplyblock-rebalancer
 
 USER 65532:65532
 
-LABEL name="simplyblock-fio-bench" \
+ENTRYPOINT ["/usr/local/bin/simplyblock-rebalancer"]
+
+LABEL name="simplyblock-rebalancer" \
       vendor="Simplyblock" \
       maintainer="developers@simplyblock.io" \
       version="${VERSION}" \
       release="${RELEASE}" \
-      summary="fio-probe: NVMe-oF latency benchmark for the Simplyblock Operator." \
-      description="Provides fio-probe (Go), fio, and nvme-cli for NVMe-oF write latency benchmarking. Used by the Simplyblock Operator as a one-shot baseline Job and as a continuously-running sidecar probe that exposes Prometheus metrics directly."
+      summary="simplyblock-rebalancer: NVMe-oF latency benchmark for the Simplyblock Operator." \
+      description="Provides simplyblock-rebalancer (Go), fio, and nvme-cli for NVMe-oF write latency benchmarking. Used by the Simplyblock Operator as a one-shot baseline Job and as a continuously-running sidecar probe that exposes Prometheus metrics directly."

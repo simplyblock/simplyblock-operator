@@ -18,21 +18,21 @@ import (
 const (
 	appLabel           = "app"
 	spdkAppPrefix      = "spdk-app-"
-	injectedAnnotation = "simplyblock.io/fio-probe-injected"
+	injectedAnnotation = "simplyblock.io/simplyblock-rebalancer-injected"
 	annotationTrue     = "true"
 )
 
-// +kubebuilder:webhook:path=/mutate-v1-pod-fio-bench,mutating=true,failurePolicy=ignore,sideEffects=None,groups="",resources=pods,verbs=create,versions=v1,name=fio-bench-injector.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/mutate-v1-pod-simplyblock-rebalancer,mutating=true,failurePolicy=ignore,sideEffects=None,groups="",resources=pods,verbs=create,versions=v1,name=simplyblock-rebalancer-injector.simplyblock.io,admissionReviewVersions=v1
 
-// FioBenchInjector is a mutating admission webhook that injects the fio-bench-probe
+// SimplyblockRebalancerInjector is a mutating admission webhook that injects the simplyblock-rebalancer
 // sidecar into any pod labelled role=simplyblock-storage-node, provided the associated
 // StorageCluster has latency benchmarking enabled. failurePolicy=ignore ensures that
 // webhook unavailability never blocks storage node pod creation.
-type FioBenchInjector struct {
+type SimplyblockRebalancerInjector struct {
 	Client client.Client
 }
 
-func (h *FioBenchInjector) Handle(
+func (h *SimplyblockRebalancerInjector) Handle(
 	ctx context.Context,
 	req admission.Request,
 ) admission.Response {
@@ -49,8 +49,8 @@ func (h *FioBenchInjector) Handle(
 		return admission.Allowed("already injected")
 	}
 	for _, c := range pod.Spec.Containers {
-		if c.Name == "fio-bench-probe" {
-			return admission.Allowed("fio-bench-probe already present")
+		if c.Name == "simplyblock-rebalancer" {
+			return admission.Allowed("simplyblock-rebalancer already present")
 		}
 	}
 
@@ -85,8 +85,8 @@ func (h *FioBenchInjector) Handle(
 
 // resolveConfig finds the StorageCluster whose UUID matches the cluster ID prefix
 // embedded in the snode-spdk pod name (snode-spdk-pod-<PORT>-<UUID_PREFIX>) and
-// returns the fio image + ConfigMap name when latency benchmarking is enabled.
-func (h *FioBenchInjector) resolveConfig(
+// returns the rebalancer image + ConfigMap name when latency benchmarking is enabled.
+func (h *SimplyblockRebalancerInjector) resolveConfig(
 	ctx context.Context,
 	podName string,
 ) (image, configMapName string, ok bool) {
@@ -107,7 +107,7 @@ func (h *FioBenchInjector) resolveConfig(
 		if rb.FioBenchmarkImage == nil || *rb.FioBenchmarkImage == "" {
 			return "", "", false
 		}
-		return *rb.FioBenchmarkImage, utils.FioBenchConfigMapName(cr.Name), true
+		return *rb.FioBenchmarkImage, utils.SimplyblockRebalancerConfigMapName(cr.Name), true
 	}
 	return "", "", false
 }
@@ -131,12 +131,12 @@ func injectSidecar(
 	optional := true
 
 	for _, v := range pod.Spec.Volumes {
-		if v.Name == "fio-bench-config" {
+		if v.Name == "simplyblock-rebalancer-config" {
 			goto skipVolume
 		}
 	}
 	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
-		Name: "fio-bench-config",
+		Name: "simplyblock-rebalancer-config",
 		VolumeSource: corev1.VolumeSource{
 			ConfigMap: &corev1.ConfigMapVolumeSource{
 				LocalObjectReference: corev1.LocalObjectReference{Name: configMapName},
@@ -147,13 +147,13 @@ func injectSidecar(
 skipVolume:
 
 	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
-		Name:            "fio-bench-probe",
+		Name:            "simplyblock-rebalancer",
 		Image:           image,
 		ImagePullPolicy: corev1.PullAlways,
-		Command:         []string{"fio-probe"},
+		Command:         []string{"simplyblock-rebalancer"},
 		Args: []string{
 			"--mode=probe",
-			"--config=/etc/simplyblock/fio-bench/$(HOSTNAME)",
+			"--config=/etc/simplyblock/simplyblock-rebalancer/$(HOSTNAME)",
 			"--metrics-addr=:9199",
 		},
 		SecurityContext: &corev1.SecurityContext{Privileged: boolPtr(true)},
@@ -168,7 +168,7 @@ skipVolume:
 			},
 		},
 		Ports: []corev1.ContainerPort{
-			{Name: "fio-metrics", ContainerPort: utils.FioBenchMetricsPort, Protocol: corev1.ProtocolTCP},
+			{Name: "rebalancer-metrics", ContainerPort: utils.SimplyblockRebalancerMetricsPort, Protocol: corev1.ProtocolTCP},
 		},
 		Env: []corev1.EnvVar{
 			{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
@@ -176,7 +176,7 @@ skipVolume:
 			}},
 		},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: "fio-bench-config", MountPath: "/etc/simplyblock/fio-bench", ReadOnly: true},
+			{Name: "simplyblock-rebalancer-config", MountPath: "/etc/simplyblock/simplyblock-rebalancer", ReadOnly: true},
 			{Name: "dev-vol", MountPath: "/dev"},
 		},
 	})

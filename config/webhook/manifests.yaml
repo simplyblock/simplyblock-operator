@@ -10,9 +10,9 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /mutate-v1-pod-fio-bench
+      path: /mutate-v1-pod-simplyblock-rebalancer
   failurePolicy: Ignore
-  name: fio-bench-injector.simplyblock.io
+  name: simplyblock-rebalancer-injector.simplyblock.io
   rules:
   - apiGroups:
     - ""

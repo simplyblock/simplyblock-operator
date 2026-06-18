@@ -6,10 +6,10 @@ IMG      ?= $(IMG_BASE):$(IMG_TAG)
 ECR_IMG_BASE ?= public.ecr.aws/simply-block/simplyblock-operator
 ECR_IMG      ?= $(ECR_IMG_BASE):$(IMG_TAG)
 
-# fio benchmark job image (built from Dockerfile.fio-bench)
-FIO_BENCH_IMG_BASE     ?= quay.io/simplyblock-io/simplyblock-fio-bench
+# simplyblock-rebalancer image (built from Dockerfile.simplyblock-rebalancer)
+FIO_BENCH_IMG_BASE     ?= quay.io/simplyblock-io/simplyblock-rebalancer
 FIO_BENCH_IMG          ?= $(FIO_BENCH_IMG_BASE):$(IMG_TAG)
-ECR_FIO_BENCH_IMG_BASE ?= public.ecr.aws/simply-block/simplyblock-fio-bench
+ECR_FIO_BENCH_IMG_BASE ?= public.ecr.aws/simply-block/simplyblock-rebalancer
 ECR_FIO_BENCH_IMG      ?= $(ECR_FIO_BENCH_IMG_BASE):$(IMG_TAG)
 BUNDLE_IMG ?= quay.io/simplyblock-io/simplyblock-operator-bundle:$(VERSION)
 OPENSHIFT_VERSION ?= v4.19
@@ -24,7 +24,7 @@ YQ_CSV_EXPR = .metadata.annotations.containerImage = strenv(OPERATOR_IMG) \
   | .spec.relatedImages = [{"name": "simplyblock-operator", "image": strenv(OPERATOR_IMG)}, \
     {"name": "simplyblock", "image": strenv(CLUSTER_IMG)}, \
     {"name": "ultra-spdk", "image": strenv(SPDK_IMG)}, \
-    {"name": "simplyblock-fio-bench", "image": strenv(FIO_BENCH_IMG)}] \
+    {"name": "simplyblock-rebalancer", "image": strenv(FIO_BENCH_IMG)}] \
   | .spec.install.spec.deployments[0].spec.template.spec.containers[0].image = strenv(OPERATOR_IMG)
 YQ_ANNOTATIONS_EXPR = .annotations."com.redhat.openshift.versions" = strenv(OPENSHIFT_VERSION)
 
@@ -184,26 +184,26 @@ docker-buildx-ecr: ## Build and push docker image to ECR public for cross-platfo
 	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
 	rm Dockerfile.cross
 
-.PHONY: docker-build-fio-bench
-docker-build-fio-bench: ## Build the fio benchmark job image.
-	$(CONTAINER_TOOL) build -t ${FIO_BENCH_IMG} -f Dockerfile.fio-bench .
+.PHONY: docker-build-simplyblock-rebalancer
+docker-build-simplyblock-rebalancer: ## Build the simplyblock-rebalancer image.
+	$(CONTAINER_TOOL) build -t ${FIO_BENCH_IMG} -f Dockerfile.simplyblock-rebalancer .
 
-.PHONY: docker-push-fio-bench
-docker-push-fio-bench: ## Push the fio benchmark job image.
+.PHONY: docker-push-simplyblock-rebalancer
+docker-push-simplyblock-rebalancer: ## Push the simplyblock-rebalancer image.
 	$(CONTAINER_TOOL) push ${FIO_BENCH_IMG}
 
-.PHONY: docker-buildx-fio-bench
-docker-buildx-fio-bench: ## Build and push multi-arch fio benchmark job image to quay.io.
+.PHONY: docker-buildx-simplyblock-rebalancer
+docker-buildx-simplyblock-rebalancer: ## Build and push multi-arch simplyblock-rebalancer image to quay.io.
 	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
 	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
-	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${FIO_BENCH_IMG} -f Dockerfile.fio-bench .
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${FIO_BENCH_IMG} -f Dockerfile.simplyblock-rebalancer .
 	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
 
-.PHONY: docker-buildx-ecr-fio-bench
-docker-buildx-ecr-fio-bench: ## Build and push multi-arch fio benchmark job image to ECR.
+.PHONY: docker-buildx-ecr-simplyblock-rebalancer
+docker-buildx-ecr-simplyblock-rebalancer: ## Build and push multi-arch simplyblock-rebalancer image to ECR.
 	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
 	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
-	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${ECR_FIO_BENCH_IMG} -f Dockerfile.fio-bench .
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${ECR_FIO_BENCH_IMG} -f Dockerfile.simplyblock-rebalancer .
 	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
 
 .PHONY: build-installer
@@ -239,7 +239,7 @@ bundle: yq ## Generate bundle manifests with digest-pinned images (operator imag
 	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
 	FIO_BENCH_DIGEST=$$(curl -sI \
-	  "https://quay.io/v2/simplyblock-io/simplyblock-fio-bench/manifests/$(IMG_TAG)" \
+	  "https://quay.io/v2/simplyblock-io/simplyblock-rebalancer/manifests/$(IMG_TAG)" \
 	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
 	test -n "$$FIO_BENCH_DIGEST" \

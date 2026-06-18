@@ -53,6 +53,8 @@ type MigrationConnection struct {
 	NrIoQueues     int    `json:"nrIoQueues,omitempty"`
 	ReconnectDelay int    `json:"reconnectDelay,omitempty"`
 	CtrlLossTmo    int    `json:"ctrlLossTmo,omitempty"`
+	FastIOFailTmo  int    `json:"fastIOFailTmo,omitempty"`
+	KeepAliveTmo   int    `json:"keepAliveTmo,omitempty"`
 }
 
 // VolumeMigrationSpec defines the desired state of a VolumeMigration.

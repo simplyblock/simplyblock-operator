@@ -47,10 +47,10 @@ const (
 	baselineJobNamePrefix         = "sb-fio-baseline-"
 )
 
-// fioBenchNodeConfig is one element of the JSON array stored per k8s hostname in the
-// fio-bench ConfigMap. The sidecar iterates the array to benchmark every NUMA node on
+// simplyblockRebalancerNodeConfig is one element of the JSON array stored per k8s hostname in the
+// simplyblock-rebalancer ConfigMap. The sidecar iterates the array to benchmark every NUMA node on
 // its host independently.
-type fioBenchNodeConfig struct {
+type simplyblockRebalancerNodeConfig struct {
 	NQN         string `json:"nqn"`
 	Addr        string `json:"addr"`
 	Port        int32  `json:"port"`
@@ -58,15 +58,15 @@ type fioBenchNodeConfig struct {
 	ClusterUUID string `json:"clusterUUID"`
 }
 
-// fioBenchResult is the JSON written to the container termination log by the baseline Job.
-type fioBenchResult struct {
+// simplyblockRebalancerResult is the JSON written to the container termination log by the baseline Job.
+type simplyblockRebalancerResult struct {
 	P50NS int64 `json:"p50_ns"`
 	P99NS int64 `json:"p99_ns"`
 }
 
 // StorageNodeLatencyReconciler measures per-node NVMe-oF write latency using a
 // one-shot Kubernetes Job for the initial empty-cluster baseline. Ongoing runtime
-// measurements are pushed directly to Prometheus by the fio-bench-probe sidecar.
+// measurements are pushed directly to Prometheus by the simplyblock-rebalancer sidecar.
 type StorageNodeLatencyReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -150,7 +150,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	latencyMetrics := r.copyLatencyMetrics(snode.Status.LatencyMetrics)
 	// hostConfigs accumulates per-node configs keyed by k8s hostname so the sidecar
 	// (one pod per host) receives a JSON array covering all NUMA nodes on its host.
-	hostConfigs := map[string][]fioBenchNodeConfig{}
+	hostConfigs := map[string][]simplyblockRebalancerNodeConfig{}
 	changed := false
 
 	for _, node := range nodesByUUID {
@@ -166,7 +166,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 		configData[hostname] = string(raw)
 	}
 	if err := r.reconcileConfigMap(ctx, snode.Namespace, snode.Spec.ClusterName, configData); err != nil {
-		log.Error(err, "Cannot reconcile fio-bench ConfigMap")
+		log.Error(err, "Cannot reconcile simplyblock-rebalancer ConfigMap")
 	}
 
 	if changed {
@@ -190,7 +190,7 @@ func (r *StorageNodeLatencyReconciler) processNodeBaseline(
 	node simplyblockv1alpha1.NodeStatus,
 	image string,
 	latencyMetrics *[]simplyblockv1alpha1.NodeLatencyMetrics,
-	hostConfigs map[string][]fioBenchNodeConfig,
+	hostConfigs map[string][]simplyblockRebalancerNodeConfig,
 ) bool {
 	log := logf.FromContext(ctx)
 
@@ -198,7 +198,7 @@ func (r *StorageNodeLatencyReconciler) processNodeBaseline(
 
 	volumeUUID, err := r.Provisioner.EnsureVolume(
 		ctx, snode.Namespace, snode.Spec.ClusterName, poolUUID,
-		"fio-bench-"+node.UUID, node.UUID,
+		"simplyblock-rebalancer-"+node.UUID, node.UUID,
 	)
 	if err != nil {
 		log.Error(err, "Cannot ensure benchmark volume", "node", node.UUID)
@@ -235,7 +235,7 @@ func (r *StorageNodeLatencyReconciler) processNodeBaseline(
 	// with the one-shot baseline Job — both would write to the same NVMe device
 	// and corrupt each other's measurements.
 	if m.BaselineP99NS > 0 {
-		hostConfigs[node.Hostname] = append(hostConfigs[node.Hostname], fioBenchNodeConfig{
+		hostConfigs[node.Hostname] = append(hostConfigs[node.Hostname], simplyblockRebalancerNodeConfig{
 			NQN:         conn.NQN,
 			Addr:        conn.Addr,
 			Port:        conn.Port,
@@ -265,7 +265,7 @@ func (r *StorageNodeLatencyReconciler) reconcileBaselineJob(
 	node simplyblockv1alpha1.NodeStatus,
 	conn benchmarkConnInfo,
 	image string,
-) (*fioBenchResult, bool, error) {
+) (*simplyblockRebalancerResult, bool, error) {
 	jobName := baselineJobNamePrefix + safeNodeID(node.UUID)
 	job := &batchv1.Job{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: snode.Namespace, Name: jobName}, job)
@@ -342,11 +342,11 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 					},
 					Containers: []corev1.Container{
 						{
-							Name:            "fio-baseline",
+							Name:            "simplyblock-rebalancer-baseline",
 							Image:           image,
 							ImagePullPolicy: corev1.PullAlways,
 							Command: []string{
-								"fio-probe",
+								"simplyblock-rebalancer",
 								"--mode=baseline",
 								"--addr=$(FIO_NODE_ADDR)",
 								"--port=$(FIO_NODE_PORT)",
@@ -380,7 +380,7 @@ func logicalVolumeConnectionPort(node simplyblockv1alpha1.NodeStatus) int32 {
 }
 
 // readJobResult reads the fio result from the baseline container's termination message.
-func (r *StorageNodeLatencyReconciler) readJobResult(ctx context.Context, job *batchv1.Job) (*fioBenchResult, error) {
+func (r *StorageNodeLatencyReconciler) readJobResult(ctx context.Context, job *batchv1.Job) (*simplyblockRebalancerResult, error) {
 	podList := &corev1.PodList{}
 	if err := r.List(ctx, podList,
 		client.InNamespace(job.Namespace),
@@ -393,10 +393,10 @@ func (r *StorageNodeLatencyReconciler) readJobResult(ctx context.Context, job *b
 	}
 
 	for _, cs := range podList.Items[0].Status.ContainerStatuses {
-		if cs.Name != "fio-baseline" || cs.State.Terminated == nil {
+		if cs.Name != "simplyblock-rebalancer-baseline" || cs.State.Terminated == nil {
 			continue
 		}
-		var result fioBenchResult
+		var result simplyblockRebalancerResult
 		if err := json.Unmarshal([]byte(cs.State.Terminated.Message), &result); err != nil {
 			return nil, fmt.Errorf("parse termination message: %w", err)
 		}
@@ -406,13 +406,13 @@ func (r *StorageNodeLatencyReconciler) readJobResult(ctx context.Context, job *b
 }
 
 // reconcileConfigMap creates or updates the per-cluster ConfigMap that maps k8s
-// node hostname → benchmark volume config JSON consumed by the fio-bench-probe sidecar.
+// node hostname → benchmark volume config JSON consumed by the simplyblock-rebalancer sidecar.
 func (r *StorageNodeLatencyReconciler) reconcileConfigMap(
 	ctx context.Context,
 	namespace, clusterName string,
 	data map[string]string,
 ) error {
-	name := utils.FioBenchConfigMapName(clusterName)
+	name := utils.SimplyblockRebalancerConfigMapName(clusterName)
 	var existing corev1.ConfigMap
 	err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &existing)
 	if apierrors.IsNotFound(err) {

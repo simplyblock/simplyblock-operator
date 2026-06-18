@@ -375,8 +375,8 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
-	mgr.GetWebhookServer().Register("/mutate-v1-pod-fio-bench",
-		&webhook.Admission{Handler: &internalwebhook.FioBenchInjector{Client: mgr.GetClient()}})
+	mgr.GetWebhookServer().Register("/mutate-v1-pod-simplyblock-rebalancer",
+		&webhook.Admission{Handler: &internalwebhook.SimplyblockRebalancerInjector{Client: mgr.GetClient()}})
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
