@@ -9,9 +9,38 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
+
+// defaultInitContainerResources are applied when the user has not set
+// InitContainerResources on the StorageNode CR.
+var defaultInitContainerResources = corev1.ResourceRequirements{
+	Requests: corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("100m"),
+		corev1.ResourceMemory: resource.MustParse("128Mi"),
+	},
+	Limits: corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("200m"),
+		corev1.ResourceMemory: resource.MustParse("256Mi"),
+	},
+}
+
+// defaultContainerResources are applied when the user has not set
+// ContainerResources on the StorageNode CR. No CPU limit is set because
+// SPDK uses busy-polling and a hard CPU ceiling would degrade storage
+// performance. Memory limits are enforced to allow kubelet eviction.
+var defaultContainerResources = corev1.ResourceRequirements{
+	Requests: corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("200m"),
+		corev1.ResourceMemory: resource.MustParse("256Mi"),
+	},
+	Limits: corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("500m"),
+		corev1.ResourceMemory: resource.MustParse("512Mi"),
+	},
+}
 
 func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
 
@@ -52,6 +81,11 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 	}
 	if sn.Spec.CorePercentage != nil {
 		initCmd = append(initCmd, "--cores-percentage="+Int32PtrToString(sn.Spec.CorePercentage))
+	}
+
+	imagePullPolicy := sn.Spec.ImagePullPolicy
+	if imagePullPolicy == "" {
+		imagePullPolicy = corev1.PullAlways
 	}
 
 	mainEnv := []corev1.EnvVar{
@@ -229,10 +263,11 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 						{
 							Name:            "s-node-api-config-generator",
 							Image:           image,
-							ImagePullPolicy: corev1.PullAlways,
+							ImagePullPolicy: imagePullPolicy,
 							Command:         initCmd,
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
 							VolumeMounts:    initMounts,
+							Resources:       effectiveResources(sn.Spec.InitContainerResources, defaultInitContainerResources),
 							Env: []corev1.EnvVar{
 								{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
@@ -245,15 +280,15 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 						{
 							Name:            "s-node-api-container",
 							Image:           image,
-							ImagePullPolicy: corev1.PullAlways,
+							ImagePullPolicy: imagePullPolicy,
 							Command: []string{
 								"sudo", "-E", "python3", "simplyblock_web/node_webapp.py", "storage_node_k8s",
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
-
-							ReadinessProbe: readinessProbe,
-							Env:            mainEnv,
-							VolumeMounts:   mainMounts,
+							Resources:       effectiveResources(sn.Spec.ContainerResources, defaultContainerResources),
+							ReadinessProbe:  readinessProbe,
+							Env:             mainEnv,
+							VolumeMounts:    mainMounts,
 						},
 					},
 				},
@@ -526,4 +561,14 @@ func BuildStorageNodeClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBin
 			APIGroup: "rbac.authorization.k8s.io",
 		},
 	}
+}
+
+// effectiveResources returns user if the user has set any requests or limits,
+// otherwise falls back to def. This ensures defaults are always applied while
+// still allowing full user override.
+func effectiveResources(user, def corev1.ResourceRequirements) corev1.ResourceRequirements {
+	if len(user.Requests) > 0 || len(user.Limits) > 0 {
+		return user
+	}
+	return def
 }

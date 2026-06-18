@@ -4,9 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestStorageNodeAPIAddress(t *testing.T) {
@@ -80,5 +81,37 @@ func TestBuildSpdkProxyEndpointSlice_CollidingFirstLabelFails(t *testing.T) {
 	if !strings.Contains(err.Error(), "worker.us-east-1.local") ||
 		!strings.Contains(err.Error(), "worker.eu-west-1.local") {
 		t.Fatalf("expected error to name both colliding nodes, got %q", err.Error())
+	}
+}
+
+func TestBuildStorageNodeDaemonSetUserResourcesOverrideDefaults(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "simplyblock"},
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
+			ClusterName:  "test-cluster",
+			ClusterImage: "simplyblock/simplyblock:latest",
+			ContainerResources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
+				Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("4Gi")},
+			},
+			InitContainerResources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")},
+				Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("128Mi")},
+			},
+		},
+	}
+
+	ds := BuildStorageNodeDaemonSet(sn, false, false, "", "")
+
+	main := ds.Spec.Template.Spec.Containers[0]
+	mainMem := main.Resources.Limits[corev1.ResourceMemory]
+	if mainMem.String() != "4Gi" {
+		t.Errorf("main container: expected user memory limit 4Gi, got %v", mainMem.String())
+	}
+
+	init := ds.Spec.Template.Spec.InitContainers[0]
+	initMem := init.Resources.Limits[corev1.ResourceMemory]
+	if initMem.String() != "128Mi" {
+		t.Errorf("init container: expected user memory limit 128Mi, got %v", initMem.String())
 	}
 }
