@@ -22,7 +22,7 @@ var defaultInitContainerResources = corev1.ResourceRequirements{
 		corev1.ResourceMemory: resource.MustParse("128Mi"),
 	},
 	Limits: corev1.ResourceList{
-		corev1.ResourceCPU:    resource.MustParse("100m"),
+		corev1.ResourceCPU:    resource.MustParse("200m"),
 		corev1.ResourceMemory: resource.MustParse("256Mi"),
 	},
 }
