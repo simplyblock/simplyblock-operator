@@ -1947,6 +1947,13 @@ func newStorageNodeStateTestReconciler(
 			Image: "test-image:latest",
 		},
 	}
+	// Simulate kubebuilder defaults that the API server would apply.
+	for _, obj := range objects {
+		if sn, ok := obj.(*simplyblockv1alpha1.StorageNode); ok && sn.Spec.MaxParallelNodeAdds == nil {
+			v := int32(1)
+			sn.Spec.MaxParallelNodeAdds = &v
+		}
+	}
 	allObjects := append([]client.Object{singleton}, objects...)
 
 	cl := newTestClient(t, scheme, []client.Object{

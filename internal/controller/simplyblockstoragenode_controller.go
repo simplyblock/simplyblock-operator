@@ -846,6 +846,8 @@ func workerIsInFlight(snCR *simplyblockv1alpha1.StorageNode, nodeName string) bo
 
 // reconcileWorkerNodes fans out the node-add loop across parallel (non-FDB) and
 // sequential (FDB) workers, respecting MaxParallelNodeAdds.
+// MaxParallelNodeAdds carries a +kubebuilder:default=1 marker so the API server
+// always populates it before the CR is stored — it is safe to dereference directly.
 func (r *StorageNodeReconciler) reconcileWorkerNodes(
 	ctx context.Context,
 	req ctrl.Request,
