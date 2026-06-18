@@ -182,6 +182,8 @@ func (c *Client) CreateMigration(
 		}
 	}
 
+	logger.Info("CreateMigration response", "volume", volumeUUID, "status", statusCode, "body", string(body))
+
 	if statusCode >= 300 {
 		return nil, fmt.Errorf("create migration for volume %s: status %d: %s", volumeUUID, statusCode, string(body))
 	}
@@ -189,6 +191,7 @@ func (c *Client) CreateMigration(
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, fmt.Errorf("unmarshal migration response: %w", err)
 	}
+	logger.Info("CreateMigration parsed", "volume", volumeUUID, "migration_id", m.ID, "connect_strings", len(m.ConnectStrings))
 	return &m, nil
 }
 
