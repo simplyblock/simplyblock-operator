@@ -2772,7 +2772,7 @@ func TestFDBWorkerSet(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
 				Namespace: namespace,
-				Labels:    map[string]string{"foundationdb.org/fdb-cluster-name": "simplyblock-fdb-cluster"},
+				Labels:    map[string]string{utils.LabelFDBClusterName: "simplyblock-fdb-cluster"},
 			},
 			Spec: corev1.PodSpec{NodeName: nodeName},
 		}

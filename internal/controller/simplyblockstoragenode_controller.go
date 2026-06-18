@@ -865,10 +865,7 @@ func (r *StorageNodeReconciler) reconcileWorkerNodes(
 		}
 	}
 
-	maxParallel := 1
-	if snCR.Spec.MaxParallelNodeAdds != nil && *snCR.Spec.MaxParallelNodeAdds > 0 {
-		maxParallel = int(*snCR.Spec.MaxParallelNodeAdds)
-	}
+	maxParallel := int(*snCR.Spec.MaxParallelNodeAdds)
 
 	inFlight := 0
 	for _, nodeName := range parallelWorkers {
@@ -961,7 +958,7 @@ func (r *StorageNodeReconciler) fdbWorkerSet(ctx context.Context, snCR *simplybl
 	var podList corev1.PodList
 	if err := r.List(ctx, &podList,
 		client.InNamespace(snCR.Namespace),
-		client.HasLabels{"foundationdb.org/fdb-cluster-name"},
+		client.HasLabels{utils.LabelFDBClusterName},
 	); err != nil {
 		return workerSet
 	}
