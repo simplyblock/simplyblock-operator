@@ -144,7 +144,18 @@ type StorageNodeSpec struct {
 	// add process simultaneously. Defaults to 1 (fully sequential) when unset.
 	// FDB workers are always sequential regardless of this setting.
 	MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
-
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Container Resources"
+	// ContainerResources sets CPU and memory requests/limits for the main storage-node container.
+	// When omitted no limits are enforced, which preserves the previous behaviour.
+	ContainerResources corev1.ResourceRequirements `json:"containerResources,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Init Container Resources"
+	// InitContainerResources sets CPU and memory requests/limits for the init container.
+	// When omitted no limits are enforced.
+	InitContainerResources corev1.ResourceRequirements `json:"initContainerResources,omitempty"`
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Image Pull Policy"
+	// ImagePullPolicy controls when the container image is pulled. Defaults to IfNotPresent.
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
 	// Force enables forced action execution where supported.
 	Force *bool `json:"force,omitempty"`
