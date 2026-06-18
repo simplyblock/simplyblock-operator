@@ -104,10 +104,10 @@ func (h *SimplyblockRebalancerInjector) resolveConfig(
 		if rb == nil || rb.LatencyBenchmarkEnabled == nil || !*rb.LatencyBenchmarkEnabled {
 			return "", "", false
 		}
-		if rb.FioBenchmarkImage == nil || *rb.FioBenchmarkImage == "" {
+		if rb.RebalancerImage == nil || *rb.RebalancerImage == "" {
 			return "", "", false
 		}
-		return *rb.FioBenchmarkImage, utils.SimplyblockRebalancerConfigMapName(cr.Name), true
+		return *rb.RebalancerImage, utils.SimplyblockRebalancerConfigMapName(cr.Name), true
 	}
 	return "", "", false
 }

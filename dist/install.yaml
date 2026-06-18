@@ -1388,11 +1388,6 @@ spec:
                     description: EvaluationInterval is how often the rebalancer evaluates
                       load. Defaults to 60s.
                     type: string
-                  fioBenchmarkImage:
-                    description: |-
-                      FioBenchmarkImage is the container image for fio benchmark Jobs.
-                      The image must include fio, nvme-cli, and jq.
-                    type: string
                   imbalanceThreshold:
                     description: |-
                       ImbalanceThreshold is the minimum p99 latency deviation from baseline (in percent)
@@ -1408,7 +1403,7 @@ spec:
                   latencyBenchmarkEnabled:
                     description: |-
                       LatencyBenchmarkEnabled enables fio-based NVMe-oF latency measurement via Kubernetes Jobs.
-                      Defaults to false; set to true once a FioBenchmarkImage is configured.
+                      Defaults to false; set to true once a RebalancerImage is configured.
                     type: boolean
                   latencyBenchmarkInterval:
                     description: |-
@@ -1432,6 +1427,11 @@ spec:
                   prometheusURL:
                     description: PrometheusURL is required when MetricsBackend is
                       "prometheus".
+                    type: string
+                  rebalancerImage:
+                    description: |-
+                      RebalancerImage is the container image for rebalancer Jobs.
+                      The image must include fio, nvme-cli, and jq.
                     type: string
                   storageNodeCandidateCount:
                     description: |-

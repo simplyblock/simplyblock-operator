@@ -46,7 +46,7 @@ func makeCluster(benchmarkEnabled bool, image string) *simplyblockv1alpha1.Stora
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			VolumeRebalancing: &simplyblockv1alpha1.VolumeRebalancingSpec{
 				LatencyBenchmarkEnabled: boolRef(benchmarkEnabled),
-				FioBenchmarkImage:       strRef(image),
+				RebalancerImage:       strRef(image),
 			},
 		},
 		Status: simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterUUID},

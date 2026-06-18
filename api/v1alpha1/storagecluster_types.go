@@ -101,17 +101,17 @@ type VolumeRebalancingSpec struct {
 	// +optional
 	PrometheusURL *string `json:"prometheusURL,omitempty"`
 	// LatencyBenchmarkEnabled enables fio-based NVMe-oF latency measurement via Kubernetes Jobs.
-	// Defaults to false; set to true once a FioBenchmarkImage is configured.
+	// Defaults to false; set to true once a RebalancerImage is configured.
 	// +optional
 	LatencyBenchmarkEnabled *bool `json:"latencyBenchmarkEnabled,omitempty"`
 	// LatencyBenchmarkInterval is how often fio benchmark Jobs run against each storage node.
 	// Defaults to 5m.
 	// +optional
 	LatencyBenchmarkInterval *metav1.Duration `json:"latencyBenchmarkInterval,omitempty"`
-	// FioBenchmarkImage is the container image for fio benchmark Jobs.
+	// RebalancerImage is the container image for rebalancer Jobs.
 	// The image must include fio, nvme-cli, and jq.
 	// +optional
-	FioBenchmarkImage *string `json:"fioBenchmarkImage,omitempty"`
+	RebalancerImage *string `json:"rebalancerImage,omitempty"`
 	// IOPSWeight is the weight applied to per-volume IOPS when computing the volume IO score.
 	// Defaults to 1.0.
 	// +optional

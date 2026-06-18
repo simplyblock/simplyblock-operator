@@ -365,11 +365,11 @@ func (r *VolumeMigrationReconciler) resolveRebalancerImage(
 			continue
 		}
 		rb := cr.Spec.VolumeRebalancing
-		if rb != nil && rb.FioBenchmarkImage != nil && *rb.FioBenchmarkImage != "" {
-			return *rb.FioBenchmarkImage, nil
+		if rb != nil && rb.RebalancerImage != nil && *rb.RebalancerImage != "" {
+			return *rb.RebalancerImage, nil
 		}
 	}
-	return "", fmt.Errorf("no FioBenchmarkImage configured for cluster UUID %q", clusterUUID)
+	return "", fmt.Errorf("no RebalancerImage configured for cluster UUID %q", clusterUUID)
 }
 
 // reconcileRunning polls the migration API and updates progress in status.

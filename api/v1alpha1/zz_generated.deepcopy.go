@@ -2085,8 +2085,8 @@ func (in *VolumeRebalancingSpec) DeepCopyInto(out *VolumeRebalancingSpec) {
 		*out = new(v1.Duration)
 		**out = **in
 	}
-	if in.FioBenchmarkImage != nil {
-		in, out := &in.FioBenchmarkImage, &out.FioBenchmarkImage
+	if in.RebalancerImage != nil {
+		in, out := &in.RebalancerImage, &out.RebalancerImage
 		*out = new(string)
 		**out = **in
 	}

@@ -109,8 +109,8 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if spec == nil || spec.LatencyBenchmarkEnabled == nil || !*spec.LatencyBenchmarkEnabled {
 		return ctrl.Result{}, nil
 	}
-	if spec.FioBenchmarkImage == nil || *spec.FioBenchmarkImage == "" {
-		log.Info("FioBenchmarkImage not configured; latency benchmark disabled")
+	if spec.RebalancerImage == nil || *spec.RebalancerImage == "" {
+		log.Info("RebalancerImage not configured; latency benchmark disabled")
 		return ctrl.Result{}, nil
 	}
 
@@ -154,7 +154,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	changed := false
 
 	for _, node := range nodesByUUID {
-		nodeChanged := r.processNodeBaseline(ctx, snode, clusterCR, poolUUID, node, *spec.FioBenchmarkImage, &latencyMetrics, hostConfigs)
+		nodeChanged := r.processNodeBaseline(ctx, snode, clusterCR, poolUUID, node, *spec.RebalancerImage, &latencyMetrics, hostConfigs)
 		if nodeChanged {
 			changed = true
 		}
