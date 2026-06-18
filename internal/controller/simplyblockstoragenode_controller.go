@@ -92,6 +92,8 @@ var (
 	waitForActionCompletionSleepFn      = time.Sleep
 
 	syncNodeStatusInterval = 30 * time.Second
+
+	spdkPodEventDelay = 20 * time.Second
 )
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
@@ -108,6 +110,7 @@ var (
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -393,7 +396,7 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func isSpdkProxyPod(obj client.Object) bool {
-	return obj.GetLabels()["role"] == "simplyblock-storage-node"
+	return obj.GetLabels()["role"] == utils.LabelSpdkProxyRole
 }
 
 func isStorageNodeTLSSecret(obj client.Object) bool {
@@ -747,7 +750,7 @@ func (r *StorageNodeReconciler) reconcileSpdkProxyEndpointSlices(
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods,
 		client.InNamespace(snCR.Namespace),
-		client.MatchingLabels{"role": "simplyblock-storage-node"},
+		client.MatchingLabels{"role": utils.LabelSpdkProxyRole},
 	); err != nil {
 		return fmt.Errorf("failed to list spdk-proxy pods: %w", err)
 	}
@@ -842,6 +845,71 @@ func workerIsInFlight(snCR *simplyblockv1alpha1.StorageNode, nodeName string) bo
 		}
 	}
 	return false
+}
+
+// recordSpdkPodEvents finds the worker's pending SPDK pod, fetches its most
+// recent Kubernetes event, and surfaces it on the StorageNode CR status so
+// operators can see why a pod is stuck without running kubectl describe.
+func (r *StorageNodeReconciler) recordSpdkPodEvents(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+	nodeName string,
+) {
+	log := logf.FromContext(ctx)
+
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList,
+		client.InNamespace(snCR.Namespace),
+		client.MatchingLabels{"role": utils.LabelSpdkProxyRole},
+	); err != nil {
+		log.Error(err, "recordSpdkPodEvents: failed to list SPDK pods", "node", nodeName)
+		return
+	}
+
+	var targetPod *corev1.Pod
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if pod.Spec.NodeName == nodeName && pod.Status.Phase == corev1.PodPending {
+			targetPod = pod
+			break
+		}
+	}
+	if targetPod == nil {
+		return
+	}
+
+	var eventList corev1.EventList
+	if err := r.List(ctx, &eventList, client.InNamespace(snCR.Namespace)); err != nil {
+		log.Error(err, "recordSpdkPodEvents: failed to list events", "node", nodeName)
+		return
+	}
+
+	var latest *corev1.Event
+	for i := range eventList.Items {
+		ev := &eventList.Items[i]
+		if ev.InvolvedObject.Name != targetPod.Name {
+			continue
+		}
+		if latest == nil || ev.LastTimestamp.After(latest.LastTimestamp.Time) {
+			latest = ev
+		}
+	}
+	if latest == nil {
+		return
+	}
+
+	patch := client.MergeFrom(snCR.DeepCopy())
+	if snCR.Status.NodePodEvents == nil {
+		snCR.Status.NodePodEvents = make(map[string]simplyblockv1alpha1.NodePodEvent)
+	}
+	snCR.Status.NodePodEvents[nodeName] = simplyblockv1alpha1.NodePodEvent{
+		Reason:     latest.Reason,
+		Message:    latest.Message,
+		ObservedAt: metav1.Now(),
+	}
+	if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+		log.Error(err, "recordSpdkPodEvents: failed to patch pod event status", "node", nodeName)
+	}
 }
 
 // reconcileWorkerNodes fans out the node-add loop across parallel (non-FDB) and
@@ -1216,6 +1284,9 @@ func (r *StorageNodeReconciler) nodeOnlineRequeueOrTimeout(
 	// Fall back to the legacy UUID=="" PostedAt for backward compatibility.
 	if postedAt, ok := snCR.Status.PendingNodeAdds[nodeName]; ok {
 		if time.Since(postedAt.Time) <= timeout {
+			if time.Since(postedAt.Time) >= spdkPodEventDelay {
+				r.recordSpdkPodEvents(ctx, snCR, nodeName)
+			}
 			return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
 		}
 	} else {
@@ -1304,10 +1375,14 @@ func onAllSocketNodesOnline(
 		}
 	}
 
-	// All socket nodes confirmed online — remove the pending marker so the
-	// worker is no longer considered in-flight.
+	// All socket nodes confirmed online — remove the pending marker and any
+	// recorded pod events so the worker is no longer considered in-flight.
 	if _, ok := snCR.Status.PendingNodeAdds[nodeName]; ok {
 		delete(snCR.Status.PendingNodeAdds, nodeName)
+		changed = true
+	}
+	if _, ok := snCR.Status.NodePodEvents[nodeName]; ok {
+		delete(snCR.Status.NodePodEvents, nodeName)
 		changed = true
 	}
 

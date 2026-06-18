@@ -46,5 +46,6 @@ const (
 
 	AnnotationTLSSecretRevision = "storage.simplyblock.io/tls-secret-revision"
 
-	LabelFDBClusterName = "foundationdb.org/fdb-cluster-name"
+	LabelFDBClusterName  = "foundationdb.org/fdb-cluster-name"
+	LabelSpdkProxyRole   = "simplyblock-storage-node"
 )
