@@ -11,6 +11,6 @@ spec:
     matchLabels:
       role: simplyblock-storage-node
   podMetricsEndpoints:
-  - port: rebalancer-metrics
+  - port: latency-metrics
     path: /metrics
     scheme: http
