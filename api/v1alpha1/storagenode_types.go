@@ -211,6 +211,10 @@ type StorageNodeStatus struct {
 	// POSTs — it is a separate map field so patches to Status.Nodes never
 	// inadvertently delete it.
 	PendingNodeAdds map[string]metav1.Time `json:"pendingNodeAdds,omitempty"`
+	// SchedulingFailedWorkers tracks worker hostnames whose SPDK pod experienced
+	// a FailedScheduling event during node add. Used to emit a recovery event
+	// when the node subsequently comes online.
+	SchedulingFailedWorkers map[string]bool `json:"schedulingFailedWorkers,omitempty"`
 }
 
 type NodeStatus struct {

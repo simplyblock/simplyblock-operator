@@ -906,6 +906,17 @@ func (r *StorageNodeReconciler) recordSpdkPodEvents(
 
 	r.Recorder.Eventf(snCR, corev1.EventTypeWarning, latest.Reason,
 		"worker %s: %s", nodeName, latest.Message)
+
+	// Persist the flag so the recovery event is emitted correctly even if the
+	// operator restarts before the node comes online.
+	patch := client.MergeFrom(snCR.DeepCopy())
+	if snCR.Status.SchedulingFailedWorkers == nil {
+		snCR.Status.SchedulingFailedWorkers = make(map[string]bool)
+	}
+	snCR.Status.SchedulingFailedWorkers[nodeName] = true
+	if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+		log.Error(err, "recordSpdkPodEvents: failed to persist scheduling failure flag", "node", nodeName)
+	}
 }
 
 // reconcileWorkerNodes fans out the node-add loop across parallel (non-FDB) and
@@ -1371,10 +1382,18 @@ func onAllSocketNodesOnline(
 		}
 	}
 
-	// All socket nodes confirmed online — remove the pending marker and any
-	// recorded pod events so the worker is no longer considered in-flight.
+	// All socket nodes confirmed online — remove the pending marker so the
+	// worker is no longer considered in-flight.
 	if _, ok := snCR.Status.PendingNodeAdds[nodeName]; ok {
 		delete(snCR.Status.PendingNodeAdds, nodeName)
+		changed = true
+	}
+	// Emit a recovery event only if the worker previously had a scheduling
+	// failure, then clear the flag.
+	if snCR.Status.SchedulingFailedWorkers[nodeName] {
+		r.Recorder.Eventf(snCR, corev1.EventTypeNormal, "NodeOnline",
+			"worker %s: SPDK pod is now online after previous scheduling failure", nodeName)
+		delete(snCR.Status.SchedulingFailedWorkers, nodeName)
 		changed = true
 	}
 	if changed {
