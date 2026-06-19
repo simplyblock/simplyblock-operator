@@ -53,15 +53,6 @@ const (
 	// (missing, unreadable, or lacking required keys).
 	eventReasonBackupCredentialsError = "BackupCredentialsError"
 
-	// eventReasonClusterLookupError is emitted when the controller fails to
-	// determine whether a cluster already exists in the namespace, preventing
-	// it from choosing the correct API endpoint.
-	eventReasonClusterLookupError = "ClusterLookupError"
-
-	// eventReasonClusterAuthError is emitted when cluster credentials cannot
-	// be retrieved from the cluster Secret, blocking any authenticated API call.
-	eventReasonClusterAuthError = "ClusterAuthError"
-
 	// eventReasonInvalidConfig is emitted when a user-supplied field in the CR
 	// fails validation (e.g. a non-HTTPS or private-IP URL).
 	eventReasonInvalidConfig = "InvalidConfig"
