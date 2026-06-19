@@ -195,17 +195,6 @@ type NodeDrainState struct {
 	ActiveNodeUUID string `json:"activeNodeUUID,omitempty"`
 }
 
-// NodePodEvent records the most recent Kubernetes pod event for a worker's
-// SPDK pod, surfaced when the pod has been pending for more than 20 seconds.
-type NodePodEvent struct {
-	// Reason is the event reason (e.g. "FailedScheduling", "Insufficient hugepages").
-	Reason string `json:"reason,omitempty"`
-	// Message is the human-readable event message from the pod event.
-	Message string `json:"message,omitempty"`
-	// ObservedAt is when this event was last recorded.
-	ObservedAt metav1.Time `json:"observedAt,omitempty"`
-}
-
 // StorageNodeStatus defines the observed state of StorageNode.
 type StorageNodeStatus struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Nodes"
@@ -222,10 +211,6 @@ type StorageNodeStatus struct {
 	// POSTs — it is a separate map field so patches to Status.Nodes never
 	// inadvertently delete it.
 	PendingNodeAdds map[string]metav1.Time `json:"pendingNodeAdds,omitempty"`
-	// NodePodEvents records the most recent Kubernetes pod event per worker
-	// hostname. Populated when the worker's SPDK pod has been pending for more
-	// than 20 seconds, cleared when the node comes online.
-	NodePodEvents map[string]NodePodEvent `json:"nodePodEvents,omitempty"`
 }
 
 type NodeStatus struct {

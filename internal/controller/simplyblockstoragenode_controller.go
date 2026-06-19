@@ -33,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -56,6 +57,7 @@ type StorageNodeReconciler struct {
 	TLSEnabled       bool
 	TLSProvider      string
 	TLSMutualEnabled bool
+	Recorder         record.EventRecorder
 }
 
 type SNODEAPIResponse struct {
@@ -902,18 +904,8 @@ func (r *StorageNodeReconciler) recordSpdkPodEvents(
 		return
 	}
 
-	patch := client.MergeFrom(snCR.DeepCopy())
-	if snCR.Status.NodePodEvents == nil {
-		snCR.Status.NodePodEvents = make(map[string]simplyblockv1alpha1.NodePodEvent)
-	}
-	snCR.Status.NodePodEvents[nodeName] = simplyblockv1alpha1.NodePodEvent{
-		Reason:     latest.Reason,
-		Message:    latest.Message,
-		ObservedAt: metav1.Now(),
-	}
-	if err := r.Status().Patch(ctx, snCR, patch); err != nil {
-		log.Error(err, "recordSpdkPodEvents: failed to patch pod event status", "node", nodeName)
-	}
+	r.Recorder.Eventf(snCR, corev1.EventTypeWarning, latest.Reason,
+		"worker %s: %s", nodeName, latest.Message)
 }
 
 // reconcileWorkerNodes fans out the node-add loop across parallel (non-FDB) and
@@ -1385,11 +1377,6 @@ func onAllSocketNodesOnline(
 		delete(snCR.Status.PendingNodeAdds, nodeName)
 		changed = true
 	}
-	if _, ok := snCR.Status.NodePodEvents[nodeName]; ok {
-		delete(snCR.Status.NodePodEvents, nodeName)
-		changed = true
-	}
-
 	if changed {
 		if err := r.Status().Patch(ctx, snCR, patch); err != nil {
 			log.Error(err, "Failed to patch node status to online", "node", nodeName)
