@@ -251,6 +251,10 @@ spec:
       - knob_disable_posix_kernel_aio=1
       podTemplate:
         spec:
+          {{- if .Values.controlplane.foundationdb.nodeSelector }}
+          nodeSelector:
+            {{- toYaml .Values.controlplane.foundationdb.nodeSelector | nindent 12 }}
+          {{- end }}
           containers:
           - name: foundationdb
             resources:
@@ -297,6 +301,10 @@ spec:
     storage:
       podTemplate:
         spec:
+          {{- if .Values.controlplane.foundationdb.nodeSelector }}
+          nodeSelector:
+            {{- toYaml .Values.controlplane.foundationdb.nodeSelector | nindent 12 }}
+          {{- end }}
           containers:
           - name: foundationdb
             resources:
@@ -320,6 +328,10 @@ spec:
     log:
       podTemplate:
         spec:
+          {{- if .Values.controlplane.foundationdb.nodeSelector }}
+          nodeSelector:
+            {{- toYaml .Values.controlplane.foundationdb.nodeSelector | nindent 12 }}
+          {{- end }}
           containers:
           - name: foundationdb
             resources:
