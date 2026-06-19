@@ -869,7 +869,11 @@ func (r *StorageNodeReconciler) recordSpdkPodEvents(
 	var targetPod *corev1.Pod
 	for i := range podList.Items {
 		pod := &podList.Items[i]
-		if pod.Spec.NodeName == nodeName && pod.Status.Phase == corev1.PodPending {
+		if pod.Status.Phase != corev1.PodPending {
+			continue
+		}
+		if pod.Spec.NodeName == nodeName ||
+			pod.Spec.NodeSelector["kubernetes.io/hostname"] == nodeName {
 			targetPod = pod
 			break
 		}
