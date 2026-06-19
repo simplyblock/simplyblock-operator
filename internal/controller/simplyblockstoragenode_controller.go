@@ -259,28 +259,52 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 	}
 
 	if !isPending {
-		// Persist the pending marker BEFORE the POST so that every future
-		// reconcile — including those triggered while sbcli is retrying
-		// internally after a failure — sees the marker and skips the POST.
-		patch := client.MergeFrom(snCR.DeepCopy())
-		if snCR.Status.PendingNodeAdds == nil {
-			snCR.Status.PendingNodeAdds = make(map[string]metav1.Time)
-		}
-		snCR.Status.PendingNodeAdds[nodeName] = metav1.Now()
-		if err := r.Status().Patch(ctx, snCR, patch); err != nil {
-			log.Error(err, "Failed to persist pending node add marker before POST, retrying", "node", nodeName)
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		// Before writing the pending marker and POSTing, check the backend
+		// SNODE list. If the backend already has a non-removed node for this
+		// host's IP, a previous POST was accepted by the backend but returned
+		// a non-2xx response, so we never recorded a marker. Treat it as
+		// pending and proceed straight to polling.
+		alreadyOnBackend, err := r.hasBackendNodeForIP(ctx, apiClient, clusterUUID, ip)
+		if err != nil {
+			log.Error(err, "Failed to check backend node list before POST, requeueing", "node", nodeName)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
-		if res, err := r.postStorageNode(ctx, req, snCR, nodeName, ip, clusterUUID, apiClient); err != nil || res.RequeueAfter > 0 {
-			// POST failed — clear the pending marker so the next reconcile
-			// retries the POST rather than waiting on a node that was never created.
-			clearPatch := client.MergeFrom(snCR.DeepCopy())
-			delete(snCR.Status.PendingNodeAdds, nodeName)
-			if patchErr := r.Status().Patch(ctx, snCR, clearPatch); patchErr != nil {
-				log.Error(patchErr, "Failed to clear pending node add marker after POST failure", "node", nodeName)
+		if alreadyOnBackend {
+			log.Info("Backend already has node in progress for this host, skipping POST", "node", nodeName)
+			patch := client.MergeFrom(snCR.DeepCopy())
+			if snCR.Status.PendingNodeAdds == nil {
+				snCR.Status.PendingNodeAdds = make(map[string]metav1.Time)
 			}
-			return res, err
+			snCR.Status.PendingNodeAdds[nodeName] = metav1.Now()
+			if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+				log.Error(err, "Failed to persist pending node add marker, requeueing", "node", nodeName)
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+		} else {
+			// Persist the pending marker BEFORE the POST so that every future
+			// reconcile — including those triggered while sbcli is retrying
+			// internally after a failure — sees the marker and skips the POST.
+			patch := client.MergeFrom(snCR.DeepCopy())
+			if snCR.Status.PendingNodeAdds == nil {
+				snCR.Status.PendingNodeAdds = make(map[string]metav1.Time)
+			}
+			snCR.Status.PendingNodeAdds[nodeName] = metav1.Now()
+			if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+				log.Error(err, "Failed to persist pending node add marker before POST, retrying", "node", nodeName)
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+
+			if res, err := r.postStorageNode(ctx, req, snCR, nodeName, ip, clusterUUID, apiClient); err != nil || res.RequeueAfter > 0 {
+				// POST failed — clear the pending marker so the next reconcile
+				// retries the POST rather than waiting on a node that was never created.
+				clearPatch := client.MergeFrom(snCR.DeepCopy())
+				delete(snCR.Status.PendingNodeAdds, nodeName)
+				if patchErr := r.Status().Patch(ctx, snCR, clearPatch); patchErr != nil {
+					log.Error(patchErr, "Failed to clear pending node add marker after POST failure", "node", nodeName)
+				}
+				return res, err
+			}
 		}
 	}
 
@@ -1144,6 +1168,38 @@ func waitForNodeInfoReachable(
 // pollNodeOnline performs a single non-blocking check of whether the node is
 // online, returning RequeueAfter if it isn't yet. This replaces the old
 // blocking waitForNodeOnline loop so the reconcile worker goroutine stays free.
+// hasBackendNodeForIP returns true when the backend SNODE list already contains
+// at least one node for the given management IP in a non-removed state. This
+// guards against re-POSTing after a previous POST was accepted by the backend
+// but returned a non-2xx response, so no pending marker was written to status.
+func (r *StorageNodeReconciler) hasBackendNodeForIP(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID, ip string,
+) (bool, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
+		return false, err
+	}
+	if strings.TrimSpace(string(body)) == "[]" {
+		return false, nil
+	}
+	var apiResp []SNODEAPIResponse
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return false, fmt.Errorf("failed to unmarshal storage node list: %w", err)
+	}
+	for _, n := range apiResp {
+		if n.IP == ip && n.Status != "removed" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (r *StorageNodeReconciler) pollNodeOnline(
 	ctx context.Context,
 	apiClient *webapi.Client,
