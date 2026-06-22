@@ -40,14 +40,6 @@ type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Image"
 	// ClusterImage is the container image used for storage-node workloads.
 	ClusterImage string `json:"clusterImage,omitempty"`
-	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume;remove
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
-	// Action triggers an imperative node operation.
-	Action string `json:"action,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node UUID"
-	// NodeUUID is required when action is specified
-	NodeUUID string `json:"nodeUUID,omitempty"`
-
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Logical Volume Count"
 	// MaxLogicalVolumeCount is the maximum number of logical volumes per node.
 	MaxLogicalVolumeCount *int32 `json:"maxLogicalVolumeCount,omitempty"`
@@ -96,12 +88,6 @@ type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Worker Nodes"
 	// WorkerNodes is the set of Kubernetes worker nodes to manage.
 	WorkerNodes []string `json:"workerNodes,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Worker Node"
-	// WorkerNode is a single worker node used by action flows.
-	WorkerNode string `json:"workerNode,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Reattach Volume"
-	// ReattachVolume reattaches volumes during restart where supported by the backend.
-	ReattachVolume *bool `json:"reattachVolume,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="OpenShift Cluster"
 	// OpenShiftCluster indicates OpenShift-specific behavior should be enabled.
 	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
@@ -157,9 +143,6 @@ type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Image Pull Policy"
 	// ImagePullPolicy controls when the container image is pulled. Defaults to IfNotPresent.
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
-	// Force enables forced action execution where supported.
-	Force *bool `json:"force,omitempty"`
 }
 
 // Drain coordination phases for a worker node undergoing a rolling upgrade drain.
@@ -200,8 +183,6 @@ type StorageNodeSetStatus struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Nodes"
 	// Nodes is the observed state of each managed storage node.
 	Nodes []NodeStatus `json:"nodes,omitempty"`
-	// ActionStatus tracks the latest action execution status.
-	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Drain Coordination"
 	// DrainCoordination tracks the upgrade-drain state per worker node.
 	DrainCoordination []NodeDrainState `json:"drainCoordination,omitempty"`
@@ -269,8 +250,7 @@ type ActionStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && (!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\"))",message="nodeUUID is required when action is specified"
-// +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname) && self.spec.mgmtIfname != \"\")",message="maxLogicalVolumeCount, workerNodes, and mgmtIfname are required when action is not specified"
+// +kubebuilder:validation:XValidation:rule="has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname) && self.spec.mgmtIfname != \"\"",message="maxLogicalVolumeCount, workerNodes, and mgmtIfname are required"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Storage Node",resources={{ServiceAccount,v1,simplyblock-storage-node},{Service,v1,simplyblock-storage-node},{DaemonSet,v1,simplyblock-storage-node},{ClusterRole,v1,simplyblock-storage-node},{ClusterRoleBinding,v1,simplyblock-storage-node}}
 // StorageNodeSet is the Schema for the storagenodesets API
 type StorageNodeSet struct {
