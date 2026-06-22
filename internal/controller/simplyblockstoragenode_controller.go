@@ -962,11 +962,16 @@ func (r *StorageNodeReconciler) reconcileWorkerNodes(
 				}
 				continue
 			}
-			availableSlots--
 		}
 		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
 		if err != nil {
 			return ctrl.Result{}, err
+		}
+		// Only count the slot if the POST was genuinely sent (PendingNodeAdds
+		// was set). A transient failure (e.g. checkNodeInfoReachable) clears
+		// PendingNodeAdds immediately, so the slot should not be consumed.
+		if !alreadyInFlight && workerIsInFlight(snCR, nodeName) {
+			availableSlots--
 		}
 		if res.RequeueAfter > parallelRequeueAfter {
 			parallelRequeueAfter = res.RequeueAfter
@@ -978,7 +983,10 @@ func (r *StorageNodeReconciler) reconcileWorkerNodes(
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if res.RequeueAfter > 0 {
+		// Only block subsequent FDB workers if this worker is genuinely
+		// in-flight (PendingNodeAdds set after a successful POST). A transient
+		// failure such as checkNodeInfoReachable must not starve later workers.
+		if res.RequeueAfter > 0 && workerIsInFlight(snCR, nodeName) {
 			return res, nil
 		}
 	}
