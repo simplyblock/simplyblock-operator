@@ -1,0 +1,1055 @@
+#!/usr/bin/env python3
+"""
+fio_migration_test.py — simplyblock live-migration I/O stress / correlation test.
+
+What it does
+------------
+1. Creates an XFS StorageClass cloned from the live pool StorageClass
+   (`simplyblock-default-simplyblock-cluster-pool1`, provisioner csi.simplyblock.io)
+   but with `csi.storage.k8s.io/fstype: xfs`.
+2. Provisions N (default 10) 10Gi PVCs from that StorageClass and N fio pods.
+   Each pod mounts the simplyblock volume (XFS) and runs fio for 10 minutes with:
+       ioengine=libaio, direct=1, iodepth=16, numjobs=4   (see
+       cmd/simplyblock-rebalancer/main.go::measure for the direct/libaio reference)
+   fio emits per-second IOPS / latency / bandwidth logs plus a final JSON summary.
+3. While the pods run, repeatedly picks a *random* pod and migrates its volume to a
+   *random storage node other than the one it currently lives on* by creating a
+   `VolumeMigration` CR — one migration at a time. The current storage node is
+   resolved authoritatively before each pick by running `sbctl volume list --json`
+   inside a webappapi pod (simplyblock namespace) and matching the PV's logical-volume
+   UUID; the sbctl Hostname (e.g. vm19_4424) is mapped to a storage-node UUID via the
+   `simplyblock-rebalancer-<nodeUUID>` benchmark volumes. Start and stop of every
+   migration are timestamped and logged for later correlation.
+4. Continuously monitors pod health. After the run it pulls every pod's fio logs and
+   correlates the per-second IOPS timeline against the migration windows.
+
+Failure criterion
+------------------
+Losing I/O is a TOTAL FAIL. Any of the following is treated as I/O loss and makes the
+script exit non-zero, with the offending interval logged explicitly:
+  * a per-second sample where total IOPS drops to 0 during the timed run,
+  * fio reporting a non-zero error count for any job,
+  * a fio pod leaving Running / restarting / failing before its planned completion.
+Each I/O-loss event is annotated with whether it overlaps a migration window.
+
+Requirements: python3, kubectl (current context pointed at the cluster), the
+simplyblock operator running in `default`. fio is installed into the pods at runtime
+(alpine `apk add fio`).
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import random
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+# ── configuration / constants ───────────────────────────────────────────────────
+
+NAMESPACE = "default"
+SIMPLYBLOCK_NAMESPACE = "simplyblock"  # where the webappapi pods run
+WEBAPPAPI_MATCH = "webappapi"          # substring used to find a webappapi pod
+SOURCE_STORAGECLASS = "simplyblock-default-simplyblock-cluster-pool1"
+XFS_STORAGECLASS = SOURCE_STORAGECLASS + "-xfs"
+STORAGENODE_CR = "simplyblock-node"  # StorageNode CR in `default`
+FIO_IMAGE = "alpine:3"
+
+# fio knobs (the direct=1 / libaio pair mirrors rebalancer measure())
+FIO_IOENGINE = "libaio"
+FIO_DIRECT = 1
+FIO_IODEPTH = 16
+FIO_NUMJOBS = 4
+FIO_BS = "4k"
+FIO_RWMIXREAD = 70  # randrw read percentage
+
+API_GROUP = "storage.simplyblock.io/v1alpha1"
+
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ── logging ──────────────────────────────────────────────────────────────────────
+
+class Logger:
+    def __init__(self, path: str):
+        self._lock = threading.Lock()
+        self._fh = open(path, "a", buffering=1)
+
+    def log(self, level: str, msg: str) -> None:
+        line = f"{iso(now_utc())} [{level:8}] {msg}"
+        with self._lock:
+            print(line, flush=True)
+            self._fh.write(line + "\n")
+
+    def info(self, m): self.log("INFO", m)
+    def warn(self, m): self.log("WARN", m)
+    def error(self, m): self.log("ERROR", m)
+    def crit(self, m): self.log("CRITICAL", m)
+    def event(self, m): self.log("EVENT", m)
+
+
+# ── kubectl plumbing ──────────────────────────────────────────────────────────────
+
+def kubectl(args: list[str], *, input_str: str | None = None, check: bool = True,
+            timeout: int = 120) -> subprocess.CompletedProcess:
+    cmd = ["kubectl", "-n", NAMESPACE] + args
+    return subprocess.run(
+        cmd, input=input_str, capture_output=True, text=True, check=check,
+        timeout=timeout,
+    )
+
+
+def kubectl_apply(manifest: str) -> None:
+    kubectl(["apply", "-f", "-"], input_str=manifest)
+
+
+def kubectl_json(args: list[str], check: bool = True) -> dict:
+    cp = kubectl(args + ["-o", "json"], check=check)
+    if cp.returncode != 0:
+        return {}
+    return json.loads(cp.stdout)
+
+
+# ── data structures ────────────────────────────────────────────────────────────────
+
+@dataclass
+class MigrationRecord:
+    name: str
+    pod: str
+    pvc: str
+    pv: str
+    target: str
+    source: str = ""
+    start: datetime = field(default_factory=now_utc)
+    end: datetime | None = None
+    phase: str = ""
+    error: str = ""
+    snaps: str = ""
+
+
+@dataclass
+class PodHealthEvent:
+    ts: datetime
+    pod: str
+    detail: str
+
+
+# ── the test runner ────────────────────────────────────────────────────────────────
+
+class FioMigrationTest:
+    def __init__(self, args, log: Logger, outdir: str):
+        self.a = args
+        self.log = log
+        self.outdir = outdir
+        self.run_id = f"fiomig-{int(time.time())}"
+        self.pods: list[str] = []
+        self.pvcs: list[str] = []
+        self.pv_of: dict[str, str] = {}        # pod -> pv name
+        self.pvc_of: dict[str, str] = {}       # pod -> pvc name
+        self.volume_uuid_of: dict[str, str] = {}  # pv -> simplyblock logical-volume UUID
+        self.placement: dict[str, str] = {}    # pv -> current storage node uuid
+        self.nodes: list[str] = []
+        self.node_host: dict[str, str] = {}    # node uuid -> k8s hostname (StorageNode CR)
+        self.sbctl_host_to_node: dict[str, str] = {}  # sbctl Hostname (vmNN_PORT) -> node uuid
+        self._webappapi_pod: str = ""
+        self.migrations: list[MigrationRecord] = []
+        self.health_events: list[PodHealthEvent] = []
+        self._stop_monitor = threading.Event()
+        self._monitor_thread: threading.Thread | None = None
+        self._fio_finished = threading.Event()
+
+    # ---- setup ------------------------------------------------------------------
+
+    def discover_nodes(self) -> None:
+        cr = kubectl_json(["get", "storagenode", STORAGENODE_CR])
+        nodes = cr.get("status", {}).get("nodes", [])
+        for n in nodes:
+            uuid = n.get("uuid")
+            if not uuid:
+                continue
+            healthy = n.get("health", False) and (n.get("status") == "online")
+            if healthy:
+                self.nodes.append(uuid)
+                self.node_host[uuid] = n.get("hostname", "?")
+        if len(self.nodes) < 2:
+            raise SystemExit(
+                f"need >=2 healthy storage nodes to migrate between, found {len(self.nodes)}"
+            )
+        self.log.info(f"healthy storage nodes ({len(self.nodes)}):")
+        for u in self.nodes:
+            self.log.info(f"    {u}  ({self.node_host[u]})")
+
+    def ensure_xfs_storageclass(self) -> None:
+        existing = kubectl_json(["get", "sc", XFS_STORAGECLASS], check=False)
+        if existing.get("metadata", {}).get("name") == XFS_STORAGECLASS:
+            self.log.info(f"xfs StorageClass {XFS_STORAGECLASS} already exists")
+            return
+        src = kubectl_json(["get", "sc", SOURCE_STORAGECLASS])
+        if not src:
+            raise SystemExit(f"source StorageClass {SOURCE_STORAGECLASS} not found")
+        params = dict(src.get("parameters", {}))
+        params["csi.storage.k8s.io/fstype"] = "xfs"
+        sc = {
+            "apiVersion": "storage.k8s.io/v1",
+            "kind": "StorageClass",
+            "metadata": {"name": XFS_STORAGECLASS,
+                         "labels": {"app.kubernetes.io/created-by": "fio-migration-test"}},
+            "provisioner": src.get("provisioner", "csi.simplyblock.io"),
+            "parameters": params,
+            "reclaimPolicy": src.get("reclaimPolicy", "Delete"),
+            "volumeBindingMode": src.get("volumeBindingMode", "WaitForFirstConsumer"),
+            "allowVolumeExpansion": src.get("allowVolumeExpansion", True),
+        }
+        kubectl_apply(json.dumps(sc))
+        self.log.info(f"created xfs StorageClass {XFS_STORAGECLASS} "
+                      f"(provisioner={sc['provisioner']}, fstype=xfs)")
+
+    def fio_command(self) -> str:
+        size = self.a.volume_size_gb
+        # leave headroom under the 10Gi xfs filesystem for the data file
+        file_size = f"{max(1, size - 2)}G"
+        runtime = self.a.runtime
+        # data file lives on the simplyblock XFS volume (/data); fio logs go to a
+        # separate emptyDir (/logs) so log collection never depends on volume health.
+        fio = " ".join([
+            "fio",
+            "--name=fiotest",
+            "--filename=/data/fiotest",
+            f"--size={file_size}",
+            f"--ioengine={FIO_IOENGINE}",
+            f"--direct={FIO_DIRECT}",
+            "--rw=randrw",
+            f"--rwmixread={FIO_RWMIXREAD}",
+            f"--bs={FIO_BS}",
+            f"--iodepth={FIO_IODEPTH}",
+            f"--numjobs={FIO_NUMJOBS}",
+            "--group_reporting",
+            "--time_based",
+            f"--runtime={runtime}",
+            "--continue_on_error=all",   # do not die on EIO: record errors instead
+            "--percentile_list=50:95:99:99.9",
+            "--write_iops_log=/logs/iops",
+            "--write_lat_log=/logs/lat",
+            "--write_bw_log=/logs/bw",
+            "--log_avg_msec=1000",       # one sample per second
+            "--output=/logs/result.json",
+            "--output-format=json",
+        ])
+        return (
+            "set -u\n"
+            'echo "[pod] $(date -u +%FT%TZ) installing fio"\n'
+            "apk add --no-cache fio >/dev/null 2>&1 || "
+            '{ echo "[pod] apk add fio FAILED"; exit 90; }\n'
+            "mkdir -p /logs\n"
+            'echo "[pod] $(date -u +%FT%TZ) starting fio"\n'
+            f"{fio}\n"
+            "rc=$?\n"
+            'echo "$rc" > /logs/fio.rc\n'
+            'echo "[pod] $(date -u +%FT%TZ) fio exited rc=$rc"\n'
+            # keep the container alive so logs can be collected via kubectl cp
+            "sleep 100000\n"
+        )
+
+    def worker_node_affinity(self) -> dict:
+        """nodeAffinity that pins fio pods to the simplyblock storage worker nodes
+        (vm17/vm18/vm19) and keeps them off control-plane nodes.
+
+        The worker hostnames come from the StorageNode CR (self.node_host); the
+        control-plane exclusion is belt-and-suspenders in case the hostname list is
+        incomplete.
+        """
+        workers = sorted({h for h in self.node_host.values() if h})
+        exprs = [{
+            "key": "node-role.kubernetes.io/control-plane",
+            "operator": "DoesNotExist",
+        }]
+        if workers:
+            exprs.insert(0, {
+                "key": "kubernetes.io/hostname",
+                "operator": "In",
+                "values": workers,
+            })
+            self.log.info(f"pods restricted to worker nodes: {', '.join(workers)}")
+        else:
+            self.log.warn("no worker hostnames known; only excluding control-plane nodes")
+        return {
+            "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": [{"matchExpressions": exprs}],
+                }
+            }
+        }
+
+    def create_workload(self) -> None:
+        affinity = self.worker_node_affinity()
+        script = self.fio_command()
+        docs = []
+        for i in range(self.a.pods):
+            pvc = f"{self.run_id}-pvc-{i}"
+            pod = f"{self.run_id}-fio-{i}"
+            self.pvcs.append(pvc)
+            self.pods.append(pod)
+            self.pvc_of[pod] = pvc
+            docs.append({
+                "apiVersion": "v1",
+                "kind": "PersistentVolumeClaim",
+                "metadata": {"name": pvc, "labels": {"test": self.run_id}},
+                "spec": {
+                    "accessModes": ["ReadWriteOnce"],
+                    "storageClassName": XFS_STORAGECLASS,
+                    "resources": {"requests": {"storage": f"{self.a.volume_size_gb}Gi"}},
+                },
+            })
+            docs.append({
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": pod, "labels": {"test": self.run_id, "app": "fio"}},
+                "spec": {
+                    "restartPolicy": "Never",
+                    "terminationGracePeriodSeconds": 5,
+                    # Schedule only on the simplyblock storage worker nodes
+                    # (vm17/vm18/vm19), never on control-plane nodes.
+                    "affinity": affinity,
+                    "containers": [{
+                        "name": "fio",
+                        "image": FIO_IMAGE,
+                        "imagePullPolicy": "IfNotPresent",
+                        "command": ["sh", "-c", script],
+                        "volumeMounts": [
+                            {"name": "data", "mountPath": "/data"},
+                            {"name": "logs", "mountPath": "/logs"},
+                        ],
+                        "resources": {"requests": {"cpu": "250m", "memory": "256Mi"}},
+                    }],
+                    "volumes": [
+                        {"name": "data", "persistentVolumeClaim": {"claimName": pvc}},
+                        {"name": "logs", "emptyDir": {}},
+                    ],
+                },
+            })
+        manifest = "\n---\n".join(json.dumps(d) for d in docs)
+        kubectl_apply(manifest)
+        self.log.info(f"created {self.a.pods} PVCs + fio pods (run id {self.run_id})")
+
+    # ---- readiness --------------------------------------------------------------
+
+    def wait_pods_running(self, timeout: int = 420) -> None:
+        self.log.info("waiting for all fio pods to reach Running ...")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            data = kubectl_json(["get", "pods", "-l", f"test={self.run_id}"])
+            phases = {}
+            for item in data.get("items", []):
+                phases[item["metadata"]["name"]] = item.get("status", {}).get("phase", "?")
+            running = [p for p, ph in phases.items() if ph == "Running"]
+            bad = [f"{p}={ph}" for p, ph in phases.items() if ph in ("Failed", "Unknown")]
+            if bad:
+                raise SystemExit(f"pod(s) failed during startup: {', '.join(bad)}")
+            if len(running) == len(self.pods) and running:
+                self.log.info(f"all {len(running)} pods Running")
+                return
+            time.sleep(5)
+        raise SystemExit("timed out waiting for pods to become Running")
+
+    def resolve_pvs(self) -> None:
+        for pod in self.pods:
+            pvc = self.pvc_of[pod]
+            data = kubectl_json(["get", "pvc", pvc])
+            pv = data.get("spec", {}).get("volumeName", "")
+            if not pv:
+                raise SystemExit(f"PVC {pvc} has no bound PV yet")
+            self.pv_of[pod] = pv
+            # CSI volume handle: "<clusterUUID>:<poolUUID>:<volumeUUID>"
+            pvdata = kubectl_json(["get", "pv", pv])
+            handle = pvdata.get("spec", {}).get("csi", {}).get("volumeHandle", "")
+            parts = handle.split(":")
+            if len(parts) != 3 or not parts[2]:
+                raise SystemExit(f"PV {pv} has unexpected CSI volume handle {handle!r}")
+            self.volume_uuid_of[pv] = parts[2]
+            self.placement[pv] = ""
+        self.log.info("resolved PVCs -> PVs -> volume UUIDs:")
+        for pod in self.pods:
+            pv = self.pv_of[pod]
+            self.log.info(f"    {pod}  {self.pvc_of[pod]}  ->  {pv}  "
+                          f"(lvol {self.volume_uuid_of[pv]})")
+
+    def wait_io_flowing(self, timeout: int = 300) -> None:
+        """Wait until every pod's fio iops log has samples (timed phase started)."""
+        self.log.info("waiting for fio I/O to start flowing in every pod ...")
+        deadline = time.time() + timeout
+        pending = set(self.pods)
+        while pending and time.time() < deadline:
+            for pod in list(pending):
+                cp = kubectl(
+                    ["exec", pod, "--", "sh", "-c",
+                     "cat /logs/iops*log 2>/dev/null | wc -l"],
+                    check=False, timeout=30,
+                )
+                if cp.returncode == 0 and cp.stdout.strip().isdigit():
+                    if int(cp.stdout.strip()) >= 2:
+                        pending.discard(pod)
+            if pending:
+                time.sleep(5)
+        if pending:
+            self.log.warn(f"I/O not confirmed flowing in: {', '.join(sorted(pending))} "
+                          "(continuing anyway)")
+        else:
+            self.log.info("fio I/O confirmed flowing in all pods")
+
+    # ---- health monitor ---------------------------------------------------------
+
+    def start_health_monitor(self) -> None:
+        self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._monitor_thread.start()
+
+    def stop_health_monitor(self) -> None:
+        self._stop_monitor.set()
+        if self._monitor_thread:
+            self._monitor_thread.join(timeout=10)
+
+    def _monitor_loop(self) -> None:
+        last_restart: dict[str, int] = {}
+        while not self._stop_monitor.is_set():
+            try:
+                data = kubectl_json(["get", "pods", "-l", f"test={self.run_id}"], check=False)
+                for item in data.get("items", []):
+                    name = item["metadata"]["name"]
+                    st = item.get("status", {})
+                    phase = st.get("phase", "?")
+                    restarts = 0
+                    terminated = None
+                    for cs in st.get("containerStatuses", []):
+                        restarts += cs.get("restartCount", 0)
+                        term = cs.get("state", {}).get("terminated")
+                        if term:
+                            terminated = term
+                    # fio is expected to keep the container Running (it sleeps after
+                    # fio exits). Anything else before fio finished = I/O loss signal.
+                    if not self._fio_finished.is_set():
+                        if phase not in ("Running", "Pending"):
+                            self._record_health(name,
+                                f"pod phase={phase} BEFORE fio completion "
+                                f"(terminated={terminated})")
+                        if restarts > last_restart.get(name, 0):
+                            self._record_health(name,
+                                f"container restarted (count={restarts}) BEFORE fio completion")
+                    last_restart[name] = restarts
+            except Exception as e:  # noqa: BLE001 — monitor must never crash the test
+                self.log.warn(f"health monitor poll error: {e}")
+            self._stop_monitor.wait(self.a.health_poll)
+
+    def _record_health(self, pod: str, detail: str) -> None:
+        ev = PodHealthEvent(ts=now_utc(), pod=pod, detail=detail)
+        self.health_events.append(ev)
+        self.log.crit(f"POD HEALTH: {pod}: {detail}")
+
+    # ---- current-node resolution via sbctl --------------------------------------
+
+    def webappapi_pod(self) -> str:
+        """Find (and cache) a running webappapi pod in the simplyblock namespace."""
+        if self._webappapi_pod:
+            return self._webappapi_pod
+        # webappapi runs in the simplyblock namespace, not the default ns our
+        # kubectl() helper targets — call kubectl directly here.
+        cp = subprocess.run(
+            ["kubectl", "-n", SIMPLYBLOCK_NAMESPACE, "get", "pods", "-o", "json"],
+            capture_output=True, text=True, check=True, timeout=60)
+        data = json.loads(cp.stdout)
+        for item in data.get("items", []):
+            name = item["metadata"]["name"]
+            if WEBAPPAPI_MATCH in name and item.get("status", {}).get("phase") == "Running":
+                self._webappapi_pod = name
+                self.log.info(f"using webappapi pod {name} for sbctl queries")
+                return name
+        raise SystemExit(f"no running '*{WEBAPPAPI_MATCH}*' pod found in "
+                         f"namespace {SIMPLYBLOCK_NAMESPACE}")
+
+    def sbctl_volume_list(self) -> list[dict]:
+        """Run `sbctl volume list --json` inside a webappapi pod and parse it."""
+        pod = self.webappapi_pod()
+        cp = subprocess.run(
+            ["kubectl", "-n", SIMPLYBLOCK_NAMESPACE, "exec", pod, "--",
+             "sbctl", "volume", "list", "--json"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if cp.returncode != 0:
+            raise RuntimeError(f"sbctl volume list failed: {cp.stderr.strip()}")
+        return json.loads(cp.stdout)
+
+    def build_sbctl_host_map(self, vols: list[dict]) -> None:
+        """Map each sbctl Hostname (e.g. 'vm19_4424') to a storage-node UUID.
+
+        Authoritative source: the rebalancer benchmark volumes are named
+        'simplyblock-rebalancer-<nodeUUID>' and live on that node, so their
+        Hostname field directly ties an sbctl hostname to a node UUID. Falls back
+        to matching the short hostname (vmNN) against the StorageNode CR hostnames.
+        """
+        m: dict[str, str] = {}
+        for v in vols:
+            name = v.get("Name", "")
+            host = v.get("Hostname", "")
+            if host and name.startswith("simplyblock-rebalancer-"):
+                uuid = name[len("simplyblock-rebalancer-"):]
+                if uuid in self.nodes:
+                    m[host] = uuid
+        # fallback: short hostname (vmNN) -> node uuid via StorageNode CR hostnames
+        if len(m) < len({v.get("Hostname", "") for v in vols if v.get("Hostname")}):
+            short_to_uuid = {h.split(".")[0]: u for u, h in self.node_host.items()}
+            for v in vols:
+                host = v.get("Hostname", "")
+                if host and host not in m:
+                    short = host.split("_")[0]
+                    if short in short_to_uuid:
+                        m[host] = short_to_uuid[short]
+        self.sbctl_host_to_node = m
+        self.log.info("sbctl hostname -> storage node map:")
+        for h, u in sorted(m.items()):
+            self.log.info(f"    {h}  ->  {u} ({self.node_host.get(u,'?')})")
+
+    def resolve_current_nodes(self) -> None:
+        """Authoritatively set placement[pv] = current storage node for every PV."""
+        vols = self.sbctl_volume_list()
+        if not self.sbctl_host_to_node:
+            self.build_sbctl_host_map(vols)
+        by_lvol = {v.get("LVolUUID"): v for v in vols}
+        for pod in self.pods:
+            pv = self.pv_of[pod]
+            lvol = self.volume_uuid_of.get(pv)
+            v = by_lvol.get(lvol)
+            if not v:
+                self.log.warn(f"{pv}: lvol {lvol} not found in sbctl volume list")
+                continue
+            host = v.get("Hostname", "")
+            node = self.sbctl_host_to_node.get(host, "")
+            if not node:
+                self.log.warn(f"{pv}: sbctl hostname {host!r} not mapped to a node")
+                continue
+            self.placement[pv] = node
+
+    # ---- migrations -------------------------------------------------------------
+
+    def pick_target(self, pv: str) -> str:
+        # placement[pv] is authoritative: seeded once from sbctl before the loop,
+        # then kept current because each completed migration's target becomes the
+        # new source. No per-migration sbctl call is needed.
+        current = self.placement.get(pv, "")
+        candidates = [n for n in self.nodes if n != current] if current else list(self.nodes)
+        return random.choice(candidates)
+
+    def migration_manifest(self, name: str, pv: str, target: str) -> str:
+        return json.dumps({
+            "apiVersion": API_GROUP,
+            "kind": "VolumeMigration",
+            "metadata": {"name": name, "labels": {"test": self.run_id}},
+            "spec": {"pvName": pv, "targetNodeUUID": target},
+        })
+
+    def run_one_migration(self, idx: int, hard_deadline: float) -> MigrationRecord | None:
+        pod = random.choice(self.pods)
+        pv = self.pv_of[pod]
+        pvc = self.pvc_of[pod]
+        target = self.pick_target(pv)  # also refreshes placement[pv] via sbctl
+        name = f"{self.run_id}-mig-{idx}"
+        rec = MigrationRecord(name=name, pod=pod, pvc=pvc, pv=pv, target=target)
+        rec.source = self.placement.get(pv, "")  # authoritative current node (sbctl)
+        self.migrations.append(rec)
+
+        kubectl_apply(self.migration_manifest(name, pv, target))
+        self.log.event(
+            f"MIGRATION START  {name}  pod={pod}  pv={pv}  "
+            f"source={rec.source or '?'} ({self.node_host.get(rec.source,'?')})  "
+            f"target={target} ({self.node_host.get(target,'?')})")
+
+        # Bound the wait so a migration started late doesn't block long past fio's
+        # end; hard_deadline already includes a grace window beyond the fio runtime.
+        deadline = min(time.time() + self.a.migration_timeout, hard_deadline)
+        terminal = {"Completed", "Failed", "Aborted"}
+        while time.time() < deadline:
+            cr = kubectl_json(["get", "volumemigration", name], check=False)
+            status = cr.get("status", {}) if cr else {}
+            phase = status.get("phase", "")
+            if status.get("sourceNodeUUID"):
+                rec.source = status["sourceNodeUUID"]
+                if not self.placement.get(pv):
+                    self.placement[pv] = rec.source  # learn current node
+            st, tt = status.get("snapsTotal"), status.get("snapsMigrated")
+            if st is not None:
+                rec.snaps = f"{tt or 0}/{st}"
+            if phase in terminal:
+                rec.phase = phase
+                rec.error = status.get("errorMessage", "")
+                rec.end = now_utc()
+                break
+            time.sleep(self.a.migration_poll)
+        else:
+            rec.phase = "TIMEOUT"
+            rec.end = now_utc()
+
+        dur = (rec.end - rec.start).total_seconds() if rec.end else -1
+        src_h = self.node_host.get(rec.source, "?")
+        tgt_h = self.node_host.get(rec.target, "?")
+        if rec.phase == "Completed":
+            self.placement[pv] = target
+            self.log.event(
+                f"MIGRATION STOP   {name}  phase=Completed  {rec.source}({src_h}) -> "
+                f"{target}({tgt_h})  snaps={rec.snaps}  duration={dur:.0f}s")
+        else:
+            # If we guessed a target equal to the (previously unknown) current node,
+            # CreateMigration is a no-op/error — learn placement and move on.
+            self.log.event(
+                f"MIGRATION STOP   {name}  phase={rec.phase}  target={target}({tgt_h})  "
+                f"source={rec.source or '?'}  duration={dur:.0f}s  error={rec.error!r}")
+            if rec.source and rec.source == target:
+                self.log.warn(f"{name}: target equalled current node (was unknown) — "
+                              "no-op, will pick a different node next time")
+        return rec
+
+    def migration_loop(self, stop_at: float) -> None:
+        # Keep launching migrations across almost the whole fio runtime. A migration
+        # may finish shortly after fio stops; its wait is bounded by hard_deadline.
+        hard_deadline = stop_at + self.a.migration_grace
+        idx = 0
+        while time.time() < stop_at - self.a.migration_gap:
+            idx += 1
+            try:
+                self.run_one_migration(idx, hard_deadline)
+            except subprocess.CalledProcessError as e:
+                self.log.error(f"migration {idx} kubectl error: {e.stderr or e}")
+            except Exception as e:  # noqa: BLE001
+                self.log.error(f"migration {idx} unexpected error: {e}")
+            # gap between migrations (one at a time)
+            sleep_for = min(self.a.migration_gap, max(0, stop_at - time.time()))
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+        self.log.info(f"migration loop done ({idx} migration(s) attempted); "
+                      "letting fio run out its remaining time")
+
+    # ---- log collection & analysis ----------------------------------------------
+
+    def collect_logs(self) -> None:
+        self.log.info("collecting fio logs from pods ...")
+        for pod in self.pods:
+            dest = os.path.join(self.outdir, pod)
+            os.makedirs(dest, exist_ok=True)
+            cp = subprocess.run(
+                ["kubectl", "-n", NAMESPACE, "cp", f"{pod}:/logs", dest],
+                capture_output=True, text=True, timeout=180,
+            )
+            if cp.returncode != 0:
+                self.log.warn(f"kubectl cp from {pod} failed: {cp.stderr.strip()}")
+            else:
+                self.log.info(f"    pulled logs for {pod} -> {dest}")
+
+    @staticmethod
+    def _read_fio_log(paths: list[str]) -> dict[int, dict[int, list[float]]]:
+        """Parse fio time-series logs into {second: {ddir: [values, ...]}}.
+
+        fio log line: `time_ms, value, ddir, bs, offset`  (ddir 0=read, 1=write).
+        Values are aggregated across the per-job files (one file per numjobs thread).
+        """
+        out: dict[int, dict[int, list[float]]] = {}
+        for path in paths:
+            try:
+                with open(path) as fh:
+                    for line in fh:
+                        parts = [p.strip() for p in line.split(",")]
+                        if len(parts) < 3:
+                            continue
+                        try:
+                            t = int(round(int(parts[0]) / 1000.0))
+                            val = float(parts[1])
+                            ddir = int(parts[2])
+                        except ValueError:
+                            continue
+                        out.setdefault(t, {}).setdefault(ddir, []).append(val)
+            except OSError:
+                continue
+        return out
+
+    def _parse_timeline(self, pod_dir: str) -> dict[int, dict]:
+        """Build a per-second timeline of IOPS and completion latency for one pod.
+
+        Returns {second: {read_iops, write_iops, total_iops,
+                          read_clat_us, write_clat_us, avg_clat_us}}.
+        IOPS are summed across jobs+directions; clat is averaged across jobs and
+        IOPS-weighted across read/write.
+        """
+        iops = self._read_fio_log(
+            glob.glob(os.path.join(pod_dir, "**", "iops_iops.*log"), recursive=True))
+        # clat (completion latency, ns) mirrors measure()'s clat percentiles
+        clat = self._read_fio_log(
+            glob.glob(os.path.join(pod_dir, "**", "lat_clat.*log"), recursive=True))
+
+        timeline: dict[int, dict] = {}
+        for t in sorted(set(iops) | set(clat)):
+            ri = sum(iops.get(t, {}).get(0, []))
+            wi = sum(iops.get(t, {}).get(1, []))
+            rc_vals = clat.get(t, {}).get(0, [])
+            wc_vals = clat.get(t, {}).get(1, [])
+            rc = (sum(rc_vals) / len(rc_vals) / 1000.0) if rc_vals else 0.0  # ns -> us
+            wc = (sum(wc_vals) / len(wc_vals) / 1000.0) if wc_vals else 0.0
+            total = ri + wi
+            avg = ((ri * rc + wi * wc) / total) if total else 0.0
+            timeline[t] = {
+                "read_iops": round(ri, 1),
+                "write_iops": round(wi, 1),
+                "total_iops": round(total, 1),
+                "read_clat_us": round(rc, 1),
+                "write_clat_us": round(wc, 1),
+                "avg_clat_us": round(avg, 1),
+            }
+        return timeline
+
+    def _parse_result_json(self, pod_dir: str) -> dict:
+        for path in glob.glob(os.path.join(pod_dir, "**", "result.json"), recursive=True):
+            try:
+                with open(path) as fh:
+                    return json.load(fh)
+            except (OSError, json.JSONDecodeError):
+                continue
+        return {}
+
+    @staticmethod
+    def _overlaps_migration(start_s: int, base: datetime,
+                            migs: list[MigrationRecord]) -> MigrationRecord | None:
+        ts = base.timestamp() + start_s
+        for m in migs:
+            if m.end is None:
+                continue
+            if m.start.timestamp() <= ts <= m.end.timestamp():
+                return m
+        return None
+
+    def analyze(self) -> bool:
+        """Returns True if I/O was continuous (PASS), False on any I/O loss (FAIL)."""
+        self.log.info("=" * 78)
+        self.log.info("ANALYSIS — correlating IOPS/latency with migration windows")
+        self.log.info("=" * 78)
+
+        io_lost = False
+        report: dict = {"run_id": self.run_id, "pods": {}, "migrations": [], "health_events": []}
+
+        completed_migs = [m for m in self.migrations if m.end is not None]
+
+        base = self._io_start_time
+
+        for pod in self.pods:
+            pod_dir = os.path.join(self.outdir, pod)
+            result = self._parse_result_json(pod_dir)
+            timeline = self._parse_timeline(pod_dir)
+
+            # --- emit the per-second IOPS + latency time series as CSV ---
+            csv_path = self._write_timeseries_csv(pod, pod_dir, timeline, base, completed_migs)
+
+            pod_report: dict = {"pv": self.pv_of.get(pod, ""), "jobs": [],
+                                "timeseries_csv": os.path.relpath(csv_path, self.outdir)}
+
+            # --- latency / IOPS summary from fio JSON ---
+            total_iops = 0.0
+            fio_errors = 0
+            for job in result.get("jobs", []):
+                rd, wr = job.get("read", {}), job.get("write", {})
+                err = job.get("error", 0)
+                fio_errors += err
+                total_iops += rd.get("iops", 0.0) + wr.get("iops", 0.0)
+
+                def clat_us(io):
+                    c = io.get("clat_ns", {})
+                    pct = c.get("percentile", {}) or {}
+                    return {
+                        "mean_us": round(c.get("mean", 0) / 1000.0, 1),
+                        "p50_us": round(pct.get("50.000000", 0) / 1000.0, 1),
+                        "p99_us": round(pct.get("99.000000", 0) / 1000.0, 1),
+                        "p99_9_us": round(pct.get("99.900000", 0) / 1000.0, 1),
+                    }
+
+                pod_report["jobs"].append({
+                    "name": job.get("jobname"),
+                    "error": err,
+                    "read": {"iops": round(rd.get("iops", 0), 1), **clat_us(rd)},
+                    "write": {"iops": round(wr.get("iops", 0), 1), **clat_us(wr)},
+                })
+
+            pod_report["total_iops"] = round(total_iops, 1)
+            pod_report["fio_error_count"] = fio_errors
+
+            # --- I/O continuity: any zero-IOPS second during the run? ---
+            stalls = []
+            if timeline:
+                tmax = max(timeline)
+                # ignore the very first/last second (ramp / teardown rounding)
+                for t in range(1, tmax):
+                    v = timeline.get(t, {}).get("total_iops", 0.0)
+                    if v <= self.a.stall_threshold:
+                        mig = self._overlaps_migration(t, base, completed_migs) if base else None
+                        stalls.append({"second": t, "iops": round(v, 1),
+                                       "migration": mig.name if mig else None})
+            pod_report["zero_iops_samples"] = stalls
+            pod_report["samples_total"] = len(timeline)
+            # full per-second timeline (also written to CSV); kept in JSON for tooling
+            pod_report["timeseries"] = [
+                {"second": t, **timeline[t]} for t in sorted(timeline)]
+
+            # --- verdicts ---
+            problems = []
+            if fio_errors > 0:
+                problems.append(f"fio reported {fio_errors} I/O error(s)")
+            if stalls:
+                during = [s for s in stalls if s["migration"]]
+                problems.append(
+                    f"{len(stalls)} zero-IOPS sample(s)"
+                    + (f", {len(during)} during a migration" if during else ""))
+            if not timeline:
+                problems.append("no per-second samples collected (could not verify continuity)")
+
+            if problems:
+                io_lost = io_lost or bool(fio_errors or stalls)
+                self.log.crit(f"POD {pod}: " + "; ".join(problems))
+                for s in stalls[:10]:
+                    tag = f"during {s['migration']}" if s["migration"] else "no migration active"
+                    self.log.crit(f"    I/O LOSS @ +{s['second']}s  iops={s['iops']}  ({tag})")
+            else:
+                self.log.info(
+                    f"POD {pod}: OK  total_iops={pod_report['total_iops']:.0f}  "
+                    f"samples={len(timeline)}  errors=0  no stalls")
+
+            report["pods"][pod] = pod_report
+
+        # health events (pod death / restart) are hard I/O-loss signals
+        for ev in self.health_events:
+            io_lost = True
+            mig = None
+            for m in completed_migs:
+                if m.end and m.start <= ev.ts <= m.end:
+                    mig = m.name
+            tag = f"during migration {mig}" if mig else "outside any migration window"
+            self.log.crit(f"HEALTH EVENT: {iso(ev.ts)} {ev.pod}: {ev.detail} ({tag})")
+            report["health_events"].append(
+                {"ts": iso(ev.ts), "pod": ev.pod, "detail": ev.detail, "migration": mig})
+
+        for m in completed_migs + [x for x in self.migrations if x.end is None]:
+            report["migrations"].append({
+                "name": m.name, "pod": m.pod, "pv": m.pv,
+                "source": m.source, "target": m.target,
+                "phase": m.phase, "snaps": m.snaps, "error": m.error,
+                "start": iso(m.start), "end": iso(m.end) if m.end else None,
+                "duration_s": round((m.end - m.start).total_seconds(), 0) if m.end else None,
+            })
+
+        report["result"] = "FAIL — I/O LOSS DETECTED" if io_lost else "PASS — I/O CONTINUOUS"
+        report_path = os.path.join(self.outdir, "report.json")
+        with open(report_path, "w") as fh:
+            json.dump(report, fh, indent=2)
+        self.log.info(f"wrote machine-readable report -> {report_path}")
+
+        self._print_summary(report, io_lost)
+        return not io_lost
+
+    def _write_timeseries_csv(self, pod: str, pod_dir: str, timeline: dict[int, dict],
+                              base: "datetime | None",
+                              migs: list[MigrationRecord]) -> str:
+        """Write the per-second IOPS + latency time series for one pod to CSV.
+
+        Columns: second, wall_clock, total_iops, read_iops, write_iops,
+                 read_clat_us, write_clat_us, avg_clat_us, active_migration.
+        The active_migration column names the migration (if any) in flight that
+        second, enabling direct correlation of IOPS/latency with migrations.
+        """
+        path = os.path.join(pod_dir, "timeseries.csv")
+        header = ("second,wall_clock,total_iops,read_iops,write_iops,"
+                  "read_clat_us,write_clat_us,avg_clat_us,active_migration\n")
+        with open(path, "w") as fh:
+            fh.write(header)
+            for t in sorted(timeline):
+                row = timeline[t]
+                wall = iso(datetime.fromtimestamp(base.timestamp() + t, tz=timezone.utc)) \
+                    if base else ""
+                mig = self._overlaps_migration(t, base, migs) if base else None
+                fh.write(
+                    f"{t},{wall},{row['total_iops']},{row['read_iops']},{row['write_iops']},"
+                    f"{row['read_clat_us']},{row['write_clat_us']},{row['avg_clat_us']},"
+                    f"{mig.name if mig else ''}\n")
+        return path
+
+    def _print_summary(self, report: dict, io_lost: bool) -> None:
+        line = "=" * 78
+        self.log.info(line)
+        self.log.info("SUMMARY")
+        self.log.info(line)
+        self.log.info(f"run id            : {self.run_id}")
+        self.log.info(f"pods              : {len(self.pods)}")
+        self.log.info(f"migrations        : {len([m for m in self.migrations if m.end])} "
+                      f"completed-window / {len(self.migrations)} attempted")
+        completed = len([m for m in self.migrations if m.phase == 'Completed'])
+        self.log.info(f"  of which phase=Completed: {completed}")
+        self.log.info(f"health events     : {len(self.health_events)}")
+        self.log.info("")
+        self.log.info("per-pod IOPS / latency (clat):")
+        for pod, pr in report["pods"].items():
+            rd = pr["jobs"][0]["read"] if pr["jobs"] else {}
+            wr = pr["jobs"][0]["write"] if pr["jobs"] else {}
+            self.log.info(
+                f"  {pod}: total_iops={pr.get('total_iops',0):>9.0f} "
+                f"errors={pr.get('fio_error_count',0)} "
+                f"stalls={len(pr.get('zero_iops_samples',[]))} | "
+                f"read p99={rd.get('p99_us','-')}us write p99={wr.get('p99_us','-')}us")
+        self.log.info("")
+        self.log.info("per-second IOPS + latency time series (1s granularity):")
+        for pod, pr in report["pods"].items():
+            self.log.info(f"  {pod}: {pr.get('samples_total',0)} samples -> "
+                          f"{pr.get('timeseries_csv','?')}")
+        self.log.info("")
+        self.log.info(f"artifacts         : {self.outdir}")
+        self.log.info("  report.json           full machine-readable report (+ embedded timeseries)")
+        self.log.info("  <pod>/timeseries.csv  per-second IOPS & clat latency, with active migration")
+        self.log.info("  <pod>/result.json     fio final JSON summary")
+        self.log.info("  test.log              full event log (migration start/stop, I/O-loss events)")
+        self.log.info(line)
+        if io_lost:
+            self.log.crit("RESULT: FAIL — I/O LOSS DETECTED (see CRITICAL lines above)")
+        else:
+            self.log.info("RESULT: PASS — I/O remained continuous across all migrations")
+        self.log.info(line)
+
+    # ---- cleanup ----------------------------------------------------------------
+
+    def cleanup(self) -> None:
+        if self.a.keep:
+            self.log.info(f"--keep set; leaving resources (label test={self.run_id})")
+            return
+        self.log.info("cleaning up pods, PVCs and migration CRs ...")
+        kubectl(["delete", "volumemigration", "-l", f"test={self.run_id}",
+                 "--ignore-not-found", "--wait=false"], check=False)
+        kubectl(["delete", "pod", "-l", f"test={self.run_id}",
+                 "--ignore-not-found", "--grace-period=5"], check=False, timeout=180)
+        kubectl(["delete", "pvc", "-l", f"test={self.run_id}",
+                 "--ignore-not-found"], check=False, timeout=180)
+        self.log.info("cleanup done (xfs StorageClass kept for reuse)")
+
+    # ---- orchestration ----------------------------------------------------------
+
+    _io_start_time: datetime | None = None
+
+    def run(self) -> int:
+        self.log.info(f"=== fio migration test  run_id={self.run_id} ===")
+        self.log.info(f"pods={self.a.pods} volume={self.a.volume_size_gb}Gi xfs "
+                      f"runtime={self.a.runtime}s "
+                      f"fio(direct={FIO_DIRECT},ioengine={FIO_IOENGINE},"
+                      f"iodepth={FIO_IODEPTH},numjobs={FIO_NUMJOBS})")
+        try:
+            self.discover_nodes()
+            self.ensure_xfs_storageclass()
+            self.create_workload()
+            self.wait_pods_running()
+            self.resolve_pvs()
+            # build the sbctl hostname->node map and log each volume's current node
+            self.resolve_current_nodes()
+            self.log.info("initial volume placement (authoritative, via sbctl):")
+            for pod in self.pods:
+                pv = self.pv_of[pod]
+                node = self.placement.get(pv, "")
+                self.log.info(f"    {pod}  {pv}  on  {node or '?'} "
+                              f"({self.node_host.get(node, '?')})")
+            self.wait_io_flowing()
+            self._io_start_time = now_utc()
+
+            self.start_health_monitor()
+            # fio started roughly when I/O began flowing; stop migrating with enough
+            # slack for the last migration to finish before fio exits.
+            stop_at = self._io_start_time.timestamp() + self.a.runtime
+            self.log.info("entering migration loop ...")
+            self.migration_loop(stop_at)
+
+            # wait out fio's remaining runtime
+            remaining = stop_at - time.time()
+            if remaining > 0:
+                self.log.info(f"waiting {remaining:.0f}s for fio to finish ...")
+                time.sleep(remaining + 15)
+            self.wait_fio_exit()
+        finally:
+            self._fio_finished.set()
+            self.stop_health_monitor()
+
+        ok = False
+        try:
+            self.collect_logs()
+            ok = self.analyze()
+        finally:
+            self.cleanup()
+        return 0 if ok else 1
+
+    def wait_fio_exit(self, timeout: int = 180) -> None:
+        self.log.info("waiting for fio to exit in all pods ...")
+        deadline = time.time() + timeout
+        pending = set(self.pods)
+        while pending and time.time() < deadline:
+            for pod in list(pending):
+                cp = kubectl(["exec", pod, "--", "sh", "-c", "cat /logs/fio.rc 2>/dev/null"],
+                             check=False, timeout=30)
+                if cp.returncode == 0 and cp.stdout.strip() != "":
+                    rc = cp.stdout.strip()
+                    if rc != "0":
+                        self.log.warn(f"{pod}: fio exited with rc={rc}")
+                    pending.discard(pod)
+            if pending:
+                time.sleep(5)
+        self._fio_finished.set()
+        if pending:
+            self.log.warn(f"fio exit not confirmed for: {', '.join(sorted(pending))}")
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--pods", type=int, default=10, help="number of fio pods (default 10)")
+    p.add_argument("--volume-size-gb", type=int, default=10, help="volume size in GiB (default 10)")
+    p.add_argument("--runtime", type=int, default=600, help="fio runtime seconds (default 600 = 10min)")
+    p.add_argument("--migration-gap", type=int, default=15,
+                   help="seconds to wait between migrations (default 15)")
+    p.add_argument("--migration-timeout", type=int, default=420,
+                   help="max seconds to wait for one migration (default 420)")
+    p.add_argument("--migration-grace", type=int, default=120,
+                   help="extra seconds past fio runtime to let a late migration finish (default 120)")
+    p.add_argument("--migration-poll", type=int, default=5,
+                   help="migration status poll interval seconds (default 5)")
+    p.add_argument("--health-poll", type=int, default=3,
+                   help="pod health poll interval seconds (default 3)")
+    p.add_argument("--stall-threshold", type=float, default=0.0,
+                   help="IOPS at/below this in a 1s sample counts as I/O loss (default 0)")
+    p.add_argument("--keep", action="store_true",
+                   help="do not delete pods/PVCs/migrations after the run")
+    p.add_argument("--outdir", default=None, help="artifact directory (default ./fio-mig-<ts>)")
+    return p.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    outdir = args.outdir or os.path.abspath(f"fio-mig-{int(time.time())}")
+    os.makedirs(outdir, exist_ok=True)
+    log = Logger(os.path.join(outdir, "test.log"))
+    test = FioMigrationTest(args, log, outdir)
+    try:
+        return test.run()
+    except SystemExit as e:
+        log.error(f"aborting: {e}")
+        return 2
+    except KeyboardInterrupt:
+        log.warn("interrupted — attempting cleanup")
+        test.cleanup()
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())
