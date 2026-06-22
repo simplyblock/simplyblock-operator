@@ -243,7 +243,7 @@ func (r *VolumeMigrationReconciler) pollValidationJob(
 	log.Info("Validation job succeeded; calling ContinueMigration",
 		"migration", vm.Status.MigrationID)
 
-	if _, err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID); err != nil {
+	if err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID); err != nil {
 		_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID)
 		return r.setFailed(ctx, vm, fmt.Sprintf("ContinueMigration: %v", err))
 	}

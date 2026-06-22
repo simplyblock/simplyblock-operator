@@ -263,20 +263,16 @@ func (c *Client) GetMigration(
 func (c *Client) ContinueMigration(
 	ctx context.Context,
 	clusterUUID, poolUUID, volumeUUID, migrationID string,
-) (*MigrationDTO, error) {
+) error {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/migrations/%s/continue", clusterUUID, poolUUID, volumeUUID, migrationID)
 	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, ContinueMigrationParams{})
 	if err != nil {
-		return nil, fmt.Errorf("continue migration %s: %w", migrationID, err)
+		return fmt.Errorf("continue migration %s: %w", migrationID, err)
 	}
 	if statusCode >= 300 {
-		return nil, fmt.Errorf("continue migration %s: status %d: %s", migrationID, statusCode, string(body))
+		return fmt.Errorf("continue migration %s: status %d: %s", migrationID, statusCode, string(body))
 	}
-	var m MigrationDTO
-	if err := json.Unmarshal(body, &m); err != nil {
-		return nil, fmt.Errorf("unmarshal continue migration response: %w", err)
-	}
-	return &m, nil
+	return nil
 }
 
 // CancelMigration cancels an in-progress migration by its ID.
