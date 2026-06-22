@@ -204,9 +204,13 @@ class FioMigrationTest:
         cluster from `sbctl cluster list` — never copied blindly from the source SC,
         which may still carry a dead cluster id after a reinstall.
         """
-        src = kubectl_json(["get", "sc", SOURCE_STORAGECLASS])
+        src = kubectl_json(["get", "sc", SOURCE_STORAGECLASS], check=False)
         if not src:
-            raise SystemExit(f"source StorageClass {SOURCE_STORAGECLASS} not found")
+            raise SystemExit(
+                f"source StorageClass {SOURCE_STORAGECLASS} not found — the operator has "
+                "not created it yet. This usually means the Pool is not Active (e.g. its "
+                "create is stuck retrying on the backend), so no StorageClass was provisioned. "
+                "Check: kubectl -n default get pool pool1 -o jsonpath='{.status}'")
 
         cluster_uuid = self.sbctl_cluster_uuid()
         params = dict(src.get("parameters", {}))
