@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -702,6 +703,16 @@ func (r *StorageNodeReconciler) reconcileEndpointSlice(
 		nodeIPs[nodeName] = ip
 	}
 
+	return r.applyStorageNodeEndpointSlice(ctx, snCR, nodeIPs)
+}
+
+// applyStorageNodeEndpointSlice creates or updates the storage-node-api
+// EndpointSlice with the supplied nodeIPs map.
+func (r *StorageNodeReconciler) applyStorageNodeEndpointSlice(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+	nodeIPs map[string]string,
+) error {
 	eps := utils.BuildStorageNodeEndpointSlice(snCR, nodeIPs)
 	if err := controllerutil.SetControllerReference(snCR, eps, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set EndpointSlice owner reference: %w", err)
@@ -1662,6 +1673,13 @@ func (r *StorageNodeReconciler) performNodeAction(
 				return fmt.Errorf("failed to label worker node %s: %w", snCR.Spec.WorkerNode, err)
 			}
 
+			// The action reconcile path skips reconcileEndpointSlice, so the
+			// headless-service DNS entry for the target worker would be missing.
+			// Ensure the EndpointSlice is updated before any reachability check.
+			if err := r.ensureWorkerInEndpointSlice(ctx, snCR, snCR.Spec.WorkerNode); err != nil {
+				return fmt.Errorf("failed to ensure endpoint for worker %s: %w", snCR.Spec.WorkerNode, err)
+			}
+
 			if err := waitForNodeInfoReachable(ctx, snCR.Spec.WorkerNode, snCR.Namespace, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
 				log.Error(err, "node never became reachable")
 				return err
@@ -1748,6 +1766,39 @@ func nodeActionForce(snCR *simplyblockv1alpha1.StorageNode, defaultValue bool) b
 		return defaultValue
 	}
 	return *snCR.Spec.Force
+}
+
+// ensureWorkerInEndpointSlice adds the target worker to the storage-node-api
+// EndpointSlice when it is absent. spec.workerNode holds the migration target
+// but is never part of spec.workerNodes, so reconcileEndpointSlice would never
+// add a DNS hostname entry for it, causing headless-service lookups to fail.
+func (r *StorageNodeReconciler) ensureWorkerInEndpointSlice(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+	workerNode string,
+) error {
+	if slices.Contains(snCR.Spec.WorkerNodes, workerNode) {
+		return nil // already covered by the regular EndpointSlice reconciliation
+	}
+
+	ip, err := getNodeInternalIP(ctx, r.Client, workerNode)
+	if err != nil {
+		return fmt.Errorf("failed to get IP for worker %s: %w", workerNode, err)
+	}
+
+	log := logf.FromContext(ctx)
+	nodeIPs := make(map[string]string, len(snCR.Spec.WorkerNodes)+1)
+	for _, nodeName := range snCR.Spec.WorkerNodes {
+		nodeIP, err := getNodeInternalIP(ctx, r.Client, nodeName)
+		if err != nil {
+			log.Error(err, "failed to get internal IP for EndpointSlice, skipping node", "node", nodeName)
+			continue
+		}
+		nodeIPs[nodeName] = nodeIP
+	}
+	nodeIPs[workerNode] = ip
+
+	return r.applyStorageNodeEndpointSlice(ctx, snCR, nodeIPs)
 }
 
 func (r *StorageNodeReconciler) waitForActionCompletion(
