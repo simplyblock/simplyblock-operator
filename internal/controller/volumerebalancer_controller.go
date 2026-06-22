@@ -7,7 +7,10 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -24,7 +27,17 @@ import (
 const (
 	// Defaults applied when the spec field is nil.
 	defaultEvaluationInterval = 60 * time.Second
+
+	// rebalancerLabel marks VolumeMigration CRs created by the auto-rebalancer.
+	rebalancerLabel = "storage.simplyblock.io/rebalancer"
+	// rebalancerClusterLabel records the owning StorageCluster name.
+	rebalancerClusterLabel = "storage.simplyblock.io/cluster"
 )
+
+// rebalanceMigrationName is the deterministic VolumeMigration CR name for a volume.
+func rebalanceMigrationName(volumeUUID string) string {
+	return "rebalance-" + volumeUUID
+}
 
 // VolumeRebalancerReconciler monitors latency deviation across storage nodes and
 // migrates volumes from degraded to healthy nodes.
@@ -52,6 +65,8 @@ func (r *VolumeRebalancerReconciler) init() {
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations/status,verbs=get
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
@@ -162,10 +177,11 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
 }
 
-// executeMigrations submits each MigrationCandidate to the storage API, records
-// cool-down and pending state, and returns the number of migrations initiated.
-// Source and target are already resolved by the Rebalancer; this function only
-// owns API submission and event emission.
+// executeMigrations creates a VolumeMigration CR for each MigrationCandidate and
+// records cool-down and pending state, returning the number of migrations initiated.
+// Source and target are already resolved by the Rebalancer. The VolumeMigration
+// controller owns the backend protocol (CreateMigration → validate NVMe paths →
+// ContinueMigration → poll); this function only creates the CR and tracks it.
 func (r *VolumeRebalancerReconciler) executeMigrations(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
@@ -174,6 +190,12 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 	cycleDeadline time.Time,
 ) int {
 	log := logf.FromContext(ctx)
+	ownerRefs := []metav1.OwnerReference{{
+		APIVersion: simplyblockv1alpha1.GroupVersion.String(),
+		Kind:       "StorageCluster",
+		Name:       clusterCR.Name,
+		UID:        clusterCR.UID,
+	}}
 	migratedCount := 0
 	for _, mc := range toMigrate {
 		if time.Now().After(cycleDeadline) {
@@ -182,25 +204,39 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 				len(toMigrate)-migratedCount)
 			break
 		}
-		migration, err := r.apiClient.CreateMigration(ctx, mc.ClusterUUID, mc.Volume.PoolUUID, mc.Volume.UUID, mc.TargetNodeUUID)
-		if err != nil {
-			log.Error(err, "CreateMigration failed", "volume", mc.Volume.UUID, "target", mc.TargetNodeUUID)
+		name := rebalanceMigrationName(mc.Volume.UUID)
+		labels := map[string]string{
+			rebalancerLabel:        "true",
+			rebalancerClusterLabel: clusterCR.Name,
+		}
+		err := volumemigration.StartMigration(ctx, r.Client, mc.Volume.UUID, mc.TargetNodeUUID,
+			name, clusterCR.Namespace, ownerRefs, labels)
+		switch {
+		case apierrors.IsAlreadyExists(err):
+			// A VolumeMigration for this volume already exists (in flight, or a
+			// leftover not yet reaped). Track it and move on rather than duplicating.
+			log.Info("VolumeMigration CR already exists; tracking existing", "name", name, "volume", mc.Volume.UUID)
+		case err != nil:
+			log.Error(err, "Failed to create VolumeMigration CR", "volume", mc.Volume.UUID, "target", mc.TargetNodeUUID)
 			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingFailed",
-				"Migration of volume %s to node %s failed: %v", mc.Volume.UUID, mc.TargetNodeUUID, err)
+				"Creating VolumeMigration for volume %s to node %s failed: %v", mc.Volume.UUID, mc.TargetNodeUUID, err)
 			continue
 		}
-		r.migrationState.PushMigration(mc.ClusterUUID, mc.Volume.PoolUUID, mc.Volume.UUID, migration.ID, coolDownSecs)
+		r.migrationState.PushMigration(mc.ClusterUUID, mc.Volume.PoolUUID, mc.Volume.UUID, name, clusterCR.Namespace, coolDownSecs)
 		r.Recorder.Eventf(clusterCR, corev1.EventTypeNormal, "VolumeRebalancingStarted",
-			"Initiating migration of volume %s from node %s to %s",
-			mc.Volume.UUID, mc.SourceNodeUUID, mc.TargetNodeUUID)
+			"Created VolumeMigration %s for volume %s from node %s to %s",
+			name, mc.Volume.UUID, mc.SourceNodeUUID, mc.TargetNodeUUID)
 		rebalancerMigrationsTotal.WithLabelValues(clusterCR.Name, mc.SourceNodeUUID, mc.TargetNodeUUID).Inc()
 		migratedCount++
 	}
 	return migratedCount
 }
 
-// processPendingMigrations polls the migration API for all in-progress migrations
-// belonging to the given cluster and removes entries once they complete.
+// processPendingMigrations inspects the VolumeMigration CR backing each in-progress
+// migration for the cluster and removes the pending entry once the CR reaches a
+// terminal phase. The VolumeMigration controller drives the actual backend protocol
+// (validate paths + ContinueMigration + poll); this only tracks completion and
+// reaps the finished CR.
 func (r *VolumeRebalancerReconciler) processPendingMigrations(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
@@ -215,43 +251,52 @@ func (r *VolumeRebalancerReconciler) processPendingMigrations(
 		if !ok {
 			continue
 		}
-
-		migrationID := pm.MigrationID
-		migStart := pm.MigrationStart
-		stuckWarned := pm.StuckWarned
 		volumeUUID := pm.VolumeUUID
 
-		result, err := volumemigration.PollMigration(ctx, r.apiClient, clusterUUID, pm.PoolUUID, pm.VolumeUUID, migrationID, migStart)
+		vm := &simplyblockv1alpha1.VolumeMigration{}
+		err := r.Get(ctx, types.NamespacedName{Name: pm.CRName, Namespace: pm.CRNamespace}, vm)
+		if apierrors.IsNotFound(err) {
+			// CR was deleted out from under us (manual cleanup / GC). Stop tracking.
+			log.Info("VolumeMigration CR gone; clearing pending", "name", pm.CRName, "volume", volumeUUID)
+			r.migrationState.DeletePendingMigration(clusterUUID, volumeUUID)
+			continue
+		}
 		if err != nil {
-			log.Error(err, "Cannot get migration status", "migration", migrationID, "volume", volumeUUID)
+			log.Error(err, "Cannot get VolumeMigration CR", "name", pm.CRName, "volume", volumeUUID)
 			continue
 		}
 
-		if result.Stuck && !stuckWarned {
-			log.Error(nil, "Volume migration has not completed within 30 minutes",
-				"volume", volumeUUID, "migration", migrationID)
-			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingStuck",
-				"Migration %s of volume %s has not completed after 30 minutes (phase: %s, status: %s)",
-				migrationID, volumeUUID, result.Migration.Phase, result.Migration.Status)
-
-			r.migrationState.MarkMigrationStuck(clusterUUID, volumeUUID)
-		}
-
-		if !result.Done {
+		phase := vm.Status.Phase
+		terminal := phase == simplyblockv1alpha1.VolumeMigrationPhaseCompleted ||
+			phase == simplyblockv1alpha1.VolumeMigrationPhaseFailed ||
+			phase == simplyblockv1alpha1.VolumeMigrationPhaseAborted
+		if !terminal {
+			if time.Since(pm.MigrationStart) > volumemigration.MigrationStuckWarningTimeout && !pm.StuckWarned {
+				log.Error(nil, "Volume migration has not completed within 30 minutes",
+					"volume", volumeUUID, "migration", pm.CRName, "phase", phase)
+				r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingStuck",
+					"Migration %s of volume %s has not completed after 30 minutes (phase: %s)",
+					pm.CRName, volumeUUID, phase)
+				r.migrationState.MarkMigrationStuck(clusterUUID, volumeUUID)
+			}
 			continue
 		}
 
+		// Terminal: record outcome, reap the CR, stop tracking.
 		r.migrationState.DeletePendingMigration(clusterUUID, volumeUUID)
-		if result.Succeeded {
-			log.Info("Volume migration complete", "volume", volumeUUID, "migration", migrationID)
+		if phase == simplyblockv1alpha1.VolumeMigrationPhaseCompleted {
+			log.Info("Volume migration complete", "volume", volumeUUID, "migration", pm.CRName)
 			r.Recorder.Eventf(clusterCR, corev1.EventTypeNormal, "VolumeRebalancingComplete",
-				"Migration %s of volume %s completed successfully", migrationID, volumeUUID)
+				"Migration %s of volume %s completed successfully", pm.CRName, volumeUUID)
 		} else {
-			log.Error(nil, "Volume migration completed with error",
-				"volume", volumeUUID, "migration", migrationID, "error", result.Migration.ErrorMessage)
+			log.Error(nil, "Volume migration ended without success",
+				"volume", volumeUUID, "migration", pm.CRName, "phase", phase, "error", vm.Status.ErrorMessage)
 			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingFailed",
-				"Migration %s of volume %s completed with error: %s",
-				migrationID, volumeUUID, result.Migration.ErrorMessage)
+				"Migration %s of volume %s ended in phase %s: %s",
+				pm.CRName, volumeUUID, phase, vm.Status.ErrorMessage)
+		}
+		if err := r.Delete(ctx, vm); err != nil && !apierrors.IsNotFound(err) {
+			log.Error(err, "Failed to delete completed VolumeMigration CR", "name", pm.CRName)
 		}
 	}
 }
@@ -299,6 +344,7 @@ func (r *VolumeRebalancerReconciler) SetupWithManager(
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageCluster{},
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Owns(&simplyblockv1alpha1.VolumeMigration{}).
 		Named("volumerebalancer").
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)

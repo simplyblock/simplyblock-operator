@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -36,6 +37,7 @@ func StartMigration(
 	c client.Client,
 	volumeUUID, targetNodeUUID, name, namespace string,
 	ownerRefs []metav1.OwnerReference,
+	labels map[string]string,
 ) error {
 	pvName, err := findPVForVolume(ctx, c, volumeUUID)
 	if err != nil {
@@ -46,6 +48,7 @@ func StartMigration(
 			Name:            name,
 			Namespace:       namespace,
 			OwnerReferences: ownerRefs,
+			Labels:          labels,
 		},
 		Spec: simplyblockv1alpha1.VolumeMigrationSpec{
 			PVName:         pvName,
@@ -55,7 +58,11 @@ func StartMigration(
 	return c.Create(ctx, vm)
 }
 
-// findPVForVolume returns the PV name whose CSI volume handle equals volumeUUID.
+// findPVForVolume returns the PV name backing the given simplyblock logical-volume
+// UUID. simplyblock CSI volume handles have the form
+// "<clusterUUID>:<poolUUID>:<volumeUUID>", so the bare volume UUID is matched
+// against the final ":"-separated segment. An exact match against the whole
+// handle is also accepted for robustness.
 func findPVForVolume(
 	ctx context.Context,
 	c client.Client,
@@ -66,11 +73,18 @@ func findPVForVolume(
 		return "", fmt.Errorf("list PVs: %w", err)
 	}
 	for _, pv := range pvList.Items {
-		if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeHandle == volumeUUID {
+		if pv.Spec.CSI == nil {
+			continue
+		}
+		handle := pv.Spec.CSI.VolumeHandle
+		if handle == volumeUUID {
+			return pv.Name, nil
+		}
+		if idx := strings.LastIndex(handle, ":"); idx >= 0 && handle[idx+1:] == volumeUUID {
 			return pv.Name, nil
 		}
 	}
-	return "", fmt.Errorf("no PV found with CSI volume handle %q", volumeUUID)
+	return "", fmt.Errorf("no PV found backing logical volume %q", volumeUUID)
 }
 
 // PollMigrationResult is returned by PollMigration.

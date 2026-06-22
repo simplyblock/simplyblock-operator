@@ -18,11 +18,16 @@ const (
 type pendingMigration struct {
 	State          pendingMigrationState
 	MigrationStart time.Time
-	MigrationID    string // ID returned by CreateMigration
-	ClusterUUID    string
-	PoolUUID       string
-	VolumeUUID     string
-	StuckWarned    bool
+	// CRName / CRNamespace identify the VolumeMigration CR that drives this
+	// migration. The CR controller owns the backend CreateMigration/
+	// ContinueMigration/poll lifecycle; the rebalancer tracks completion via the
+	// CR's status.phase.
+	CRName      string
+	CRNamespace string
+	ClusterUUID string
+	PoolUUID    string
+	VolumeUUID  string
+	StuckWarned bool
 }
 
 type MigrationState struct {
@@ -40,7 +45,7 @@ func NewMigrationState() *MigrationState {
 	}
 }
 
-func (ms *MigrationState) PushMigration(clusterUUID, poolUUID, volumeUUID, migrationId string, coolDownSecs int64) {
+func (ms *MigrationState) PushMigration(clusterUUID, poolUUID, volumeUUID, crName, crNamespace string, coolDownSecs int64) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
@@ -49,7 +54,8 @@ func (ms *MigrationState) PushMigration(clusterUUID, poolUUID, volumeUUID, migra
 	ms.pendingMigrations[key] = &pendingMigration{
 		State:          pendingStateWaitingForCompletion,
 		MigrationStart: time.Now(),
-		MigrationID:    migrationId,
+		CRName:         crName,
+		CRNamespace:    crNamespace,
 		ClusterUUID:    clusterUUID,
 		PoolUUID:       poolUUID,
 		VolumeUUID:     volumeUUID,
