@@ -123,7 +123,11 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	if clusterCR.Status.Status != utils.ClusterStatusActive {
-		log.Info("Cluster not yet active, deferring benchmark volume provisioning",
+		// Expected, transient condition during cluster startup: the latency controller
+		// reconciles on every StorageNode status write, so logging this at INFO floods
+		// the operator log with thousands of identical lines while the cluster activates.
+		// Keep it at debug verbosity.
+		log.V(1).Info("Cluster not yet active, deferring benchmark volume provisioning",
 			"clusterStatus", clusterCR.Status.Status)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
