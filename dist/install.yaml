@@ -2039,6 +2039,14 @@ spec:
                   POSTs — it is a separate map field so patches to Status.Nodes never
                   inadvertently delete it.
                 type: object
+              schedulingFailedWorkers:
+                additionalProperties:
+                  type: boolean
+                description: |-
+                  SchedulingFailedWorkers tracks worker hostnames whose SPDK pod experienced
+                  a FailedScheduling event during node add. Used to emit a recovery event
+                  when the node subsequently comes online.
+                type: object
             type: object
         required:
         - spec
@@ -2224,7 +2232,10 @@ rules:
   - events
   verbs:
   - create
+  - get
+  - list
   - patch
+  - watch
 - apiGroups:
   - ""
   resources:
