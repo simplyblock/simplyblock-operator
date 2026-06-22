@@ -171,6 +171,12 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	if changed {
 		if err := r.patchLatencyStatus(ctx, snode, latencyMetrics); err != nil {
+			if apierrors.IsConflict(err) {
+				// Stale snapshot — the StorageNode status was updated concurrently. The
+				// optimistic lock prevented clobbering existing baselines; requeue to
+				// recompute from fresh state.
+				return ctrl.Result{Requeue: true}, nil
+			}
 			log.Error(err, "Failed to patch StorageNode latency status")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
@@ -276,8 +282,14 @@ func (r *StorageNodeLatencyReconciler) reconcileBaselineJob(
 
 	if err == nil {
 		if r.jobSucceeded(job) {
+			// Do not delete the Job here — leave it for TTLSecondsAfterFinished to reap.
+			// Deleting inline turns a cache-lagged reconcile into a re-measurement: a stale
+			// reconcile (whose snapshot predates the persisted baseline) would see the Job
+			// gone, treat the node as unmeasured, and create a fresh benchmark Job. Leaving
+			// the succeeded Job in place means such a reconcile re-reads the same idempotent
+			// result instead. Once the baseline is persisted, the BaselineP99NS>0 guard
+			// short-circuits before this function is ever called again.
 			result, readErr := r.readJobResult(ctx, job)
-			_ = r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
 			if readErr != nil {
 				return nil, true, readErr
 			}
@@ -462,7 +474,10 @@ func (r *StorageNodeLatencyReconciler) patchLatencyStatus(
 ) error {
 	orig := snode.DeepCopy()
 	snode.Status.LatencyMetrics = latencyMetrics
-	return r.Status().Patch(ctx, snode, client.MergeFrom(orig))
+	// Optimistic lock: the LatencyMetrics array is replaced wholesale by this merge patch,
+	// so a stale snapshot would silently drop entries written by a concurrent reconcile.
+	// Pinning the resourceVersion turns that lost update into a Conflict the caller requeues on.
+	return r.Status().Patch(ctx, snode, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
 }
 
 func (r *StorageNodeLatencyReconciler) copyLatencyMetrics(
