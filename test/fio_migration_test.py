@@ -68,6 +68,11 @@ FIO_IODEPTH = 16
 FIO_NUMJOBS = 4
 FIO_BS = "4k"
 FIO_RWMIXREAD = 70  # randrw read percentage
+# fio buffers --write_*_log to memory and only writes them at job end, and with no TTY
+# its default --eta=auto prints nothing — so without this fio is silent in `kubectl logs`
+# for the whole run. --eta=always + --eta-newline forces a periodic status line to stdout
+# (every N seconds) without corrupting the --output JSON report.
+FIO_ETA_NEWLINE_SEC = 5
 
 API_GROUP = "storage.simplyblock.io/v1alpha1"
 
@@ -192,15 +197,30 @@ class FioMigrationTest:
             self.log.info(f"    {u}  ({self.node_host[u]})")
 
     def ensure_xfs_storageclass(self) -> None:
-        existing = kubectl_json(["get", "sc", XFS_STORAGECLASS], check=False)
-        if existing.get("metadata", {}).get("name") == XFS_STORAGECLASS:
-            self.log.info(f"xfs StorageClass {XFS_STORAGECLASS} already exists")
-            return
+        """(Re)create the XFS StorageClass from the live pool StorageClass.
+
+        The XFS SC is always deleted and recreated so a stale one left over from a
+        previous run can never be reused, and its `cluster_id` is forced to the live
+        cluster from `sbctl cluster list` — never copied blindly from the source SC,
+        which may still carry a dead cluster id after a reinstall.
+        """
         src = kubectl_json(["get", "sc", SOURCE_STORAGECLASS])
         if not src:
             raise SystemExit(f"source StorageClass {SOURCE_STORAGECLASS} not found")
+
+        cluster_uuid = self.sbctl_cluster_uuid()
         params = dict(src.get("parameters", {}))
+        stale = params.get("cluster_id")
+        if stale and stale != cluster_uuid:
+            self.log.warn(f"source SC {SOURCE_STORAGECLASS} carries stale cluster_id "
+                          f"{stale}; overriding with live cluster {cluster_uuid}")
+        params["cluster_id"] = cluster_uuid
         params["csi.storage.k8s.io/fstype"] = "xfs"
+
+        # Always recreate: delete any existing XFS SC first so the test never reuses a
+        # StorageClass that points at a previous (now-dead) cluster.
+        kubectl(["delete", "sc", XFS_STORAGECLASS, "--ignore-not-found"], check=False)
+
         sc = {
             "apiVersion": "storage.k8s.io/v1",
             "kind": "StorageClass",
@@ -213,8 +233,9 @@ class FioMigrationTest:
             "allowVolumeExpansion": src.get("allowVolumeExpansion", True),
         }
         kubectl_apply(json.dumps(sc))
-        self.log.info(f"created xfs StorageClass {XFS_STORAGECLASS} "
-                      f"(provisioner={sc['provisioner']}, fstype=xfs)")
+        self.log.info(f"(re)created xfs StorageClass {XFS_STORAGECLASS} "
+                      f"(provisioner={sc['provisioner']}, fstype=xfs, "
+                      f"cluster_id={cluster_uuid})")
 
     def fio_command(self) -> str:
         size = self.a.volume_size_gb
@@ -244,6 +265,10 @@ class FioMigrationTest:
             "--write_lat_log=/logs/lat",
             "--write_bw_log=/logs/bw",
             "--log_avg_msec=1000",       # one sample per second
+            # periodic live status to stdout (visible in `kubectl logs`) without
+            # corrupting the JSON report written to --output
+            "--eta=always",
+            f"--eta-newline={FIO_ETA_NEWLINE_SEC}",
             "--output=/logs/result.json",
             "--output-format=json",
         ])
@@ -385,23 +410,40 @@ class FioMigrationTest:
             self.log.info(f"    {pod}  {self.pvc_of[pod]}  ->  {pv}  "
                           f"(lvol {self.volume_uuid_of[pv]})")
 
+    # Sum read_bytes+write_bytes across all fio processes in the pod. fio only flushes
+    # its --write_*_log files at job end, so the per-second logs do not exist mid-run;
+    # the /proc io byte counters are the reliable live "is I/O happening" signal.
+    _FIO_BYTES_SH = (
+        "b=0\n"
+        "for p in $(pidof fio 2>/dev/null); do\n"
+        "  v=$(awk '/^read_bytes:|^write_bytes:/{s+=$2} END{print s+0}' "
+        "\"/proc/$p/io\" 2>/dev/null)\n"
+        "  b=$((b + ${v:-0}))\n"
+        "done\n"
+        "echo \"$b\"\n"
+    )
+
+    def _pod_fio_bytes(self, pod: str) -> int:
+        cp = kubectl(["exec", pod, "--", "sh", "-c", self._FIO_BYTES_SH],
+                     check=False, timeout=30)
+        out = cp.stdout.strip()
+        return int(out) if out.isdigit() else 0
+
     def wait_io_flowing(self, timeout: int = 300) -> None:
-        """Wait until every pod's fio iops log has samples (timed phase started)."""
+        """Wait until every pod's fio is actively transferring data.
+
+        Detected by watching each pod's fio /proc/<pid>/io read+write byte counters
+        increase — not via the iops log, which fio does not write until the run ends.
+        """
         self.log.info("waiting for fio I/O to start flowing in every pod ...")
         deadline = time.time() + timeout
+        baseline = {pod: self._pod_fio_bytes(pod) for pod in self.pods}
         pending = set(self.pods)
         while pending and time.time() < deadline:
+            time.sleep(5)
             for pod in list(pending):
-                cp = kubectl(
-                    ["exec", pod, "--", "sh", "-c",
-                     "cat /logs/iops*log 2>/dev/null | wc -l"],
-                    check=False, timeout=30,
-                )
-                if cp.returncode == 0 and cp.stdout.strip().isdigit():
-                    if int(cp.stdout.strip()) >= 2:
-                        pending.discard(pod)
-            if pending:
-                time.sleep(5)
+                if self._pod_fio_bytes(pod) > baseline.get(pod, 0):
+                    pending.discard(pod)
         if pending:
             self.log.warn(f"I/O not confirmed flowing in: {', '.join(sorted(pending))} "
                           "(continuing anyway)")
@@ -488,6 +530,38 @@ class FioMigrationTest:
             raise RuntimeError(f"sbctl volume list failed: {cp.stderr.strip()}")
         return json.loads(cp.stdout)
 
+    def sbctl_cluster_uuid(self) -> str:
+        """Return the live cluster UUID from `sbctl cluster list --json`.
+
+        This is the authoritative source after a reinstall: the StorageClass
+        `parameters.cluster_id` (and the source pool SC it is cloned from) can still
+        carry a dead cluster id from a previous installation, which would make every
+        provisioned volume target a cluster that no longer exists.
+        """
+        pod = self.webappapi_pod()
+        cp = subprocess.run(
+            ["kubectl", "-n", SIMPLYBLOCK_NAMESPACE, "exec", pod, "--",
+             "sbctl", "cluster", "list", "--json"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if cp.returncode != 0:
+            raise SystemExit(f"sbctl cluster list failed: {cp.stderr.strip()}")
+        clusters = json.loads(cp.stdout)
+        if not clusters:
+            raise SystemExit("sbctl cluster list returned no clusters")
+        active = [c for c in clusters if str(c.get("Status", "")).upper() == "ACTIVE"]
+        chosen = active or clusters
+        if len(chosen) != 1:
+            desc = ", ".join(
+                f"{c.get('Name')}={c.get('UUID')}({c.get('Status')})" for c in chosen)
+            raise SystemExit(
+                f"expected exactly one active cluster, found {len(chosen)}: {desc}")
+        uuid = chosen[0].get("UUID", "")
+        if not uuid:
+            raise SystemExit("active cluster has no UUID in sbctl output")
+        self.log.info(f"live cluster (sbctl): {chosen[0].get('Name')} = {uuid}")
+        return uuid
+
     def build_sbctl_host_map(self, vols: list[dict]) -> None:
         """Map each sbctl Hostname (e.g. 'vm19_4424') to a storage-node UUID.
 
@@ -523,11 +597,17 @@ class FioMigrationTest:
         vols = self.sbctl_volume_list()
         if not self.sbctl_host_to_node:
             self.build_sbctl_host_map(vols)
-        by_lvol = {v.get("LVolUUID"): v for v in vols}
+        # The CSI volume handle's volume field is sbctl's "Id" (not "LVolUUID"), so
+        # index by both to be robust.
+        by_vol = {}
+        for v in vols:
+            for key in (v.get("Id"), v.get("LVolUUID")):
+                if key:
+                    by_vol[key] = v
         for pod in self.pods:
             pv = self.pv_of[pod]
             lvol = self.volume_uuid_of.get(pv)
-            v = by_lvol.get(lvol)
+            v = by_vol.get(lvol)
             if not v:
                 self.log.warn(f"{pv}: lvol {lvol} not found in sbctl volume list")
                 continue
