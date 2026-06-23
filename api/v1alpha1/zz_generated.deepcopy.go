@@ -2050,6 +2050,11 @@ func (in *VolumeRebalancingSpec) DeepCopyInto(out *VolumeRebalancingSpec) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.MinHotColdDifferencePct != nil {
+		in, out := &in.MinHotColdDifferencePct, &out.MinHotColdDifferencePct
+		*out = new(int32)
+		**out = **in
+	}
 	if in.DefaultCoolDownSeconds != nil {
 		in, out := &in.DefaultCoolDownSeconds, &out.DefaultCoolDownSeconds
 		*out = new(int32)

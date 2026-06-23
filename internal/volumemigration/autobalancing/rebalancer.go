@@ -8,11 +8,14 @@ import (
 // MigrationCandidate is the concrete output of the rebalancing algorithm: a single
 // volume that should be migrated from SourceNodeUUID to TargetNodeUUID.
 type MigrationCandidate struct {
-	// ClusterUUID is the storage cluster that owns the volume.
+	// ClusterUUID is the storage cluster that owns the volume (the source cluster).
 	ClusterUUID string
 	// SourceNodeUUID is the hot node the volume currently resides on.
 	SourceNodeUUID string
-	// TargetNodeUUID is the coolest node in the cluster, chosen as the migration destination.
+	// TargetClusterUUID is the cluster that owns the target node. Equal to ClusterUUID
+	// today; carried separately so the type is ready for cross-cluster migration.
+	TargetClusterUUID string
+	// TargetNodeUUID is the chosen migration destination node.
 	TargetNodeUUID string
 	// Volume is the volume to migrate, including its pool association and IO metrics.
 	Volume VolumePlacement
@@ -21,8 +24,11 @@ type MigrationCandidate struct {
 type clusterWork struct {
 	// hotNodes is the ordered list of source node UUIDs (worst deviation first).
 	hotNodes []string
-	// targetBySource maps each source node UUID to its assigned migration target.
+	// targetBySource maps each source node UUID to its assigned migration target node.
 	targetBySource map[string]string
+	// targetClusterBySource maps each source node UUID to its target node's cluster
+	// (equal to the source cluster today; differs once cross-cluster is enabled).
+	targetClusterBySource map[string]string
 }
 
 // Rebalancer wires StorageNodeSelector and LogicalVolumeSelector together to
@@ -73,11 +79,15 @@ func (rb *Rebalancer) SelectMigrations(
 	for _, p := range nodePairs {
 		cw := byCluster[p.ClusterUUID]
 		if cw == nil {
-			cw = &clusterWork{targetBySource: make(map[string]string)}
+			cw = &clusterWork{
+				targetBySource:        make(map[string]string),
+				targetClusterBySource: make(map[string]string),
+			}
 			byCluster[p.ClusterUUID] = cw
 		}
 		cw.hotNodes = append(cw.hotNodes, p.SourceNodeUUID)
 		cw.targetBySource[p.SourceNodeUUID] = p.TargetNodeUUID
+		cw.targetClusterBySource[p.SourceNodeUUID] = p.TargetClusterUUID
 	}
 
 	// Step 3 — for each cluster, collect volumes and select the migration set.
@@ -114,12 +124,14 @@ func (rb *Rebalancer) SelectMigrations(
 		}
 
 		targetNodeUUID := cw.targetBySource[sourceNodeUUID]
+		targetClusterUUID := cw.targetClusterBySource[sourceNodeUUID]
 		for _, rc := range toMigrate {
 			candidates = append(candidates, MigrationCandidate{
-				ClusterUUID:    clusterUUID,
-				SourceNodeUUID: sourceNodeUUID,
-				TargetNodeUUID: targetNodeUUID,
-				Volume:         rc.Vol,
+				ClusterUUID:       clusterUUID,
+				SourceNodeUUID:    sourceNodeUUID,
+				TargetClusterUUID: targetClusterUUID,
+				TargetNodeUUID:    targetNodeUUID,
+				Volume:            rc.Vol,
 			})
 		}
 	}

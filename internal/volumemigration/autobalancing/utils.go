@@ -12,8 +12,13 @@ const (
 	pinnedVolumeAnnotation = "simplyblock.io/pinned-volume"
 
 	// Defaults applied when the spec field is nil.
-	defaultEvaluationInterval          = 60 * time.Second
-	defaultImbalanceThresholdPct       = 20
+	defaultEvaluationInterval    = 60 * time.Second
+	defaultImbalanceThresholdPct = 80
+	// defaultMinHotColdDifferencePct is the minimum latency-deviation gap (in
+	// percentage points) a target node must have below the hot source before a
+	// migration is worthwhile — prevents shuffling load between near-equally-loaded
+	// nodes.
+	defaultMinHotColdDifferencePct     = 20
 	defaultCoolDownSeconds             = 60
 	defaultMaxVolumeMigrationsPerCycle = 10
 
@@ -32,10 +37,13 @@ type RebalancingConfig struct {
 	EvalInterval       time.Duration
 	PrometheusURL      string
 	ImbalanceThreshold float64
-	IopsWeight         float64
-	ThroughputWeight   float64
-	MaxMigrations      int
-	CoolDownSecs       int64
+	// MinHotColdDifferencePct is the minimum deviation gap (percentage points) the
+	// target must be below the source for a migration to be selected.
+	MinHotColdDifferencePct float64
+	IopsWeight              float64
+	ThroughputWeight        float64
+	MaxMigrations           int
+	CoolDownSecs            int64
 }
 
 // ResolveRebalancingConfig applies defaults and validates the spec. It returns an error
@@ -44,12 +52,13 @@ func ResolveRebalancingConfig(
 	spec *simplyblockv1alpha1.VolumeRebalancingSpec,
 ) (RebalancingConfig, error) {
 	cfg := RebalancingConfig{
-		EvalInterval:       defaultEvaluationInterval,
-		ImbalanceThreshold: defaultImbalanceThresholdPct,
-		IopsWeight:         defaultIOPSWeight,
-		ThroughputWeight:   defaultThroughputMBWeight,
-		MaxMigrations:      defaultMaxVolumeMigrationsPerCycle,
-		CoolDownSecs:       defaultCoolDownSeconds,
+		EvalInterval:            defaultEvaluationInterval,
+		ImbalanceThreshold:      defaultImbalanceThresholdPct,
+		MinHotColdDifferencePct: defaultMinHotColdDifferencePct,
+		IopsWeight:              defaultIOPSWeight,
+		ThroughputWeight:        defaultThroughputMBWeight,
+		MaxMigrations:           defaultMaxVolumeMigrationsPerCycle,
+		CoolDownSecs:            defaultCoolDownSeconds,
 	}
 	if spec.EvaluationInterval != nil && spec.EvaluationInterval.Duration > 0 {
 		cfg.EvalInterval = spec.EvaluationInterval.Duration
@@ -60,6 +69,9 @@ func ResolveRebalancingConfig(
 	cfg.PrometheusURL = *spec.PrometheusURL
 	if spec.ImbalanceThreshold != nil {
 		cfg.ImbalanceThreshold = float64(*spec.ImbalanceThreshold)
+	}
+	if spec.MinHotColdDifferencePct != nil {
+		cfg.MinHotColdDifferencePct = float64(*spec.MinHotColdDifferencePct)
 	}
 	if spec.IOPSWeight != nil && *spec.IOPSWeight > 0 {
 		cfg.IopsWeight = *spec.IOPSWeight

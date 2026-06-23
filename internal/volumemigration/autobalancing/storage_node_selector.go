@@ -68,31 +68,56 @@ func NewStorageNodeSelector(
 }
 
 // NodeMigrationPair is a source→target node pairing produced by SelectStorageNodes.
-// Both nodes belong to the same cluster.
+//
+// Source and target are tracked with their own cluster UUIDs so the type can already
+// express a cross-cluster migration. In this release the selector only ever pairs nodes
+// within the same cluster (TargetClusterUUID == ClusterUUID); cross-cluster target
+// selection is a follow-up — see isMigrationTargetEligible.
 type NodeMigrationPair struct {
-	// ClusterUUID is the storage cluster that owns both nodes.
+	// ClusterUUID is the storage cluster that owns the source node (and the volume).
 	ClusterUUID string
 	// SourceNodeUUID is the hot node whose latency deviation exceeds the threshold.
 	SourceNodeUUID string
-	// TargetNodeUUID is the coolest node in the cluster, chosen as the migration destination.
+	// TargetClusterUUID is the storage cluster that owns the target node. Equal to
+	// ClusterUUID today; may differ once cross-cluster migration is enabled.
+	TargetClusterUUID string
+	// TargetNodeUUID is the chosen migration destination — the coolest eligible node
+	// that is at least cfg.MinHotColdDifferencePct cooler than the source.
 	TargetNodeUUID string
 }
 
-// SelectStorageNodes returns source→target node pairs for all nodes that exceed
-// the imbalance threshold. For each cluster, every hot node (deviation above
-// cfg.ImbalanceThreshold) is paired with the coolest node in that cluster as
-// the migration target. Pairs where source == target are skipped.
+// nodeRef is the unit of source/target selection: a node, its owning cluster, and its
+// current latency deviation. The selection operates over a flat pool of nodeRefs so it
+// is agnostic to cluster boundaries — eligibility (incl. same-cluster vs cross-cluster)
+// is decided by isMigrationTargetEligible, the single seam to relax for cross-cluster.
+type nodeRef struct {
+	ClusterUUID  string
+	NodeUUID     string
+	DeviationPct float64
+}
+
+// SelectStorageNodes returns source→target node pairs for every node whose latency
+// deviation exceeds cfg.ImbalanceThreshold. Each hot node is paired with the coolest
+// eligible target that is at least cfg.MinHotColdDifferencePct percentage points cooler;
+// when no such target exists the hot node produces no pair (migrating between
+// near-equally-loaded nodes yields no benefit).
+//
+// Selection runs over a flat pool of all nodes regardless of cluster; the source/target
+// cluster relationship is decided by isMigrationTargetEligible (intra-cluster only
+// today, cross-cluster is a follow-up).
 func (sns *StorageNodeSelector) SelectStorageNodes(
 	ctx context.Context,
 	cfg RebalancingConfig,
 	inputs ...StorageNodeSelectorInput,
 ) ([]NodeMigrationPair, error) {
-	deviations, statsByCluster, err := sns.computeLatencyDeviations(ctx, cfg.PrometheusURL, inputs...)
+	// computeLatencyDeviations also emits the per-node / max deviation gauges as a side
+	// effect; the per-cluster stats it returns are not needed for pairing here.
+	deviations, _, err := sns.computeLatencyDeviations(ctx, cfg.PrometheusURL, inputs...)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build nodeUUID → clusterUUID from inputs so we can group deviations by cluster.
+	// Build nodeUUID → clusterUUID from inputs, then a flat pool of node references.
 	nodeCluster := make(map[string]string)
 	for _, input := range inputs {
 		for _, node := range input.StorageNodes {
@@ -101,39 +126,66 @@ func (sns *StorageNodeSelector) SelectStorageNodes(
 			}
 		}
 	}
-
-	// Partition the flat deviations map into per-cluster sub-maps.
-	clusterDeviations := make(map[string]map[string]float64)
+	var nodes []nodeRef
 	for nodeUUID, dev := range deviations {
 		clusterUUID := nodeCluster[nodeUUID]
 		if clusterUUID == "" {
 			continue
 		}
-		if clusterDeviations[clusterUUID] == nil {
-			clusterDeviations[clusterUUID] = make(map[string]float64)
-		}
-		clusterDeviations[clusterUUID][nodeUUID] = dev
+		nodes = append(nodes, nodeRef{ClusterUUID: clusterUUID, NodeUUID: nodeUUID, DeviationPct: dev})
 	}
 
-	// For each cluster pair every hot node with the cluster's coolest node.
+	// Pair every hot node with the coolest eligible, sufficiently-cooler target.
 	var pairs []NodeMigrationPair
-	for clusterUUID, clusterDevMap := range clusterDeviations {
-		stats, ok := statsByCluster[clusterUUID]
+	for _, src := range nodes {
+		if src.DeviationPct < cfg.ImbalanceThreshold {
+			continue
+		}
+		target, ok := pickColdTarget(src, nodes, cfg)
 		if !ok {
 			continue
 		}
-		for _, sourceUUID := range volumemigration.NodesAboveThreshold(clusterDevMap, cfg.ImbalanceThreshold) {
-			if stats.CoolestNodeUUID == "" || stats.CoolestNodeUUID == sourceUUID {
-				continue
-			}
-			pairs = append(pairs, NodeMigrationPair{
-				ClusterUUID:    clusterUUID,
-				SourceNodeUUID: sourceUUID,
-				TargetNodeUUID: stats.CoolestNodeUUID,
-			})
-		}
+		pairs = append(pairs, NodeMigrationPair{
+			ClusterUUID:       src.ClusterUUID,
+			SourceNodeUUID:    src.NodeUUID,
+			TargetClusterUUID: target.ClusterUUID,
+			TargetNodeUUID:    target.NodeUUID,
+		})
 	}
 	return pairs, nil
+}
+
+// pickColdTarget returns the coolest eligible migration target for the hot source from
+// the flat node pool, or ok=false when none qualifies. A candidate qualifies when it is
+// eligible (isMigrationTargetEligible) and at least cfg.MinHotColdDifferencePct
+// percentage points cooler than the source.
+func pickColdTarget(src nodeRef, pool []nodeRef, cfg RebalancingConfig) (nodeRef, bool) {
+	var best nodeRef
+	found := false
+	for _, cand := range pool {
+		if cand.NodeUUID == src.NodeUUID {
+			continue
+		}
+		if !isMigrationTargetEligible(src, cand, cfg) {
+			continue
+		}
+		if src.DeviationPct-cand.DeviationPct < cfg.MinHotColdDifferencePct {
+			continue
+		}
+		if !found || cand.DeviationPct < best.DeviationPct {
+			best = cand
+			found = true
+		}
+	}
+	return best, found
+}
+
+// isMigrationTargetEligible reports whether cand may receive a volume migrated from src.
+// Migration is intra-cluster only today, so the target must be in the source's cluster.
+// Cross-cluster migration is a planned follow-up: relaxing this predicate (e.g. gated by
+// a future cfg flag) is the single change needed here to allow cross-cluster targets.
+func isMigrationTargetEligible(src, cand nodeRef, _ RebalancingConfig) bool {
+	return cand.ClusterUUID == src.ClusterUUID
 }
 
 // computeLatencyDeviations collects per-node latency from Prometheus and StorageNode CRs,

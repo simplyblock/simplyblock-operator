@@ -79,9 +79,15 @@ type VolumeRebalancingSpec struct {
 	EvaluationInterval *metav1.Duration `json:"evaluationInterval,omitempty"`
 	// ImbalanceThreshold is the minimum p99 latency deviation from baseline (in percent)
 	// that a node must exhibit before it is considered a rebalancing source.
-	// Defaults to 20.
+	// Defaults to 80.
 	// +optional
 	ImbalanceThreshold *int32 `json:"imbalanceThreshold,omitempty"`
+	// MinHotColdDifferencePct is the minimum latency-deviation gap (in percentage points)
+	// that a candidate target node must be below the hot source node before a migration is
+	// performed. This prevents migrating between near-equally-loaded nodes (no net benefit).
+	// Defaults to 20.
+	// +optional
+	MinHotColdDifferencePct *int32 `json:"minHotColdDifferencePct,omitempty"`
 	// DefaultCoolDownSeconds is the default cool-down period (in seconds) applied to a
 	// volume after it has been migrated. Defaults to 60.
 	// +optional

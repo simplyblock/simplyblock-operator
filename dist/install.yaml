@@ -1392,7 +1392,7 @@ spec:
                     description: |-
                       ImbalanceThreshold is the minimum p99 latency deviation from baseline (in percent)
                       that a node must exhibit before it is considered a rebalancing source.
-                      Defaults to 20.
+                      Defaults to 80.
                     format: int32
                     type: integer
                   iopsWeight:
@@ -1424,6 +1424,14 @@ spec:
                     - prometheus
                     - uniform
                     type: string
+                  minHotColdDifferencePct:
+                    description: |-
+                      MinHotColdDifferencePct is the minimum latency-deviation gap (in percentage points)
+                      that a candidate target node must be below the hot source node before a migration is
+                      performed. This prevents migrating between near-equally-loaded nodes (no net benefit).
+                      Defaults to 20.
+                    format: int32
+                    type: integer
                   prometheusURL:
                     description: PrometheusURL is required when MetricsBackend is
                       "prometheus".

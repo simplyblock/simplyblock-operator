@@ -146,8 +146,8 @@ type VolumeRebalancingSpec struct {
 
     // ImbalanceThreshold is the minimum p99 latency deviation from baseline
     // (as a percentage) that a node must exhibit before it is considered a
-    // rebalancing source. Defaults to 20.
-    // Example: 20 means "trigger if currentP99 > 1.20 × baselineP99".
+    // rebalancing source. Defaults to 80.
+    // Example: 80 means "trigger if currentP99 > 1.80 × baselineP99".
     // +optional
     ImbalanceThreshold *int32 `json:"imbalanceThreshold,omitempty"`
 

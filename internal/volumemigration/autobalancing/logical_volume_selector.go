@@ -122,10 +122,7 @@ func (lvs *LogicalVolumeSelector) CollectVolumes(
 		return nil, nil, fmt.Errorf("build CSI-managed volume set: %w", err)
 	}
 
-	volumesByNode, allVolumes, err = lvs.collectVolumesByNode(ctx, input.ClusterUUID, managed)
-	if err != nil {
-		return nil, nil, err
-	}
+	volumesByNode, allVolumes = lvs.collectVolumesByNode(ctx, input.ClusterUUID, managed)
 
 	if ioProvider, pErr := promlatency.New(input.PrometheusURL); pErr != nil {
 		log.Error(pErr, "Cannot create volume IO provider; scoring will use REST API values")
@@ -178,7 +175,7 @@ func (lvs *LogicalVolumeSelector) collectVolumesByNode(
 	ctx context.Context,
 	clusterUUID string,
 	managed []managedVolume,
-) (volumesByNode map[string][]VolumePlacement, allVolumes map[string]VolumePlacement, err error) {
+) (volumesByNode map[string][]VolumePlacement, allVolumes map[string]VolumePlacement) {
 	log := logf.FromContext(ctx)
 
 	volumesByNode = make(map[string][]VolumePlacement)
@@ -199,7 +196,7 @@ func (lvs *LogicalVolumeSelector) collectVolumesByNode(
 		volumesByNode[v.PrimaryNodeUUID] = append(volumesByNode[v.PrimaryNodeUUID], vp)
 		allVolumes[v.UUID] = vp
 	}
-	return volumesByNode, allVolumes, nil
+	return volumesByNode, allVolumes
 }
 
 // selectMigrationSet applies a greedy 10 % IO-budget cap and a hard MaxMigrations

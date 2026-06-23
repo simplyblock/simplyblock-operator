@@ -94,7 +94,9 @@ spec:
           The CSI node uses the same formula so no manual NQN management is required.
         displayName: Allowed Nodes
         path: allowedNodes
-      - description: CapacityLimit is the maximum pool capacity.
+      - description: |-
+          CapacityLimit is the maximum aggregate capacity that can be allocated from this pool.
+          This maps to sbctl pool add --pool-max. Use sizes like 20M, 20G, or 0 for unlimited.
         displayName: Capacity Limit
         path: capacityLimit
       - description: ClusterName is the target storage cluster name.
@@ -105,6 +107,12 @@ spec:
           enforced when allowedNodes is non-empty
         displayName: DHCHAP
         path: dhchap
+      - description: |-
+          LogicalVolumeMaxSize is the maximum size allowed for any single logical volume
+          created in this pool. This maps to sbctl pool add --lvol-max. Use sizes like
+          20M, 20G, or 0 for unlimited.
+        displayName: Logical Volume Maximum Size
+        path: logicalVolumeMaxSize
       - description: QosSpec defines QosSpec limits for the pool.
         displayName: QoS
         path: qos
@@ -237,10 +245,6 @@ spec:
       displayName: Storage Cluster
       kind: StorageCluster
       name: storageclusters.storage.simplyblock.io
-      resources:
-      - kind: Secret
-        name: simplyblock-cluster-credentials
-        version: v1
       specDescriptors:
       - description: Action triggers a cluster-level action.
         displayName: Action
@@ -274,6 +278,13 @@ spec:
       - description: HAType defines the backend high-availability mode.
         displayName: HA Type
         path: haType
+      - description: HashicorpVaultSettings configures the Vault endpoint used by
+          the cluster for key storage.
+        displayName: HashiCorp Vault Settings
+        path: hashicorpVaultSettings
+      - description: BaseURL is the HashiCorp Vault endpoint (e.g. https://vault.example.com:8200).
+        displayName: Vault Base URL
+        path: hashicorpVaultSettings.baseURL
       - description: InflightIOThreshold defines the inflight I/O threshold.
         displayName: Inflight IO Threshold
         path: inflightIOThreshold
@@ -327,9 +338,6 @@ spec:
       - description: Configured indicates whether initial cluster setup completed.
         displayName: Configured
         path: configured
-      - description: SecretName is the Kubernetes Secret containing cluster credentials.
-        displayName: Cluster Secret
-        path: secretName
       - description: Status is the backend-reported lifecycle status.
         displayName: Status
         path: status
@@ -367,6 +375,11 @@ spec:
       - description: ClusterName is the target storage cluster name.
         displayName: Cluster Name
         path: clusterName
+      - description: |-
+          ContainerResources sets CPU and memory requests/limits for the main storage-node container.
+          When omitted no limits are enforced, which preserves the previous behaviour.
+        displayName: Container Resources
+        path: containerResources
       - description: CorePercentage is the percentage of cores to be used for spdk
           (0-99).
         displayName: Core Percentage
@@ -391,6 +404,15 @@ spec:
           where supported.
         displayName: Force Format 4K
         path: forceFormat4K
+      - description: ImagePullPolicy controls when the container image is pulled.
+          Defaults to IfNotPresent.
+        displayName: Image Pull Policy
+        path: imagePullPolicy
+      - description: |-
+          InitContainerResources sets CPU and memory requests/limits for the init container.
+          When omitted no limits are enforced.
+        displayName: Init Container Resources
+        path: initContainerResources
       - description: JournalManagerSpec configures journal manager behavior.
         displayName: Journal Manager
         path: journalManager
@@ -398,7 +420,13 @@ spec:
           per node.
         displayName: Max Logical Volume Count
         path: maxLogicalVolumeCount
-      - description: MaxSize is the maximum allocatable size of the storage node.
+      - description: |-
+          MaxParallelNodeAdds limits how many non-FDB worker nodes can be in the
+          add process simultaneously. Defaults to 1 (fully sequential).
+          FDB workers are always sequential regardless of this setting.
+        displayName: Max Parallel Node Adds
+        path: maxParallelNodeAdds
+      - description: MaxSize is the maximum allocatable size of huge pages.
         displayName: Max Size
         path: maxSize
       - description: MgmtIfname is the management interface name used by storage nodes.
@@ -415,6 +443,12 @@ spec:
           be enabled.
         displayName: OpenShift Cluster
         path: openShiftCluster
+      - description: |-
+          OpenShiftMachineConfigPool is the name of the MachineConfigPool that storage nodes belong to.
+          Generated MachineConfig resources will carry the machineconfiguration.openshift.io/role label
+          set to this value. Defaults to "worker" when unset.
+        displayName: OpenShift MachineConfigPool
+        path: openShiftMachineConfigPool
       - description: Partitions is the number of partitions created per backend storage
           device.
         displayName: Partitions
@@ -448,6 +482,11 @@ spec:
           services.
         displayName: SPDK Proxy Image
         path: spdkProxyImage
+      - description: |-
+          SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g. "4G", "512M").
+          When omitted the backend default is used.
+        displayName: SPDK System Memory
+        path: spdkSystemMemory
       - description: Tolerations configures pod tolerations for storage-node pods.
         displayName: Tolerations
         path: tolerations
@@ -469,6 +508,10 @@ spec:
       - description: DrainCoordination tracks the upgrade-drain state per worker node.
         displayName: Drain Coordination
         path: drainCoordination
+      - description: LatencyMetrics holds per-backend-node fio-measured latency data
+          for rebalancing decisions.
+        displayName: Latency Metrics
+        path: latencyMetrics
       - description: Nodes is the observed state of each managed storage node.
         displayName: Nodes
         path: nodes
