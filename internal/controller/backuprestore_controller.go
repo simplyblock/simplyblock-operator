@@ -43,8 +43,8 @@ import (
 const (
 	restoreProgressRequeue  = 10 * time.Second
 	restoreReconcileRequeue = 10 * time.Second
-	// lvolStatusFailed is the backend status string returned by the lvol polling API when a restore task fails.
-	lvolStatusFailed = "failed"
+	// lvolStatusRestoreFailed is set by the tasks-runner after exhausting all S3 transfer retry attempts.
+	lvolStatusRestoreFailed = "restore_failed"
 )
 
 const (
@@ -356,10 +356,10 @@ func (r *BackupRestoreReconciler) reconcileInProgress(
 			return ctrl.Result{}, true, patchErr
 		}
 		return ctrl.Result{}, false, nil
-	case lvolStatusFailed:
+	case lvolStatusRestoreFailed:
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
 			s.Phase = simplyblockv1alpha1.RestorePhaseFailed
-			s.Message = "Backend restore task failed"
+			s.Message = fmt.Sprintf("Backend restore task failed (lvol status: %s)", lvolStatus)
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
 		}
