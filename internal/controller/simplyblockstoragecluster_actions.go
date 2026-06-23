@@ -503,6 +503,15 @@ func (r *StorageClusterReconciler) nodeRecycleShuttingDown(
 			}
 		}
 
+		// Persist PhaseTriggered=true BEFORE the API call so that concurrent
+		// reconciles fail the Update with a conflict and requeue — by then
+		// PhaseTriggered=true is visible and they go straight to polling
+		// without sending a duplicate shutdown request.
+		nrs.PhaseTriggered = true
+		if err := r.Status().Update(ctx, clusterCR); err != nil {
+			return ctrl.Result{Requeue: true}, nil
+		}
+
 		if !alreadyShuttingDown {
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown", clusterUUID, nodeUUID)
 			body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
@@ -514,10 +523,6 @@ func (r *StorageClusterReconciler) nodeRecycleShuttingDown(
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
 			log.Info("Node shutdown triggered", "nodeUUID", nodeUUID)
-		}
-		nrs.PhaseTriggered = true
-		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -593,6 +598,13 @@ func (r *StorageClusterReconciler) nodeRecycleRestarting(
 			}
 		}
 
+		// Persist before API call to prevent duplicate restart requests from
+		// concurrent reconciles.
+		nrs.PhaseTriggered = true
+		if err := r.Status().Update(ctx, clusterCR); err != nil {
+			return ctrl.Result{Requeue: true}, nil
+		}
+
 		if !alreadyRestarting {
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
 			body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, map[string]bool{"force": true})
@@ -604,10 +616,6 @@ func (r *StorageClusterReconciler) nodeRecycleRestarting(
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
 			log.Info("Node restart triggered", "nodeUUID", nodeUUID)
-		}
-		nrs.PhaseTriggered = true
-		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
