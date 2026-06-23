@@ -571,8 +571,19 @@ func (r *StorageClusterReconciler) nodeRecycleShuttingDown(
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{Requeue: true}, nil
+	case utils.NodeStatusOnline:
+		// Node is already online — the shutdown+restart cycle completed while the
+		// operator was down. Skip straight to rebalancing so the node is marked
+		// processed and the recycle continues for remaining pending nodes.
+		log.Info("Node already online during shutdown poll (operator restarted mid-recycle), advancing to rebalancing", "nodeUUID", nodeUUID)
+		nrs.NodePhase = utils.NodeRecyclePhaseRebalancing
+		nrs.PhaseTriggered = false
+		if err := r.Status().Update(ctx, clusterCR); err != nil {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		return ctrl.Result{Requeue: true}, nil
 	default:
-		// Node still online — shutdown not yet effective, keep polling.
+		// Node in a transient state — keep polling.
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 }
