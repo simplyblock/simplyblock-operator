@@ -1719,7 +1719,8 @@ func TestPerformNodeActionRestartWorkerNodeReachabilityCanceled(t *testing.T) {
 		},
 	}
 	sn := &simplyblockv1alpha1.StorageNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "sn-restart-cancel", Namespace: "default"},
+		// UID is required for SetControllerReference inside ensureWorkerInEndpointSlice.
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-restart-cancel", Namespace: "default", UID: "uid-restart-cancel"},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			Action:      "restart",
 			NodeUUID:    nodeUUID,
@@ -1740,6 +1741,77 @@ func TestPerformNodeActionRestartWorkerNodeReachabilityCanceled(t *testing.T) {
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation error from restart reachability path, got %v", err)
+	}
+}
+
+func TestPerformNodeActionRestartWorkerNodeEndpointSliceEnsured(t *testing.T) {
+	const clusterUUID = "cluster-uuid-restart-eps"
+	const nodeUUID = "node-uuid-restart-eps"
+	const workerNode = "node-eps"
+
+	origCheckFn := waitForNodeInfoReachableCheckFn
+	origRetries := waitForNodeInfoReachableMaxRetries
+	origDelay := waitForNodeInfoReachableRetryDelay
+	t.Cleanup(func() {
+		waitForNodeInfoReachableCheckFn = origCheckFn
+		waitForNodeInfoReachableMaxRetries = origRetries
+		waitForNodeInfoReachableRetryDelay = origDelay
+	})
+	waitForNodeInfoReachableMaxRetries = 1
+	waitForNodeInfoReachableRetryDelay = time.Millisecond
+	waitForNodeInfoReachableCheckFn = func(context.Context, string, string, bool, bool) error {
+		return errors.New("unreachable")
+	}
+
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: workerNode},
+		Status: corev1.NodeStatus{
+			Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeInternalIP, Address: "10.0.2.2"},
+			},
+		},
+	}
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-eps", Namespace: "default", UID: "uid-eps"},
+		Spec: simplyblockv1alpha1.StorageNodeSpec{
+			Action:      "restart",
+			NodeUUID:    nodeUUID,
+			WorkerNode:  workerNode,
+			ClusterName: "cluster-eps",
+			// workerNode is intentionally absent from WorkerNodes.
+			WorkerNodes: []string{"existing-worker"},
+		},
+	}
+	// No existing EndpointSlice — ensureWorkerInEndpointSlice must create one.
+	r := newStorageNodeStateTestReconciler(t, sn, node)
+
+	// The action will fail at waitForNodeInfoReachable (stubbed to fail), but
+	// ensureWorkerInEndpointSlice runs before that — the slice must be present.
+	_ = r.performNodeAction(
+		context.Background(),
+		webapi.NewClient("http://127.0.0.1:1"),
+		clusterUUID,
+		sn,
+	)
+
+	var eps discoveryv1.EndpointSlice
+	if err := r.Get(
+		context.Background(),
+		client.ObjectKey{Namespace: "default", Name: "simplyblock-storage-node-api-endpoints"},
+		&eps,
+	); err != nil {
+		t.Fatalf("expected EndpointSlice to be created by ensureWorkerInEndpointSlice: %v", err)
+	}
+
+	found := false
+	for _, ep := range eps.Endpoints {
+		if ep.Hostname != nil && *ep.Hostname == workerNode {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("target worker %q not found in EndpointSlice endpoints: %#v", workerNode, eps.Endpoints)
 	}
 }
 
