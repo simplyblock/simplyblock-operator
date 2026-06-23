@@ -932,8 +932,6 @@ func (r *StorageNodeReconciler) recordSpdkPodEvents(
 
 // reconcileWorkerNodes fans out the node-add loop across parallel (non-FDB) and
 // sequential (FDB) workers, respecting MaxParallelNodeAdds.
-// MaxParallelNodeAdds carries a +kubebuilder:default=1 marker so the API server
-// always populates it before the CR is stored — it is safe to dereference directly.
 func (r *StorageNodeReconciler) reconcileWorkerNodes(
 	ctx context.Context,
 	req ctrl.Request,
@@ -953,7 +951,10 @@ func (r *StorageNodeReconciler) reconcileWorkerNodes(
 		}
 	}
 
-	maxParallel := int(*snCR.Spec.MaxParallelNodeAdds)
+	maxParallel := 1
+	if snCR.Spec.MaxParallelNodeAdds != nil {
+		maxParallel = int(*snCR.Spec.MaxParallelNodeAdds)
+	}
 
 	inFlight := 0
 	for _, nodeName := range parallelWorkers {
