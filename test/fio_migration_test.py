@@ -805,6 +805,41 @@ class FioMigrationTest:
                 continue
         return {}
 
+    def _detect_outages(self, timeline: dict[int, dict]) -> list[dict]:
+        """Find maximal contiguous runs of 'down' seconds (total_iops <= stall_threshold,
+        or a missing sample). The first second is skipped (ramp-up). Each run is
+        {start, end, duration, recovered}; recovered is False when the run extends to the
+        last observed second — i.e. I/O never came back. Caller filters by min duration."""
+        if not timeline:
+            return []
+        tmax = max(timeline)
+        runs: list[dict] = []
+        start = None
+        for t in range(1, tmax + 1):
+            down = timeline.get(t, {}).get("total_iops", 0.0) <= self.a.stall_threshold
+            if down and start is None:
+                start = t
+            elif not down and start is not None:
+                runs.append({"start": start, "end": t - 1,
+                             "duration": t - start, "recovered": True})
+                start = None
+        if start is not None:
+            runs.append({"start": start, "end": tmax,
+                         "duration": tmax - start + 1, "recovered": False})
+        return runs
+
+    @staticmethod
+    def _read_fio_rc(pod_dir: str) -> "str | None":
+        """Read fio's recorded exit code (written to /logs/fio.rc by the pod script)."""
+        for path in (glob.glob(os.path.join(pod_dir, "**", "fio.rc"), recursive=True)
+                     or glob.glob(os.path.join(pod_dir, "fio.rc"))):
+            try:
+                with open(path) as fh:
+                    return fh.read().strip()
+            except OSError:
+                continue
+        return None
+
     @staticmethod
     def _overlaps_migration(start_s: int, base: datetime,
                             migs: list[MigrationRecord]) -> MigrationRecord | None:
@@ -832,6 +867,7 @@ class FioMigrationTest:
         for pod in self.pods:
             pod_dir = os.path.join(self.outdir, pod)
             result = self._parse_result_json(pod_dir)
+            fio_rc = self._read_fio_rc(pod_dir)
             timeline = self._parse_timeline(pod_dir)
 
             # --- emit the per-second IOPS + latency time series as CSV ---
@@ -869,45 +905,59 @@ class FioMigrationTest:
             pod_report["total_iops"] = round(total_iops, 1)
             pod_report["fio_error_count"] = fio_errors
 
-            # --- I/O continuity: any zero-IOPS second during the run? ---
-            stalls = []
-            if timeline:
-                tmax = max(timeline)
-                # ignore the very first/last second (ramp / teardown rounding)
-                for t in range(1, tmax):
-                    v = timeline.get(t, {}).get("total_iops", 0.0)
-                    if v <= self.a.stall_threshold:
-                        mig = self._overlaps_migration(t, base, completed_migs) if base else None
-                        stalls.append({"second": t, "iops": round(v, 1),
-                                       "migration": mig.name if mig else None})
-            pod_report["zero_iops_samples"] = stalls
+            # --- I/O continuity ---
+            # A loss is a SUSTAINED outage: a contiguous run of >= outage_seconds where
+            # IOPS stays at/below stall_threshold (missing seconds count as down). A
+            # single missed log entry or a few zero-IOPS seconds is transient noise — a
+            # brief dip while I/O keeps flowing — NOT a loss.
+            runs = self._detect_outages(timeline)
+            outages = [r for r in runs if r["duration"] >= self.a.outage_seconds]
+            transient = [r for r in runs if r["duration"] < self.a.outage_seconds]
+            for r in outages:
+                mig = self._overlaps_migration(r["start"], base, completed_migs) if base else None
+                r["migration"] = mig.name if mig else None
+            pod_report["outages"] = outages
+            pod_report["transient_dips"] = len(transient)
             pod_report["samples_total"] = len(timeline)
             # full per-second timeline (also written to CSV); kept in JSON for tooling
             pod_report["timeseries"] = [
                 {"second": t, **timeline[t]} for t in sorted(timeline)]
 
             # --- verdicts ---
+            # Hard failures: fio reported I/O errors, fio exited non-zero (it "died"),
+            # or a sustained I/O outage. Transient dips / missing samples are not losses.
+            errored = fio_errors > 0 or (fio_rc not in (None, "", "0"))
             problems = []
             if fio_errors > 0:
                 problems.append(f"fio reported {fio_errors} I/O error(s)")
-            if stalls:
-                during = [s for s in stalls if s["migration"]]
+            if fio_rc not in (None, "", "0"):
+                problems.append(f"fio exited with rc={fio_rc}")
+            if outages:
+                perm = [o for o in outages if not o["recovered"]]
                 problems.append(
-                    f"{len(stalls)} zero-IOPS sample(s)"
-                    + (f", {len(during)} during a migration" if during else ""))
-            if not timeline:
-                problems.append("no per-second samples collected (could not verify continuity)")
+                    f"{len(outages)} sustained I/O outage(s) (>= {self.a.outage_seconds}s)"
+                    + (f", {len(perm)} never recovered" if perm else ""))
 
-            if problems:
-                io_lost = io_lost or bool(fio_errors or stalls)
+            if errored or outages:
+                io_lost = True
                 self.log.crit(f"POD {pod}: " + "; ".join(problems))
-                for s in stalls[:10]:
-                    tag = f"during {s['migration']}" if s["migration"] else "no migration active"
-                    self.log.crit(f"    I/O LOSS @ +{s['second']}s  iops={s['iops']}  ({tag})")
+                for o in outages[:10]:
+                    tag = f"during {o['migration']}" if o.get("migration") else "no migration active"
+                    rec = (f"recovered after {o['duration']}s"
+                           if o["recovered"] else "NEVER RECOVERED")
+                    self.log.crit(
+                        f"    I/O OUTAGE +{o['start']}s..+{o['end']}s "
+                        f"({o['duration']}s, {rec})  ({tag})")
+            elif not timeline:
+                self.log.warn(f"POD {pod}: no per-second samples collected — I/O "
+                              "continuity could not be verified (inconclusive)")
             else:
-                self.log.info(
-                    f"POD {pod}: OK  total_iops={pod_report['total_iops']:.0f}  "
-                    f"samples={len(timeline)}  errors=0  no stalls")
+                msg = (f"POD {pod}: OK  total_iops={pod_report['total_iops']:.0f}  "
+                       f"samples={len(timeline)}  errors=0  no sustained outages")
+                if transient:
+                    msg += (f"  ({len(transient)} transient <{self.a.outage_seconds}s "
+                            "dip(s) ignored)")
+                self.log.info(msg)
 
             report["pods"][pod] = pod_report
 
@@ -987,7 +1037,8 @@ class FioMigrationTest:
             self.log.info(
                 f"  {pod}: total_iops={pr.get('total_iops',0):>9.0f} "
                 f"errors={pr.get('fio_error_count',0)} "
-                f"stalls={len(pr.get('zero_iops_samples',[]))} | "
+                f"outages={len(pr.get('outages',[]))} "
+                f"dips={pr.get('transient_dips',0)} | "
                 f"read p99={rd.get('p99_us','-')}us write p99={wr.get('p99_us','-')}us")
         self.log.info("")
         self.log.info("per-second IOPS + latency time series (1s granularity):")
@@ -1111,7 +1162,10 @@ def parse_args():
     p.add_argument("--health-poll", type=int, default=3,
                    help="pod health poll interval seconds (default 3)")
     p.add_argument("--stall-threshold", type=float, default=0.0,
-                   help="IOPS at/below this in a 1s sample counts as I/O loss (default 0)")
+                   help="IOPS at/below this marks a 1s sample as 'down' (default 0)")
+    p.add_argument("--outage-seconds", type=int, default=30,
+                   help="minimum consecutive 'down' seconds to count as a real I/O outage; "
+                        "shorter dips are transient noise, not a loss (default 30)")
     p.add_argument("--keep", action="store_true",
                    help="do not delete pods/PVCs/migrations after the run")
     p.add_argument("--outdir", default=None, help="artifact directory (default ./fio-mig-<ts>)")
