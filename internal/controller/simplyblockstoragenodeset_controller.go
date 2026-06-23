@@ -40,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -381,7 +382,7 @@ func (r *StorageNodeSetReconciler) postStorageNodeSet(
 	log := logf.FromContext(ctx)
 
 	if err := checkNodeInfoReachable(ctx, nodeName, snCR.Namespace, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
-		log.Info("Storage node API not reachable yet, requeueing",
+		log.V(1).Info("Storage node API not reachable yet, requeueing",
 			"node", nodeName,
 			"ip", ip,
 			"error", err.Error(),
@@ -460,7 +461,22 @@ func (r *StorageNodeSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.spdkProxyPodToStorageNodeSetRequests),
-			builder.WithPredicates(predicate.NewPredicateFuncs(isSpdkProxyPod)),
+			builder.WithPredicates(
+				predicate.NewPredicateFuncs(isSpdkProxyPod),
+				predicate.Funcs{
+					UpdateFunc: func(e event.UpdateEvent) bool {
+						oldPod, ok := e.ObjectOld.(*corev1.Pod)
+						if !ok {
+							return true
+						}
+						newPod, ok := e.ObjectNew.(*corev1.Pod)
+						if !ok {
+							return true
+						}
+						return oldPod.Status.Phase != newPod.Status.Phase
+					},
+				},
+			),
 		).
 		Watches(
 			&corev1.Secret{},
@@ -1339,7 +1355,7 @@ func waitForNodeInfoReachable(
 			return nil
 		} else {
 			lastErr = err
-			log.Info("Storage node API not reachable yet, retrying",
+			log.V(1).Info("Storage node API not reachable yet, retrying",
 				"node", nodeName,
 				"attempt", i,
 				"error", err.Error(),
