@@ -12,7 +12,6 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -374,50 +373,6 @@ func TestClusterEnsureFinalizer(t *testing.T) {
 	}
 }
 
-func TestClusterDeleteClusterSecret(t *testing.T) {
-	t.Run("deletes named status secret", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.StorageCluster{
-			ObjectMeta: metav1.ObjectMeta{Name: "cluster-secret-delete", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-			Status:     simplyblockv1alpha1.StorageClusterStatus{SecretName: "custom-secret-name"},
-		}
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "custom-secret-name", Namespace: "default"},
-		}
-		r := newClusterStateTestReconciler(t, cluster, secret)
-
-		if err := r.deleteClusterSecret(context.Background(), cluster); err != nil {
-			t.Fatalf("deleteClusterSecret returned error: %v", err)
-		}
-
-		err := r.Get(context.Background(), client.ObjectKey{Name: "custom-secret-name", Namespace: "default"}, &corev1.Secret{})
-		if !apierrors.IsNotFound(err) {
-			t.Fatalf("expected secret to be deleted, got err=%v", err)
-		}
-	})
-
-	t.Run("uses default secret name fallback", func(t *testing.T) {
-		cluster := &simplyblockv1alpha1.StorageCluster{
-			ObjectMeta: metav1.ObjectMeta{Name: "cluster-b", Namespace: "default"},
-			Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		}
-		secretName := "simplyblock-cluster-cluster-b"
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: "default"},
-		}
-		r := newClusterStateTestReconciler(t, cluster, secret)
-
-		if err := r.deleteClusterSecret(context.Background(), cluster); err != nil {
-			t.Fatalf("deleteClusterSecret returned error: %v", err)
-		}
-
-		err := r.Get(context.Background(), client.ObjectKey{Name: secretName, Namespace: "default"}, &corev1.Secret{})
-		if !apierrors.IsNotFound(err) {
-			t.Fatalf("expected fallback secret to be deleted, got err=%v", err)
-		}
-	})
-}
-
 func TestClusterHandleDeletionPaths(t *testing.T) {
 	now := metav1.NewTime(time.Now())
 
@@ -495,10 +450,8 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("successful API delete removes secret and finalizer", func(t *testing.T) {
-		const clusterName = "cluster-delete-ok"
+	t.Run("successful API delete removes finalizer", func(t *testing.T) {
 		const clusterUUID = "cluster-uuid-delete-ok"
-		const clusterSecret = "secret-delete-ok"
 		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
 		defer mock.Close()
 		mock.Register(
@@ -517,21 +470,10 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{},
 			Status: simplyblockv1alpha1.StorageClusterStatus{
-				UUID:       clusterUUID,
-				SecretName: "secret-custom-delete-ok",
+				UUID: clusterUUID,
 			},
 		}
-		authSecret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster-" + clusterName, Namespace: "default"},
-			Data: map[string][]byte{
-				"uuid":   []byte(clusterUUID),
-				"secret": []byte(clusterSecret),
-			},
-		}
-		customSecret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "secret-custom-delete-ok", Namespace: "default"},
-		}
-		r := newClusterStateTestReconciler(t, cluster, authSecret, customSecret)
+		r := newClusterStateTestReconciler(t, cluster)
 
 		_, done, err := r.handleDeletion(context.Background(), cluster)
 		if err != nil {
@@ -545,10 +487,6 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 		}
 		if len(mock.Requests()) != 1 || mock.Requests()[0].Path != "/api/v2/clusters/"+clusterUUID {
 			t.Fatalf("expected delete API call for cluster UUID, got %#v", mock.Requests())
-		}
-		err = r.Get(context.Background(), client.ObjectKey{Name: "secret-custom-delete-ok", Namespace: "default"}, &corev1.Secret{})
-		if !apierrors.IsNotFound(err) {
-			t.Fatalf("expected cluster secret to be deleted, got err=%v", err)
 		}
 	})
 }
@@ -629,9 +567,7 @@ func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
 }
 
 func TestStorageClusterReconcileActivateViaMock(t *testing.T) {
-	const clusterName = "cluster-activate-mock"
 	const clusterUUID = "cluster-uuid-activate-mock"
-	const clusterSecret = "secret-activate-mock"
 
 	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
 	defer mock.Close()
@@ -671,14 +607,7 @@ func TestStorageClusterReconcileActivateViaMock(t *testing.T) {
 			UUID: clusterUUID,
 		},
 	}
-	authSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster-" + clusterName, Namespace: "default"},
-		Data: map[string][]byte{
-			"uuid":   []byte(clusterUUID),
-			"secret": []byte(clusterSecret),
-		},
-	}
-	r := newClusterStateTestReconciler(t, cluster, authSecret)
+	r := newClusterStateTestReconciler(t, cluster)
 
 	// 1) initialize action status
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)}); err != nil {
@@ -719,9 +648,7 @@ func TestStorageClusterReconcileActivateViaMock(t *testing.T) {
 }
 
 func TestStorageClusterReconcileExpandViaMock(t *testing.T) {
-	const clusterName = "cluster-expand-mock"
 	const clusterUUID = "cluster-uuid-expand-mock"
-	const clusterSecret = "secret-expand-mock"
 
 	// expand endpoint is currently missing from openapi.json, so allow unknown paths.
 	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
@@ -762,14 +689,7 @@ func TestStorageClusterReconcileExpandViaMock(t *testing.T) {
 			UUID: clusterUUID,
 		},
 	}
-	authSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster-" + clusterName, Namespace: "default"},
-		Data: map[string][]byte{
-			"uuid":   []byte(clusterUUID),
-			"secret": []byte(clusterSecret),
-		},
-	}
-	r := newClusterStateTestReconciler(t, cluster, authSecret)
+	r := newClusterStateTestReconciler(t, cluster)
 
 	// 1) initialize action status
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)}); err != nil {
@@ -825,7 +745,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v1/health/fdb/",
+			"/api/v2/_meta/ready",
 			webapimock.RouteResponse{Status: http.StatusInternalServerError, Body: `{"error":"fdb down"}`},
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
@@ -853,7 +773,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v1/health/fdb/",
+			"/api/v2/_meta/ready",
 			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
 		)
 		mock.Register(
@@ -886,7 +806,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v1/health/fdb/",
+			"/api/v2/_meta/ready",
 			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
 		)
 		mock.Register(
@@ -919,7 +839,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v1/health/fdb/",
+			"/api/v2/_meta/ready",
 			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
 		)
 		mock.Register(
@@ -972,7 +892,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
-			"/api/v1/health/fdb/",
+			"/api/v2/_meta/ready",
 			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
 		)
 		mock.Register(

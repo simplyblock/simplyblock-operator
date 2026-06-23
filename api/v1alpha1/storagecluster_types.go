@@ -88,6 +88,16 @@ type BackupSpec struct {
 }
 
 // StorageClusterSpec defines the desired state of StorageCluster
+//
+// +kubebuilder:validation:XValidation:rule="self.haType == oldSelf.haType",message="haType is immutable"
+// +kubebuilder:validation:XValidation:rule="self.fabricType == oldSelf.fabricType",message="fabricType is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.hashicorpVaultSettings) || self.hashicorpVaultSettings == oldSelf.hashicorpVaultSettings",message="hashicorpVaultSettings is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.stripe) || self.stripe == oldSelf.stripe",message="stripe is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.blockSize) || self.blockSize == oldSelf.blockSize",message="blockSize is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.isSingleNode) || self.isSingleNode == oldSelf.isSingleNode",message="isSingleNode is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.nvmfBasePort) || self.nvmfBasePort == oldSelf.nvmfBasePort",message="nvmfBasePort is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.rpcBasePort) || self.rpcBasePort == oldSelf.rpcBasePort",message="rpcBasePort is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.snodeApiPort) || self.snodeApiPort == oldSelf.snodeApiPort",message="snodeApiPort is immutable once set"
 type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Node Affinity"
 	// EnableNodeAffinity enables node-affinity placement for storage components.
@@ -185,9 +195,6 @@ type StorageClusterStatus struct {
 	Rebalancing *bool `json:"rebalancing,omitempty"`
 	// ErasureCodingScheme is the active erasure-coding layout, for example "2x1".
 	ErasureCodingScheme string `json:"erasureCodingScheme,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Cluster Secret"
-	// SecretName is the Kubernetes Secret containing cluster credentials.
-	SecretName string `json:"secretName,omitempty"`
 	// LastUpdated is the last backend update timestamp.
 	// FIXME: Unused for now (API update required?)
 	LastUpdated *metav1.Time `json:"lastUpdated,omitempty"`
@@ -213,7 +220,7 @@ type StorageClusterStatus struct {
 // +kubebuilder:printcolumn:name="UUID",type="string",JSONPath=".status.uuid",description="Backend cluster UUID"
 // +kubebuilder:printcolumn:name="Configured",type="boolean",JSONPath=".status.configured",description="Whether initial cluster setup has completed"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-// +operator-sdk:csv:customresourcedefinitions:displayName="Storage Cluster",resources={{Secret,v1,simplyblock-cluster-credentials}}
+// +operator-sdk:csv:customresourcedefinitions:displayName="Storage Cluster"
 
 // StorageCluster is the Schema for the storageclusters API
 type StorageCluster struct {

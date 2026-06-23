@@ -218,6 +218,26 @@ spec:
                     type: integer
                 type: object
             type: object
+            x-kubernetes-validations:
+            - message: haType is immutable
+              rule: self.haType == oldSelf.haType
+            - message: fabricType is immutable
+              rule: self.fabricType == oldSelf.fabricType
+            - message: hashicorpVaultSettings is immutable once set
+              rule: '!has(oldSelf.hashicorpVaultSettings) || self.hashicorpVaultSettings
+                == oldSelf.hashicorpVaultSettings'
+            - message: stripe is immutable once set
+              rule: '!has(oldSelf.stripe) || self.stripe == oldSelf.stripe'
+            - message: blockSize is immutable once set
+              rule: '!has(oldSelf.blockSize) || self.blockSize == oldSelf.blockSize'
+            - message: isSingleNode is immutable once set
+              rule: '!has(oldSelf.isSingleNode) || self.isSingleNode == oldSelf.isSingleNode'
+            - message: nvmfBasePort is immutable once set
+              rule: '!has(oldSelf.nvmfBasePort) || self.nvmfBasePort == oldSelf.nvmfBasePort'
+            - message: rpcBasePort is immutable once set
+              rule: '!has(oldSelf.rpcBasePort) || self.rpcBasePort == oldSelf.rpcBasePort'
+            - message: snodeApiPort is immutable once set
+              rule: '!has(oldSelf.snodeApiPort) || self.snodeApiPort == oldSelf.snodeApiPort'
           status:
             description: status defines the observed state of StorageCluster
             properties:
@@ -318,10 +338,6 @@ spec:
                 description: Rebalancing indicates whether cluster rebalancing is
                   currently active.
                 type: boolean
-              secretName:
-                description: SecretName is the Kubernetes Secret containing cluster
-                  credentials.
-                type: string
               status:
                 description: Status is the backend-reported lifecycle status.
                 type: string

@@ -1616,6 +1616,13 @@ func (in *StorageNodeSpec) DeepCopyInto(out *StorageNodeSpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.MaxParallelNodeAdds != nil {
+		in, out := &in.MaxParallelNodeAdds, &out.MaxParallelNodeAdds
+		*out = new(int32)
+		**out = **in
+	}
+	in.ContainerResources.DeepCopyInto(&out.ContainerResources)
+	in.InitContainerResources.DeepCopyInto(&out.InitContainerResources)
 	if in.Force != nil {
 		in, out := &in.Force, &out.Force
 		*out = new(bool)
@@ -1653,6 +1660,20 @@ func (in *StorageNodeStatus) DeepCopyInto(out *StorageNodeStatus) {
 		*out = make([]NodeDrainState, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.PendingNodeAdds != nil {
+		in, out := &in.PendingNodeAdds, &out.PendingNodeAdds
+		*out = make(map[string]v1.Time, len(*in))
+		for key, val := range *in {
+			(*out)[key] = *val.DeepCopy()
+		}
+	}
+	if in.SchedulingFailedWorkers != nil {
+		in, out := &in.SchedulingFailedWorkers, &out.SchedulingFailedWorkers
+		*out = make(map[string]bool, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
 		}
 	}
 }

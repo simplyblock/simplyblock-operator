@@ -268,25 +268,14 @@ func TestNodeDrainReconcileNoClusterAuthRequeues(t *testing.T) {
 
 func TestNodeDrainReconcileNoClusterCRRequeues(t *testing.T) {
 	const clusterName = "cluster-no-cr"
-	const clusterUUID = "cluster-uuid-no-cr"
 
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-cluster-" + clusterName,
-			Namespace: "default",
-		},
-		Data: map[string][]byte{
-			"uuid":   []byte(clusterUUID),
-			"secret": []byte("s3cr3t"),
-		},
-	}
 	snCR := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-no-cluster-cr", Namespace: "default"},
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			ClusterName: clusterName,
 		},
 	}
-	r := newNodeDrainTestReconciler(t, snCR, secret)
+	r := newNodeDrainTestReconciler(t, snCR)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(snCR)})
 	if err != nil {

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -56,6 +58,7 @@ type StorageNodeReconciler struct {
 	TLSEnabled       bool
 	TLSProvider      string
 	TLSMutualEnabled bool
+	Recorder         record.EventRecorder
 }
 
 type SNODEAPIResponse struct {
@@ -92,6 +95,8 @@ var (
 	waitForActionCompletionSleepFn      = time.Sleep
 
 	syncNodeStatusInterval = 30 * time.Second
+
+	spdkPodEventDelay = 20 * time.Second
 )
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
@@ -108,6 +113,7 @@ var (
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -160,39 +166,8 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	sa := utils.BuildStorageNodeServiceAccount(snCR.Namespace)
-	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
-	}
-	desiredSAOwnerRefs := sa.OwnerReferences
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
-		sa.OwnerReferences = desiredSAOwnerRefs
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to apply ServiceAccount: %w", err)
-	}
-
-	cr := utils.BuildStorageNodeClusterRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster))
-	desiredCRRules := cr.Rules
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
-		cr.Rules = desiredCRRules
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRole: %w", err)
-	}
-
-	crb := utils.BuildStorageNodeClusterRoleBinding(snCR.Namespace)
-	desiredCRBSubjects := crb.Subjects
-	desiredCRBRoleRef := crb.RoleRef
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
-		crb.Subjects = desiredCRBSubjects
-		crb.RoleRef = desiredCRBRoleRef
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
+	if err := r.reconcileRBAC(ctx, snCR); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if err := r.reconcileService(ctx, snCR); err != nil {
@@ -224,11 +199,8 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	expectedPerHost := utils.ExpectedNodesPerHost(snCR)
 
-	for _, nodeName := range snCR.Spec.WorkerNodes {
-		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
-		if err != nil || res.RequeueAfter > 0 {
-			return res, err
-		}
+	if res, err := r.reconcileWorkerNodes(ctx, req, snCR, clusterUUID, apiClient, expectedPerHost); err != nil || res.RequeueAfter > 0 {
+		return res, err
 	}
 
 	if err := r.syncTrackedNodesStatus(ctx, apiClient, clusterUUID, snCR); err != nil {
@@ -277,19 +249,43 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 		return ctrl.Result{RequeueAfter: time.Second * 10}, nil
 	}
 
-	// Only send the POST if no placeholder entry exists yet for this host.
-	// A placeholder (UUID=="") means the POST was already sent and we are
-	// still waiting for the backend to bring the node(s) online.
-	hasPlaceholder := false
-	for _, n := range snCR.Status.Nodes {
-		if n.Hostname == nodeName && n.UUID == "" {
-			hasPlaceholder = true
-			break
+	// PendingNodeAdds is the authoritative guard against duplicate POSTs.
+	// It is a separate map field so patches to Status.Nodes by
+	// syncTrackedNodesStatus can never inadvertently delete it.
+	// The legacy UUID=="" placeholder check is kept as a fallback for
+	// CRs that existed before PendingNodeAdds was introduced.
+	_, isPending := snCR.Status.PendingNodeAdds[nodeName]
+	if !isPending {
+		for _, n := range snCR.Status.Nodes {
+			if n.Hostname == nodeName && n.UUID == "" {
+				isPending = true
+				break
+			}
 		}
 	}
 
-	if !hasPlaceholder {
+	if !isPending {
+		// Persist the pending marker BEFORE the POST so that every future
+		// reconcile — including those triggered while sbcli is retrying
+		// internally after a failure — sees the marker and skips the POST.
+		patch := client.MergeFrom(snCR.DeepCopy())
+		if snCR.Status.PendingNodeAdds == nil {
+			snCR.Status.PendingNodeAdds = make(map[string]metav1.Time)
+		}
+		snCR.Status.PendingNodeAdds[nodeName] = metav1.Now()
+		if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+			log.Error(err, "Failed to persist pending node add marker before POST, retrying", "node", nodeName)
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+
 		if res, err := r.postStorageNode(ctx, req, snCR, nodeName, ip, clusterUUID, apiClient); err != nil || res.RequeueAfter > 0 {
+			// POST failed — clear the pending marker so the next reconcile
+			// retries the POST rather than waiting on a node that was never created.
+			clearPatch := client.MergeFrom(snCR.DeepCopy())
+			delete(snCR.Status.PendingNodeAdds, nodeName)
+			if patchErr := r.Status().Patch(ctx, snCR, clearPatch); patchErr != nil {
+				log.Error(patchErr, "Failed to clear pending node add marker after POST failure", "node", nodeName)
+			}
 			return res, err
 		}
 	}
@@ -403,7 +399,7 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func isSpdkProxyPod(obj client.Object) bool {
-	return obj.GetLabels()["role"] == "simplyblock-storage-node"
+	return obj.GetLabels()["role"] == utils.LabelSpdkProxyRole
 }
 
 func isStorageNodeTLSSecret(obj client.Object) bool {
@@ -707,6 +703,16 @@ func (r *StorageNodeReconciler) reconcileEndpointSlice(
 		nodeIPs[nodeName] = ip
 	}
 
+	return r.applyStorageNodeEndpointSlice(ctx, snCR, nodeIPs)
+}
+
+// applyStorageNodeEndpointSlice creates or updates the storage-node-api
+// EndpointSlice with the supplied nodeIPs map.
+func (r *StorageNodeReconciler) applyStorageNodeEndpointSlice(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+	nodeIPs map[string]string,
+) error {
 	eps := utils.BuildStorageNodeEndpointSlice(snCR, nodeIPs)
 	if err := controllerutil.SetControllerReference(snCR, eps, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set EndpointSlice owner reference: %w", err)
@@ -757,7 +763,7 @@ func (r *StorageNodeReconciler) reconcileSpdkProxyEndpointSlices(
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods,
 		client.InNamespace(snCR.Namespace),
-		client.MatchingLabels{"role": "simplyblock-storage-node"},
+		client.MatchingLabels{"role": utils.LabelSpdkProxyRole},
 	); err != nil {
 		return fmt.Errorf("failed to list spdk-proxy pods: %w", err)
 	}
@@ -837,6 +843,231 @@ func (r *StorageNodeReconciler) reconcileSpdkProxyEndpointSlices(
 	}
 
 	return nil
+}
+
+// workerIsInFlight returns true if a node-add POST has already been sent for
+// nodeName and is still being tracked — either via PendingNodeAdds (primary)
+// or the legacy UUID=="" placeholder (backward compatibility).
+func workerIsInFlight(snCR *simplyblockv1alpha1.StorageNode, nodeName string) bool {
+	if _, ok := snCR.Status.PendingNodeAdds[nodeName]; ok {
+		return true
+	}
+	for _, n := range snCR.Status.Nodes {
+		if n.Hostname == nodeName && n.UUID == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// recordSpdkPodEvents finds the worker's pending SPDK pod, fetches its most
+// recent Kubernetes event, and surfaces it on the StorageNode CR status so
+// operators can see why a pod is stuck without running kubectl describe.
+func (r *StorageNodeReconciler) recordSpdkPodEvents(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+	nodeName string,
+) {
+	log := logf.FromContext(ctx)
+
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList,
+		client.InNamespace(snCR.Namespace),
+		client.MatchingLabels{"role": utils.LabelSpdkProxyRole},
+	); err != nil {
+		log.Error(err, "recordSpdkPodEvents: failed to list SPDK pods", "node", nodeName)
+		return
+	}
+
+	var targetPod *corev1.Pod
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if pod.Status.Phase != corev1.PodPending {
+			continue
+		}
+		if pod.Spec.NodeName == nodeName ||
+			pod.Spec.NodeSelector["kubernetes.io/hostname"] == nodeName {
+			targetPod = pod
+			break
+		}
+	}
+	if targetPod == nil {
+		return
+	}
+
+	var eventList corev1.EventList
+	if err := r.List(ctx, &eventList, client.InNamespace(snCR.Namespace)); err != nil {
+		log.Error(err, "recordSpdkPodEvents: failed to list events", "node", nodeName)
+		return
+	}
+
+	var latest *corev1.Event
+	for i := range eventList.Items {
+		ev := &eventList.Items[i]
+		if ev.InvolvedObject.Name != targetPod.Name {
+			continue
+		}
+		if latest == nil || ev.LastTimestamp.After(latest.LastTimestamp.Time) {
+			latest = ev
+		}
+	}
+	if latest == nil {
+		return
+	}
+
+	r.Recorder.Eventf(snCR, corev1.EventTypeWarning, latest.Reason,
+		"worker %s: %s", nodeName, latest.Message)
+
+	// Persist the flag so the recovery event is emitted correctly even if the
+	// operator restarts before the node comes online.
+	patch := client.MergeFrom(snCR.DeepCopy())
+	if snCR.Status.SchedulingFailedWorkers == nil {
+		snCR.Status.SchedulingFailedWorkers = make(map[string]bool)
+	}
+	snCR.Status.SchedulingFailedWorkers[nodeName] = true
+	if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+		log.Error(err, "recordSpdkPodEvents: failed to persist scheduling failure flag", "node", nodeName)
+	}
+}
+
+// reconcileWorkerNodes fans out the node-add loop across parallel (non-FDB) and
+// sequential (FDB) workers, respecting MaxParallelNodeAdds.
+// MaxParallelNodeAdds carries a +kubebuilder:default=1 marker so the API server
+// always populates it before the CR is stored — it is safe to dereference directly.
+func (r *StorageNodeReconciler) reconcileWorkerNodes(
+	ctx context.Context,
+	req ctrl.Request,
+	snCR *simplyblockv1alpha1.StorageNode,
+	clusterUUID string,
+	apiClient *webapi.Client,
+	expectedPerHost int,
+) (ctrl.Result, error) {
+	fdbWorkers := r.fdbWorkerSet(ctx, snCR)
+
+	var parallelWorkers, sequentialWorkers []string
+	for _, nodeName := range snCR.Spec.WorkerNodes {
+		if fdbWorkers[nodeName] {
+			sequentialWorkers = append(sequentialWorkers, nodeName)
+		} else {
+			parallelWorkers = append(parallelWorkers, nodeName)
+		}
+	}
+
+	maxParallel := int(*snCR.Spec.MaxParallelNodeAdds)
+
+	inFlight := 0
+	for _, nodeName := range parallelWorkers {
+		if workerIsInFlight(snCR, nodeName) {
+			inFlight++
+		}
+	}
+	availableSlots := maxParallel - inFlight
+
+	var parallelRequeueAfter time.Duration
+	for _, nodeName := range parallelWorkers {
+		alreadyInFlight := workerIsInFlight(snCR, nodeName)
+		if !alreadyInFlight {
+			if availableSlots <= 0 {
+				if waitForNodeOnlineWaitInterval > parallelRequeueAfter {
+					parallelRequeueAfter = waitForNodeOnlineWaitInterval
+				}
+				continue
+			}
+		}
+		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		// Only count the slot if the POST was genuinely sent (PendingNodeAdds
+		// was set). A transient failure (e.g. checkNodeInfoReachable) clears
+		// PendingNodeAdds immediately, so the slot should not be consumed.
+		if !alreadyInFlight && workerIsInFlight(snCR, nodeName) {
+			availableSlots--
+		}
+		if res.RequeueAfter > parallelRequeueAfter {
+			parallelRequeueAfter = res.RequeueAfter
+		}
+	}
+
+	for _, nodeName := range sequentialWorkers {
+		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		// Only block subsequent FDB workers if this worker is genuinely
+		// in-flight (PendingNodeAdds set after a successful POST). A transient
+		// failure such as checkNodeInfoReachable must not starve later workers.
+		if res.RequeueAfter > 0 && workerIsInFlight(snCR, nodeName) {
+			return res, nil
+		}
+	}
+
+	return ctrl.Result{RequeueAfter: parallelRequeueAfter}, nil
+}
+
+// reconcileRBAC ensures the ServiceAccount, ClusterRole, and ClusterRoleBinding
+// required by the storage-node DaemonSet are present and up to date.
+func (r *StorageNodeReconciler) reconcileRBAC(ctx context.Context, snCR *simplyblockv1alpha1.StorageNode) error {
+	sa := utils.BuildStorageNodeServiceAccount(snCR.Namespace)
+	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
+	}
+	desiredSAOwnerRefs := sa.OwnerReferences
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
+		sa.OwnerReferences = desiredSAOwnerRefs
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to apply ServiceAccount: %w", err)
+	}
+
+	cr := utils.BuildStorageNodeClusterRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster))
+	desiredCRRules := cr.Rules
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
+		cr.Rules = desiredCRRules
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to apply ClusterRole: %w", err)
+	}
+
+	crb := utils.BuildStorageNodeClusterRoleBinding(snCR.Namespace)
+	desiredCRBSubjects := crb.Subjects
+	desiredCRBRoleRef := crb.RoleRef
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
+		crb.Subjects = desiredCRBSubjects
+		crb.RoleRef = desiredCRBRoleRef
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
+	}
+	return nil
+}
+
+// fdbWorkerSet returns the set of worker node names (from snCR.Spec.WorkerNodes)
+// that currently host at least one FDB pod. These workers must be added
+// sequentially to avoid simultaneous reboots that reduce FDB fault tolerance.
+func (r *StorageNodeReconciler) fdbWorkerSet(ctx context.Context, snCR *simplyblockv1alpha1.StorageNode) map[string]bool {
+	workerSet := make(map[string]bool, len(snCR.Spec.WorkerNodes))
+	for _, w := range snCR.Spec.WorkerNodes {
+		workerSet[w] = false
+	}
+
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList,
+		client.InNamespace(snCR.Namespace),
+		client.HasLabels{utils.LabelFDBClusterName},
+	); err != nil {
+		return workerSet
+	}
+
+	fdbWorkers := make(map[string]bool)
+	for _, pod := range podList.Items {
+		if pod.Spec.NodeName != "" {
+			if _, isWorker := workerSet[pod.Spec.NodeName]; isWorker {
+				fdbWorkers[pod.Spec.NodeName] = true
+			}
+		}
+	}
+	return fdbWorkers
 }
 
 func isSpdkProxyPodReady(pod *corev1.Pod) bool {
@@ -1075,16 +1306,27 @@ func (r *StorageNodeReconciler) nodeOnlineRequeueOrTimeout(
 	log := logf.FromContext(ctx)
 	timeout := time.Duration(waitForNodeOnlineRetries) * waitForNodeOnlineWaitInterval
 
-	for i := range snCR.Status.Nodes {
-		n := &snCR.Status.Nodes[i]
-		if n.Hostname == nodeName && n.UUID == "" && n.PostedAt != nil {
-			if time.Since(n.PostedAt.Time) <= timeout {
-				return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
+	// PendingNodeAdds is the primary source for the post timestamp.
+	// Fall back to the legacy UUID=="" PostedAt for backward compatibility.
+	if postedAt, ok := snCR.Status.PendingNodeAdds[nodeName]; ok {
+		if time.Since(postedAt.Time) <= timeout {
+			if time.Since(postedAt.Time) >= spdkPodEventDelay {
+				r.recordSpdkPodEvents(ctx, snCR, nodeName)
+			}
+			return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
+		}
+	} else {
+		for i := range snCR.Status.Nodes {
+			n := &snCR.Status.Nodes[i]
+			if n.Hostname == nodeName && n.UUID == "" && n.PostedAt != nil {
+				if time.Since(n.PostedAt.Time) <= timeout {
+					return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
+				}
 			}
 		}
 	}
 
-	// Timed out (or PostedAt missing — treat as timed-out to avoid infinite requeue).
+	// Timed out (or no post timestamp found — treat as timed-out).
 	log.Error(nil, "Timeout waiting for node to become online", "node", nodeName)
 	updated := false
 	for i := range snCR.Status.Nodes {
@@ -1159,6 +1401,20 @@ func onAllSocketNodesOnline(
 		}
 	}
 
+	// All socket nodes confirmed online — remove the pending marker so the
+	// worker is no longer considered in-flight.
+	if _, ok := snCR.Status.PendingNodeAdds[nodeName]; ok {
+		delete(snCR.Status.PendingNodeAdds, nodeName)
+		changed = true
+	}
+	// Emit a recovery event only if the worker previously had a scheduling
+	// failure, then clear the flag.
+	if snCR.Status.SchedulingFailedWorkers[nodeName] {
+		r.Recorder.Eventf(snCR, corev1.EventTypeNormal, "NodeOnline",
+			"worker %s: SPDK pod is now online after previous scheduling failure", nodeName)
+		delete(snCR.Status.SchedulingFailedWorkers, nodeName)
+		changed = true
+	}
 	if changed {
 		if err := r.Status().Patch(ctx, snCR, patch); err != nil {
 			log.Error(err, "Failed to patch node status to online", "node", nodeName)
@@ -1425,6 +1681,13 @@ func (r *StorageNodeReconciler) performNodeAction(
 				return fmt.Errorf("failed to label worker node %s: %w", snCR.Spec.WorkerNode, err)
 			}
 
+			// The action reconcile path skips reconcileEndpointSlice, so the
+			// headless-service DNS entry for the target worker would be missing.
+			// Ensure the EndpointSlice is updated before any reachability check.
+			if err := r.ensureWorkerInEndpointSlice(ctx, snCR, snCR.Spec.WorkerNode); err != nil {
+				return fmt.Errorf("failed to ensure endpoint for worker %s: %w", snCR.Spec.WorkerNode, err)
+			}
+
 			if err := waitForNodeInfoReachable(ctx, snCR.Spec.WorkerNode, snCR.Namespace, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
 				log.Error(err, "node never became reachable")
 				return err
@@ -1511,6 +1774,39 @@ func nodeActionForce(snCR *simplyblockv1alpha1.StorageNode, defaultValue bool) b
 		return defaultValue
 	}
 	return *snCR.Spec.Force
+}
+
+// ensureWorkerInEndpointSlice adds the target worker to the storage-node-api
+// EndpointSlice when it is absent. spec.workerNode holds the migration target
+// but is never part of spec.workerNodes, so reconcileEndpointSlice would never
+// add a DNS hostname entry for it, causing headless-service lookups to fail.
+func (r *StorageNodeReconciler) ensureWorkerInEndpointSlice(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNode,
+	workerNode string,
+) error {
+	if slices.Contains(snCR.Spec.WorkerNodes, workerNode) {
+		return nil // already covered by the regular EndpointSlice reconciliation
+	}
+
+	ip, err := getNodeInternalIP(ctx, r.Client, workerNode)
+	if err != nil {
+		return fmt.Errorf("failed to get IP for worker %s: %w", workerNode, err)
+	}
+
+	log := logf.FromContext(ctx)
+	nodeIPs := make(map[string]string, len(snCR.Spec.WorkerNodes)+1)
+	for _, nodeName := range snCR.Spec.WorkerNodes {
+		nodeIP, err := getNodeInternalIP(ctx, r.Client, nodeName)
+		if err != nil {
+			log.Error(err, "failed to get internal IP for EndpointSlice, skipping node", "node", nodeName)
+			continue
+		}
+		nodeIPs[nodeName] = nodeIP
+	}
+	nodeIPs[workerNode] = ip
+
+	return r.applyStorageNodeEndpointSlice(ctx, snCR, nodeIPs)
 }
 
 func (r *StorageNodeReconciler) waitForActionCompletion(

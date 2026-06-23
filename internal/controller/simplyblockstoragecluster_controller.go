@@ -148,15 +148,15 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	log := logf.FromContext(ctx)
 
 	apiClient := webapi.NewClient()
-	/* -------------------- Health Check -------------------- */
-	endpoint := "/api/v1/health/fdb/"
+	/* -------------------- Readiness Check -------------------- */
+	endpoint := "/api/v2/_meta/ready"
 	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
 		}
-		log.Error(err, "FDB not ready", "status", status, "response", string(body))
-		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonFDBNotReady, "FDB health check failed (status=%d): %s", status, string(body))
+		log.Error(err, "control plane not ready", "status", status, "response", string(body))
+		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonFDBNotReady, "Control plane readiness check failed (status=%d): %s", status, string(body))
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -263,22 +263,6 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	}
 
 	log.Info("Cluster successfully created", "name", clusterCR.Name)
-
-	// clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
-	// if err != nil {
-	// 	log.Error(err, "Failed to get cluster auth")
-	// 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	// }
-
-	// endpoint := fmt.Sprintf("/api/v2/clusters/%s/update", clusterUUID)
-
-	// body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, updateParams)
-	// if err != nil || status >= 300 {
-	// 	log.Error(err, "Cluster update failed", "status", status, "response", string(body))
-	// 	return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-	// }
-
-	// log.Info("Cluster updated successfully", "name", clusterCR.Name)
 	return ctrl.Result{}, nil
 }
 
@@ -414,11 +398,6 @@ func (r *StorageClusterReconciler) handleDeletion(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
 	}
 
-	if err := r.deleteClusterSecret(ctx, clusterCR); err != nil {
-		log.Error(err, "Failed to delete cluster secret, will retry", "name", clusterCR.Name)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
-	}
-
 	controllerutil.RemoveFinalizer(clusterCR, utils.FinalizerStorageCluster)
 	return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 }
@@ -434,32 +413,6 @@ func (r *StorageClusterReconciler) ensureFinalizer(
 
 	controllerutil.AddFinalizer(clusterCR, utils.FinalizerStorageCluster)
 	return true, r.Update(ctx, clusterCR)
-}
-
-func (r *StorageClusterReconciler) deleteClusterSecret(
-	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.StorageCluster,
-) error {
-
-	secretName := clusterCR.Status.SecretName
-	if secretName == "" {
-		secretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Name)
-	}
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: clusterCR.Namespace,
-		},
-	}
-
-	if err := r.Delete(ctx, secret); err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (r *StorageClusterReconciler) reconcileActivate(
