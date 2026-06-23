@@ -212,24 +212,40 @@ func probe(configFile, metricsAddr string, interval time.Duration) {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	active := make(map[string]bool) // node UUIDs with a running goroutine
+	// running maps each active node UUID to the cancel func that stops its probe.
+	// The set is reconciled against the config every loop: new nodes are started and
+	// nodes that have disappeared (e.g. removed, or a cluster reinstall replaced the
+	// ConfigMap which is keyed by the constant cluster *name*) are stopped — otherwise
+	// a dead node keeps getting probed forever and leaves a stale gauge in Prometheus.
+	running := make(map[string]context.CancelFunc)
 
 	log.Printf("probe: watching %s for baseline-complete nodes (interval=%s)", configFile, interval)
 
 	for {
+		desired := make(map[string]bool)
 		for _, n := range readConfig(configFile) {
-			if active[n.NodeUUID] {
+			desired[n.NodeUUID] = true
+			if _, ok := running[n.NodeUUID]; ok {
 				continue
 			}
-			active[n.NodeUUID] = true
+			nodeCtx, nodeCancel := context.WithCancel(ctx)
+			running[n.NodeUUID] = nodeCancel
 			log.Printf("baseline complete for node %s — starting probe", n.NodeUUID)
 			wg.Add(1)
 			go func(n probeNodeConfig) {
 				defer wg.Done()
-				probeNode(ctx, n, p50, p99, interval)
+				probeNode(nodeCtx, n, p50, p99, interval)
 			}(n)
 		}
-		if len(active) == 0 {
+		// Stop probes for nodes no longer present in the config.
+		for uuid, stop := range running {
+			if !desired[uuid] {
+				log.Printf("node %s no longer in config — stopping probe", uuid)
+				stop()
+				delete(running, uuid)
+			}
+		}
+		if len(running) == 0 {
 			log.Printf("waiting for baseline to complete (%s) ...", configFile)
 		}
 
@@ -270,6 +286,13 @@ func probeNodes(nodes []probeNodeConfig, metricsAddr string, interval time.Durat
 func probeNode(ctx context.Context, n probeNodeConfig, p50, p99 *prometheus.GaugeVec, interval time.Duration) {
 	conn := connConfig{Addr: n.Addr, Port: fmt.Sprintf("%d", n.Port), NQN: n.NQN}
 	log.Printf("probe node=%s cluster=%s interval=%s", n.NodeUUID, n.ClusterUUID, interval)
+
+	// When this probe stops (node removed from config / shutdown), drop its gauge series
+	// so a dead node/cluster does not leave a stale latency value in Prometheus.
+	defer func() {
+		p50.DeleteLabelValues(n.ClusterUUID, n.NodeUUID)
+		p99.DeleteLabelValues(n.ClusterUUID, n.NodeUUID)
+	}()
 
 	for {
 		device, disconnect, err := connectAndWait(ctx, conn)
@@ -325,8 +348,29 @@ func connectAndWait(ctx context.Context, conn connConfig) (device string, discon
 	// Always disconnect first to ensure a clean device state that supports O_DIRECT.
 	nvmeDisconnect(conn.NQN)
 	log.Printf("nvme reconnect after disconnect")
-	if err := nvmeConnect(ctx, conn); err != nil {
-		return "", nil, err
+
+	// Retry the connect rather than failing the whole run on the first attempt. The
+	// volume's NVMe-oF target is often not yet accepting connections the instant this
+	// runs (the Job/probe can start before the subsystem listener is ready), so the
+	// first attempt fails fast with "connection refused" / "no such subsystem". Without
+	// this, a baseline Job errors out and only succeeds after several controller-driven
+	// recreations — the long-standing "jobs need multiple iterations" behaviour.
+	var connErr error
+	connected := false
+	for i := range 30 {
+		if connErr = nvmeConnect(ctx, conn); connErr == nil {
+			connected = true
+			break
+		}
+		log.Printf("nvme connect not ready (attempt %d): %v", i+1, connErr)
+		select {
+		case <-ctx.Done():
+			return "", nil, ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	if !connected {
+		return "", nil, fmt.Errorf("nvme connect failed after retries: %w", connErr)
 	}
 
 	disconnect = func() { nvmeDisconnect(conn.NQN) }
