@@ -152,6 +152,39 @@ func (c *Client) GetPoolVolumes(
 	return volumes, nil
 }
 
+// GetVolume fetches a single volume by its cluster/pool/volume UUIDs (all known
+// from the CSI volume handle). Returns (nil, nil) when the volume no longer exists.
+func (c *Client) GetVolume(
+	ctx context.Context,
+	clusterUUID, poolUUID, volumeUUID string,
+) (*VolumeInfo, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/", clusterUUID, poolUUID, volumeUUID)
+	body, statusCode, err := c.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get volume %s: %w", volumeUUID, err)
+	}
+	if statusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if statusCode >= 300 {
+		return nil, fmt.Errorf("get volume %s: status %d: %s", volumeUUID, statusCode, string(body))
+	}
+	// The endpoint may return a single object or a one-element array depending on
+	// the backend version; accept both.
+	var one VolumeInfo
+	if err := json.Unmarshal(body, &one); err == nil && one.UUID != "" {
+		return &one, nil
+	}
+	var list []VolumeInfo
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("unmarshal volume %s: %w", volumeUUID, err)
+	}
+	if len(list) == 0 {
+		return nil, nil
+	}
+	return &list[0], nil
+}
+
 // CreateMigration submits a new volume migration request.
 // Returns a MigrationDTO containing the migration ID and the NVMe-oF
 // connection strings for the target-side paths. The caller must establish and

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
@@ -341,6 +342,20 @@ func (r *VolumeRebalancerReconciler) SetupWithManager(
 	mgr ctrl.Manager,
 ) error {
 	r.apiClient = webapi.NewClient()
+
+	// Index PersistentVolumes by CSI driver so BuildCSIManagedSet can filter to
+	// simplyblock CSI volumes through the cache instead of listing every PV.
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.PersistentVolume{},
+		autobalancing.PVCSIDriverIndexField, func(o client.Object) []string {
+			pv, ok := o.(*corev1.PersistentVolume)
+			if !ok || pv.Spec.CSI == nil {
+				return nil
+			}
+			return []string{pv.Spec.CSI.Driver}
+		}); err != nil {
+		return fmt.Errorf("index PersistentVolumes by CSI driver: %w", err)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageCluster{},
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).

@@ -12,6 +12,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	promlatency "github.com/simplyblock/simplyblock-operator/internal/metrics/prometheus"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -113,7 +114,15 @@ func (lvs *LogicalVolumeSelector) CollectVolumes(
 ) (volumesByNode map[string][]VolumePlacement, allVolumes map[string]VolumePlacement, err error) {
 	log := logf.FromContext(ctx)
 
-	volumesByNode, allVolumes, err = lvs.collectVolumesByNode(ctx, input.ClusterUUID)
+	// The rebalancer only ever acts on PV/PVC-managed volumes. Resolve the set of
+	// simplyblock CSI-managed volume UUIDs up front and restrict collection to them
+	// so backend-only volumes (e.g. benchmark probes) never enter the candidate pool.
+	managed, err := lvs.BuildCSIManagedVolumes(ctx, input.ClusterUUID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build CSI-managed volume set: %w", err)
+	}
+
+	volumesByNode, allVolumes, err = lvs.collectVolumesByNode(ctx, input.ClusterUUID, managed)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -159,31 +168,36 @@ func (lvs *LogicalVolumeSelector) FilterEligibleVolumes(
 	return out
 }
 
-// collectVolumesByNode fetches all volumes across every pool for the cluster and
-// groups them by primary node UUID. It also builds a flat index keyed by volume
-// UUID for O(1) lookup. Both structures contain the same VolumePlacement values.
+// collectVolumesByNode builds the migration candidate set by fetching exactly the
+// CSI-managed volumes (one backend GET each, using the cluster/pool/volume UUIDs from
+// the PV handle) — no pool enumeration. A volume that errors or no longer exists in
+// the backend is skipped rather than aborting the cycle. Returns:
+//   - volumesByNode: nodeUUID → []VolumePlacement (CSI-managed volumes only)
+//   - allVolumes:    volumeUUID → VolumePlacement, for O(1) lookup
 func (lvs *LogicalVolumeSelector) collectVolumesByNode(
 	ctx context.Context,
 	clusterUUID string,
+	managed []managedVolume,
 ) (volumesByNode map[string][]VolumePlacement, allVolumes map[string]VolumePlacement, err error) {
-	pools, err := lvs.apiClient.GetStoragePools(ctx, clusterUUID)
-	if err != nil {
-		return nil, nil, err
-	}
+	log := logf.FromContext(ctx)
 
 	volumesByNode = make(map[string][]VolumePlacement)
 	allVolumes = make(map[string]VolumePlacement)
 
-	for _, pool := range pools {
-		vols, err := lvs.apiClient.GetPoolVolumes(ctx, clusterUUID, pool.UUID)
+	for _, mv := range managed {
+		v, err := lvs.apiClient.GetVolume(ctx, clusterUUID, mv.PoolUUID, mv.VolumeUUID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("pool %s: %w", pool.UUID, err)
+			// One unreachable/erroring volume must not abort the whole cycle.
+			log.Error(err, "skipping volume: cannot fetch from backend", "volume", mv.VolumeUUID)
+			continue
 		}
-		for _, v := range vols {
-			vp := VolumePlacement{VolumeInfo: v, PoolUUID: pool.UUID}
-			volumesByNode[v.PrimaryNodeUUID] = append(volumesByNode[v.PrimaryNodeUUID], vp)
-			allVolumes[v.UUID] = vp
+		if v == nil {
+			log.V(1).Info("CSI-managed volume absent from backend; skipping", "volume", mv.VolumeUUID)
+			continue
 		}
+		vp := VolumePlacement{VolumeInfo: *v, PoolUUID: mv.PoolUUID}
+		volumesByNode[v.PrimaryNodeUUID] = append(volumesByNode[v.PrimaryNodeUUID], vp)
+		allVolumes[v.UUID] = vp
 	}
 	return volumesByNode, allVolumes, nil
 }
@@ -251,6 +265,54 @@ func (lvs *LogicalVolumeSelector) BuildPinnedSet(ctx context.Context, clusterUUI
 		}
 	}
 	return pinned, nil
+}
+
+// PVCSIDriverIndexField is the field-indexer key used to filter PersistentVolumes by
+// their CSI driver through the controller cache (the API server does not support a
+// spec.csi.driver field selector for PVs natively). It must be registered on the
+// manager's field indexer — see VolumeRebalancerReconciler.SetupWithManager.
+const PVCSIDriverIndexField = "spec.csi.driver"
+
+// managedVolume identifies a simplyblock CSI-managed volume fully from its PV's CSI
+// volume handle ("<clusterUUID>:<poolUUID>:<volumeUUID>") — enough to fetch exactly
+// that volume from the backend without enumerating any pool.
+type managedVolume struct {
+	PoolUUID   string
+	VolumeUUID string
+}
+
+// BuildCSIManagedVolumes returns the simplyblock CSI-managed volumes in the given
+// cluster, derived from the PersistentVolumes. The rebalancer only ever acts on
+// PV/PVC-managed volumes; backend-only volumes (e.g. the per-node benchmark probes
+// "simplyblock-rebalancer-<nodeUUID>", which have no PV) are therefore never
+// candidates. Pass an empty clusterUUID to include all clusters.
+//
+// The List is filtered server-side (via the cache field index) to PVs whose CSI
+// driver is the simplyblock provisioner, so non-simplyblock PVs never reach here.
+func (lvs *LogicalVolumeSelector) BuildCSIManagedVolumes(ctx context.Context, clusterUUID string) ([]managedVolume, error) {
+	var pvList corev1.PersistentVolumeList
+	if err := lvs.k8sClient.List(ctx, &pvList,
+		client.MatchingFields{PVCSIDriverIndexField: utils.CSIProvisioner}); err != nil {
+		return nil, fmt.Errorf("list simplyblock CSI PersistentVolumes: %w", err)
+	}
+
+	var managed []managedVolume
+	for i := range pvList.Items {
+		pv := &pvList.Items[i]
+		if pv.Spec.CSI == nil {
+			continue
+		}
+		// Handle format: "<clusterUUID>:<poolUUID>:<volumeUUID>"
+		parts := strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)
+		if len(parts) != 3 || parts[1] == "" || parts[2] == "" {
+			continue
+		}
+		if clusterUUID != "" && parts[0] != "" && parts[0] != clusterUUID {
+			continue
+		}
+		managed = append(managed, managedVolume{PoolUUID: parts[1], VolumeUUID: parts[2]})
+	}
+	return managed, nil
 }
 
 // overrideVolumeIO replaces the IOPS and ThroughputBytesPerSec fields on each
