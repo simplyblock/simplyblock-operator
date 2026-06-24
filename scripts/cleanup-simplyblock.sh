@@ -1,6 +1,43 @@
 #!/usr/bin/env bash
 
-NAMESPACE="${1:-simplyblock}"
+set -euo pipefail
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS] [NAMESPACE]
+
+Remove all simplyblock resources from a Kubernetes cluster.
+
+Arguments:
+  NAMESPACE    Target namespace (default: simplyblock)
+
+Options:
+  -f, --force  Skip interactive confirmation
+  -h, --help   Show this help message
+EOF
+    exit 0
+}
+
+FORCE=false
+NAMESPACE=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f|--force) FORCE=true; shift ;;
+        -h|--help)  usage ;;
+        -*)         echo "Unknown option: $1" >&2; usage ;;
+        *)
+            if [[ -z "$NAMESPACE" ]]; then
+                NAMESPACE="$1"
+            else
+                echo "Unexpected argument: $1" >&2; usage
+            fi
+            shift
+            ;;
+    esac
+done
+
+NAMESPACE="${NAMESPACE:-simplyblock}"
 HELM_RELEASE="simplyblock-operator"
 CRD_GROUP="storage.simplyblock.io"
 
@@ -23,6 +60,30 @@ elif command -v oc &>/dev/null; then
 else
     error "Neither kubectl nor oc found. Please install one and try again."
     exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Interactive confirmation
+# ---------------------------------------------------------------------------
+CURRENT_CONTEXT=$($KUBECTL config current-context 2>/dev/null || echo "<unknown>")
+CLUSTER_NAME=$($KUBECTL config view -o jsonpath="{.contexts[?(@.name==\"${CURRENT_CONTEXT}\")].context.cluster}" 2>/dev/null || echo "<unknown>")
+
+section "Cleanup target"
+echo -e "  Context:   ${RED}${CURRENT_CONTEXT}${NC}"
+echo -e "  Cluster:   ${RED}${CLUSTER_NAME}${NC}"
+echo -e "  Namespace: ${RED}${NAMESPACE}${NC}"
+echo ""
+
+if [[ "$FORCE" != true ]]; then
+    warn "This will permanently delete all simplyblock resources in the above context and namespace."
+    read -r -p "$(echo -e "${YELLOW}Continue? [y/N]:${NC} ")" answer
+    case "$answer" in
+        [yY]|[yY][eE][sS]) ;;
+        *)
+            info "Aborted."
+            exit 0
+            ;;
+    esac
 fi
 
 # ---------------------------------------------------------------------------
