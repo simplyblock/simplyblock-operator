@@ -38,12 +38,13 @@ func ParseClusterResponse(body []byte) (ClusterResponse, error) {
 	}
 
 	return ClusterResponse{
-		UUID:        payload.ID,
-		Secret:      payload.Secret,
-		NQN:         payload.NQN,
-		Status:      payload.Status,
-		Rebalancing: payload.Rebalancing,
-		NDCS:        payload.NDCS,
-		NPCS:        payload.NPCS,
+		UUID:              payload.ID,
+		Secret:            payload.Secret,
+		NQN:               payload.NQN,
+		Status:            payload.Status,
+		Rebalancing:       payload.Rebalancing,
+		NDCS:              payload.NDCS,
+		NPCS:              payload.NPCS,
+		MaxFaultTolerance: payload.MaxFaultTolerance,
 	}, nil
 }
