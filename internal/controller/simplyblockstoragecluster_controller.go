@@ -251,6 +251,8 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	clusterCR.Status.Status = apiResp.Status
 	clusterCR.Status.NQN = apiResp.NQN
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
+	mft := int32(apiResp.MaxFaultTolerance)
+	clusterCR.Status.MaxFaultTolerance = &mft
 
 	clusterCR.Status.ClusterName = clusterCR.Name
 	clusterCR.Status.Configured = true
@@ -790,10 +792,8 @@ func (r *StorageClusterReconciler) syncStatus(
 	clusterCR.Status.NQN = resp.NQN
 	clusterCR.Status.Rebalancing = &resp.Rebalancing
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
-	if resp.MaxFaultTolerance > 0 {
-		v := int32(resp.MaxFaultTolerance)
-		clusterCR.Status.MaxFaultTolerance = &v
-	}
+	mftSync := int32(resp.MaxFaultTolerance)
+	clusterCR.Status.MaxFaultTolerance = &mftSync
 
 	if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
 		log.Error(err, "syncStatus: failed to patch cluster status", "name", clusterCR.Name)
