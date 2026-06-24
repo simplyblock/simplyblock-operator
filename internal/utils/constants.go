@@ -4,7 +4,7 @@ const (
 	FinalizerPool                = "storage.simplyblock.io/pool-finalizer"
 	FinalizerTask                = "storage.simplyblock.io/task-finalizer"
 	FinalizerSnapshotReplication = "storage.simplyblock.io/snapshotreplication-finalizer"
-	FinalizerStorageNode         = "storage.simplyblock.io/storagenode-finalizer"
+	FinalizerStorageNodeSet      = "storage.simplyblock.io/storagenodeset-finalizer"
 	FinalizerStorageCluster      = "storage.simplyblock.io/cluster-finalizer"
 
 	ClusterActionActivate    = "activate"
@@ -41,8 +41,8 @@ const (
 	ENDPOINT       = "http://simplyblock-webappapi:5000"
 	CSIProvisioner = "csi.simplyblock.io"
 
-	SecretNameStorageNodeAPITLS = "simplyblock-storage-node-api-tls"
-	SecretNameSpdkProxyTLS      = "simplyblock-spdk-proxy-tls"
+	SecretNameStorageNodeSetAPITLS = "simplyblock-storage-node-api-tls"
+	SecretNameSpdkProxyTLS         = "simplyblock-spdk-proxy-tls"
 
 	AnnotationTLSSecretRevision = "storage.simplyblock.io/tls-secret-revision"
 

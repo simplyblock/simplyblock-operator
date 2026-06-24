@@ -39,8 +39,8 @@ func TestCountOnlineHealthyNodes(t *testing.T) {
 }
 
 func TestShouldActivateCluster(t *testing.T) {
-	cr := &simplyblockv1alpha1.StorageNode{
-		Spec: simplyblockv1alpha1.StorageNodeSpec{
+	cr := &simplyblockv1alpha1.StorageNodeSet{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
 			WorkerNodes: []string{"n1", "n2", "n3"},
 		},
 	}

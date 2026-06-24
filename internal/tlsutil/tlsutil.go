@@ -32,14 +32,14 @@ var ServiceClientKeyPath = "/etc/simplyblock/tls/tls.key"
 // is mounted at. Overridable for tests.
 var OperatorNamespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
-// BuildStorageNodeAPIClient returns an *http.Client that trusts the CA at
+// BuildStorageNodeSetAPIClient returns an *http.Client that trusts the CA at
 // caPath, pins ServerName to the storage-node API service DNS name in the
 // given namespace, and optionally presents the client certificate pair at
 // certPath/keyPath when both paths are provided. This lets the operator dial
 // a pod/host IP directly while still passing hostname verification against
 // the service-ca-issued cert, whose SAN is the service DNS name. Timeout is
 // short (3s) since this is used for reachability probes.
-func BuildStorageNodeAPIClient(namespace, caPath, certPath, keyPath string) (*http.Client, error) {
+func BuildStorageNodeSetAPIClient(namespace, caPath, certPath, keyPath string) (*http.Client, error) {
 	c, err := buildServiceAPIClient("simplyblock-storage-node-api", namespace, caPath)
 	if err != nil {
 		return nil, err

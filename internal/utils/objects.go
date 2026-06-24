@@ -171,7 +171,7 @@ func CountOnlineHealthyNodes(
 // ExpectedNodesPerHost returns how many backend storage-nodes the control-plane
 // will create for a single Kubernetes worker when socketsToUse is configured.
 // Without socketsToUse it is always 1.
-func ExpectedNodesPerHost(snCR *simplyblockv1alpha1.StorageNode) int {
+func ExpectedNodesPerHost(snCR *simplyblockv1alpha1.StorageNodeSet) int {
 	if len(snCR.Spec.SocketsToUse) == 0 {
 		return 1
 	}
@@ -185,7 +185,7 @@ func ExpectedNodesPerHost(snCR *simplyblockv1alpha1.StorageNode) int {
 func ShouldActivateCluster(
 	mod int,
 	onlineHealthy int,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) bool {
 
 	required := mod + 1
@@ -396,7 +396,7 @@ func ClusterSuspended(ctx context.Context, apiClient *webapi.Client, clusterUUID
 	return strings.EqualFold(resp.Status, ClusterStatusSuspended), nil
 }
 
-func AllStorageNodesUnreachable(
+func AllStorageNodeSetsUnreachable(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
@@ -564,7 +564,7 @@ func ShouldFailoverToRepCluster(
 		return suspended, err
 	}
 
-	allUnreachable, err := AllStorageNodesUnreachable(ctx, apiClient, clusterUUID)
+	allUnreachable, err := AllStorageNodeSetsUnreachable(ctx, apiClient, clusterUUID)
 	if err != nil {
 		return false, err
 	}
