@@ -232,7 +232,7 @@ func (r *StorageNodeLatencyReconciler) processNodeBaseline(
 			m.BaselineP50NS = baseline.P50NS
 			m.BaselineP99NS = baseline.P99NS
 			m.BaselineMeasuredAt = &now
-			log.Info("Baseline measured", "node", node.UUID, "p99ns", baseline.P99NS)
+			log.Info("Baseline measured", "node", node.UUID, "p50ns", baseline.P50NS, "p99ns", baseline.P99NS)
 			jobChanged = true
 		}
 		if jobChanged {
