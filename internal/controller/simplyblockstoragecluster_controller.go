@@ -833,10 +833,7 @@ func (r *StorageClusterReconciler) syncStatus(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	clusterSecretName := clusterCR.Status.SecretName
-	if clusterSecretName == "" {
-		clusterSecretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Name)
-	}
+	clusterSecretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Name)
 	clusterSecret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Name: clusterSecretName, Namespace: clusterCR.Namespace}, clusterSecret); err == nil {
 		secretVal := string(clusterSecret.Data["secret"])

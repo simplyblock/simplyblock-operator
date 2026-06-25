@@ -264,7 +264,7 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 		}
 	}
 
-	if !hasPlaceholder {
+	if !isPending {
 		// Proactive: check if nodes already exist on backend (e.g. from Helm deployment)
 		// before sending a POST that would either fail or create a duplicate.
 		// For multi-socket deployments (expectedPerHost > 1) a single POST creates all
@@ -298,7 +298,6 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 				return ctrl.Result{}, nil
 			}
 		}
-	if !isPending {
 		// Persist the pending marker BEFORE the POST so that every future
 		// reconcile — including those triggered while sbcli is retrying
 		// internally after a failure — sees the marker and skips the POST.
