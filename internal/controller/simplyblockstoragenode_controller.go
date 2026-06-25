@@ -994,10 +994,12 @@ func (r *StorageNodeReconciler) reconcileWorkerNodes(
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		// Only block subsequent FDB workers if this worker is genuinely
-		// in-flight (PendingNodeAdds set after a successful POST). A transient
-		// failure such as checkNodeInfoReachable must not starve later workers.
-		if res.RequeueAfter > 0 && workerIsInFlight(snCR, nodeName) {
+		// Always return early for sequential (FDB) workers on any requeue.
+		// If a concurrent reconcile's PendingNodeAdds persist failed (conflict),
+		// workerIsInFlight would be false on the local snCR even though the
+		// worker is effectively claimed — continuing the loop would process the
+		// next FDB worker in parallel, violating the one-at-a-time guarantee.
+		if res.RequeueAfter > 0 {
 			return res, nil
 		}
 	}
