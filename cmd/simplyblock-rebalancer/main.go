@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -91,6 +92,12 @@ func main() {
 
 	// Baseline-only.
 	terminationLog := flag.String("termination-log", "/tmp/termination-log", "path to write JSON result (baseline)")
+	baselineSamples := flag.Int("baseline-samples", 5,
+		"number of fio measurements to take for the baseline (the high/low outliers are "+
+			"dropped and the rest averaged, so the baseline reflects steady state, not a "+
+			"single noisy sample)")
+	baselineInterval := flag.Duration("baseline-interval", 15*time.Second,
+		"delay between successive baseline measurements")
 
 	// Probe-only.
 	configFile := flag.String("config", "",
@@ -112,7 +119,8 @@ func main() {
 		if *addr == "" || *port == "" || *nqn == "" {
 			log.Fatal("--addr, --port and --nqn (or FIO_NODE_ADDR/FIO_NODE_PORT/FIO_VOLUME_NQN) are required")
 		}
-		baseline(connConfig{Addr: *addr, Port: *port, NQN: *nqn}, *terminationLog)
+		baseline(connConfig{Addr: *addr, Port: *port, NQN: *nqn}, *terminationLog,
+			*baselineSamples, *baselineInterval)
 
 	case "probe":
 		if *configFile != "" {
@@ -153,8 +161,12 @@ func readConfig(path string) []probeNodeConfig {
 
 // ── baseline mode ──────────────────────────────────────────────────────────────
 
-func baseline(conn connConfig, terminationLog string) {
+func baseline(conn connConfig, terminationLog string, samples int, interval time.Duration) {
 	ctx := context.Background()
+
+	if samples < 1 {
+		samples = 1
+	}
 
 	device, disconnect, err := connectAndWait(ctx, conn)
 	if err != nil {
@@ -162,16 +174,52 @@ func baseline(conn connConfig, terminationLog string) {
 	}
 	defer disconnect()
 
-	result, err := measure(ctx, device)
-	if err != nil {
-		log.Fatalf("fio: %v", err)
+	// Take several measurements in succession; a single fio run is a noisy sample of a
+	// spiky latency distribution, so we aggregate (trimmed mean) for a stable baseline.
+	var p50s, p99s []int64
+	for i := 0; i < samples; i++ {
+		if i > 0 {
+			time.Sleep(interval)
+		}
+		r, mErr := measure(ctx, device)
+		if mErr != nil {
+			log.Printf("baseline sample %d/%d failed: %v", i+1, samples, mErr)
+			continue
+		}
+		p50s = append(p50s, r.P50NS)
+		p99s = append(p99s, r.P99NS)
+		log.Printf("baseline sample %d/%d: p50=%dns p99=%dns", i+1, samples, r.P50NS, r.P99NS)
+	}
+	if len(p50s) == 0 {
+		log.Fatalf("fio: all %d baseline samples failed", samples)
 	}
 
+	result := &latencyResult{P50NS: trimmedMean(p50s), P99NS: trimmedMean(p99s)}
 	out, _ := json.Marshal(result)
 	if err := os.WriteFile(terminationLog, out, 0o644); err != nil {
 		log.Fatalf("write termination log: %v", err)
 	}
-	log.Printf("baseline complete: p50=%dns p99=%dns", result.P50NS, result.P99NS)
+	log.Printf("baseline complete (%d/%d samples): p50=%dns p99=%dns",
+		len(p50s), samples, result.P50NS, result.P99NS)
+}
+
+// trimmedMean drops the single lowest and highest value (when there are >=3 samples)
+// to reject outliers, then averages the rest. With 1–2 samples it averages all.
+func trimmedMean(vals []int64) int64 {
+	n := len(vals)
+	if n == 0 {
+		return 0
+	}
+	s := append([]int64(nil), vals...)
+	slices.Sort(s)
+	if n >= 3 {
+		s = s[1 : n-1] // drop min and max
+	}
+	var sum int64
+	for _, v := range s {
+		sum += v
+	}
+	return sum / int64(len(s))
 }
 
 // ── probe mode ─────────────────────────────────────────────────────────────────
