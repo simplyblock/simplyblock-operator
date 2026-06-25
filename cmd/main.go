@@ -123,11 +123,21 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	var latencyPercentile string
+	flag.StringVar(&latencyPercentile, "latency-percentile", "p50",
+		"fio write-latency percentile driving the volume-rebalancing deviation signal: "+
+			"\"p50\" (median, stable) or \"p99\" (tail, noisy).")
 	opts := zap.Options{
 		Development: true,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	if latencyPercentile != "p50" && latencyPercentile != "p99" {
+		setupLog.Error(nil, "invalid --latency-percentile (must be \"p50\" or \"p99\")",
+			"value", latencyPercentile)
+		os.Exit(1)
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -346,9 +356,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.VolumeRebalancerReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("volumerebalancer-controller"),
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorderFor("volumerebalancer-controller"),
+		LatencyPercentile: latencyPercentile,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeRebalancer")
 		os.Exit(1)

@@ -21,6 +21,10 @@ const (
 	defaultMinHotColdDifferencePct     = 20
 	defaultCoolDownSeconds             = 60
 	defaultMaxVolumeMigrationsPerCycle = 10
+	// defaultLatencyPercentile is the fio write-latency percentile driving the
+	// rebalancing deviation signal. p50 (median) is stable; p99 is dominated by
+	// journal/EC/HA tail spikes. Overridden by the operator-wide --latency-percentile flag.
+	defaultLatencyPercentile = "p50"
 
 	// migrationBudgetFraction is the fraction of the source node's total volume IO score
 	// that may be migrated in a single evaluation cycle.
@@ -40,10 +44,13 @@ type RebalancingConfig struct {
 	// MinHotColdDifferencePct is the minimum deviation gap (percentage points) the
 	// target must be below the source for a migration to be selected.
 	MinHotColdDifferencePct float64
-	IopsWeight              float64
-	ThroughputWeight        float64
-	MaxMigrations           int
-	CoolDownSecs            int64
+	// LatencyPercentile selects the fio write-latency percentile ("p50" or "p99") that
+	// the deviation signal is computed from. Set operator-wide (not per cluster).
+	LatencyPercentile string
+	IopsWeight        float64
+	ThroughputWeight  float64
+	MaxMigrations     int
+	CoolDownSecs      int64
 }
 
 // ResolveRebalancingConfig applies defaults and validates the spec. It returns an error
@@ -55,6 +62,7 @@ func ResolveRebalancingConfig(
 		EvalInterval:            defaultEvaluationInterval,
 		ImbalanceThreshold:      defaultImbalanceThresholdPct,
 		MinHotColdDifferencePct: defaultMinHotColdDifferencePct,
+		LatencyPercentile:       defaultLatencyPercentile,
 		IopsWeight:              defaultIOPSWeight,
 		ThroughputWeight:        defaultThroughputMBWeight,
 		MaxMigrations:           defaultMaxVolumeMigrationsPerCycle,

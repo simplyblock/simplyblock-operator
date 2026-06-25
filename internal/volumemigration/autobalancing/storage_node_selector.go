@@ -25,10 +25,10 @@ type StorageNodeSelectorInput struct {
 // ClusterDeviationStats holds the per-cluster aggregate latency deviation statistics
 // computed by deviationStats from a single evaluation cycle.
 type ClusterDeviationStats struct {
-	// MaxDeviationPct is the highest p99 latency deviation from baseline across
+	// MaxDeviationPct is the highest p50 latency deviation from baseline across
 	// all nodes in the cluster, expressed as a percentage.
 	MaxDeviationPct float64
-	// AvgDeviationPct is the mean p99 latency deviation across all measured nodes.
+	// AvgDeviationPct is the mean p50 latency deviation across all measured nodes.
 	AvgDeviationPct float64
 	// HottestNodeUUID is the node with the highest deviation (migration source candidate).
 	HottestNodeUUID string
@@ -36,19 +36,21 @@ type ClusterDeviationStats struct {
 	CoolestNodeUUID string
 }
 
-// nodeLatencyData holds the fio p99 latency measurements for one storage node,
-// combined from the Prometheus current reading and the StorageNode CR baseline.
+// nodeLatencyData holds the fio write-latency measurements for one storage node at the
+// configured percentile (p50 or p99), combined from the Prometheus current reading and
+// the StorageNode CR baseline. p50 (median) is the default — it is stable, whereas p99
+// is dominated by journal/EC/HA tail spikes that make the deviation signal noisy.
 type nodeLatencyData struct {
 	// clusterUUID identifies which cluster this node belongs to, used to group
 	// nodes when computing per-cluster deviation statistics.
 	clusterUUID string
-	// baselineP99NS is the one-time fio p99 write latency (ns) recorded by the
-	// baseline Job and stored in StorageNode.status.latencyMetrics. Zero until
-	// the baseline Job has completed for this node.
-	baselineP99NS int64
-	// currentP99NS is the most recent fio p99 write latency (ns) scraped from
-	// Prometheus via the fio-bench-probe sidecar.
-	currentP99NS int64
+	// baselineNS is the one-time fio write latency (ns) at the configured percentile,
+	// recorded by the baseline Job and stored in StorageNode.status.latencyMetrics.
+	// Zero until the baseline Job has completed for this node.
+	baselineNS int64
+	// currentNS is the most recent fio write latency (ns) at the configured percentile,
+	// scraped from Prometheus via the fio-bench-probe sidecar.
+	currentNS int64
 }
 
 // StorageNodeSelector evaluates per-node latency deviation and selects source/target
@@ -112,7 +114,7 @@ func (sns *StorageNodeSelector) SelectStorageNodes(
 ) ([]NodeMigrationPair, error) {
 	// computeLatencyDeviations also emits the per-node / max deviation gauges as a side
 	// effect; the per-cluster stats it returns are not needed for pairing here.
-	deviations, _, err := sns.computeLatencyDeviations(ctx, cfg.PrometheusURL, inputs...)
+	deviations, _, err := sns.computeLatencyDeviations(ctx, cfg.PrometheusURL, cfg.LatencyPercentile, inputs...)
 	if err != nil {
 		return nil, err
 	}
@@ -194,15 +196,16 @@ func isMigrationTargetEligible(src, cand nodeRef, _ RebalancingConfig) bool {
 func (sns *StorageNodeSelector) computeLatencyDeviations(
 	ctx context.Context,
 	prometheusURL string,
+	percentile string,
 	inputs ...StorageNodeSelectorInput,
 ) (deviations map[string]float64, statsByCluster map[string]ClusterDeviationStats, err error) {
-	latencyByNode, err := sns.collectLatencyState(ctx, prometheusURL, inputs...)
+	latencyByNode, err := sns.collectLatencyState(ctx, prometheusURL, percentile, inputs...)
 	if err != nil {
 		return nil, nil, err
 	}
 	deviations = make(map[string]float64, len(latencyByNode))
 	for nodeUUID, ld := range latencyByNode {
-		dev := volumemigration.ComputeLatencyDeviationPct(ld.baselineP99NS, ld.currentP99NS)
+		dev := volumemigration.ComputeLatencyDeviationPct(ld.baselineNS, ld.currentNS)
 		rebalancerNodeLatencyDeviationPct.WithLabelValues(ld.clusterUUID, nodeUUID).Set(dev)
 		deviations[nodeUUID] = dev
 	}
@@ -214,14 +217,15 @@ func (sns *StorageNodeSelector) computeLatencyDeviations(
 }
 
 // collectLatencyState builds a nodeUUID → nodeLatencyData map by combining:
-//   - current p99 write latency queried from Prometheus (written by the fio-bench-probe sidecar)
-//   - baseline p99 write latency read from StorageNode CR status (set once by the baseline Job)
+//   - current p50 write latency queried from Prometheus (written by the fio-bench-probe sidecar)
+//   - baseline p50 write latency read from StorageNode CR status (set once by the baseline Job)
 func (sns *StorageNodeSelector) collectLatencyState(
 	ctx context.Context,
 	prometheusURL string,
+	percentile string,
 	inputs ...StorageNodeSelectorInput,
 ) (map[string]nodeLatencyData, error) {
-	currentByNodeByCluster, err := sns.collectCurrentLatency(ctx, prometheusURL, inputs...)
+	currentByNodeByCluster, err := sns.collectCurrentLatency(ctx, prometheusURL, percentile, inputs...)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +233,7 @@ func (sns *StorageNodeSelector) collectLatencyState(
 	// Collect baselines from all distinct namespaces present in the inputs.
 	baselineByNode := make(map[string]int64)
 	for _, input := range inputs {
-		for nodeUUID, baseline := range sns.readBaselineFromCRs(ctx, input.Namespace) {
+		for nodeUUID, baseline := range sns.readBaselineFromCRs(ctx, input.Namespace, percentile) {
 			baselineByNode[nodeUUID] = baseline
 		}
 	}
@@ -239,21 +243,22 @@ func (sns *StorageNodeSelector) collectLatencyState(
 	for clusterUUID, byNode := range currentByNodeByCluster {
 		for nodeUUID, curr := range byNode {
 			result[nodeUUID] = nodeLatencyData{
-				baselineP99NS: baselineByNode[nodeUUID], // 0 until baseline Job completes
-				currentP99NS:  curr,
-				clusterUUID:   clusterUUID,
+				baselineNS:  baselineByNode[nodeUUID], // 0 until baseline Job completes
+				currentNS:   curr,
+				clusterUUID: clusterUUID,
 			}
 		}
 	}
 	return result, nil
 }
 
-// collectCurrentLatency queries Prometheus for the most recent p99 write latency
-// across all clusters referenced in inputs in a single round-trip, returning
-// a map[clusterUUID][nodeUUID]p99NS.
+// collectCurrentLatency queries Prometheus for the most recent write latency at the
+// configured percentile across all clusters referenced in inputs in a single
+// round-trip, returning a map[clusterUUID][nodeUUID]latencyNS.
 func (sns *StorageNodeSelector) collectCurrentLatency(
 	ctx context.Context,
 	prometheusURL string,
+	percentile string,
 	inputs ...StorageNodeSelectorInput,
 ) (map[string]map[string]int64, error) {
 	provider, err := promlatency.New(prometheusURL)
@@ -262,14 +267,16 @@ func (sns *StorageNodeSelector) collectCurrentLatency(
 	}
 
 	clusterIds := distinctClusterUUIDs(inputs)
-	return provider.GetClustersCurrentP99(ctx, clusterIds)
+	return provider.GetClustersCurrentLatency(ctx, clusterIds, percentile)
 }
 
-// readBaselineFromCRs returns a nodeUUID → BaselineP99NS map from all StorageNode CRs
-// in the given namespace. The baseline is set exactly once by the one-shot baseline Job.
+// readBaselineFromCRs returns a nodeUUID → baseline-latency map (at the configured
+// percentile) from all StorageNode CRs in the given namespace. The baseline is set
+// exactly once by the one-shot baseline Job.
 func (sns *StorageNodeSelector) readBaselineFromCRs(
 	ctx context.Context,
 	namespace string,
+	percentile string,
 ) map[string]int64 {
 	result := make(map[string]int64)
 	var snodeList simplyblockv1alpha1.StorageNodeList
@@ -278,8 +285,12 @@ func (sns *StorageNodeSelector) readBaselineFromCRs(
 	}
 	for _, snode := range snodeList.Items {
 		for _, lm := range snode.Status.LatencyMetrics {
-			if lm.BaselineP99NS > 0 {
-				result[lm.NodeUUID] = lm.BaselineP99NS
+			baseline := lm.BaselineP50NS
+			if percentile == promlatency.PercentileP99 {
+				baseline = lm.BaselineP99NS
+			}
+			if baseline > 0 {
+				result[lm.NodeUUID] = baseline
 			}
 		}
 	}

@@ -52,6 +52,11 @@ type VolumeRebalancerReconciler struct {
 	Recorder  record.EventRecorder
 	apiClient *webapi.Client
 
+	// LatencyPercentile is the operator-wide fio write-latency percentile ("p50" or
+	// "p99") used for the rebalancing deviation signal, set from the --latency-percentile
+	// flag. Empty falls back to the config default (p50).
+	LatencyPercentile string
+
 	migrationState *volumemigration.MigrationState
 	rebalancer     *autobalancing.Rebalancer
 }
@@ -98,6 +103,10 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 		log.Error(err, "Invalid rebalancing configuration; skipping cycle")
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
 		return ctrl.Result{RequeueAfter: defaultEvaluationInterval}, nil
+	}
+	// Apply the operator-wide latency-percentile flag (general, not per cluster).
+	if r.LatencyPercentile != "" {
+		cfg.LatencyPercentile = r.LatencyPercentile
 	}
 	cycleStart := time.Now()
 

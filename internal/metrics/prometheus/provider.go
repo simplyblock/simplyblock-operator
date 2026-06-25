@@ -4,7 +4,7 @@
 // all metric categories used by the operator:
 //
 //   - GetClusterMetrics / GetNodeMetrics — Phase 2 per-node SPDK I/O (NodeMetricsProvider)
-//   - GetClusterCurrentP99              — Phase 1 fio p99 write latency per node
+//   - GetClusterCurrentP50              — Phase 1 fio p50 write latency per node
 //   - GetClusterVolumeIO               — Phase 1 per-volume IOPS + throughput
 package prometheus
 
@@ -24,7 +24,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/metrics"
 )
 
-// ErrLatencyDataNotReady is returned by GetClusterCurrentP99 when Prometheus has not
+// ErrLatencyDataNotReady is returned by GetClusterCurrentP50 when Prometheus has not
 // yet received any latency samples — the fio-bench-probe sidecar has not completed
 // its first measurement cycle. Callers should treat this as a transient "not yet
 // available" condition and log a warning rather than an error.
@@ -131,41 +131,60 @@ func validScheme(
 }
 
 // ---------------------------------------------------------------------------
-// Latency metrics (Phase 1) — fio p99 write latency per node
+// Latency metrics (Phase 1) — fio write latency per node (p50 or p99)
 // ---------------------------------------------------------------------------
 
-// GetClusterCurrentP99 returns the most recent p99 write latency (nanoseconds) per node UUID
-// for all nodes in the given cluster. Nodes with no scraped measurement are omitted.
-// Baseline latency is not stored in Prometheus — it is kept in the StorageNode CR.
-func (p *Provider) GetClusterCurrentP99(
+// LatencyPercentile selects which fio write-latency percentile the deviation signal
+// uses. p50 (median) is stable; p99 is dominated by journal/EC/HA tail spikes.
+const (
+	PercentileP50 = "p50"
+	PercentileP99 = "p99"
+)
+
+// latencyMetricName returns the Prometheus metric for the given percentile, falling
+// back to p50 for any unrecognised value.
+func latencyMetricName(percentile string) string {
+	if percentile == PercentileP99 {
+		return "simplyblock_node_fio_write_latency_p99_ns"
+	}
+	return "simplyblock_node_fio_write_latency_p50_ns"
+}
+
+// GetClusterCurrentLatency returns the most recent write latency (nanoseconds) at the
+// given percentile per node UUID for all nodes in the cluster. Nodes with no scraped
+// measurement are omitted. Baseline latency is not stored in Prometheus — it lives in
+// the StorageNode CR.
+func (p *Provider) GetClusterCurrentLatency(
 	ctx context.Context,
 	clusterUUID string,
+	percentile string,
 ) (map[string]int64, error) {
-	all, err := p.GetClustersCurrentP99(ctx, []string{clusterUUID})
+	all, err := p.GetClustersCurrentLatency(ctx, []string{clusterUUID}, percentile)
 	if err != nil {
 		return nil, err
 	}
 	return all[clusterUUID], nil
 }
 
-// GetClustersCurrentP99 returns the most recent p99 write latency per node for all
-// given clusters in a single Prometheus query, keyed by [clusterUUID][nodeUUID].
-// Clusters or nodes with no scraped measurement are omitted from the result.
+// GetClustersCurrentLatency returns the most recent write latency at the given
+// percentile per node for all given clusters in a single Prometheus query, keyed by
+// [clusterUUID][nodeUUID]. Clusters or nodes with no scraped measurement are omitted.
 // Returns ErrLatencyDataNotReady (wrapped) on client-level connectivity errors.
-func (p *Provider) GetClustersCurrentP99(
+func (p *Provider) GetClustersCurrentLatency(
 	ctx context.Context,
 	clusterUUIDs []string,
+	percentile string,
 ) (map[string]map[string]int64, error) {
 	if len(clusterUUIDs) == 0 {
 		return map[string]map[string]int64{}, nil
 	}
 
+	metric := latencyMetricName(percentile)
 	var query string
 	if len(clusterUUIDs) == 1 {
-		query = fmt.Sprintf(`simplyblock_node_fio_write_latency_p99_ns{cluster=%q}`, clusterUUIDs[0])
+		query = fmt.Sprintf(`%s{cluster=%q}`, metric, clusterUUIDs[0])
 	} else {
-		query = fmt.Sprintf(`simplyblock_node_fio_write_latency_p99_ns{cluster=~%q}`,
-			strings.Join(clusterUUIDs, "|"))
+		query = fmt.Sprintf(`%s{cluster=~%q}`, metric, strings.Join(clusterUUIDs, "|"))
 	}
 
 	vec, err := p.queryVector(ctx, query)
