@@ -318,11 +318,11 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 	var body struct {
 		VolumeMaxSize int `json:"volume_max_size"`
 	}
-	if err := json.Unmarshal(reqs[0].Body, &body); err != nil {
-		t.Fatalf("failed to decode pool create request body %q: %v", string(reqs[0].Body), err)
+	if err := json.Unmarshal(reqs[1].Body, &body); err != nil {
+		t.Fatalf("failed to decode pool create request body %q: %v", string(reqs[1].Body), err)
 	}
 	if body.VolumeMaxSize != 20_000_000_000 {
-		t.Fatalf("volume_max_size got %d want %d; body=%s", body.VolumeMaxSize, 20_000_000_000, string(reqs[0].Body))
+		t.Fatalf("volume_max_size got %d want %d; body=%s", body.VolumeMaxSize, 20_000_000_000, string(reqs[1].Body))
 	}
 }
 
