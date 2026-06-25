@@ -164,6 +164,18 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
 	}
 
+	// Dry-run: when migration creation is disabled the rebalancer still evaluated load and
+	// emitted deviation metrics above; we log the candidates it *would* migrate but create
+	// no VolumeMigration CRs (e.g. to run workload tests without rebalancer interference).
+	if !cfg.MigrationEnabled {
+		for _, mc := range toMigrate {
+			log.Info("migrationEnabled=false; skipping migration (dry-run)",
+				"volume", mc.Volume.UUID, "source", mc.SourceNodeUUID, "target", mc.TargetNodeUUID)
+		}
+		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "dry_run").Inc()
+		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
+	}
+
 	if err := r.setRebalancing(ctx, clusterCR, true); err != nil {
 		log.Error(err, "Failed to set status.rebalancing=true")
 	}

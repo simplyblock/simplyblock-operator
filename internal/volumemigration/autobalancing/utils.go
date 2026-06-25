@@ -47,10 +47,14 @@ type RebalancingConfig struct {
 	// LatencyPercentile selects the fio write-latency percentile ("p50" or "p99") that
 	// the deviation signal is computed from. Set operator-wide (not per cluster).
 	LatencyPercentile string
-	IopsWeight        float64
-	ThroughputWeight  float64
-	MaxMigrations     int
-	CoolDownSecs      int64
+	// MigrationEnabled controls whether selected candidates are actually turned into
+	// VolumeMigration CRs. When false the rebalancer evaluates and emits metrics but
+	// creates no migrations (dry-run). Defaults to true.
+	MigrationEnabled bool
+	IopsWeight       float64
+	ThroughputWeight float64
+	MaxMigrations    int
+	CoolDownSecs     int64
 }
 
 // ResolveRebalancingConfig applies defaults and validates the spec. It returns an error
@@ -63,6 +67,7 @@ func ResolveRebalancingConfig(
 		ImbalanceThreshold:      defaultImbalanceThresholdPct,
 		MinHotColdDifferencePct: defaultMinHotColdDifferencePct,
 		LatencyPercentile:       defaultLatencyPercentile,
+		MigrationEnabled:        true,
 		IopsWeight:              defaultIOPSWeight,
 		ThroughputWeight:        defaultThroughputMBWeight,
 		MaxMigrations:           defaultMaxVolumeMigrationsPerCycle,
@@ -80,6 +85,9 @@ func ResolveRebalancingConfig(
 	}
 	if spec.MinHotColdDifferencePct != nil {
 		cfg.MinHotColdDifferencePct = float64(*spec.MinHotColdDifferencePct)
+	}
+	if spec.MigrationEnabled != nil {
+		cfg.MigrationEnabled = *spec.MigrationEnabled
 	}
 	if spec.IOPSWeight != nil && *spec.IOPSWeight > 0 {
 		cfg.IopsWeight = *spec.IOPSWeight

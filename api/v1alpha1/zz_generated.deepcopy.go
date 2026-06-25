@@ -2040,6 +2040,11 @@ func (in *VolumeRebalancingSpec) DeepCopyInto(out *VolumeRebalancingSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.MigrationEnabled != nil {
+		in, out := &in.MigrationEnabled, &out.MigrationEnabled
+		*out = new(bool)
+		**out = **in
+	}
 	if in.EvaluationInterval != nil {
 		in, out := &in.EvaluationInterval, &out.EvaluationInterval
 		*out = new(v1.Duration)

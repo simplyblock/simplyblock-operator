@@ -257,6 +257,14 @@ spec:
                     - prometheus
                     - uniform
                     type: string
+                  migrationEnabled:
+                    description: |-
+                      MigrationEnabled controls whether the rebalancer actually creates VolumeMigration
+                      CRs. When false the rebalancer still runs every cycle — evaluating load, computing
+                      deviations, selecting candidates and emitting metrics — but discards the migrations
+                      instead of creating them (dry-run). Use to observe the signal, or to run workload
+                      tests without auto-rebalancer interference. Defaults to true.
+                    type: boolean
                   minHotColdDifferencePct:
                     description: |-
                       MinHotColdDifferencePct is the minimum latency-deviation gap (in percentage points)

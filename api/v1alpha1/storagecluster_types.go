@@ -74,6 +74,13 @@ type VolumeRebalancingSpec struct {
 	// Enabled activates automatic rebalancing for this cluster. Defaults to true.
 	// +optional
 	Enabled *bool `json:"enabled,omitempty"`
+	// MigrationEnabled controls whether the rebalancer actually creates VolumeMigration
+	// CRs. When false the rebalancer still runs every cycle — evaluating load, computing
+	// deviations, selecting candidates and emitting metrics — but discards the migrations
+	// instead of creating them (dry-run). Use to observe the signal, or to run workload
+	// tests without auto-rebalancer interference. Defaults to true.
+	// +optional
+	MigrationEnabled *bool `json:"migrationEnabled,omitempty"`
 	// EvaluationInterval is how often the rebalancer evaluates load. Defaults to 60s.
 	// +optional
 	EvaluationInterval *metav1.Duration `json:"evaluationInterval,omitempty"`
