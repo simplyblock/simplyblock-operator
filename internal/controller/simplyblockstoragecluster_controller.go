@@ -286,6 +286,8 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	clusterCR.Status.Status = apiResp.Status
 	clusterCR.Status.NQN = apiResp.NQN
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
+	mft := int32(apiResp.MaxFaultTolerance)
+	clusterCR.Status.MaxFaultTolerance = &mft
 
 	clusterCR.Status.ClusterName = clusterCR.Name
 	clusterCR.Status.Configured = true
@@ -298,22 +300,6 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	}
 
 	log.Info("Cluster successfully created", "name", clusterCR.Name)
-
-	// clusterUUID, clusterSecret, err := utils.GetClusterAuth(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
-	// if err != nil {
-	// 	log.Error(err, "Failed to get cluster auth")
-	// 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	// }
-
-	// endpoint := fmt.Sprintf("/api/v2/clusters/%s/update", clusterUUID)
-
-	// body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, updateParams)
-	// if err != nil || status >= 300 {
-	// 	log.Error(err, "Cluster update failed", "status", status, "response", string(body))
-	// 	return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-	// }
-
-	// log.Info("Cluster updated successfully", "name", clusterCR.Name)
 	return ctrl.Result{}, nil
 }
 
@@ -472,11 +458,6 @@ func (r *StorageClusterReconciler) handleDeletion(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
 	}
 
-	if err := r.deleteClusterSecret(ctx, clusterCR); err != nil {
-		log.Error(err, "Failed to delete cluster secret, will retry", "name", clusterCR.Name)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, true, nil
-	}
-
 	controllerutil.RemoveFinalizer(clusterCR, utils.FinalizerStorageCluster)
 	return ctrl.Result{}, true, r.Update(ctx, clusterCR)
 }
@@ -492,32 +473,6 @@ func (r *StorageClusterReconciler) ensureFinalizer(
 
 	controllerutil.AddFinalizer(clusterCR, utils.FinalizerStorageCluster)
 	return true, r.Update(ctx, clusterCR)
-}
-
-func (r *StorageClusterReconciler) deleteClusterSecret(
-	ctx context.Context,
-	clusterCR *simplyblockv1alpha1.StorageCluster,
-) error {
-
-	secretName := clusterCR.Status.SecretName
-	if secretName == "" {
-		secretName = fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Name)
-	}
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: clusterCR.Namespace,
-		},
-	}
-
-	if err := r.Delete(ctx, secret); err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (r *StorageClusterReconciler) reconcileActivate(
@@ -625,6 +580,8 @@ func (r *StorageClusterReconciler) reconcileActivate(
 		clusterCR.Status.Configured = true
 		clusterCR.Status.Rebalancing = &resp.Rebalancing
 		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
+		mft := int32(resp.MaxFaultTolerance)
+		clusterCR.Status.MaxFaultTolerance = &mft
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
 			return ctrl.Result{}, err
@@ -719,6 +676,8 @@ func (r *StorageClusterReconciler) reconcileExpand(
 		clusterCR.Status.Configured = true
 		clusterCR.Status.Rebalancing = &resp.Rebalancing
 		clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
+		mft := int32(resp.MaxFaultTolerance)
+		clusterCR.Status.MaxFaultTolerance = &mft
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
 			return ctrl.Result{}, err
@@ -916,10 +875,8 @@ func (r *StorageClusterReconciler) syncStatus(
 	clusterCR.Status.NQN = resp.NQN
 	clusterCR.Status.Rebalancing = &resp.Rebalancing
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
-	if resp.MaxFaultTolerance > 0 {
-		v := int32(resp.MaxFaultTolerance)
-		clusterCR.Status.MaxFaultTolerance = &v
-	}
+	mftSync := int32(resp.MaxFaultTolerance)
+	clusterCR.Status.MaxFaultTolerance = &mftSync
 
 	if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
 		log.Error(err, "syncStatus: failed to patch cluster status", "name", clusterCR.Name)

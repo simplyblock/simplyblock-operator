@@ -138,6 +138,25 @@ type StorageNodeSpec struct {
 	// Tolerations configures pod tolerations for storage-node pods.
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Parallel Node Adds"
+	// MaxParallelNodeAdds limits how many non-FDB worker nodes can be in the
+	// add process simultaneously. Defaults to 1 (fully sequential).
+	// FDB workers are always sequential regardless of this setting.
+	MaxParallelNodeAdds *int32 `json:"maxParallelNodeAdds,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Container Resources"
+	// ContainerResources sets CPU and memory requests/limits for the main storage-node container.
+	// When omitted no limits are enforced, which preserves the previous behaviour.
+	ContainerResources corev1.ResourceRequirements `json:"containerResources,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Init Container Resources"
+	// InitContainerResources sets CPU and memory requests/limits for the init container.
+	// When omitted no limits are enforced.
+	InitContainerResources corev1.ResourceRequirements `json:"initContainerResources,omitempty"`
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Image Pull Policy"
+	// ImagePullPolicy controls when the container image is pulled. Defaults to IfNotPresent.
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
 	// Force enables forced action execution where supported.
 	Force *bool `json:"force,omitempty"`
@@ -186,6 +205,16 @@ type StorageNodeStatus struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Drain Coordination"
 	// DrainCoordination tracks the upgrade-drain state per worker node.
 	DrainCoordination []NodeDrainState `json:"drainCoordination,omitempty"`
+	// PendingNodeAdds records the timestamp when a node-add POST was sent for
+	// each worker hostname. Entries are removed only when all socket nodes for
+	// that worker come online. This is the authoritative guard against duplicate
+	// POSTs — it is a separate map field so patches to Status.Nodes never
+	// inadvertently delete it.
+	PendingNodeAdds map[string]metav1.Time `json:"pendingNodeAdds,omitempty"`
+	// SchedulingFailedWorkers tracks worker hostnames whose SPDK pod experienced
+	// a FailedScheduling event during node add. Used to emit a recovery event
+	// when the node subsequently comes online.
+	SchedulingFailedWorkers map[string]bool `json:"schedulingFailedWorkers,omitempty"`
 }
 
 type NodeStatus struct {
