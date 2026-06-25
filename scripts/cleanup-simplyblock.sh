@@ -75,6 +75,15 @@ echo -e "  Namespace: ${RED}${NAMESPACE}${NC}"
 echo ""
 
 if [[ "$FORCE" != true ]]; then
+    if [[ ! -t 0 ]]; then
+        error "This script requires interactive input but stdin is not a terminal."
+        error "It looks like you are piping this script (e.g. curl | bash)."
+        error "Please download and run it directly, or pass --force / -f to skip confirmation:"
+        error "  curl -sO https://raw.githubusercontent.com/simplyblock/helm-charts/main/scripts/cleanup-simplyblock.sh"
+        error "  bash cleanup-simplyblock.sh [NAMESPACE]"
+        error "Or, if you accept the risks:  curl -s ... | bash -s -- -f [NAMESPACE]"
+        exit 1
+    fi
     warn "This will permanently delete all simplyblock resources in the above context and namespace."
     read -r -p "$(echo -e "${YELLOW}Continue? [y/N]:${NC} ")" answer
     case "$answer" in
