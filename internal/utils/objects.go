@@ -118,7 +118,20 @@ func ResolveClusterUUID(
 
 func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, namespace, cluster string) (string, error) {
 	if IsUUID(cluster) {
-		return cluster, nil
+		// When the caller supplies a raw UUID, validate that a StorageCluster
+		// with that UUID actually exists in the requested namespace. Without
+		// this check a caller in namespace A could supply the UUID of a cluster
+		// in namespace B and bypass namespace isolation entirely.
+		var list simplyblockv1alpha1.StorageClusterList
+		if err := k8sClient.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+			return "", fmt.Errorf("failed to validate cluster UUID %q in namespace %q: %w", cluster, namespace, err)
+		}
+		for i := range list.Items {
+			if list.Items[i].Status.UUID == cluster {
+				return cluster, nil
+			}
+		}
+		return "", fmt.Errorf("cluster UUID %q not found in namespace %q", cluster, namespace)
 	}
 	return ResolveClusterUUID(ctx, k8sClient, namespace, cluster)
 }

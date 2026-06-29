@@ -802,6 +802,12 @@ func lvolIDFromNQN(nqn string) (string, bool) {
 	if id == "" {
 		return "", false
 	}
+	// Validate that the extracted ID is a well-formed UUID to prevent NQN
+	// injection: a crafted NQN with a legitimate marker followed by an
+	// arbitrary path or string could otherwise reach downstream API calls.
+	if !utils.IsUUID(id) {
+		return "", false
+	}
 	return id, true
 }
 
