@@ -159,7 +159,7 @@ func (r *SnapshotReplicationReconciler) reconcileFailback(
 		return 15 * time.Second, nil
 	}
 
-	targetClusterUUID, err := r.resolveTargetClusterUUID(ctx, snapRepCR)
+	targetClusterUUID, err := utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
 	if err != nil {
 		log.Info("Target cluster UUID not ready, requeuing", "cluster", snapRepCR.Spec.TargetCluster)
 		return 10 * time.Second, nil
@@ -366,44 +366,6 @@ func (r *SnapshotReplicationReconciler) getSnapRepCR(
 	return snapRepCR, nil
 }
 
-// resolveTargetClusterUUID resolves the target cluster identifier to a UUID
-// and enforces that the resolved cluster belongs to the same namespace as the
-// SnapshotReplication CR. This prevents cross-namespace data access: a user
-// in namespace A cannot reference a StorageCluster that lives in namespace B,
-// even if they supply its UUID directly.
-func (r *SnapshotReplicationReconciler) resolveTargetClusterUUID(
-	ctx context.Context,
-	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
-) (string, error) {
-	clusterUUID, err := utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
-	if err != nil {
-		return "", err
-	}
-	// Verify the resolved cluster actually resides in the CR's namespace.
-	// ResolveClusterIdentifier returns a UUID directly when the spec field is
-	// already a UUID — without this check an attacker could supply the UUID of
-	// a cluster in a different namespace and bypass the name-scoped lookup.
-	clusterCR, err := utils.ResolveClusterCR(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
-	if err != nil || clusterCR == nil {
-		// Fall back to checking by Status.UUID when the field is a UUID.
-		var list simplyblockv1alpha1.StorageClusterList
-		if listErr := r.List(ctx, &list, client.InNamespace(snapRepCR.Namespace)); listErr != nil {
-			return "", fmt.Errorf("cross-namespace cluster reference check failed: %w", listErr)
-		}
-		found := false
-		for i := range list.Items {
-			if list.Items[i].Status.UUID == clusterUUID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return "", fmt.Errorf("target cluster %q is not in namespace %q", snapRepCR.Spec.TargetCluster, snapRepCR.Namespace)
-		}
-	}
-	return clusterUUID, nil
-}
-
 func (r *SnapshotReplicationReconciler) resolveSourceClusterUUID(
 	ctx context.Context,
 	snapRepCR *simplyblockv1alpha1.SnapshotReplication,
@@ -446,7 +408,7 @@ func (r *SnapshotReplicationReconciler) ensureConfigured(
 		return nil
 	}
 
-	targetClusterUUID, err := r.resolveTargetClusterUUID(ctx, snapRepCR)
+	targetClusterUUID, err := utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
 	if err != nil {
 		log.Info("Target cluster UUID not found, requeuing", "cluster", snapRepCR.Spec.TargetCluster)
 		res := ctrl.Result{RequeueAfter: 10 * time.Second}
@@ -505,7 +467,7 @@ func (r *SnapshotReplicationReconciler) computeFailoverAndTargetIDs(
 		return false, targetIDs, nil, nil
 	}
 
-	targetClusterUUID, err := r.resolveTargetClusterUUID(ctx, snapRepCR)
+	targetClusterUUID, err := utils.ResolveClusterIdentifier(ctx, r.Client, snapRepCR.Namespace, snapRepCR.Spec.TargetCluster)
 	if err != nil {
 		log.Info("Target cluster UUID not ready, requeuing", "cluster", snapRepCR.Spec.TargetCluster)
 		tmp := ctrl.Result{RequeueAfter: 10 * time.Second}
