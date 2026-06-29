@@ -11,12 +11,12 @@ metadata:
   labels:
     app.kubernetes.io/name: simplyblock-operator
     app.kubernetes.io/managed-by: Helm
-  name: storagenode-viewer-role
+  name: storagenodeset-viewer-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
-  - storagenodes
+  - storagenodesets
   verbs:
   - get
   - list
@@ -24,6 +24,6 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
-  - storagenodes/status
+  - storagenodesets/status
   verbs:
   - get
