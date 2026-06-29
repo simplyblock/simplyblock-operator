@@ -497,7 +497,7 @@ func (r *StorageClusterReconciler) nodeRecycleTriggerPhase(
 	log := logf.FromContext(ctx)
 	nrs := clusterCR.Status.NodeRecycleStatus
 
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
+	nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 	if err != nil {
 		log.Error(err, fmt.Sprintf("Failed to fetch node status before %s API call", actionName), "nodeUUID", nodeUUID)
 		res := ctrl.Result{RequeueAfter: 10 * time.Second}
