@@ -17,15 +17,15 @@ import (
 	"time"
 )
 
-func TestBuildStorageNodeAPIClientTrustsServingCert(t *testing.T) {
+func TestBuildStorageNodeSetAPIClientTrustsServingCert(t *testing.T) {
 	server := httptest.NewTLSServer(nil)
 	defer server.Close()
 
 	caPath := writeCertPEM(t, server.Certificate())
 
-	c, err := BuildStorageNodeAPIClient("default", caPath, "", "")
+	c, err := BuildStorageNodeSetAPIClient("default", caPath, "", "")
 	if err != nil {
-		t.Fatalf("BuildStorageNodeAPIClient returned error: %v", err)
+		t.Fatalf("BuildStorageNodeSetAPIClient returned error: %v", err)
 	}
 
 	tr, ok := c.Transport.(*http.Transport)
@@ -41,32 +41,32 @@ func TestBuildStorageNodeAPIClientTrustsServingCert(t *testing.T) {
 	_ = resp.Body.Close()
 }
 
-func TestBuildStorageNodeAPIClientRejectsBadCA(t *testing.T) {
+func TestBuildStorageNodeSetAPIClientRejectsBadCA(t *testing.T) {
 	caPath := filepath.Join(t.TempDir(), "ca.crt")
 	if err := os.WriteFile(caPath, []byte("not a certificate"), 0o600); err != nil {
 		t.Fatalf("write temp ca: %v", err)
 	}
-	if _, err := BuildStorageNodeAPIClient("default", caPath, "", ""); err == nil {
+	if _, err := BuildStorageNodeSetAPIClient("default", caPath, "", ""); err == nil {
 		t.Fatalf("expected error on garbage CA bundle")
 	} else if !strings.Contains(err.Error(), "no usable certificates") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestBuildStorageNodeAPIClientMissingCAFile(t *testing.T) {
-	if _, err := BuildStorageNodeAPIClient("default", "/no/such/file", "", ""); err == nil {
+func TestBuildStorageNodeSetAPIClientMissingCAFile(t *testing.T) {
+	if _, err := BuildStorageNodeSetAPIClient("default", "/no/such/file", "", ""); err == nil {
 		t.Fatalf("expected error on missing CA file")
 	}
 }
 
-func TestBuildStorageNodeAPIClientShape(t *testing.T) {
+func TestBuildStorageNodeSetAPIClientShape(t *testing.T) {
 	server := httptest.NewTLSServer(nil)
 	defer server.Close()
 	caPath := writeCertPEM(t, server.Certificate())
 
-	c, err := BuildStorageNodeAPIClient("kube-storage", caPath, "", "")
+	c, err := BuildStorageNodeSetAPIClient("kube-storage", caPath, "", "")
 	if err != nil {
-		t.Fatalf("BuildStorageNodeAPIClient: %v", err)
+		t.Fatalf("BuildStorageNodeSetAPIClient: %v", err)
 	}
 	tr, ok := c.Transport.(*http.Transport)
 	if !ok {
@@ -83,12 +83,12 @@ func TestBuildStorageNodeAPIClientShape(t *testing.T) {
 	}
 }
 
-func TestBuildStorageNodeAPIClientMTLSShape(t *testing.T) {
+func TestBuildStorageNodeSetAPIClientMTLSShape(t *testing.T) {
 	caPath, certPath, keyPath := writeSelfSignedCertPairPEM(t)
 
-	c, err := BuildStorageNodeAPIClient("simplyblock", caPath, certPath, keyPath)
+	c, err := BuildStorageNodeSetAPIClient("simplyblock", caPath, certPath, keyPath)
 	if err != nil {
-		t.Fatalf("BuildStorageNodeAPIClient: %v", err)
+		t.Fatalf("BuildStorageNodeSetAPIClient: %v", err)
 	}
 	tr, ok := c.Transport.(*http.Transport)
 	if !ok {

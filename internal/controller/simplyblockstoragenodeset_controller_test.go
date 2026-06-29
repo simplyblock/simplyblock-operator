@@ -20,9 +20,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 )
 
-var _ = Describe("StorageNode Controller", func() {
+var _ = Describe("StorageNodeSet Controller", func() {
 	It("should ignore not-found resources and return no requeue", func() {
-		controllerReconciler := &StorageNodeReconciler{
+		controllerReconciler := &StorageNodeSetReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
 		}

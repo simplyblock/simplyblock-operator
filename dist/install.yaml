@@ -1531,20 +1531,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: storagenodes.storage.simplyblock.io
+  name: storagenodesets.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
   names:
-    kind: StorageNode
-    listKind: StorageNodeList
-    plural: storagenodes
-    singular: storagenode
+    kind: StorageNodeSet
+    listKind: StorageNodeSetList
+    plural: storagenodesets
+    singular: storagenodeset
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: StorageNode is the Schema for the storagenodes API
+        description: StorageNodeSet is the Schema for the storagenodesets API
         properties:
           apiVersion:
             description: |-
@@ -1564,7 +1564,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of StorageNode
+            description: spec defines the desired state of StorageNodeSet
             properties:
               action:
                 description: Action triggers an imperative node operation.
@@ -1898,7 +1898,7 @@ spec:
             - clusterName
             type: object
           status:
-            description: status defines the observed state of StorageNode
+            description: status defines the observed state of StorageNodeSet
             properties:
               actionStatus:
                 description: ActionStatus tracks the latest action execution status.
@@ -2363,7 +2363,7 @@ rules:
   - snapshotreplications
   - storagebackups
   - storageclusters
-  - storagenodes
+  - storagenodesets
   - tasks
   verbs:
   - create
@@ -2383,7 +2383,7 @@ rules:
   - snapshotreplications/finalizers
   - storagebackups/finalizers
   - storageclusters/finalizers
-  - storagenodes/finalizers
+  - storagenodesets/finalizers
   - tasks/finalizers
   verbs:
   - update
@@ -2398,7 +2398,7 @@ rules:
   - snapshotreplications/status
   - storagebackups/status
   - storageclusters/status
-  - storagenodes/status
+  - storagenodesets/status
   - tasks/status
   verbs:
   - get
@@ -2496,7 +2496,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
-  - storagenodes
+  - storagenodesets
   verbs:
   - create
   - delete
@@ -2508,7 +2508,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
-  - storagenodes/status
+  - storagenodesets/status
   verbs:
   - get
 ---
@@ -2589,18 +2589,18 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-storagenode-admin-role
+  name: simplyblock-operator-storagenodeset-admin-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
-  - storagenodes
+  - storagenodesets
   verbs:
   - '*'
 - apiGroups:
   - storage.simplyblock.io
   resources:
-  - storagenodes/status
+  - storagenodesets/status
   verbs:
   - get
 ---
@@ -2610,12 +2610,12 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/name: simplyblock-operator
-  name: simplyblock-operator-storagenode-viewer-role
+  name: simplyblock-operator-storagenodeset-viewer-role
 rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
-  - storagenodes
+  - storagenodesets
   verbs:
   - get
   - list
@@ -2623,7 +2623,7 @@ rules:
 - apiGroups:
   - storage.simplyblock.io
   resources:
-  - storagenodes/status
+  - storagenodesets/status
   verbs:
   - get
 ---
