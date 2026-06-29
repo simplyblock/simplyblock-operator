@@ -508,7 +508,8 @@ func (r *SnapshotReplicationReconciler) handleFailoverReplication(
 		return false
 	}
 
-	if id, ok := lvolIDFromNQN(lvolDetail.NQN); ok {
+	if !lvolDetail.NQN.IsZero() {
+		id := lvolDetail.NQN.LvolID.String()
 		if _, exists := targetIDs[id]; exists {
 			return false
 		}
@@ -738,11 +739,8 @@ func (r *SnapshotReplicationReconciler) resolveSourceFailbackTarget(
 			continue
 		}
 		for _, sl := range sourceLvols {
-			if id, ok := lvolIDFromNQN(sl.NQN); ok {
-				targetID, _ := lvolIDFromNQN(targetLvol.NQN)
-				if id == targetID {
-					return poolUUID, sl.UUID, false, nil
-				}
+			if !sl.NQN.IsZero() && !targetLvol.NQN.IsZero() && sl.NQN.LvolID == targetLvol.NQN.LvolID {
+				return poolUUID, sl.UUID, false, nil
 			}
 		}
 	}
@@ -792,19 +790,6 @@ func replicateLvol(ctx context.Context, apiClient *webapi.Client, clusterUUID, p
 	return nil
 }
 
-func lvolIDFromNQN(nqn string) (string, bool) {
-	const marker = "lvol:"
-	i := strings.LastIndex(nqn, marker)
-	if i < 0 {
-		return "", false
-	}
-	id := strings.TrimSpace(nqn[i+len(marker):])
-	if id == "" {
-		return "", false
-	}
-	return id, true
-}
-
 func buildLvolIDSet(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -834,12 +819,10 @@ func buildLvolIDSet(
 
 	ids := make(map[string]struct{}, len(allLvols))
 	for _, tl := range allLvols {
-		if tl.NQN == "" {
+		if tl.NQN.IsZero() {
 			continue
 		}
-		if id, ok := lvolIDFromNQN(tl.NQN); ok {
-			ids[id] = struct{}{}
-		}
+		ids[tl.NQN.LvolID.String()] = struct{}{}
 	}
 
 	return ids, nil
@@ -853,8 +836,8 @@ func shouldProcessFailbackVolume(volumeID string, includeIDs, excludeIDs []strin
 }
 
 func failbackFilterID(lvol *utils.Lvol) string {
-	if id, ok := lvolIDFromNQN(lvol.NQN); ok {
-		return id
+	if !lvol.NQN.IsZero() {
+		return lvol.NQN.LvolID.String()
 	}
 	return lvol.UUID
 }

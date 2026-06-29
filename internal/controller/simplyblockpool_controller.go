@@ -35,7 +35,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/google/uuid"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/sbnqn"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -497,7 +500,11 @@ func (r *PoolReconciler) syncPoolHosts(
 		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
 			return false, fmt.Errorf("failed to get node %s: %w", nodeName, err)
 		}
-		desired = append(desired, fmt.Sprintf("nqn.2014-08.io.simplyblock:uuid:%s", node.UID))
+		nodeUID, err := uuid.Parse(string(node.UID))
+		if err != nil {
+			return false, fmt.Errorf("node %s has invalid UID: %w", nodeName, err)
+		}
+		desired = append(desired, sbnqn.NewHostNQN("2014-08", nodeUID).String())
 	}
 
 	// Fetch current backend state to use as applied list.

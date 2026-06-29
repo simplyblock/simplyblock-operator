@@ -14,6 +14,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/sbnqn"
 
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -30,11 +31,11 @@ type NodeStatusResponse struct {
 }
 
 type Lvol struct {
-	UUID        string `json:"id"`
-	Name        string `json:"name"`
-	DoReplicate bool   `json:"do_replicate"`
-	NQN         string `json:"nqn"`
-	Status      string `json:"status"`
+	UUID        string          `json:"id"`
+	Name        string          `json:"name"`
+	DoReplicate bool            `json:"do_replicate"`
+	NQN         sbnqn.VolumeNQN `json:"nqn"`
+	Status      string          `json:"status"`
 
 	RepInfo *ReplicationInfo `json:"rep_info,omitempty"`
 }
@@ -236,13 +237,13 @@ func ActivateCluster(
 
 // ClusterListEntry is a single item returned by GET /api/v2/clusters/.
 type ClusterListEntry struct {
-	UUID   string `json:"id"`
-	Secret string `json:"secret"`
-	Name   string `json:"name"`
-	NQN    string `json:"nqn"`
-	Status string `json:"status"`
-	NDCS   int    `json:"distr_ndcs"`
-	NPCS   int    `json:"distr_npcs"`
+	UUID   string           `json:"id"`
+	Secret string           `json:"secret"`
+	Name   string           `json:"name"`
+	NQN    sbnqn.ClusterNQN `json:"nqn"`
+	Status string           `json:"status"`
+	NDCS   int              `json:"distr_ndcs"`
+	NPCS   int              `json:"distr_npcs"`
 }
 
 // GetClusterID returns the UUID for clusterCR. It uses Status.UUID when

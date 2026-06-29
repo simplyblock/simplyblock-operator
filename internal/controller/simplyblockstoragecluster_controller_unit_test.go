@@ -850,7 +850,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 				Body: `{
 					"id":"cluster-new-uuid",
 					"secret":"cluster-new-secret",
-					"nqn":"nqn.2026-04.io.simplyblock:cluster-new",
+					"nqn":"nqn.2026-04.io.simplyblock:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 					"distr_ndcs":2,
 					"distr_npcs":1,
 					"is_re_balancing":false,
@@ -904,7 +904,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 					"id":"cluster-dto-new-uuid",
 					"name":"cluster-create-dto",
 					"secret":"cluster-dto-new-secret",
-					"nqn":"nqn.2026-04.io.simplyblock:cluster-dto-new",
+					"nqn":"nqn.2026-04.io.simplyblock:bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
 					"status":"inactive",
 					"is_re_balancing":false,
 					"distr_ndcs":4,

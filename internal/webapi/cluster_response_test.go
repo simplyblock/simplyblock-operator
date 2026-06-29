@@ -7,7 +7,7 @@ func TestParseClusterResponse(t *testing.T) {
 		"id":"cluster-dto-uuid",
 		"name":"cluster-dto",
 		"secret":"cluster-dto-secret",
-		"nqn":"nqn.2026-04.io.simplyblock:dto",
+		"nqn":"nqn.2026-04.io.simplyblock:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 		"status":"active",
 		"is_re_balancing":false,
 		"distr_ndcs":3,

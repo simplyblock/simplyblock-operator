@@ -249,7 +249,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	clusterCR.Status.UUID = apiResp.UUID
 	clusterCR.Status.Rebalancing = &apiResp.Rebalancing
 	clusterCR.Status.Status = apiResp.Status
-	clusterCR.Status.NQN = apiResp.NQN
+	clusterCR.Status.NQN = apiResp.NQN.String()
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
 	mft := int32(apiResp.MaxFaultTolerance)
 	clusterCR.Status.MaxFaultTolerance = &mft
@@ -282,7 +282,7 @@ func (r *StorageClusterReconciler) adoptExistingCluster(
 
 	orig := clusterCR.DeepCopy()
 	clusterCR.Status.UUID = existing.UUID
-	clusterCR.Status.NQN = existing.NQN
+	clusterCR.Status.NQN = existing.NQN.String()
 	clusterCR.Status.Status = existing.Status
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", existing.NDCS, existing.NPCS)
 	clusterCR.Status.ClusterName = clusterCR.Name
@@ -517,7 +517,7 @@ func (r *StorageClusterReconciler) reconcileActivate(
 		clusterCR.Status.ActionStatus.State = utils.ActionStateSuccess
 		clusterCR.Status.ActionStatus.Message = "Cluster activated successfully"
 		clusterCR.Status.UUID = resp.UUID
-		clusterCR.Status.NQN = resp.NQN
+		clusterCR.Status.NQN = resp.NQN.String()
 		clusterCR.Status.ClusterName = clusterCR.Name
 		clusterCR.Status.Configured = true
 		clusterCR.Status.Rebalancing = &resp.Rebalancing
@@ -613,7 +613,7 @@ func (r *StorageClusterReconciler) reconcileExpand(
 		clusterCR.Status.ActionStatus.State = utils.ActionStateSuccess
 		clusterCR.Status.ActionStatus.Message = "Cluster expanded successfully"
 		clusterCR.Status.UUID = resp.UUID
-		clusterCR.Status.NQN = resp.NQN
+		clusterCR.Status.NQN = resp.NQN.String()
 		clusterCR.Status.ClusterName = clusterCR.Name
 		clusterCR.Status.Configured = true
 		clusterCR.Status.Rebalancing = &resp.Rebalancing
@@ -786,14 +786,14 @@ func (r *StorageClusterReconciler) syncStatus(
 	}
 
 	if resp.Status == clusterCR.Status.Status &&
-		resp.NQN == clusterCR.Status.NQN &&
+		resp.NQN.String() == clusterCR.Status.NQN &&
 		(clusterCR.Status.Rebalancing == nil || resp.Rebalancing == *clusterCR.Status.Rebalancing) {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	patch := client.MergeFrom(clusterCR.DeepCopy())
 	clusterCR.Status.Status = resp.Status
-	clusterCR.Status.NQN = resp.NQN
+	clusterCR.Status.NQN = resp.NQN.String()
 	clusterCR.Status.Rebalancing = &resp.Rebalancing
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
 	mftSync := int32(resp.MaxFaultTolerance)

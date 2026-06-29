@@ -239,9 +239,9 @@ func TestSnapshotReplicationEnsureConfigured(t *testing.T) {
 func TestSnapshotReplicationNormalReplication(t *testing.T) {
 	t.Run("triggers replication for eligible lvol and updates volume status", func(t *testing.T) {
 		const (
-			srcUUID  = "src-uuid-normal"
-			poolUUID = "pool-uuid-normal"
-			lvolUUID = "lvol-uuid-normal"
+			srcUUID  = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
+			poolUUID = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
+			lvolUUID = "cccccccc-cccc-4ccc-cccc-cccccccccccc"
 		)
 		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
 		defer mock.Close()
@@ -255,13 +255,13 @@ func TestSnapshotReplicationNormalReplication(t *testing.T) {
 		mock.Register(http.MethodGet, "/api/v2/clusters/"+srcUUID+"/storage-pools/"+poolUUID+"/volumes/",
 			webapimock.RouteResponse{Status: http.StatusOK, Body: lvolListJSON(map[string]any{
 				"id": lvolUUID, "do_replicate": true,
-				"nqn": "nqn.2024-01.io.simplyblock:" + lvolUUID,
+				"nqn": "nqn.2024-01.io.simplyblock:" + srcUUID + ":lvol:" + lvolUUID,
 			})})
 		// get lvol detail — also used by GetReplicationActiveSides (from_source=true)
 		mock.Register(http.MethodGet, "/api/v2/clusters/"+srcUUID+"/storage-pools/"+poolUUID+"/volumes/"+lvolUUID,
 			webapimock.RouteResponse{Status: http.StatusOK, Body: `{
 				"id":"` + lvolUUID + `","do_replicate":true,"from_source":true,
-				"nqn":"nqn.2024-01.io.simplyblock:` + lvolUUID + `",
+				"nqn":"nqn.2024-01.io.simplyblock:` + srcUUID + `:lvol:` + lvolUUID + `",
 				"rep_info":{"last_replication_time":"2020-01-01T00:00:00Z","replicated_count":5,"last_snapshot_id":"snap-001"}
 			}`})
 		// last snapshot task done
@@ -314,10 +314,10 @@ func TestSnapshotReplicationNormalReplication(t *testing.T) {
 
 	t.Run("skips lvol not in VolumeIDs allowlist", func(t *testing.T) {
 		const (
-			srcUUID     = "src-uuid-filter"
-			poolUUID    = "pool-uuid-filter"
-			lvolUUID    = "lvol-not-allowed"
-			allowedUUID = "lvol-allowed"
+			srcUUID     = "dddddddd-dddd-4ddd-dddd-dddddddddddd"
+			poolUUID    = "eeeeeeee-eeee-4eee-eeee-eeeeeeeeeeee"
+			lvolUUID    = "ffffffff-ffff-4fff-ffff-ffffffffffff"
+			allowedUUID = "11111111-1111-4111-1111-111111111111"
 		)
 		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
 		defer mock.Close()
@@ -327,7 +327,7 @@ func TestSnapshotReplicationNormalReplication(t *testing.T) {
 			webapimock.RouteResponse{Status: http.StatusOK, Body: `[{"id":"` + poolUUID + `"}]`})
 		mock.Register(http.MethodGet, "/api/v2/clusters/"+srcUUID+"/storage-pools/"+poolUUID+"/volumes/",
 			webapimock.RouteResponse{Status: http.StatusOK, Body: lvolListJSON(
-				map[string]any{"id": lvolUUID, "do_replicate": true, "nqn": "nqn.x:" + lvolUUID},
+				map[string]any{"id": lvolUUID, "do_replicate": true, "nqn": "nqn.2024-01.io.simplyblock:" + srcUUID + ":lvol:" + lvolUUID},
 			)})
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 

@@ -3,12 +3,14 @@ package webapi
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/simplyblock/simplyblock-operator/internal/sbnqn"
 )
 
 type ClusterResponse struct {
 	UUID              string
 	Secret            string
-	NQN               string
+	NQN               sbnqn.ClusterNQN
 	Status            string
 	Rebalancing       bool
 	NDCS              int
@@ -17,14 +19,14 @@ type ClusterResponse struct {
 }
 
 type clusterResponsePayload struct {
-	ID                string `json:"id"`
-	Secret            string `json:"secret"`
-	NQN               string `json:"nqn"`
-	Status            string `json:"status"`
-	Rebalancing       bool   `json:"is_re_balancing"`
-	NDCS              int    `json:"distr_ndcs"`
-	NPCS              int    `json:"distr_npcs"`
-	MaxFaultTolerance int    `json:"max_fault_tolerance"`
+	ID                string           `json:"id"`
+	Secret            string           `json:"secret"`
+	NQN               sbnqn.ClusterNQN `json:"nqn"`
+	Status            string           `json:"status"`
+	Rebalancing       bool             `json:"is_re_balancing"`
+	NDCS              int              `json:"distr_ndcs"`
+	NPCS              int              `json:"distr_npcs"`
+	MaxFaultTolerance int              `json:"max_fault_tolerance"`
 }
 
 func ParseClusterResponse(body []byte) (ClusterResponse, error) {
