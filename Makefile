@@ -5,6 +5,12 @@ IMG_TAG  ?= $(VERSION)
 IMG      ?= $(IMG_BASE):$(IMG_TAG)
 ECR_IMG_BASE ?= public.ecr.aws/simply-block/simplyblock-operator
 ECR_IMG      ?= $(ECR_IMG_BASE):$(IMG_TAG)
+
+# simplyblock-rebalancer image (built from Dockerfile.simplyblock-rebalancer)
+REBALANCER_IMG_BASE     ?= quay.io/simplyblock-io/simplyblock-rebalancer
+REBALANCER_IMG          ?= $(REBALANCER_IMG_BASE):$(IMG_TAG)
+ECR_REBALANCER_IMG_BASE ?= public.ecr.aws/simply-block/simplyblock-rebalancer
+ECR_REBALANCER_IMG      ?= $(ECR_REBALANCER_IMG_BASE):$(IMG_TAG)
 BUNDLE_IMG ?= quay.io/simplyblock-io/simplyblock-operator-bundle:$(VERSION)
 OPENSHIFT_VERSION ?= v4.19
 
@@ -17,7 +23,8 @@ SPDK_IMAGE_TAG     ?= R26.2-PRE-latest
 YQ_CSV_EXPR = .metadata.annotations.containerImage = strenv(OPERATOR_IMG) \
   | .spec.relatedImages = [{"name": "simplyblock-operator", "image": strenv(OPERATOR_IMG)}, \
     {"name": "simplyblock", "image": strenv(CLUSTER_IMG)}, \
-    {"name": "ultra-spdk", "image": strenv(SPDK_IMG)}] \
+    {"name": "ultra-spdk", "image": strenv(SPDK_IMG)}, \
+    {"name": "simplyblock-rebalancer", "image": strenv(REBALANCER_IMG)}] \
   | .spec.install.spec.deployments[0].spec.template.spec.containers[0].image = strenv(OPERATOR_IMG)
 YQ_ANNOTATIONS_EXPR = .annotations."com.redhat.openshift.versions" = strenv(OPENSHIFT_VERSION)
 
@@ -63,7 +70,7 @@ help: ## Display this help.
 
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd:allowDangerousTypes=true webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -177,6 +184,28 @@ docker-buildx-ecr: ## Build and push docker image to ECR public for cross-platfo
 	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
 	rm Dockerfile.cross
 
+.PHONY: docker-build-simplyblock-rebalancer
+docker-build-simplyblock-rebalancer: ## Build the simplyblock-rebalancer image.
+	$(CONTAINER_TOOL) build -t ${REBALANCER_IMG} -f Dockerfile.simplyblock-rebalancer .
+
+.PHONY: docker-push-simplyblock-rebalancer
+docker-push-simplyblock-rebalancer: ## Push the simplyblock-rebalancer image.
+	$(CONTAINER_TOOL) push ${REBALANCER_IMG}
+
+.PHONY: docker-buildx-simplyblock-rebalancer
+docker-buildx-simplyblock-rebalancer: ## Build and push multi-arch simplyblock-rebalancer image to quay.io.
+	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
+	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${REBALANCER_IMG} -f Dockerfile.simplyblock-rebalancer .
+	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
+
+.PHONY: docker-buildx-ecr-simplyblock-rebalancer
+docker-buildx-ecr-simplyblock-rebalancer: ## Build and push multi-arch simplyblock-rebalancer image to ECR.
+	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
+	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${ECR_REBALANCER_IMG} -f Dockerfile.simplyblock-rebalancer .
+	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
+
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
@@ -209,11 +238,18 @@ bundle: yq ## Generate bundle manifests with digest-pinned images (operator imag
 	  "https://quay.io/v2/simplyblock-io/ultra/manifests/$(SPDK_IMAGE_TAG)" \
 	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	REBALANCER_DIGEST=$$(curl -sI \
+	  "https://quay.io/v2/simplyblock-io/simplyblock-rebalancer/manifests/$(IMG_TAG)" \
+	  -H "Accept: $(MANIFEST_ACCEPT)" \
+	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	test -n "$$REBALANCER_DIGEST" \
+	  || { echo "ERROR: could not fetch digest for $(REBALANCER_IMG_BASE):$(IMG_TAG) — is the image pushed?"; exit 1; }; \
 	(cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
 	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
 	OPERATOR_IMG="$(IMG_BASE)@$$OPERATOR_DIGEST" \
 	CLUSTER_IMG="$(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)@$$CLUSTER_DIGEST" \
 	SPDK_IMG="$(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)@$$SPDK_DIGEST" \
+	REBALANCER_IMG="$(REBALANCER_IMG_BASE)@$$REBALANCER_DIGEST" \
 	"$(YQ)" e '$(YQ_CSV_EXPR)' -i bundle/manifests/simplyblock-operator.clusterserviceversion.yaml; \
 	OPENSHIFT_VERSION="$(OPENSHIFT_VERSION)" \
 	"$(YQ)" e '$(YQ_ANNOTATIONS_EXPR)' -i bundle/metadata/annotations.yaml;
