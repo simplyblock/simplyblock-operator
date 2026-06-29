@@ -25,7 +25,7 @@ import (
 type ControlPlaneSpec struct {
 	// Image is the container image used for all simplyblock control-plane and
 	// storage-node workloads (e.g. quay.io/simplyblock-io/simplyblock:26.2.2).
-	// StorageNode CRs that omit spec.clusterImage inherit this value.
+	// StorageNodeSet CRs that omit spec.clusterImage inherit this value.
 	// +optional
 	Image string `json:"image,omitempty"`
 }

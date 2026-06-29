@@ -31,9 +31,9 @@ resources:
 - task_admin_role.yaml
 - task_editor_role.yaml
 - task_viewer_role.yaml
-- storagenode_admin_role.yaml
-- storagenode_editor_role.yaml
-- storagenode_viewer_role.yaml
+- storagenodeset_admin_role.yaml
+- storagenodeset_editor_role.yaml
+- storagenodeset_viewer_role.yaml
 - storagebackup_admin_role.yaml
 - storagebackup_editor_role.yaml
 - storagebackup_viewer_role.yaml

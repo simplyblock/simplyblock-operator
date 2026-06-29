@@ -50,8 +50,8 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
-// StorageNodeReconciler reconciles a StorageNode object
-type StorageNodeReconciler struct {
+// StorageNodeSetReconciler reconciles a StorageNodeSet object
+type StorageNodeSetReconciler struct {
 	client.Client
 	Scheme           *runtime.Scheme
 	Namespace        string // operator namespace, used to look up the singleton ControlPlane CR
@@ -99,9 +99,9 @@ var (
 	spdkPodEventDelay = 20 * time.Second
 )
 
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodesets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodesets/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodesets/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch;create;update;patch;delete
@@ -118,16 +118,16 @@ var (
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the StorageNode object against the actual cluster state, and then
+// the StorageNodeSet object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
-func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	snCR := &simplyblockv1alpha1.StorageNode{}
+	snCR := &simplyblockv1alpha1.StorageNodeSet{}
 	if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -221,10 +221,10 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 }
 
 // reconcileWorkerNode handles provisioning and online-wait for a single worker node.
-func (r *StorageNodeReconciler) reconcileWorkerNode(
+func (r *StorageNodeSetReconciler) reconcileWorkerNode(
 	ctx context.Context,
 	req ctrl.Request,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	nodeName, clusterUUID string,
 	apiClient *webapi.Client,
 	expectedPerHost int,
@@ -278,7 +278,7 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 
-		if res, err := r.postStorageNode(ctx, req, snCR, nodeName, ip, clusterUUID, apiClient); err != nil || res.RequeueAfter > 0 {
+		if res, err := r.postStorageNodeSet(ctx, req, snCR, nodeName, ip, clusterUUID, apiClient); err != nil || res.RequeueAfter > 0 {
 			// POST failed — clear the pending marker so the next reconcile
 			// retries the POST rather than waiting on a node that was never created.
 			clearPatch := client.MergeFrom(snCR.DeepCopy())
@@ -293,12 +293,12 @@ func (r *StorageNodeReconciler) reconcileWorkerNode(
 	return r.pollNodeOnline(ctx, apiClient, clusterUUID, ip, nodeName, expectedPerHost, snCR)
 }
 
-// postStorageNode calls the backend storage-node creation API and records the
+// postStorageNodeSet calls the backend storage-node creation API and records the
 // placeholder status entry.
-func (r *StorageNodeReconciler) postStorageNode(
+func (r *StorageNodeSetReconciler) postStorageNodeSet(
 	ctx context.Context,
 	req ctrl.Request,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	nodeName, ip, clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, error) {
@@ -313,8 +313,8 @@ func (r *StorageNodeReconciler) postStorageNode(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	nodeAddress := utils.StorageNodeAPIAddress(nodeName, snCR.Namespace)
-	params := utils.StorageNodeAddParams{
+	nodeAddress := utils.StorageNodeSetAPIAddress(nodeName, snCR.Namespace)
+	params := utils.StorageNodeSetAddParams{
 		NodeAddress:         nodeAddress,
 		InterfaceName:       snCR.Spec.MgmtIfname,
 		SPDKImage:           snCR.Spec.SpdkImage,
@@ -330,7 +330,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 		HaJMCount:           journalManagerCount(snCR),
 		CRName:              snCR.Name,
 		CRNameSpace:         snCR.Namespace,
-		CRPlural:            "storagenodes",
+		CRPlural:            "storagenodesets",
 		Format4K:            utils.BoolPtrOrFalse(snCR.Spec.ForceFormat4K),
 		SpdkSystemMemory:    snCR.Spec.SpdkSystemMemory,
 	}
@@ -352,7 +352,7 @@ func (r *StorageNodeReconciler) postStorageNode(
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
 		}
-		log.Error(err, "StorageNode creation failed", "status", status, "response", string(body))
+		log.Error(err, "StorageNodeSet creation failed", "status", status, "response", string(body))
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	}
 
@@ -376,23 +376,23 @@ func (r *StorageNodeReconciler) postStorageNode(
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *StorageNodeSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.StorageNode{}).
-		Named("storagenode").
+		For(&simplyblockv1alpha1.StorageNodeSet{}).
+		Named("storagenodeset").
 		Watches(
 			&corev1.Pod{},
-			handler.EnqueueRequestsFromMapFunc(r.spdkProxyPodToStorageNodeRequests),
+			handler.EnqueueRequestsFromMapFunc(r.spdkProxyPodToStorageNodeSetRequests),
 			builder.WithPredicates(predicate.NewPredicateFuncs(isSpdkProxyPod)),
 		).
 		Watches(
 			&corev1.Secret{},
-			handler.EnqueueRequestsFromMapFunc(r.tlsSecretToStorageNodeRequests),
-			builder.WithPredicates(predicate.NewPredicateFuncs(isStorageNodeTLSSecret)),
+			handler.EnqueueRequestsFromMapFunc(r.tlsSecretToStorageNodeSetRequests),
+			builder.WithPredicates(predicate.NewPredicateFuncs(isStorageNodeSetTLSSecret)),
 		).
 		Watches(
 			&simplyblockv1alpha1.ControlPlane{},
-			handler.EnqueueRequestsFromMapFunc(r.controlPlaneToStorageNodeRequests),
+			handler.EnqueueRequestsFromMapFunc(r.controlPlaneToStorageNodeSetRequests),
 			builder.WithPredicates(predicate.NewPredicateFuncs(isSimplyblockControlPlane)),
 		).
 		Complete(r)
@@ -402,19 +402,19 @@ func isSpdkProxyPod(obj client.Object) bool {
 	return obj.GetLabels()["role"] == utils.LabelSpdkProxyRole
 }
 
-func isStorageNodeTLSSecret(obj client.Object) bool {
-	return obj.GetName() == utils.SecretNameStorageNodeAPITLS
+func isStorageNodeSetTLSSecret(obj client.Object) bool {
+	return obj.GetName() == utils.SecretNameStorageNodeSetAPITLS
 }
 
 func isSimplyblockControlPlane(obj client.Object) bool {
 	return obj.GetName() == SingletonControlPlaneName
 }
 
-func (r *StorageNodeReconciler) controlPlaneToStorageNodeRequests(
+func (r *StorageNodeSetReconciler) controlPlaneToStorageNodeSetRequests(
 	ctx context.Context,
 	obj client.Object,
 ) []reconcile.Request {
-	var snList simplyblockv1alpha1.StorageNodeList
+	var snList simplyblockv1alpha1.StorageNodeSetList
 	if err := r.List(ctx, &snList, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
 	}
@@ -427,16 +427,16 @@ func (r *StorageNodeReconciler) controlPlaneToStorageNodeRequests(
 	return reqs
 }
 
-// tlsSecretToStorageNodeRequests enqueues every StorageNode CR in the
+// tlsSecretToStorageNodeSetRequests enqueues every StorageNodeSet CR in the
 // Secret's namespace when the storage-node-api TLS Secret changes. Coupled
 // with the resourceVersion annotation stamped on the DaemonSet pod template,
 // this drives a rolling restart whenever cert-manager (or OpenShift's
 // service-ca) rotates the Secret.
-func (r *StorageNodeReconciler) tlsSecretToStorageNodeRequests(
+func (r *StorageNodeSetReconciler) tlsSecretToStorageNodeSetRequests(
 	ctx context.Context,
 	obj client.Object,
 ) []reconcile.Request {
-	var snList simplyblockv1alpha1.StorageNodeList
+	var snList simplyblockv1alpha1.StorageNodeSetList
 	if err := r.List(ctx, &snList, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
 	}
@@ -449,16 +449,16 @@ func (r *StorageNodeReconciler) tlsSecretToStorageNodeRequests(
 	return reqs
 }
 
-// spdkProxyPodToStorageNodeRequests enqueues every StorageNode CR in the Pod's
+// spdkProxyPodToStorageNodeSetRequests enqueues every StorageNodeSet CR in the Pod's
 // namespace when a spdk-proxy pod changes. Pods are created by the backend, not
 // by the operator, so there is no forward owner reference — fanning out within
 // the namespace is the simplest correct mapping and cheap in practice (one CR
 // per namespace is typical).
-func (r *StorageNodeReconciler) spdkProxyPodToStorageNodeRequests(
+func (r *StorageNodeSetReconciler) spdkProxyPodToStorageNodeSetRequests(
 	ctx context.Context,
 	obj client.Object,
 ) []reconcile.Request {
-	var snList simplyblockv1alpha1.StorageNodeList
+	var snList simplyblockv1alpha1.StorageNodeSetList
 	if err := r.List(ctx, &snList, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
 	}
@@ -471,37 +471,37 @@ func (r *StorageNodeReconciler) spdkProxyPodToStorageNodeRequests(
 	return reqs
 }
 
-func (r *StorageNodeReconciler) handleDeletion(
+func (r *StorageNodeSetReconciler) handleDeletion(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) (bool, error) {
 
 	if snCR.DeletionTimestamp.IsZero() {
 		return false, nil
 	}
 
-	if !controllerutil.ContainsFinalizer(snCR, utils.FinalizerStorageNode) {
+	if !controllerutil.ContainsFinalizer(snCR, utils.FinalizerStorageNodeSet) {
 		return true, nil
 	}
 
-	controllerutil.RemoveFinalizer(snCR, utils.FinalizerStorageNode)
+	controllerutil.RemoveFinalizer(snCR, utils.FinalizerStorageNodeSet)
 	return true, r.Update(ctx, snCR)
 }
 
-func (r *StorageNodeReconciler) ensureFinalizer(
+func (r *StorageNodeSetReconciler) ensureFinalizer(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) (bool, error) {
 
-	if controllerutil.ContainsFinalizer(snCR, utils.FinalizerStorageNode) {
+	if controllerutil.ContainsFinalizer(snCR, utils.FinalizerStorageNodeSet) {
 		return false, nil
 	}
 
-	controllerutil.AddFinalizer(snCR, utils.FinalizerStorageNode)
+	controllerutil.AddFinalizer(snCR, utils.FinalizerStorageNodeSet)
 	return true, r.Update(ctx, snCR)
 }
 
-func (r *StorageNodeReconciler) labelWorkerNodes(ctx context.Context, sn *simplyblockv1alpha1.StorageNode) error {
+func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *simplyblockv1alpha1.StorageNodeSet) error {
 	for _, nodeName := range sn.Spec.WorkerNodes {
 		var node corev1.Node
 		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
@@ -528,7 +528,7 @@ func (r *StorageNodeReconciler) labelWorkerNodes(ctx context.Context, sn *simply
 	return nil
 }
 
-func (r *StorageNodeReconciler) labelWorkerNode(ctx context.Context, sn *simplyblockv1alpha1.StorageNode) error {
+func (r *StorageNodeSetReconciler) labelWorkerNode(ctx context.Context, sn *simplyblockv1alpha1.StorageNodeSet) error {
 	var node corev1.Node
 	if err := r.Get(ctx, client.ObjectKey{Name: sn.Spec.WorkerNode}, &node); err != nil {
 		return err
@@ -549,9 +549,9 @@ func (r *StorageNodeReconciler) labelWorkerNode(ctx context.Context, sn *simplyb
 	return nil
 }
 
-func (r *StorageNodeReconciler) reconcileDaemonSet(
+func (r *StorageNodeSetReconciler) reconcileDaemonSet(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) error {
 
 	if snCR.Spec.ClusterImage == "" {
@@ -571,7 +571,7 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 		return err
 	}
 
-	ds := utils.BuildStorageNodeDaemonSet(snCR, r.TLSEnabled, r.TLSMutualEnabled, r.TLSProvider, tlsSecretRV)
+	ds := utils.BuildStorageNodeSetDaemonSet(snCR, r.TLSEnabled, r.TLSMutualEnabled, r.TLSProvider, tlsSecretRV)
 
 	if err := controllerutil.SetControllerReference(snCR, ds, r.Scheme); err != nil {
 		return err
@@ -595,7 +595,7 @@ func (r *StorageNodeReconciler) reconcileDaemonSet(
 // been provisioned yet. The value is stamped onto the DaemonSet's pod
 // template so that cert rotations (where the Secret object changes but its
 // name does not) trigger a rolling restart.
-func (r *StorageNodeReconciler) getTLSSecretResourceVersion(
+func (r *StorageNodeSetReconciler) getTLSSecretResourceVersion(
 	ctx context.Context,
 	namespace string,
 ) (string, error) {
@@ -605,7 +605,7 @@ func (r *StorageNodeReconciler) getTLSSecretResourceVersion(
 	var sec corev1.Secret
 	err := r.Get(ctx, types.NamespacedName{
 		Namespace: namespace,
-		Name:      utils.SecretNameStorageNodeAPITLS,
+		Name:      utils.SecretNameStorageNodeSetAPITLS,
 	}, &sec)
 	if apierrors.IsNotFound(err) {
 		return "", nil
@@ -616,11 +616,11 @@ func (r *StorageNodeReconciler) getTLSSecretResourceVersion(
 	return sec.ResourceVersion, nil
 }
 
-func (r *StorageNodeReconciler) reconcileService(
+func (r *StorageNodeSetReconciler) reconcileService(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) error {
-	svc := utils.BuildStorageNodeService(snCR, r.TLSEnabled, r.TLSProvider)
+	svc := utils.BuildStorageNodeSetService(snCR, r.TLSEnabled, r.TLSProvider)
 	if err := controllerutil.SetControllerReference(snCR, svc, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set Service owner reference: %w", err)
 	}
@@ -639,9 +639,9 @@ func (r *StorageNodeReconciler) reconcileService(
 	return r.Update(ctx, svc)
 }
 
-func (r *StorageNodeReconciler) reconcileServingCertificates(
+func (r *StorageNodeSetReconciler) reconcileServingCertificates(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) error {
 	if !r.TLSEnabled || !utils.IsCertManagerTLSProvider(r.TLSProvider) {
 		return nil
@@ -653,7 +653,7 @@ func (r *StorageNodeReconciler) reconcileServingCertificates(
 	}{
 		{
 			serviceName: "simplyblock-storage-node-api",
-			secretName:  utils.SecretNameStorageNodeAPITLS,
+			secretName:  utils.SecretNameStorageNodeSetAPITLS,
 		},
 		{
 			serviceName: "simplyblock-spdk-proxy",
@@ -670,9 +670,9 @@ func (r *StorageNodeReconciler) reconcileServingCertificates(
 	return nil
 }
 
-func (r *StorageNodeReconciler) reconcileServingCertificate(
+func (r *StorageNodeSetReconciler) reconcileServingCertificate(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	serviceName, secretName string,
 ) error {
 	cert := utils.BuildServiceServingCertificate(snCR.Namespace, serviceName, secretName)
@@ -687,9 +687,9 @@ func (r *StorageNodeReconciler) reconcileServingCertificate(
 	return nil
 }
 
-func (r *StorageNodeReconciler) reconcileEndpointSlice(
+func (r *StorageNodeSetReconciler) reconcileEndpointSlice(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) error {
 	log := logf.FromContext(ctx)
 
@@ -703,17 +703,17 @@ func (r *StorageNodeReconciler) reconcileEndpointSlice(
 		nodeIPs[nodeName] = ip
 	}
 
-	return r.applyStorageNodeEndpointSlice(ctx, snCR, nodeIPs)
+	return r.applyStorageNodeSetEndpointSlice(ctx, snCR, nodeIPs)
 }
 
-// applyStorageNodeEndpointSlice creates or updates the storage-node-api
+// applyStorageNodeSetEndpointSlice creates or updates the storage-node-api
 // EndpointSlice with the supplied nodeIPs map.
-func (r *StorageNodeReconciler) applyStorageNodeEndpointSlice(
+func (r *StorageNodeSetReconciler) applyStorageNodeSetEndpointSlice(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	nodeIPs map[string]string,
 ) error {
-	eps := utils.BuildStorageNodeEndpointSlice(snCR, nodeIPs)
+	eps := utils.BuildStorageNodeSetEndpointSlice(snCR, nodeIPs)
 	if err := controllerutil.SetControllerReference(snCR, eps, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set EndpointSlice owner reference: %w", err)
 	}
@@ -731,9 +731,9 @@ func (r *StorageNodeReconciler) applyStorageNodeEndpointSlice(
 	return r.Update(ctx, eps)
 }
 
-func (r *StorageNodeReconciler) reconcileSpdkProxyService(
+func (r *StorageNodeSetReconciler) reconcileSpdkProxyService(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) error {
 	svc := utils.BuildSpdkProxyService(snCR, r.TLSEnabled, r.TLSProvider)
 	if err := controllerutil.SetControllerReference(snCR, svc, r.Scheme); err != nil {
@@ -754,9 +754,9 @@ func (r *StorageNodeReconciler) reconcileSpdkProxyService(
 	return r.Update(ctx, svc)
 }
 
-func (r *StorageNodeReconciler) reconcileSpdkProxyEndpointSlices(
+func (r *StorageNodeSetReconciler) reconcileSpdkProxyEndpointSlices(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) error {
 	log := logf.FromContext(ctx)
 
@@ -848,7 +848,7 @@ func (r *StorageNodeReconciler) reconcileSpdkProxyEndpointSlices(
 // workerIsInFlight returns true if a node-add POST has already been sent for
 // nodeName and is still being tracked — either via PendingNodeAdds (primary)
 // or the legacy UUID=="" placeholder (backward compatibility).
-func workerIsInFlight(snCR *simplyblockv1alpha1.StorageNode, nodeName string) bool {
+func workerIsInFlight(snCR *simplyblockv1alpha1.StorageNodeSet, nodeName string) bool {
 	if _, ok := snCR.Status.PendingNodeAdds[nodeName]; ok {
 		return true
 	}
@@ -861,11 +861,11 @@ func workerIsInFlight(snCR *simplyblockv1alpha1.StorageNode, nodeName string) bo
 }
 
 // recordSpdkPodEvents finds the worker's pending SPDK pod, fetches its most
-// recent Kubernetes event, and surfaces it on the StorageNode CR status so
+// recent Kubernetes event, and surfaces it on the StorageNodeSet CR status so
 // operators can see why a pod is stuck without running kubectl describe.
-func (r *StorageNodeReconciler) recordSpdkPodEvents(
+func (r *StorageNodeSetReconciler) recordSpdkPodEvents(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	nodeName string,
 ) {
 	log := logf.FromContext(ctx)
@@ -934,10 +934,10 @@ func (r *StorageNodeReconciler) recordSpdkPodEvents(
 // sequential (FDB) workers, respecting MaxParallelNodeAdds.
 // MaxParallelNodeAdds carries a +kubebuilder:default=1 marker so the API server
 // always populates it before the CR is stored — it is safe to dereference directly.
-func (r *StorageNodeReconciler) reconcileWorkerNodes(
+func (r *StorageNodeSetReconciler) reconcileWorkerNodes(
 	ctx context.Context,
 	req ctrl.Request,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	clusterUUID string,
 	apiClient *webapi.Client,
 	expectedPerHost int,
@@ -1009,8 +1009,8 @@ func (r *StorageNodeReconciler) reconcileWorkerNodes(
 
 // reconcileRBAC ensures the ServiceAccount, ClusterRole, and ClusterRoleBinding
 // required by the storage-node DaemonSet are present and up to date.
-func (r *StorageNodeReconciler) reconcileRBAC(ctx context.Context, snCR *simplyblockv1alpha1.StorageNode) error {
-	sa := utils.BuildStorageNodeServiceAccount(snCR.Namespace)
+func (r *StorageNodeSetReconciler) reconcileRBAC(ctx context.Context, snCR *simplyblockv1alpha1.StorageNodeSet) error {
+	sa := utils.BuildStorageNodeSetServiceAccount(snCR.Namespace)
 	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
 	}
@@ -1022,7 +1022,7 @@ func (r *StorageNodeReconciler) reconcileRBAC(ctx context.Context, snCR *simplyb
 		return fmt.Errorf("failed to apply ServiceAccount: %w", err)
 	}
 
-	cr := utils.BuildStorageNodeClusterRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster))
+	cr := utils.BuildStorageNodeSetClusterRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster))
 	desiredCRRules := cr.Rules
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
 		cr.Rules = desiredCRRules
@@ -1031,7 +1031,7 @@ func (r *StorageNodeReconciler) reconcileRBAC(ctx context.Context, snCR *simplyb
 		return fmt.Errorf("failed to apply ClusterRole: %w", err)
 	}
 
-	crb := utils.BuildStorageNodeClusterRoleBinding(snCR.Namespace)
+	crb := utils.BuildStorageNodeSetClusterRoleBinding(snCR.Namespace)
 	desiredCRBSubjects := crb.Subjects
 	desiredCRBRoleRef := crb.RoleRef
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
@@ -1047,7 +1047,7 @@ func (r *StorageNodeReconciler) reconcileRBAC(ctx context.Context, snCR *simplyb
 // fdbWorkerSet returns the set of worker node names (from snCR.Spec.WorkerNodes)
 // that currently host at least one FDB pod. These workers must be added
 // sequentially to avoid simultaneous reboots that reduce FDB fault tolerance.
-func (r *StorageNodeReconciler) fdbWorkerSet(ctx context.Context, snCR *simplyblockv1alpha1.StorageNode) map[string]bool {
+func (r *StorageNodeSetReconciler) fdbWorkerSet(ctx context.Context, snCR *simplyblockv1alpha1.StorageNodeSet) map[string]bool {
 	workerSet := make(map[string]bool, len(snCR.Spec.WorkerNodes))
 	for _, w := range snCR.Spec.WorkerNodes {
 		workerSet[w] = false
@@ -1134,7 +1134,7 @@ func getNodeInternalIP(ctx context.Context, c client.Client, nodeName string) (s
 }
 
 func ensureNodeStatus(
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	nodeName, ip string,
 ) *simplyblockv1alpha1.NodeStatus {
 
@@ -1165,14 +1165,14 @@ func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tls
 			certPath = tlsutil.ServiceClientCertificatePath
 			keyPath = tlsutil.ServiceClientKeyPath
 		}
-		c, err := tlsutil.BuildStorageNodeAPIClient(namespace, tlsutil.ServiceCABundlePath, certPath, keyPath)
+		c, err := tlsutil.BuildStorageNodeSetAPIClient(namespace, tlsutil.ServiceCABundlePath, certPath, keyPath)
 		if err != nil {
 			return fmt.Errorf("build storage-node TLS client: %w", err)
 		}
 		httpClient = c
 	}
 
-	url := fmt.Sprintf("%s://%s/snode/info", scheme, utils.StorageNodeAPIAddress(nodeName, namespace))
+	url := fmt.Sprintf("%s://%s/snode/info", scheme, utils.StorageNodeSetAPIAddress(nodeName, namespace))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -1240,12 +1240,12 @@ func waitForNodeInfoReachable(
 // pollNodeOnline performs a single non-blocking check of whether the node is
 // online, returning RequeueAfter if it isn't yet. This replaces the old
 // blocking waitForNodeOnline loop so the reconcile worker goroutine stays free.
-func (r *StorageNodeReconciler) pollNodeOnline(
+func (r *StorageNodeSetReconciler) pollNodeOnline(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID, ip, nodeName string,
 	expectedPerHost int,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
@@ -1300,10 +1300,10 @@ func (r *StorageNodeReconciler) pollNodeOnline(
 
 // nodeOnlineRequeueOrTimeout returns RequeueAfter when the node is still
 // within the allowed wait window, or marks it as timed-out and returns done.
-func (r *StorageNodeReconciler) nodeOnlineRequeueOrTimeout(
+func (r *StorageNodeSetReconciler) nodeOnlineRequeueOrTimeout(
 	ctx context.Context,
 	nodeName, ip string,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	timeout := time.Duration(waitForNodeOnlineRetries) * waitForNodeOnlineWaitInterval
@@ -1351,16 +1351,16 @@ func (r *StorageNodeReconciler) nodeOnlineRequeueOrTimeout(
 	return ctrl.Result{}, nil
 }
 
-// onAllSocketNodesOnline syncs the StorageNode status entries for all online
+// onAllSocketNodesOnline syncs the StorageNodeSet status entries for all online
 // socket nodes and triggers cluster activation when conditions are met.
 func onAllSocketNodesOnline(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	nodeName string,
 	onlineForHost []SNODEAPIResponse,
-	r *StorageNodeReconciler,
+	r *StorageNodeSetReconciler,
 ) error {
 	log := logf.FromContext(ctx)
 
@@ -1432,11 +1432,11 @@ func onAllSocketNodesOnline(
 // from the backend API. It is called on every completed reconcile pass to keep
 // Health, Status, LvolPort and the other fields up-to-date after initial
 // provisioning. PostedAt is preserved because it is a creation timestamp.
-func (r *StorageNodeReconciler) syncTrackedNodesStatus(
+func (r *StorageNodeSetReconciler) syncTrackedNodesStatus(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) error {
 	log := logf.FromContext(ctx)
 
@@ -1519,8 +1519,8 @@ func maybeActivateCluster(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
-	snCR *simplyblockv1alpha1.StorageNode,
-	r *StorageNodeReconciler,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+	r *StorageNodeSetReconciler,
 ) error {
 	log := logf.FromContext(ctx)
 
@@ -1566,7 +1566,7 @@ func maybeActivateCluster(
 }
 
 func journalManagerPercentPerDevice(
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) int {
 	if snCR.Spec.JournalManagerSpec == nil {
 		return 3
@@ -1575,7 +1575,7 @@ func journalManagerPercentPerDevice(
 }
 
 func journalManagerCount(
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) int {
 	if snCR.Spec.JournalManagerSpec == nil {
 		return 3
@@ -1583,9 +1583,9 @@ func journalManagerCount(
 	return utils.IntPtrOrDefault(snCR.Spec.JournalManagerSpec.Count, 3)
 }
 
-func (r *StorageNodeReconciler) reconcileAction(
+func (r *StorageNodeSetReconciler) reconcileAction(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	clusterUUID string,
 ) (ctrl.Result, error) {
 
@@ -1603,10 +1603,10 @@ func (r *StorageNodeReconciler) reconcileAction(
 	return ctrl.Result{}, nil
 }
 
-func (r *StorageNodeReconciler) handleNodeAction(
+func (r *StorageNodeSetReconciler) handleNodeAction(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	clusterUUID string,
 ) error {
 	log := logf.FromContext(ctx)
@@ -1655,11 +1655,11 @@ func (r *StorageNodeReconciler) handleNodeAction(
 	return nil
 }
 
-func (r *StorageNodeReconciler) performNodeAction(
+func (r *StorageNodeSetReconciler) performNodeAction(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) error {
 
 	log := logf.FromContext(ctx)
@@ -1698,7 +1698,7 @@ func (r *StorageNodeReconciler) performNodeAction(
 			body = map[string]any{
 				"force":           nodeActionForce(snCR, true),
 				"reattach_volume": utils.BoolPtrOrFalse(snCR.Spec.ReattachVolume),
-				"node_address":    utils.StorageNodeAPIAddress(snCR.Spec.WorkerNode, snCR.Namespace),
+				"node_address":    utils.StorageNodeSetAPIAddress(snCR.Spec.WorkerNode, snCR.Namespace),
 			}
 		} else {
 			body = payload
@@ -1771,7 +1771,7 @@ func (r *StorageNodeReconciler) performNodeAction(
 	return nil
 }
 
-func nodeActionForce(snCR *simplyblockv1alpha1.StorageNode, defaultValue bool) bool {
+func nodeActionForce(snCR *simplyblockv1alpha1.StorageNodeSet, defaultValue bool) bool {
 	if snCR.Spec.Force == nil {
 		return defaultValue
 	}
@@ -1782,9 +1782,9 @@ func nodeActionForce(snCR *simplyblockv1alpha1.StorageNode, defaultValue bool) b
 // EndpointSlice when it is absent. spec.workerNode holds the migration target
 // but is never part of spec.workerNodes, so reconcileEndpointSlice would never
 // add a DNS hostname entry for it, causing headless-service lookups to fail.
-func (r *StorageNodeReconciler) ensureWorkerInEndpointSlice(
+func (r *StorageNodeSetReconciler) ensureWorkerInEndpointSlice(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	workerNode string,
 ) error {
 	if slices.Contains(snCR.Spec.WorkerNodes, workerNode) {
@@ -1808,10 +1808,10 @@ func (r *StorageNodeReconciler) ensureWorkerInEndpointSlice(
 	}
 	nodeIPs[workerNode] = ip
 
-	return r.applyStorageNodeEndpointSlice(ctx, snCR, nodeIPs)
+	return r.applyStorageNodeSetEndpointSlice(ctx, snCR, nodeIPs)
 }
 
-func (r *StorageNodeReconciler) waitForActionCompletion(
+func (r *StorageNodeSetReconciler) waitForActionCompletion(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,

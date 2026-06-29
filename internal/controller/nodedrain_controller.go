@@ -63,7 +63,7 @@ const (
 // and restart during Kubernetes node drain events such as rolling OS upgrades.
 //
 // The controller implements a requeue-based state machine tracked in
-// StorageNode.status.drainCoordination. The full per-node flow is:
+// StorageNodeSet.status.drainCoordination. The full per-node flow is:
 //
 //  1. Detect   – k8s node cordoned (spec.unschedulable=true); wait for drain slot
 //  2. Shutdown – label storage pod, create blocking PDB (maxUnavailable=0),
@@ -76,7 +76,7 @@ const (
 //  8. Cleanup  – delete PDB, remove drain label, mark phase "complete"
 //
 // Concurrency is controlled by StorageCluster.spec.maxFaultTolerance: at most
-// that many nodes per StorageNode CR may be in the active drain window
+// that many nodes per StorageNodeSet CR may be in the active drain window
 // (phases shutdown_called, draining, restart_called) simultaneously.
 //
 // OpenShift MachineConfigPool (MCP) pausing is not implemented here; instead,
@@ -95,8 +95,8 @@ type NodeDrainCoordinatorReconciler struct {
 	TLSMutualEnabled bool
 }
 
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodesets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodesets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;update;patch
@@ -106,7 +106,7 @@ type NodeDrainCoordinatorReconciler struct {
 func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	snCR := &simplyblockv1alpha1.StorageNode{}
+	snCR := &simplyblockv1alpha1.StorageNodeSet{}
 	if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -199,7 +199,7 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 // outer worker loop should stop processing further nodes.
 func (r *NodeDrainCoordinatorReconciler) processWorker(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	workerName string,
 	apiClient *webapi.Client,
 	clusterUUID string,
@@ -290,7 +290,7 @@ func (r *NodeDrainCoordinatorReconciler) processWorker(
 // state is still present (e.g., after reboot or admin intervention).
 func (r *NodeDrainCoordinatorReconciler) processUncordoned(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	workerName string,
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
@@ -351,7 +351,7 @@ func (r *NodeDrainCoordinatorReconciler) processUncordoned(
 // advanceStateMachine dispatches to the handler for the current drain phase.
 func (r *NodeDrainCoordinatorReconciler) advanceStateMachine(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
 	clusterUUID string,
@@ -384,7 +384,7 @@ func (r *NodeDrainCoordinatorReconciler) advanceStateMachine(
 // pod while this node is queued behind another drain in progress.
 func (r *NodeDrainCoordinatorReconciler) handleDetected(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
 	clusterUUID string,
@@ -504,7 +504,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 // offline is the PDB removed and drain allowed to proceed.
 func (r *NodeDrainCoordinatorReconciler) handleShutdownCalled(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
 	clusterUUID string,
@@ -568,7 +568,7 @@ func (r *NodeDrainCoordinatorReconciler) handleShutdownCalled(
 // reboot. It verifies SPDK is reachable before calling the simplyblock restart API.
 func (r *NodeDrainCoordinatorReconciler) handleDraining(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
 	clusterUUID string,
@@ -618,7 +618,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 
 	restartPayload := map[string]any{
 		"force":        true,
-		"node_address": utils.StorageNodeAPIAddress(state.Hostname, snCR.Namespace),
+		"node_address": utils.StorageNodeSetAPIAddress(state.Hostname, snCR.Namespace),
 	}
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, firstUUID)
 	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, restartPayload)
@@ -643,7 +643,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDraining(
 // allowed to drain, subject to maxFaultTolerance.
 func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	state *simplyblockv1alpha1.NodeDrainState,
 	apiClient *webapi.Client,
 	clusterUUID string,
@@ -722,7 +722,7 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 
 		restartPayload := map[string]any{
 			"force":        true,
-			"node_address": utils.StorageNodeAPIAddress(state.Hostname, snCR.Namespace),
+			"node_address": utils.StorageNodeSetAPIAddress(state.Hostname, snCR.Namespace),
 		}
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nextUUID)
 		body, httpStatus, err := apiClient.Do(ctx, http.MethodPost, endpoint, restartPayload)
@@ -949,7 +949,7 @@ func (r *NodeDrainCoordinatorReconciler) deleteManagerPDB(ctx context.Context, n
 // cleanupManagerPDBIfStale deletes the manager self-PDB when the manager's own
 // node is no longer in the detected drain phase. This handles crash-recovery
 // where the PDB was created but the manager was killed before deleting it.
-func (r *NodeDrainCoordinatorReconciler) cleanupManagerPDBIfStale(ctx context.Context, snCR *simplyblockv1alpha1.StorageNode) {
+func (r *NodeDrainCoordinatorReconciler) cleanupManagerPDBIfStale(ctx context.Context, snCR *simplyblockv1alpha1.StorageNodeSet) {
 	log := logf.FromContext(ctx)
 	state := getDrainState(snCR, r.ManagerNodeName)
 	// PDB is only needed transiently during DrainPhaseDetected on the manager's node.
@@ -961,29 +961,29 @@ func (r *NodeDrainCoordinatorReconciler) cleanupManagerPDBIfStale(ctx context.Co
 	}
 }
 
-// SetupWithManager wires the controller to watch StorageNode CRs, k8s Nodes,
+// SetupWithManager wires the controller to watch StorageNodeSet CRs, k8s Nodes,
 // and the pods that labelStoragePod tracks. Watching pods ensures that when a
 // tracked pod is recreated (e.g. after a crash) the reconcile fires immediately
 // to re-apply the drain label, keeping PDB protection continuous.
 func (r *NodeDrainCoordinatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.StorageNode{}).
+		For(&simplyblockv1alpha1.StorageNodeSet{}).
 		Named("nodedrain").
 		Watches(
 			&corev1.Node{},
-			handler.EnqueueRequestsFromMapFunc(r.nodeToStorageNodeRequests),
+			handler.EnqueueRequestsFromMapFunc(r.nodeToStorageNodeSetRequests),
 		).
 		Watches(
 			&corev1.Pod{},
-			handler.EnqueueRequestsFromMapFunc(r.trackedPodToStorageNodeRequests),
+			handler.EnqueueRequestsFromMapFunc(r.trackedPodToStorageNodeSetRequests),
 		).
 		Complete(r)
 }
 
-// trackedPodToStorageNodeRequests maps a Pod event to the StorageNode CR(s)
+// trackedPodToStorageNodeSetRequests maps a Pod event to the StorageNodeSet CR(s)
 // whose workerNodes contains the pod's node. Only fires for the pod selectors
 // that labelStoragePod tracks, so unrelated pods cause no reconcile churn.
-func (r *NodeDrainCoordinatorReconciler) trackedPodToStorageNodeRequests(
+func (r *NodeDrainCoordinatorReconciler) trackedPodToStorageNodeSetRequests(
 	ctx context.Context,
 	obj client.Object,
 ) []reconcile.Request {
@@ -1001,7 +1001,7 @@ func (r *NodeDrainCoordinatorReconciler) trackedPodToStorageNodeRequests(
 		return nil
 	}
 
-	var snList simplyblockv1alpha1.StorageNodeList
+	var snList simplyblockv1alpha1.StorageNodeSetList
 	if err := r.List(ctx, &snList); err != nil {
 		return nil
 	}
@@ -1020,15 +1020,15 @@ func (r *NodeDrainCoordinatorReconciler) trackedPodToStorageNodeRequests(
 	return requests
 }
 
-// nodeToStorageNodeRequests maps a k8s Node event to the StorageNode CR(s)
+// nodeToStorageNodeSetRequests maps a k8s Node event to the StorageNodeSet CR(s)
 // that list the node in spec.workerNodes.
-func (r *NodeDrainCoordinatorReconciler) nodeToStorageNodeRequests(
+func (r *NodeDrainCoordinatorReconciler) nodeToStorageNodeSetRequests(
 	ctx context.Context,
 	obj client.Object,
 ) []reconcile.Request {
 	node := obj.(*corev1.Node)
 
-	var snList simplyblockv1alpha1.StorageNodeList
+	var snList simplyblockv1alpha1.StorageNodeSetList
 	if err := r.List(ctx, &snList); err != nil {
 		return nil
 	}
@@ -1080,7 +1080,7 @@ func getBackendNodeInfo(
 }
 
 // getDrainState returns the drain state entry for the given hostname, or nil.
-func getDrainState(snCR *simplyblockv1alpha1.StorageNode, hostname string) *simplyblockv1alpha1.NodeDrainState {
+func getDrainState(snCR *simplyblockv1alpha1.StorageNodeSet, hostname string) *simplyblockv1alpha1.NodeDrainState {
 	for i := range snCR.Status.DrainCoordination {
 		if snCR.Status.DrainCoordination[i].Hostname == hostname {
 			return &snCR.Status.DrainCoordination[i]
@@ -1090,7 +1090,7 @@ func getDrainState(snCR *simplyblockv1alpha1.StorageNode, hostname string) *simp
 }
 
 // upsertDrainState inserts or updates the drain state entry for state.Hostname.
-func upsertDrainState(snCR *simplyblockv1alpha1.StorageNode, state simplyblockv1alpha1.NodeDrainState) {
+func upsertDrainState(snCR *simplyblockv1alpha1.StorageNodeSet, state simplyblockv1alpha1.NodeDrainState) {
 	for i := range snCR.Status.DrainCoordination {
 		if snCR.Status.DrainCoordination[i].Hostname == state.Hostname {
 			snCR.Status.DrainCoordination[i] = state
@@ -1101,7 +1101,7 @@ func upsertDrainState(snCR *simplyblockv1alpha1.StorageNode, state simplyblockv1
 }
 
 // removeDrainState removes the drain state entry for the given hostname.
-func removeDrainState(snCR *simplyblockv1alpha1.StorageNode, hostname string) {
+func removeDrainState(snCR *simplyblockv1alpha1.StorageNodeSet, hostname string) {
 	filtered := snCR.Status.DrainCoordination[:0]
 	for _, s := range snCR.Status.DrainCoordination {
 		if s.Hostname != hostname {
@@ -1123,7 +1123,7 @@ func removeDrainState(snCR *simplyblockv1alpha1.StorageNode, hostname string) {
 //     while nodes are still transitioning in the backend.
 func countActiveDrains(
 	ctx context.Context,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 	apiClient *webapi.Client,
 	clusterUUID string,
 ) int {
@@ -1169,8 +1169,8 @@ func countActiveDrains(
 	return controllerCount
 }
 
-// findNodeUUID returns the backend UUID for the given hostname from StorageNode status.
-func findNodeUUID(snCR *simplyblockv1alpha1.StorageNode, hostname string) string {
+// findNodeUUID returns the backend UUID for the given hostname from StorageNodeSet status.
+func findNodeUUID(snCR *simplyblockv1alpha1.StorageNodeSet, hostname string) string {
 	for _, n := range snCR.Status.Nodes {
 		if n.Hostname == hostname {
 			return n.UUID
@@ -1183,7 +1183,7 @@ func findNodeUUID(snCR *simplyblockv1alpha1.StorageNode, hostname string) string
 // For multi-socket workers (socketsToUse configured) each NUMA socket produces
 // a separate backend node entry sharing the same hostname, so this may return
 // more than one UUID. Returns a single-element slice for standard workers.
-func findAllNodeUUIDs(snCR *simplyblockv1alpha1.StorageNode, hostname string) []string {
+func findAllNodeUUIDs(snCR *simplyblockv1alpha1.StorageNodeSet, hostname string) []string {
 	var uuids []string
 	for _, n := range snCR.Status.Nodes {
 		if n.Hostname == hostname && n.UUID != "" {
@@ -1206,8 +1206,8 @@ func nextUUIDInList(uuids []string, current string) string {
 
 // isNodeReady returns true when the node has a Ready condition with status True.
 // isWorkerOnline returns true if the worker node has status "online" in the
-// StorageNode status, meaning it has been fully added and is serving I/O.
-func isWorkerOnline(snCR *simplyblockv1alpha1.StorageNode, workerName string) bool {
+// StorageNodeSet status, meaning it has been fully added and is serving I/O.
+func isWorkerOnline(snCR *simplyblockv1alpha1.StorageNodeSet, workerName string) bool {
 	for _, n := range snCR.Status.Nodes {
 		if n.Hostname == workerName {
 			return n.Status == "online"

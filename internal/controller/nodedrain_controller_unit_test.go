@@ -19,8 +19,8 @@ import (
 // ---- pure helpers ----
 
 func TestGetDrainState(t *testing.T) {
-	snCR := &simplyblockv1alpha1.StorageNode{
-		Status: simplyblockv1alpha1.StorageNodeStatus{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
 			DrainCoordination: []simplyblockv1alpha1.NodeDrainState{
 				{Hostname: "node-a", Phase: simplyblockv1alpha1.DrainPhaseDetected},
 				{Hostname: "node-b", Phase: simplyblockv1alpha1.DrainPhaseDraining},
@@ -39,7 +39,7 @@ func TestGetDrainState(t *testing.T) {
 }
 
 func TestUpsertDrainState(t *testing.T) {
-	snCR := &simplyblockv1alpha1.StorageNode{}
+	snCR := &simplyblockv1alpha1.StorageNodeSet{}
 
 	upsertDrainState(snCR, simplyblockv1alpha1.NodeDrainState{Hostname: "node-a", Phase: simplyblockv1alpha1.DrainPhaseDetected})
 	if len(snCR.Status.DrainCoordination) != 1 {
@@ -61,8 +61,8 @@ func TestUpsertDrainState(t *testing.T) {
 }
 
 func TestRemoveDrainState(t *testing.T) {
-	snCR := &simplyblockv1alpha1.StorageNode{
-		Status: simplyblockv1alpha1.StorageNodeStatus{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
 			DrainCoordination: []simplyblockv1alpha1.NodeDrainState{
 				{Hostname: "node-a", Phase: simplyblockv1alpha1.DrainPhaseComplete},
 				{Hostname: "node-b", Phase: simplyblockv1alpha1.DrainPhaseDraining},
@@ -86,8 +86,8 @@ func TestRemoveDrainState(t *testing.T) {
 }
 
 func TestFindNodeUUID(t *testing.T) {
-	snCR := &simplyblockv1alpha1.StorageNode{
-		Status: simplyblockv1alpha1.StorageNodeStatus{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
 			Nodes: []simplyblockv1alpha1.NodeStatus{
 				{Hostname: "node-a", UUID: "uuid-a"},
 				{Hostname: "node-b", UUID: "uuid-b"},
@@ -104,8 +104,8 @@ func TestFindNodeUUID(t *testing.T) {
 }
 
 func TestIsWorkerOnline(t *testing.T) {
-	snCR := &simplyblockv1alpha1.StorageNode{
-		Status: simplyblockv1alpha1.StorageNodeStatus{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
 			Nodes: []simplyblockv1alpha1.NodeStatus{
 				{Hostname: "node-online", Status: "online"},
 				{Hostname: "node-offline", Status: "offline"},
@@ -171,8 +171,8 @@ func TestSanitizeLabelValue(t *testing.T) {
 }
 
 func TestCountActiveDrainsControllerState(t *testing.T) {
-	snCR := &simplyblockv1alpha1.StorageNode{
-		Status: simplyblockv1alpha1.StorageNodeStatus{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
 			DrainCoordination: []simplyblockv1alpha1.NodeDrainState{
 				{Hostname: "n1", Phase: simplyblockv1alpha1.DrainPhaseShutdownCalled},
 				{Hostname: "n2", Phase: simplyblockv1alpha1.DrainPhaseDraining},
@@ -193,8 +193,8 @@ func TestCountActiveDrainsControllerState(t *testing.T) {
 
 func TestCountActiveDrainsBackendConservative(t *testing.T) {
 	// Backend API unreachable → node is counted as active (conservative).
-	snCR := &simplyblockv1alpha1.StorageNode{
-		Status: simplyblockv1alpha1.StorageNodeStatus{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
 			Nodes: []simplyblockv1alpha1.NodeStatus{
 				{Hostname: "node-a", UUID: "uuid-a"},
 			},
@@ -217,8 +217,8 @@ func TestCountActiveDrainsBackendTakesPrecedence(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	snCR := &simplyblockv1alpha1.StorageNode{
-		Status: simplyblockv1alpha1.StorageNodeStatus{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
 			Nodes: []simplyblockv1alpha1.NodeStatus{
 				{Hostname: "node-a", UUID: "uuid-a"},
 				{Hostname: "node-b", UUID: "uuid-b"},
@@ -249,9 +249,9 @@ func TestNodeDrainReconcileNotFound(t *testing.T) {
 }
 
 func TestNodeDrainReconcileNoClusterAuthRequeues(t *testing.T) {
-	snCR := &simplyblockv1alpha1.StorageNode{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-no-auth", Namespace: "default"},
-		Spec: simplyblockv1alpha1.StorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
 			ClusterName: "cluster-missing",
 		},
 	}
@@ -269,9 +269,9 @@ func TestNodeDrainReconcileNoClusterAuthRequeues(t *testing.T) {
 func TestNodeDrainReconcileNoClusterCRRequeues(t *testing.T) {
 	const clusterName = "cluster-no-cr"
 
-	snCR := &simplyblockv1alpha1.StorageNode{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-no-cluster-cr", Namespace: "default"},
-		Spec: simplyblockv1alpha1.StorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
 			ClusterName: clusterName,
 		},
 	}
@@ -536,7 +536,7 @@ func TestCleanupManagerPDBIfStaleRemovesWhenNotInDetectedPhase(t *testing.T) {
 		},
 	}
 	// Manager node is NOT in detected phase (no drain state at all).
-	snCR := &simplyblockv1alpha1.StorageNode{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
 	}
 	r := newNodeDrainTestReconciler(t, pdb)
@@ -560,9 +560,9 @@ func TestCleanupManagerPDBIfStaleKeepsWhenDetected(t *testing.T) {
 		},
 	}
 	// Manager node IS in the detected phase — PDB should be kept.
-	snCR := &simplyblockv1alpha1.StorageNode{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
-		Status: simplyblockv1alpha1.StorageNodeStatus{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
 			DrainCoordination: []simplyblockv1alpha1.NodeDrainState{
 				{Hostname: "manager-node", Phase: simplyblockv1alpha1.DrainPhaseDetected},
 			},
@@ -584,9 +584,9 @@ func TestProcessWorkerUncordonedNoState(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "node-g"},
 		Spec:       corev1.NodeSpec{Unschedulable: false},
 	}
-	snCR := &simplyblockv1alpha1.StorageNode{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.StorageNodeSpec{WorkerNodes: []string{"node-g"}},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{WorkerNodes: []string{"node-g"}},
 	}
 	r := newNodeDrainTestReconciler(t, snCR, node)
 
@@ -608,9 +608,9 @@ func TestProcessWorkerSkipsCordonedNotYetOnline(t *testing.T) {
 		Spec:       corev1.NodeSpec{Unschedulable: true},
 	}
 	// No Nodes in status → isWorkerOnline returns false.
-	snCR := &simplyblockv1alpha1.StorageNode{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-h", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.StorageNodeSpec{WorkerNodes: []string{"node-h"}},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{WorkerNodes: []string{"node-h"}},
 	}
 	r := newNodeDrainTestReconciler(t, snCR, node)
 
@@ -632,10 +632,10 @@ func TestProcessWorkerCordonedOnlineInitializesState(t *testing.T) {
 		Spec:       corev1.NodeSpec{Unschedulable: true},
 	}
 	// Node is online in backend status.
-	snCR := &simplyblockv1alpha1.StorageNode{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-i", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.StorageNodeSpec{WorkerNodes: []string{"node-i"}},
-		Status: simplyblockv1alpha1.StorageNodeStatus{
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{WorkerNodes: []string{"node-i"}},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
 			Nodes: []simplyblockv1alpha1.NodeStatus{
 				{Hostname: "node-i", Status: "online", UUID: ""},
 			},
@@ -738,9 +738,9 @@ func TestHandleRestartCalledHoldsDrainSlotWhileRebalancing(t *testing.T) {
 			},
 		},
 	}
-	snCR := &simplyblockv1alpha1.StorageNode{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-rebal", Namespace: "default"},
-		Status: simplyblockv1alpha1.StorageNodeStatus{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
 			Nodes: []simplyblockv1alpha1.NodeStatus{
 				{Hostname: nodeName, UUID: nodeUUID, Status: "online"},
 			},
@@ -793,9 +793,9 @@ func TestHandleRestartCalledCompletesWhenNotRebalancing(t *testing.T) {
 			},
 		},
 	}
-	snCR := &simplyblockv1alpha1.StorageNode{
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-done", Namespace: "default"},
-		Status: simplyblockv1alpha1.StorageNodeStatus{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
 			Nodes: []simplyblockv1alpha1.NodeStatus{
 				{Hostname: nodeName, UUID: nodeUUID, Status: "online"},
 			},
@@ -833,7 +833,7 @@ func newNodeDrainTestReconciler(t *testing.T, objects ...client.Object) *NodeDra
 		policyv1.AddToScheme,
 	)
 	cl := newTestClient(t, scheme, []client.Object{
-		&simplyblockv1alpha1.StorageNode{},
+		&simplyblockv1alpha1.StorageNodeSet{},
 		&simplyblockv1alpha1.StorageCluster{},
 	}, objects...)
 

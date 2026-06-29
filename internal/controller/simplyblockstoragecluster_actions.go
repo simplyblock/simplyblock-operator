@@ -347,7 +347,7 @@ func (r *StorageClusterReconciler) reconcileNodeRecycle(
 
 	// Populate PendingNodes once from the API.
 	if clusterCR.Status.NodeRecycleStatus == nil {
-		nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
+		nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 		if err != nil {
 			log.Error(err, "Failed to list storage nodes for node-recycle init")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -421,7 +421,7 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefresh(
 	log := logf.FromContext(ctx)
 	nrs := clusterCR.Status.NodeRecycleStatus
 
-	found, err := r.deleteStorageNodePod(ctx, clusterCR, apiClient, clusterUUID, nodeUUID)
+	found, err := r.deleteStorageNodeSetPod(ctx, clusterCR, apiClient, clusterUUID, nodeUUID)
 	if err != nil {
 		log.Error(err, "Failed to delete storage node pod for refresh", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -454,7 +454,7 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefreshWait(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	ready, err := r.isStorageNodePodReady(ctx, clusterCR, apiClient, clusterUUID, nodeUUID)
+	ready, err := r.isStorageNodeSetPodReady(ctx, clusterCR, apiClient, clusterUUID, nodeUUID)
 	if err != nil {
 		log.Error(err, "Failed to check storage node pod readiness", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -473,6 +473,74 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefreshWait(
 	return ctrl.Result{Requeue: true}, nil
 }
 
+// nodeRecycleTriggerPhase handles the "trigger" half of a node-recycle phase:
+//  1. Checks idempotency — if the node's current status is already in one of
+//     alreadyDoneStatuses the API call is skipped (a previous reconcile sent it
+//     but crashed before persisting PhaseTriggered).
+//  2. Persists PhaseTriggered=true BEFORE the API call so concurrent reconciles
+//     fail the status update with a conflict and requeue without sending a
+//     duplicate request.
+//  3. Calls the API if the node is not already in the expected state.
+//
+// Returns a non-nil Result when the caller should return immediately (error
+// fetching nodes, conflict on status update, or API failure).
+func (r *StorageClusterReconciler) nodeRecycleTriggerPhase(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+	apiClient *webapi.Client,
+	clusterUUID, nodeUUID string,
+	alreadyDoneStatuses []string,
+	method, endpoint string,
+	requestBody interface{},
+	actionName string,
+) *ctrl.Result {
+	log := logf.FromContext(ctx)
+	nrs := clusterCR.Status.NodeRecycleStatus
+
+	nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
+	if err != nil {
+		log.Error(err, fmt.Sprintf("Failed to fetch node status before %s API call", actionName), "nodeUUID", nodeUUID)
+		res := ctrl.Result{RequeueAfter: 10 * time.Second}
+		return &res
+	}
+
+	alreadyDone := false
+	for _, n := range nodes {
+		if n.UUID == nodeUUID {
+			s := strings.ToLower(n.Status)
+			for _, done := range alreadyDoneStatuses {
+				if s == done {
+					log.Info(fmt.Sprintf("Node already in %s state, skipping %s API call", s, actionName), "nodeUUID", nodeUUID, "status", s)
+					alreadyDone = true
+					break
+				}
+			}
+			break
+		}
+	}
+
+	nrs.PhaseTriggered = true
+	if err := r.Status().Update(ctx, clusterCR); err != nil {
+		res := ctrl.Result{Requeue: true}
+		return &res
+	}
+
+	if !alreadyDone {
+		body, status, err := apiClient.Do(ctx, method, endpoint, requestBody)
+		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d body=%s", status, string(body))
+			}
+			log.Error(err, fmt.Sprintf("Node %s API call failed", actionName), "nodeUUID", nodeUUID)
+			res := ctrl.Result{RequeueAfter: 10 * time.Second}
+			return &res
+		}
+		log.Info(fmt.Sprintf("Node %s triggered", actionName), "nodeUUID", nodeUUID)
+	}
+	res := ctrl.Result{RequeueAfter: 10 * time.Second}
+	return &res
+}
+
 func (r *StorageClusterReconciler) nodeRecycleShuttingDown(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
@@ -484,23 +552,16 @@ func (r *StorageClusterReconciler) nodeRecycleShuttingDown(
 
 	if !nrs.PhaseTriggered {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown", clusterUUID, nodeUUID)
-		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
-		if err != nil || status >= 300 {
-			if err == nil {
-				err = fmt.Errorf("unexpected status %d body=%s", status, string(body))
-			}
-			log.Error(err, "Node shutdown API call failed", "nodeUUID", nodeUUID)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-		log.Info("Node shutdown triggered", "nodeUUID", nodeUUID)
-		nrs.PhaseTriggered = true
-		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{Requeue: true}, nil
+		if res := r.nodeRecycleTriggerPhase(ctx, clusterCR, apiClient, clusterUUID, nodeUUID,
+			[]string{utils.NodeStatusInShutdown, utils.NodeStatusOffline, utils.NodeStatusInRestart},
+			http.MethodPost, endpoint, nil, "shutdown",
+		); res != nil {
+			return *res, nil
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
+	nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 	if err != nil {
 		log.Error(err, "Failed to list storage nodes during shutdown poll", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -537,7 +598,7 @@ func (r *StorageClusterReconciler) nodeRecycleShuttingDown(
 		}
 		return ctrl.Result{Requeue: true}, nil
 	default:
-		// Node still online — shutdown not yet effective, keep polling.
+		// Node not yet offline — shutdown not yet effective, keep polling.
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 }
@@ -553,23 +614,16 @@ func (r *StorageClusterReconciler) nodeRecycleRestarting(
 
 	if !nrs.PhaseTriggered {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
-		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, map[string]bool{"force": true})
-		if err != nil || status >= 300 {
-			if err == nil {
-				err = fmt.Errorf("unexpected status %d body=%s", status, string(body))
-			}
-			log.Error(err, "Node restart API call failed", "nodeUUID", nodeUUID)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-		log.Info("Node restart triggered", "nodeUUID", nodeUUID)
-		nrs.PhaseTriggered = true
-		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{Requeue: true}, nil
+		if res := r.nodeRecycleTriggerPhase(ctx, clusterCR, apiClient, clusterUUID, nodeUUID,
+			[]string{utils.NodeStatusInRestart, utils.NodeStatusOnline},
+			http.MethodPost, endpoint, map[string]bool{"force": true}, "restart",
+		); res != nil {
+			return *res, nil
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
+	nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 	if err != nil {
 		log.Error(err, "Failed to list storage nodes during restart poll", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -641,8 +695,8 @@ func (r *StorageClusterReconciler) nodeRecycleRebalancing(
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// listClusterStorageNodes fetches all storage nodes for a cluster.
-func listClusterStorageNodes(
+// listClusterStorageNodeSets fetches all storage nodes for a cluster.
+func listClusterStorageNodeSets(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
@@ -662,18 +716,18 @@ func listClusterStorageNodes(
 	return nodes, nil
 }
 
-// deleteStorageNodePod finds and deletes the storage-node DaemonSet pod running
+// deleteStorageNodeSetPod finds and deletes the storage-node DaemonSet pod running
 // on the Kubernetes node that hosts the given backend storage node.
 // Returns (true, nil) on success, (false, nil) when the node is not in the
 // storage node list (caller should skip the refresh phase), or (false, err)
 // on a real failure.
-func (r *StorageClusterReconciler) deleteStorageNodePod(
+func (r *StorageClusterReconciler) deleteStorageNodeSetPod(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 ) (bool, error) {
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
+	nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 	if err != nil {
 		return false, err
 	}
@@ -693,7 +747,7 @@ func (r *StorageClusterReconciler) deleteStorageNodePod(
 		return false, fmt.Errorf("find k8s node for IP %s: %w", nodeIP, err)
 	}
 
-	pod, err := r.findStorageNodePod(ctx, clusterCR.Namespace, clusterCR.Name, k8sNodeName)
+	pod, err := r.findStorageNodeSetPod(ctx, clusterCR.Namespace, clusterCR.Name, k8sNodeName)
 	if err != nil {
 		return false, fmt.Errorf("find storage node pod on %s: %w", k8sNodeName, err)
 	}
@@ -703,15 +757,15 @@ func (r *StorageClusterReconciler) deleteStorageNodePod(
 	return true, client.IgnoreNotFound(r.Delete(ctx, pod))
 }
 
-// isStorageNodePodReady returns true when the storage-node pod for the given
+// isStorageNodeSetPodReady returns true when the storage-node pod for the given
 // backend node exists, is not being deleted, and has its Ready condition true.
-func (r *StorageClusterReconciler) isStorageNodePodReady(
+func (r *StorageClusterReconciler) isStorageNodeSetPodReady(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 ) (bool, error) {
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
+	nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 	if err != nil {
 		return false, err
 	}
@@ -731,7 +785,7 @@ func (r *StorageClusterReconciler) isStorageNodePodReady(
 		return false, err
 	}
 
-	pod, err := r.findStorageNodePod(ctx, clusterCR.Namespace, clusterCR.Name, k8sNodeName)
+	pod, err := r.findStorageNodeSetPod(ctx, clusterCR.Namespace, clusterCR.Name, k8sNodeName)
 	if err != nil {
 		return false, err
 	}
@@ -761,7 +815,7 @@ func (r *StorageClusterReconciler) findK8sNodeByIP(ctx context.Context, ip strin
 	return "", fmt.Errorf("no k8s node with InternalIP %s", ip)
 }
 
-func (r *StorageClusterReconciler) findStorageNodePod(
+func (r *StorageClusterReconciler) findStorageNodeSetPod(
 	ctx context.Context,
 	namespace, clusterName, k8sNodeName string,
 ) (*corev1.Pod, error) {
