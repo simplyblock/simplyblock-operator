@@ -347,7 +347,7 @@ func (r *StorageClusterReconciler) reconcileNodeRecycle(
 
 	// Populate PendingNodes once from the API.
 	if clusterCR.Status.NodeRecycleStatus == nil {
-		nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
+		nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 		if err != nil {
 			log.Error(err, "Failed to list storage nodes for node-recycle init")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -421,7 +421,7 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefresh(
 	log := logf.FromContext(ctx)
 	nrs := clusterCR.Status.NodeRecycleStatus
 
-	found, err := r.deleteStorageNodePod(ctx, clusterCR, apiClient, clusterUUID, nodeUUID)
+	found, err := r.deleteStorageNodeSetPod(ctx, clusterCR, apiClient, clusterUUID, nodeUUID)
 	if err != nil {
 		log.Error(err, "Failed to delete storage node pod for refresh", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -454,7 +454,7 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefreshWait(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	ready, err := r.isStorageNodePodReady(ctx, clusterCR, apiClient, clusterUUID, nodeUUID)
+	ready, err := r.isStorageNodeSetPodReady(ctx, clusterCR, apiClient, clusterUUID, nodeUUID)
 	if err != nil {
 		log.Error(err, "Failed to check storage node pod readiness", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -500,7 +500,7 @@ func (r *StorageClusterReconciler) nodeRecycleShuttingDown(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
+	nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 	if err != nil {
 		log.Error(err, "Failed to list storage nodes during shutdown poll", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -569,7 +569,7 @@ func (r *StorageClusterReconciler) nodeRecycleRestarting(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
+	nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 	if err != nil {
 		log.Error(err, "Failed to list storage nodes during restart poll", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -641,8 +641,8 @@ func (r *StorageClusterReconciler) nodeRecycleRebalancing(
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// listClusterStorageNodes fetches all storage nodes for a cluster.
-func listClusterStorageNodes(
+// listClusterStorageNodeSets fetches all storage nodes for a cluster.
+func listClusterStorageNodeSets(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
@@ -662,18 +662,18 @@ func listClusterStorageNodes(
 	return nodes, nil
 }
 
-// deleteStorageNodePod finds and deletes the storage-node DaemonSet pod running
+// deleteStorageNodeSetPod finds and deletes the storage-node DaemonSet pod running
 // on the Kubernetes node that hosts the given backend storage node.
 // Returns (true, nil) on success, (false, nil) when the node is not in the
 // storage node list (caller should skip the refresh phase), or (false, err)
 // on a real failure.
-func (r *StorageClusterReconciler) deleteStorageNodePod(
+func (r *StorageClusterReconciler) deleteStorageNodeSetPod(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 ) (bool, error) {
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
+	nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 	if err != nil {
 		return false, err
 	}
@@ -693,7 +693,7 @@ func (r *StorageClusterReconciler) deleteStorageNodePod(
 		return false, fmt.Errorf("find k8s node for IP %s: %w", nodeIP, err)
 	}
 
-	pod, err := r.findStorageNodePod(ctx, clusterCR.Namespace, clusterCR.Name, k8sNodeName)
+	pod, err := r.findStorageNodeSetPod(ctx, clusterCR.Namespace, clusterCR.Name, k8sNodeName)
 	if err != nil {
 		return false, fmt.Errorf("find storage node pod on %s: %w", k8sNodeName, err)
 	}
@@ -703,15 +703,15 @@ func (r *StorageClusterReconciler) deleteStorageNodePod(
 	return true, client.IgnoreNotFound(r.Delete(ctx, pod))
 }
 
-// isStorageNodePodReady returns true when the storage-node pod for the given
+// isStorageNodeSetPodReady returns true when the storage-node pod for the given
 // backend node exists, is not being deleted, and has its Ready condition true.
-func (r *StorageClusterReconciler) isStorageNodePodReady(
+func (r *StorageClusterReconciler) isStorageNodeSetPodReady(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 ) (bool, error) {
-	nodes, err := listClusterStorageNodes(ctx, apiClient, clusterUUID)
+	nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 	if err != nil {
 		return false, err
 	}
@@ -731,7 +731,7 @@ func (r *StorageClusterReconciler) isStorageNodePodReady(
 		return false, err
 	}
 
-	pod, err := r.findStorageNodePod(ctx, clusterCR.Namespace, clusterCR.Name, k8sNodeName)
+	pod, err := r.findStorageNodeSetPod(ctx, clusterCR.Namespace, clusterCR.Name, k8sNodeName)
 	if err != nil {
 		return false, err
 	}
@@ -761,7 +761,7 @@ func (r *StorageClusterReconciler) findK8sNodeByIP(ctx context.Context, ip strin
 	return "", fmt.Errorf("no k8s node with InternalIP %s", ip)
 }
 
-func (r *StorageClusterReconciler) findStorageNodePod(
+func (r *StorageClusterReconciler) findStorageNodeSetPod(
 	ctx context.Context,
 	namespace, clusterName, k8sNodeName string,
 ) (*corev1.Pod, error) {

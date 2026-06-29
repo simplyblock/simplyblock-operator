@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: storagenodes.storage.simplyblock.io
+  name: storagenodesets.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
   names:
-    kind: StorageNode
-    listKind: StorageNodeList
-    plural: storagenodes
-    singular: storagenode
+    kind: StorageNodeSet
+    listKind: StorageNodeSetList
+    plural: storagenodesets
+    singular: storagenodeset
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: StorageNode is the Schema for the storagenodes API
+        description: StorageNodeSet is the Schema for the storagenodesets API
         properties:
           apiVersion:
             description: |-
@@ -37,7 +37,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of StorageNode
+            description: spec defines the desired state of StorageNodeSet
             properties:
               action:
                 description: Action triggers an imperative node operation.
@@ -371,7 +371,7 @@ spec:
             - clusterName
             type: object
           status:
-            description: status defines the observed state of StorageNode
+            description: status defines the observed state of StorageNodeSet
             properties:
               actionStatus:
                 description: ActionStatus tracks the latest action execution status.

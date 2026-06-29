@@ -24,7 +24,7 @@ resources:
   controller: true
   domain: simplyblock.io
   group: storage
-  kind: StorageNode
+  kind: StorageNodeSet
   path: github.com/simplyblock/simplyblock-operator/api/v1alpha1
   version: v1alpha1
 - api:

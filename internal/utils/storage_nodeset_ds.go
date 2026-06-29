@@ -15,7 +15,7 @@ import (
 )
 
 // defaultInitContainerResources are applied when the user has not set
-// InitContainerResources on the StorageNode CR.
+// InitContainerResources on the StorageNodeSet CR.
 var defaultInitContainerResources = corev1.ResourceRequirements{
 	Requests: corev1.ResourceList{
 		corev1.ResourceCPU:    resource.MustParse("100m"),
@@ -28,7 +28,7 @@ var defaultInitContainerResources = corev1.ResourceRequirements{
 }
 
 // defaultContainerResources are applied when the user has not set
-// ContainerResources on the StorageNode CR. No CPU limit is set because
+// ContainerResources on the StorageNodeSet CR. No CPU limit is set because
 // SPDK uses busy-polling and a hard CPU ceiling would degrade storage
 // performance. Memory limits are enforced to allow kubelet eviction.
 var defaultContainerResources = corev1.ResourceRequirements{
@@ -42,7 +42,7 @@ var defaultContainerResources = corev1.ResourceRequirements{
 	},
 }
 
-func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
+func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
 
 	labels := map[string]string{
 		"app":                 "storage-node",
@@ -209,7 +209,7 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 	}
 
 	if tlsEnabled {
-		volumes = append(volumes, buildStorageNodeTLSVolume(tlsProvider))
+		volumes = append(volumes, buildStorageNodeSetTLSVolume(tlsProvider))
 
 		tlsMounts := []corev1.VolumeMount{
 			{Name: "tls", MountPath: "/etc/simplyblock/tls", ReadOnly: true},
@@ -297,18 +297,18 @@ func BuildStorageNodeDaemonSet(sn *simplyblockv1alpha1.StorageNode, tlsEnabled b
 	}
 }
 
-// buildStorageNodeTLSVolume returns a Volume that exposes tls.crt, tls.key,
+// buildStorageNodeSetTLSVolume returns a Volume that exposes tls.crt, tls.key,
 // and ca.crt at /etc/simplyblock/tls. cert-manager already bundles the CA in
 // the Secret, so a plain Secret volume is enough; OpenShift's serving-cert
 // controller emits the CA via a separate ConfigMap, so the two sources are
 // combined through a projected volume.
-func buildStorageNodeTLSVolume(tlsProvider string) corev1.Volume {
+func buildStorageNodeSetTLSVolume(tlsProvider string) corev1.Volume {
 	if IsCertManagerTLSProvider(tlsProvider) {
 		return corev1.Volume{
 			Name: "tls",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: SecretNameStorageNodeAPITLS,
+					SecretName: SecretNameStorageNodeSetAPITLS,
 				},
 			},
 		}
@@ -322,7 +322,7 @@ func buildStorageNodeTLSVolume(tlsProvider string) corev1.Volume {
 					{
 						Secret: &corev1.SecretProjection{
 							LocalObjectReference: corev1.LocalObjectReference{
-								Name: SecretNameStorageNodeAPITLS,
+								Name: SecretNameStorageNodeSetAPITLS,
 							},
 						},
 					},
@@ -342,7 +342,7 @@ func buildStorageNodeTLSVolume(tlsProvider string) corev1.Volume {
 	}
 }
 
-func BuildStorageNodeServiceAccount(namespace string) *corev1.ServiceAccount {
+func BuildStorageNodeSetServiceAccount(namespace string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ServiceAccount",
@@ -355,7 +355,7 @@ func BuildStorageNodeServiceAccount(namespace string) *corev1.ServiceAccount {
 	}
 }
 
-func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
+func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 	baseRules := []rbacv1.PolicyRule{
 		{
 			APIGroups: []string{""},
@@ -400,19 +400,19 @@ func BuildStorageNodeClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 	}
 }
 
-// StorageNodeAPIAddress returns the per-pod headless-service DNS address that
+// StorageNodeSetAPIAddress returns the per-pod headless-service DNS address that
 // the cluster control-plane uses to reach a storage-node-api pod backing the
 // given worker node.
-func StorageNodeAPIAddress(workerNode, namespace string) string {
+func StorageNodeSetAPIAddress(workerNode, namespace string) string {
 	return fmt.Sprintf("%s.simplyblock-storage-node-api.%s.svc.cluster.local:5000", nodeHostnameLabel(workerNode), namespace)
 }
 
-func BuildStorageNodeService(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsProvider string) *corev1.Service {
+func BuildStorageNodeSetService(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabled bool, tlsProvider string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "simplyblock-storage-node-api",
 			Namespace:   sn.Namespace,
-			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, SecretNameStorageNodeAPITLS),
+			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, SecretNameStorageNodeSetAPITLS),
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
@@ -427,7 +427,7 @@ func BuildStorageNodeService(sn *simplyblockv1alpha1.StorageNode, tlsEnabled boo
 	}
 }
 
-func BuildStorageNodeEndpointSlice(sn *simplyblockv1alpha1.StorageNode, nodeIPs map[string]string) *discoveryv1.EndpointSlice {
+func BuildStorageNodeSetEndpointSlice(sn *simplyblockv1alpha1.StorageNodeSet, nodeIPs map[string]string) *discoveryv1.EndpointSlice {
 	protocol := corev1.ProtocolTCP
 	port := int32(5000)
 	portName := "api"
@@ -469,7 +469,7 @@ type SpdkProxyEndpoint struct {
 	RpcPort  int32
 }
 
-func BuildSpdkProxyService(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool, tlsProvider string) *corev1.Service {
+func BuildSpdkProxyService(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabled bool, tlsProvider string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "simplyblock-spdk-proxy",
@@ -488,7 +488,7 @@ func BuildSpdkProxyService(sn *simplyblockv1alpha1.StorageNode, tlsEnabled bool,
 // name truncated at the first dot so FQDN-style node names stay within the
 // 63-char DNS label limit.
 func BuildSpdkProxyEndpointSlice(
-	sn *simplyblockv1alpha1.StorageNode,
+	sn *simplyblockv1alpha1.StorageNodeSet,
 	rpcPort int32,
 	endpoints []SpdkProxyEndpoint,
 ) (*discoveryv1.EndpointSlice, error) {
@@ -539,7 +539,7 @@ func nodeHostnameLabel(nodeName string) string {
 	return label
 }
 
-func BuildStorageNodeClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
+func BuildStorageNodeSetClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
 	return &rbacv1.ClusterRoleBinding{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ClusterRoleBinding",

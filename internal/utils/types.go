@@ -95,7 +95,7 @@ type PoolUpdateParams struct {
 	LvolCRPlural    string `json:"lvols_cr_plural,omitempty"`
 }
 
-type StorageNodeAddParams struct {
+type StorageNodeSetAddParams struct {
 	NodeAddress         string   `json:"node_address"`
 	InterfaceName       string   `json:"interface_name"`
 	SPDKImage           string   `json:"spdk_image,omitempty"`
