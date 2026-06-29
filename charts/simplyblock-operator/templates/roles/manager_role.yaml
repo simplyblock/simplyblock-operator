@@ -10,7 +10,10 @@ rules:
   - events
   verbs:
   - create
+  - get
+  - list
   - patch
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -138,7 +141,7 @@ rules:
   - snapshotreplications
   - storagebackups
   - storageclusters
-  - storagenodes
+  - storagenodesets
   - tasks
   verbs:
   - create
@@ -158,7 +161,7 @@ rules:
   - snapshotreplications/finalizers
   - storagebackups/finalizers
   - storageclusters/finalizers
-  - storagenodes/finalizers
+  - storagenodesets/finalizers
   - tasks/finalizers
   verbs:
   - update
@@ -173,7 +176,7 @@ rules:
   - snapshotreplications/status
   - storagebackups/status
   - storageclusters/status
-  - storagenodes/status
+  - storagenodesets/status
   - tasks/status
   verbs:
   - get
