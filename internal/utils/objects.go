@@ -118,7 +118,20 @@ func ResolveClusterUUID(
 
 func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, namespace, cluster string) (string, error) {
 	if IsUUID(cluster) {
-		return cluster, nil
+		// When the caller supplies a raw UUID, validate that a StorageCluster
+		// with that UUID actually exists in the requested namespace. Without
+		// this check a caller in namespace A could supply the UUID of a cluster
+		// in namespace B and bypass namespace isolation entirely.
+		var list simplyblockv1alpha1.StorageClusterList
+		if err := k8sClient.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+			return "", fmt.Errorf("failed to validate cluster UUID %q in namespace %q: %w", cluster, namespace, err)
+		}
+		for i := range list.Items {
+			if list.Items[i].Status.UUID == cluster {
+				return cluster, nil
+			}
+		}
+		return "", fmt.Errorf("cluster UUID %q not found in namespace %q", cluster, namespace)
 	}
 	return ResolveClusterUUID(ctx, k8sClient, namespace, cluster)
 }
@@ -171,7 +184,7 @@ func CountOnlineHealthyNodes(
 // ExpectedNodesPerHost returns how many backend storage-nodes the control-plane
 // will create for a single Kubernetes worker when socketsToUse is configured.
 // Without socketsToUse it is always 1.
-func ExpectedNodesPerHost(snCR *simplyblockv1alpha1.StorageNode) int {
+func ExpectedNodesPerHost(snCR *simplyblockv1alpha1.StorageNodeSet) int {
 	if len(snCR.Spec.SocketsToUse) == 0 {
 		return 1
 	}
@@ -185,7 +198,7 @@ func ExpectedNodesPerHost(snCR *simplyblockv1alpha1.StorageNode) int {
 func ShouldActivateCluster(
 	mod int,
 	onlineHealthy int,
-	snCR *simplyblockv1alpha1.StorageNode,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) bool {
 
 	required := mod + 1
@@ -396,7 +409,7 @@ func ClusterSuspended(ctx context.Context, apiClient *webapi.Client, clusterUUID
 	return strings.EqualFold(resp.Status, ClusterStatusSuspended), nil
 }
 
-func AllStorageNodesUnreachable(
+func AllStorageNodeSetsUnreachable(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
@@ -596,7 +609,7 @@ func ShouldFailoverToRepCluster(
 		return suspended, err
 	}
 
-	allUnreachable, err := AllStorageNodesUnreachable(ctx, apiClient, clusterUUID)
+	allUnreachable, err := AllStorageNodeSetsUnreachable(ctx, apiClient, clusterUUID)
 	if err != nil {
 		return false, err
 	}

@@ -10,17 +10,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestStorageNodeAPIAddress(t *testing.T) {
-	got := StorageNodeAPIAddress("worker-1", "simplyblock")
+func TestStorageNodeSetAPIAddress(t *testing.T) {
+	got := StorageNodeSetAPIAddress("worker-1", "simplyblock")
 	want := "worker-1.simplyblock-storage-node-api.simplyblock.svc.cluster.local:5000"
 	if got != want {
-		t.Fatalf("StorageNodeAPIAddress = %q, want %q", got, want)
+		t.Fatalf("StorageNodeSetAPIAddress = %q, want %q", got, want)
 	}
 }
 
-func TestBuildStorageNodeClusterRoleBindingNameIncludesNamespace(t *testing.T) {
-	cluster1Binding := BuildStorageNodeClusterRoleBinding("cluster1")
-	cluster2Binding := BuildStorageNodeClusterRoleBinding("cluster2")
+func TestBuildStorageNodeSetClusterRoleBindingNameIncludesNamespace(t *testing.T) {
+	cluster1Binding := BuildStorageNodeSetClusterRoleBinding("cluster1")
+	cluster2Binding := BuildStorageNodeSetClusterRoleBinding("cluster2")
 
 	if cluster1Binding.Name == cluster2Binding.Name {
 		t.Fatalf("expected per-namespace ClusterRoleBinding names, got %q", cluster1Binding.Name)
@@ -34,7 +34,7 @@ func TestBuildStorageNodeClusterRoleBindingNameIncludesNamespace(t *testing.T) {
 }
 
 func TestBuildSpdkProxyEndpointSlice_DottedNodeNameTruncates(t *testing.T) {
-	sn := &simplyblockv1alpha1.StorageNode{
+	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
 	}
 	endpoints := []SpdkProxyEndpoint{
@@ -66,7 +66,7 @@ func TestBuildSpdkProxyEndpointSlice_DottedNodeNameTruncates(t *testing.T) {
 }
 
 func TestBuildSpdkProxyEndpointSlice_CollidingFirstLabelFails(t *testing.T) {
-	sn := &simplyblockv1alpha1.StorageNode{
+	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
 	}
 	endpoints := []SpdkProxyEndpoint{
@@ -84,10 +84,10 @@ func TestBuildSpdkProxyEndpointSlice_CollidingFirstLabelFails(t *testing.T) {
 	}
 }
 
-func TestBuildStorageNodeDaemonSetUserResourcesOverrideDefaults(t *testing.T) {
-	sn := &simplyblockv1alpha1.StorageNode{
+func TestBuildStorageNodeSetDaemonSetUserResourcesOverrideDefaults(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "simplyblock"},
-		Spec: simplyblockv1alpha1.StorageNodeSpec{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
 			ClusterName:  "test-cluster",
 			ClusterImage: "simplyblock/simplyblock:latest",
 			ContainerResources: corev1.ResourceRequirements{
@@ -101,7 +101,7 @@ func TestBuildStorageNodeDaemonSetUserResourcesOverrideDefaults(t *testing.T) {
 		},
 	}
 
-	ds := BuildStorageNodeDaemonSet(sn, false, false, "", "")
+	ds := BuildStorageNodeSetDaemonSet(sn, false, false, "", "")
 
 	main := ds.Spec.Template.Spec.Containers[0]
 	mainMem := main.Resources.Limits[corev1.ResourceMemory]

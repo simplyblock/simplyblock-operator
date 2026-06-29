@@ -1,7 +1,7 @@
 ## Append samples of your project ##
 resources:
 - storage_v1alpha1_storagecluster.yaml
-- storage_v1alpha1_storagenode.yaml
+- storage_v1alpha1_storagenodeset.yaml
 - storage_v1alpha1_pool.yaml
 - storage_v1alpha1_task.yaml
 - storage_v1alpha1_snapshotreplication.yaml

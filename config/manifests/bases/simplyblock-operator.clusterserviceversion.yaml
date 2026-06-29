@@ -337,10 +337,10 @@ spec:
         displayName: Cluster UUID
         path: uuid
       version: v1alpha1
-    - description: StorageNode is the Schema for the storagenodes API
+    - description: StorageNodeSet is the Schema for the storagenodesets API
       displayName: Storage Node
-      kind: StorageNode
-      name: storagenodes.storage.simplyblock.io
+      kind: StorageNodeSet
+      name: storagenodesets.storage.simplyblock.io
       resources:
       - kind: ClusterRole
         name: simplyblock-storage-node

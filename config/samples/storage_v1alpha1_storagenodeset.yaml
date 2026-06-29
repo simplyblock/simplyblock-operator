@@ -1,10 +1,10 @@
 apiVersion: storage.simplyblock.io/v1alpha1
-kind: StorageNode
+kind: StorageNodeSet
 metadata:
   labels:
     app.kubernetes.io/name: simplyblock-operator
     app.kubernetes.io/managed-by: kustomize
-  name: storagenode-sample
+  name: storagenodeset-sample
 spec:
   clusterName: sample-cluster
   clusterImage: simplyblock/snode:latest

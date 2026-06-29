@@ -32,8 +32,8 @@ type JournalManagerSpec struct {
 	PercentPerDevice *int32 `json:"percentPerDevice,omitempty"`
 }
 
-// StorageNodeSpec defines the desired state of StorageNode
-type StorageNodeSpec struct {
+// StorageNodeSetSpec defines the desired state of StorageNodeSet
+type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
 	ClusterName string `json:"clusterName"`
@@ -195,8 +195,8 @@ type NodeDrainState struct {
 	ActiveNodeUUID string `json:"activeNodeUUID,omitempty"`
 }
 
-// StorageNodeStatus defines the observed state of StorageNode.
-type StorageNodeStatus struct {
+// StorageNodeSetStatus defines the observed state of StorageNodeSet.
+type StorageNodeSetStatus struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Nodes"
 	// Nodes is the observed state of each managed storage node.
 	Nodes []NodeStatus `json:"nodes,omitempty"`
@@ -272,32 +272,32 @@ type ActionStatus struct {
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && (!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\"))",message="nodeUUID is required when action is specified"
 // +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname) && self.spec.mgmtIfname != \"\")",message="maxLogicalVolumeCount, workerNodes, and mgmtIfname are required when action is not specified"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Storage Node",resources={{ServiceAccount,v1,simplyblock-storage-node},{Service,v1,simplyblock-storage-node},{DaemonSet,v1,simplyblock-storage-node},{ClusterRole,v1,simplyblock-storage-node},{ClusterRoleBinding,v1,simplyblock-storage-node}}
-// StorageNode is the Schema for the storagenodes API
-type StorageNode struct {
+// StorageNodeSet is the Schema for the storagenodesets API
+type StorageNodeSet struct {
 	metav1.TypeMeta `json:",inline"`
 
 	// metadata is a standard object metadata
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	// spec defines the desired state of StorageNode
+	// spec defines the desired state of StorageNodeSet
 	// +required
-	Spec StorageNodeSpec `json:"spec"`
+	Spec StorageNodeSetSpec `json:"spec"`
 
-	// status defines the observed state of StorageNode
+	// status defines the observed state of StorageNodeSet
 	// +optional
-	Status StorageNodeStatus `json:"status,omitzero"`
+	Status StorageNodeSetStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
 
-// StorageNodeList contains a list of StorageNode
-type StorageNodeList struct {
+// StorageNodeSetList contains a list of StorageNodeSet
+type StorageNodeSetList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`
-	Items           []StorageNode `json:"items"`
+	Items           []StorageNodeSet `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&StorageNode{}, &StorageNodeList{})
+	SchemeBuilder.Register(&StorageNodeSet{}, &StorageNodeSetList{})
 }
