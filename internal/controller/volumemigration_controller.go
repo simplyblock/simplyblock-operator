@@ -487,6 +487,7 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 	if result.Migration != nil {
 		// Update progress fields even if not done yet.
 		patch := client.MergeFrom(vm.DeepCopy())
+		vm.Status.SourceNodeUUID = result.Migration.SourceNodeID
 		vm.Status.SnapsTotal = result.Migration.SnapsTotal
 		vm.Status.SnapsMigrated = result.Migration.SnapsMigrated
 		if err := r.Status().Patch(ctx, vm, patch); err != nil {
