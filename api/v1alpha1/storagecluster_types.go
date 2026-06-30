@@ -89,8 +89,8 @@ type BackupSpec struct {
 
 // StorageClusterSpec defines the desired state of StorageCluster
 //
-// +kubebuilder:validation:XValidation:rule="self.haType == oldSelf.haType",message="haType is immutable"
-// +kubebuilder:validation:XValidation:rule="self.fabricType == oldSelf.fabricType",message="fabricType is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.haType) || self.haType == oldSelf.haType",message="haType is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType",message="fabricType is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.hashicorpVaultSettings) || self.hashicorpVaultSettings == oldSelf.hashicorpVaultSettings",message="hashicorpVaultSettings is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.stripe) || self.stripe == oldSelf.stripe",message="stripe is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.blockSize) || self.blockSize == oldSelf.blockSize",message="blockSize is immutable once set"
