@@ -544,6 +544,17 @@ func (r *VolumeMigrationReconciler) reconcileAbort(
 
 	now := metav1.Now()
 	patch := client.MergeFrom(vm.DeepCopy())
+
+	// Best-effort cleanup of the validation Job when aborting during Validating.
+	if vm.Status.ValidationJobName != "" {
+		_ = r.Delete(ctx,
+			&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: vm.Status.ValidationJobName, Namespace: vm.Namespace}},
+			client.PropagationPolicy(metav1.DeletePropagationBackground),
+		)
+		vm.Status.ValidationJobName = ""
+		vm.Status.Connections = nil
+	}
+
 	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseAborted
 	vm.Status.CompletedAt = &now
 	if err := r.Status().Patch(ctx, vm, patch); err != nil {
