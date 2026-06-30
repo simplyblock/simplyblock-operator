@@ -213,7 +213,20 @@ func (r *VolumeMigrationReconciler) pollValidationJob(
 
 	job := &batchv1.Job{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: vm.Namespace, Name: vm.Status.ValidationJobName}, job); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("get validation job: %w", err)
+		}
+		// The Job vanished before we observed a terminal state (TTL controller,
+		// manual deletion, eviction, ...). Clear the recorded name and requeue so
+		// reconcileValidating rebuilds it instead of getting wedged in Validating.
+		log.Info("Validation job no longer exists; recreating",
+			"job", vm.Status.ValidationJobName, "migration", vm.Status.MigrationID)
+		patch := client.MergeFrom(vm.DeepCopy())
+		vm.Status.ValidationJobName = ""
+		if err := r.Status().Patch(ctx, vm, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("clear ValidationJobName: %w", err)
+		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Determine terminal state from Job conditions (set by the Job controller).
