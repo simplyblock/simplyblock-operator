@@ -25,6 +25,7 @@ import (
 const (
 	testVMNamespace = "sb"
 	testVMName      = "mig-test"
+	testPVName      = "pv-1"
 	testClusterUUID = "cluster-uuid"
 	testPoolUUID    = "pool-uuid"
 	testVolumeUUID  = "vol-uuid"
@@ -83,16 +84,17 @@ func baseVM() *simplyblockv1alpha1.VolumeMigration {
 	return &simplyblockv1alpha1.VolumeMigration{
 		ObjectMeta: metav1.ObjectMeta{Name: testVMName, Namespace: testVMNamespace},
 		Spec: simplyblockv1alpha1.VolumeMigrationSpec{
-			PVName:         "pv-1",
+			PVName:         testPVName,
 			TargetNodeUUID: "target-node",
 		},
 	}
 }
 
-// csiPV returns a CSI-provisioned PV with the given volume handle and (optional) claimRef.
-func csiPV(name, handle string) *corev1.PersistentVolume {
+// csiPV returns a CSI-provisioned PV (named testPVName, matching baseVM's PVName)
+// with the given volume handle.
+func csiPV(handle string) *corev1.PersistentVolume {
 	return &corev1.PersistentVolume{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: testPVName},
 		Spec: corev1.PersistentVolumeSpec{
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				CSI: &corev1.CSIPersistentVolumeSource{VolumeHandle: handle},
@@ -134,7 +136,7 @@ func TestReconcileStart_TransitionsToValidating(t *testing.T) {
 	})
 
 	vm := baseVM()
-	pv := csiPV("pv-1", testClusterUUID+":"+testPoolUUID+":"+testVolumeUUID)
+	pv := csiPV(testClusterUUID + ":" + testPoolUUID + ":" + testVolumeUUID)
 	r, cl := newVMReconciler(t, srv.URL, vm, pv, migrationCluster())
 
 	res, err := r.Reconcile(context.Background(), vmRequest())
@@ -180,7 +182,7 @@ func TestReconcileStart_PVNotFound_Fails(t *testing.T) {
 
 func TestReconcileStart_BadCSIHandle_Fails(t *testing.T) {
 	vm := baseVM()
-	pv := csiPV("pv-1", "not-a-valid-handle")
+	pv := csiPV("not-a-valid-handle")
 	r, cl := newVMReconciler(t, unreachableAPI, vm, pv)
 
 	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
@@ -196,7 +198,7 @@ func TestReconcileStart_EmptyMigrationID_Fails(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":""}`))
 	})
 	vm := baseVM()
-	pv := csiPV("pv-1", testClusterUUID+":"+testPoolUUID+":"+testVolumeUUID)
+	pv := csiPV(testClusterUUID + ":" + testPoolUUID + ":" + testVolumeUUID)
 	r, cl := newVMReconciler(t, srv.URL, vm, pv, migrationCluster())
 
 	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
@@ -253,7 +255,7 @@ func TestReconcileStart_DisabledOrUnconfigured_NeverMigrates(t *testing.T) {
 			})
 
 			vm := baseVM()
-			pv := csiPV("pv-1", testClusterUUID+":"+testPoolUUID+":"+testVolumeUUID)
+			pv := csiPV(testClusterUUID + ":" + testPoolUUID + ":" + testVolumeUUID)
 			r, cl := newVMReconciler(t, srv.URL, vm, pv, clusterWithSettings(tc.settings))
 
 			if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
