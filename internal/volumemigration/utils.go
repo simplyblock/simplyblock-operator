@@ -89,9 +89,10 @@ func findPVForVolume(
 
 // PollMigrationResult is returned by PollMigration.
 type PollMigrationResult struct {
-	// Done is true when CompletedAt > 0 in the migration record.
+	// Done is true when the migration has reached a terminal status
+	// (done, failed, or cancelled).
 	Done bool
-	// Succeeded is true when Done is true and no error message was set.
+	// Succeeded is true when the migration reached the "done" status.
 	Succeeded bool
 	// Stuck is true when the migration has exceeded MigrationStuckWarningTimeout
 	// without completing.
@@ -122,12 +123,20 @@ func PollMigration(
 	}
 
 	result := PollMigrationResult{Migration: m}
-	if m.CompletedAt > 0 {
+	// Terminal state is determined by the migration's status, not by
+	// error_message: a transient error_message can linger from a retried step
+	// even after the migration recovers and completes successfully.
+	switch m.Status {
+	case webapi.MigrationStatusDone:
 		result.Done = true
-		result.Succeeded = m.ErrorMessage == ""
-		return result, nil
+		result.Succeeded = true
+	case webapi.MigrationStatusFailed, webapi.MigrationStatusCancelled:
+		result.Done = true
+		result.Succeeded = false
+	default:
+		// Still in flight (new, running, suspended, cutover).
+		result.Stuck = time.Now().After(migrationStart.Add(MigrationStuckWarningTimeout))
 	}
-	result.Stuck = time.Now().After(migrationStart.Add(MigrationStuckWarningTimeout))
 	return result, nil
 }
 

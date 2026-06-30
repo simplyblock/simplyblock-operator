@@ -92,6 +92,25 @@ type MigrationDTO struct {
 	ConnectStrings            []LvolConnectResp `json:"connect_strings"`
 }
 
+// Migration status values reported in MigrationDTO.Status. The status field —
+// not error_message — is the authoritative signal for whether a migration has
+// finished and whether it succeeded: a transient error_message may linger from
+// a retried-then-recovered step even when the migration ultimately completes.
+const (
+	// MigrationStatusNew, MigrationStatusRunning, MigrationStatusSuspended and
+	// MigrationStatusCutover are non-terminal: the migration is still in flight.
+	MigrationStatusNew       = "new"
+	MigrationStatusRunning   = "running"
+	MigrationStatusSuspended = "suspended"
+	MigrationStatusCutover   = "cutover"
+
+	// MigrationStatusDone, MigrationStatusFailed and MigrationStatusCancelled are
+	// the terminal states. Only MigrationStatusDone is a success.
+	MigrationStatusDone      = "done"
+	MigrationStatusFailed    = "failed"
+	MigrationStatusCancelled = "cancelled"
+)
+
 // GetStoragePools lists all storage pools for the given cluster.
 func (c *Client) GetStoragePools(
 	ctx context.Context,
