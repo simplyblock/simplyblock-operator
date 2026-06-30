@@ -130,7 +130,7 @@ type VolumeMigrationStatus struct {
 // +kubebuilder:printcolumn:name="PV",type="string",JSONPath=".spec.pvName"
 // +kubebuilder:printcolumn:name="Target Node",type="string",JSONPath=".spec.targetNodeUUID"
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
-// +kubebuilder:printcolumn:name="Snaps",type="string",JSONPath=".status.snapsMigrated",priority=1
+// +kubebuilder:printcolumn:name="Snaps",type="integer",JSONPath=".status.snapsMigrated",priority=1
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // VolumeMigration triggers a storage-node migration for a single PersistentVolume.
