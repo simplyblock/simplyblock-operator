@@ -460,6 +460,19 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
+	// StartedAt is an optional pointer and may be nil on older objects, manual
+	// edits, or partial status writes. Backfill it rather than dereferencing a
+	// nil pointer (panic) or defaulting to the zero time (instant "stuck" warning).
+	if vm.Status.StartedAt == nil {
+		now := metav1.Now()
+		patch := client.MergeFrom(vm.DeepCopy())
+		vm.Status.StartedAt = &now
+		if err := r.Status().Patch(ctx, vm, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("backfill StartedAt: %w", err)
+		}
+		log.Info("StartedAt was unset in Running phase; backfilled", "migration", vm.Status.MigrationID)
+	}
+
 	migrationStart := vm.Status.StartedAt.Time
 	result, err := vmigration.PollMigration(ctx, r.apiClient, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID, migrationStart)
 	if err != nil {
