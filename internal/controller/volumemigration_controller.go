@@ -139,7 +139,7 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 
 	patch := client.MergeFrom(vm.DeepCopy())
 	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseValidating
-	vm.Status.MigrationID = migration.ID
+	vm.Status.MigrationUUID = migration.ID
 	vm.Status.ClusterUUID = clusterUUID
 	vm.Status.VolumeUUID = volumeUUID
 	vm.Status.PoolUUID = poolUUID
@@ -169,7 +169,7 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if vm.Status.MigrationID == "" {
+	if vm.Status.MigrationUUID == "" {
 		return r.setFailed(ctx, vm, "migration ID is empty in Validating phase; status was likely written before a failed CreateMigration")
 	}
 
@@ -224,7 +224,7 @@ func (r *VolumeMigrationReconciler) pollValidationJob(
 		// manual deletion, eviction, ...). Clear the recorded name and requeue so
 		// reconcileValidating rebuilds it instead of getting wedged in Validating.
 		log.Info("Validation job no longer exists; recreating",
-			"job", vm.Status.ValidationJobName, "migration", vm.Status.MigrationID)
+			"job", vm.Status.ValidationJobName, "migration", vm.Status.MigrationUUID)
 		patch := client.MergeFrom(vm.DeepCopy())
 		vm.Status.ValidationJobName = ""
 		if err := r.Status().Patch(ctx, vm, patch); err != nil {
@@ -252,16 +252,16 @@ func (r *VolumeMigrationReconciler) pollValidationJob(
 
 	if failed {
 		log.Error(nil, "Validation job failed; cancelling migration",
-			"job", vm.Status.ValidationJobName, "migration", vm.Status.MigrationID)
-		_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID)
+			"job", vm.Status.ValidationJobName, "migration", vm.Status.MigrationUUID)
+		_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID)
 		return r.setFailed(ctx, vm, "NVMe path validation failed; migration cancelled")
 	}
 
 	log.Info("Validation job succeeded; calling ContinueMigration",
-		"migration", vm.Status.MigrationID)
+		"migration", vm.Status.MigrationUUID)
 
-	if err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID); err != nil {
-		_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID)
+	if err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID); err != nil {
+		_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID)
 		return r.setFailed(ctx, vm, fmt.Sprintf("ContinueMigration: %v", err))
 	}
 
@@ -275,7 +275,7 @@ func (r *VolumeMigrationReconciler) pollValidationJob(
 
 	r.Recorder.Eventf(vm, corev1.EventTypeNormal, "MigrationStarted",
 		"Migration %s started: volume %s → node %s",
-		vm.Status.MigrationID, vm.Status.VolumeUUID, vm.Spec.TargetNodeUUID)
+		vm.Status.MigrationUUID, vm.Status.VolumeUUID, vm.Spec.TargetNodeUUID)
 	return ctrl.Result{RequeueAfter: vmigration.MigrationInitialDelay}, nil
 }
 
@@ -293,7 +293,7 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "vmig-validate-" + safeNodeID(vm.Status.MigrationID),
+			Name:      "vmig-validate-" + safeNodeID(vm.Status.MigrationUUID),
 			Namespace: vm.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(vm, simplyblockv1alpha1.GroupVersion.WithKind("VolumeMigration")),
@@ -474,13 +474,13 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 		if err := r.Status().Patch(ctx, vm, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("backfill StartedAt: %w", err)
 		}
-		log.Info("StartedAt was unset in Running phase; backfilled", "migration", vm.Status.MigrationID)
+		log.Info("StartedAt was unset in Running phase; backfilled", "migration", vm.Status.MigrationUUID)
 	}
 
 	migrationStart := vm.Status.StartedAt.Time
-	result, err := vmigration.PollMigration(ctx, r.apiClient, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID, migrationStart)
+	result, err := vmigration.PollMigration(ctx, r.apiClient, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID, migrationStart)
 	if err != nil {
-		log.Error(err, "Cannot poll migration; requeuing", "migration", vm.Status.MigrationID)
+		log.Error(err, "Cannot poll migration; requeuing", "migration", vm.Status.MigrationUUID)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
@@ -498,7 +498,7 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 	if result.Stuck {
 		r.Recorder.Eventf(vm, corev1.EventTypeWarning, "MigrationStuck",
 			"Migration %s has not completed after 30 minutes (phase: %s, status: %s)",
-			vm.Status.MigrationID, result.Migration.Phase, result.Migration.Status)
+			vm.Status.MigrationUUID, result.Migration.Phase, result.Migration.Status)
 	}
 
 	if !result.Done {
@@ -516,7 +516,7 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 			return ctrl.Result{}, fmt.Errorf("patch status Completed: %w", err)
 		}
 		r.Recorder.Eventf(vm, corev1.EventTypeNormal, "MigrationCompleted",
-			"Migration %s completed successfully", vm.Status.MigrationID)
+			"Migration %s completed successfully", vm.Status.MigrationUUID)
 	} else {
 		vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseFailed
 		vm.Status.ErrorMessage = result.Migration.ErrorMessage
@@ -524,7 +524,7 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 			return ctrl.Result{}, fmt.Errorf("patch status Failed: %w", err)
 		}
 		r.Recorder.Eventf(vm, corev1.EventTypeWarning, "MigrationFailed",
-			"Migration %s failed: %s", vm.Status.MigrationID, result.Migration.ErrorMessage)
+			"Migration %s failed: %s", vm.Status.MigrationUUID, result.Migration.ErrorMessage)
 	}
 	return ctrl.Result{}, nil
 }
@@ -535,9 +535,9 @@ func (r *VolumeMigrationReconciler) reconcileAbort(
 	vm *simplyblockv1alpha1.VolumeMigration,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	log.Info("Aborting migration", "migration", vm.Status.MigrationID)
+	log.Info("Aborting migration", "migration", vm.Status.MigrationUUID)
 
-	if err := r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationID); err != nil {
+	if err := r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID); err != nil {
 		log.Error(err, "CancelMigration failed; requeuing")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -561,7 +561,7 @@ func (r *VolumeMigrationReconciler) reconcileAbort(
 		return ctrl.Result{}, fmt.Errorf("patch status Aborted: %w", err)
 	}
 	r.Recorder.Eventf(vm, corev1.EventTypeNormal, "MigrationAborted",
-		"Migration %s cancelled", vm.Status.MigrationID)
+		"Migration %s cancelled", vm.Status.MigrationUUID)
 	return ctrl.Result{}, nil
 }
 

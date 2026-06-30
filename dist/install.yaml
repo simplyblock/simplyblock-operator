@@ -2322,9 +2322,9 @@ spec:
               errorMessage:
                 description: ErrorMessage holds the failure reason when Phase is Failed.
                 type: string
-              migrationID:
+              migrationUUID:
                 description: |-
-                  MigrationID is the identifier returned by the storage API when the
+                  MigrationUUID is the identifier returned by the storage API when the
                   migration was submitted. Used for polling and cancellation.
                 type: string
               phase:

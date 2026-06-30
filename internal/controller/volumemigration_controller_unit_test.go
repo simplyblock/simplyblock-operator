@@ -23,13 +23,13 @@ import (
 )
 
 const (
-	testVMNamespace = "sb"
-	testVMName      = "mig-test"
-	testPVName      = "pv-1"
-	testClusterUUID = "cluster-uuid"
-	testPoolUUID    = "pool-uuid"
-	testVolumeUUID  = "vol-uuid"
-	testMigrationID = "migration-1"
+	testVMNamespace   = "sb"
+	testVMName        = "mig-test"
+	testPVName        = "pv-1"
+	testClusterUUID   = "cluster-uuid"
+	testPoolUUID      = "pool-uuid"
+	testVolumeUUID    = "vol-uuid"
+	testMigrationUUID = "migration-1"
 )
 
 // unreachableAPI is a base URL that always fails to connect; use it for tests
@@ -132,7 +132,7 @@ func TestReconcileStart_TransitionsToValidating(t *testing.T) {
 		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/migrations") {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"id":"` + testMigrationID + `","connect_strings":[{"nqn":"nqn.x","ip":"10.0.0.1","port":4420,"transport":"tcp"}]}`))
+		_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","connect_strings":[{"nqn":"nqn.x","ip":"10.0.0.1","port":4420,"transport":"tcp"}]}`))
 	})
 
 	vm := baseVM()
@@ -151,8 +151,8 @@ func TestReconcileStart_TransitionsToValidating(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseValidating {
 		t.Errorf("phase = %q, want Validating", got.Status.Phase)
 	}
-	if got.Status.MigrationID != testMigrationID {
-		t.Errorf("MigrationID = %q, want %q", got.Status.MigrationID, testMigrationID)
+	if got.Status.MigrationUUID != testMigrationUUID {
+		t.Errorf("MigrationUUID = %q, want %q", got.Status.MigrationUUID, testMigrationUUID)
 	}
 	if got.Status.ClusterUUID != testClusterUUID || got.Status.PoolUUID != testPoolUUID || got.Status.VolumeUUID != testVolumeUUID {
 		t.Errorf("UUIDs not resolved from CSI handle: %+v", got.Status)
@@ -193,7 +193,7 @@ func TestReconcileStart_BadCSIHandle_Fails(t *testing.T) {
 	}
 }
 
-func TestReconcileStart_EmptyMigrationID_Fails(t *testing.T) {
+func TestReconcileStart_EmptyMigrationUUID_Fails(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"id":""}`))
 	})
@@ -217,7 +217,7 @@ func TestReconcileStart_EmptyMigrationID_Fails(t *testing.T) {
 // invariant: the controller must NEVER call CreateMigration (start a backend
 // migration) when volume migration is disabled, has no rebalancer image, or is
 // not configured at all. The fake API server fails the test if its migrations
-// endpoint is ever hit, and we assert the CR ends Failed with no MigrationID.
+// endpoint is ever hit, and we assert the CR ends Failed with no MigrationUUID.
 func TestReconcileStart_DisabledOrUnconfigured_NeverMigrates(t *testing.T) {
 	enabled := true
 	disabled := false
@@ -266,8 +266,8 @@ func TestReconcileStart_DisabledOrUnconfigured_NeverMigrates(t *testing.T) {
 			if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
 				t.Errorf("phase = %q, want Failed", got.Status.Phase)
 			}
-			if got.Status.MigrationID != "" {
-				t.Errorf("MigrationID = %q, want empty (no migration started)", got.Status.MigrationID)
+			if got.Status.MigrationUUID != "" {
+				t.Errorf("MigrationUUID = %q, want empty (no migration started)", got.Status.MigrationUUID)
 			}
 			if got.Status.StartedAt != nil {
 				t.Errorf("StartedAt should be nil when no migration is started")
@@ -284,7 +284,7 @@ func TestReconcileStart_DisabledOrUnconfigured_NeverMigrates(t *testing.T) {
 func validatingVM(jobName string) *simplyblockv1alpha1.VolumeMigration {
 	vm := baseVM()
 	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseValidating
-	vm.Status.MigrationID = testMigrationID
+	vm.Status.MigrationUUID = testMigrationUUID
 	vm.Status.ClusterUUID = testClusterUUID
 	vm.Status.PoolUUID = testPoolUUID
 	vm.Status.VolumeUUID = testVolumeUUID
@@ -410,9 +410,9 @@ func TestPollValidationJob_Failed_CancelsAndFails(t *testing.T) {
 	}
 }
 
-func TestReconcileValidating_EmptyMigrationID_Fails(t *testing.T) {
+func TestReconcileValidating_EmptyMigrationUUID_Fails(t *testing.T) {
 	vm := validatingVM("")
-	vm.Status.MigrationID = ""
+	vm.Status.MigrationUUID = ""
 	r, cl := newVMReconciler(t, unreachableAPI, vm)
 
 	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
@@ -428,7 +428,7 @@ func TestReconcileValidating_EmptyMigrationID_Fails(t *testing.T) {
 func runningVM(startedAt *metav1.Time) *simplyblockv1alpha1.VolumeMigration {
 	vm := baseVM()
 	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseRunning
-	vm.Status.MigrationID = testMigrationID
+	vm.Status.MigrationUUID = testMigrationUUID
 	vm.Status.ClusterUUID = testClusterUUID
 	vm.Status.PoolUUID = testPoolUUID
 	vm.Status.VolumeUUID = testVolumeUUID
@@ -438,7 +438,7 @@ func runningVM(startedAt *metav1.Time) *simplyblockv1alpha1.VolumeMigration {
 
 func TestReconcileRunning_Completed(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"id":"` + testMigrationID + `","status":"done","snaps_total":5,"snaps_migrated":5}`))
+		_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","status":"done","snaps_total":5,"snaps_migrated":5}`))
 	})
 	past := metav1.NewTime(time.Now().Add(-1 * time.Minute))
 	r, cl := newVMReconciler(t, srv.URL, runningVM(&past))
@@ -460,7 +460,7 @@ func TestReconcileRunning_Completed(t *testing.T) {
 // be treated as success, not failure.
 func TestReconcileRunning_DoneWithLingeringError_Completes(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"id":"` + testMigrationID + `","status":"done","error_message":"transient nvme reconnect, retried"}`))
+		_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","status":"done","error_message":"transient nvme reconnect, retried"}`))
 	})
 	past := metav1.NewTime(time.Now().Add(-1 * time.Minute))
 	r, cl := newVMReconciler(t, srv.URL, runningVM(&past))
@@ -475,7 +475,7 @@ func TestReconcileRunning_DoneWithLingeringError_Completes(t *testing.T) {
 
 func TestReconcileRunning_Failed(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"id":"` + testMigrationID + `","status":"failed","error_message":"boom"}`))
+		_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","status":"failed","error_message":"boom"}`))
 	})
 	past := metav1.NewTime(time.Now().Add(-1 * time.Minute))
 	r, cl := newVMReconciler(t, srv.URL, runningVM(&past))
@@ -495,7 +495,7 @@ func TestReconcileRunning_Failed(t *testing.T) {
 // A backend-cancelled migration is terminal and not a success.
 func TestReconcileRunning_Cancelled_Fails(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"id":"` + testMigrationID + `","status":"cancelled"}`))
+		_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","status":"cancelled"}`))
 	})
 	past := metav1.NewTime(time.Now().Add(-1 * time.Minute))
 	r, cl := newVMReconciler(t, srv.URL, runningVM(&past))
@@ -510,7 +510,7 @@ func TestReconcileRunning_Cancelled_Fails(t *testing.T) {
 
 func TestReconcileRunning_InProgress_UpdatesProgress(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"id":"` + testMigrationID + `","status":"running","snaps_total":10,"snaps_migrated":3}`))
+		_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","status":"running","snaps_total":10,"snaps_migrated":3}`))
 	})
 	past := metav1.NewTime(time.Now().Add(-1 * time.Minute))
 	r, cl := newVMReconciler(t, srv.URL, runningVM(&past))
@@ -535,7 +535,7 @@ func TestReconcileRunning_InProgress_UpdatesProgress(t *testing.T) {
 // StartedAt must not panic; the field is backfilled instead.
 func TestReconcileRunning_NilStartedAt_BackfillsWithoutPanic(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"id":"` + testMigrationID + `","completed_at":0}`))
+		_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","completed_at":0}`))
 	})
 	r, cl := newVMReconciler(t, srv.URL, runningVM(nil))
 
@@ -572,7 +572,7 @@ func assertAbort(t *testing.T, from simplyblockv1alpha1.VolumeMigrationPhase) {
 	vm := baseVM()
 	vm.Spec.Abort = true
 	vm.Status.Phase = from
-	vm.Status.MigrationID = testMigrationID
+	vm.Status.MigrationUUID = testMigrationUUID
 	vm.Status.ClusterUUID = testClusterUUID
 	vm.Status.PoolUUID = testPoolUUID
 	vm.Status.VolumeUUID = testVolumeUUID
