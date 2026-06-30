@@ -235,6 +235,10 @@ func (c *Client) CreateMigration(
 		}
 	}
 
+	// FIXME: logging the full response body is a debugging aid and should be
+	// removed — or at least masked — before this is considered production-ready,
+	// since the body may carry NVMe connection details (NQNs, IPs) or other
+	// sensitive fields.
 	logger.Info("CreateMigration response", "volume", volumeUUID, "status", statusCode, "body", string(body))
 
 	if statusCode >= 300 {
