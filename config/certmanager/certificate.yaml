@@ -1,0 +1,25 @@
+# ClusterIssuer is cluster-scoped. Its name gets the kustomize namePrefix
+# (simplyblock-operator-) applied. The Certificate's issuerRef must use the
+# same prefixed name because kustomize does not rewrite cert-manager cross-references.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-cluster-issuer
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: serving-cert
+  namespace: system
+spec:
+  dnsNames:
+  - $(SERVICE_NAME).$(SERVICE_NAMESPACE).svc
+  - $(SERVICE_NAME).$(SERVICE_NAMESPACE).svc.cluster.local
+  issuerRef:
+    kind: ClusterIssuer
+    # Must include the kustomize namePrefix (simplyblock-operator-) because
+    # kustomize rewrites the ClusterIssuer name but not this reference field.
+    name: simplyblock-operator-selfsigned-cluster-issuer
+  secretName: webhook-server-cert
