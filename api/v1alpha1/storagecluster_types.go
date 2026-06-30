@@ -57,6 +57,22 @@ type NodeRecycleStatus struct {
 	PhaseTriggered bool `json:"phaseTriggered,omitempty"`
 }
 
+// VolumeMigrationSettings carries cluster-level settings for volume migration.
+//
+// Automatic load-based rebalancing will later be added as a nested field on this
+// type (e.g. AutoRebalancing *AutoRebalancingSpec); this PR ships the manually-triggered
+// VolumeMigration feature only.
+type VolumeMigrationSettings struct {
+	// Enabled turns on volume migration for this cluster. When false, the operator
+	// will not act on VolumeMigration resources for this cluster. Defaults to true.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+	// RebalancerImage is the container image used for the volume-migration path
+	// validation Job. The image must include nvme-cli.
+	// +optional
+	RebalancerImage *string `json:"rebalancerImage,omitempty"`
+}
+
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
@@ -171,6 +187,9 @@ type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="HashiCorp Vault Settings"
 	// HashicorpVaultSettings configures the Vault endpoint used by the cluster for key storage.
 	HashicorpVaultSettings *HashicorpVaultSettings `json:"hashicorpVaultSettings,omitempty"`
+	// VolumeMigrationSettings controls volume migration for this cluster.
+	// +optional
+	VolumeMigrationSettings *VolumeMigrationSettings `json:"volumeMigrationSettings,omitempty"`
 }
 
 // StorageClusterStatus defines the observed state of StorageCluster.

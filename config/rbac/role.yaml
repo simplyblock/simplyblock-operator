@@ -48,6 +48,12 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
   - secrets
   - serviceaccounts
   - services
@@ -143,6 +149,7 @@ rules:
   - storageclusters
   - storagenodesets
   - tasks
+  - volumemigrations
   verbs:
   - create
   - delete
@@ -163,6 +170,7 @@ rules:
   - storageclusters/finalizers
   - storagenodesets/finalizers
   - tasks/finalizers
+  - volumemigrations/finalizers
   verbs:
   - update
 - apiGroups:
@@ -178,6 +186,7 @@ rules:
   - storageclusters/status
   - storagenodesets/status
   - tasks/status
+  - volumemigrations/status
   verbs:
   - get
   - patch
