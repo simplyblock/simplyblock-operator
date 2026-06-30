@@ -101,22 +101,26 @@ func csiPV(name, handle string) *corev1.PersistentVolume {
 	}
 }
 
-// migrationCluster returns a StorageCluster matching testClusterUUID with volume
-// migration enabled and a rebalancer image set — the precondition reconcileStart's
-// enablement check (resolveRebalancerImage) requires before starting a migration.
+// clusterWithSettings returns a StorageCluster matching testClusterUUID with the given
+// volume-migration settings (pass nil for "not configured").
+func clusterWithSettings(s *simplyblockv1alpha1.VolumeMigrationSettings) *simplyblockv1alpha1.StorageCluster {
+	return &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: testVMNamespace},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{VolumeMigrationSettings: s},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterUUID},
+	}
+}
+
+// migrationCluster returns a StorageCluster with volume migration enabled and a
+// rebalancer image set — the precondition reconcileStart's enablement check
+// (resolveRebalancerImage) requires before starting a migration.
 func migrationCluster() *simplyblockv1alpha1.StorageCluster {
 	enabled := true
 	image := "rebalancer:test"
-	return &simplyblockv1alpha1.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: testVMNamespace},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			VolumeMigrationSettings: &simplyblockv1alpha1.VolumeMigrationSettings{
-				Enabled:         &enabled,
-				RebalancerImage: &image,
-			},
-		},
-		Status: simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterUUID},
-	}
+	return clusterWithSettings(&simplyblockv1alpha1.VolumeMigrationSettings{
+		Enabled:         &enabled,
+		RebalancerImage: &image,
+	})
 }
 
 // ---- reconcileStart (Pending -> Validating / Failed) ----
@@ -204,6 +208,72 @@ func TestReconcileStart_EmptyMigrationID_Fails(t *testing.T) {
 	}
 	if !strings.Contains(got.Status.ErrorMessage, "empty migration ID") {
 		t.Errorf("ErrorMessage = %q, want empty migration ID", got.Status.ErrorMessage)
+	}
+}
+
+// TestReconcileStart_DisabledOrUnconfigured_NeverMigrates guards the safety
+// invariant: the controller must NEVER call CreateMigration (start a backend
+// migration) when volume migration is disabled, has no rebalancer image, or is
+// not configured at all. The fake API server fails the test if its migrations
+// endpoint is ever hit, and we assert the CR ends Failed with no MigrationID.
+func TestReconcileStart_DisabledOrUnconfigured_NeverMigrates(t *testing.T) {
+	enabled := true
+	disabled := false
+	image := "rebalancer:test"
+
+	cases := []struct {
+		name     string
+		settings *simplyblockv1alpha1.VolumeMigrationSettings
+		wantErr  string
+	}{
+		{
+			name:     "migration disabled",
+			settings: &simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &disabled, RebalancerImage: &image},
+			wantErr:  "disabled",
+		},
+		{
+			name:     "rebalancer image not set",
+			settings: &simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &enabled},
+			wantErr:  "no RebalancerImage",
+		},
+		{
+			name:     "volume migration not configured",
+			settings: nil,
+			wantErr:  "not configured",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/migrations") {
+					t.Errorf("CreateMigration must not be called when %s", tc.name)
+				}
+				w.WriteHeader(http.StatusNotFound)
+			})
+
+			vm := baseVM()
+			pv := csiPV("pv-1", testClusterUUID+":"+testPoolUUID+":"+testVolumeUUID)
+			r, cl := newVMReconciler(t, srv.URL, vm, pv, clusterWithSettings(tc.settings))
+
+			if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+
+			got := getVM(t, cl)
+			if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
+				t.Errorf("phase = %q, want Failed", got.Status.Phase)
+			}
+			if got.Status.MigrationID != "" {
+				t.Errorf("MigrationID = %q, want empty (no migration started)", got.Status.MigrationID)
+			}
+			if got.Status.StartedAt != nil {
+				t.Errorf("StartedAt should be nil when no migration is started")
+			}
+			if !strings.Contains(got.Status.ErrorMessage, tc.wantErr) {
+				t.Errorf("ErrorMessage = %q, want contains %q", got.Status.ErrorMessage, tc.wantErr)
+			}
+		})
 	}
 }
 
