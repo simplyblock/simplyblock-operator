@@ -106,6 +106,10 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 	}
 	clusterUUID, poolUUID, volumeUUID := parts[0], parts[1], parts[2]
 
+	if _, err := r.resolveRebalancerImage(ctx, vm.Namespace, clusterUUID); err != nil {
+		return r.setFailed(ctx, vm, fmt.Sprintf("volume migration not enabled/configured for cluster %q: %v", clusterUUID, err))
+	}
+
 	log.Info("Submitting volume migration",
 		"volume", volumeUUID, "cluster", clusterUUID, "target", vm.Spec.TargetNodeUUID)
 
