@@ -2216,7 +2216,7 @@ spec:
     - jsonPath: .status.snapsMigrated
       name: Snaps
       priority: 1
-      type: string
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
