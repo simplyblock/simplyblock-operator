@@ -101,6 +101,24 @@ func csiPV(name, handle string) *corev1.PersistentVolume {
 	}
 }
 
+// migrationCluster returns a StorageCluster matching testClusterUUID with volume
+// migration enabled and a rebalancer image set — the precondition reconcileStart's
+// enablement check (resolveRebalancerImage) requires before starting a migration.
+func migrationCluster() *simplyblockv1alpha1.StorageCluster {
+	enabled := true
+	image := "rebalancer:test"
+	return &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: testVMNamespace},
+		Spec: simplyblockv1alpha1.StorageClusterSpec{
+			VolumeMigrationSettings: &simplyblockv1alpha1.VolumeMigrationSettings{
+				Enabled:         &enabled,
+				RebalancerImage: &image,
+			},
+		},
+		Status: simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterUUID},
+	}
+}
+
 // ---- reconcileStart (Pending -> Validating / Failed) ----
 
 func TestReconcileStart_TransitionsToValidating(t *testing.T) {
@@ -113,7 +131,7 @@ func TestReconcileStart_TransitionsToValidating(t *testing.T) {
 
 	vm := baseVM()
 	pv := csiPV("pv-1", testClusterUUID+":"+testPoolUUID+":"+testVolumeUUID)
-	r, cl := newVMReconciler(t, srv.URL, vm, pv)
+	r, cl := newVMReconciler(t, srv.URL, vm, pv, migrationCluster())
 
 	res, err := r.Reconcile(context.Background(), vmRequest())
 	if err != nil {
@@ -175,7 +193,7 @@ func TestReconcileStart_EmptyMigrationID_Fails(t *testing.T) {
 	})
 	vm := baseVM()
 	pv := csiPV("pv-1", testClusterUUID+":"+testPoolUUID+":"+testVolumeUUID)
-	r, cl := newVMReconciler(t, srv.URL, vm, pv)
+	r, cl := newVMReconciler(t, srv.URL, vm, pv, migrationCluster())
 
 	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
