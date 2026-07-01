@@ -167,7 +167,7 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// If the user cleared the remove action while a drain was in progress, resume the node.
 	if snCR.Status.ActionStatus != nil &&
-		snCR.Status.ActionStatus.Action == "remove" &&
+		snCR.Status.ActionStatus.Action == utils.NodeActionRemove &&
 		snCR.Status.ActionStatus.SubPhase != "" &&
 		snCR.Status.ActionStatus.State == utils.ActionStateRunning {
 		return r.drainHandleCancellation(ctx, webapi.NewClient(), clusterUUID, snCR)
@@ -1602,7 +1602,7 @@ func (r *StorageNodeSetReconciler) reconcileAction(
 ) (ctrl.Result, error) {
 	apiClient := webapi.NewClient()
 
-	if snCR.Spec.Action == "remove" {
+	if snCR.Spec.Action == utils.NodeActionRemove {
 		return r.performDrainAndRemove(ctx, apiClient, clusterUUID, snCR)
 	}
 
@@ -1687,7 +1687,10 @@ func (r *StorageNodeSetReconciler) performNodeAction(
 
 	switch snCR.Spec.Action {
 
-	case "restart":
+	case utils.NodeActionRemove:
+		return fmt.Errorf("remove action must be handled by performDrainAndRemove, not performNodeAction")
+
+	case utils.NodeActionRestart:
 		payload := map[string]any{
 			"force":           nodeActionForce(snCR, true),
 			"reattach_volume": utils.BoolPtrOrFalse(snCR.Spec.ReattachVolume),
@@ -1723,16 +1726,6 @@ func (r *StorageNodeSetReconciler) performNodeAction(
 			"/api/v2/clusters/%s/storage-nodes/%s/restart",
 			clusterUUID,
 			snCR.Spec.NodeUUID,
-		)
-
-	case "remove":
-		method = http.MethodDelete
-		body = nil
-		endpoint = fmt.Sprintf(
-			"/api/v2/clusters/%s/storage-nodes/%s?force_remove=%t",
-			clusterUUID,
-			snCR.Spec.NodeUUID,
-			nodeActionForce(snCR, true),
 		)
 
 	default:
@@ -1837,11 +1830,11 @@ func (r *StorageNodeSetReconciler) waitForActionCompletion(
 	log := logf.FromContext(ctx)
 
 	expectedStatus := map[string]string{
-		"suspend":  "suspended",
-		"resume":   "online",
-		"shutdown": "offline",
-		"restart":  "online",
-		"remove":   "removed",
+		utils.NodeActionSuspend:  "suspended",
+		utils.NodeActionResume:   "online",
+		utils.NodeActionShutdown: "offline",
+		utils.NodeActionRestart:  "online",
+		utils.NodeActionRemove:   "removed",
 	}
 
 	targetStatus, ok := expectedStatus[action]
@@ -1858,7 +1851,7 @@ func (r *StorageNodeSetReconciler) waitForActionCompletion(
 	for i := 0; i < waitForActionCompletionRetries; i++ {
 		body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 
-		if action == "remove" && status == http.StatusNotFound {
+		if action == utils.NodeActionRemove && status == http.StatusNotFound {
 			log.Info(
 				"Node successfully removed (404 returned)",
 				"nodeUUID", nodeUUID,
