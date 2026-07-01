@@ -65,70 +65,16 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed component and reconciliati
 
 ---
 
-## 📦 Getting Started
+## 📦 Installation
 
-### 1. Prerequisites
+The operator is installed as part of a simplyblock deployment via the **official Helm charts**. Follow
+the documentation for the supported, end-to-end installation flow — it wires up the control plane, the
+`ControlPlane` CR, cert-manager, and the CSI driver alongside the operator:
 
-- Go v1.24.6+ (for building from source)
-- Docker v17.03+
-- kubectl v1.11.3+
-- Access to a Kubernetes v1.11.3+ cluster
-- A reachable simplyblock control plane (Web API)
+👉 **[Simplyblock Kubernetes Deployment Guide](https://docs.simplyblock.io/latest/deployments/kubernetes/)**
 
-### 2. Install via bundle (Recommended)
-
-Apply the pre-built installer bundle, which contains all CRDs, RBAC, and the manager deployment:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/simplyblock/simplyblock-operator/main/dist/install.yaml
-```
-
-### 3. Verify the deployment
-
-```sh
-kubectl -n simplyblock-operator get pods
-```
-
-You should see the manager pod in the `Running` state.
-
-### 4. Create your first resources
-
-Apply the bundled samples to try it out:
-
-```sh
-kubectl apply -k config/samples/
-```
-
-To remove them again:
-
-```sh
-kubectl delete -k config/samples/
-```
-
----
-
-## 🛠️ Build & Deploy from Source
-
-```sh
-# Build and push the operator image
-make docker-build docker-push IMG=<some-registry>/simplyblock-operator:tag
-
-# Install CRDs and deploy the manager with your image
-make install
-make deploy IMG=<some-registry>/simplyblock-operator:tag
-
-# Regenerate the install bundle (dist/install.yaml) or a Helm chart
-make build-installer IMG=<some-registry>/simplyblock-operator:tag
-kubebuilder edit --plugins=helm/v2-alpha        # optional: generate dist/chart
-
-# Tear everything down
-make undeploy      # remove the controller
-make uninstall     # remove the CRDs
-```
-
-> **NOTE:** The pushed image must be reachable from the cluster — ensure the registry is accessible and
-> that you have pull permissions. If you hit RBAC errors during `make deploy`, you may need cluster-admin
-> privileges. Run `make help` for the full list of targets.
+> The manual and from-source paths below exist for development and troubleshooting only. For any real
+> deployment, use the documentation and Helm charts above.
 
 ---
 
@@ -256,6 +202,49 @@ The operator's pod is the sole caller of the simplyblock webapi; user
 identities are **not** propagated to the backend. K8s RBAC governs what users
 can do to the CRs, the operator then talks to webapi using its own service
 account token.
+
+---
+
+## 🧪 Manual & From-Source Installation (Development Only)
+
+> ⚠️ These paths are for local development and troubleshooting. For real deployments, use the
+> [documentation and Helm charts](https://docs.simplyblock.io/latest/deployments/kubernetes/).
+
+**Prerequisites**
+
+- Go v1.24.6+, Docker v17.03+, kubectl v1.11.3+
+- Access to a Kubernetes v1.11.3+ cluster
+- A reachable simplyblock control plane (Web API)
+
+**Apply the pre-built installer bundle** (CRDs, RBAC, and the manager deployment):
+
+```sh
+kubectl apply -f https://raw.githubusercontent.com/simplyblock/simplyblock-operator/main/dist/install.yaml
+kubectl -n simplyblock-operator get pods        # manager pod should be Running
+kubectl apply -k config/samples/                # try the bundled samples
+```
+
+**Build and deploy from source:**
+
+```sh
+# Build and push the operator image
+make docker-build docker-push IMG=<some-registry>/simplyblock-operator:tag
+
+# Install CRDs and deploy the manager with your image
+make install
+make deploy IMG=<some-registry>/simplyblock-operator:tag
+
+# Regenerate the install bundle (dist/install.yaml)
+make build-installer IMG=<some-registry>/simplyblock-operator:tag
+
+# Tear everything down
+make undeploy      # remove the controller
+make uninstall     # remove the CRDs
+```
+
+> **NOTE:** The pushed image must be reachable from the cluster — ensure the registry is accessible and
+> that you have pull permissions. If you hit RBAC errors during `make deploy`, you may need cluster-admin
+> privileges. Run `make help` for the full list of targets.
 
 ---
 
