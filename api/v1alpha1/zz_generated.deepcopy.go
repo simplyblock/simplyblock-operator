@@ -1648,11 +1648,6 @@ func (in *StorageNodeSetSpec) DeepCopyInto(out *StorageNodeSetSpec) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.UnpinBeforeDrain != nil {
-		in, out := &in.UnpinBeforeDrain, &out.UnpinBeforeDrain
-		*out = new(bool)
-		**out = **in
-	}
 	if in.SystemVolumeFilterRegex != nil {
 		in, out := &in.SystemVolumeFilterRegex, &out.SystemVolumeFilterRegex
 		*out = new(string)

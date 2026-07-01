@@ -160,13 +160,6 @@ type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
 	// Force enables forced action execution where supported.
 	Force *bool `json:"force,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Unpin Before Drain"
-	// UnpinBeforeDrain, when true, instructs the operator to remove the
-	// simplyblock.io/pinned-volume annotation from all pinned PVCs on this node
-	// before beginning the drain. The annotation is not restored after migration.
-	// Defaults to false.
-	// +optional
-	UnpinBeforeDrain *bool `json:"unpinBeforeDrain,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="System Volume Filter Regex"
 	// SystemVolumeFilterRegex is a Go regular expression matched against backend
 	// volume names. Matching volumes are excluded from drain migration and from
