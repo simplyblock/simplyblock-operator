@@ -58,13 +58,6 @@ const (
 	drainRequeueValidate   = 30 * time.Second
 )
 
-// NodeVolumeAPIResponse is the JSON shape of a single volume returned by
-// GET /api/v2/clusters/{clusterUUID}/storage-nodes/{nodeUUID}/volumes.
-type NodeVolumeAPIResponse struct {
-	UUID string `json:"id"`
-	Name string `json:"name"`
-}
-
 // performDrainAndRemove is the entry point for the drain-remove state machine.
 // It is called from reconcileAction when action == "remove" and a drain flow is
 // required (i.e. when the caller opts in by leaving the existing remove path and
@@ -581,33 +574,32 @@ func advanceDrainSubPhase(
 	return r.Status().Patch(ctx, snCR, patch)
 }
 
-// listNodeVolumes fetches the list of volumes on a storage node from the backend API.
+// listNodeVolumes returns all volumes whose primary node is nodeUUID by listing
+// every pool in the cluster and filtering by VolumeInfo.PrimaryNodeUUID.
 func listNodeVolumes(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
 	nodeUUID string,
-) ([]NodeVolumeAPIResponse, error) {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/volumes", clusterUUID, nodeUUID)
-	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+) ([]webapi.VolumeInfo, error) {
+	pools, err := apiClient.GetStoragePools(ctx, clusterUUID)
 	if err != nil {
-		return nil, fmt.Errorf("listNodeVolumes: GET %s: %w", endpoint, err)
-	}
-	if status >= 300 {
-		return nil, fmt.Errorf("listNodeVolumes: GET %s returned status %d", endpoint, status)
+		return nil, fmt.Errorf("listNodeVolumes: %w", err)
 	}
 
-	// Handle empty array body.
-	trimmed := strings.TrimSpace(string(body))
-	if trimmed == "[]" || trimmed == "" {
-		return nil, nil
+	var result []webapi.VolumeInfo
+	for _, pool := range pools {
+		vols, err := apiClient.GetPoolVolumes(ctx, clusterUUID, pool.UUID)
+		if err != nil {
+			return nil, fmt.Errorf("listNodeVolumes: pool %s: %w", pool.UUID, err)
+		}
+		for _, v := range vols {
+			if v.PrimaryNodeUUID == nodeUUID {
+				result = append(result, v)
+			}
+		}
 	}
-
-	var volumes []NodeVolumeAPIResponse
-	if err := json.Unmarshal(body, &volumes); err != nil {
-		return nil, fmt.Errorf("listNodeVolumes: unmarshal: %w", err)
-	}
-	return volumes, nil
+	return result, nil
 }
 
 // matchVolumesToPVs classifies each backend volume into one of three buckets:
@@ -620,7 +612,7 @@ func listNodeVolumes(
 func matchVolumesToPVs(
 	ctx context.Context,
 	r *StorageNodeSetReconciler,
-	volumes []NodeVolumeAPIResponse,
+	volumes []webapi.VolumeInfo,
 	filterRegex string,
 ) (pvManaged, pinned, unmanaged []string, pvNameByVolumeUUID map[string]string, err error) {
 	log := logf.FromContext(ctx)
