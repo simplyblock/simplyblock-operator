@@ -247,6 +247,15 @@ func (r *StorageNodeSetReconciler) drainSuspend(
 	nodeUUID := snCR.Spec.NodeUUID
 
 	if !snCR.Status.ActionStatus.Triggered {
+		// Re-fetch to guard against stale cache: another reconcile may have
+		// already POSTed suspend and set Triggered=true.
+		fresh := &simplyblockv1alpha1.StorageNodeSet{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(snCR), fresh); err == nil {
+			if fresh.Status.ActionStatus != nil && fresh.Status.ActionStatus.Triggered {
+				return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+			}
+		}
+
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/suspend", clusterUUID, nodeUUID)
 		_, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
