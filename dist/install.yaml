@@ -1919,13 +1919,6 @@ spec:
               ubuntuHost:
                 description: UbuntuHost indicates the node host OS is Ubuntu.
                 type: boolean
-              unpinBeforeDrain:
-                description: |-
-                  UnpinBeforeDrain, when true, instructs the operator to remove the
-                  simplyblock.io/pinned-volume annotation from all pinned PVCs on this node
-                  before beginning the drain. The annotation is not restored after migration.
-                  Defaults to false.
-                type: boolean
               workerNode:
                 description: WorkerNode is a single worker node used by action flows.
                 type: string

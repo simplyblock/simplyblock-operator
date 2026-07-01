@@ -194,12 +194,10 @@ func (r *StorageNodeSetReconciler) drainValidate(
 		return ctrl.Result{RequeueAfter: drainRequeueValidate}, nil
 	}
 
-	unpinBeforeDrain := snCR.Spec.UnpinBeforeDrain != nil && *snCR.Spec.UnpinBeforeDrain
-
-	// Pinned volumes block drain unless UnpinBeforeDrain is true.
-	if len(pinned) > 0 && !unpinBeforeDrain {
+	// Pinned volumes always block drain — user must remove the annotation manually.
+	if len(pinned) > 0 {
 		r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "PinnedVolumeBlocking",
-			"drain blocked: pinned volumes %s must be unpinned or set unpinBeforeDrain=true",
+			"drain blocked: pinned volumes %s must be unpinned before drain",
 			strings.Join(pinned, ", "))
 		patch := client.MergeFrom(snCR.DeepCopy())
 		snCR.Status.ActionStatus.Message = fmt.Sprintf(
@@ -222,53 +220,6 @@ func (r *StorageNodeSetReconciler) drainValidate(
 			log.Error(err, "drain: failed to patch status (unmanaged blocking)")
 		}
 		return ctrl.Result{RequeueAfter: drainRequeueBlocking}, nil
-	}
-
-	// If UnpinBeforeDrain is true and there are pinned volumes, unpin them now.
-	if unpinBeforeDrain && len(pinned) > 0 {
-		// Re-run matchVolumesToPVs to get the pvNameByVolumeUUID map for fetching PVCs.
-		_, pinnedUUIDs, _, pvNameByVolumeUUID, err := matchVolumesToPVs(ctx, r, volumes, filterRegex)
-		if err != nil {
-			log.Error(err, "drain: matchVolumesToPVs failed (unpin pass)")
-			return ctrl.Result{RequeueAfter: drainRequeueValidate}, nil
-		}
-
-		for _, volUUID := range pinnedUUIDs {
-			pvName, ok := pvNameByVolumeUUID[volUUID]
-			if !ok {
-				continue
-			}
-			var pv corev1.PersistentVolume
-			if err := r.Get(ctx, client.ObjectKey{Name: pvName}, &pv); err != nil {
-				log.Error(err, "drain: failed to get PV for unpin", "pv", pvName)
-				continue
-			}
-			if pv.Spec.ClaimRef == nil {
-				continue
-			}
-			var pvc corev1.PersistentVolumeClaim
-			if err := r.Get(ctx, types.NamespacedName{
-				Namespace: pv.Spec.ClaimRef.Namespace,
-				Name:      pv.Spec.ClaimRef.Name,
-			}, &pvc); err != nil {
-				log.Error(err, "drain: failed to get PVC for unpin",
-					"pvc", pv.Spec.ClaimRef.Name, "namespace", pv.Spec.ClaimRef.Namespace)
-				continue
-			}
-			if pvc.Annotations == nil {
-				continue
-			}
-			if _, hasPinAnnotation := pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolume]; !hasPinAnnotation {
-				continue
-			}
-			delete(pvc.Annotations, simplyblockv1alpha1.AnnotationPinnedVolume)
-			if err := r.Update(ctx, &pvc); err != nil {
-				log.Error(err, "drain: failed to remove pinned-volume annotation",
-					"pvc", pvc.Name, "namespace", pvc.Namespace)
-			}
-		}
-		r.Recorder.Eventf(snCR, corev1.EventTypeNormal, "PinnedVolumeUnpinned",
-			"drain: removed pinned-volume annotation from %d PVC(s)", len(pinnedUUIDs))
 	}
 
 	// Advance to Suspending.
