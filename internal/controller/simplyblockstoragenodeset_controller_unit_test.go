@@ -1645,35 +1645,25 @@ func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
 	})
 }
 
-func TestPerformNodeActionRemoveHappyPath(t *testing.T) {
+func TestPerformNodeActionRemoveReturnsError(t *testing.T) {
 	const clusterUUID = "cluster-uuid-remove"
 	const nodeUUID = "node-uuid-remove"
-
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
-	defer mock.Close()
-	mock.Register(
-		http.MethodDelete,
-		"/api/v2/clusters/"+clusterUUID+"/storage-nodes/"+nodeUUID,
-		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
-	)
-	mock.Register(
-		http.MethodGet,
-		"/api/v2/clusters/"+clusterUUID+"/storage-nodes/"+nodeUUID,
-		webapimock.RouteResponse{Status: http.StatusNotFound},
-	)
-	apiClient := webapi.NewClient(mock.URL())
 
 	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-remove", Namespace: "default"},
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
-			Action:   "remove",
+			Action:   utils.NodeActionRemove,
 			NodeUUID: nodeUUID,
 		},
 	}
 	r := newStorageNodeSetStateTestReconciler(t, sn)
 
-	if err := r.performNodeAction(context.Background(), apiClient, clusterUUID, sn); err != nil {
-		t.Fatalf("performNodeAction(remove) returned error: %v", err)
+	err := r.performNodeAction(context.Background(), webapi.NewClient("http://127.0.0.1:1"), clusterUUID, sn)
+	if err == nil {
+		t.Fatal("expected performNodeAction(remove) to return an error")
+	}
+	if !strings.Contains(err.Error(), "performDrainAndRemove") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -1954,20 +1944,20 @@ func TestHandleNodeActionTransitionsToSuccess(t *testing.T) {
 	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
 	defer mock.Close()
 	mock.Register(
-		http.MethodDelete,
-		"/api/v2/clusters/"+clusterUUID+"/storage-nodes/"+nodeUUID,
+		http.MethodPost,
+		"/api/v2/clusters/"+clusterUUID+"/storage-nodes/"+nodeUUID+"/suspend",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
 	)
 	mock.Register(
 		http.MethodGet,
 		"/api/v2/clusters/"+clusterUUID+"/storage-nodes/"+nodeUUID,
-		webapimock.RouteResponse{Status: http.StatusNotFound},
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `{"status":"suspended"}`},
 	)
 
 	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-action-success", Namespace: "default"},
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
-			Action:   "remove",
+			Action:   utils.NodeActionSuspend,
 			NodeUUID: nodeUUID,
 		},
 	}
