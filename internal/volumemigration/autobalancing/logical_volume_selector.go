@@ -103,15 +103,14 @@ func (lvs *LogicalVolumeSelector) SelectVolumesForMigration(
 	return "", nil
 }
 
-// CollectVolumes fetches all volumes across every pool in the cluster, enriches
-// each with live IOPS and throughput from Prometheus (falling back to REST API
-// values when Prometheus is unavailable), and returns:
-//   - volumesByNode: nodeUUID → []VolumePlacement, including ineligible volumes
-//   - allVolumes:    volumeUUID → VolumePlacement, for O(1) lookup by ID
+// CollectVolumes fetches the CSI-managed volumes in the cluster, enriches each with
+// live IOPS and throughput from Prometheus (falling back to REST API values when
+// Prometheus is unavailable), and returns volumesByNode: nodeUUID → []VolumePlacement
+// (including ineligible volumes; eligibility is applied downstream).
 func (lvs *LogicalVolumeSelector) CollectVolumes(
 	ctx context.Context,
 	input LogicalVolumeSelectorInput,
-) (volumesByNode map[string][]VolumePlacement, allVolumes map[string]VolumePlacement, err error) {
+) (volumesByNode map[string][]VolumePlacement, err error) {
 	log := logf.FromContext(ctx)
 
 	// The rebalancer only ever acts on PV/PVC-managed volumes. Resolve the set of
@@ -119,10 +118,10 @@ func (lvs *LogicalVolumeSelector) CollectVolumes(
 	// so backend-only volumes (e.g. benchmark probes) never enter the candidate pool.
 	managed, err := lvs.BuildCSIManagedVolumes(ctx, input.ClusterUUID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("build CSI-managed volume set: %w", err)
+		return nil, fmt.Errorf("build CSI-managed volume set: %w", err)
 	}
 
-	volumesByNode, allVolumes = lvs.collectVolumesByNode(ctx, input.ClusterUUID, managed)
+	volumesByNode = lvs.collectVolumesByNode(ctx, input.ClusterUUID, managed)
 
 	if ioProvider, pErr := promlatency.New(input.PrometheusURL); pErr != nil {
 		log.Error(pErr, "Cannot create volume IO provider; scoring will use REST API values")
@@ -132,7 +131,7 @@ func (lvs *LogicalVolumeSelector) CollectVolumes(
 		lvs.overrideVolumeIO(volumesByNode, prometheusIO)
 	}
 
-	return volumesByNode, allVolumes, nil
+	return volumesByNode, nil
 }
 
 // FilterEligibleVolumes returns the subset of vols that are candidates for
@@ -168,18 +167,16 @@ func (lvs *LogicalVolumeSelector) FilterEligibleVolumes(
 // collectVolumesByNode builds the migration candidate set by fetching exactly the
 // CSI-managed volumes (one backend GET each, using the cluster/pool/volume UUIDs from
 // the PV handle) — no pool enumeration. A volume that errors or no longer exists in
-// the backend is skipped rather than aborting the cycle. Returns:
-//   - volumesByNode: nodeUUID → []VolumePlacement (CSI-managed volumes only)
-//   - allVolumes:    volumeUUID → VolumePlacement, for O(1) lookup
+// the backend is skipped rather than aborting the cycle. Returns volumesByNode:
+// nodeUUID → []VolumePlacement (CSI-managed volumes only).
 func (lvs *LogicalVolumeSelector) collectVolumesByNode(
 	ctx context.Context,
 	clusterUUID string,
 	managed []managedVolume,
-) (volumesByNode map[string][]VolumePlacement, allVolumes map[string]VolumePlacement) {
+) map[string][]VolumePlacement {
 	log := logf.FromContext(ctx)
 
-	volumesByNode = make(map[string][]VolumePlacement)
-	allVolumes = make(map[string]VolumePlacement)
+	volumesByNode := make(map[string][]VolumePlacement)
 
 	for _, mv := range managed {
 		v, err := lvs.apiClient.GetVolume(ctx, clusterUUID, mv.PoolUUID, mv.VolumeUUID)
@@ -194,9 +191,8 @@ func (lvs *LogicalVolumeSelector) collectVolumesByNode(
 		}
 		vp := VolumePlacement{VolumeInfo: *v, PoolUUID: mv.PoolUUID}
 		volumesByNode[v.PrimaryNodeUUID] = append(volumesByNode[v.PrimaryNodeUUID], vp)
-		allVolumes[v.UUID] = vp
 	}
-	return volumesByNode, allVolumes
+	return volumesByNode
 }
 
 // selectMigrationSet applies a greedy 10 % IO-budget cap and a hard MaxMigrations

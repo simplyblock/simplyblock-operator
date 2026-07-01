@@ -118,7 +118,7 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 		return r.setFailed(ctx, vm, fmt.Sprintf("CreateMigration: %v", err))
 	}
 	if migration.ID == "" {
-		return r.setFailed(ctx, vm, "CreateMigration returned empty migration ID")
+		return r.setFailed(ctx, vm, "CreateMigration returned empty migration UUID")
 	}
 
 	now := metav1.Now()
@@ -170,7 +170,7 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 	log := logf.FromContext(ctx)
 
 	if vm.Status.MigrationUUID == "" {
-		return r.setFailed(ctx, vm, "migration ID is empty in Validating phase; status was likely written before a failed CreateMigration")
+		return r.setFailed(ctx, vm, "migration UUID is empty in Validating phase; status was likely written before a failed CreateMigration")
 	}
 
 	// If the Job already exists, poll it.

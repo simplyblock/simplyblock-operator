@@ -57,19 +57,23 @@ func NewRebalancer(nodeSelector *StorageNodeSelector, volumeSelector *LogicalVol
 // isCoolingDown is called per volume to check the post-migration cool-down
 // window. The first argument is the cluster UUID, the second the volume UUID.
 // Pass nil to skip the cool-down check.
+// The returned pinnedBlocked is true when at least one hot node could not be
+// rebalanced because every volume it hosts is pinned (simplyblock.io/pinned-volume).
+// This is a distinct, legitimate outcome from "no hot nodes" or "cooling down" and
+// callers surface it via the rebalancer_pinned_blocked metric.
 func (rb *Rebalancer) SelectMigrations(
 	ctx context.Context,
 	cfg RebalancingConfig,
 	isCoolingDown func(clusterUUID, volumeUUID string) bool,
 	inputs ...StorageNodeSelectorInput,
-) ([]MigrationCandidate, error) {
+) (candidates []MigrationCandidate, pinnedBlocked bool, err error) {
 	// Step 1 — identify hot→cool node pairs across all clusters.
 	nodePairs, err := rb.nodeSelector.SelectStorageNodes(ctx, cfg, inputs...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(nodePairs) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	// Step 2 — group pairs by cluster, preserving the worst-first ordering
@@ -91,11 +95,10 @@ func (rb *Rebalancer) SelectMigrations(
 	}
 
 	// Step 3 — for each cluster, collect volumes and select the migration set.
-	var candidates []MigrationCandidate
 	for clusterUUID, cw := range byCluster {
 		pinned, err := rb.volumeSelector.BuildPinnedSet(ctx, clusterUUID)
 		if err != nil {
-			return nil, fmt.Errorf("cluster %s: build pinned set: %w", clusterUUID, err)
+			return nil, false, fmt.Errorf("cluster %s: build pinned set: %w", clusterUUID, err)
 		}
 
 		lvInput := LogicalVolumeSelectorInput{
@@ -112,14 +115,19 @@ func (rb *Rebalancer) SelectMigrations(
 			}(clusterUUID)
 		}
 
-		volumesByNode, _, err := rb.volumeSelector.CollectVolumes(ctx, lvInput)
+		volumesByNode, err := rb.volumeSelector.CollectVolumes(ctx, lvInput)
 		if err != nil {
-			return nil, fmt.Errorf("cluster %s: collect volumes: %w", clusterUUID, err)
+			return nil, false, fmt.Errorf("cluster %s: collect volumes: %w", clusterUUID, err)
 		}
 
 		sourceNodeUUID, toMigrate := rb.volumeSelector.SelectVolumesForMigration(lvInput, cw.hotNodes, volumesByNode, cfg)
 		if sourceNodeUUID == "" {
-			// Every hot node in this cluster had no eligible volumes.
+			// No hot node yielded an eligible volume. Distinguish the pinned case:
+			// a hot node that hosts volumes, every one of which is pinned, is blocked
+			// from rebalancing by policy (not by cool-down or lack of load).
+			if hotNodesAllPinned(cw.hotNodes, volumesByNode, pinned) {
+				pinnedBlocked = true
+			}
 			continue
 		}
 
@@ -135,5 +143,29 @@ func (rb *Rebalancer) SelectMigrations(
 			})
 		}
 	}
-	return candidates, nil
+	return candidates, pinnedBlocked, nil
+}
+
+// hotNodesAllPinned reports whether any hot node hosts at least one volume and
+// every volume it hosts is pinned — i.e. the node is hot but rebalancing is
+// blocked purely by pin policy. volumesByNode contains all volumes (pinning is
+// applied downstream), so it is the correct set to test against pinned.
+func hotNodesAllPinned(hotNodes []string, volumesByNode map[string][]VolumePlacement, pinned map[string]bool) bool {
+	for _, node := range hotNodes {
+		vols := volumesByNode[node]
+		if len(vols) == 0 {
+			continue
+		}
+		allPinned := true
+		for _, vp := range vols {
+			if !pinned[vp.UUID] {
+				allPinned = false
+				break
+			}
+		}
+		if allPinned {
+			return true
+		}
+	}
+	return false
 }

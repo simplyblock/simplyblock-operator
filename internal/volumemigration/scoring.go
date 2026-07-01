@@ -1,9 +1,5 @@
 package volumemigration
 
-import (
-	"sort"
-)
-
 // ComputeLatencyDeviationPct returns how much currentNS exceeds baselineNS as a
 // percentage. The latencies are in nanoseconds at whichever percentile the operator
 // configured (p50 or p99); the computation is percentile-agnostic. Returns 0 when
@@ -20,27 +16,6 @@ func ComputeLatencyDeviationPct(
 		return 0
 	}
 	return dev
-}
-
-// topKNodes returns the top-k StorageNodeCandidates sorted by Score descending.
-// If k exceeds the number of candidates the full list is returned.
-// Used in Phase 2 source-candidate selection to evaluate the k hottest nodes
-// for migratable load before picking the best source (§6 Step 2, Phase 2).
-func topKNodes(
-	candidates []StorageNodeCandidate,
-	k int,
-) []StorageNodeCandidate {
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Score > candidates[j].Score
-	})
-	if k > len(candidates) {
-		k = len(candidates)
-	}
-	out := make([]StorageNodeCandidate, k)
-	for i := range out {
-		out[i] = candidates[i]
-	}
-	return out
 }
 
 // VolumeIOScore computes the migration priority score for a single volume.

@@ -149,7 +149,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 		return r.migrationState.IsVolumeCooledDown(cUUID, volumeUUID, time.Now())
 	}
 
-	toMigrate, err := r.rebalancer.SelectMigrations(ctx, cfg, isCoolingDown,
+	toMigrate, pinnedBlocked, err := r.rebalancer.SelectMigrations(ctx, cfg, isCoolingDown,
 		autobalancing.StorageNodeSelectorInput{
 			Namespace:    clusterCR.Namespace,
 			StorageNodes: storageNodes,
@@ -158,6 +158,11 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 		log.Error(err, "Cannot select migration candidates; requeuing")
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "error").Inc()
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	if pinnedBlocked {
+		// A hot node could not be rebalanced because every volume it hosts is pinned.
+		log.Info("rebalancing blocked: hot node has only pinned volumes", "cluster", clusterCR.Name)
+		rebalancerPinnedBlockedTotal.WithLabelValues(clusterCR.Name).Inc()
 	}
 	if len(toMigrate) == 0 {
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()

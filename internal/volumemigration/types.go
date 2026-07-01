@@ -5,8 +5,3 @@ type StorageNode struct {
 	PoolUUID    string
 	ClusterUUID string
 }
-
-type StorageNodeCandidate struct {
-	StorageNode
-	Score float64
-}

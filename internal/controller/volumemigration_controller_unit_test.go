@@ -208,8 +208,8 @@ func TestReconcileStart_EmptyMigrationUUID_Fails(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
 		t.Fatalf("phase = %q, want Failed", got.Status.Phase)
 	}
-	if !strings.Contains(got.Status.ErrorMessage, "empty migration ID") {
-		t.Errorf("ErrorMessage = %q, want empty migration ID", got.Status.ErrorMessage)
+	if !strings.Contains(got.Status.ErrorMessage, "empty migration UUID") {
+		t.Errorf("ErrorMessage = %q, want empty migration UUID", got.Status.ErrorMessage)
 	}
 }
 

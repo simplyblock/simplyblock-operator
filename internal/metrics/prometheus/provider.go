@@ -1,11 +1,10 @@
 // Package prometheus implements metrics providers backed by a Prometheus instance.
 //
-// A single Provider wraps the Prometheus HTTP client and exposes methods for
-// all metric categories used by the operator:
+// A single Provider wraps the Prometheus HTTP client and exposes the metric
+// queries used by the rebalancer:
 //
-//   - GetClusterMetrics / GetNodeMetrics — per-node SPDK I/O (NodeMetricsProvider)
-//   - GetClustersCurrentLatency         — fio write latency per node at the configured percentile (p50/p99)
-//   - GetClusterVolumeIO                — per-volume IOPS + throughput
+//   - GetClustersCurrentLatency — fio write latency per node at the configured percentile (p50/p99)
+//   - GetClusterVolumeIO        — per-volume IOPS + throughput
 package prometheus
 
 import (
@@ -13,15 +12,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
 	prometheusapi "github.com/prometheus/client_golang/api"
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
-
-	"github.com/simplyblock/simplyblock-operator/internal/metrics"
 )
 
 // ErrLatencyDataNotReady is returned by GetClustersCurrentLatency when Prometheus has
@@ -48,90 +44,7 @@ func New(
 }
 
 // ---------------------------------------------------------------------------
-// NodeMetricsProvider (Phase 2) — per-node SPDK I/O via simplyblock_node_iops_total
-// ---------------------------------------------------------------------------
-
-const nodeIOPSMetric = "simplyblock_node_iops_total"
-
-func (p *Provider) GetNodeMetrics(
-	ctx context.Context,
-	clusterUUID, nodeUUID string,
-) (*metrics.NodeMetrics, error) {
-	query := fmt.Sprintf(`%s{cluster=%q,node=%q}`, nodeIOPSMetric, clusterUUID, nodeUUID)
-	result, err := p.queryVector(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	clusterData := parseNodeIOPSVector(result, time.Now())
-	m, ok := clusterData[nodeUUID]
-	if !ok {
-		return nil, fmt.Errorf("prometheus: no series for node %s in cluster %s", nodeUUID, clusterUUID)
-	}
-	return m, nil
-}
-
-func (p *Provider) GetClusterMetrics(
-	ctx context.Context,
-	clusterUUID string,
-) (map[string]*metrics.NodeMetrics, error) {
-	query := fmt.Sprintf(`%s{cluster=%q}`, nodeIOPSMetric, clusterUUID)
-	result, err := p.queryVector(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	return parseNodeIOPSVector(result, time.Now()), nil
-}
-
-func parseNodeIOPSVector(
-	vec model.Vector,
-	collectedAt time.Time,
-) map[string]*metrics.NodeMetrics {
-	out := make(map[string]*metrics.NodeMetrics)
-	for _, sample := range vec {
-		nodeUUID := string(sample.Metric["node"])
-		if nodeUUID == "" {
-			continue
-		}
-		blockSizeBytes, err := strconv.ParseInt(string(sample.Metric["blocksize"]), 10, 64)
-		if err != nil {
-			continue
-		}
-		operation := metrics.IOOperation(sample.Metric["operation"])
-		if operation != metrics.IOOperationRead && operation != metrics.IOOperationWrite {
-			continue
-		}
-		scheme := metrics.ErasureScheme(sample.Metric["erasure_scheme"])
-		if !validScheme(scheme) {
-			continue
-		}
-		nm, exists := out[nodeUUID]
-		if !exists {
-			nm = &metrics.NodeMetrics{NodeUUID: nodeUUID, CollectedAt: collectedAt}
-			out[nodeUUID] = nm
-		}
-		nm.IO = append(nm.IO, metrics.BlockSizeIOMetrics{
-			BlockSizeBytes: blockSizeBytes,
-			Operation:      operation,
-			ErasureScheme:  scheme,
-			IOPS:           float64(sample.Value),
-		})
-	}
-	return out
-}
-
-func validScheme(
-	s metrics.ErasureScheme,
-) bool {
-	switch s {
-	case metrics.ErasureScheme1Plus1, metrics.ErasureScheme2Plus1, metrics.ErasureScheme4Plus1,
-		metrics.ErasureScheme1Plus2, metrics.ErasureScheme2Plus2, metrics.ErasureScheme4Plus2:
-		return true
-	}
-	return false
-}
-
-// ---------------------------------------------------------------------------
-// Latency metrics (Phase 1) — fio write latency per node (p50 or p99)
+// Latency metrics — fio write latency per node (p50 or p99)
 // ---------------------------------------------------------------------------
 
 // LatencyPercentile selects which fio write-latency percentile the deviation signal
@@ -148,22 +61,6 @@ func latencyMetricName(percentile string) string {
 		return "simplyblock_node_fio_write_latency_p99_ns"
 	}
 	return "simplyblock_node_fio_write_latency_p50_ns"
-}
-
-// GetClusterCurrentLatency returns the most recent write latency (nanoseconds) at the
-// given percentile per node UUID for all nodes in the cluster. Nodes with no scraped
-// measurement are omitted. Baseline latency is not stored in Prometheus — it lives in
-// the StorageNode CR.
-func (p *Provider) GetClusterCurrentLatency(
-	ctx context.Context,
-	clusterUUID string,
-	percentile string,
-) (map[string]int64, error) {
-	all, err := p.GetClustersCurrentLatency(ctx, []string{clusterUUID}, percentile)
-	if err != nil {
-		return nil, err
-	}
-	return all[clusterUUID], nil
 }
 
 // GetClustersCurrentLatency returns the most recent write latency at the given
