@@ -28,6 +28,16 @@ rules:
   - ""
   resources:
   - persistentvolumeclaims
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - persistentvolumes
   verbs:
   - create
