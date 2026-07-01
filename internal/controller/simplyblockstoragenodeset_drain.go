@@ -124,6 +124,18 @@ func (r *StorageNodeSetReconciler) drainHandleCancellation(
 		return ctrl.Result{}, nil
 	}
 
+	// Re-fetch from the API server to guard against stale informer cache reads.
+	// A stale reconcile may see Spec.Action="" while a concurrent one is actively
+	// draining — a live read prevents a spurious resume from racing with suspend.
+	fresh := &simplyblockv1alpha1.StorageNodeSet{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(snCR), fresh); err != nil {
+		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+	}
+	if fresh.Spec.Action == utils.NodeActionRemove {
+		// Drain is still active in the live CR — the cache was stale; skip cancellation.
+		return ctrl.Result{}, nil
+	}
+
 	nodeUUID := snCR.Status.ActionStatus.NodeUUID
 	subPhase := snCR.Status.ActionStatus.SubPhase
 
