@@ -139,17 +139,26 @@ func (r *StorageNodeSetReconciler) drainHandleCancellation(
 	nodeUUID := snCR.Status.ActionStatus.NodeUUID
 	subPhase := snCR.Status.ActionStatus.SubPhase
 
-	// Only attempt resume if we reached or passed the Suspending phase.
+	// Only attempt resume if we reached or passed the Suspending phase AND the
+	// node is actually suspended — skip if it's already online.
 	if subPhase == drainSubPhaseSuspending ||
 		subPhase == drainSubPhaseMigrating ||
 		subPhase == drainSubPhaseVerifying ||
 		subPhase == drainSubPhaseRemoving {
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/resume", clusterUUID, nodeUUID)
-		if _, _, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil); err != nil {
-			log.Error(err, "drain: cancellation resume failed (best effort)", "nodeUUID", nodeUUID)
+		currentStatus, err := getNodeBackendStatus(ctx, apiClient, clusterUUID, nodeUUID)
+		if err != nil {
+			log.Error(err, "drain: cancellation could not read node status, skipping resume", "nodeUUID", nodeUUID)
+		} else if currentStatus == "suspended" {
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/resume", clusterUUID, nodeUUID)
+			if _, _, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil); err != nil {
+				log.Error(err, "drain: cancellation resume failed (best effort)", "nodeUUID", nodeUUID)
+			} else {
+				r.Recorder.Eventf(snCR, corev1.EventTypeNormal, "NodeResumed",
+					"drain cancelled: resumed node %s", nodeUUID)
+			}
+		} else {
+			log.Info("drain: cancellation skipping resume, node already online", "nodeUUID", nodeUUID, "status", currentStatus)
 		}
-		r.Recorder.Eventf(snCR, corev1.EventTypeNormal, "NodeResumed",
-			"drain cancelled: resumed node %s", nodeUUID)
 	}
 
 	patch := client.MergeFrom(snCR.DeepCopy())
@@ -247,13 +256,22 @@ func (r *StorageNodeSetReconciler) drainSuspend(
 	nodeUUID := snCR.Spec.NodeUUID
 
 	if !snCR.Status.ActionStatus.Triggered {
-		// Re-fetch to guard against stale cache: another reconcile may have
-		// already POSTed suspend and set Triggered=true.
-		fresh := &simplyblockv1alpha1.StorageNodeSet{}
-		if err := r.Get(ctx, client.ObjectKeyFromObject(snCR), fresh); err == nil {
-			if fresh.Status.ActionStatus != nil && fresh.Status.ActionStatus.Triggered {
-				return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+		// Check actual node status before POSTing — skip if already suspended.
+		currentStatus, err := getNodeBackendStatus(ctx, apiClient, clusterUUID, nodeUUID)
+		if err != nil {
+			log.Error(err, "drain: could not read node status before suspend, retrying", "nodeUUID", nodeUUID)
+			return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+		}
+		if currentStatus == "suspended" {
+			log.Info("drain: node already suspended, advancing without POST", "nodeUUID", nodeUUID)
+			patch := client.MergeFrom(snCR.DeepCopy())
+			snCR.Status.ActionStatus.Triggered = true
+			snCR.Status.ActionStatus.Message = "node already suspended"
+			snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
+			if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+				log.Error(err, "drain: failed to patch Triggered=true (already suspended)")
 			}
+			return ctrl.Result{RequeueAfter: drainRequeueImmediate}, nil
 		}
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/suspend", clusterUUID, nodeUUID)
@@ -714,6 +732,28 @@ func matchVolumesToPVs(
 	}
 
 	return pvManaged, pinned, unmanaged, pvNameByVolumeUUID, nil
+}
+
+// getNodeBackendStatus fetches the current status string of a single storage
+// node directly from the backend API.
+func getNodeBackendStatus(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID, nodeUUID string,
+) (string, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("getNodeBackendStatus: %w", err)
+	}
+	if status >= 300 {
+		return "", fmt.Errorf("getNodeBackendStatus: status %d", status)
+	}
+	var resp utils.NodeStatusResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("getNodeBackendStatus: unmarshal: %w", err)
+	}
+	return resp.Status, nil
 }
 
 // pickTargetNode returns the UUID of an online storage node that is not the
