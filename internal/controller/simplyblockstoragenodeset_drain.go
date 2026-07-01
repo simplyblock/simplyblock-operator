@@ -359,6 +359,13 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 			return ctrl.Result{RequeueAfter: drainRequeueImmediate}, nil
 		}
 
+		// Pick an online target node that is not the one being drained.
+		targetNodeUUID, err := pickTargetNode(ctx, apiClient, clusterUUID, nodeUUID)
+		if err != nil {
+			log.Error(err, "drain: no available target node for migration")
+			return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
+		}
+
 		createdCount := 0
 		for _, volUUID := range pvManaged {
 			pvName, ok := pvNameByVolumeUUID[volUUID]
@@ -376,12 +383,8 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 					},
 				},
 				Spec: simplyblockv1alpha1.VolumeMigrationSpec{
-					PVName: pvName,
-					// TargetNodeUUID is left empty to let the VolumeMigration
-					// controller select an available node automatically.
-					// TODO: populate with a specific target UUID once the backend
-					// supports auto-selection or the caller provides one.
-					TargetNodeUUID: "",
+					PVName:         pvName,
+					TargetNodeUUID: targetNodeUUID,
 				},
 			}
 			if err := controllerutil.SetControllerReference(snCR, vmig, r.Scheme); err != nil {
@@ -690,6 +693,26 @@ func matchVolumesToPVs(
 	}
 
 	return pvManaged, pinned, unmanaged, pvNameByVolumeUUID, nil
+}
+
+// pickTargetNode returns the UUID of an online storage node that is not the
+// node being drained. Returns an error if no such node is available.
+func pickTargetNode(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID string,
+	excludeNodeUUID string,
+) (string, error) {
+	nodes, err := apiClient.GetStorageNodes(ctx, clusterUUID)
+	if err != nil {
+		return "", fmt.Errorf("pickTargetNode: %w", err)
+	}
+	for _, n := range nodes {
+		if n.UUID != excludeNodeUUID && n.Status == utils.NodeStatusOnline {
+			return n.UUID, nil
+		}
+	}
+	return "", fmt.Errorf("pickTargetNode: no online node available other than %s", excludeNodeUUID)
 }
 
 // drainMigrationName builds a DNS-label-safe name for a VolumeMigration CR.
