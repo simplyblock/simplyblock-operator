@@ -168,15 +168,12 @@ type StorageNodeSetSpec struct {
 	SystemVolumeFilterRegex *string `json:"systemVolumeFilterRegex,omitempty"`
 }
 
+// Drain coordination phases for a worker node undergoing a rolling upgrade drain.
 const (
 	// AnnotationPinnedVolume is the PVC annotation that marks a volume as pinned to its current node.
 	AnnotationPinnedVolume = "simplyblock.io/pinned-volume"
 	// DefaultSystemVolumeFilterRegex is the default pattern for system/benchmark volumes.
 	DefaultSystemVolumeFilterRegex = "^sb-fio-baseline-.*"
-)
-
-// Drain coordination phases for a worker node undergoing a rolling upgrade drain.
-const (
 	// DrainPhaseDetected means the node is cordoned and waiting for a drain slot.
 	DrainPhaseDetected = "detected"
 	// DrainPhaseShutdownCalled means the simplyblock shutdown API has been called.
