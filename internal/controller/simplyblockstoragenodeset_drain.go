@@ -148,7 +148,7 @@ func (r *StorageNodeSetReconciler) drainHandleCancellation(
 		currentStatus, err := getNodeBackendStatus(ctx, apiClient, clusterUUID, nodeUUID)
 		if err != nil {
 			log.Error(err, "drain: cancellation could not read node status, skipping resume", "nodeUUID", nodeUUID)
-		} else if currentStatus == "suspended" {
+		} else if currentStatus == utils.NodeStatusSuspended {
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/resume", clusterUUID, nodeUUID)
 			if _, _, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil); err != nil {
 				log.Error(err, "drain: cancellation resume failed (best effort)", "nodeUUID", nodeUUID)
@@ -262,7 +262,7 @@ func (r *StorageNodeSetReconciler) drainSuspend(
 			log.Error(err, "drain: could not read node status before suspend, retrying", "nodeUUID", nodeUUID)
 			return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 		}
-		if currentStatus == "suspended" {
+		if currentStatus == utils.NodeStatusSuspended {
 			log.Info("drain: node already suspended, advancing without POST", "nodeUUID", nodeUUID)
 			patch := client.MergeFrom(snCR.DeepCopy())
 			snCR.Status.ActionStatus.Triggered = true
@@ -311,7 +311,7 @@ func (r *StorageNodeSetReconciler) drainSuspend(
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
 
-	if nodeResp.Status != "suspended" {
+	if nodeResp.Status != utils.NodeStatusSuspended {
 		log.Info("drain: node not yet suspended, requeuing",
 			"nodeUUID", nodeUUID, "currentStatus", nodeResp.Status)
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
