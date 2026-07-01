@@ -632,9 +632,14 @@ func matchVolumesToPVs(
 		if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != utils.CSIProvisioner {
 			continue
 		}
+		// VolumeHandle format: clusterUUID:poolUUID:volumeUUID — extract last segment.
 		volHandle := pv.Spec.CSI.VolumeHandle
 		if volHandle != "" {
-			pvByVolumeUUID[volHandle] = pv
+			parts := strings.SplitN(volHandle, ":", 3)
+			volumeUUID := parts[len(parts)-1]
+			if volumeUUID != "" {
+				pvByVolumeUUID[volumeUUID] = pv
+			}
 		}
 	}
 
