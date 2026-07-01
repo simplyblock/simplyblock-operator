@@ -114,6 +114,9 @@ var (
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;update;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -160,6 +163,14 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	if snCR.Spec.Action != "" {
 		return r.reconcileAction(ctx, snCR, clusterUUID)
+	}
+
+	// If the user cleared the remove action while a drain was in progress, resume the node.
+	if snCR.Status.ActionStatus != nil &&
+		snCR.Status.ActionStatus.Action == "remove" &&
+		snCR.Status.ActionStatus.SubPhase != "" &&
+		snCR.Status.ActionStatus.State == utils.ActionStateRunning {
+		return r.drainHandleCancellation(ctx, webapi.NewClient(), clusterUUID, snCR)
 	}
 
 	if err := r.labelWorkerNodes(ctx, snCR); err != nil {
@@ -395,6 +406,7 @@ func (r *StorageNodeSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.controlPlaneToStorageNodeSetRequests),
 			builder.WithPredicates(predicate.NewPredicateFuncs(isSimplyblockControlPlane)),
 		).
+		Owns(&simplyblockv1alpha1.VolumeMigration{}).
 		Complete(r)
 }
 
@@ -1588,8 +1600,11 @@ func (r *StorageNodeSetReconciler) reconcileAction(
 	snCR *simplyblockv1alpha1.StorageNodeSet,
 	clusterUUID string,
 ) (ctrl.Result, error) {
-
 	apiClient := webapi.NewClient()
+
+	if snCR.Spec.Action == "remove" {
+		return r.performDrainAndRemove(ctx, apiClient, clusterUUID, snCR)
+	}
 
 	if err := r.handleNodeAction(
 		ctx,

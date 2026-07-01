@@ -1443,6 +1443,11 @@ spec:
                     type: integer
                   state:
                     type: string
+                  subPhase:
+                    description: |-
+                      SubPhase tracks the active drain step within the remove action.
+                      One of: Validating, Suspending, Migrating, Verifying, Removing.
+                    type: string
                   triggered:
                     description: Triggered indicates whether the underlying backend
                       action has been fired.
@@ -1451,6 +1456,14 @@ spec:
                     description: UpdatedAt is the timestamp of the last status transition.
                     format: date-time
                     type: string
+                  volumesMigrated:
+                    description: VolumesMigrated is the count of volumes successfully
+                      migrated so far.
+                    type: integer
+                  volumesPending:
+                    description: VolumesPending is the count of volumes still awaiting
+                      migration.
+                    type: integer
                 type: object
               clusterName:
                 description: ClusterName is the resolved backend cluster name.
@@ -1857,6 +1870,12 @@ spec:
                   When omitted the backend default is used.
                 pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                 type: string
+              systemVolumeFilterRegex:
+                description: |-
+                  SystemVolumeFilterRegex is a Go regular expression matched against backend
+                  volume names. Matching volumes are excluded from drain migration and from
+                  the final verification check. Defaults to "^sb-fio-baseline-.*".
+                type: string
               tolerations:
                 description: Tolerations configures pod tolerations for storage-node
                   pods.
@@ -1900,6 +1919,13 @@ spec:
               ubuntuHost:
                 description: UbuntuHost indicates the node host OS is Ubuntu.
                 type: boolean
+              unpinBeforeDrain:
+                description: |-
+                  UnpinBeforeDrain, when true, instructs the operator to remove the
+                  simplyblock.io/pinned-volume annotation from all pinned PVCs on this node
+                  before beginning the drain. The annotation is not restored after migration.
+                  Defaults to false.
+                type: boolean
               workerNode:
                 description: WorkerNode is a single worker node used by action flows.
                 type: string
@@ -1934,6 +1960,11 @@ spec:
                     type: integer
                   state:
                     type: string
+                  subPhase:
+                    description: |-
+                      SubPhase tracks the active drain step within the remove action.
+                      One of: Validating, Suspending, Migrating, Verifying, Removing.
+                    type: string
                   triggered:
                     description: Triggered indicates whether the underlying backend
                       action has been fired.
@@ -1942,6 +1973,14 @@ spec:
                     description: UpdatedAt is the timestamp of the last status transition.
                     format: date-time
                     type: string
+                  volumesMigrated:
+                    description: VolumesMigrated is the count of volumes successfully
+                      migrated so far.
+                    type: integer
+                  volumesPending:
+                    description: VolumesPending is the count of volumes still awaiting
+                      migration.
+                    type: integer
                 type: object
               drainCoordination:
                 description: DrainCoordination tracks the upgrade-drain state per
@@ -2454,6 +2493,16 @@ rules:
   - ""
   resources:
   - persistentvolumeclaims
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - persistentvolumes
   verbs:
   - create
