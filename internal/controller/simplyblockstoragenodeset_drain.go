@@ -69,6 +69,17 @@ func (r *StorageNodeSetReconciler) performDrainAndRemove(
 	clusterUUID string,
 	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) (ctrl.Result, error) {
+	// Skip immediately if this drain already reached a terminal state.
+	// Without this guard, stale reconciles read SubPhase="" after success and
+	// re-enter the initialization branch, restarting the drain on a node that
+	// was already removed.
+	if snCR.Status.ActionStatus != nil &&
+		snCR.Status.ActionStatus.NodeUUID == snCR.Spec.NodeUUID &&
+		(snCR.Status.ActionStatus.State == utils.ActionStateSuccess ||
+			snCR.Status.ActionStatus.State == utils.ActionStateFailed) {
+		return ctrl.Result{}, nil
+	}
+
 	// Determine current sub-phase.
 	subPhase := ""
 	if snCR.Status.ActionStatus != nil {
