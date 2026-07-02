@@ -491,6 +491,9 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 		vm.Status.SnapsTotal = result.Migration.SnapsTotal
 		vm.Status.SnapsMigrated = result.Migration.SnapsMigrated
 		if err := r.Status().Patch(ctx, vm, patch); err != nil {
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("patch progress: %w", err)
 		}
 	}
