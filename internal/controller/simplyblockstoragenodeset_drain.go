@@ -398,10 +398,18 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 			return ctrl.Result{RequeueAfter: drainRequeueImmediate}, nil
 		}
 
-		// Pick an online target node that is not the one being drained.
-		targetNodeUUID, err := pickTargetNode(ctx, apiClient, clusterUUID, nodeUUID)
+		// Build the PV name list for round-robin assignment.
+		pvNames := make([]string, 0, len(pvManaged))
+		for _, volUUID := range pvManaged {
+			if pv, ok := pvNameByVolumeUUID[volUUID]; ok {
+				pvNames = append(pvNames, pv)
+			}
+		}
+
+		// Assign each PV a target node via round-robin across all online peers.
+		targetByPV, err := roundRobinTargetNodes(ctx, apiClient, clusterUUID, nodeUUID, pvNames)
 		if err != nil {
-			log.Error(err, "drain: no available target node for migration")
+			log.Error(err, "drain: no available target nodes for migration")
 			return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 		}
 
@@ -423,7 +431,7 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 				},
 				Spec: simplyblockv1alpha1.VolumeMigrationSpec{
 					PVName:         pvName,
-					TargetNodeUUID: targetNodeUUID,
+					TargetNodeUUID: targetByPV[pvName],
 				},
 			}
 			if err := controllerutil.SetControllerReference(snCR, vmig, r.Scheme); err != nil {
@@ -756,24 +764,38 @@ func getNodeBackendStatus(
 	return resp.Status, nil
 }
 
-// pickTargetNode returns the UUID of an online storage node that is not the
-// node being drained. Returns an error if no such node is available.
-func pickTargetNode(
+// roundRobinTargetNodes lists all online nodes (excluding the drained node) and
+// assigns each PV name a target node UUID using round-robin order. The i-th PV
+// in pvNames is assigned to onlineNodes[i % len(onlineNodes)], distributing
+// migrations evenly across the cluster without requiring persistent state.
+// Returns an error if no online peer node is available.
+func roundRobinTargetNodes(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
 	excludeNodeUUID string,
-) (string, error) {
+	pvNames []string,
+) (map[string]string, error) {
 	nodes, err := apiClient.GetStorageNodes(ctx, clusterUUID)
 	if err != nil {
-		return "", fmt.Errorf("pickTargetNode: %w", err)
+		return nil, fmt.Errorf("roundRobinTargetNodes: %w", err)
 	}
+
+	var online []string
 	for _, n := range nodes {
 		if n.UUID != excludeNodeUUID && n.Status == utils.NodeStatusOnline {
-			return n.UUID, nil
+			online = append(online, n.UUID)
 		}
 	}
-	return "", fmt.Errorf("pickTargetNode: no online node available other than %s", excludeNodeUUID)
+	if len(online) == 0 {
+		return nil, fmt.Errorf("roundRobinTargetNodes: no online node available other than %s", excludeNodeUUID)
+	}
+
+	assignment := make(map[string]string, len(pvNames))
+	for i, pv := range pvNames {
+		assignment[pv] = online[i%len(online)]
+	}
+	return assignment, nil
 }
 
 // drainMigrationName builds a DNS-label-safe name for a VolumeMigration CR.
