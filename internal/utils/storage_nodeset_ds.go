@@ -162,10 +162,10 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 			},
 		},
 		{
-			Name: "tmp-simplyblock",
+			Name: "var-run-simplyblock",
 			VolumeSource: corev1.VolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
-					Path: "/tmp/simplyblock",
+					Path: "/var/run/simplyblock",
 					Type: func() *corev1.HostPathType { t := corev1.HostPathDirectoryOrCreate; return &t }(),
 				},
 			},
@@ -182,7 +182,7 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 		{Name: "dev-vol", MountPath: "/dev"},
 		{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
 		{Name: "host-sys", MountPath: "/sys"},
-		{Name: "tmp-simplyblock", MountPath: "/tmp/simplyblock"},
+		{Name: "var-run-simplyblock", MountPath: "/var/run/simplyblock"},
 	}
 
 	readinessProbe := &corev1.Probe{
