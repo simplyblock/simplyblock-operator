@@ -202,6 +202,25 @@ func (r *StorageNodeSetReconciler) drainValidate(
 		}
 	}
 
+	// Block drain if the cluster is currently rebalancing — concurrent volume
+	// movement would compete with the drain's VolumeMigration CRs.
+	clusterCR, err := utils.ResolveClusterCR(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
+	if err != nil {
+		log.Error(err, "drain: failed to resolve StorageCluster for rebalancing check")
+		return ctrl.Result{RequeueAfter: drainRequeueValidate}, nil
+	}
+	if clusterCR.Status.Rebalancing != nil && *clusterCR.Status.Rebalancing {
+		r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "ClusterRebalancing",
+			"drain blocked: cluster is rebalancing, will retry when complete")
+		patch := client.MergeFrom(snCR.DeepCopy())
+		snCR.Status.ActionStatus.Message = "drain blocked: cluster is currently rebalancing"
+		snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
+		if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+			log.Error(err, "drain: failed to patch status (rebalancing blocked)")
+		}
+		return ctrl.Result{RequeueAfter: drainRequeueBlocking}, nil
+	}
+
 	volumes, err := listNodeVolumes(ctx, apiClient, clusterUUID, nodeUUID)
 	if err != nil {
 		log.Error(err, "drain: failed to list node volumes", "nodeUUID", nodeUUID)
