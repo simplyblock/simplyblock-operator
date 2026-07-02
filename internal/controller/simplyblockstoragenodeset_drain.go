@@ -552,7 +552,7 @@ func (r *StorageNodeSetReconciler) drainRemove(
 			fmt.Sprintf("DELETE node failed: %v", err))
 	}
 
-	if status == http.StatusOK || status == http.StatusNotFound {
+	if status == http.StatusOK || status == http.StatusNoContent || status == http.StatusNotFound {
 		r.Recorder.Eventf(snCR, corev1.EventTypeNormal, "NodeRemoved",
 			"storage node %s removed successfully", nodeUUID)
 		patch := client.MergeFrom(snCR.DeepCopy())
