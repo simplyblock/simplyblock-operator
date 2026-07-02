@@ -469,8 +469,18 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 	}
 
-	// All existing CRs are completed — clean up and advance.
+	// All existing CRs are completed — update counters, clean up and advance.
 	if inProgress == 0 && completed == len(vmigList.Items) {
+		// Write final counters before deleting the CRs so the status reflects
+		// the true end state (all migrated, none pending).
+		finalPatch := client.MergeFrom(snCR.DeepCopy())
+		snCR.Status.ActionStatus.VolumesMigrated = completed
+		snCR.Status.ActionStatus.VolumesPending = 0
+		snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
+		if err := r.Status().Patch(ctx, snCR, finalPatch); err != nil {
+			log.Error(err, "drain: failed to patch final migration counters")
+		}
+
 		for i := range vmigList.Items {
 			vm := &vmigList.Items[i]
 			if err := r.Delete(ctx, vm); err != nil {
