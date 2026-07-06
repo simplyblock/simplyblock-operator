@@ -202,7 +202,7 @@ func TestRoundRobinSkipsOfflineNodes(t *testing.T) {
 
 // ── matchVolumesToPVs ─────────────────────────────────────────────────────────
 
-func newPV(name, volumeUUID, clusterUUID, poolUUID string) *corev1.PersistentVolume {
+func newPV(name, volumeUUID, clusterUUID, poolUUID string) *corev1.PersistentVolume { //nolint:unparam
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 	}
@@ -217,7 +217,7 @@ func newPV(name, volumeUUID, clusterUUID, poolUUID string) *corev1.PersistentVol
 	return pv
 }
 
-func newPVC(name, ns string, pinned bool) *corev1.PersistentVolumeClaim {
+func newPVC(name, ns string, pinned bool) *corev1.PersistentVolumeClaim { //nolint:unparam
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 	}
