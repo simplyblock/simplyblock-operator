@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -296,25 +297,97 @@ func TestMatchVolumesToPVs_SystemVolumeSkipped(t *testing.T) {
 	}
 }
 
-func TestMatchVolumesToPVs_BothPinnedAndUnmanagedVisible(t *testing.T) {
-	// When a node has both blocking types they must all surface — not short-circuit.
-	pv := newPV("pv-pin", "vol-pinned", drainTestClusterUUID, "pool-1")
-	pvc := newPVC("pv-pin-pvc", drainTestNS, true)
-	r := newDrainReconciler(t, pv, pvc)
+func TestDrainValidateBothPinnedAndUnmanagedSurfacedTogether(t *testing.T) {
+	// When a node has both pinned and unmanaged volumes, drainValidate must emit
+	// BOTH warning events in a single reconcile — not short-circuit after pinned.
+	// This prevents the user having to fix one issue, retry, then discover the next.
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	defer mock.Close()
 
-	vols := []webapi.VolumeInfo{
-		{UUID: "vol-pinned", Name: "pvc-a"},
-		{UUID: "vol-orphan", Name: "manually-created"},
+	// Backend returns two volumes: one PV-managed+pinned, one unmanaged.
+	mock.Register(http.MethodGet,
+		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-pools/",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `[{"id":"pool-1","name":"p1"}]`},
+	)
+	mock.Register(http.MethodGet,
+		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-pools/pool-1/volumes/",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `[
+			{"id":"vol-pinned","name":"pvc-a","storage_node_id":"`+drainTestNodeUUID+`"},
+			{"id":"vol-orphan","name":"manually-created","storage_node_id":"`+drainTestNodeUUID+`"}
+		]`},
+	)
+	// Cluster not rebalancing.
+	rebalancing := false
+	cluster := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: drainTestCluster, Namespace: drainTestNS},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{Rebalancing: &rebalancing},
 	}
-	_, pinned, unmanaged, _, err := matchVolumesToPVs(context.Background(), r, vols, "^never-matches$")
+	pv := newPV("pv-pin", "vol-pinned", drainTestClusterUUID, "pool-1")
+	pvc := newPVC("pv-pin-pvc", drainTestNS, true) // pinned annotation set
+
+	fakeRecorder := record.NewFakeRecorder(8)
+	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseValidating, utils.ActionStateRunning)
+	sn.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
+		Action:   utils.NodeActionRemove,
+		NodeUUID: drainTestNodeUUID,
+		State:    utils.ActionStateRunning,
+		SubPhase: drainSubPhaseValidating,
+	}
+
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	cl := newTestClient(t, scheme, []client.Object{
+		&simplyblockv1alpha1.StorageNodeSet{},
+		&simplyblockv1alpha1.StorageCluster{},
+	}, cluster, sn, pv, pvc)
+	r := &StorageNodeSetReconciler{
+		Client:   cl,
+		Scheme:   scheme,
+		Recorder: fakeRecorder,
+	}
+
+	res, err := r.drainValidate(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(pinned) != 1 {
-		t.Errorf("expected 1 pinned volume, got %v", pinned)
+	if res.RequeueAfter == 0 {
+		t.Error("expected non-zero requeue when blocking volumes present")
 	}
-	if len(unmanaged) != 1 {
-		t.Errorf("expected 1 unmanaged volume, got %v", unmanaged)
+
+	// Drain all buffered events.
+	close(fakeRecorder.Events)
+	var reasons []string
+	for e := range fakeRecorder.Events {
+		// Event format: "Warning PinnedVolumeBlocking ..."
+		parts := strings.SplitN(e, " ", 3)
+		if len(parts) >= 2 {
+			reasons = append(reasons, parts[1])
+		}
+	}
+
+	hasPinned := contains(reasons, "PinnedVolumeBlocking")
+	hasUnmanaged := contains(reasons, "UnmanagedVolumeBlocking")
+
+	if !hasPinned {
+		t.Error("expected PinnedVolumeBlocking event to be emitted")
+	}
+	if !hasUnmanaged {
+		t.Error("expected UnmanagedVolumeBlocking event to be emitted in the same reconcile")
+	}
+	if !hasPinned || !hasUnmanaged {
+		t.Errorf("emitted events: %v — both blockers must surface together so the user can fix everything at once", reasons)
+	}
+
+	// Message must mention both issues.
+	updated := &simplyblockv1alpha1.StorageNodeSet{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), updated); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	msg := ""
+	if updated.Status.ActionStatus != nil {
+		msg = updated.Status.ActionStatus.Message
+	}
+	if !strings.Contains(msg, "pinned") || !strings.Contains(msg, "unmanaged") {
+		t.Errorf("status message should mention both blockers, got: %q", msg)
 	}
 }
 

@@ -238,30 +238,27 @@ func (r *StorageNodeSetReconciler) drainValidate(
 		return ctrl.Result{RequeueAfter: drainRequeueValidate}, nil
 	}
 
-	// Pinned volumes always block drain — user must remove the annotation manually.
+	// Evaluate ALL blocking conditions before returning so the user sees every
+	// issue at once — not one per reconcile iteration.
+	var msgParts []string
 	if len(pinned) > 0 {
 		r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "PinnedVolumeBlocking",
 			"drain blocked: pinned volumes %s must be unpinned before drain",
 			strings.Join(pinned, ", "))
-		patch := client.MergeFrom(snCR.DeepCopy())
-		snCR.Status.ActionStatus.Message = fmt.Sprintf(
-			"drain blocked by %d pinned volume(s): %s", len(pinned), strings.Join(pinned, ", "))
-		if err := r.Status().Patch(ctx, snCR, patch); err != nil {
-			log.Error(err, "drain: failed to patch status (pinned blocking)")
-		}
-		return ctrl.Result{RequeueAfter: drainRequeueBlocking}, nil
+		msgParts = append(msgParts, fmt.Sprintf("%d pinned volume(s): %s", len(pinned), strings.Join(pinned, ", ")))
 	}
-
-	// Unmanaged volumes always block drain.
 	if len(unmanaged) > 0 {
 		r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "UnmanagedVolumeBlocking",
 			"drain blocked: unmanaged volumes %s must be removed before drain",
 			strings.Join(unmanaged, ", "))
+		msgParts = append(msgParts, fmt.Sprintf("%d unmanaged volume(s): %s", len(unmanaged), strings.Join(unmanaged, ", ")))
+	}
+	if len(msgParts) > 0 {
 		patch := client.MergeFrom(snCR.DeepCopy())
-		snCR.Status.ActionStatus.Message = fmt.Sprintf(
-			"drain blocked by %d unmanaged volume(s): %s", len(unmanaged), strings.Join(unmanaged, ", "))
+		snCR.Status.ActionStatus.Message = "drain blocked by " + strings.Join(msgParts, "; ")
+		snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
 		if err := r.Status().Patch(ctx, snCR, patch); err != nil {
-			log.Error(err, "drain: failed to patch status (unmanaged blocking)")
+			log.Error(err, "drain: failed to patch status (blocking)")
 		}
 		return ctrl.Result{RequeueAfter: drainRequeueBlocking}, nil
 	}
