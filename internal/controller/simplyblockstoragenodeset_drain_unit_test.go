@@ -312,8 +312,8 @@ func TestDrainValidateBothPinnedAndUnmanagedSurfacedTogether(t *testing.T) {
 	mock.Register(http.MethodGet,
 		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-pools/pool-1/volumes/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: `[
-			{"id":"vol-pinned","name":"pvc-a","storage_node_id":"`+drainTestNodeUUID+`"},
-			{"id":"vol-orphan","name":"manually-created","storage_node_id":"`+drainTestNodeUUID+`"}
+			{"id":"vol-pinned","name":"pvc-a","storage_node_id":"` + drainTestNodeUUID + `"},
+			{"id":"vol-orphan","name":"manually-created","storage_node_id":"` + drainTestNodeUUID + `"}
 		]`},
 	)
 	// Cluster not rebalancing.
