@@ -172,6 +172,28 @@ func (r *StorageNodeSetReconciler) drainHandleCancellation(
 		}
 	}
 
+	// Delete all owned VolumeMigration CRs so a subsequent drain starts fresh and
+	// emits MigrationCreated events. Without this, reusing in-flight CRs silently
+	// completes the migration with no user-visible indication the drain restarted.
+	var vmigList simplyblockv1alpha1.VolumeMigrationList
+	if err := r.List(ctx, &vmigList,
+		client.InNamespace(snCR.Namespace),
+		client.MatchingLabels{"storage.simplyblock.io/drain-node": nodeUUID},
+	); err != nil {
+		log.Error(err, "drain: cancellation failed to list VolumeMigration CRs", "nodeUUID", nodeUUID)
+	} else {
+		for i := range vmigList.Items {
+			vm := &vmigList.Items[i]
+			if err := r.Delete(ctx, vm); err != nil {
+				log.Error(err, "drain: cancellation failed to delete VolumeMigration", "name", vm.Name)
+			}
+		}
+		if len(vmigList.Items) > 0 {
+			log.Info("drain: cancelled — deleted in-flight VolumeMigration CRs",
+				"nodeUUID", nodeUUID, "count", len(vmigList.Items))
+		}
+	}
+
 	patch := client.MergeFrom(snCR.DeepCopy())
 	snCR.Status.ActionStatus = nil
 	if err := r.Status().Patch(ctx, snCR, patch); err != nil {

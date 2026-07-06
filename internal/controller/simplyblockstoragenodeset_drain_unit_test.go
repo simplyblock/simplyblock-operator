@@ -744,6 +744,64 @@ func TestDrainMigrationNameIsDNSValid(t *testing.T) {
 
 // ── drainHandleCancellation: stale cache guard ────────────────────────────────
 
+func TestDrainCancellationDeletesInFlightVolumeMigrationCRs(t *testing.T) {
+	// When the user cancels mid-drain, all owned VolumeMigration CRs must be
+	// deleted so a subsequent drain starts fresh and emits MigrationCreated events.
+	// Without this, the re-applied drain silently reuses the old CRs and the user
+	// sees no indication that migration restarted.
+	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseMigrating, utils.ActionStateRunning)
+	sn.Spec.Action = "" // user cleared the action
+	sn.Spec.NodeUUID = ""
+	inFlightVM := &simplyblockv1alpha1.VolumeMigration{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "drain-inflight-pvc-a",
+			Namespace: drainTestNS,
+			Labels:    map[string]string{"storage.simplyblock.io/drain-node": drainTestNodeUUID},
+		},
+		Spec: simplyblockv1alpha1.VolumeMigrationSpec{
+			PVName:         "pv-a",
+			TargetNodeUUID: drainTestNodeUUID2,
+		},
+		Status: simplyblockv1alpha1.VolumeMigrationStatus{
+			Phase: simplyblockv1alpha1.VolumeMigrationPhaseRunning,
+		},
+	}
+	r := newDrainReconciler(t, sn, inFlightVM)
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	defer mock.Close()
+	// Node is online (already resumed or never suspended in this test).
+	mock.Register(http.MethodGet,
+		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-nodes/"+drainTestNodeUUID,
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `{"status":"online"}`},
+	)
+
+	if _, err := r.drainHandleCancellation(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn); err != nil {
+		t.Fatalf("drainHandleCancellation: %v", err)
+	}
+
+	// The in-flight VolumeMigration CR must have been deleted.
+	var vmList simplyblockv1alpha1.VolumeMigrationList
+	if err := r.List(context.Background(), &vmList,
+		client.InNamespace(drainTestNS),
+		client.MatchingLabels{"storage.simplyblock.io/drain-node": drainTestNodeUUID},
+	); err != nil {
+		t.Fatalf("list VolumeMigration: %v", err)
+	}
+	if len(vmList.Items) != 0 {
+		t.Errorf("expected in-flight VolumeMigration CRs to be deleted on cancel, got %d remaining", len(vmList.Items))
+	}
+
+	// ActionStatus must also be cleared.
+	updated := &simplyblockv1alpha1.StorageNodeSet{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), updated); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if updated.Status.ActionStatus != nil {
+		t.Errorf("expected ActionStatus cleared after cancellation, got %+v", updated.Status.ActionStatus)
+	}
+}
+
 func TestDrainCancellationSkipsWhenActionStillActive(t *testing.T) {
 	// If the live CR still has action=remove, a stale reconcile must not resume.
 	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseMigrating, utils.ActionStateRunning)
