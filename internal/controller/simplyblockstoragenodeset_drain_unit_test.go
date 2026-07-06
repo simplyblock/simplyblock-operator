@@ -417,6 +417,209 @@ func TestMatchVolumesToPVs_OnlySystemVolumes(t *testing.T) {
 	}
 }
 
+// ── drainValidate: reconciler-level user-visible behaviour ───────────────────
+//
+// These tests call drainValidate (not matchVolumesToPVs) and assert what the
+// user actually sees: events emitted on the StorageNodeSet CR and the status
+// message. Testing the classification helper alone is insufficient — it does
+// not verify that the reconciler surfaces the result to the user.
+
+// newValidateSetup builds a mock HTTP server and reconciler for drainValidate
+// tests. volumes is the JSON array the backend returns for the pool's volumes.
+func newValidateSetup(
+	t *testing.T,
+	volumes string,
+	k8sObjects ...client.Object,
+) (*StorageNodeSetReconciler, *record.FakeRecorder, *webapimock.SpecServer, *simplyblockv1alpha1.StorageNodeSet) {
+	t.Helper()
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	t.Cleanup(mock.Close)
+	mock.Register(http.MethodGet,
+		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-pools/",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `[{"id":"pool-1","name":"p1"}]`},
+	)
+	mock.Register(http.MethodGet,
+		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-pools/pool-1/volumes/",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: volumes},
+	)
+
+	rebalancing := false
+	cluster := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: drainTestCluster, Namespace: drainTestNS},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{Rebalancing: &rebalancing},
+	}
+	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseValidating, utils.ActionStateRunning)
+	sn.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
+		Action:   utils.NodeActionRemove,
+		NodeUUID: drainTestNodeUUID,
+		State:    utils.ActionStateRunning,
+		SubPhase: drainSubPhaseValidating,
+	}
+
+	recorder := record.NewFakeRecorder(8)
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	allObjs := append([]client.Object{cluster, sn}, k8sObjects...)
+	cl := newTestClient(t, scheme, []client.Object{
+		&simplyblockv1alpha1.StorageNodeSet{},
+		&simplyblockv1alpha1.StorageCluster{},
+	}, allObjs...)
+	r := &StorageNodeSetReconciler{Client: cl, Scheme: scheme, Recorder: recorder}
+	return r, recorder, mock, sn
+}
+
+// collectEvents drains all buffered events and returns a map of reason→count.
+func collectEvents(rec *record.FakeRecorder) map[string]int {
+	close(rec.Events)
+	reasons := map[string]int{}
+	for e := range rec.Events {
+		parts := strings.SplitN(e, " ", 3)
+		if len(parts) >= 2 {
+			reasons[parts[1]]++
+		}
+	}
+	return reasons
+}
+
+func TestDrainValidatePinnedVolumeEmitsEventAndBlocks(t *testing.T) {
+	// User sees: PinnedVolumeBlocking event; status message mentions "pinned";
+	// drain does not advance past Validating.
+	pv := newPV("pv-x", "vol-pinned", drainTestClusterUUID, "pool-1")
+	pvc := newPVC("pv-x-pvc", drainTestNS, true)
+	r, rec, mock, sn := newValidateSetup(t,
+		`[{"id":"vol-pinned","name":"pvc-x","storage_node_id":"`+drainTestNodeUUID+`"}]`,
+		pv, pvc,
+	)
+	defer mock.Close()
+
+	res, err := r.drainValidate(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("expected non-zero requeue when pinned volume blocks drain")
+	}
+
+	events := collectEvents(rec)
+	if events["PinnedVolumeBlocking"] == 0 {
+		t.Error("expected PinnedVolumeBlocking event; user must be told why drain is blocked")
+	}
+
+	updated := &simplyblockv1alpha1.StorageNodeSet{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), updated); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	msg := ""
+	if updated.Status.ActionStatus != nil {
+		msg = updated.Status.ActionStatus.Message
+	}
+	if !strings.Contains(msg, "pinned") {
+		t.Errorf("status message must mention 'pinned' so user knows what to fix; got: %q", msg)
+	}
+	if updated.Status.ActionStatus != nil && updated.Status.ActionStatus.SubPhase != drainSubPhaseValidating {
+		t.Errorf("drain must stay in Validating when blocked; got SubPhase=%q", updated.Status.ActionStatus.SubPhase)
+	}
+}
+
+func TestDrainValidateUnmanagedVolumeEmitsEventAndBlocks(t *testing.T) {
+	// User sees: UnmanagedVolumeBlocking event; status message mentions "unmanaged";
+	// drain does not advance past Validating.
+	r, rec, mock, sn := newValidateSetup(t,
+		`[{"id":"vol-orphan","name":"manually-created","storage_node_id":"`+drainTestNodeUUID+`"}]`,
+		// no PV in cluster → volume is unmanaged
+	)
+	defer mock.Close()
+
+	res, err := r.drainValidate(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("expected non-zero requeue when unmanaged volume blocks drain")
+	}
+
+	events := collectEvents(rec)
+	if events["UnmanagedVolumeBlocking"] == 0 {
+		t.Error("expected UnmanagedVolumeBlocking event; user must be told why drain is blocked")
+	}
+
+	updated := &simplyblockv1alpha1.StorageNodeSet{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), updated); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	msg := ""
+	if updated.Status.ActionStatus != nil {
+		msg = updated.Status.ActionStatus.Message
+	}
+	if !strings.Contains(msg, "unmanaged") {
+		t.Errorf("status message must mention 'unmanaged' so user knows what to fix; got: %q", msg)
+	}
+}
+
+func TestDrainValidateEmptyNodeAdvancesToSuspending(t *testing.T) {
+	// User sees: drain proceeds without any blocking event.
+	// Empty node must not block; it advances straight to Suspending.
+	r, rec, mock, sn := newValidateSetup(t, `[]`)
+	defer mock.Close()
+
+	res, err := r.drainValidate(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should requeue immediately (advance to Suspending), not with the blocking interval.
+	if res.RequeueAfter > drainRequeueBlocking {
+		t.Errorf("unexpected long requeue for empty node: %v (expected ≤ %v)", res.RequeueAfter, drainRequeueBlocking)
+	}
+
+	events := collectEvents(rec)
+	if events["PinnedVolumeBlocking"] > 0 || events["UnmanagedVolumeBlocking"] > 0 {
+		t.Errorf("empty node must not emit blocking events; got %v", events)
+	}
+
+	updated := &simplyblockv1alpha1.StorageNodeSet{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), updated); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if updated.Status.ActionStatus == nil || updated.Status.ActionStatus.SubPhase != drainSubPhaseSuspending {
+		got := ""
+		if updated.Status.ActionStatus != nil {
+			got = updated.Status.ActionStatus.SubPhase
+		}
+		t.Errorf("empty node must advance to Suspending; got SubPhase=%q", got)
+	}
+}
+
+func TestDrainValidateSystemOnlyNodeAdvancesToSuspending(t *testing.T) {
+	// User sees: drain proceeds without blocking even though volumes exist —
+	// system volumes are silently filtered and the drain advances normally.
+	r, rec, mock, sn := newValidateSetup(t, `[
+		{"id":"v1","name":"sb-fio-baseline-read","storage_node_id":"`+drainTestNodeUUID+`"},
+		{"id":"v2","name":"sb-fio-baseline-write","storage_node_id":"`+drainTestNodeUUID+`"}
+	]`)
+	defer mock.Close()
+
+	_, err := r.drainValidate(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	events := collectEvents(rec)
+	if events["PinnedVolumeBlocking"] > 0 || events["UnmanagedVolumeBlocking"] > 0 {
+		t.Errorf("system-volume-only node must not emit blocking events; got %v", events)
+	}
+
+	updated := &simplyblockv1alpha1.StorageNodeSet{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), updated); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if updated.Status.ActionStatus == nil || updated.Status.ActionStatus.SubPhase != drainSubPhaseSuspending {
+		got := ""
+		if updated.Status.ActionStatus != nil {
+			got = updated.Status.ActionStatus.SubPhase
+		}
+		t.Errorf("system-only node must advance to Suspending; got SubPhase=%q", got)
+	}
+}
+
 // ── drainMigrate: VolumeMigration idempotency ─────────────────────────────────
 
 func TestDrainMigrateDoesNotRecreateExistingCRs(t *testing.T) {
