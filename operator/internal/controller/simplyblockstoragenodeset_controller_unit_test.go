@@ -24,6 +24,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -65,7 +66,10 @@ func TestEnsureNodeStatus(t *testing.T) {
 func TestWaitForActionCompletionUnknownAction(t *testing.T) {
 	r := &StorageNodeSetReconciler{}
 	c := webapi.NewClient("http://127.0.0.1:1")
-	err := r.waitForActionCompletion(context.Background(), c, "cluster", "node", "invalid-action")
+	sn := &simplyblockv1alpha1.StorageNodeSet{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{NodeUUID: "node", Action: "invalid-action"},
+	}
+	err := r.waitForActionCompletion(context.Background(), c, "cluster", sn)
 	if err == nil {
 		t.Fatalf("expected error for unknown action")
 	}
@@ -126,12 +130,90 @@ func TestWaitForActionCompletionValidTransitions(t *testing.T) {
 
 			r := &StorageNodeSetReconciler{}
 			c := webapi.NewClient(srv.URL)
-			err := r.waitForActionCompletion(context.Background(), c, "cluster", "node", tc.action)
+			sn := &simplyblockv1alpha1.StorageNodeSet{
+				Spec: simplyblockv1alpha1.StorageNodeSetSpec{NodeUUID: "node", Action: tc.action},
+			}
+			err := r.waitForActionCompletion(context.Background(), c, "cluster", sn)
 			if err != nil {
 				t.Fatalf("waitForActionCompletion returned error: %v", err)
 			}
 		})
 	}
+}
+
+func TestVerifyWorkerAssignment(t *testing.T) {
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+
+	worker4 := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-4"},
+		Status: corev1.NodeStatus{
+			Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeInternalIP, Address: "192.168.10.247"},
+			},
+		},
+	}
+
+	newReconciler := func() (*StorageNodeSetReconciler, *record.FakeRecorder) {
+		rec := record.NewFakeRecorder(8)
+		return &StorageNodeSetReconciler{
+			Client:   newTestClient(t, scheme, nil, worker4),
+			Scheme:   scheme,
+			Recorder: rec,
+		}, rec
+	}
+
+	newSN := func(action, workerNode string) *simplyblockv1alpha1.StorageNodeSet {
+		return &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "default"},
+			Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+				Action:     action,
+				NodeUUID:   "node-1",
+				WorkerNode: workerNode,
+			},
+		}
+	}
+
+	t.Run("node online on the requested worker passes", func(t *testing.T) {
+		r, rec := newReconciler()
+		err := r.verifyWorkerAssignment(context.Background(), newSN("restart", "worker-4"),
+			utils.NodeStatusResponse{Status: statusOnline, IP: "192.168.10.247"})
+		if err != nil {
+			t.Fatalf("expected nil for matching worker, got %v", err)
+		}
+		select {
+		case e := <-rec.Events:
+			t.Fatalf("expected no event, got %q", e)
+		default:
+		}
+	})
+
+	t.Run("node online on the wrong worker errors and emits an event", func(t *testing.T) {
+		r, rec := newReconciler()
+		// The migration targeted worker-4 (.247) but the node came back on
+		// worker-3 (.246) — the silent-success case from SFAM-2764.
+		err := r.verifyWorkerAssignment(context.Background(), newSN("restart", "worker-4"),
+			utils.NodeStatusResponse{Status: statusOnline, IP: "192.168.10.246"})
+		if err == nil {
+			t.Fatalf("expected an error when the node landed on the wrong worker")
+		}
+		select {
+		case e := <-rec.Events:
+			if !strings.Contains(e, "WorkerAssignmentMismatch") {
+				t.Fatalf("unexpected event: %q", e)
+			}
+		default:
+			t.Fatalf("expected a WorkerAssignmentMismatch event")
+		}
+	})
+
+	t.Run("restart without a target worker is not verified", func(t *testing.T) {
+		r, _ := newReconciler()
+		err := r.verifyWorkerAssignment(context.Background(), newSN("restart", ""),
+			utils.NodeStatusResponse{Status: statusOnline, IP: "10.0.0.1"})
+		if err != nil {
+			t.Fatalf("expected nil when no worker is targeted, got %v", err)
+		}
+	})
 }
 
 func TestHandleNodeActionTransitions(t *testing.T) {
@@ -1758,8 +1840,9 @@ func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
 			context.Background(),
 			webapi.NewClient(srv.URL),
 			"cluster-a",
-			"node-a",
-			"restart",
+			&simplyblockv1alpha1.StorageNodeSet{
+				Spec: simplyblockv1alpha1.StorageNodeSetSpec{NodeUUID: "node-a", Action: "restart"},
+			},
 		)
 		if err == nil {
 			t.Fatalf("expected terminal status error")
@@ -1794,8 +1877,9 @@ func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
 			context.Background(),
 			webapi.NewClient(srv.URL),
 			"cluster-b",
-			"node-b",
-			"restart",
+			&simplyblockv1alpha1.StorageNodeSet{
+				Spec: simplyblockv1alpha1.StorageNodeSetSpec{NodeUUID: "node-b", Action: "restart"},
+			},
 		)
 		if err != nil {
 			t.Fatalf("expected eventual success, got error: %v", err)
