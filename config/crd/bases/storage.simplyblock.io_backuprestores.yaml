@@ -366,6 +366,11 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: clusterName is immutable after creation
+          rule: '!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName'
+        - message: backupRef.name is immutable after creation
+          rule: '!has(oldSelf.spec.backupRef) || self.spec.backupRef.name == oldSelf.spec.backupRef.name'
     served: true
     storage: true
     subresources:

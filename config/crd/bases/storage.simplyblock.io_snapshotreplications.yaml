@@ -230,6 +230,11 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: sourceCluster is immutable after creation
+          rule: '!has(oldSelf.spec.sourceCluster) || self.spec.sourceCluster == oldSelf.spec.sourceCluster'
+        - message: targetCluster is immutable after creation
+          rule: '!has(oldSelf.spec.targetCluster) || self.spec.targetCluster == oldSelf.spec.targetCluster'
     served: true
     storage: true
     subresources:

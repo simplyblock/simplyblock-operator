@@ -110,6 +110,8 @@ type VolumeMigrationStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.pvName) || self.spec.pvName == oldSelf.spec.pvName",message="pvName is immutable after creation"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.targetNodeUUID) || self.spec.targetNodeUUID == oldSelf.spec.targetNodeUUID",message="targetNodeUUID is immutable after creation"
 // +kubebuilder:resource:scope=Namespaced,shortName=vmig
 // +kubebuilder:printcolumn:name="PV",type="string",JSONPath=".spec.pvName"
 // +kubebuilder:printcolumn:name="Target Node",type="string",JSONPath=".spec.targetNodeUUID"

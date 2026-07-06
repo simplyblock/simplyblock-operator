@@ -118,6 +118,7 @@ type StorageBackupStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName",message="clusterName is immutable after creation"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="PVC",type=string,JSONPath=".spec.pvcRef.name"
 // +kubebuilder:printcolumn:name="BackupID",type=string,JSONPath=".status.backupID"

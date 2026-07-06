@@ -183,6 +183,12 @@ spec:
                 type: string
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: pvName is immutable after creation
+          rule: '!has(oldSelf.spec.pvName) || self.spec.pvName == oldSelf.spec.pvName'
+        - message: targetNodeUUID is immutable after creation
+          rule: '!has(oldSelf.spec.targetNodeUUID) || self.spec.targetNodeUUID ==
+            oldSelf.spec.targetNodeUUID'
     served: true
     storage: true
     subresources:

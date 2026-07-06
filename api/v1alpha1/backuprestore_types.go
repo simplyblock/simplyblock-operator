@@ -133,6 +133,8 @@ type BackupRestoreStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName",message="clusterName is immutable after creation"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.backupRef) || self.spec.backupRef.name == oldSelf.spec.backupRef.name",message="backupRef.name is immutable after creation"
 // +kubebuilder:resource:scope=Namespaced,shortName=br
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Backup",type=string,JSONPath=".spec.backupRef.name"

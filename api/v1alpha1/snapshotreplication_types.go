@@ -167,6 +167,8 @@ type ReplicationError struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.sourceCluster) || self.spec.sourceCluster == oldSelf.spec.sourceCluster",message="sourceCluster is immutable after creation"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.targetCluster) || self.spec.targetCluster == oldSelf.spec.targetCluster",message="targetCluster is immutable after creation"
 // +kubebuilder:printcolumn:name="Configured",type="boolean",JSONPath=".status.configured"
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="Reason",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].reason"
