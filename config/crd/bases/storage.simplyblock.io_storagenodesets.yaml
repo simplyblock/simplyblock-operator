@@ -533,6 +533,17 @@ spec:
           rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.maxLogicalVolumeCount)
             && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname)
             && self.spec.mgmtIfname != "")
+        - message: clusterName is immutable after creation
+          rule: '!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName'
+        - message: mgmtIfname is immutable after creation
+          rule: '!has(oldSelf.spec.mgmtIfname) || self.spec.mgmtIfname == oldSelf.spec.mgmtIfname'
+        - message: partitions is immutable after creation
+          rule: '!has(oldSelf.spec.partitions) || self.spec.partitions == oldSelf.spec.partitions'
+        - message: forceFormat4K is immutable after creation
+          rule: '!has(oldSelf.spec.forceFormat4K) || self.spec.forceFormat4K == oldSelf.spec.forceFormat4K'
+        - message: nodesPerSocket is immutable after creation
+          rule: '!has(oldSelf.spec.nodesPerSocket) || self.spec.nodesPerSocket ==
+            oldSelf.spec.nodesPerSocket'
     served: true
     storage: true
     subresources:

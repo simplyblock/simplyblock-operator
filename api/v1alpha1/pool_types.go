@@ -167,6 +167,8 @@ type PoolStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName",message="clusterName is immutable after creation"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.dhchap) || self.spec.dhchap == oldSelf.spec.dhchap",message="dhchap is immutable after creation"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Pool"
 
 // Pool is the Schema for the pools API

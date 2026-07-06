@@ -520,6 +520,11 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: clusterName is immutable after creation
+          rule: '!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName'
+        - message: backupRef.name is immutable after creation
+          rule: '!has(oldSelf.spec.backupRef) || self.spec.backupRef.name == oldSelf.spec.backupRef.name'
     served: true
     storage: true
     subresources:
@@ -746,6 +751,11 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: clusterName is immutable after creation
+          rule: '!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName'
+        - message: dhchap is immutable after creation
+          rule: '!has(oldSelf.spec.dhchap) || self.spec.dhchap == oldSelf.spec.dhchap'
     served: true
     storage: true
     subresources:
@@ -982,6 +992,11 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: sourceCluster is immutable after creation
+          rule: '!has(oldSelf.spec.sourceCluster) || self.spec.sourceCluster == oldSelf.spec.sourceCluster'
+        - message: targetCluster is immutable after creation
+          rule: '!has(oldSelf.spec.targetCluster) || self.spec.targetCluster == oldSelf.spec.targetCluster'
     served: true
     storage: true
     subresources:
@@ -1161,6 +1176,9 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: clusterName is immutable after creation
+          rule: '!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName'
     served: true
     storage: true
     subresources:
@@ -2075,6 +2093,17 @@ spec:
           rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.maxLogicalVolumeCount)
             && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname)
             && self.spec.mgmtIfname != "")
+        - message: clusterName is immutable after creation
+          rule: '!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName'
+        - message: mgmtIfname is immutable after creation
+          rule: '!has(oldSelf.spec.mgmtIfname) || self.spec.mgmtIfname == oldSelf.spec.mgmtIfname'
+        - message: partitions is immutable after creation
+          rule: '!has(oldSelf.spec.partitions) || self.spec.partitions == oldSelf.spec.partitions'
+        - message: forceFormat4K is immutable after creation
+          rule: '!has(oldSelf.spec.forceFormat4K) || self.spec.forceFormat4K == oldSelf.spec.forceFormat4K'
+        - message: nodesPerSocket is immutable after creation
+          rule: '!has(oldSelf.spec.nodesPerSocket) || self.spec.nodesPerSocket ==
+            oldSelf.spec.nodesPerSocket'
     served: true
     storage: true
     subresources:
@@ -2370,6 +2399,12 @@ spec:
                 type: string
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: pvName is immutable after creation
+          rule: '!has(oldSelf.spec.pvName) || self.spec.pvName == oldSelf.spec.pvName'
+        - message: targetNodeUUID is immutable after creation
+          rule: '!has(oldSelf.spec.targetNodeUUID) || self.spec.targetNodeUUID ==
+            oldSelf.spec.targetNodeUUID'
     served: true
     storage: true
     subresources:

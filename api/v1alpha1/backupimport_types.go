@@ -67,6 +67,8 @@ type BackupImportStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.sourceClusterName) || self.spec.sourceClusterName == oldSelf.spec.sourceClusterName",message="sourceClusterName is immutable after creation"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.targetClusterName) || self.spec.targetClusterName == oldSelf.spec.targetClusterName",message="targetClusterName is immutable after creation"
 // +kubebuilder:resource:scope=Namespaced,shortName=bi
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Source",type=string,JSONPath=".spec.sourceClusterName"
