@@ -47,7 +47,7 @@ func newDrainReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetR
 	}
 }
 
-func newDrainSN(nodeUUID string, subPhase string, state string) *simplyblockv1alpha1.StorageNodeSet {
+func newDrainSN(nodeUUID, subPhase, state string) *simplyblockv1alpha1.StorageNodeSet { //nolint:unparam
 	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-drain", Namespace: drainTestNS},
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
@@ -372,7 +372,9 @@ func TestDrainMigrateDoesNotRecreateExistingCRs(t *testing.T) {
 
 	// Call drainMigrate. It should see the existing CR and not call the API
 	// to create new ones.
-	r.drainMigrate(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn)
+	if _, err := r.drainMigrate(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn); err != nil {
+		t.Fatalf("drainMigrate: %v", err)
+	}
 
 	var vmList simplyblockv1alpha1.VolumeMigrationList
 	if err := r.List(context.Background(), &vmList,
@@ -413,7 +415,9 @@ func TestDrainMigrateFailedCRTriggersResumeAndFail(t *testing.T) {
 		webapimock.RouteResponse{Status: http.StatusNoContent},
 	)
 
-	r.drainMigrate(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn)
+	if _, err := r.drainMigrate(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn); err != nil {
+		t.Fatalf("drainMigrate: %v", err)
+	}
 
 	// After resumeAndFail, actionStatus.state must be failed.
 	updated := &simplyblockv1alpha1.StorageNodeSet{}
@@ -452,7 +456,7 @@ func TestDrainMigrationNameIsDNSValid(t *testing.T) {
 			t.Errorf("empty name for nodeUUID=%q pvName=%q", tc.nodeUUID, tc.pvName)
 		}
 		for _, c := range name {
-			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
 				t.Errorf("invalid char %q in name %q", c, name)
 			}
 		}
@@ -476,16 +480,8 @@ func TestDrainCancellationSkipsWhenActionStillActive(t *testing.T) {
 
 	// The passed-in sn has action=remove in the live store (seeded in fake client),
 	// so drainHandleCancellation's re-fetch will see it and exit early.
-	r.drainHandleCancellation(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn)
-
-	// ActionStatus should be unchanged.
-	updated := &simplyblockv1alpha1.StorageNodeSet{}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), updated); err != nil {
-		t.Fatalf("get StorageNodeSet: %v", err)
-	}
-	if updated.Status.ActionStatus != nil {
-		// If ActionStatus was cleared, the guard failed.
-		// (It's nil because the fake client initialised sn without Status — this is fine.)
+	if _, err := r.drainHandleCancellation(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn); err != nil {
+		t.Fatalf("drainHandleCancellation: %v", err)
 	}
 }
 
@@ -547,7 +543,9 @@ func TestRapidActionToggleDoesNotLeakState(t *testing.T) {
 	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
 	defer mock.Close()
 
-	r.drainHandleCancellation(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn)
+	if _, err := r.drainHandleCancellation(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn); err != nil {
+		t.Fatalf("drainHandleCancellation: %v", err)
+	}
 
 	updated := &simplyblockv1alpha1.StorageNodeSet{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), updated); err != nil {
