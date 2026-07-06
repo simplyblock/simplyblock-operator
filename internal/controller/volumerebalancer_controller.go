@@ -193,7 +193,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	migratedCount := r.executeMigrations(ctx, clusterCR, toMigrate, cfg.CoolDownSecs, cycleStart.Add(cfg.EvalInterval))
 
 	activeCooldowns := r.migrationState.GetCooldownCountByCluster(clusterUUID, time.Now())
-	autobalancing.SetCooldownVolumes(clusterCR.Name, float64(activeCooldowns))
+	autobalancing.SetCooldownVolumes(clusterUUID, float64(activeCooldowns))
 
 	if migratedCount > 0 {
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "migrated").Inc()

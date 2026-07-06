@@ -15,7 +15,7 @@ const (
 	pendingStateWaitingForCompletion pendingMigrationState = "waiting_for_completion"
 )
 
-type pendingMigration struct {
+type PendingMigration struct {
 	State          pendingMigrationState
 	MigrationStart time.Time
 	// CRName / CRNamespace identify the VolumeMigration CR that drives this
@@ -35,13 +35,13 @@ type MigrationState struct {
 	// coolDownMap keys: "clusterUUID/volumeUUID" → expiry time
 	coolDownMap map[string]time.Time
 	// pendingMigrations keys: "clusterUUID/volumeUUID"
-	pendingMigrations map[string]*pendingMigration
+	pendingMigrations map[string]*PendingMigration
 }
 
 func NewMigrationState() *MigrationState {
 	return &MigrationState{
 		coolDownMap:       make(map[string]time.Time),
-		pendingMigrations: make(map[string]*pendingMigration),
+		pendingMigrations: make(map[string]*PendingMigration),
 	}
 }
 
@@ -51,7 +51,7 @@ func (ms *MigrationState) PushMigration(clusterUUID, poolUUID, volumeUUID, crNam
 
 	key := clusterUUID + "/" + volumeUUID
 	ms.coolDownMap[key] = time.Now().Add(time.Duration(coolDownSecs) * time.Second)
-	ms.pendingMigrations[key] = &pendingMigration{
+	ms.pendingMigrations[key] = &PendingMigration{
 		State:          pendingStateWaitingForCompletion,
 		MigrationStart: time.Now(),
 		CRName:         crName,
@@ -62,7 +62,7 @@ func (ms *MigrationState) PushMigration(clusterUUID, poolUUID, volumeUUID, crNam
 	}
 }
 
-func (ms *MigrationState) GetPendingMigration(clusterUUID, volumeUUID string) (*pendingMigration, bool) {
+func (ms *MigrationState) GetPendingMigration(clusterUUID, volumeUUID string) (*PendingMigration, bool) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
@@ -71,7 +71,7 @@ func (ms *MigrationState) GetPendingMigration(clusterUUID, volumeUUID string) (*
 	return pendingMigration, ok
 }
 
-func (ms *MigrationState) GetPendingMigrationByKey(key string) (*pendingMigration, bool) {
+func (ms *MigrationState) GetPendingMigrationByKey(key string) (*PendingMigration, bool) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 

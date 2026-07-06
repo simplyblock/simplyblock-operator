@@ -41,6 +41,6 @@ func init() {
 
 // SetCooldownVolumes updates the per-cluster cooldown-volume gauge.
 // Called by the controller after each evaluation cycle.
-func SetCooldownVolumes(clusterName string, count float64) {
-	rebalancerCooldownVolumes.WithLabelValues(clusterName).Set(count)
+func SetCooldownVolumes(clusterUUID string, count float64) {
+	rebalancerCooldownVolumes.WithLabelValues(clusterUUID).Set(count)
 }
