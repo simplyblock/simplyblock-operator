@@ -575,9 +575,11 @@ func (r *StorageNodeSetReconciler) drainVerify(
 		re = regexp.MustCompile("^$") // match nothing
 	}
 
-	var nonSystem []string
+	var nonSystem, systemVols []string
 	for _, vol := range volumes {
-		if !re.MatchString(vol.Name) {
+		if re.MatchString(vol.Name) {
+			systemVols = append(systemVols, vol.UUID)
+		} else {
 			nonSystem = append(nonSystem, vol.UUID)
 		}
 	}
@@ -588,7 +590,56 @@ func (r *StorageNodeSetReconciler) drainVerify(
 		return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
 	}
 
-	// All remaining volumes are system volumes (or node is empty).
+	// If system/benchmark volumes remain, delete them now. The backend rejects
+	// node removal if any LVols are still present, even system ones. Requeue
+	// after issuing the deletes so the next reconcile confirms they are gone
+	// before advancing to Removing.
+	if len(systemVols) > 0 {
+		pools, err := apiClient.GetStoragePools(ctx, clusterUUID)
+		if err != nil {
+			log.Error(err, "drain: failed to list pools for system volume cleanup")
+			return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
+		}
+		poolByVol := make(map[string]string)
+		for _, pool := range pools {
+			vols, err := apiClient.GetPoolVolumes(ctx, clusterUUID, pool.UUID)
+			if err != nil {
+				continue
+			}
+			for _, v := range vols {
+				poolByVol[v.UUID] = pool.UUID
+			}
+		}
+		for _, volUUID := range systemVols {
+			poolUUID, ok := poolByVol[volUUID]
+			if !ok {
+				log.Info("drain: system volume pool not found, skipping", "volUUID", volUUID)
+				continue
+			}
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
+				clusterUUID, poolUUID, volUUID)
+			_, delStatus, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
+			switch {
+			case err != nil:
+				// Transient network error — requeue and retry.
+				log.Error(err, "drain: transient error deleting system volume, retrying", "volUUID", volUUID)
+			case delStatus == http.StatusOK || delStatus == http.StatusNoContent || delStatus == http.StatusNotFound:
+				log.Info("drain: deleted system volume", "volUUID", volUUID, "status", delStatus)
+			case delStatus >= http.StatusBadRequest && delStatus < http.StatusInternalServerError:
+				// 4xx: permanent rejection — the backend will not accept this delete.
+				return r.resumeAndFail(ctx, apiClient, clusterUUID, snCR,
+					fmt.Sprintf("system volume %s delete rejected by backend (status %d)", volUUID, delStatus))
+			default:
+				// 5xx: transient — requeue and retry.
+				log.Error(nil, "drain: transient 5xx deleting system volume, retrying",
+					"volUUID", volUUID, "status", delStatus)
+			}
+		}
+		// Requeue to confirm the volumes are gone before advancing to Removing.
+		return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
+	}
+
+	// Node is empty — advance to Removing.
 	if err := advanceDrainSubPhase(ctx, r, snCR, drainSubPhaseRemoving); err != nil {
 		log.Error(err, "drain: failed to advance to Removing")
 		return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
