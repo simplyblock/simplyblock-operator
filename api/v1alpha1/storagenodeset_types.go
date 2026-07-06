@@ -276,7 +276,7 @@ type ActionStatus struct {
 	// Triggered indicates whether the underlying backend action has been fired.
 	Triggered bool `json:"triggered,omitempty"`
 	// SubPhase tracks the active drain step within the remove action.
-	// One of: Validating, Suspending, Migrating, Verifying, Removing.
+	// +kubebuilder:validation:Enum=Validating;Suspending;Migrating;Verifying;Removing
 	// +optional
 	SubPhase string `json:"subPhase,omitempty"`
 	// VolumesMigrated is the count of volumes successfully migrated so far.
