@@ -762,9 +762,15 @@ func listNodeVolumes(
 			return nil, fmt.Errorf("listNodeVolumes: pool %s: %w", pool.UUID, err)
 		}
 		for _, v := range vols {
-			if v.PrimaryNodeUUID == nodeUUID {
-				result = append(result, v)
+			if v.PrimaryNodeUUID != nodeUUID {
+				continue
 			}
+			// Skip volumes already being deleted — backend deletion is async so
+			// the volume may still appear in the list briefly after DELETE 204.
+			if v.Status == "in_deletion" {
+				continue
+			}
+			result = append(result, v)
 		}
 	}
 	return result, nil
