@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: volumemigrations.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -74,12 +74,18 @@ spec:
                   should be migrated. The PV must be provisioned by the simplyblock CSI driver.
                 minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: pvName is immutable after creation
+                  rule: self == oldSelf
               targetNodeUUID:
                 description: |-
                   TargetNodeUUID is the UUID of the storage node that should host the
                   volume after migration.
                 minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: targetNodeUUID is immutable after creation
+                  rule: self == oldSelf
             required:
             - pvName
             - targetNodeUUID
@@ -183,12 +189,6 @@ spec:
                 type: string
             type: object
         type: object
-        x-kubernetes-validations:
-        - message: pvName is immutable after creation
-          rule: '!has(oldSelf.spec.pvName) || self.spec.pvName == oldSelf.spec.pvName'
-        - message: targetNodeUUID is immutable after creation
-          rule: '!has(oldSelf.spec.targetNodeUUID) || self.spec.targetNodeUUID ==
-            oldSelf.spec.targetNodeUUID'
     served: true
     storage: true
     subresources:

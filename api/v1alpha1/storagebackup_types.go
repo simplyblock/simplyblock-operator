@@ -42,6 +42,7 @@ type PersistentVolumeClaimRef struct {
 type StorageBackupSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="clusterName is immutable after creation"
 	ClusterName string `json:"clusterName"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PVC Ref"
 	// PVCRef identifies the PVC whose backing Simplyblock volume should be snapshotted and backed up.
@@ -118,7 +119,6 @@ type StorageBackupStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName",message="clusterName is immutable after creation"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="PVC",type=string,JSONPath=".spec.pvcRef.name"
 // +kubebuilder:printcolumn:name="BackupID",type=string,JSONPath=".status.backupID"

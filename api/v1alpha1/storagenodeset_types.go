@@ -36,6 +36,7 @@ type JournalManagerSpec struct {
 type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="clusterName is immutable after creation"
 	ClusterName string `json:"clusterName"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Image"
 	// ClusterImage is the container image used for storage-node workloads.
@@ -62,9 +63,11 @@ type StorageNodeSetSpec struct {
 	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Management Interface"
 	// MgmtIfname is the management interface name used by storage nodes.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="mgmtIfname is immutable after creation"
 	MgmtIfname string `json:"mgmtIfname,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Partitions"
 	// Partitions is the number of partitions created per backend storage device.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="partitions is immutable after creation"
 	Partitions *int32 `json:"partitions,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Journal Manager"
 	// JournalManagerSpec configures journal manager behavior.
@@ -89,6 +92,7 @@ type StorageNodeSetSpec struct {
 	SocketsToUse []string `json:"socketsToUse,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Nodes Per Socket"
 	// NodesPerSocket defines how many storage nodes are created per NUMA socket.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="nodesPerSocket is immutable after creation"
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Data Interfaces"
 	// DataIfname lists data-plane network interfaces.
@@ -121,6 +125,7 @@ type StorageNodeSetSpec struct {
 	SkipKubeletConfiguration *bool `json:"skipKubeletConfiguration,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force Format 4K"
 	// ForceFormat4K forces 4K blocksize formatting of the NVMe device where supported.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="forceFormat4K is immutable after creation"
 	ForceFormat4K *bool `json:"forceFormat4K,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable CPU Topology"
 	// EnableCpuTopology enables topology-aware CPU handling.
@@ -271,11 +276,6 @@ type ActionStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && (!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\"))",message="nodeUUID is required when action is specified"
 // +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname) && self.spec.mgmtIfname != \"\")",message="maxLogicalVolumeCount, workerNodes, and mgmtIfname are required when action is not specified"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName",message="clusterName is immutable after creation"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.mgmtIfname) || self.spec.mgmtIfname == oldSelf.spec.mgmtIfname",message="mgmtIfname is immutable after creation"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.partitions) || self.spec.partitions == oldSelf.spec.partitions",message="partitions is immutable after creation"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.forceFormat4K) || self.spec.forceFormat4K == oldSelf.spec.forceFormat4K",message="forceFormat4K is immutable after creation"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.nodesPerSocket) || self.spec.nodesPerSocket == oldSelf.spec.nodesPerSocket",message="nodesPerSocket is immutable after creation"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Storage Node",resources={{ServiceAccount,v1,simplyblock-storage-node},{Service,v1,simplyblock-storage-node},{DaemonSet,v1,simplyblock-storage-node},{ClusterRole,v1,simplyblock-storage-node},{ClusterRoleBinding,v1,simplyblock-storage-node}}
 // StorageNodeSet is the Schema for the storagenodesets API
 type StorageNodeSet struct {

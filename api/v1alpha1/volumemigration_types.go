@@ -46,11 +46,13 @@ type VolumeMigrationSpec struct {
 	// PVName is the name of the PersistentVolume whose backing logical volume
 	// should be migrated. The PV must be provisioned by the simplyblock CSI driver.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="pvName is immutable after creation"
 	PVName string `json:"pvName"`
 
 	// TargetNodeUUID is the UUID of the storage node that should host the
 	// volume after migration.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="targetNodeUUID is immutable after creation"
 	TargetNodeUUID string `json:"targetNodeUUID"`
 
 	// Abort requests cancellation of an in-progress migration. Set to true to
@@ -110,8 +112,6 @@ type VolumeMigrationStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.pvName) || self.spec.pvName == oldSelf.spec.pvName",message="pvName is immutable after creation"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.targetNodeUUID) || self.spec.targetNodeUUID == oldSelf.spec.targetNodeUUID",message="targetNodeUUID is immutable after creation"
 // +kubebuilder:resource:scope=Namespaced,shortName=vmig
 // +kubebuilder:printcolumn:name="PV",type="string",JSONPath=".spec.pvName"
 // +kubebuilder:printcolumn:name="Target Node",type="string",JSONPath=".spec.targetNodeUUID"
