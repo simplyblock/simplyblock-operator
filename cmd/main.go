@@ -382,6 +382,9 @@ func main() {
 			APIClient: webapi.NewClient(),
 			K8sClient: mgr.GetClient(),
 		},
+		// Resolves each storage node's data-network IP (/nics) for the fio baseline;
+		// independent of the provisioner, so it is set for both prod and test paths.
+		APIClient: webapi.NewClient(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeLatency")
 		os.Exit(1)

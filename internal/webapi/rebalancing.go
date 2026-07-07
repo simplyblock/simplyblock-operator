@@ -205,6 +205,40 @@ func (c *Client) GetVolume(
 	return &list[0], nil
 }
 
+// StorageNodeNIC is one network interface entry returned by the storage-node
+// /nics endpoint. Address is the data-network IP the lvol subsystem listens on
+// (the management IP is reported separately). Field tags match the capitalised,
+// space-containing keys the control plane emits for this endpoint.
+type StorageNodeNIC struct {
+	ID         string `json:"ID"`
+	DeviceName string `json:"Device name"`
+	Address    string `json:"Address"`
+	NetType    string `json:"Net type"`
+	Status     string `json:"Status"`
+}
+
+// GetStorageNodeNICs returns the data-network interfaces for a single storage
+// node. Used to target the fio latency baseline at the node's data-NIC IP rather
+// than its management IP (the lvol subsystem does not listen on mgmt_ip).
+func (c *Client) GetStorageNodeNICs(
+	ctx context.Context,
+	clusterUUID, nodeUUID string,
+) ([]StorageNodeNIC, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/nics", clusterUUID, nodeUUID)
+	body, statusCode, err := c.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get NICs for node %s: %w", nodeUUID, err)
+	}
+	if statusCode >= 300 {
+		return nil, fmt.Errorf("get NICs for node %s: status %d: %s", nodeUUID, statusCode, string(body))
+	}
+	var nics []StorageNodeNIC
+	if err := json.Unmarshal(body, &nics); err != nil {
+		return nil, fmt.Errorf("unmarshal node NICs: %w", err)
+	}
+	return nics, nil
+}
+
 // CreateMigration submits a new volume migration request.
 // Returns a MigrationDTO containing the migration ID and the NVMe-oF
 // connection strings for the target-side paths. The caller must establish and

@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -36,6 +37,7 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/rebalancer"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const (
@@ -63,6 +65,10 @@ type StorageNodeLatencyReconciler struct {
 	// and volumes are created automatically during cluster setup.
 	// Set to WebAPIBenchmarkProvisioner for test environments that require explicit provisioning.
 	Provisioner BenchmarkProvisioner
+
+	// APIClient queries the SimplyBlock REST API to resolve a storage node's
+	// data-network IP (the /nics endpoint). Independent of the provisioner.
+	APIClient *webapi.Client
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodesets,verbs=get;list;watch
@@ -212,6 +218,16 @@ func (r *StorageNodeLatencyReconciler) processNodeBaseline(
 		NQN:  r.Provisioner.BenchmarkNQN(clusterCR.Status.NQN, volumeUUID),
 		Addr: node.MgmtIp,
 		Port: logicalVolumeConnectionPort(node),
+	}
+	// The lvol's NVMe-oF subsystem listens on the node's data NIC, not its management
+	// IP, so targeting node.MgmtIp fails with "connection refused". Resolve the node's
+	// data-network address from the /nics endpoint; fall back to the management address
+	// only when it cannot be resolved.
+	if dataAddr, err := r.nodeDataAddr(ctx, clusterCR.Status.UUID, node.UUID); err != nil {
+		log.Info("Could not resolve data-network address; falling back to management IP",
+			"node", node.UUID, "addr", conn.Addr, "error", err.Error())
+	} else {
+		conn.Addr = dataAddr
 	}
 
 	changed := false
@@ -378,6 +394,27 @@ func (r *StorageNodeLatencyReconciler) createBaselineJob(
 			},
 		},
 	})
+}
+
+// nodeDataAddr resolves a storage node's data-network IP via the /nics endpoint,
+// returning the first interface that is UP with a non-empty address. The lvol
+// subsystem listens on the data NIC, so the fio baseline must target this address
+// rather than the node's management IP. Returns an error when no API client is
+// configured or no usable data NIC is reported.
+func (r *StorageNodeLatencyReconciler) nodeDataAddr(ctx context.Context, clusterUUID, nodeUUID string) (string, error) {
+	if r.APIClient == nil {
+		return "", fmt.Errorf("no API client configured")
+	}
+	nics, err := r.APIClient.GetStorageNodeNICs(ctx, clusterUUID, nodeUUID)
+	if err != nil {
+		return "", err
+	}
+	for _, nic := range nics {
+		if nic.Address != "" && strings.EqualFold(nic.Status, "UP") {
+			return nic.Address, nil
+		}
+	}
+	return "", fmt.Errorf("no UP data NIC found for node %s", nodeUUID)
 }
 
 // logicalVolumeConnectionPort returns the NVMe/TCP connection port for a node, falling back to 4430 if not reported.
