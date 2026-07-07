@@ -136,6 +136,7 @@ class MigrationRecord:
     pvc: str
     pv: str
     target: str
+    vol: str = ""   # simplyblock logical-volume UUID (as referenced by webappapi errors)
     source: str = ""
     start: datetime = field(default_factory=now_utc)
     end: datetime | None = None
@@ -687,12 +688,13 @@ class FioMigrationTest:
         target = self.pick_target(pv)
         name = f"{self.run_id}-mig-{idx}"
         rec = MigrationRecord(name=name, pod=pod, pvc=pvc, pv=pv, target=target)
+        rec.vol = self.volume_uuid_of.get(pv, "")  # lvol UUID, as webappapi errors reference it
         rec.source = self.placement.get(pv, "")  # authoritative current node (sbctl)
         self.migrations.append(rec)
 
         kubectl_apply(self.migration_manifest(name, pv, target))
         self.log.event(
-            f"MIGRATION START  {name}  pod={pod}  pv={pv}  "
+            f"MIGRATION START  {name}  pod={pod}  pv={pv}  vol={rec.vol or '?'}  "
             f"source={rec.source or '?'} ({self.node_host.get(rec.source,'?')})  "
             f"target={target} ({self.node_host.get(target,'?')})")
 
@@ -726,11 +728,11 @@ class FioMigrationTest:
         tgt_h = self.node_host.get(rec.target, "?")
         if rec.phase == "Completed":
             self.log.event(
-                f"MIGRATION STOP   {name}  phase=Completed  {rec.source}({src_h}) -> "
+                f"MIGRATION STOP   {name}  phase=Completed  vol={rec.vol or '?'}  {rec.source}({src_h}) -> "
                 f"{target}({tgt_h})  snaps={rec.snaps}  duration={dur:.0f}s")
         else:
             self.log.event(
-                f"MIGRATION STOP   {name}  phase={rec.phase}  target={target}({tgt_h})  "
+                f"MIGRATION STOP   {name}  phase={rec.phase}  vol={rec.vol or '?'}  target={target}({tgt_h})  "
                 f"source={rec.source or '?'}  duration={dur:.0f}s  error={rec.error!r}")
 
         self._verify_migration(rec)
@@ -1248,7 +1250,7 @@ class FioMigrationTest:
 
         for m in completed_migs + [x for x in self.migrations if x.end is None]:
             report["migrations"].append({
-                "name": m.name, "pod": m.pod, "pv": m.pv,
+                "name": m.name, "pod": m.pod, "pv": m.pv, "vol": m.vol,
                 "source": m.source, "target": m.target,
                 "phase": m.phase, "snaps": m.snaps, "error": m.error,
                 "start": iso(m.start), "end": iso(m.end) if m.end else None,
