@@ -12,6 +12,10 @@
 #   4 — Operator restart mid-drain, sub-phase preserved
 #   5 — VolumeMigration failure, node resumes and state = failed
 #   6 — fio under drain: I/O not interrupted (removes a node — run last)
+#   7 — Empty node: no VolumeMigration CRs created, drain completes directly (removes a node)
+#   8 — Rapid action toggle: set/clear/set does not leak state
+#   9 — System-volume-only node: sb-fio-baseline-* volumes skipped, no migrations (removes a node)
+#  10 — Both pinned + unmanaged visible simultaneously: both blocking events emitted
 
 set -euo pipefail
 
@@ -90,6 +94,61 @@ wait_for_action_state() {
 get_first_node_uuid() {
   kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
     -o jsonpath='{.status.nodes[0].uuid}'
+}
+
+get_cluster_uuid() {
+  kubectl get storagecluster -n "$NAMESPACE" \
+    -o jsonpath='{.items[0].status.uuid}'
+}
+
+get_pool_uuid() {
+  kubectl get pool -n "$NAMESPACE" \
+    -o jsonpath='{.items[0].status.uuid}'
+}
+
+# Create a backend volume via sbctl in the admin-control pod.
+# Args: pool name size [host_node_uuid]
+# --host-id pins the primary to a specific storage node, so we know exactly
+# which node will have the volume without having to look it up afterwards.
+# Returns the volume UUID (last line of sbctl volume add output).
+create_backend_volume() {
+  local pool="$1" name="$2" size="${3:-1G}" host_id="${4:-}"
+  local adminpod
+  adminpod=$(kubectl get pods -n "$NAMESPACE" -l app=simplyblock-admin-control \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  [[ -z "$adminpod" ]] && { echo ""; return 1; }
+  local extra_args=()
+  [[ -n "$host_id" ]] && extra_args=("--host-id" "$host_id")
+  kubectl exec -n "$NAMESPACE" "$adminpod" -- \
+    sbctl volume add "$name" "$size" "$pool" "${extra_args[@]}" 2>/dev/null \
+    | tail -1 \
+    | grep -oE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+    || echo ""
+}
+
+# Delete a backend volume by UUID via sbctl.
+delete_backend_volume() {
+  local vol_uuid="$1"
+  local adminpod
+  adminpod=$(kubectl get pods -n "$NAMESPACE" -l app=simplyblock-admin-control \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  [[ -z "$adminpod" ]] && return
+  kubectl exec -n "$NAMESPACE" "$adminpod" -- \
+    sbctl volume delete "$vol_uuid" &>/dev/null || true
+}
+
+wait_for_node_online() {
+  local node_uuid="$1" timeout="$2"
+  local deadline=$((SECONDS + timeout))
+  while true; do
+    local status
+    status=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+      -o jsonpath="{.status.nodes[?(@.uuid==\"$node_uuid\")].status}" 2>/dev/null || true)
+    info "  node status=$status"
+    [[ "$status" == "online" ]] && return 0
+    [[ $SECONDS -ge $deadline ]] && return 1
+    sleep 5
+  done
 }
 
 create_pvcs_and_pods() {
@@ -192,12 +251,13 @@ NODE_UUID=$(get_first_node_uuid)
       || info "Warning: no VolumeMigration CRs seen (may have already completed)"
 
     if wait_for_action_state "success" "$TIMEOUT_MIGRATION"; then
-      remaining=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
-        -o jsonpath='{.status.nodes[*].uuid}' | tr ' ' '\n' | grep -c "^${NODE_UUID}$" || true)
+      node_final_status=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+        -o jsonpath="{.status.nodes[?(@.uuid==\"$NODE_UUID\")].status}" 2>/dev/null || true)
       bound=$(kubectl get pvc -n "$TEST_NS" -o jsonpath='{.items[*].status.phase}' \
         | tr ' ' '\n' | grep -c "^Bound$" || true)
-      [[ "$remaining" -eq 0 ]] && pass "Test 1: Node removed from cluster" \
-        || fail "Test 1: Node still present in StorageNodeSet status"
+      [[ -z "$node_final_status" || "$node_final_status" == "removed" ]] \
+        && pass "Test 1: Node removed from cluster" \
+        || fail "Test 1: Node still present with status=$node_final_status"
       [[ "$bound" -eq "$PVC_COUNT" ]] && pass "Test 1: All $PVC_COUNT PVCs still bound after drain" \
         || fail "Test 1: Only $bound/$PVC_COUNT PVCs bound after drain"
     else
@@ -654,12 +714,297 @@ $fio_interrupted \
 cleanup_test_ns
 } # end run_test_6
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Test 7: Empty node — no PV-managed volumes, drain completes without migrations
+# ══════════════════════════════════════════════════════════════════════════════
+run_test_7() {
+section "Test 7: Empty node drain (no VolumeMigration CRs expected)"
+
+# Do NOT create any PVCs — we want the target node to have no user volumes.
+EMPTY_NODE=$(get_first_node_uuid)
+[[ -z "$EMPTY_NODE" ]] && { fail "Test 7: Could not determine node UUID"; return; }
+info "Triggering drain on empty node $EMPTY_NODE"
+trigger_drain "$EMPTY_NODE"
+
+if wait_for_action_state "success" "$TIMEOUT_MIGRATION"; then
+  pass "Test 7: Drain completed on empty node"
+
+  # Verify no VolumeMigration CRs were ever created.
+  vmig_count=$(kubectl get volumemigration -n "$NAMESPACE" \
+    -l "storage.simplyblock.io/drain-node=$EMPTY_NODE" \
+    --no-headers 2>/dev/null | wc -l | tr -d ' ')
+  [[ "$vmig_count" -eq 0 ]] \
+    && pass "Test 7: No VolumeMigration CRs created (empty node skipped migration)" \
+    || fail "Test 7: Unexpected VolumeMigration CRs created: $vmig_count"
+
+  # Verify node removed from status (absent or status=removed).
+  node_final_status=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+    -o jsonpath="{.status.nodes[?(@.uuid==\"$EMPTY_NODE\")].status}" 2>/dev/null || true)
+  [[ -z "$node_final_status" || "$node_final_status" == "removed" ]] \
+    && pass "Test 7: Node removed from StorageNodeSet status" \
+    || fail "Test 7: Node still present with status=$node_final_status"
+
+  # Confirm volumesMigrated counter is 0.
+  migrated=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+    -o jsonpath='{.status.actionStatus.volumesMigrated}' 2>/dev/null || echo "0")
+  migrated="${migrated:-0}"
+  [[ "$migrated" -eq 0 ]] \
+    && pass "Test 7: volumesMigrated=0 as expected for empty node" \
+    || fail "Test 7: Expected volumesMigrated=0, got $migrated"
+else
+  fail "Test 7: Drain did not reach success within timeout"
+  clear_action
+fi
+} # end run_test_7
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Test 8: Rapid action toggle — set/clear/set does not leak state
+# ══════════════════════════════════════════════════════════════════════════════
+run_test_8() {
+section "Test 8: Action toggle — cancel at Validating, re-trigger, verify clean restart"
+
+cleanup_test_ns
+create_pvcs_and_pods 4
+
+TOGGLE_NODE=$(get_first_node_uuid)
+[[ -z "$TOGGLE_NODE" ]] && { fail "Test 8: Could not determine node UUID"; cleanup_test_ns; return; }
+
+# Step 1: trigger drain → allow one reconcile to initialise → cancel immediately.
+# Cancel early (Validating) so the node is never suspended — no resume needed.
+info "Step 1: trigger drain, cancel at Validating"
+trigger_drain "$TOGGLE_NODE"
+sleep 15
+clear_action
+
+# Wait for ActionStatus to be cleared by drainHandleCancellation.
+deadline=$((SECONDS + 60))
+while [[ $SECONDS -lt $deadline ]]; do
+  state=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+    -o jsonpath='{.status.actionStatus.state}' 2>/dev/null || true)
+  sp=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+    -o jsonpath='{.status.actionStatus.subPhase}' 2>/dev/null || true)
+  info "  waiting for clear: state=$state subPhase=$sp"
+  [[ -z "$state" || -z "$sp" ]] && break
+  sleep 5
+done
+
+state=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+  -o jsonpath='{.status.actionStatus.state}' 2>/dev/null || true)
+[[ -z "$state" ]] \
+  && pass "Test 8: ActionStatus cleared after first cancel" \
+  || fail "Test 8: ActionStatus not cleared (state=$state)"
+
+# Verify node stayed online — it was never suspended.
+node_status=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+  -o jsonpath="{.status.nodes[?(@.uuid==\"$TOGGLE_NODE\")].status}" 2>/dev/null || true)
+[[ "$node_status" == "online" ]] \
+  && pass "Test 8: Node stayed online after cancel at Validating" \
+  || fail "Test 8: Node status is '$node_status', expected online"
+
+# Step 2: re-trigger drain — state machine must restart cleanly from Validating.
+info "Step 2: re-trigger drain — verify clean restart"
+trigger_drain "$TOGGLE_NODE"
+
+if wait_for_subphase "Suspending|Migrating|Verifying|Removing" 120; then
+  sp=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+    -o jsonpath='{.status.actionStatus.subPhase}' 2>/dev/null || true)
+  pass "Test 8: Drain restarted cleanly from scratch (subPhase=$sp)"
+else
+  fail "Test 8: Drain did not advance past Validating after re-trigger"
+  clear_action
+  cleanup_test_ns
+  return
+fi
+
+# Cancel the second drain immediately — don't wait for it to progress further.
+info "Cancelling second drain immediately"
+clear_action
+
+# Give the cancellation handler time to resume and clear state.
+if wait_for_node_online "$TOGGLE_NODE" 120; then
+  pass "Test 8: Node returned to online after second cancel"
+else
+  fail "Test 8: Node did not return to online after second cancel"
+fi
+
+sp=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+  -o jsonpath='{.status.actionStatus.subPhase}' 2>/dev/null || true)
+[[ -z "$sp" ]] \
+  && pass "Test 8: No leaked SubPhase after toggle" \
+  || fail "Test 8: Leaked SubPhase=$sp after toggle"
+
+cleanup_test_ns
+} # end run_test_8
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Test 9: System-volume-only node — drain completes without VolumeMigration CRs
+# ══════════════════════════════════════════════════════════════════════════════
+run_test_9() {
+section "Test 9: System-volume-only node skips migration"
+
+POOL_NAME=$(kubectl get pool -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}')
+[[ -z "$POOL_NAME" ]] && {
+  fail "Test 9: Could not resolve pool name"
+  return
+}
+
+# Pin the system volume to the first node using --host-id so we know exactly
+# which node to drain without a separate lookup.
+SYS_NODE=$(get_first_node_uuid)
+[[ -z "$SYS_NODE" ]] && { fail "Test 9: Could not determine node UUID"; return; }
+
+SYS_VOL_NAME="sb-fio-baseline-drain-test-$$"
+info "Creating system volume $SYS_VOL_NAME on node $SYS_NODE"
+SYS_VOL_UUID=$(create_backend_volume "$POOL_NAME" "$SYS_VOL_NAME" "2G" "$SYS_NODE")
+if [[ -z "$SYS_VOL_UUID" ]]; then
+  fail "Test 9: Failed to create system volume via sbctl"
+  return
+fi
+info "  system volume UUID: $SYS_VOL_UUID"
+
+# Trigger drain on that node — should complete without VolumeMigration CRs.
+trigger_drain "$SYS_NODE"
+
+if wait_for_action_state "success" "$TIMEOUT_MIGRATION"; then
+  pass "Test 9: Drain completed on system-volume-only node"
+
+  vmig_count=$(kubectl get volumemigration -n "$NAMESPACE" \
+    -l "storage.simplyblock.io/drain-node=$SYS_NODE" \
+    --no-headers 2>/dev/null | wc -l | tr -d ' ')
+  [[ "$vmig_count" -eq 0 ]] \
+    && pass "Test 9: No VolumeMigration CRs created (system volumes skipped)" \
+    || fail "Test 9: Unexpected VolumeMigration CRs created: $vmig_count"
+
+  migrated=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+    -o jsonpath='{.status.actionStatus.volumesMigrated}' 2>/dev/null || echo "0")
+  migrated="${migrated:-0}"
+  [[ "$migrated" -eq 0 ]] \
+    && pass "Test 9: volumesMigrated=0 — system volumes correctly excluded" \
+    || fail "Test 9: Expected volumesMigrated=0, got $migrated"
+else
+  fail "Test 9: Drain did not reach success within timeout"
+  clear_action
+  delete_backend_volume "$SYS_VOL_UUID"
+fi
+# System volume deleted when node was removed; nothing to clean up.
+} # end run_test_9
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Test 10: Both pinned and unmanaged volumes visible simultaneously
+# ══════════════════════════════════════════════════════════════════════════════
+run_test_10() {
+section "Test 10: Both pinned + unmanaged volumes block drain simultaneously"
+
+POOL_NAME=$(kubectl get pool -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}')
+[[ -z "$POOL_NAME" ]] && {
+  fail "Test 10: Could not resolve pool name"
+  return
+}
+
+cleanup_test_ns
+kubectl get ns "$TEST_NS" &>/dev/null || kubectl create ns "$TEST_NS"
+
+# Create 3 PVCs (distributed across nodes) and pin all of them.
+for i in 1 2 3; do
+  kubectl apply -n "$TEST_NS" -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: drain-both-pvc-${i}
+spec:
+  storageClassName: ${SC}
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: ${PVC_SIZE}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: drain-both-pod-${i}
+spec:
+  containers:
+  - name: writer
+    image: busybox
+    command: ["sh", "-c", "while true; do echo ok >> /mnt/data; sleep 5; done"]
+    volumeMounts:
+    - mountPath: /mnt
+      name: data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: drain-both-pvc-${i}
+EOF
+done
+
+deadline=$((SECONDS + TIMEOUT_PVC_BOUND))
+while true; do
+  bound=$(kubectl get pvc -n "$TEST_NS" -o jsonpath='{.items[*].status.phase}' \
+    | tr ' ' '\n' | grep -c "^Bound$" || true)
+  [[ "$bound" -eq 3 ]] && break
+  [[ $SECONDS -ge $deadline ]] && { fail "Test 10: PVCs did not bind"; cleanup_test_ns; return; }
+  sleep 5
+done
+
+for i in 1 2 3; do
+  kubectl annotate pvc "drain-both-pvc-${i}" -n "$TEST_NS" \
+    "simplyblock.io/pinned-volume=true" --overwrite
+done
+
+# Pick the target node first, then pin the unmanaged volume to it via --host-id.
+# This guarantees both a pinned PVC and an unmanaged volume land on the same node.
+TARGET_NODE=$(get_first_node_uuid)
+[[ -z "$TARGET_NODE" ]] && { fail "Test 10: Could not determine node UUID"; cleanup_test_ns; return; }
+
+UNMANAGED_NAME="drain-unmanaged-test-$$"
+info "Creating unmanaged volume $UNMANAGED_NAME on node $TARGET_NODE"
+UNMANAGED_UUID=$(create_backend_volume "$POOL_NAME" "$UNMANAGED_NAME" "1G" "$TARGET_NODE")
+if [[ -z "$UNMANAGED_UUID" ]]; then
+  fail "Test 10: Failed to create unmanaged volume"
+  cleanup_test_ns
+  return
+fi
+info "  unmanaged volume UUID: $UNMANAGED_UUID"
+
+info "Triggering drain on $TARGET_NODE"
+trigger_drain "$TARGET_NODE"
+
+# Wait 60s for both events to surface.
+sleep 60
+sp=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+  -o jsonpath='{.status.actionStatus.subPhase}' 2>/dev/null || true)
+[[ "$sp" == "Validating" ]] \
+  && pass "Test 10: Drain blocked in Validating (both blockers present)" \
+  || fail "Test 10: Expected Validating subPhase, got '$sp'"
+
+pinned_event=$(kubectl get events -n "$NAMESPACE" \
+  --field-selector reason=PinnedVolumeBlocking \
+  --sort-by=.lastTimestamp -o jsonpath='{.items[-1].reason}' 2>/dev/null || true)
+[[ "$pinned_event" == "PinnedVolumeBlocking" ]] \
+  && pass "Test 10: PinnedVolumeBlocking event emitted" \
+  || fail "Test 10: PinnedVolumeBlocking event not found"
+
+unmanaged_event=$(kubectl get events -n "$NAMESPACE" \
+  --field-selector reason=UnmanagedVolumeBlocking \
+  --sort-by=.lastTimestamp -o jsonpath='{.items[-1].reason}' 2>/dev/null || true)
+[[ "$unmanaged_event" == "UnmanagedVolumeBlocking" ]] \
+  && pass "Test 10: UnmanagedVolumeBlocking event emitted" \
+  || fail "Test 10: UnmanagedVolumeBlocking event not found (unmanaged volume may be on a different node)"
+
+# Cancel drain and clean up.
+info "Cancelling drain and cleaning up"
+clear_action
+sleep 30
+delete_backend_volume "$UNMANAGED_UUID"
+cleanup_test_ns
+} # end run_test_10
+
 # ── Dispatcher ────────────────────────────────────────────────────────────────
 # Default order: non-destructive tests first, node-removing tests last
 if [[ $# -gt 0 ]]; then
   TESTS=("$@")
 else
-  TESTS=(2 3 4 5 1 6)
+  TESTS=(2 3 4 5 8 10 9 7 1 6)
 fi
 
 for t in "${TESTS[@]}"; do
@@ -670,7 +1015,11 @@ for t in "${TESTS[@]}"; do
     4) run_test_4 ;;
     5) run_test_5 ;;
     6) run_test_6 ;;
-    *) echo "[WARN] Unknown test number: $t (valid: 1-6)"; FAILED=$((FAILED + 1)) ;;
+    7) run_test_7 ;;
+    8) run_test_8 ;;
+    9) run_test_9 ;;
+    10) run_test_10 ;;
+    *) echo "[WARN] Unknown test number: $t (valid: 1-10)"; FAILED=$((FAILED + 1)) ;;
   esac
 done
 
