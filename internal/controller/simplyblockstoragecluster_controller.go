@@ -272,7 +272,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 
 	if err = r.upsertCSICredentialsSecret(
 		ctx,
-		clusterCR.Namespace,
+		r.Namespace,
 		apiResp.UUID,
 		utils.ENDPOINT,
 		apiResp.Secret,
@@ -333,7 +333,7 @@ func (r *StorageClusterReconciler) adoptExistingCluster(
 		log.Error(err, "Failed to create/update Secret for adopted cluster")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	if err := r.upsertCSICredentialsSecret(ctx, clusterCR.Namespace, existing.UUID, utils.ENDPOINT, existing.Secret); err != nil {
+	if err := r.upsertCSICredentialsSecret(ctx, r.Namespace, existing.UUID, utils.ENDPOINT, existing.Secret); err != nil {
 		log.Error(err, "Failed to update CSI credentials secret for adopted cluster")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -837,7 +837,7 @@ func (r *StorageClusterReconciler) syncStatus(
 	clusterSecret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Name: clusterSecretName, Namespace: clusterCR.Namespace}, clusterSecret); err == nil {
 		secretVal := string(clusterSecret.Data["secret"])
-		if upsertErr := r.upsertCSICredentialsSecret(ctx, clusterCR.Namespace, clusterCR.Status.UUID, utils.ENDPOINT, secretVal); upsertErr != nil {
+		if upsertErr := r.upsertCSICredentialsSecret(ctx, r.Namespace, clusterCR.Status.UUID, utils.ENDPOINT, secretVal); upsertErr != nil {
 			log.Error(upsertErr, "syncStatus: failed to upsert CSI credentials secret", "name", clusterCR.Name)
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
