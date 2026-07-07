@@ -11,7 +11,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: backuppolicies.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -157,7 +157,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: backuprestores.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -221,6 +221,9 @@ spec:
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+                x-kubernetes-validations:
+                - message: clusterName is immutable after creation
+                  rule: self == oldSelf
               pvcTemplate:
                 description: PVCTemplate describes the PVC to create once the restore
                   completes.
@@ -521,8 +524,6 @@ spec:
         - spec
         type: object
         x-kubernetes-validations:
-        - message: clusterName is immutable after creation
-          rule: '!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName'
         - message: backupRef.name is immutable after creation
           rule: '!has(oldSelf.spec.backupRef) || self.spec.backupRef.name == oldSelf.spec.backupRef.name'
     served: true
@@ -534,7 +535,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: pools.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -592,12 +593,18 @@ spec:
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+                x-kubernetes-validations:
+                - message: clusterName is immutable after creation
+                  rule: self == oldSelf
               dhchap:
                 default: false
                 description: |-
                   DHCHAP enables DH-HMAC-CHAP key generation for the pool. Authentication is only
                   enforced when allowedNodes is non-empty
                 type: boolean
+                x-kubernetes-validations:
+                - message: dhchap is immutable after creation
+                  rule: self == oldSelf
               logicalVolumeMaxSize:
                 description: |-
                   LogicalVolumeMaxSize is the maximum size allowed for any single logical volume
@@ -751,11 +758,6 @@ spec:
         required:
         - spec
         type: object
-        x-kubernetes-validations:
-        - message: clusterName is immutable after creation
-          rule: '!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName'
-        - message: dhchap is immutable after creation
-          rule: '!has(oldSelf.spec.dhchap) || self.spec.dhchap == oldSelf.spec.dhchap'
     served: true
     storage: true
     subresources:
@@ -765,7 +767,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: snapshotreplications.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -838,12 +840,18 @@ spec:
               sourceCluster:
                 description: Source cluster for the snapshots
                 type: string
+                x-kubernetes-validations:
+                - message: sourceCluster is immutable after creation
+                  rule: self == oldSelf
               sourcePool:
                 description: required for failback to a fresh source cluster
                 type: string
               targetCluster:
                 description: Target cluster for replication
                 type: string
+                x-kubernetes-validations:
+                - message: targetCluster is immutable after creation
+                  rule: self == oldSelf
               targetPool:
                 description: Target cluster pool for replication
                 type: string
@@ -992,11 +1000,6 @@ spec:
         required:
         - spec
         type: object
-        x-kubernetes-validations:
-        - message: sourceCluster is immutable after creation
-          rule: '!has(oldSelf.spec.sourceCluster) || self.spec.sourceCluster == oldSelf.spec.sourceCluster'
-        - message: targetCluster is immutable after creation
-          rule: '!has(oldSelf.spec.targetCluster) || self.spec.targetCluster == oldSelf.spec.targetCluster'
     served: true
     storage: true
     subresources:
@@ -1006,7 +1009,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: storagebackups.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -1061,6 +1064,9 @@ spec:
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+                x-kubernetes-validations:
+                - message: clusterName is immutable after creation
+                  rule: self == oldSelf
               pvcRef:
                 description: |-
                   PVCRef identifies the PVC whose backing Simplyblock volume should be snapshotted and backed up.
@@ -1176,9 +1182,6 @@ spec:
         required:
         - spec
         type: object
-        x-kubernetes-validations:
-        - message: clusterName is immutable after creation
-          rule: '!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName'
     served: true
     storage: true
     subresources:
@@ -1188,7 +1191,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: storageclusters.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -1563,7 +1566,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: storagenodesets.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -1615,6 +1618,9 @@ spec:
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+                x-kubernetes-validations:
+                - message: clusterName is immutable after creation
+                  rule: self == oldSelf
               containerResources:
                 description: |-
                   ContainerResources sets CPU and memory requests/limits for the main storage-node container.
@@ -1705,6 +1711,9 @@ spec:
                 description: ForceFormat4K forces 4K blocksize formatting of the NVMe
                   device where supported.
                 type: boolean
+                x-kubernetes-validations:
+                - message: forceFormat4K is immutable after creation
+                  rule: self == oldSelf
               imagePullPolicy:
                 description: ImagePullPolicy controls when the container image is
                   pulled. Defaults to IfNotPresent.
@@ -1808,6 +1817,9 @@ spec:
                 description: MgmtIfname is the management interface name used by storage
                   nodes.
                 type: string
+                x-kubernetes-validations:
+                - message: mgmtIfname is immutable after creation
+                  rule: self == oldSelf
               nodeUUID:
                 description: NodeUUID is required when action is specified
                 type: string
@@ -1816,6 +1828,9 @@ spec:
                   per NUMA socket.
                 format: int32
                 type: integer
+                x-kubernetes-validations:
+                - message: nodesPerSocket is immutable after creation
+                  rule: self == oldSelf
               openShiftCluster:
                 description: OpenShiftCluster indicates OpenShift-specific behavior
                   should be enabled.
@@ -1831,6 +1846,9 @@ spec:
                   storage device.
                 format: int32
                 type: integer
+                x-kubernetes-validations:
+                - message: partitions is immutable after creation
+                  rule: self == oldSelf
               pcieAllowList:
                 description: PcieAllowList is the list of PCI addresses allowed for
                   use.
@@ -2093,17 +2111,6 @@ spec:
           rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.maxLogicalVolumeCount)
             && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname)
             && self.spec.mgmtIfname != "")
-        - message: clusterName is immutable after creation
-          rule: '!has(oldSelf.spec.clusterName) || self.spec.clusterName == oldSelf.spec.clusterName'
-        - message: mgmtIfname is immutable after creation
-          rule: '!has(oldSelf.spec.mgmtIfname) || self.spec.mgmtIfname == oldSelf.spec.mgmtIfname'
-        - message: partitions is immutable after creation
-          rule: '!has(oldSelf.spec.partitions) || self.spec.partitions == oldSelf.spec.partitions'
-        - message: forceFormat4K is immutable after creation
-          rule: '!has(oldSelf.spec.forceFormat4K) || self.spec.forceFormat4K == oldSelf.spec.forceFormat4K'
-        - message: nodesPerSocket is immutable after creation
-          rule: '!has(oldSelf.spec.nodesPerSocket) || self.spec.nodesPerSocket ==
-            oldSelf.spec.nodesPerSocket'
     served: true
     storage: true
     subresources:
@@ -2113,7 +2120,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: tasks.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -2219,7 +2226,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: volumemigrations.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -2290,12 +2297,18 @@ spec:
                   should be migrated. The PV must be provisioned by the simplyblock CSI driver.
                 minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: pvName is immutable after creation
+                  rule: self == oldSelf
               targetNodeUUID:
                 description: |-
                   TargetNodeUUID is the UUID of the storage node that should host the
                   volume after migration.
                 minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: targetNodeUUID is immutable after creation
+                  rule: self == oldSelf
             required:
             - pvName
             - targetNodeUUID
@@ -2399,12 +2412,6 @@ spec:
                 type: string
             type: object
         type: object
-        x-kubernetes-validations:
-        - message: pvName is immutable after creation
-          rule: '!has(oldSelf.spec.pvName) || self.spec.pvName == oldSelf.spec.pvName'
-        - message: targetNodeUUID is immutable after creation
-          rule: '!has(oldSelf.spec.targetNodeUUID) || self.spec.targetNodeUUID ==
-            oldSelf.spec.targetNodeUUID'
     served: true
     storage: true
     subresources:
