@@ -357,8 +357,8 @@ func (c *Client) CancelMigration(
 	ctx context.Context,
 	clusterUUID, poolUUID, volumeUUID, migrationID string,
 ) error {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/migrations/%s/cancel", clusterUUID, poolUUID, volumeUUID, migrationID)
-	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, nil)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/migrations/%s", clusterUUID, poolUUID, volumeUUID, migrationID)
+	body, statusCode, err := c.Do(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("cancel migration %s: %w", migrationID, err)
 	}
