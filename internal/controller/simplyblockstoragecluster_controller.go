@@ -160,6 +160,41 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	/* -------------------- Proactive Adoption Check (Helm upgrade) -------------------- */
+	// To migrate from a Helm deployment, create a Secret named
+	// "simplyblock-{clusterName}-upgrade" in the same namespace containing
+	// the cluster's "uuid" and "secret" fields. The operator uses them to
+	// fetch the existing cluster and populate the CR status without POSTing.
+	upgradeSecretName := fmt.Sprintf("simplyblock-%s-upgrade", clusterCR.Name)
+	upgradeSecret := &corev1.Secret{}
+	if getErr := r.Get(ctx, types.NamespacedName{Name: upgradeSecretName, Namespace: clusterCR.Namespace}, upgradeSecret); getErr == nil {
+		upgradeUUID := string(upgradeSecret.Data["uuid"])
+		upgradeClusterSecret := string(upgradeSecret.Data["secret"])
+		if upgradeUUID != "" && upgradeClusterSecret != "" {
+			clusterEndpoint := fmt.Sprintf("/api/v2/clusters/%s", upgradeUUID)
+			upgradeBody, upgradeStatus, upgradeErr := apiClient.Do(ctx, http.MethodGet, clusterEndpoint, nil)
+			if upgradeErr == nil && upgradeStatus < 300 {
+				if clusterResp, parseErr := webapi.ParseClusterResponse(upgradeBody); parseErr == nil {
+					adoptSecret := upgradeClusterSecret
+					if clusterResp.Secret != "" {
+						adoptSecret = clusterResp.Secret
+					}
+					existing := &utils.ClusterListEntry{
+						UUID:   clusterResp.UUID,
+						Secret: adoptSecret,
+						Name:   clusterCR.Name,
+						NQN:    clusterResp.NQN,
+						Status: clusterResp.Status,
+						NDCS:   clusterResp.NDCS,
+						NPCS:   clusterResp.NPCS,
+					}
+					log.Info("Cluster found via upgrade secret, adopting", "clusterName", clusterCR.Name, "uuid", existing.UUID)
+					return r.adoptExistingCluster(ctx, clusterCR, existing)
+				}
+			}
+		}
+	}
+
 	/* -------------------- Create Cluster -------------------- */
 	cluster := clusterCR.DeepCopy()
 	backupConfig, err := r.buildBackupConfig(ctx, clusterCR)
@@ -237,7 +272,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 
 	if err = r.upsertCSICredentialsSecret(
 		ctx,
-		r.Namespace,
+		clusterCR.Namespace,
 		apiResp.UUID,
 		utils.ENDPOINT,
 		apiResp.Secret,
@@ -275,7 +310,30 @@ func (r *StorageClusterReconciler) adoptExistingCluster(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if err := r.upsertCSICredentialsSecret(ctx, r.Namespace, existing.UUID, utils.ENDPOINT, existing.Secret); err != nil {
+	secretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Name)
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: clusterCR.Namespace,
+		},
+	}
+	if err := controllerutil.SetControllerReference(clusterCR, secret, r.Scheme); err != nil {
+		log.Error(err, "Failed to set owner reference on cluster secret")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		if secret.Data == nil {
+			secret.Data = map[string][]byte{}
+		}
+		secret.Data["uuid"] = []byte(existing.UUID)
+		secret.Data["secret"] = []byte(existing.Secret)
+		return nil
+	})
+	if err != nil {
+		log.Error(err, "Failed to create/update Secret for adopted cluster")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	if err := r.upsertCSICredentialsSecret(ctx, clusterCR.Namespace, existing.UUID, utils.ENDPOINT, existing.Secret); err != nil {
 		log.Error(err, "Failed to update CSI credentials secret for adopted cluster")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -684,17 +742,25 @@ func (r *StorageClusterReconciler) upsertCSICredentialsSecret(
 				_ = json.Unmarshal(data, &creds)
 			}
 
-			for _, c := range creds.Clusters {
+			found := false
+			for i, c := range creds.Clusters {
 				if c.ClusterID == clusterID {
-					return nil
+					creds.Clusters[i] = CSIClusterEntry{
+						ClusterID:       clusterID,
+						ClusterEndpoint: clusterEndpoint,
+						ClusterSecret:   clusterSecret,
+					}
+					found = true
+					break
 				}
 			}
-
-			creds.Clusters = append(creds.Clusters, CSIClusterEntry{
-				ClusterID:       clusterID,
-				ClusterEndpoint: clusterEndpoint,
-				ClusterSecret:   clusterSecret,
-			})
+			if !found {
+				creds.Clusters = append(creds.Clusters, CSIClusterEntry{
+					ClusterID:       clusterID,
+					ClusterEndpoint: clusterEndpoint,
+					ClusterSecret:   clusterSecret,
+				})
+			}
 
 			payload, err := json.MarshalIndent(creds, "", "  ")
 			if err != nil {
@@ -766,6 +832,16 @@ func (r *StorageClusterReconciler) syncStatus(
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+
+	clusterSecretName := fmt.Sprintf("simplyblock-cluster-%s", clusterCR.Name)
+	clusterSecret := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Name: clusterSecretName, Namespace: clusterCR.Namespace}, clusterSecret); err == nil {
+		secretVal := string(clusterSecret.Data["secret"])
+		if upsertErr := r.upsertCSICredentialsSecret(ctx, clusterCR.Namespace, clusterCR.Status.UUID, utils.ENDPOINT, secretVal); upsertErr != nil {
+			log.Error(upsertErr, "syncStatus: failed to upsert CSI credentials secret", "name", clusterCR.Name)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+	}
 
 	apiClient := webapi.NewClient()
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterCR.Status.UUID)

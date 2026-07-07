@@ -462,6 +462,38 @@ func RequiredNodesFromErasureCodingScheme(scheme string) (int, error) {
 	return ndcs + npcs, nil
 }
 
+// PoolListEntry represents a single pool entry returned by the backend list API.
+type PoolListEntry struct {
+	UUID      string `json:"id"`
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	MaxRwIOPS int64  `json:"max_rw_ios_per_sec"`
+	RWLimit   int64  `json:"max_rw_mbytes_per_sec"`
+	RLimit    int64  `json:"max_r_mbytes_per_sec"`
+	WLimit    int64  `json:"max_w_mbytes_per_sec"`
+	QoSHost   string `json:"qos_host,omitempty"`
+}
+
+// GetPoolByName lists all pools for a cluster and returns the one matching name.
+// Returns nil if no match is found.
+func GetPoolByName(ctx context.Context, apiClient *webapi.Client, clusterUUID, name string) (*PoolListEntry, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return nil, fmt.Errorf("list pools failed, status %d: %v, body: %s", status, err, string(body))
+	}
+	var entries []PoolListEntry
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return nil, fmt.Errorf("failed to parse pool list: %w", err)
+	}
+	for i := range entries {
+		if entries[i].Name == name {
+			return &entries[i], nil
+		}
+	}
+	return nil, nil
+}
+
 func GetPoolUUIDs(ctx context.Context, apiClient *webapi.Client, clusterUUID string) ([]string, error) {
 	log := logf.FromContext(ctx)
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)

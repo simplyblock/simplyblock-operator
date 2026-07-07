@@ -265,6 +265,39 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNode(
 	}
 
 	if !isPending {
+		// Proactive: check if nodes already exist on backend (e.g. from Helm deployment)
+		// before sending a POST that would either fail or create a duplicate.
+		// For multi-socket deployments (expectedPerHost > 1) a single POST creates all
+		// NUMA-socket nodes at once, so we skip POST if ANY node for this IP already
+		// exists. pollNodeOnline then waits for all expectedPerHost nodes to be online.
+		allNodes, lookupErr := listStorageNodesForCluster(ctx, apiClient, clusterUUID)
+		if lookupErr == nil {
+			existingCount := 0
+			for _, n := range allNodes {
+				if n.IP == ip {
+					existingCount++
+				}
+			}
+			if existingCount > 0 {
+				log.Info("Storage node(s) already exist on backend, adopting", "node", nodeName, "count", existingCount)
+				if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
+					return ctrl.Result{}, err
+				}
+				var matchingNodes []SNODEAPIResponse
+				for _, n := range allNodes {
+					if n.IP == ip {
+						matchingNodes = append(matchingNodes, n)
+					}
+				}
+				adoptStorageNodeStatus(snCR, nodeName, matchingNodes)
+				if err := r.Status().Update(ctx, snCR); err != nil {
+					log.Error(err, "Failed to set node status for adoption")
+					return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+				}
+				log.Info("Storage node(s) adopted from backend", "node", nodeName, "count", existingCount)
+				return ctrl.Result{}, nil
+			}
+		}
 		// Persist the pending marker BEFORE the POST so that every future
 		// reconcile — including those triggered while sbcli is retrying
 		// internally after a failure — sees the marker and skips the POST.
@@ -1133,6 +1166,20 @@ func getNodeInternalIP(ctx context.Context, c client.Client, nodeName string) (s
 	return "", fmt.Errorf("node %s has no InternalIP", nodeName)
 }
 
+// listStorageNodesForCluster fetches all backend storage nodes for the given cluster.
+func listStorageNodesForCluster(ctx context.Context, apiClient *webapi.Client, clusterUUID string) ([]SNODEAPIResponse, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		return nil, fmt.Errorf("list storage nodes failed, status %d: %v", status, err)
+	}
+	var nodes []SNODEAPIResponse
+	if err := json.Unmarshal(body, &nodes); err != nil {
+		return nil, fmt.Errorf("failed to parse storage node list: %w", err)
+	}
+	return nodes, nil
+}
+
 func ensureNodeStatus(
 	snCR *simplyblockv1alpha1.StorageNodeSet,
 	nodeName, ip string,
@@ -1153,6 +1200,37 @@ func ensureNodeStatus(
 	})
 
 	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
+}
+
+func adoptStorageNodeStatus(snCR *simplyblockv1alpha1.StorageNodeSet, nodeName string, nodes []SNODEAPIResponse) {
+	for _, res := range nodes {
+		entry := simplyblockv1alpha1.NodeStatus{
+			Hostname: nodeName,
+			UUID:     res.UUID,
+			Status:   res.Status,
+			MgmtIp:   res.IP,
+			Health:   res.Health,
+			Devices:  fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
+			CPU:      utils.IntToInt32Ptr(res.CPU),
+			Memory:   utils.HumanBytes(res.Memory, "iec"),
+			Volumes:  utils.IntToInt32Ptr(res.Volumes),
+			RpcPort:  utils.IntToInt32Ptr(res.RPC_PORT),
+			LvolPort: utils.IntToInt32Ptr(res.LVOL_PORT),
+			NvmfPort: utils.IntToInt32Ptr(res.NVMF_PORT),
+		}
+		matched := false
+		for i := range snCR.Status.Nodes {
+			n := &snCR.Status.Nodes[i]
+			if n.Hostname == nodeName && (n.UUID == res.UUID || n.UUID == "") {
+				*n = entry
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			snCR.Status.Nodes = append(snCR.Status.Nodes, entry)
+		}
+	}
 }
 
 func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tlsEnabled, tlsMutualEnabled bool) error {
