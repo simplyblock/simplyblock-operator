@@ -69,14 +69,14 @@ spec:
                   cluster that owns the backup.
                 type: string
                 x-kubernetes-validations:
-                - message: sourceClusterName is immutable after creation
+                - message: sourceClusterName is immutable once set
                   rule: self == oldSelf
               targetClusterName:
                 description: TargetClusterName is the StorageCluster CR name of the
                   cluster to import into.
                 type: string
                 x-kubernetes-validations:
-                - message: targetClusterName is immutable after creation
+                - message: targetClusterName is immutable once set
                   rule: self == oldSelf
             required:
             - sourceBackupID

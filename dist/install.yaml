@@ -222,7 +222,7 @@ spec:
                 description: ClusterName is the target storage cluster name.
                 type: string
                 x-kubernetes-validations:
-                - message: clusterName is immutable after creation
+                - message: clusterName is immutable once set
                   rule: self == oldSelf
               pvcTemplate:
                 description: PVCTemplate describes the PVC to create once the restore
@@ -524,7 +524,7 @@ spec:
         - spec
         type: object
         x-kubernetes-validations:
-        - message: backupRef.name is immutable after creation
+        - message: backupRef.name is immutable once set
           rule: '!has(oldSelf.spec.backupRef) || self.spec.backupRef.name == oldSelf.spec.backupRef.name'
     served: true
     storage: true
@@ -594,7 +594,7 @@ spec:
                 description: ClusterName is the target storage cluster name.
                 type: string
                 x-kubernetes-validations:
-                - message: clusterName is immutable after creation
+                - message: clusterName is immutable once set
                   rule: self == oldSelf
               dhchap:
                 default: false
@@ -603,7 +603,7 @@ spec:
                   enforced when allowedNodes is non-empty
                 type: boolean
                 x-kubernetes-validations:
-                - message: dhchap is immutable after creation
+                - message: dhchap is immutable once set
                   rule: self == oldSelf
               logicalVolumeMaxSize:
                 description: |-
@@ -841,7 +841,7 @@ spec:
                 description: Source cluster for the snapshots
                 type: string
                 x-kubernetes-validations:
-                - message: sourceCluster is immutable after creation
+                - message: sourceCluster is immutable once set
                   rule: self == oldSelf
               sourcePool:
                 description: required for failback to a fresh source cluster
@@ -850,7 +850,7 @@ spec:
                 description: Target cluster for replication
                 type: string
                 x-kubernetes-validations:
-                - message: targetCluster is immutable after creation
+                - message: targetCluster is immutable once set
                   rule: self == oldSelf
               targetPool:
                 description: Target cluster pool for replication
@@ -1065,7 +1065,7 @@ spec:
                 description: ClusterName is the target storage cluster name.
                 type: string
                 x-kubernetes-validations:
-                - message: clusterName is immutable after creation
+                - message: clusterName is immutable once set
                   rule: self == oldSelf
               pvcRef:
                 description: |-
@@ -1619,7 +1619,7 @@ spec:
                 description: ClusterName is the target storage cluster name.
                 type: string
                 x-kubernetes-validations:
-                - message: clusterName is immutable after creation
+                - message: clusterName is immutable once set
                   rule: self == oldSelf
               containerResources:
                 description: |-
@@ -1712,7 +1712,7 @@ spec:
                   device where supported.
                 type: boolean
                 x-kubernetes-validations:
-                - message: forceFormat4K is immutable after creation
+                - message: forceFormat4K is immutable once set
                   rule: self == oldSelf
               imagePullPolicy:
                 description: ImagePullPolicy controls when the container image is
@@ -1818,7 +1818,7 @@ spec:
                   nodes.
                 type: string
                 x-kubernetes-validations:
-                - message: mgmtIfname is immutable after creation
+                - message: mgmtIfname is immutable once set
                   rule: self == oldSelf
               nodeUUID:
                 description: NodeUUID is required when action is specified
@@ -1829,7 +1829,7 @@ spec:
                 format: int32
                 type: integer
                 x-kubernetes-validations:
-                - message: nodesPerSocket is immutable after creation
+                - message: nodesPerSocket is immutable once set
                   rule: self == oldSelf
               openShiftCluster:
                 description: OpenShiftCluster indicates OpenShift-specific behavior
@@ -1847,7 +1847,7 @@ spec:
                 format: int32
                 type: integer
                 x-kubernetes-validations:
-                - message: partitions is immutable after creation
+                - message: partitions is immutable once set
                   rule: self == oldSelf
               pcieAllowList:
                 description: PcieAllowList is the list of PCI addresses allowed for
@@ -2298,7 +2298,7 @@ spec:
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
-                - message: pvName is immutable after creation
+                - message: pvName is immutable once set
                   rule: self == oldSelf
               targetNodeUUID:
                 description: |-
@@ -2307,7 +2307,7 @@ spec:
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
-                - message: targetNodeUUID is immutable after creation
+                - message: targetNodeUUID is immutable once set
                   rule: self == oldSelf
             required:
             - pvName

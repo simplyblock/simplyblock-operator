@@ -56,7 +56,7 @@ spec:
                 description: ClusterName is the target storage cluster name.
                 type: string
                 x-kubernetes-validations:
-                - message: clusterName is immutable after creation
+                - message: clusterName is immutable once set
                   rule: self == oldSelf
               containerResources:
                 description: |-
@@ -149,7 +149,7 @@ spec:
                   device where supported.
                 type: boolean
                 x-kubernetes-validations:
-                - message: forceFormat4K is immutable after creation
+                - message: forceFormat4K is immutable once set
                   rule: self == oldSelf
               imagePullPolicy:
                 description: ImagePullPolicy controls when the container image is
@@ -255,7 +255,7 @@ spec:
                   nodes.
                 type: string
                 x-kubernetes-validations:
-                - message: mgmtIfname is immutable after creation
+                - message: mgmtIfname is immutable once set
                   rule: self == oldSelf
               nodeUUID:
                 description: NodeUUID is required when action is specified
@@ -266,7 +266,7 @@ spec:
                 format: int32
                 type: integer
                 x-kubernetes-validations:
-                - message: nodesPerSocket is immutable after creation
+                - message: nodesPerSocket is immutable once set
                   rule: self == oldSelf
               openShiftCluster:
                 description: OpenShiftCluster indicates OpenShift-specific behavior
@@ -284,7 +284,7 @@ spec:
                 format: int32
                 type: integer
                 x-kubernetes-validations:
-                - message: partitions is immutable after creation
+                - message: partitions is immutable once set
                   rule: self == oldSelf
               pcieAllowList:
                 description: PcieAllowList is the list of PCI addresses allowed for

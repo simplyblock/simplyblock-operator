@@ -113,7 +113,7 @@ type StorageClassParameters struct {
 type PoolSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="clusterName is immutable after creation"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="clusterName is immutable once set"
 	ClusterName string `json:"clusterName"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Status"
 	// Status is an optional desired-status hint for backend workflows.
@@ -132,7 +132,7 @@ type PoolSpec struct {
 	// DHCHAP enables DH-HMAC-CHAP key generation for the pool. Authentication is only
 	// enforced when allowedNodes is non-empty
 	// +kubebuilder:default=false
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="dhchap is immutable after creation"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="dhchap is immutable once set"
 	DHCHAP bool `json:"dhchap,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Allowed Nodes"
 	// AllowedNodes is the list of Kubernetes worker node names allowed to access volumes

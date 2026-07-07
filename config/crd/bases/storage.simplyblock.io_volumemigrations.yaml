@@ -75,7 +75,7 @@ spec:
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
-                - message: pvName is immutable after creation
+                - message: pvName is immutable once set
                   rule: self == oldSelf
               targetNodeUUID:
                 description: |-
@@ -84,7 +84,7 @@ spec:
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
-                - message: targetNodeUUID is immutable after creation
+                - message: targetNodeUUID is immutable once set
                   rule: self == oldSelf
             required:
             - pvName

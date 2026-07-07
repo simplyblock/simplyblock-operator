@@ -77,12 +77,12 @@ const (
 type SnapshotReplicationSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source Cluster"
 	// Source cluster for the snapshots
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="sourceCluster is immutable after creation"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="sourceCluster is immutable once set"
 	SourceCluster string `json:"sourceCluster"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Target Cluster"
 	// Target cluster for replication
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="targetCluster is immutable after creation"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="targetCluster is immutable once set"
 	TargetCluster string `json:"targetCluster"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Target Pool"

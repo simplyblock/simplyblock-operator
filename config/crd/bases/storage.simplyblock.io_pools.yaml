@@ -62,7 +62,7 @@ spec:
                 description: ClusterName is the target storage cluster name.
                 type: string
                 x-kubernetes-validations:
-                - message: clusterName is immutable after creation
+                - message: clusterName is immutable once set
                   rule: self == oldSelf
               dhchap:
                 default: false
@@ -71,7 +71,7 @@ spec:
                   enforced when allowedNodes is non-empty
                 type: boolean
                 x-kubernetes-validations:
-                - message: dhchap is immutable after creation
+                - message: dhchap is immutable once set
                   rule: self == oldSelf
               logicalVolumeMaxSize:
                 description: |-

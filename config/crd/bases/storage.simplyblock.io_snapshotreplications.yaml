@@ -77,7 +77,7 @@ spec:
                 description: Source cluster for the snapshots
                 type: string
                 x-kubernetes-validations:
-                - message: sourceCluster is immutable after creation
+                - message: sourceCluster is immutable once set
                   rule: self == oldSelf
               sourcePool:
                 description: required for failback to a fresh source cluster
@@ -86,7 +86,7 @@ spec:
                 description: Target cluster for replication
                 type: string
                 x-kubernetes-validations:
-                - message: targetCluster is immutable after creation
+                - message: targetCluster is immutable once set
                   rule: self == oldSelf
               targetPool:
                 description: Target cluster pool for replication
