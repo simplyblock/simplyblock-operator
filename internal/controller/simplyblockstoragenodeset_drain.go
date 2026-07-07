@@ -589,26 +589,24 @@ func (r *StorageNodeSetReconciler) drainVerify(
 	log := logf.FromContext(ctx)
 	nodeUUID := snCR.Spec.NodeUUID
 
-	volumes, err := listNodeVolumes(ctx, apiClient, clusterUUID, nodeUUID)
+	// Fetch pools and node volumes in a single pass — drainVerify may also need
+	// the pool list for system volume cleanup, so we reuse it rather than
+	// making a second GetStoragePools call.
+	pools, volumes, err := fetchPoolVolumes(ctx, apiClient, clusterUUID, nodeUUID)
 	if err != nil {
 		log.Error(err, "drain: failed to list volumes during verification", "nodeUUID", nodeUUID)
 		return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
 	}
 
-	filterRegex := simplyblockv1alpha1.DefaultSystemVolumeFilterRegex
-	if snCR.Spec.SystemVolumeFilterRegex != nil && *snCR.Spec.SystemVolumeFilterRegex != "" {
-		filterRegex = *snCR.Spec.SystemVolumeFilterRegex
-	}
-
-	re, err := regexp.Compile(filterRegex)
+	sysFilter, err := resolveSystemVolumeFilter(snCR, r)
 	if err != nil {
-		log.Error(err, "drain: invalid SystemVolumeFilterRegex, using empty filter")
-		re = regexp.MustCompile("^$") // match nothing
+		log.Error(err, "drain: invalid systemVolumeFilterRegex")
+		return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
 	}
 
 	var nonSystem, systemVols []string
 	for _, vol := range volumes {
-		if re.MatchString(vol.Name) {
+		if sysFilter.MatchString(vol.Name) {
 			systemVols = append(systemVols, vol.UUID)
 		} else {
 			nonSystem = append(nonSystem, vol.UUID)
@@ -626,11 +624,7 @@ func (r *StorageNodeSetReconciler) drainVerify(
 	// after issuing the deletes so the next reconcile confirms they are gone
 	// before advancing to Removing.
 	if len(systemVols) > 0 {
-		pools, err := apiClient.GetStoragePools(ctx, clusterUUID)
-		if err != nil {
-			log.Error(err, "drain: failed to list pools for system volume cleanup")
-			return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
-		}
+		// Build pool lookup from the pools already fetched above — no extra API call.
 		poolByVol := make(map[string]string)
 		for _, pool := range pools {
 			vols, err := apiClient.GetPoolVolumes(ctx, clusterUUID, pool.UUID)
@@ -783,24 +777,24 @@ func advanceDrainSubPhase(
 	return r.Status().Patch(ctx, snCR, patch)
 }
 
-// listNodeVolumes returns all volumes whose primary node is nodeUUID by listing
-// every pool in the cluster and filtering by VolumeInfo.PrimaryNodeUUID.
-func listNodeVolumes(
+// fetchPoolVolumes fetches all pools and returns (pools, nodeVolumes, err).
+// Callers that need both the pool list (e.g. for cleanup) and the node volumes
+// should call this once and reuse the returned pools, avoiding a second
+// GetStoragePools round-trip within the same reconcile.
+func fetchPoolVolumes(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
 	nodeUUID string,
-) ([]webapi.VolumeInfo, error) {
-	pools, err := apiClient.GetStoragePools(ctx, clusterUUID)
+) (pools []webapi.StoragePoolInfo, nodeVols []webapi.VolumeInfo, err error) {
+	pools, err = apiClient.GetStoragePools(ctx, clusterUUID)
 	if err != nil {
-		return nil, fmt.Errorf("listNodeVolumes: %w", err)
+		return nil, nil, fmt.Errorf("listNodeVolumes: %w", err)
 	}
-
-	var result []webapi.VolumeInfo
 	for _, pool := range pools {
 		vols, err := apiClient.GetPoolVolumes(ctx, clusterUUID, pool.UUID)
 		if err != nil {
-			return nil, fmt.Errorf("listNodeVolumes: pool %s: %w", pool.UUID, err)
+			return nil, nil, fmt.Errorf("listNodeVolumes: pool %s: %w", pool.UUID, err)
 		}
 		for _, v := range vols {
 			if v.PrimaryNodeUUID != nodeUUID {
@@ -811,10 +805,22 @@ func listNodeVolumes(
 			if v.Status == "in_deletion" {
 				continue
 			}
-			result = append(result, v)
+			nodeVols = append(nodeVols, v)
 		}
 	}
-	return result, nil
+	return pools, nodeVols, nil
+}
+
+// listNodeVolumes returns volumes on nodeUUID. Use fetchPoolVolumes when the
+// pool list is also needed (e.g. drainVerify cleanup) to avoid a double fetch.
+func listNodeVolumes(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID string,
+	nodeUUID string,
+) ([]webapi.VolumeInfo, error) {
+	_, vols, err := fetchPoolVolumes(ctx, apiClient, clusterUUID, nodeUUID)
+	return vols, err
 }
 
 // matchVolumesToPVs classifies each backend volume into one of three buckets:
