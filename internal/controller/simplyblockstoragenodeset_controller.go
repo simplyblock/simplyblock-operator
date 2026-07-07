@@ -1202,7 +1202,7 @@ func ensureNodeStatus(
 	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
 }
 
-func adoptStorageNodeStatus(snCR *simplyblockv1alpha1.StorageNode, nodeName string, nodes []SNODEAPIResponse) {
+func adoptStorageNodeStatus(snCR *simplyblockv1alpha1.StorageNodeSet, nodeName string, nodes []SNODEAPIResponse) {
 	for _, res := range nodes {
 		entry := simplyblockv1alpha1.NodeStatus{
 			Hostname: nodeName,
