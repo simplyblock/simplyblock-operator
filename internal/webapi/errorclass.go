@@ -43,14 +43,14 @@ func ClassifyStatus(status int) APIErrorClass {
 		return APIErrorClass{}
 
 	// Context-specific: meaning depends on the calling operation.
-	case http.StatusNotFound,  // 404
+	case http.StatusNotFound, // 404
 		http.StatusConflict: // 409
 		return APIErrorClass{ContextSpecific: true}
 
 	// Retryable server errors + request timeout + back-pressure.
-	case http.StatusRequestTimeout,      // 408
-		http.StatusTooManyRequests,      // 429
-		http.StatusInternalServerError,  // 500
+	case http.StatusRequestTimeout, // 408
+		http.StatusTooManyRequests,     // 429
+		http.StatusInternalServerError, // 500
 		http.StatusBadGateway,          // 502
 		http.StatusServiceUnavailable,  // 503
 		http.StatusGatewayTimeout,      // 504
@@ -58,18 +58,18 @@ func ClassifyStatus(status int) APIErrorClass {
 		return APIErrorClass{Retryable: true}
 
 	// Permanent server errors.
-	case http.StatusNotImplemented,               // 501
+	case http.StatusNotImplemented, // 501
 		http.StatusHTTPVersionNotSupported,       // 505
 		http.StatusLoopDetected,                  // 508
 		http.StatusNetworkAuthenticationRequired: // 511
 		return APIErrorClass{}
 
 	// Permanent client errors.
-	case http.StatusBadRequest,           // 400
-		http.StatusUnauthorized,          // 401
-		http.StatusForbidden,             // 403
-		http.StatusUnprocessableEntity,   // 422
-		http.StatusPreconditionFailed:    // 412
+	case http.StatusBadRequest, // 400
+		http.StatusUnauthorized,        // 401
+		http.StatusForbidden,           // 403
+		http.StatusUnprocessableEntity, // 422
+		http.StatusPreconditionFailed:  // 412
 		return APIErrorClass{}
 	}
 

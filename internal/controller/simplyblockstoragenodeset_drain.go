@@ -703,8 +703,24 @@ func (r *StorageNodeSetReconciler) resumeAndFail(
 	nodeUUID := snCR.Spec.NodeUUID
 
 	resumeEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/resume", clusterUUID, nodeUUID)
-	if _, _, err := apiClient.Do(ctx, http.MethodPost, resumeEndpoint, nil); err != nil {
-		log.Error(err, "drain: best-effort resume failed", "nodeUUID", nodeUUID)
+	_, resumeStatus, resumeErr := apiClient.Do(ctx, http.MethodPost, resumeEndpoint, nil)
+	resumeClass := webapi.ClassifyError(resumeErr, resumeStatus)
+	if resumeClass.Retryable {
+		// Transient resume failure — requeue so the node gets another resume
+		// attempt rather than being left suspended indefinitely.
+		log.Error(resumeErr, "drain: transient error resuming node, will retry",
+			"nodeUUID", nodeUUID, "status", resumeStatus)
+		patch := client.MergeFrom(snCR.DeepCopy())
+		snCR.Status.ActionStatus.Message = fmt.Sprintf("resume pending after failure: %s", reason)
+		snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
+		if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+			log.Error(err, "drain: failed to patch status during resume retry")
+		}
+		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
+	}
+	if resumeErr != nil || (resumeStatus >= http.StatusBadRequest && resumeStatus != http.StatusNotFound) {
+		log.Error(resumeErr, "drain: permanent error resuming node — node may remain suspended",
+			"nodeUUID", nodeUUID, "status", resumeStatus)
 	}
 
 	r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "NodeResumed",
@@ -777,6 +793,14 @@ func listNodeVolumes(
 //
 // System volumes (those matching filterRegex by name) are skipped entirely.
 // pvNameByVolumeUUID maps volume UUID → PV name for the pvManaged and pinned buckets.
+// matchVolumesToPVs classifies each backend volume into pvManaged, pinned, or
+// unmanaged buckets. System volumes matching filterRegex are skipped entirely.
+//
+// Note: if the PVC fetch for a PV-backed volume fails (e.g. API server
+// temporarily unavailable), that volume is conservatively placed in the
+// unmanaged bucket. This will block drain with an UnmanagedVolumeBlocking
+// event until the next reconcile succeeds. It is a transient false-positive,
+// not a permanent classification.
 func matchVolumesToPVs(
 	ctx context.Context,
 	r *StorageNodeSetReconciler,
