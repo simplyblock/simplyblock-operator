@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -209,8 +210,10 @@ func (c *Client) GetVolume(
 // connection strings for the target-side paths. The caller must establish and
 // validate those paths before calling ContinueMigration.
 //
-// If the API returns 409 (a migration already exists for the volume), any
-// existing migrations are cancelled and the request is retried once.
+// If the API reports that a migration already exists for the volume, any
+// existing migrations are cancelled and the request is retried once. The API
+// signals this as either 409 or 400 with an "...already exists... Cancel it
+// first" detail depending on deployment, so both are handled.
 func (c *Client) CreateMigration(
 	ctx context.Context,
 	clusterUUID, poolUUID, volumeUUID, targetNodeID string,
@@ -224,8 +227,9 @@ func (c *Client) CreateMigration(
 		return nil, fmt.Errorf("create migration for volume %s: %w", volumeUUID, err)
 	}
 
-	if statusCode == http.StatusConflict {
-		logger.Info("CreateMigration returned 409; cancelling existing migration(s) before retry", "volume", volumeUUID)
+	if isExistingMigrationConflict(statusCode, body) {
+		logger.Info("CreateMigration rejected: a migration already exists for the volume; cancelling before retry",
+			"volume", volumeUUID, "status", statusCode)
 		if cancelErr := c.cancelMigrationForVolume(ctx, clusterUUID, poolUUID, volumeUUID); cancelErr != nil {
 			return nil, fmt.Errorf("create migration for volume %s: cancel existing migrations: %w", volumeUUID, cancelErr)
 		}
@@ -250,6 +254,23 @@ func (c *Client) CreateMigration(
 	}
 	logger.Info("CreateMigration parsed", "volume", volumeUUID, "migration_id", m.ID, "connect_strings", len(m.ConnectStrings))
 	return &m, nil
+}
+
+// isExistingMigrationConflict reports whether a CreateMigration response
+// indicates an existing migration is blocking the request. Some deployments
+// return 409; others return 400 with a detail like "An active migration for
+// <vol> already exists targeting a different node (...). Cancel it first." Only
+// that specific 400 is treated as a conflict — other 400s (bad request, volume
+// already on the target node, etc.) must not trigger a cancel-and-retry.
+func isExistingMigrationConflict(statusCode int, body []byte) bool {
+	if statusCode == http.StatusConflict {
+		return true
+	}
+	if statusCode == http.StatusBadRequest {
+		b := strings.ToLower(string(body))
+		return strings.Contains(b, "already exists") && strings.Contains(b, "migration")
+	}
+	return false
 }
 
 // cancelMigrationForVolume lists migrations for the volume, finds the one
