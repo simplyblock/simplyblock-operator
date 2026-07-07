@@ -618,21 +618,18 @@ func (r *StorageNodeSetReconciler) drainVerify(
 			}
 			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/",
 				clusterUUID, poolUUID, volUUID)
-			_, delStatus, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
+			_, delStatus, delErr := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
+			delClass := webapi.ClassifyError(delErr, delStatus)
 			switch {
-			case err != nil:
-				// Transient network error — requeue and retry.
-				log.Error(err, "drain: transient error deleting system volume, retrying", "volUUID", volUUID)
-			case delStatus == http.StatusOK || delStatus == http.StatusNoContent || delStatus == http.StatusNotFound:
+			case delErr == nil && (delStatus == http.StatusOK || delStatus == http.StatusNoContent || delStatus == http.StatusNotFound):
 				log.Info("drain: deleted system volume", "volUUID", volUUID, "status", delStatus)
-			case delStatus >= http.StatusBadRequest && delStatus < http.StatusInternalServerError:
-				// 4xx: permanent rejection — the backend will not accept this delete.
+			case delClass.Retryable:
+				log.Error(delErr, "drain: transient error deleting system volume, will retry on next reconcile",
+					"volUUID", volUUID, "status", delStatus)
+			default:
+				// Permanent rejection — resume and fail the drain.
 				return r.resumeAndFail(ctx, apiClient, clusterUUID, snCR,
 					fmt.Sprintf("system volume %s delete rejected by backend (status %d)", volUUID, delStatus))
-			default:
-				// 5xx: transient — requeue and retry.
-				log.Error(nil, "drain: transient 5xx deleting system volume, retrying",
-					"volUUID", volUUID, "status", delStatus)
 			}
 		}
 		// Requeue to confirm the volumes are gone before advancing to Removing.
@@ -664,12 +661,9 @@ func (r *StorageNodeSetReconciler) drainRemove(
 	)
 
 	_, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
-	if err != nil {
-		log.Error(err, "drain: DELETE node request failed, retrying", "nodeUUID", nodeUUID)
-		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
-	}
 
-	if status == http.StatusOK || status == http.StatusNoContent || status == http.StatusNotFound {
+	// 200, 204: success. 404: node already gone — treat as success.
+	if err == nil && (status == http.StatusOK || status == http.StatusNoContent || status == http.StatusNotFound) {
 		r.Recorder.Eventf(snCR, corev1.EventTypeNormal, "NodeRemoved",
 			"storage node %s removed successfully", nodeUUID)
 		patch := client.MergeFrom(snCR.DeepCopy())
@@ -684,16 +678,16 @@ func (r *StorageNodeSetReconciler) drainRemove(
 		return ctrl.Result{}, nil
 	}
 
-	// 5xx: transient backend error — retry without resuming the node.
-	if status >= http.StatusInternalServerError {
-		log.Error(nil, "drain: DELETE node returned 5xx, retrying",
+	class := webapi.ClassifyError(err, status)
+	if class.Retryable {
+		log.Error(err, "drain: transient error on node DELETE, retrying",
 			"nodeUUID", nodeUUID, "status", status)
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
 
-	// 4xx (other than 404): permanent backend rejection — resume and fail.
+	// Permanent error — resume the node and mark failed.
 	return r.resumeAndFail(ctx, apiClient, clusterUUID, snCR,
-		fmt.Sprintf("DELETE node returned unexpected status %d", status))
+		fmt.Sprintf("DELETE node returned status %d", status))
 }
 
 // resumeAndFail attempts a best-effort resume of the suspended node, then marks

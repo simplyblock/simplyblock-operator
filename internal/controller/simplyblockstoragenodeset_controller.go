@@ -1851,25 +1851,34 @@ func (r *StorageNodeSetReconciler) waitForActionCompletion(
 	for i := 0; i < waitForActionCompletionRetries; i++ {
 		body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 
-		if action == utils.NodeActionRemove && status == http.StatusNotFound {
-			log.Info(
-				"Node successfully removed (404 returned)",
-				"nodeUUID", nodeUUID,
-			)
-			return nil
+		class := webapi.ClassifyError(err, status)
+
+		if class.ContextSpecific {
+			// 404/409 — interpret per action.
+			if status == http.StatusNotFound {
+				// Node no longer exists — treat as completed for shutdown/remove-like actions.
+				log.Info("Node not found during status poll, treating as complete",
+					"nodeUUID", nodeUUID, "action", action)
+				return nil
+			}
+			// 409 — unexpected during a status poll; retry.
+			waitForActionCompletionSleepFn(waitForActionCompletionWaitInterval)
+			continue
 		}
 
-		if err != nil || status >= 300 {
+		if !class.Retryable && (err != nil || status >= 300) {
+			// Permanent error — do not retry.
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d", status)
 			}
-			log.Error(
-				err,
-				"Failed to get node status",
-				"nodeUUID", nodeUUID,
-				"status", status,
-				"response", string(body),
-			)
+			log.Error(err, "Permanent error polling node status — aborting",
+				"nodeUUID", nodeUUID, "status", status)
+			return err
+		}
+
+		if class.Retryable {
+			log.Error(err, "Transient error polling node status, retrying",
+				"nodeUUID", nodeUUID, "status", status)
 			waitForActionCompletionSleepFn(waitForActionCompletionWaitInterval)
 			continue
 		}
@@ -1882,11 +1891,8 @@ func (r *StorageNodeSetReconciler) waitForActionCompletion(
 		}
 
 		if resp.Status == targetStatus {
-			log.Info(
-				"Node reached expected status",
-				"nodeUUID", nodeUUID,
-				"status", resp.Status,
-			)
+			log.Info("Node reached expected status",
+				"nodeUUID", nodeUUID, "status", resp.Status)
 			return nil
 		}
 
