@@ -1,72 +1,84 @@
-# Simplyblock Operator
-// TODO(user): Add simple overview of use/purpose
+# Simplyblock Operator for Kubernetes
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+**Kubernetes Operator for declarative management of simplyblock storage clusters**
 
-## Getting Started
+[![Documentation](https://img.shields.io/badge/Docs-simplyblock-blue)](https://docs.simplyblock.io/latest/deployments/kubernetes/) [![Issues](https://img.shields.io/github/issues/simplyblock/simplyblock-operator)](https://github.com/simplyblock/simplyblock-operator/issues)
 
-### Prerequisites
-- go version v1.24.6+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+![](assets/simplyblock-logo.svg)
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+### 📖 Read the full documentation at **[docs.simplyblock.io](https://docs.simplyblock.io)**
 
-```sh
-make docker-build docker-push IMG=<some-registry>/simplyblock-operator:tag
-```
+---
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+## 🚀 Overview
 
-**Install the CRDs into the cluster:**
+`simplyblock-operator` is the official **Kubernetes operator for simplyblock storage**. It turns the
+simplyblock control plane into a set of native Kubernetes Custom Resources, so you can provision and
+operate **high-performance NVMe/TCP block storage** the same way you manage any other Kubernetes object.
 
-```sh
-make install
-```
+The operator watches simplyblock CRs in its namespace and reconciles the desired state into actual
+storage-system state by calling the simplyblock Web API. Observed results are written back into each
+CR's status, giving you a declarative, GitOps-friendly, status-driven view of your storage estate.
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+Where the [simplyblock CSI driver](https://github.com/simplyblock/simplyblock-csi) provisions and
+attaches volumes to workloads, the operator manages the **lifecycle of the storage platform itself** —
+clusters, nodes, pools, backups, restores, and replication.
 
-```sh
-make deploy IMG=<some-registry>/simplyblock-operator:tag
-```
+👉 For full documentation, see the [Simplyblock Kubernetes Deployment Guide](https://docs.simplyblock.io/latest/deployments/kubernetes/).
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
+---
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+## ✨ Features
 
-```sh
-kubectl apply -k config/samples/
-```
+| Feature                        | Benefit                                                                        |
+|--------------------------------|--------------------------------------------------------------------------------|
+| **Declarative Storage Clusters** | Create, activate, expand, and lifecycle-manage clusters via Kubernetes CRs     |
+| **Storage Node Management**    | Reconciles the storage-node DaemonSet, node labels, and per-namespace RBAC      |
+| **Pool Provisioning**          | Manages storage pools, QoS, dhchap security, and host allow-lists              |
+| **Backup, Restore & Import**   | First-class backups with cross-cluster import and policy-driven retention       |
+| **Snapshot Replication**       | Replicates snapshots between clusters/pools, including failback support         |
+| **Drain-Aware Node Lifecycle** | Coordinates storage-node shutdown/restart with Kubernetes drains via PDBs        |
+| **Standard Kubernetes RBAC**   | Authorization delegated entirely to native K8s RBAC (no custom identity model)   |
+| **mTLS to the Control Plane**  | Optional cert-manager-issued mTLS between the operator and the Web API           |
 
->**NOTE**: Ensure that the samples has default values to test it out.
+---
 
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
+## 🧩 Custom Resources
 
-```sh
-kubectl delete -k config/samples/
-```
+The operator manages the following `storage.simplyblock.io/v1alpha1` resources:
 
-**Delete the APIs(CRDs) from the cluster:**
+| Kind                  | Purpose                                                                 |
+|-----------------------|-------------------------------------------------------------------------|
+| `ControlPlane`        | Singleton gating the system on control-plane readiness                  |
+| `StorageCluster`      | Create/activate/expand clusters and provision per-pool StorageClasses   |
+| `StorageNodeSet`      | Manage storage nodes and the storage-node DaemonSet                     |
+| `Pool`                | Create storage pools with QoS, dhchap security, and host affinity       |
+| `Task`                | Observe long-running cluster tasks                                      |
+| `StorageBackup`       | Snapshot a PVC's backing volume and create a cluster backup             |
+| `BackupRestore`       | Restore a backup into a cluster/pool/node                               |
+| `BackupImport`        | Import a backup from a source cluster's backend into a target cluster   |
+| `BackupPolicy`        | Define retention (`maxVersions`, `maxAge`) attached to PVCs             |
+| `SnapshotReplication` | Replicate snapshots between clusters/pools                              |
+| `VolumeMigration`     | Migrate volumes between clusters                                        |
 
-```sh
-make uninstall
-```
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed component and reconciliation overview.
 
-**UnDeploy the controller from the cluster:**
+---
 
-```sh
-make undeploy
-```
+## 📦 Installation
 
-## Access control (RBAC)
+The operator is installed as part of a simplyblock deployment via the **official Helm charts**. Follow
+the documentation for the supported, end-to-end installation flow — it wires up the control plane, the
+`ControlPlane` CR, cert-manager, and the CSI driver alongside the operator:
+
+👉 **[Simplyblock Kubernetes Deployment Guide](https://docs.simplyblock.io/latest/deployments/kubernetes/)**
+
+> The manual and from-source paths below exist for development and troubleshooting only. For any real
+> deployment, use the documentation and Helm charts above.
+
+---
+
+## 🔐 Access Control (RBAC)
 
 The operator delegates user authorisation entirely to standard Kubernetes RBAC.
 It does not ship per-CR `admin`/`editor`/`viewer` ClusterRoles or any
@@ -191,70 +203,86 @@ identities are **not** propagated to the backend. K8s RBAC governs what users
 can do to the CRs, the operator then talks to webapi using its own service
 account token.
 
-## Project Distribution
+---
 
-Following the options to release and provide this solution to the users.
+## 🧪 Manual & From-Source Installation (Development Only)
 
-### By providing a bundle with all YAML files
+> ⚠️ These paths are for local development and troubleshooting. For real deployments, use the
+> [documentation and Helm charts](https://docs.simplyblock.io/latest/deployments/kubernetes/).
 
-1. Build the installer for the image built and published in the registry:
+**Prerequisites**
+
+- Go v1.24.6+, Docker v17.03+, kubectl v1.11.3+
+- Access to a Kubernetes v1.11.3+ cluster
+- A reachable simplyblock control plane (Web API)
+
+**Apply the pre-built installer bundle** (CRDs, RBAC, and the manager deployment):
 
 ```sh
+kubectl apply -f https://raw.githubusercontent.com/simplyblock/simplyblock-operator/main/dist/install.yaml
+kubectl -n simplyblock-operator get pods        # manager pod should be Running
+kubectl apply -k config/samples/                # try the bundled samples
+```
+
+**Build and deploy from source:**
+
+```sh
+# Build and push the operator image
+make docker-build docker-push IMG=<some-registry>/simplyblock-operator:tag
+
+# Install CRDs and deploy the manager with your image
+make install
+make deploy IMG=<some-registry>/simplyblock-operator:tag
+
+# Regenerate the install bundle (dist/install.yaml)
 make build-installer IMG=<some-registry>/simplyblock-operator:tag
+
+# Tear everything down
+make undeploy      # remove the controller
+make uninstall     # remove the CRDs
 ```
 
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
+> **NOTE:** The pushed image must be reachable from the cluster — ensure the registry is accessible and
+> that you have pull permissions. If you hit RBAC errors during `make deploy`, you may need cluster-admin
+> privileges. Run `make help` for the full list of targets.
 
-2. Using the installer
+---
 
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
+## 📄 License
 
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/simplyblock-operator/<tag or branch>/dist/install.yaml
-```
+This project is licensed under the **Apache 2.0 License** — see the [LICENSE](LICENSE) file for details.
 
-### By providing a Helm Chart
+---
 
-1. Build the chart using the optional helm plugin
+## 📚 Documentation
 
-```sh
-kubebuilder edit --plugins=helm/v2-alpha
-```
+* [Architecture Overview](ARCHITECTURE.md)
+* [Kubernetes Deployment Guide](https://docs.simplyblock.io/latest/deployments/kubernetes/)
+* [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
 
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
+---
 
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
+## 🤝 Contributing
 
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
+We welcome contributions!
 
-**NOTE:** Run `make help` for more information on all potential `make` targets
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/my-feature`)
+3. Commit your changes with a clear message
+4. Push to your fork and open a Pull Request
 
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+Run `make help` for the full list of available `make` targets.
 
-## License
+---
 
-Copyright 2025.
+## 📬 Support
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+* 📖 [Documentation](https://docs.simplyblock.io/latest/deployments/kubernetes/)
+* 🐞 [GitHub Issues](https://github.com/simplyblock/simplyblock-operator/issues)
+* 🌐 [Simplyblock Website](https://www.simplyblock.io)
 
-    http://www.apache.org/licenses/LICENSE-2.0
+Maintained by the **simplyblock team**.
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+---
 
+**Manage NVMe-grade simplyblock storage the Kubernetes-native way.**
