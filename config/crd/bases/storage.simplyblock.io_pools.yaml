@@ -62,7 +62,7 @@ spec:
                 description: ClusterName is the target storage cluster name.
                 type: string
                 x-kubernetes-validations:
-                - message: clusterName is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               dhchap:
                 default: false
@@ -71,7 +71,7 @@ spec:
                   enforced when allowedNodes is non-empty
                 type: boolean
                 x-kubernetes-validations:
-                - message: dhchap is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               logicalVolumeMaxSize:
                 description: |-
@@ -176,6 +176,9 @@ spec:
             required:
             - clusterName
             type: object
+            x-kubernetes-validations:
+            - message: field dhchap is immutable once set
+              rule: '!has(oldSelf.dhchap) || has(self.dhchap)'
           status:
             description: status defines the observed state of Pool
             properties:

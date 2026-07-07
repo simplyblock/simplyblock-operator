@@ -32,7 +32,7 @@ const (
 type BackupImportSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source Cluster Name"
 	// SourceClusterName is the StorageCluster CR name of the cluster that owns the backup.
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="sourceClusterName is immutable once set"
+	// +k8s:immutable
 	SourceClusterName string `json:"sourceClusterName"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source Backup ID"
 	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9_-]{1,128}$`
@@ -40,7 +40,7 @@ type BackupImportSpec struct {
 	SourceBackupID string `json:"sourceBackupID"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Target Cluster Name"
 	// TargetClusterName is the StorageCluster CR name of the cluster to import into.
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="targetClusterName is immutable once set"
+	// +k8s:immutable
 	TargetClusterName string `json:"targetClusterName"`
 }
 

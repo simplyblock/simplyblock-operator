@@ -63,7 +63,7 @@ type PVCTemplate struct {
 type BackupRestoreSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="clusterName is immutable once set"
+	// +k8s:immutable
 	ClusterName string `json:"clusterName"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup Ref"
 	// BackupRef references the StorageBackup resource to restore from.

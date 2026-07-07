@@ -68,7 +68,7 @@ spec:
                 description: ClusterName is the target storage cluster name.
                 type: string
                 x-kubernetes-validations:
-                - message: clusterName is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               pvcTemplate:
                 description: PVCTemplate describes the PVC to create once the restore

@@ -222,7 +222,7 @@ spec:
                 description: ClusterName is the target storage cluster name.
                 type: string
                 x-kubernetes-validations:
-                - message: clusterName is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               pvcTemplate:
                 description: PVCTemplate describes the PVC to create once the restore
@@ -594,7 +594,7 @@ spec:
                 description: ClusterName is the target storage cluster name.
                 type: string
                 x-kubernetes-validations:
-                - message: clusterName is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               dhchap:
                 default: false
@@ -603,7 +603,7 @@ spec:
                   enforced when allowedNodes is non-empty
                 type: boolean
                 x-kubernetes-validations:
-                - message: dhchap is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               logicalVolumeMaxSize:
                 description: |-
@@ -708,6 +708,9 @@ spec:
             required:
             - clusterName
             type: object
+            x-kubernetes-validations:
+            - message: field dhchap is immutable once set
+              rule: '!has(oldSelf.dhchap) || has(self.dhchap)'
           status:
             description: status defines the observed state of Pool
             properties:
@@ -841,7 +844,7 @@ spec:
                 description: Source cluster for the snapshots
                 type: string
                 x-kubernetes-validations:
-                - message: sourceCluster is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               sourcePool:
                 description: required for failback to a fresh source cluster
@@ -850,7 +853,7 @@ spec:
                 description: Target cluster for replication
                 type: string
                 x-kubernetes-validations:
-                - message: targetCluster is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               targetPool:
                 description: Target cluster pool for replication
@@ -1065,7 +1068,7 @@ spec:
                 description: ClusterName is the target storage cluster name.
                 type: string
                 x-kubernetes-validations:
-                - message: clusterName is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               pvcRef:
                 description: |-
@@ -1619,7 +1622,7 @@ spec:
                 description: ClusterName is the target storage cluster name.
                 type: string
                 x-kubernetes-validations:
-                - message: clusterName is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               containerResources:
                 description: |-
@@ -1712,7 +1715,7 @@ spec:
                   device where supported.
                 type: boolean
                 x-kubernetes-validations:
-                - message: forceFormat4K is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               imagePullPolicy:
                 description: ImagePullPolicy controls when the container image is
@@ -1818,7 +1821,7 @@ spec:
                   nodes.
                 type: string
                 x-kubernetes-validations:
-                - message: mgmtIfname is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               nodeUUID:
                 description: NodeUUID is required when action is specified
@@ -1829,7 +1832,7 @@ spec:
                 format: int32
                 type: integer
                 x-kubernetes-validations:
-                - message: nodesPerSocket is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               openShiftCluster:
                 description: OpenShiftCluster indicates OpenShift-specific behavior
@@ -1847,7 +1850,7 @@ spec:
                 format: int32
                 type: integer
                 x-kubernetes-validations:
-                - message: partitions is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               pcieAllowList:
                 description: PcieAllowList is the list of PCI addresses allowed for
@@ -1948,6 +1951,15 @@ spec:
             required:
             - clusterName
             type: object
+            x-kubernetes-validations:
+            - message: field mgmtIfname is immutable once set
+              rule: '!has(oldSelf.mgmtIfname) || has(self.mgmtIfname)'
+            - message: field partitions is immutable once set
+              rule: '!has(oldSelf.partitions) || has(self.partitions)'
+            - message: field nodesPerSocket is immutable once set
+              rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
+            - message: field forceFormat4K is immutable once set
+              rule: '!has(oldSelf.forceFormat4K) || has(self.forceFormat4K)'
           status:
             description: status defines the observed state of StorageNodeSet
             properties:
@@ -2298,7 +2310,7 @@ spec:
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
-                - message: pvName is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
               targetNodeUUID:
                 description: |-
@@ -2307,7 +2319,7 @@ spec:
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
-                - message: targetNodeUUID is immutable once set
+                - message: field is immutable
                   rule: self == oldSelf
             required:
             - pvName
