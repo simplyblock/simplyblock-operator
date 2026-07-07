@@ -36,6 +36,7 @@ type JournalManagerSpec struct {
 type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
+	// +k8s:immutable
 	ClusterName string `json:"clusterName"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Image"
 	// ClusterImage is the container image used for storage-node workloads.
@@ -62,9 +63,11 @@ type StorageNodeSetSpec struct {
 	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Management Interface"
 	// MgmtIfname is the management interface name used by storage nodes.
+	// +k8s:immutable
 	MgmtIfname string `json:"mgmtIfname,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Partitions"
 	// Partitions is the number of partitions created per backend storage device.
+	// +k8s:immutable
 	Partitions *int32 `json:"partitions,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Journal Manager"
 	// JournalManagerSpec configures journal manager behavior.
@@ -89,6 +92,7 @@ type StorageNodeSetSpec struct {
 	SocketsToUse []string `json:"socketsToUse,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Nodes Per Socket"
 	// NodesPerSocket defines how many storage nodes are created per NUMA socket.
+	// +k8s:immutable
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Data Interfaces"
 	// DataIfname lists data-plane network interfaces.
@@ -121,6 +125,7 @@ type StorageNodeSetSpec struct {
 	SkipKubeletConfiguration *bool `json:"skipKubeletConfiguration,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force Format 4K"
 	// ForceFormat4K forces 4K blocksize formatting of the NVMe device where supported.
+	// +k8s:immutable
 	ForceFormat4K *bool `json:"forceFormat4K,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable CPU Topology"
 	// EnableCpuTopology enables topology-aware CPU handling.

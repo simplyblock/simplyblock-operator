@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: storagenodesets.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -55,6 +55,9 @@ spec:
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               containerResources:
                 description: |-
                   ContainerResources sets CPU and memory requests/limits for the main storage-node container.
@@ -145,6 +148,9 @@ spec:
                 description: ForceFormat4K forces 4K blocksize formatting of the NVMe
                   device where supported.
                 type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               imagePullPolicy:
                 description: ImagePullPolicy controls when the container image is
                   pulled. Defaults to IfNotPresent.
@@ -248,6 +254,9 @@ spec:
                 description: MgmtIfname is the management interface name used by storage
                   nodes.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               nodeUUID:
                 description: NodeUUID is required when action is specified
                 type: string
@@ -256,6 +265,9 @@ spec:
                   per NUMA socket.
                 format: int32
                 type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               openShiftCluster:
                 description: OpenShiftCluster indicates OpenShift-specific behavior
                   should be enabled.
@@ -271,6 +283,9 @@ spec:
                   storage device.
                 format: int32
                 type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               pcieAllowList:
                 description: PcieAllowList is the list of PCI addresses allowed for
                   use.
@@ -370,6 +385,15 @@ spec:
             required:
             - clusterName
             type: object
+            x-kubernetes-validations:
+            - message: field mgmtIfname is immutable once set
+              rule: '!has(oldSelf.mgmtIfname) || has(self.mgmtIfname)'
+            - message: field partitions is immutable once set
+              rule: '!has(oldSelf.partitions) || has(self.partitions)'
+            - message: field nodesPerSocket is immutable once set
+              rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
+            - message: field forceFormat4K is immutable once set
+              rule: '!has(oldSelf.forceFormat4K) || has(self.forceFormat4K)'
           status:
             description: status defines the observed state of StorageNodeSet
             properties:
