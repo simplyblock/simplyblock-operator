@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -59,6 +60,10 @@ type StorageNodeSetReconciler struct {
 	TLSProvider      string
 	TLSMutualEnabled bool
 	Recorder         record.EventRecorder
+	// systemVolumeFilterCache caches compiled system-volume filter regexes keyed
+	// by the pattern string. Compilation errors are surfaced on first use and the
+	// CR is rejected, so subsequent reconciles reuse the valid compiled regex.
+	systemVolumeFilterCache sync.Map
 }
 
 type SNODEAPIResponse struct {

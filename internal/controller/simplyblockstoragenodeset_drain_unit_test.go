@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -235,7 +236,7 @@ func TestMatchVolumesToPVs_PVManaged(t *testing.T) {
 	r := newDrainReconciler(t, pv, pvc)
 
 	vols := []webapi.VolumeInfo{{UUID: "vol-1111", Name: "pvc-something"}}
-	pvManaged, pinned, unmanaged, byUUID, err := matchVolumesToPVs(context.Background(), r, vols, "^never-matches$")
+	pvManaged, pinned, unmanaged, byUUID, err := matchVolumesToPVs(context.Background(), r, vols, regexp.MustCompile("^never-matches$"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -256,7 +257,7 @@ func TestMatchVolumesToPVs_Pinned(t *testing.T) {
 	r := newDrainReconciler(t, pv, pvc)
 
 	vols := []webapi.VolumeInfo{{UUID: "vol-2222", Name: "pvc-something"}}
-	pvManaged, pinned, unmanaged, _, err := matchVolumesToPVs(context.Background(), r, vols, "^never-matches$")
+	pvManaged, pinned, unmanaged, _, err := matchVolumesToPVs(context.Background(), r, vols, regexp.MustCompile("^never-matches$"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -272,7 +273,7 @@ func TestMatchVolumesToPVs_Unmanaged(t *testing.T) {
 	r := newDrainReconciler(t) // no PVs in cluster
 
 	vols := []webapi.VolumeInfo{{UUID: "vol-orphan", Name: "manually-created"}}
-	pvManaged, pinned, unmanaged, _, err := matchVolumesToPVs(context.Background(), r, vols, "^never-matches$")
+	pvManaged, pinned, unmanaged, _, err := matchVolumesToPVs(context.Background(), r, vols, regexp.MustCompile("^never-matches$"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -288,7 +289,7 @@ func TestMatchVolumesToPVs_SystemVolumeSkipped(t *testing.T) {
 	r := newDrainReconciler(t) // no PVs — if not filtered, would be unmanaged
 
 	vols := []webapi.VolumeInfo{{UUID: "vol-bench", Name: "sb-fio-baseline-xyz"}}
-	pvManaged, pinned, unmanaged, _, err := matchVolumesToPVs(context.Background(), r, vols, simplyblockv1alpha1.DefaultSystemVolumeFilterRegex)
+	pvManaged, pinned, unmanaged, _, err := matchVolumesToPVs(context.Background(), r, vols, defaultSystemVolumeFilter)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -393,7 +394,7 @@ func TestDrainValidateBothPinnedAndUnmanagedSurfacedTogether(t *testing.T) {
 
 func TestMatchVolumesToPVs_EmptyNodeSkipsMigration(t *testing.T) {
 	r := newDrainReconciler(t)
-	pvManaged, pinned, unmanaged, _, err := matchVolumesToPVs(context.Background(), r, nil, simplyblockv1alpha1.DefaultSystemVolumeFilterRegex)
+	pvManaged, pinned, unmanaged, _, err := matchVolumesToPVs(context.Background(), r, nil, defaultSystemVolumeFilter)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -408,7 +409,7 @@ func TestMatchVolumesToPVs_OnlySystemVolumes(t *testing.T) {
 		{UUID: "v1", Name: "sb-fio-baseline-read"},
 		{UUID: "v2", Name: "sb-fio-baseline-write"},
 	}
-	pvManaged, pinned, unmanaged, _, err := matchVolumesToPVs(context.Background(), r, vols, simplyblockv1alpha1.DefaultSystemVolumeFilterRegex)
+	pvManaged, pinned, unmanaged, _, err := matchVolumesToPVs(context.Background(), r, vols, defaultSystemVolumeFilter)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

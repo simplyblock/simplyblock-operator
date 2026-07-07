@@ -38,6 +38,35 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
+// defaultSystemVolumeFilter is compiled once at package init from the
+// well-known default pattern. A MustCompile panics at startup if the constant
+// is malformed — intentional fast-fail for a hardcoded value.
+var defaultSystemVolumeFilter = regexp.MustCompile(simplyblockv1alpha1.DefaultSystemVolumeFilterRegex)
+
+// resolveSystemVolumeFilter returns the compiled regex for the CR's system
+// volume filter. The default is a package-level constant; custom patterns are
+// compiled on first use and cached in the reconciler. If a custom pattern
+// fails to compile, an error is returned so the reconciler can surface it to
+// the user before touching any volumes.
+func resolveSystemVolumeFilter(
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+	r *StorageNodeSetReconciler,
+) (*regexp.Regexp, error) {
+	if snCR.Spec.SystemVolumeFilterRegex == nil || *snCR.Spec.SystemVolumeFilterRegex == "" {
+		return defaultSystemVolumeFilter, nil
+	}
+	pattern := *snCR.Spec.SystemVolumeFilterRegex
+	if cached, ok := r.systemVolumeFilterCache.Load(pattern); ok {
+		return cached.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid systemVolumeFilterRegex %q: %w", pattern, err)
+	}
+	r.systemVolumeFilterCache.Store(pattern, re)
+	return re, nil
+}
+
 // Drain sub-phase names.
 const (
 	drainSubPhaseValidating = "Validating"
@@ -249,12 +278,13 @@ func (r *StorageNodeSetReconciler) drainValidate(
 		return ctrl.Result{RequeueAfter: drainRequeueValidate}, nil
 	}
 
-	filterRegex := simplyblockv1alpha1.DefaultSystemVolumeFilterRegex
-	if snCR.Spec.SystemVolumeFilterRegex != nil && *snCR.Spec.SystemVolumeFilterRegex != "" {
-		filterRegex = *snCR.Spec.SystemVolumeFilterRegex
+	sysFilter, err := resolveSystemVolumeFilter(snCR, r)
+	if err != nil {
+		log.Error(err, "drain: invalid systemVolumeFilterRegex")
+		return ctrl.Result{RequeueAfter: drainRequeueValidate}, nil
 	}
 
-	_, pinned, unmanaged, _, err := matchVolumesToPVs(ctx, r, volumes, filterRegex)
+	_, pinned, unmanaged, _, err := matchVolumesToPVs(ctx, r, volumes, sysFilter)
 	if err != nil {
 		log.Error(err, "drain: matchVolumesToPVs failed")
 		return ctrl.Result{RequeueAfter: drainRequeueValidate}, nil
@@ -427,12 +457,13 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 			return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 		}
 
-		filterRegex := simplyblockv1alpha1.DefaultSystemVolumeFilterRegex
-		if snCR.Spec.SystemVolumeFilterRegex != nil && *snCR.Spec.SystemVolumeFilterRegex != "" {
-			filterRegex = *snCR.Spec.SystemVolumeFilterRegex
+		sysFilter, err := resolveSystemVolumeFilter(snCR, r)
+		if err != nil {
+			log.Error(err, "drain: invalid systemVolumeFilterRegex")
+			return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 		}
 
-		pvManaged, _, _, pvNameByVolumeUUID, err := matchVolumesToPVs(ctx, r, volumes, filterRegex)
+		pvManaged, _, _, pvNameByVolumeUUID, err := matchVolumesToPVs(ctx, r, volumes, sysFilter)
 		if err != nil {
 			log.Error(err, "drain: matchVolumesToPVs failed during migration creation")
 			return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
@@ -805,7 +836,7 @@ func matchVolumesToPVs(
 	ctx context.Context,
 	r *StorageNodeSetReconciler,
 	volumes []webapi.VolumeInfo,
-	filterRegex string,
+	sysFilter *regexp.Regexp,
 ) (pvManaged, pinned, unmanaged []string, pvNameByVolumeUUID map[string]string, err error) {
 	log := logf.FromContext(ctx)
 
@@ -835,15 +866,9 @@ func matchVolumesToPVs(
 		}
 	}
 
-	re, reErr := regexp.Compile(filterRegex)
-	if reErr != nil {
-		log.Error(reErr, "matchVolumesToPVs: invalid filterRegex, treating all volumes as non-system", "regex", filterRegex)
-		re = regexp.MustCompile("^$") // match nothing — no volumes will be treated as system
-	}
-
 	for _, vol := range volumes {
 		// System volume: skip entirely.
-		if re.MatchString(vol.Name) {
+		if sysFilter.MatchString(vol.Name) {
 			continue
 		}
 
