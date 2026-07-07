@@ -114,7 +114,7 @@ func TestSimplyblockRebalancerInjector_Handle(t *testing.T) {
 		podName    = "snode-spdk-pod-4420-c03e15"
 	)
 
-	spdkLabels := map[string]string{"role": "simplyblock-storage-node"}
+	spdkLabels := map[string]string{"app": "spdk-app-4420"}
 
 	cases := []struct {
 		name        string
@@ -124,14 +124,14 @@ func TestSimplyblockRebalancerInjector_Handle(t *testing.T) {
 		wantPatch   bool
 	}{
 		{
-			name:        "non-storage-node role label — skipped",
-			pod:         makePod(podName, map[string]string{"role": "other"}, nil),
+			name:        "non-spdk app label — skipped",
+			pod:         makePod(podName, map[string]string{"app": "other-app"}, nil),
 			cluster:     makeCluster(true, benchImage),
 			wantAllowed: true,
 			wantPatch:   false,
 		},
 		{
-			name:        "no role label — skipped",
+			name:        "no app label — skipped",
 			pod:         makePod(podName, nil, nil),
 			cluster:     makeCluster(true, benchImage),
 			wantAllowed: true,

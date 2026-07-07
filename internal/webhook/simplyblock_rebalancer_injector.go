@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	roleLabelKey       = "role"
-	roleLabelValue     = "simplyblock-storage-node"
+	appLabel           = "app"
+	spdkAppPrefix      = "spdk-app-"
 	injectedAnnotation = "simplyblock.io/simplyblock-rebalancer-injected"
 	annotationTrue     = "true"
 )
@@ -27,7 +27,7 @@ const (
 // +kubebuilder:webhook:path=/mutate-v1-pod-simplyblock-rebalancer,mutating=true,failurePolicy=ignore,sideEffects=None,groups="",resources=pods,verbs=create,versions=v1,name=simplyblock-rebalancer-injector.simplyblock.io,admissionReviewVersions=v1
 
 // SimplyblockRebalancerInjector is a mutating admission webhook that injects the simplyblock-rebalancer
-// sidecar into any pod labeled role=simplyblock-storage-node, provided the associated
+// sidecar into any pod labelled role=simplyblock-storage-node, provided the associated
 // StorageCluster has latency benchmarking enabled. failurePolicy=ignore ensures that
 // webhook unavailability never blocks storage node pod creation.
 type SimplyblockRebalancerInjector struct {
@@ -45,9 +45,9 @@ func (h *SimplyblockRebalancerInjector) Handle(
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
-	if pod.Labels[roleLabelKey] != roleLabelValue {
-		log.V(1).Info("Skipping: not a simplyblock storage-node pod", "role", pod.Labels[roleLabelKey])
-		return admission.Allowed("not a simplyblock storage-node pod")
+	if !strings.HasPrefix(pod.Labels[appLabel], spdkAppPrefix) {
+		log.V(1).Info("Skipping: not an spdk-app pod", "app", pod.Labels[appLabel])
+		return admission.Allowed("not an spdk-app pod")
 	}
 
 	if pod.Annotations[injectedAnnotation] == annotationTrue {
