@@ -86,6 +86,10 @@ type StorageBackupStatus struct {
 	LvolID string `json:"lvolID,omitempty"`
 	// LvolName is the backend logical volume name.
 	LvolName string `json:"lvolName,omitempty"`
+	// FSType is the filesystem type of the source PersistentVolume (e.g. "ext4",
+	// "xfs"), captured at backup time so a restore can preserve it regardless of
+	// which StorageClass the restored PVC ends up using.
+	FSType string `json:"fsType,omitempty"`
 
 	// SnapshotID is the internally-created snapshot UUID used for the backup request.
 	SnapshotID string `json:"snapshotID,omitempty"`

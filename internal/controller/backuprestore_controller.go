@@ -254,6 +254,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 		s.ClusterUUID = clusterUUID
 		s.BackupID = backup.Status.BackupID
 		s.SourceLvolID = backup.Status.LvolID
+		s.FSType = backup.Status.FSType
 		s.SourceClusterUUID = backup.Status.SourceClusterUUID
 		if s.Phase == "" {
 			s.Phase = simplyblockv1alpha1.RestorePhasePending
@@ -776,6 +777,13 @@ func (r *BackupRestoreReconciler) ensurePV(
 					Driver:           utils.CSIProvisioner,
 					VolumeHandle:     volumeHandle,
 					VolumeAttributes: volumeAttributes,
+					// FSType preserves the original source volume's filesystem
+					// (e.g. xfs) so the restored volume mounts the same way it
+					// was backed up, instead of the CSI driver's ext4 default.
+					// Empty for backups taken before this field existed, or for
+					// imported backups with no live source PV — the CSI driver
+					// falls back to its default in that case.
+					FSType: restoreCR.Status.FSType,
 				},
 			},
 		},
