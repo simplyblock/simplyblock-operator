@@ -2721,6 +2721,16 @@ rules:
   - update
   - watch
 - apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - mutatingwebhookconfigurations
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - apps
   resources:
   - daemonsets
@@ -3289,7 +3299,6 @@ spec:
         volumeMounts:
         - mountPath: /tmp/k8s-webhook-server/serving-certs
           name: webhook-certs
-          readOnly: true
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -3297,37 +3306,12 @@ spec:
       serviceAccountName: simplyblock-operator-controller-manager
       terminationGracePeriodSeconds: 10
       volumes:
-      - name: webhook-certs
-        secret:
-          secretName: webhook-server-cert
----
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: simplyblock-operator-serving-cert
-  namespace: simplyblock-operator-system
-spec:
-  dnsNames:
-  - simplyblock-operator-webhook-service.simplyblock-operator-system.svc
-  - simplyblock-operator-webhook-service.simplyblock-operator-system.svc.cluster.local
-  issuerRef:
-    kind: ClusterIssuer
-    name: simplyblock-operator-selfsigned-cluster-issuer
-  secretName: webhook-server-cert
----
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: simplyblock-operator-selfsigned-cluster-issuer
-  namespace: simplyblock-operator-system
-spec:
-  selfSigned: {}
+      - emptyDir: {}
+        name: webhook-certs
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
-  annotations:
-    cert-manager.io/inject-ca-from: simplyblock-operator-system/simplyblock-operator-serving-cert
   name: simplyblock-operator-mutating-webhook-configuration
 webhooks:
 - admissionReviewVersions:

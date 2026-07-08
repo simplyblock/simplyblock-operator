@@ -167,6 +167,10 @@ func main() {
 	webhookTLSOpts := tlsOpts
 	webhookServerOptions := webhook.Options{
 		TLSOpts: webhookTLSOpts,
+		// Serve from the location the runtime cert provisioner writes to; this is
+		// also controller-runtime's default, but we set it explicitly so the value
+		// is discoverable alongside the rotator/provisioner in internal/webhook.
+		CertDir: utils.WebhookCertDir,
 	}
 
 	if len(webhookCertPath) > 0 {
@@ -391,8 +395,24 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
-	mgr.GetWebhookServer().Register("/mutate-v1-pod-simplyblock-rebalancer",
-		&webhook.Admission{Handler: &internalwebhook.SimplyblockRebalancerInjector{Client: mgr.GetClient()}})
+	// Provision the mutating-webhook serving certificate at runtime (self-signed
+	// via cert-controller, or from cert-manager when SB_TLS_PROVIDER=cert-manager).
+	webhookReady, err := internalwebhook.SetupWebhookCertificate(mgr, operatorNamespace, tlsProvider)
+	if err != nil {
+		setupLog.Error(err, "unable to set up webhook serving certificate")
+		os.Exit(1)
+	}
+
+	// Defer registering the webhook until the serving cert is on disk and the CA
+	// bundle is injected. This delays adding controller-runtime's webhook-server
+	// runnable (whose certwatcher fails on a missing cert file) until the cert
+	// exists. failurePolicy=Ignore keeps pod creation unblocked during the gap.
+	go func() {
+		<-webhookReady
+		mgr.GetWebhookServer().Register("/mutate-v1-pod-simplyblock-rebalancer",
+			&webhook.Admission{Handler: &internalwebhook.SimplyblockRebalancerInjector{Client: mgr.GetClient()}})
+		setupLog.Info("registered simplyblock-rebalancer mutating webhook")
+	}()
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
