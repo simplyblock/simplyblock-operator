@@ -66,34 +66,44 @@ spec:
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               maxAge:
                 description: |-
                   MaxAge is the maximum age of backups to retain (e.g. "7d", "12h", "30m").
                   Backups older than this are merged. Accepts m, h, d, w suffixes.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               maxVersions:
                 description: |-
                   MaxVersions is the maximum number of completed backup versions to retain.
                   When exceeded, the oldest backup is merged into the second-oldest.
                 type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               schedule:
                 description: |-
                   Schedule defines the tiered backup schedule as a space-separated list of
                   interval,keep_count pairs (e.g. "15m,4 60m,11 24h,7").
                   Intervals must be strictly increasing. Supported units: m, h, d, w.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
             required:
             - clusterName
             type: object
             x-kubernetes-validations:
-            - message: clusterName is immutable
-              rule: self.clusterName == oldSelf.clusterName
-            - message: maxVersions is immutable
-              rule: self.maxVersions == oldSelf.maxVersions
-            - message: maxAge is immutable
-              rule: self.maxAge == oldSelf.maxAge
-            - message: schedule is immutable
-              rule: self.schedule == oldSelf.schedule
+            - message: field maxVersions is immutable once set
+              rule: '!has(oldSelf.maxVersions) || has(self.maxVersions)'
+            - message: field maxAge is immutable once set
+              rule: '!has(oldSelf.maxAge) || has(self.maxAge)'
+            - message: field schedule is immutable once set
+              rule: '!has(oldSelf.schedule) || has(self.schedule)'
           status:
             description: status defines the observed state of BackupPolicy
             properties:

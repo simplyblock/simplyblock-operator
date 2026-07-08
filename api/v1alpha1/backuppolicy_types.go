@@ -27,26 +27,24 @@ const (
 )
 
 // BackupPolicySpec defines the desired state of BackupPolicy.
-//
-// +kubebuilder:validation:XValidation:rule="self.clusterName == oldSelf.clusterName",message="clusterName is immutable"
-// +kubebuilder:validation:XValidation:rule="self.maxVersions == oldSelf.maxVersions",message="maxVersions is immutable"
-// +kubebuilder:validation:XValidation:rule="self.maxAge == oldSelf.maxAge",message="maxAge is immutable"
-// +kubebuilder:validation:XValidation:rule="self.schedule == oldSelf.schedule",message="schedule is immutable"
 type BackupPolicySpec struct {
 	// ClusterName is the target storage cluster name.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
+	// +k8s:immutable
 	ClusterName string `json:"clusterName"`
 
 	// MaxVersions is the maximum number of completed backup versions to retain.
 	// When exceeded, the oldest backup is merged into the second-oldest.
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Versions"
+	// +k8s:immutable
 	MaxVersions int `json:"maxVersions,omitempty"`
 
 	// MaxAge is the maximum age of backups to retain (e.g. "7d", "12h", "30m").
 	// Backups older than this are merged. Accepts m, h, d, w suffixes.
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Age"
+	// +k8s:immutable
 	MaxAge string `json:"maxAge,omitempty"`
 
 	// Schedule defines the tiered backup schedule as a space-separated list of
@@ -54,6 +52,7 @@ type BackupPolicySpec struct {
 	// Intervals must be strictly increasing. Supported units: m, h, d, w.
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Schedule"
+	// +k8s:immutable
 	Schedule string `json:"schedule,omitempty"`
 }
 
