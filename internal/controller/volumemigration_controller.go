@@ -428,8 +428,15 @@ func (r *VolumeMigrationReconciler) collectAndLogJobPodLogs(ctx context.Context,
 	}
 }
 
-// resolveRebalancerImage returns the simplyblock-rebalancer image configured on the
-// StorageCluster that owns the migration's volume.
+// defaultRebalancerImage is used when a StorageCluster enables volume migration
+// (explicitly, or by default via an omitted settings block) without pinning a
+// specific rebalancer image. The image must include nvme-cli.
+const defaultRebalancerImage = "docker.io/simplyblock/simplyblock-rebalancer:main"
+
+// resolveRebalancerImage returns the simplyblock-rebalancer image for the StorageCluster
+// that owns the migration's volume. Volume migration is enabled by default: an omitted
+// VolumeMigrationSettings block (or one without an image) resolves to defaultRebalancerImage;
+// only an explicit Enabled=false disables it.
 func (r *VolumeMigrationReconciler) resolveRebalancerImage(
 	ctx context.Context,
 	namespace, clusterUUID string,
@@ -444,7 +451,8 @@ func (r *VolumeMigrationReconciler) resolveRebalancerImage(
 		}
 		vm := cr.Spec.VolumeMigrationSettings
 		if vm == nil {
-			return "", fmt.Errorf("volume migration is not configured for cluster UUID %q", clusterUUID)
+			// No settings block: volume migration is enabled by default with the default image.
+			return defaultRebalancerImage, nil
 		}
 		if vm.Enabled != nil && !*vm.Enabled {
 			return "", fmt.Errorf("volume migration is disabled for cluster UUID %q", clusterUUID)
@@ -452,7 +460,8 @@ func (r *VolumeMigrationReconciler) resolveRebalancerImage(
 		if vm.RebalancerImage != nil && *vm.RebalancerImage != "" {
 			return *vm.RebalancerImage, nil
 		}
-		return "", fmt.Errorf("no RebalancerImage configured for cluster UUID %q", clusterUUID)
+		// Enabled (explicitly or by default) but no image pinned: use the default image.
+		return defaultRebalancerImage, nil
 	}
 	return "", fmt.Errorf("no StorageCluster found for cluster UUID %q", clusterUUID)
 }

@@ -213,45 +213,61 @@ func TestReconcileStart_EmptyMigrationUUID_Fails(t *testing.T) {
 	}
 }
 
-// TestReconcileStart_DisabledOrUnconfigured_NeverMigrates guards the safety
-// invariant: the controller must NEVER call CreateMigration (start a backend
-// migration) when volume migration is disabled, has no rebalancer image, or is
-// not configured at all. The fake API server fails the test if its migrations
-// endpoint is ever hit, and we assert the CR ends Failed with no MigrationUUID.
-func TestReconcileStart_DisabledOrUnconfigured_NeverMigrates(t *testing.T) {
-	enabled := true
+// TestReconcileStart_Disabled_NeverMigrates guards the safety invariant: an explicit
+// Enabled=false must block migration — CreateMigration is never called (the fake API
+// fails the test if its migrations endpoint is hit) and the CR ends Failed with no
+// MigrationUUID.
+func TestReconcileStart_Disabled_NeverMigrates(t *testing.T) {
 	disabled := false
 	image := "rebalancer:test"
 
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/migrations") {
+			t.Errorf("CreateMigration must not be called when migration is disabled")
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	vm := baseVM()
+	pv := csiPV(testClusterUUID + ":" + testPoolUUID + ":" + testVolumeUUID)
+	cluster := clusterWithSettings(&simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &disabled, RebalancerImage: &image})
+	r, cl := newVMReconciler(t, srv.URL, vm, pv, cluster)
+
+	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	got := getVM(t, cl)
+	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
+		t.Errorf("phase = %q, want Failed", got.Status.Phase)
+	}
+	if got.Status.MigrationUUID != "" {
+		t.Errorf("MigrationUUID = %q, want empty (no migration started)", got.Status.MigrationUUID)
+	}
+	if got.Status.StartedAt != nil {
+		t.Errorf("StartedAt should be nil when no migration is started")
+	}
+	if !strings.Contains(got.Status.ErrorMessage, "disabled") {
+		t.Errorf("ErrorMessage = %q, want contains %q", got.Status.ErrorMessage, "disabled")
+	}
+}
+
+// TestReconcileStart_DefaultsToEnabled verifies volume migration is enabled by default:
+// an omitted VolumeMigrationSettings block, or one that enables migration without pinning
+// an image, still proceeds (using the default rebalancer image) and reaches Validating.
+func TestReconcileStart_DefaultsToEnabled(t *testing.T) {
+	enabled := true
 	cases := []struct {
 		name     string
 		settings *simplyblockv1alpha1.VolumeMigrationSettings
-		wantErr  string
 	}{
-		{
-			name:     "migration disabled",
-			settings: &simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &disabled, RebalancerImage: &image},
-			wantErr:  "disabled",
-		},
-		{
-			name:     "rebalancer image not set",
-			settings: &simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &enabled},
-			wantErr:  "no RebalancerImage",
-		},
-		{
-			name:     "volume migration not configured",
-			settings: nil,
-			wantErr:  "not configured",
-		},
+		{name: "settings block omitted", settings: nil},
+		{name: "enabled without pinned image", settings: &simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &enabled}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/migrations") {
-					t.Errorf("CreateMigration must not be called when %s", tc.name)
-				}
-				w.WriteHeader(http.StatusNotFound)
+			srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `"}`))
 			})
 
 			vm := baseVM()
@@ -261,19 +277,12 @@ func TestReconcileStart_DisabledOrUnconfigured_NeverMigrates(t *testing.T) {
 			if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
 				t.Fatalf("Reconcile: %v", err)
 			}
-
 			got := getVM(t, cl)
-			if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
-				t.Errorf("phase = %q, want Failed", got.Status.Phase)
+			if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseValidating {
+				t.Errorf("phase = %q, want Validating (migration enabled by default)", got.Status.Phase)
 			}
-			if got.Status.MigrationUUID != "" {
-				t.Errorf("MigrationUUID = %q, want empty (no migration started)", got.Status.MigrationUUID)
-			}
-			if got.Status.StartedAt != nil {
-				t.Errorf("StartedAt should be nil when no migration is started")
-			}
-			if !strings.Contains(got.Status.ErrorMessage, tc.wantErr) {
-				t.Errorf("ErrorMessage = %q, want contains %q", got.Status.ErrorMessage, tc.wantErr)
+			if got.Status.MigrationUUID != testMigrationUUID {
+				t.Errorf("MigrationUUID = %q, want %q", got.Status.MigrationUUID, testMigrationUUID)
 			}
 		})
 	}

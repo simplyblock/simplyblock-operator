@@ -190,6 +190,15 @@ type StorageClusterSpec struct {
 	// VolumeMigrationSettings controls volume migration for this cluster.
 	// +optional
 	VolumeMigrationSettings *VolumeMigrationSettings `json:"volumeMigrationSettings,omitempty"`
+
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Failure Domains"
+	// EnableFailureDomains opts the cluster into failure-domain mode. When enabled, every
+	// storage node must declare a failure-domain group so the control plane can spread
+	// erasure-coding chunks across independent fault groups. Immutable once set — failure-
+	// domain mode cannot be toggled on a live cluster.
+	// +k8s:immutable
+	// +optional
+	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
 }
 
 // StorageClusterStatus defines the observed state of StorageCluster.

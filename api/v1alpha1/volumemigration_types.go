@@ -46,11 +46,13 @@ type VolumeMigrationSpec struct {
 	// PVName is the name of the PersistentVolume whose backing logical volume
 	// should be migrated. The PV must be provisioned by the simplyblock CSI driver.
 	// +kubebuilder:validation:MinLength=1
+	// +k8s:immutable
 	PVName string `json:"pvName"`
 
 	// TargetNodeUUID is the UUID of the storage node that should host the
 	// volume after migration.
 	// +kubebuilder:validation:MinLength=1
+	// +k8s:immutable
 	TargetNodeUUID string `json:"targetNodeUUID"`
 
 	// Abort requests cancellation of an in-progress migration. Set to true to

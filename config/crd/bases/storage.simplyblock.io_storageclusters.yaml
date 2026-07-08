@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: storageclusters.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -119,6 +119,16 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              enableFailureDomains:
+                description: |-
+                  EnableFailureDomains opts the cluster into failure-domain mode. When enabled, every
+                  storage node must declare a failure-domain group so the control plane can spread
+                  erasure-coding chunks across independent fault groups. Immutable once set — failure-
+                  domain mode cannot be toggled on a live cluster.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               enableNodeAffinity:
                 description: EnableNodeAffinity enables node-affinity placement for
                   storage components.
@@ -234,6 +244,8 @@ spec:
                 type: object
             type: object
             x-kubernetes-validations:
+            - message: field enableFailureDomains is immutable once set
+              rule: '!has(oldSelf.enableFailureDomains) || has(self.enableFailureDomains)'
             - message: haType is immutable once set
               rule: '!has(oldSelf.haType) || self.haType == oldSelf.haType'
             - message: fabricType is immutable once set

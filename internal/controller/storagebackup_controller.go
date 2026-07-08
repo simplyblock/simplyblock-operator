@@ -111,6 +111,7 @@ type backupSource struct {
 	PVName       string
 	PoolName     string
 	LvolID       string
+	FSType       string
 }
 
 type storagePoolAPIResponse struct {
@@ -193,8 +194,21 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// SnapshotID is a separate API call that races with this reconciler. If
 	// BackupID is still empty the patch hasn't landed yet — requeue and wait
 	// rather than creating a duplicate snapshot/backup in the backend.
-	if backupCR.Labels[backupSyncImportedLabel] == "true" && backupCR.Status.BackupID == "" {
-		return ctrl.Result{RequeueAfter: backupReconcileRequeue}, nil
+	if backupCR.Labels[backupSyncImportedLabel] == "true" {
+		if backupCR.Status.BackupID == "" {
+			return ctrl.Result{RequeueAfter: backupReconcileRequeue}, nil
+		}
+		// Imported backups are managed externally: poll status directly by
+		// BackupID/ClusterUUID instead of resolving a PVC-based source, since the
+		// originating PVC/lvol may no longer exist (e.g. after the source pool was
+		// deleted and recreated) even though the backend backup and its data
+		// remain valid and restorable. Calling resolveBackupSource here would
+		// hard-fail on the missing PVC and overwrite the imported status back to
+		// Pending on every reconcile.
+		return r.syncBackupProgress(ctx, backupCR, &backupContext{
+			clusterUUID: backupCR.Status.ClusterUUID,
+			apiClient:   r.apiClient(),
+		})
 	}
 
 	bctx, result, done, err := r.prepareBackupContext(ctx, backupCR)
@@ -253,6 +267,7 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 			status.PVName = source.PVName
 			status.PoolName = source.PoolName
 			status.LvolID = source.LvolID
+			status.FSType = source.FSType
 			status.Message = err.Error()
 		}); patchErr != nil {
 			return nil, ctrl.Result{}, true, patchErr
@@ -268,6 +283,7 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 		status.PoolName = source.PoolName
 		status.PoolUUID = poolUUID
 		status.LvolID = source.LvolID
+		status.FSType = source.FSType
 		if status.Phase == "" {
 			status.Phase = simplyblockv1alpha1.BackupPhasePending
 		}
@@ -545,6 +561,7 @@ func (r *StorageBackupReconciler) resolveBackupSource(
 		PVName:       pv.Name,
 		PoolName:     poolNameOrID,
 		LvolID:       lvolID,
+		FSType:       pv.Spec.CSI.FSType,
 	}, nil
 }
 

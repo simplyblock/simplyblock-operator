@@ -63,6 +63,7 @@ type PVCTemplate struct {
 type BackupRestoreSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
+	// +k8s:immutable
 	ClusterName string `json:"clusterName"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup Ref"
 	// BackupRef references the StorageBackup resource to restore from.
@@ -97,6 +98,11 @@ type BackupRestoreStatus struct {
 	BackupID string `json:"backupID,omitempty"`
 	// SourceLvolID is the original logical volume UUID that was backed up.
 	SourceLvolID string `json:"sourceLvolID,omitempty"`
+	// FSType is the filesystem type of the original source volume, copied from
+	// the referenced StorageBackup's status.fsType. Set on the restored
+	// PersistentVolume so it mounts with the same filesystem it was backed up
+	// with, instead of the CSI driver's default.
+	FSType string `json:"fsType,omitempty"`
 
 	// PoolName is the pool the restore was issued against.
 	PoolName string `json:"poolName,omitempty"`
@@ -133,6 +139,7 @@ type BackupRestoreStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.backupRef) || self.spec.backupRef.name == oldSelf.spec.backupRef.name",message="backupRef.name is immutable once set"
 // +kubebuilder:resource:scope=Namespaced,shortName=br
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Backup",type=string,JSONPath=".spec.backupRef.name"

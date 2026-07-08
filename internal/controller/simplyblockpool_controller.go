@@ -187,38 +187,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	apiClient := webapi.NewClient()
 
 	if !poolCR.DeletionTimestamp.IsZero() {
-		if utils.ContainsString(poolCR.Finalizers, utils.FinalizerPool) && poolCR.Status.UUID != "" {
-			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
-			body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
-			if err != nil || status >= 300 {
-				if err == nil {
-					err = fmt.Errorf("unexpected status %d", status)
-				}
-				log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
-				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-			}
-
-			if err := r.deleteStorageClass(ctx, poolCR); err != nil {
-				log.Error(err, "Failed to delete StorageClass for pool")
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-
-			// Clear pool node labels from all nodes.
-			poolCR.Spec.AllowedNodes = nil
-			if err := r.syncNodeLabels(ctx, poolCR); err != nil {
-				log.Error(err, "Failed to clear node labels on pool deletion")
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-
-			poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, utils.FinalizerPool)
-			if err := r.Update(ctx, poolCR); err != nil {
-				log.Error(err, "Failed to remove finalizer")
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-
-			log.Info("Pool deleted successfully", "name", poolCR.Name)
-		}
-		return ctrl.Result{}, nil
+		return r.handlePoolDeletion(ctx, poolCR, apiClient, clusterUUID)
 	}
 
 	if !controllerutil.ContainsFinalizer(poolCR, utils.FinalizerPool) {
@@ -229,62 +198,8 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, nil
 	}
 
-	pool := poolCR.DeepCopy()
-
-	if pool.Status.UUID == "" {
-		params := utils.PoolAddParams{
-			Name:          poolCR.Name,
-			PoolMax:       utils.Int64PtrOrDefault(utils.ParseSizeInt64(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
-			VolumeMaxSize: utils.Int64PtrOrDefault(utils.ParseSizeInt64(poolCR.Spec.LogicalVolumeMaxSize, "si/iec", "", false), 0),
-			MaxRwMB:       poolSpecQoSThroughputReadWrite(poolCR.Spec.QosSpec),
-			MaxRwIOPS:     poolSpecQoSIOPS(poolCR.Spec.QosSpec),
-			MaxRMB:        poolSpecQoSThroughputRead(poolCR.Spec.QosSpec),
-			MaxWMB:        poolSpecQoSThroughputWrite(poolCR.Spec.QosSpec),
-			DHCHAP:        poolCR.Spec.DHCHAP,
-			CRName:        poolCR.Name,
-			CRNameSpace:   poolCR.Namespace,
-			CRPlural:      "pools",
-		}
-
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
-		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, params)
-		if err != nil || status >= 300 {
-			if err == nil {
-				err = fmt.Errorf("unexpected status %d", status)
-			}
-			log.Error(err, "Pool creation failed", "status", status, "response", string(body))
-			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-		}
-
-		log.Info("POOL API call",
-			"endpoint", endpoint,
-			"status", status,
-			"response", string(body),
-		)
-
-		poolDTO, err := parsePoolAPIResponse(body)
-		if err != nil {
-			log.Error(err, "Failed to parse pool creation response", "raw", string(body))
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-		poolCR.Status.UUID = poolDTO.ID
-		poolCR.Status.Status = poolDTO.Status
-		poolCR.Status.QoS = &simplyblockv1alpha1.PoolQoSStatus{
-			IOPS: utils.ToInt32Ptr(poolDTO.MaxRwIOPS),
-			Throughput: &simplyblockv1alpha1.PoolQoSThroughputStatus{
-				Read:      utils.ToInt32Ptr(poolDTO.MaxRMbytes),
-				ReadWrite: utils.ToInt32Ptr(poolDTO.MaxRwMbytes),
-				Write:     utils.ToInt32Ptr(poolDTO.MaxWMbytes),
-			},
-		}
-
-		if err := r.Status().Update(ctx, poolCR); err != nil {
-			log.Error(err, "Failed to update pool status after creation")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
-		log.Info("Pool successfully created", "name", poolCR.Name)
-		return ctrl.Result{}, nil
+	if poolCR.Status.UUID == "" {
+		return r.handlePoolCreation(ctx, poolCR, apiClient, clusterUUID)
 	}
 
 	if err := r.upsertStorageClass(ctx, poolCR, clusterUUID); err != nil {
@@ -326,6 +241,89 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	// }
 
 	// log.Info("Pool updated successfully", "name", poolCR.Name)
+	return ctrl.Result{}, nil
+}
+
+func (r *PoolReconciler) handlePoolDeletion(ctx context.Context, poolCR *simplyblockv1alpha1.Pool, apiClient *webapi.Client, clusterUUID string) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	if utils.ContainsString(poolCR.Finalizers, utils.FinalizerPool) && poolCR.Status.UUID != "" {
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
+		body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
+		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("unexpected status %d", status)
+			}
+			log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
+			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+		}
+		if err := r.deleteStorageClass(ctx, poolCR); err != nil {
+			log.Error(err, "Failed to delete StorageClass for pool")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		poolCR.Spec.AllowedNodes = nil
+		if err := r.syncNodeLabels(ctx, poolCR); err != nil {
+			log.Error(err, "Failed to clear node labels on pool deletion")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, utils.FinalizerPool)
+		if err := r.Update(ctx, poolCR); err != nil {
+			log.Error(err, "Failed to remove finalizer")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		log.Info("Pool deleted successfully", "name", poolCR.Name)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *PoolReconciler) handlePoolCreation(ctx context.Context, poolCR *simplyblockv1alpha1.Pool, apiClient *webapi.Client, clusterUUID string) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	if existing, lookupErr := utils.GetPoolByName(ctx, apiClient, clusterUUID, poolCR.Name); lookupErr == nil && existing != nil {
+		log.Info("Pool already exists on backend, adopting", "name", poolCR.Name, "uuid", existing.UUID)
+		return r.adoptExistingPool(ctx, poolCR, existing)
+	}
+	params := utils.PoolAddParams{
+		Name:          poolCR.Name,
+		PoolMax:       utils.Int64PtrOrDefault(utils.ParseSizeInt64(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
+		VolumeMaxSize: utils.Int64PtrOrDefault(utils.ParseSizeInt64(poolCR.Spec.LogicalVolumeMaxSize, "si/iec", "", false), 0),
+		MaxRwMB:       poolSpecQoSThroughputReadWrite(poolCR.Spec.QosSpec),
+		MaxRwIOPS:     poolSpecQoSIOPS(poolCR.Spec.QosSpec),
+		MaxRMB:        poolSpecQoSThroughputRead(poolCR.Spec.QosSpec),
+		MaxWMB:        poolSpecQoSThroughputWrite(poolCR.Spec.QosSpec),
+		DHCHAP:        poolCR.Spec.DHCHAP,
+		CRName:        poolCR.Name,
+		CRNameSpace:   poolCR.Namespace,
+		CRPlural:      "pools",
+	}
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
+	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, params)
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d", status)
+		}
+		log.Error(err, "Pool creation failed", "status", status, "response", string(body))
+		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+	}
+	log.Info("POOL API call", "endpoint", endpoint, "status", status, "response", string(body))
+	poolDTO, err := parsePoolAPIResponse(body)
+	if err != nil {
+		log.Error(err, "Failed to parse pool creation response", "raw", string(body))
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	poolCR.Status.UUID = poolDTO.ID
+	poolCR.Status.Status = poolDTO.Status
+	poolCR.Status.QoS = &simplyblockv1alpha1.PoolQoSStatus{
+		IOPS: utils.ToInt32Ptr(poolDTO.MaxRwIOPS),
+		Throughput: &simplyblockv1alpha1.PoolQoSThroughputStatus{
+			Read:      utils.ToInt32Ptr(poolDTO.MaxRMbytes),
+			ReadWrite: utils.ToInt32Ptr(poolDTO.MaxRwMbytes),
+			Write:     utils.ToInt32Ptr(poolDTO.MaxWMbytes),
+		},
+	}
+	if err := r.Status().Update(ctx, poolCR); err != nil {
+		log.Error(err, "Failed to update pool status after creation")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	log.Info("Pool successfully created", "name", poolCR.Name)
 	return ctrl.Result{}, nil
 }
 
@@ -602,4 +600,30 @@ func poolSpecQoSThroughputWrite(q *simplyblockv1alpha1.PoolQoSSpec) int {
 		return 0
 	}
 	return utils.IntPtrOrDefault(q.Throughput.Write, 0)
+}
+
+func (r *PoolReconciler) adoptExistingPool(
+	ctx context.Context,
+	poolCR *simplyblockv1alpha1.Pool,
+	existing *utils.PoolListEntry,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	orig := poolCR.DeepCopy()
+	poolCR.Status.UUID = existing.UUID
+	poolCR.Status.Status = existing.Status
+	poolCR.Status.QoS = &simplyblockv1alpha1.PoolQoSStatus{
+		Host: existing.QoSHost,
+		IOPS: utils.ToInt32Ptr(existing.MaxRwIOPS),
+		Throughput: &simplyblockv1alpha1.PoolQoSThroughputStatus{
+			Read:      utils.ToInt32Ptr(existing.RLimit),
+			ReadWrite: utils.ToInt32Ptr(existing.RWLimit),
+			Write:     utils.ToInt32Ptr(existing.WLimit),
+		},
+	}
+	if err := r.Status().Patch(ctx, poolCR, client.MergeFrom(orig)); err != nil {
+		log.Error(err, "Failed to patch pool status after adoption")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	log.Info("Pool adopted from existing backend", "name", poolCR.Name, "uuid", existing.UUID)
+	return ctrl.Result{}, nil
 }

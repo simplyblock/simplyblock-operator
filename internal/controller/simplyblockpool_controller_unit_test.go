@@ -242,6 +242,19 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
 	defer mock.Close()
 
+	// Proactive adoption check: empty list means no existing pool → fall through to POST.
+	mock.Register(
+		http.MethodGet,
+		"/api/v2/clusters/"+clusterUUID+"/storage-pools/",
+		webapimock.RouteResponse{
+			Status: http.StatusOK,
+			Body:   `[]`,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+		},
+	)
+
 	mock.Register(
 		http.MethodPost,
 		"/api/v2/clusters/"+clusterUUID+"/storage-pools/",
@@ -297,17 +310,19 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 		t.Fatalf("unexpected status after mocked pool create: %#v", current.Status)
 	}
 	reqs := mock.Requests()
-	if len(reqs) != 1 || reqs[0].Path != "/api/v2/clusters/"+clusterUUID+"/storage-pools" {
-		t.Fatalf("expected pool API call with cluster UUID %q, got %#v", clusterUUID, reqs)
+	if len(reqs) != 2 ||
+		reqs[0].Method != http.MethodGet || reqs[0].Path != "/api/v2/clusters/"+clusterUUID+"/storage-pools" ||
+		reqs[1].Method != http.MethodPost || reqs[1].Path != "/api/v2/clusters/"+clusterUUID+"/storage-pools" {
+		t.Fatalf("expected GET (adoption check) then POST (create) for cluster UUID %q, got %#v", clusterUUID, reqs)
 	}
 	var body struct {
 		VolumeMaxSize int `json:"volume_max_size"`
 	}
-	if err := json.Unmarshal(reqs[0].Body, &body); err != nil {
-		t.Fatalf("failed to decode pool create request body %q: %v", string(reqs[0].Body), err)
+	if err := json.Unmarshal(reqs[1].Body, &body); err != nil {
+		t.Fatalf("failed to decode pool create request body %q: %v", string(reqs[1].Body), err)
 	}
 	if body.VolumeMaxSize != 20_000_000_000 {
-		t.Fatalf("volume_max_size got %d want %d; body=%s", body.VolumeMaxSize, 20_000_000_000, string(reqs[0].Body))
+		t.Fatalf("volume_max_size got %d want %d; body=%s", body.VolumeMaxSize, 20_000_000_000, string(reqs[1].Body))
 	}
 }
 

@@ -36,6 +36,7 @@ type JournalManagerSpec struct {
 type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
+	// +k8s:immutable
 	ClusterName string `json:"clusterName"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Image"
 	// ClusterImage is the container image used for storage-node workloads.
@@ -62,9 +63,11 @@ type StorageNodeSetSpec struct {
 	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Management Interface"
 	// MgmtIfname is the management interface name used by storage nodes.
+	// +k8s:immutable
 	MgmtIfname string `json:"mgmtIfname,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Partitions"
 	// Partitions is the number of partitions created per backend storage device.
+	// +k8s:immutable
 	Partitions *int32 `json:"partitions,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Journal Manager"
 	// JournalManagerSpec configures journal manager behavior.
@@ -89,6 +92,7 @@ type StorageNodeSetSpec struct {
 	SocketsToUse []string `json:"socketsToUse,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Nodes Per Socket"
 	// NodesPerSocket defines how many storage nodes are created per NUMA socket.
+	// +k8s:immutable
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Data Interfaces"
 	// DataIfname lists data-plane network interfaces.
@@ -121,6 +125,7 @@ type StorageNodeSetSpec struct {
 	SkipKubeletConfiguration *bool `json:"skipKubeletConfiguration,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force Format 4K"
 	// ForceFormat4K forces 4K blocksize formatting of the NVMe device where supported.
+	// +k8s:immutable
 	ForceFormat4K *bool `json:"forceFormat4K,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable CPU Topology"
 	// EnableCpuTopology enables topology-aware CPU handling.
@@ -166,6 +171,16 @@ type StorageNodeSetSpec struct {
 	// the final verification check. Defaults to "^sb-fio-baseline-.*".
 	// +optional
 	SystemVolumeFilterRegex *string `json:"systemVolumeFilterRegex,omitempty"`
+
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node Failure Domains"
+	// NodeFailureDomains assigns each worker node to a failure-domain group (integer ≥ 1).
+	// Required when the referenced StorageCluster has enableFailureDomains=true.
+	// Keys are Kubernetes worker node names; values are the failure-domain group index.
+	// Each node in the same physical failure domain (rack, AZ, power unit) should share
+	// the same group index so the control plane can spread erasure-coding chunks across
+	// independent fault groups.
+	// +optional
+	NodeFailureDomains map[string]int32 `json:"nodeFailureDomains,omitempty"`
 }
 
 // Drain coordination phases for a worker node undergoing a rolling upgrade drain.
@@ -291,6 +306,7 @@ type ActionStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && (!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\"))",message="nodeUUID is required when action is specified"
 // +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname) && self.spec.mgmtIfname != \"\")",message="maxLogicalVolumeCount, workerNodes, and mgmtIfname are required when action is not specified"
+// +kubebuilder:validation:XValidation:rule="!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k, self.spec.nodeFailureDomains[k] >= 1)",message="all nodeFailureDomains values must be >= 1 (failure-domain group index)"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Storage Node",resources={{ServiceAccount,v1,simplyblock-storage-node},{Service,v1,simplyblock-storage-node},{DaemonSet,v1,simplyblock-storage-node},{ClusterRole,v1,simplyblock-storage-node},{ClusterRoleBinding,v1,simplyblock-storage-node}}
 // StorageNodeSet is the Schema for the storagenodesets API
 type StorageNodeSet struct {

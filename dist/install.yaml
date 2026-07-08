@@ -11,7 +11,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: backuppolicies.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -74,34 +74,44 @@ spec:
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               maxAge:
                 description: |-
                   MaxAge is the maximum age of backups to retain (e.g. "7d", "12h", "30m").
                   Backups older than this are merged. Accepts m, h, d, w suffixes.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               maxVersions:
                 description: |-
                   MaxVersions is the maximum number of completed backup versions to retain.
                   When exceeded, the oldest backup is merged into the second-oldest.
                 type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               schedule:
                 description: |-
                   Schedule defines the tiered backup schedule as a space-separated list of
                   interval,keep_count pairs (e.g. "15m,4 60m,11 24h,7").
                   Intervals must be strictly increasing. Supported units: m, h, d, w.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
             required:
             - clusterName
             type: object
             x-kubernetes-validations:
-            - message: clusterName is immutable
-              rule: self.clusterName == oldSelf.clusterName
-            - message: maxVersions is immutable
-              rule: self.maxVersions == oldSelf.maxVersions
-            - message: maxAge is immutable
-              rule: self.maxAge == oldSelf.maxAge
-            - message: schedule is immutable
-              rule: self.schedule == oldSelf.schedule
+            - message: field maxVersions is immutable once set
+              rule: '!has(oldSelf.maxVersions) || has(self.maxVersions)'
+            - message: field maxAge is immutable once set
+              rule: '!has(oldSelf.maxAge) || has(self.maxAge)'
+            - message: field schedule is immutable once set
+              rule: '!has(oldSelf.schedule) || has(self.schedule)'
           status:
             description: status defines the observed state of BackupPolicy
             properties:
@@ -157,7 +167,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: backuprestores.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -221,6 +231,9 @@ spec:
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               pvcTemplate:
                 description: PVCTemplate describes the PVC to create once the restore
                   completes.
@@ -468,6 +481,13 @@ spec:
                 description: CompletedAt is when the PVC became bound.
                 format: date-time
                 type: string
+              fsType:
+                description: |-
+                  FSType is the filesystem type of the original source volume, copied from
+                  the referenced StorageBackup's status.fsType. Set on the restored
+                  PersistentVolume so it mounts with the same filesystem it was backed up
+                  with, instead of the CSI driver's default.
+                type: string
               message:
                 description: Message contains the latest reconciliation detail or
                   error.
@@ -520,6 +540,9 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: backupRef.name is immutable once set
+          rule: '!has(oldSelf.spec.backupRef) || self.spec.backupRef.name == oldSelf.spec.backupRef.name'
     served: true
     storage: true
     subresources:
@@ -529,7 +552,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: pools.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -587,12 +610,18 @@ spec:
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               dhchap:
                 default: false
                 description: |-
                   DHCHAP enables DH-HMAC-CHAP key generation for the pool. Authentication is only
                   enforced when allowedNodes is non-empty
                 type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               logicalVolumeMaxSize:
                 description: |-
                   LogicalVolumeMaxSize is the maximum size allowed for any single logical volume
@@ -696,6 +725,9 @@ spec:
             required:
             - clusterName
             type: object
+            x-kubernetes-validations:
+            - message: field dhchap is immutable once set
+              rule: '!has(oldSelf.dhchap) || has(self.dhchap)'
           status:
             description: status defines the observed state of Pool
             properties:
@@ -755,7 +787,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: snapshotreplications.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -828,12 +860,18 @@ spec:
               sourceCluster:
                 description: Source cluster for the snapshots
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               sourcePool:
                 description: required for failback to a fresh source cluster
                 type: string
               targetCluster:
                 description: Target cluster for replication
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               targetPool:
                 description: Target cluster pool for replication
                 type: string
@@ -991,7 +1029,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: storagebackups.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -1046,6 +1084,9 @@ spec:
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               pvcRef:
                 description: |-
                   PVCRef identifies the PVC whose backing Simplyblock volume should be snapshotted and backed up.
@@ -1101,6 +1142,12 @@ spec:
               createdAt:
                 description: CreatedAt is when the backup was created.
                 format: date-time
+                type: string
+              fsType:
+                description: |-
+                  FSType is the filesystem type of the source PersistentVolume (e.g. "ext4",
+                  "xfs"), captured at backup time so a restore can preserve it regardless of
+                  which StorageClass the restored PVC ends up using.
                 type: string
               lvolID:
                 description: LvolID is the Simplyblock volume UUID.
@@ -1170,7 +1217,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: storageclusters.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -1286,6 +1333,16 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              enableFailureDomains:
+                description: |-
+                  EnableFailureDomains opts the cluster into failure-domain mode. When enabled, every
+                  storage node must declare a failure-domain group so the control plane can spread
+                  erasure-coding chunks across independent fault groups. Immutable once set — failure-
+                  domain mode cannot be toggled on a live cluster.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               enableNodeAffinity:
                 description: EnableNodeAffinity enables node-affinity placement for
                   storage components.
@@ -1401,6 +1458,8 @@ spec:
                 type: object
             type: object
             x-kubernetes-validations:
+            - message: field enableFailureDomains is immutable once set
+              rule: '!has(oldSelf.enableFailureDomains) || has(self.enableFailureDomains)'
             - message: haType is immutable once set
               rule: '!has(oldSelf.haType) || self.haType == oldSelf.haType'
             - message: fabricType is immutable once set
@@ -1563,7 +1622,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: storagenodesets.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -1615,6 +1674,9 @@ spec:
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               containerResources:
                 description: |-
                   ContainerResources sets CPU and memory requests/limits for the main storage-node container.
@@ -1705,6 +1767,9 @@ spec:
                 description: ForceFormat4K forces 4K blocksize formatting of the NVMe
                   device where supported.
                 type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               imagePullPolicy:
                 description: ImagePullPolicy controls when the container image is
                   pulled. Defaults to IfNotPresent.
@@ -1808,6 +1873,21 @@ spec:
                 description: MgmtIfname is the management interface name used by storage
                   nodes.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              nodeFailureDomains:
+                additionalProperties:
+                  format: int32
+                  type: integer
+                description: |-
+                  NodeFailureDomains assigns each worker node to a failure-domain group (integer ≥ 1).
+                  Required when the referenced StorageCluster has enableFailureDomains=true.
+                  Keys are Kubernetes worker node names; values are the failure-domain group index.
+                  Each node in the same physical failure domain (rack, AZ, power unit) should share
+                  the same group index so the control plane can spread erasure-coding chunks across
+                  independent fault groups.
+                type: object
               nodeUUID:
                 description: NodeUUID is required when action is specified
                 type: string
@@ -1816,6 +1896,9 @@ spec:
                   per NUMA socket.
                 format: int32
                 type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               openShiftCluster:
                 description: OpenShiftCluster indicates OpenShift-specific behavior
                   should be enabled.
@@ -1831,6 +1914,9 @@ spec:
                   storage device.
                 format: int32
                 type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               pcieAllowList:
                 description: PcieAllowList is the list of PCI addresses allowed for
                   use.
@@ -1936,6 +2022,15 @@ spec:
             required:
             - clusterName
             type: object
+            x-kubernetes-validations:
+            - message: field mgmtIfname is immutable once set
+              rule: '!has(oldSelf.mgmtIfname) || has(self.mgmtIfname)'
+            - message: field partitions is immutable once set
+              rule: '!has(oldSelf.partitions) || has(self.partitions)'
+            - message: field nodesPerSocket is immutable once set
+              rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
+            - message: field forceFormat4K is immutable once set
+              rule: '!has(oldSelf.forceFormat4K) || has(self.forceFormat4K)'
           status:
             description: status defines the observed state of StorageNodeSet
             properties:
@@ -2117,6 +2212,10 @@ spec:
           rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.maxLogicalVolumeCount)
             && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname)
             && self.spec.mgmtIfname != "")
+        - message: all nodeFailureDomains values must be >= 1 (failure-domain group
+            index)
+          rule: '!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k,
+            self.spec.nodeFailureDomains[k] >= 1)'
     served: true
     storage: true
     subresources:
@@ -2126,7 +2225,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: tasks.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -2232,7 +2331,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: volumemigrations.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -2303,12 +2402,18 @@ spec:
                   should be migrated. The PV must be provisioned by the simplyblock CSI driver.
                 minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               targetNodeUUID:
                 description: |-
                   TargetNodeUUID is the UUID of the storage node that should host the
                   volume after migration.
                 minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
             required:
             - pvName
             - targetNodeUUID
