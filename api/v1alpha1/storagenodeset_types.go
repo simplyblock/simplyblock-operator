@@ -165,6 +165,16 @@ type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
 	// Force enables forced action execution where supported.
 	Force *bool `json:"force,omitempty"`
+
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node Failure Domains"
+	// NodeFailureDomains assigns each worker node to a failure-domain group (integer ≥ 1).
+	// Required when the referenced StorageCluster has enableFailureDomains=true.
+	// Keys are Kubernetes worker node names; values are the failure-domain group index.
+	// Each node in the same physical failure domain (rack, AZ, power unit) should share
+	// the same group index so the control plane can spread erasure-coding chunks across
+	// independent fault groups.
+	// +optional
+	NodeFailureDomains map[string]int32 `json:"nodeFailureDomains,omitempty"`
 }
 
 // Drain coordination phases for a worker node undergoing a rolling upgrade drain.
@@ -276,6 +286,7 @@ type ActionStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.action) && self.spec.action != \"\" && (!has(self.spec.nodeUUID) || self.spec.nodeUUID == \"\"))",message="nodeUUID is required when action is specified"
 // +kubebuilder:validation:XValidation:rule="(has(self.spec.action) && self.spec.action != \"\") || (has(self.spec.maxLogicalVolumeCount) && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname) && self.spec.mgmtIfname != \"\")",message="maxLogicalVolumeCount, workerNodes, and mgmtIfname are required when action is not specified"
+// +kubebuilder:validation:XValidation:rule="!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k, self.spec.nodeFailureDomains[k] > 0)",message="all nodeFailureDomains values must be greater than 0"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Storage Node",resources={{ServiceAccount,v1,simplyblock-storage-node},{Service,v1,simplyblock-storage-node},{DaemonSet,v1,simplyblock-storage-node},{ClusterRole,v1,simplyblock-storage-node},{ClusterRoleBinding,v1,simplyblock-storage-node}}
 // StorageNodeSet is the Schema for the storagenodesets API
 type StorageNodeSet struct {

@@ -1310,6 +1310,16 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              enableFailureDomains:
+                description: |-
+                  EnableFailureDomains opts the cluster into failure-domain mode. When enabled, every
+                  storage node must declare a failure-domain group so the control plane can spread
+                  erasure-coding chunks across independent fault groups. Immutable once set — failure-
+                  domain mode cannot be toggled on a live cluster.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               enableNodeAffinity:
                 description: EnableNodeAffinity enables node-affinity placement for
                   storage components.
@@ -1425,6 +1435,8 @@ spec:
                 type: object
             type: object
             x-kubernetes-validations:
+            - message: field enableFailureDomains is immutable once set
+              rule: '!has(oldSelf.enableFailureDomains) || has(self.enableFailureDomains)'
             - message: haType is immutable once set
               rule: '!has(oldSelf.haType) || self.haType == oldSelf.haType'
             - message: fabricType is immutable once set
@@ -1823,6 +1835,18 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              nodeFailureDomains:
+                additionalProperties:
+                  format: int32
+                  type: integer
+                description: |-
+                  NodeFailureDomains assigns each worker node to a failure-domain group (integer ≥ 1).
+                  Required when the referenced StorageCluster has enableFailureDomains=true.
+                  Keys are Kubernetes worker node names; values are the failure-domain group index.
+                  Each node in the same physical failure domain (rack, AZ, power unit) should share
+                  the same group index so the control plane can spread erasure-coding chunks across
+                  independent fault groups.
+                type: object
               nodeUUID:
                 description: NodeUUID is required when action is specified
                 type: string
@@ -2123,6 +2147,9 @@ spec:
           rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.maxLogicalVolumeCount)
             && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname)
             && self.spec.mgmtIfname != "")
+        - message: all nodeFailureDomains values must be greater than 0
+          rule: '!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k,
+            self.spec.nodeFailureDomains[k] > 0)'
     served: true
     storage: true
     subresources:

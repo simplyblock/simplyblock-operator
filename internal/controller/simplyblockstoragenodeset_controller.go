@@ -366,6 +366,7 @@ func (r *StorageNodeSetReconciler) postStorageNodeSet(
 		CRPlural:            "storagenodesets",
 		Format4K:            utils.BoolPtrOrFalse(snCR.Spec.ForceFormat4K),
 		SpdkSystemMemory:    snCR.Spec.SpdkSystemMemory,
+		FailureDomain:       nodeFailureDomain(snCR, nodeName),
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
@@ -1641,6 +1642,16 @@ func maybeActivateCluster(
 	}
 
 	return nil
+}
+
+// nodeFailureDomain returns the failure-domain group for a specific worker node,
+// looked up from the StorageNodeSet's NodeFailureDomains map. Returns 0 (omitted)
+// when no entry is configured, which the backend interprets as no failure domain.
+func nodeFailureDomain(snCR *simplyblockv1alpha1.StorageNodeSet, nodeName string) int {
+	if snCR.Spec.NodeFailureDomains == nil {
+		return 0
+	}
+	return int(snCR.Spec.NodeFailureDomains[nodeName])
 }
 
 func journalManagerPercentPerDevice(

@@ -45,6 +45,9 @@ type ClusterAddParams struct {
 	SnodeApiPort           int                   `json:"snode_api_port,omitempty"`
 	BackupConfig           *BackupConfig         `json:"backup_config,omitempty"`
 	HashicorpVaultSettings *HashicorpVaultConfig `json:"hashicorp_vault_settings,omitempty"`
+	// EnableFailureDomain opts the cluster into failure-domain mode.
+	// Wire key must match the /api/v2/clusters/ endpoint — verify against sbcli before release.
+	EnableFailureDomain bool `json:"enable_failure_domain,omitempty"`
 }
 
 type ClusterUpdateParams struct {
@@ -114,4 +117,7 @@ type StorageNodeSetAddParams struct {
 	CRPlural            string   `json:"cr_plural,omitempty"`
 	Format4K            bool     `json:"format_4k,omitempty"`
 	SpdkSystemMemory    string   `json:"spdk_sys_mem,omitempty"`
+	// FailureDomain assigns this node to a failure-domain group (integer ≥ 1).
+	// Required when the cluster has EnableFailureDomain=true; omit (zero value) otherwise.
+	FailureDomain int `json:"failure_domain,omitempty"`
 }
