@@ -1,9 +1,13 @@
 package webhook
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/open-policy-agent/cert-controller/pkg/rotator"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -55,6 +59,18 @@ func SetupWebhookCertificate(mgr ctrl.Manager, namespace, tlsProvider string) (c
 		return ready, nil
 	}
 
+	// The Cert-Controller Rotator requires an empty secret to exist
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      utils.WebhookServerCertSecret,
+		},
+	}
+	if err := mgr.GetClient().Create(context.Background(), sec); err != nil &&
+		!apierrors.IsAlreadyExists(err) {
+		return nil, fmt.Errorf("pre-create webhook cert secret: %w", err)
+	}
+
 	if err := rotator.AddRotator(mgr, &rotator.CertRotator{
 		SecretKey:              types.NamespacedName{Namespace: namespace, Name: utils.WebhookServerCertSecret},
 		CertDir:                utils.WebhookCertDir,
@@ -65,6 +81,7 @@ func SetupWebhookCertificate(mgr ctrl.Manager, namespace, tlsProvider string) (c
 		IsReady:                ready,
 		Webhooks:               webhooks,
 		RestartOnSecretRefresh: true,
+		RequireLeaderElection:  true,
 	}); err != nil {
 		return nil, fmt.Errorf("add webhook cert rotator: %w", err)
 	}
