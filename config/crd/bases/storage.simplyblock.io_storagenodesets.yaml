@@ -569,9 +569,10 @@ spec:
           rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.maxLogicalVolumeCount)
             && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname)
             && self.spec.mgmtIfname != "")
-        - message: all nodeFailureDomains values must be greater than 0
+        - message: all nodeFailureDomains values must be >= 1 (failure-domain group
+            index)
           rule: '!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k,
-            self.spec.nodeFailureDomains[k] > 0)'
+            self.spec.nodeFailureDomains[k] >= 1)'
     served: true
     storage: true
     subresources:
