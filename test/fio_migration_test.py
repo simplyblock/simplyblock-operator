@@ -9,8 +9,9 @@ What it does
    but with `csi.storage.k8s.io/fstype: xfs`.
 2. Provisions N (default 10) 10Gi PVCs from that StorageClass and N fio pods.
    Each pod mounts the simplyblock volume (XFS) and runs fio for 10 minutes with:
-       ioengine=libaio, direct=1, iodepth=16, numjobs=4   (see
-       cmd/simplyblock-rebalancer/main.go::measure for the direct/libaio reference)
+       ioengine=libaio, direct=1, iodepth=1, numjobs=1 (override with
+       --iodepth/--numjobs; see cmd/simplyblock-rebalancer/main.go::measure
+       for the direct/libaio reference)
    fio emits per-second IOPS / latency / bandwidth logs plus a final JSON summary.
 3. While the pods run, repeatedly picks a *random* pod and migrates its volume to a
    *random storage node other than the one it currently lives on* by creating a
@@ -175,6 +176,7 @@ class FioMigrationTest:
         self.node_host: dict[str, str] = {}    # node uuid -> k8s hostname (StorageNode CR)
         self.sbctl_host_to_node: dict[str, str] = {}  # sbctl Hostname (vmNN_PORT) -> node uuid
         self._webappapi_pod: str = ""
+        self._cluster_uuid: str = ""
         self.migrations: list[MigrationRecord] = []
         self.health_events: list[PodHealthEvent] = []
         self._stop_monitor = threading.Event()
@@ -258,7 +260,7 @@ class FioMigrationTest:
         runtime = self.a.runtime
         # data file lives on the simplyblock XFS volume (/data); fio logs go to a
         # separate emptyDir (/logs) so log collection never depends on volume health.
-        fio = " ".join([
+        fio_args = [
             "fio",
             "--name=fiotest",
             "--filename=/data/fiotest",
@@ -268,8 +270,8 @@ class FioMigrationTest:
             "--rw=randrw",
             f"--rwmixread={FIO_RWMIXREAD}",
             f"--bs={FIO_BS}",
-            f"--iodepth={FIO_IODEPTH}",
-            f"--numjobs={FIO_NUMJOBS}",
+            f"--iodepth={self.a.iodepth}",
+            f"--numjobs={self.a.numjobs}",
             "--group_reporting",
             "--time_based",
             f"--runtime={runtime}",
@@ -285,18 +287,31 @@ class FioMigrationTest:
             f"--eta-newline={FIO_ETA_NEWLINE_SEC}",
             "--output=/logs/result.json",
             "--output-format=json",
-            # Data-integrity verification across the migration. md5 header per block;
-            # verify_fatal makes a checksum mismatch a HARD failure (overrides
-            # continue_on_error=all for verify), so corruption aborts immediately while
-            # transient EIO during a path switch is still tolerated. verify_backlog
-            # re-verifies recently-written blocks continuously during the run, so
-            # corruption is caught while the volume is migrating (not only at job end).
-            "--verify=md5",
-            "--verify_fatal=1",
-            "--verify_backlog=4096",
-            "--verify_backlog_batch=4096",
-            "--verify_dump=1",
-        ])
+        ]
+        # Data-integrity verification is only sound with a single in-flight writer:
+        # with iodepth>1 or numjobs>1 multiple I/Os target overlapping blocks
+        # concurrently, so verify races the writes and reports spurious md5 mismatches.
+        # Only enable verify when both are 1; otherwise run a pure load test.
+        if self.a.iodepth == 1 and self.a.numjobs == 1:
+            fio_args += [
+                # md5 header per block; verify_fatal makes a checksum mismatch a HARD
+                # failure (overrides continue_on_error=all for verify), so corruption
+                # aborts immediately while transient EIO during a path switch is still
+                # tolerated. verify_backlog re-verifies recently-written blocks
+                # continuously during the run, so corruption is caught while the volume
+                # is migrating (not only at job end).
+                "--verify=md5",
+                "--verify_fatal=1",
+                "--verify_backlog=4096",
+                "--verify_backlog_batch=4096",
+                "--verify_dump=1",
+            ]
+        else:
+            self.log.warn(
+                f"data-integrity verification DISABLED: iodepth={self.a.iodepth} "
+                f"numjobs={self.a.numjobs} (>1 races the verify and yields false "
+                f"corruption); this run measures I/O only, not data integrity")
+        fio = " ".join(fio_args)
         return (
             "set -u\n"
             'echo "[pod] $(date -u +%FT%TZ) installing fio"\n'
@@ -560,6 +575,8 @@ class FioMigrationTest:
         carry a dead cluster id from a previous installation, which would make every
         provisioned volume target a cluster that no longer exists.
         """
+        if self._cluster_uuid:
+            return self._cluster_uuid
         pod = self.webappapi_pod()
         cp = subprocess.run(
             ["kubectl", "-n", SIMPLYBLOCK_NAMESPACE, "exec", pod, "--",
@@ -582,6 +599,7 @@ class FioMigrationTest:
         if not uuid:
             raise SystemExit("active cluster has no UUID in sbctl output")
         self.log.info(f"live cluster (sbctl): {chosen[0].get('Name')} = {uuid}")
+        self._cluster_uuid = uuid
         return uuid
 
     def build_sbctl_host_map(self, vols: list[dict]) -> None:
@@ -875,6 +893,10 @@ class FioMigrationTest:
                 with open(os.path.join(sub, "fio.log"), "wb") as fh:
                     self._grab_container_logs(grab, NAMESPACE, p["name"], "fio", fh)
 
+            # simplyblock cluster event log (status changes, migrations, node events)
+            # via `sbctl cluster get-logs` inside a webappapi pod -> cluster-events.json
+            self._collect_cluster_events()
+
             # dmesg for the storage workers via the privileged spdk-container
             for p in snode:
                 dest = os.path.join(self.outdir, f"dmesg-{self._short(p['node'])}.txt")
@@ -933,6 +955,11 @@ class FioMigrationTest:
                 "containers": [{
                     "name": "grab", "image": FIO_IMAGE, "imagePullPolicy": "IfNotPresent",
                     "command": ["sh", "-c", "sleep 1800"],
+                    # privileged + runAsUser:0 is required to read the host's
+                    # /var/log/pods on OpenShift: without it the container runs as
+                    # container_t (SELinux) and gets EACCES even as root, so every
+                    # grab silently produced empty files.
+                    "securityContext": {"privileged": True, "runAsUser": 0},
                     "volumeMounts": [{"name": "pods", "mountPath": "/podlogs", "readOnly": True}],
                 }],
                 "volumes": [{"name": "pods", "hostPath": {"path": "/var/log/pods"}}],
@@ -975,6 +1002,37 @@ class FioMigrationTest:
              self._host_dump_script(namespace, pod, container)],
             capture_output=True, check=False, timeout=300)
         fh.write(cp.stdout)
+        # the host dump script swallows read errors (2>/dev/null, || exit 0), so an
+        # empty grab is otherwise indistinguishable from "no logs" — surface it.
+        if not cp.stdout:
+            detail = cp.stderr.decode(errors="replace").strip() if cp.stderr else ""
+            self.log.warn(f"empty log grab for {namespace}/{pod}/{container} "
+                          f"(rc={cp.returncode}{'; ' + detail if detail else ''})")
+
+    def _collect_cluster_events(self) -> None:
+        """Dump the simplyblock cluster event log (`sbctl cluster get-logs`) — cluster
+        status changes, migration/node events — into cluster-events.json. Best-effort."""
+        try:
+            cluster = self.sbctl_cluster_uuid()
+            pod = self.webappapi_pod()
+        except Exception as e:  # noqa: BLE001
+            self.log.warn(f"cluster events: cannot resolve cluster/webappapi: {e}")
+            return
+        cp = subprocess.run(
+            ["kubectl", "-n", SIMPLYBLOCK_NAMESPACE, "exec", pod, "--",
+             "sbctl", "cluster", "get-logs", cluster, "--json", "--limit=50000"],
+            capture_output=True, text=True, timeout=120)
+        if cp.returncode != 0:
+            self.log.warn(f"sbctl cluster get-logs failed: {cp.stderr.strip()}")
+            return
+        dest = os.path.join(self.outdir, "cluster-events.json")
+        with open(dest, "w") as fh:
+            fh.write(cp.stdout)
+        try:
+            n = len(json.loads(cp.stdout))
+            self.log.info(f"    cluster event log: {n} entries -> {dest}")
+        except Exception:  # noqa: BLE001
+            self.log.info(f"    cluster event log -> {dest}")
 
     @staticmethod
     def _read_fio_log(paths: list[str]) -> dict[int, dict[int, list[float]]]:
@@ -1409,7 +1467,7 @@ class FioMigrationTest:
         self.log.info(f"pods={self.a.pods} volume={self.a.volume_size_gb}Gi xfs "
                       f"runtime={self.a.runtime}s "
                       f"fio(direct={FIO_DIRECT},ioengine={FIO_IOENGINE},"
-                      f"iodepth={FIO_IODEPTH},numjobs={FIO_NUMJOBS})")
+                      f"iodepth={self.a.iodepth},numjobs={self.a.numjobs})")
         try:
             self.discover_nodes()
             self.ensure_xfs_storageclass()
@@ -1489,6 +1547,10 @@ def parse_args():
                    help="fio data file size in GiB; kept small so the up-front layout is "
                         "near-instant (default 1, capped at volume-size-gb minus 2)")
     p.add_argument("--runtime", type=int, default=600, help="fio runtime seconds (default 600 = 10min)")
+    p.add_argument("--iodepth", type=int, default=FIO_IODEPTH,
+                   help=f"fio queue depth per job (default {FIO_IODEPTH})")
+    p.add_argument("--numjobs", type=int, default=FIO_NUMJOBS,
+                   help=f"fio parallel jobs per pod (default {FIO_NUMJOBS})")
     p.add_argument("--migration-gap", type=int, default=15,
                    help="seconds to wait between migrations (default 15)")
     p.add_argument("--migration-timeout", type=int, default=420,
