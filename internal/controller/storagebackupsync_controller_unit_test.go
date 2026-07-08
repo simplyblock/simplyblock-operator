@@ -174,9 +174,12 @@ func TestStorageBackupSyncImportsBackup(t *testing.T) {
 	}
 }
 
-// TestStorageBackupSyncSkipsWhenNoPVCMatches verifies that when no PVC in the
-// cluster maps to the backend backup's lvol ID, no StorageBackup CR is created.
-func TestStorageBackupSyncSkipsWhenNoPVCMatches(t *testing.T) {
+// TestStorageBackupSyncImportsWhenNoPVCMatches verifies that a backend backup
+// is still imported as a StorageBackup CR even when its originating lvol has
+// no matching PVC (e.g. the source pool was deleted and recreated) — the
+// backend backup and its data remain valid and restorable, so it must not be
+// silently dropped forever.
+func TestStorageBackupSyncImportsWhenNoPVCMatches(t *testing.T) {
 	srv := syncTestBackupServer(t)
 	defer srv.Close()
 
@@ -194,8 +197,18 @@ func TestStorageBackupSyncSkipsWhenNoPVCMatches(t *testing.T) {
 	if err := r.List(context.Background(), list, client.InNamespace(syncTestNamespace)); err != nil {
 		t.Fatalf("List StorageBackups: %v", err)
 	}
-	if len(list.Items) != 0 {
-		t.Errorf("expected no StorageBackup CRs, found %d", len(list.Items))
+	if len(list.Items) != 1 {
+		t.Fatalf("expected 1 imported StorageBackup CR, found %d", len(list.Items))
+	}
+	imported := list.Items[0]
+	if imported.Spec.PVCRef != nil {
+		t.Errorf("expected nil PVCRef when no PVC matches, got %+v", imported.Spec.PVCRef)
+	}
+	if imported.Status.BackupID != syncTestBackupID {
+		t.Errorf("expected imported CR status BackupID %q, got %q", syncTestBackupID, imported.Status.BackupID)
+	}
+	if imported.Status.LvolID != syncTestLvolID {
+		t.Errorf("expected imported CR status LvolID %q, got %q", syncTestLvolID, imported.Status.LvolID)
 	}
 }
 
@@ -241,10 +254,11 @@ func TestStorageBackupSyncSkipsAlreadyTracked(t *testing.T) {
 	}
 }
 
-// TestStorageBackupSyncSkipsAnnotationMismatch verifies that a PVC whose lvol-id
-// annotation disagrees with the PV's CSI volume handle is excluded from the
-// lvol→PVC map, so the backup is not associated with a potentially wrong PVC.
-func TestStorageBackupSyncSkipsAnnotationMismatch(t *testing.T) {
+// TestStorageBackupSyncImportsWithoutPVCRefOnAnnotationMismatch verifies that
+// a PVC whose lvol annotation disagrees with its PV's volume handle is
+// treated as "no match" (never used as a possibly-wrong PVCRef), but the
+// backend backup is still imported rather than silently dropped.
+func TestStorageBackupSyncImportsWithoutPVCRefOnAnnotationMismatch(t *testing.T) {
 	srv := syncTestBackupServer(t)
 	defer srv.Close()
 
@@ -268,7 +282,10 @@ func TestStorageBackupSyncSkipsAnnotationMismatch(t *testing.T) {
 	if err := r.List(context.Background(), list, client.InNamespace(syncTestNamespace)); err != nil {
 		t.Fatalf("List StorageBackups: %v", err)
 	}
-	if len(list.Items) != 0 {
-		t.Errorf("expected no StorageBackup CRs when annotation mismatches handle, found %d", len(list.Items))
+	if len(list.Items) != 1 {
+		t.Fatalf("expected 1 imported StorageBackup CR, found %d", len(list.Items))
+	}
+	if list.Items[0].Spec.PVCRef != nil {
+		t.Errorf("expected nil PVCRef when annotation mismatches handle, got %+v", list.Items[0].Spec.PVCRef)
 	}
 }

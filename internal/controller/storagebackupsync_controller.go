@@ -110,12 +110,18 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			continue
 		}
 
+		// A PVC match is best-effort only: the originating PVC/lvol may no longer
+		// exist (e.g. the source pool was deleted and recreated), but the backend
+		// backup and its data remain valid and restorable, so it must still be
+		// imported as a CR — otherwise a BackupRestore referencing it can never
+		// find it and gets stuck at Pending/NotFound forever.
 		pvcEntry, found := lvolToPVC[bp.LvolID]
-		pvcName, pvcNamespace := pvcEntry[0], pvcEntry[1]
-		if !found {
-			log.Info("Skipping backend backup — no matching PVC found for lvol",
+		var pvcName, pvcNamespace string
+		if found {
+			pvcName, pvcNamespace = pvcEntry[0], pvcEntry[1]
+		} else {
+			log.Info("Importing backend backup with no matching PVC — originating lvol was likely deleted",
 				"backupID", bp.ID, "lvolID", bp.LvolID)
-			continue
 		}
 
 		imported := &simplyblockv1alpha1.StorageBackup{
@@ -127,13 +133,15 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				},
 			},
 			Spec: simplyblockv1alpha1.StorageBackupSpec{
-				ClusterName: clusterCR.Name,
-				PVCRef: &simplyblockv1alpha1.PersistentVolumeClaimRef{
-					Name:      pvcName,
-					Namespace: pvcNamespace,
-				},
+				ClusterName:  clusterCR.Name,
 				SnapshotName: bp.SnapshotName,
 			},
+		}
+		if found {
+			imported.Spec.PVCRef = &simplyblockv1alpha1.PersistentVolumeClaimRef{
+				Name:      pvcName,
+				Namespace: pvcNamespace,
+			}
 		}
 
 		if err := r.Create(ctx, imported); err != nil {
@@ -171,10 +179,14 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				"backupID", bp.ID)
 		}
 
+		pvcDescr := pvcName
+		if pvcDescr == "" {
+			pvcDescr = "none — lvol deleted"
+		}
 		log.Info("Imported backend backup as StorageBackup CR",
-			"backupID", bp.ID, "pvc", pvcName, "cluster", clusterCR.Name)
+			"backupID", bp.ID, "pvc", pvcDescr, "cluster", clusterCR.Name)
 		r.Recorder.Eventf(clusterCR, "Normal", "StorageBackupImported",
-			"Imported backend backup %q (PVC %s) as StorageBackup CR", bp.ID, pvcName)
+			"Imported backend backup %q (PVC %s) as StorageBackup CR", bp.ID, pvcDescr)
 	}
 
 	return ctrl.Result{RequeueAfter: backupSyncRequeue}, nil
