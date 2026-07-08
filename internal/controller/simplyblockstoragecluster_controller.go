@@ -237,6 +237,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		SnodeApiPort:           utils.IntPtrOrDefault(clusterCR.Spec.SnodeApiPort, 50001),
 		BackupConfig:           backupConfig,
 		HashicorpVaultSettings: buildHashicorpVaultConfig(clusterCR.Spec.HashicorpVaultSettings),
+		EnableFailureDomain:    utils.BoolPtrOrFalse(clusterCR.Spec.EnableFailureDomains),
 	}
 
 	endpoint = "/api/v2/clusters/"

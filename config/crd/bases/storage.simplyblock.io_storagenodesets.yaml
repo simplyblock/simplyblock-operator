@@ -257,6 +257,18 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              nodeFailureDomains:
+                additionalProperties:
+                  format: int32
+                  type: integer
+                description: |-
+                  NodeFailureDomains assigns each worker node to a failure-domain group (integer ≥ 1).
+                  Required when the referenced StorageCluster has enableFailureDomains=true.
+                  Keys are Kubernetes worker node names; values are the failure-domain group index.
+                  Each node in the same physical failure domain (rack, AZ, power unit) should share
+                  the same group index so the control plane can spread erasure-coding chunks across
+                  independent fault groups.
+                type: object
               nodeUUID:
                 description: NodeUUID is required when action is specified
                 type: string
@@ -557,6 +569,10 @@ spec:
           rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.maxLogicalVolumeCount)
             && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname)
             && self.spec.mgmtIfname != "")
+        - message: all nodeFailureDomains values must be >= 1 (failure-domain group
+            index)
+          rule: '!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k,
+            self.spec.nodeFailureDomains[k] >= 1)'
     served: true
     storage: true
     subresources:
