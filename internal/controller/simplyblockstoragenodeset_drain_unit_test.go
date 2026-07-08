@@ -864,6 +864,150 @@ func TestDrainValidateBlocksWhenClusterRebalancing(t *testing.T) {
 	}
 }
 
+// ── drainClusterPauseCheck: pause during active sub-phases ────────────────────
+
+// newPauseCheckReconciler builds a reconciler seeded with the given StorageCluster
+// and a StorageNodeSet in the provided sub-phase, for drainClusterPauseCheck tests.
+func newPauseCheckReconciler(t *testing.T, cluster *simplyblockv1alpha1.StorageCluster, subPhase string) (*StorageNodeSetReconciler, *simplyblockv1alpha1.StorageNodeSet) {
+	t.Helper()
+	sn := newDrainSN(drainTestNodeUUID, subPhase, utils.ActionStateRunning)
+	sn.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
+		Action:   utils.NodeActionRemove,
+		NodeUUID: drainTestNodeUUID,
+		State:    utils.ActionStateRunning,
+		SubPhase: subPhase,
+	}
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	cl := newTestClient(t, scheme, []client.Object{
+		&simplyblockv1alpha1.StorageNodeSet{},
+		&simplyblockv1alpha1.StorageCluster{},
+	}, cluster, sn)
+	r := &StorageNodeSetReconciler{
+		Client:   cl,
+		Scheme:   scheme,
+		Recorder: record.NewFakeRecorder(32),
+	}
+	return r, sn
+}
+
+func TestDrainPausesWhenClusterInactive(t *testing.T) {
+	// When the cluster transitions to a non-active status (e.g. "degraded")
+	// during an active drain sub-phase, performDrainAndRemove must pause and
+	// requeue rather than advancing the state machine.
+	cluster := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: drainTestCluster, Namespace: drainTestNS},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{Status: "degraded"},
+	}
+
+	for _, subPhase := range []string{
+		drainSubPhaseSuspending,
+		drainSubPhaseMigrating,
+		drainSubPhaseVerifying,
+		drainSubPhaseRemoving,
+	} {
+		t.Run("subPhase="+subPhase, func(t *testing.T) {
+			r, sn := newPauseCheckReconciler(t, cluster, subPhase)
+
+			mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+			defer mock.Close()
+
+			res, err := r.performDrainAndRemove(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.RequeueAfter == 0 {
+				t.Errorf("expected non-zero requeue when cluster is inactive")
+			}
+
+			// SubPhase must not have advanced.
+			updated := &simplyblockv1alpha1.StorageNodeSet{}
+			if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), updated); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if updated.Status.ActionStatus == nil {
+				t.Fatal("expected actionStatus to remain set")
+			}
+			if updated.Status.ActionStatus.SubPhase != subPhase {
+				t.Errorf("sub-phase must not advance during pause: got %q want %q",
+					updated.Status.ActionStatus.SubPhase, subPhase)
+			}
+			// Message should mention the pause.
+			if !strings.Contains(updated.Status.ActionStatus.Message, "paused") {
+				t.Errorf("expected message to mention 'paused', got %q",
+					updated.Status.ActionStatus.Message)
+			}
+		})
+	}
+}
+
+func TestDrainPausesWhenClusterRebalancingDuringActiveDrain(t *testing.T) {
+	// When the cluster starts rebalancing after the drain has already advanced
+	// past Validating, the drain must pause at its current sub-phase.
+	rebalancing := true
+	cluster := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: drainTestCluster, Namespace: drainTestNS},
+		Status: simplyblockv1alpha1.StorageClusterStatus{
+			Status:      utils.ClusterStatusActive,
+			Rebalancing: &rebalancing,
+		},
+	}
+
+	for _, subPhase := range []string{
+		drainSubPhaseSuspending,
+		drainSubPhaseMigrating,
+	} {
+		t.Run("subPhase="+subPhase, func(t *testing.T) {
+			r, sn := newPauseCheckReconciler(t, cluster, subPhase)
+
+			mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+			defer mock.Close()
+
+			res, err := r.performDrainAndRemove(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.RequeueAfter == 0 {
+				t.Errorf("expected non-zero requeue when cluster is rebalancing")
+			}
+
+			updated := &simplyblockv1alpha1.StorageNodeSet{}
+			if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), updated); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if updated.Status.ActionStatus == nil {
+				t.Fatal("expected actionStatus to remain set")
+			}
+			if updated.Status.ActionStatus.SubPhase != subPhase {
+				t.Errorf("sub-phase must not advance during pause: got %q want %q",
+					updated.Status.ActionStatus.SubPhase, subPhase)
+			}
+			if !strings.Contains(updated.Status.ActionStatus.Message, "rebalancing") {
+				t.Errorf("expected message to mention 'rebalancing', got %q",
+					updated.Status.ActionStatus.Message)
+			}
+		})
+	}
+}
+
+func TestDrainContinuesWhenClusterActiveAndNotRebalancing(t *testing.T) {
+	// When the cluster is active and not rebalancing, drainClusterPauseCheck
+	// must return (false, "") so the drain proceeds normally.
+	rebalancing := false
+	cluster := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: drainTestCluster, Namespace: drainTestNS},
+		Status: simplyblockv1alpha1.StorageClusterStatus{
+			Status:      utils.ClusterStatusActive,
+			Rebalancing: &rebalancing,
+		},
+	}
+	r, sn := newPauseCheckReconciler(t, cluster, drainSubPhaseMigrating)
+
+	paused, reason := r.drainClusterPauseCheck(context.Background(), sn)
+	if paused {
+		t.Errorf("expected drain to continue when cluster is active and not rebalancing, got reason=%q", reason)
+	}
+}
+
 // ── Rapid action toggling ─────────────────────────────────────────────────────
 
 func TestRapidActionToggleDoesNotLeakState(t *testing.T) {

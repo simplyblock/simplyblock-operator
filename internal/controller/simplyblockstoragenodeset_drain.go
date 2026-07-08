@@ -135,6 +135,24 @@ func (r *StorageNodeSetReconciler) performDrainAndRemove(
 		return r.drainValidate(ctx, apiClient, clusterUUID, snCR)
 	}
 
+	// For all active sub-phases (Suspending onward), pause drain if the cluster
+	// is no longer active or is currently rebalancing. Resume automatically
+	// on the next reconcile once the cluster is active and not rebalancing.
+	if paused, reason := r.drainClusterPauseCheck(ctx, snCR); paused {
+		log := logf.FromContext(ctx)
+		log.Info("drain: pausing — cluster not ready",
+			"subPhase", subPhase, "reason", reason)
+		patch := client.MergeFrom(snCR.DeepCopy())
+		snCR.Status.ActionStatus.Message = "drain paused: " + reason
+		snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
+		if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+			log.Error(err, "drain: failed to patch paused message")
+		}
+		r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "DrainPaused",
+			"drain paused at %s: %s", subPhase, reason)
+		return ctrl.Result{RequeueAfter: drainRequeueBlocking}, nil
+	}
+
 	switch subPhase {
 	case drainSubPhaseSuspending:
 		return r.drainSuspend(ctx, apiClient, clusterUUID, snCR)
@@ -229,6 +247,31 @@ func (r *StorageNodeSetReconciler) drainHandleCancellation(
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// drainClusterPauseCheck returns (true, reason) when the cluster is not ready
+// for drain progression — either because it is not active or because it is
+// currently rebalancing. The drain resumes automatically on the next poll once
+// both conditions are cleared. Returns (false, "") when the cluster is ready.
+func (r *StorageNodeSetReconciler) drainClusterPauseCheck(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+) (paused bool, reason string) {
+	clusterCR, err := utils.ResolveClusterCR(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
+	if err != nil {
+		// Can't determine cluster status — don't block, let the sub-phase handle it.
+		return false, ""
+	}
+
+	if clusterCR.Status.Status != "" && clusterCR.Status.Status != utils.ClusterStatusActive {
+		return true, fmt.Sprintf("cluster status is %q (not active)", clusterCR.Status.Status)
+	}
+
+	if clusterCR.Status.Rebalancing != nil && *clusterCR.Status.Rebalancing {
+		return true, "cluster is rebalancing"
+	}
+
+	return false, ""
 }
 
 // drainValidate classifies volumes on the node into system, PV-managed, pinned,
