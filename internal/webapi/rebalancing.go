@@ -54,17 +54,17 @@ type ContinueMigrationParams struct {
 // connected and validated before calling ContinueMigration.
 type LvolConnectResp struct {
 	Nqn            string `json:"nqn"`
-	ReconnectDelay int    `json:"reconnect_delay"`
-	NrIoQueues     int    `json:"nr_io_queues"`
-	CtrlLossTmo    int    `json:"ctrl_loss_tmo"`
-	FastIOFailTmo  int    `json:"fast_io_fail_tmo"`
-	KeepAliveTmo   int    `json:"keep_alive_tmo"`
+	ReconnectDelay int    `json:"reconnect-delay"`
+	NrIoQueues     int    `json:"nr-io-queues"`
+	CtrlLossTmo    int    `json:"ctrl-loss-tmo"`
+	FastIOFailTmo  int    `json:"fast-io-fail-tmo"`
+	KeepAliveTmo   int    `json:"keep-alive-tmo"`
 	Port           int    `json:"port"`
 	TargetType     string `json:"transport"`
 	IP             string `json:"ip"`
 	Connect        string `json:"connect"`
-	NSID           int    `json:"ns_id"`
-	HostIface      string `json:"host_iface,omitempty"`
+	NSID           int    `json:"ns-id"`
+	HostIface      string `json:"host-iface,omitempty"`
 }
 
 // MigrateParams is the request body for
