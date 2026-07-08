@@ -471,6 +471,13 @@ spec:
                 description: CompletedAt is when the PVC became bound.
                 format: date-time
                 type: string
+              fsType:
+                description: |-
+                  FSType is the filesystem type of the original source volume, copied from
+                  the referenced StorageBackup's status.fsType. Set on the restored
+                  PersistentVolume so it mounts with the same filesystem it was backed up
+                  with, instead of the CSI driver's default.
+                type: string
               message:
                 description: Message contains the latest reconciliation detail or
                   error.
@@ -1125,6 +1132,12 @@ spec:
               createdAt:
                 description: CreatedAt is when the backup was created.
                 format: date-time
+                type: string
+              fsType:
+                description: |-
+                  FSType is the filesystem type of the source PersistentVolume (e.g. "ext4",
+                  "xfs"), captured at backup time so a restore can preserve it regardless of
+                  which StorageClass the restored PVC ends up using.
                 type: string
               lvolID:
                 description: LvolID is the Simplyblock volume UUID.

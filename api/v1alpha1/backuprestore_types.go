@@ -98,6 +98,11 @@ type BackupRestoreStatus struct {
 	BackupID string `json:"backupID,omitempty"`
 	// SourceLvolID is the original logical volume UUID that was backed up.
 	SourceLvolID string `json:"sourceLvolID,omitempty"`
+	// FSType is the filesystem type of the original source volume, copied from
+	// the referenced StorageBackup's status.fsType. Set on the restored
+	// PersistentVolume so it mounts with the same filesystem it was backed up
+	// with, instead of the CSI driver's default.
+	FSType string `json:"fsType,omitempty"`
 
 	// PoolName is the pool the restore was issued against.
 	PoolName string `json:"poolName,omitempty"`

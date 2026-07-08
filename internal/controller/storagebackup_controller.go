@@ -111,6 +111,7 @@ type backupSource struct {
 	PVName       string
 	PoolName     string
 	LvolID       string
+	FSType       string
 }
 
 type storagePoolAPIResponse struct {
@@ -253,6 +254,7 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 			status.PVName = source.PVName
 			status.PoolName = source.PoolName
 			status.LvolID = source.LvolID
+			status.FSType = source.FSType
 			status.Message = err.Error()
 		}); patchErr != nil {
 			return nil, ctrl.Result{}, true, patchErr
@@ -268,6 +270,7 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 		status.PoolName = source.PoolName
 		status.PoolUUID = poolUUID
 		status.LvolID = source.LvolID
+		status.FSType = source.FSType
 		if status.Phase == "" {
 			status.Phase = simplyblockv1alpha1.BackupPhasePending
 		}
@@ -545,6 +548,7 @@ func (r *StorageBackupReconciler) resolveBackupSource(
 		PVName:       pv.Name,
 		PoolName:     poolNameOrID,
 		LvolID:       lvolID,
+		FSType:       pv.Spec.CSI.FSType,
 	}, nil
 }
 
