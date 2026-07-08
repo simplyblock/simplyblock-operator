@@ -1406,7 +1406,7 @@ spec:
                       defaultCoolDownSeconds:
                         description: |-
                           DefaultCoolDownSeconds is the cool-down period (seconds) applied to a volume after
-                          it has been migrated. Defaults to 60.
+                          it has been migrated. Defaults to 600.
                         format: int32
                         type: integer
                       enabled:

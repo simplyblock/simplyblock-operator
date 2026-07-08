@@ -113,7 +113,7 @@ type VolumeRebalancingSettings struct {
 	// +optional
 	MinHotColdDifferencePct *int32 `json:"minHotColdDifferencePct,omitempty"`
 	// DefaultCoolDownSeconds is the cool-down period (seconds) applied to a volume after
-	// it has been migrated. Defaults to 60.
+	// it has been migrated. Defaults to 600.
 	// +optional
 	DefaultCoolDownSeconds *int32 `json:"defaultCoolDownSeconds,omitempty"`
 	// MaxVolumeMigrationsPerCycle is the maximum number of volumes moved per cycle. Defaults to 10.

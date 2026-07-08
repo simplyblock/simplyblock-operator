@@ -23,7 +23,7 @@ const (
 	// migration is worthwhile — prevents shuffling load between near-equally-loaded
 	// nodes.
 	defaultMinHotColdDifferencePct     = 20
-	defaultCoolDownSeconds             = 60
+	defaultCoolDownSeconds             = 600
 	defaultMaxVolumeMigrationsPerCycle = 10
 	// defaultLatencyPercentile is the fio write-latency percentile driving the
 	// rebalancing deviation signal. p50 (median) is stable; p99 is dominated by
