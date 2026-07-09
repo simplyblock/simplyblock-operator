@@ -42,6 +42,8 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
+	internalwebhook "github.com/simplyblock/simplyblock-operator/internal/webhook"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -121,6 +123,10 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	var latencyPercentile string
+	flag.StringVar(&latencyPercentile, "latency-percentile", "p50",
+		"fio write-latency percentile driving the volume-rebalancing deviation signal: "+
+			"\"p50\" (median, stable) or \"p99\" (tail, noisy).")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -135,6 +141,12 @@ func main() {
 		os.Exit(1)
 	}
 	operatorNamespace := strings.TrimSpace(string(nsBytes))
+
+	if latencyPercentile != "p50" && latencyPercentile != "p99" {
+		setupLog.Error(nil, "invalid --latency-percentile (must be \"p50\" or \"p99\")",
+			"value", latencyPercentile)
+		os.Exit(1)
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -155,6 +167,10 @@ func main() {
 	webhookTLSOpts := tlsOpts
 	webhookServerOptions := webhook.Options{
 		TLSOpts: webhookTLSOpts,
+		// Serve from the location the runtime cert provisioner writes to; this is
+		// also controller-runtime's default, but we set it explicitly so the value
+		// is discoverable alongside the rotator/provisioner in internal/webhook.
+		CertDir: utils.WebhookCertDir,
 	}
 
 	if len(webhookCertPath) > 0 {
@@ -351,7 +367,52 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeMigration")
 		os.Exit(1)
 	}
+	if err := (&controller.VolumeRebalancerReconciler{
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorderFor("volumerebalancer-controller"),
+		LatencyPercentile: latencyPercentile,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "VolumeRebalancer")
+		os.Exit(1)
+	}
+	if err := (&controller.StorageNodeLatencyReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		// FIXME: test environments use the WebAPI provisioner to explicitly create the
+		// benchmark pool/volumes. In production these are auto-provisioned during cluster
+		// setup, where the default (nil → AutomaticBenchmarkProvisioner) is correct.
+		Provisioner: &controller.WebAPIBenchmarkProvisioner{
+			APIClient: webapi.NewClient(),
+			K8sClient: mgr.GetClient(),
+		},
+		// Resolves each storage node's data-network IP (/nics) for the fio baseline;
+		// independent of the provisioner, so it is set for both prod and test paths.
+		APIClient: webapi.NewClient(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeLatency")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
+
+	// Provision the mutating-webhook serving certificate at runtime (self-signed
+	// via cert-controller, or from cert-manager when SB_TLS_PROVIDER=cert-manager).
+	webhookReady, err := internalwebhook.SetupWebhookCertificate(mgr, operatorNamespace, tlsProvider)
+	if err != nil {
+		setupLog.Error(err, "unable to set up webhook serving certificate")
+		os.Exit(1)
+	}
+
+	// Defer registering the webhook until the serving cert is on disk and the CA
+	// bundle is injected. This delays adding controller-runtime's webhook-server
+	// runnable (whose certwatcher fails on a missing cert file) until the cert
+	// exists. failurePolicy=Ignore keeps pod creation unblocked during the gap.
+	go func() {
+		<-webhookReady
+		mgr.GetWebhookServer().Register("/mutate-v1-pod-simplyblock-rebalancer",
+			&webhook.Admission{Handler: &internalwebhook.SimplyblockRebalancerInjector{Client: mgr.GetClient()}})
+		setupLog.Info("registered simplyblock-rebalancer mutating webhook")
+	}()
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

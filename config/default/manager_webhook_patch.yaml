@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: system
+spec:
+  template:
+    spec:
+      containers:
+      - name: manager
+        # Serve the webhook cert from controller-runtime's default location
+        # (/tmp/k8s-webhook-server/serving-certs). The operator writes the cert
+        # here at runtime (self-signed via cert-controller, or read from the
+        # cert-manager-issued Secret when SB_TLS_PROVIDER=cert-manager), so this
+        # must be a writable volume — the container runs with a read-only root fs.
+        volumeMounts:
+        - mountPath: /tmp/k8s-webhook-server/serving-certs
+          name: webhook-certs
+      volumes:
+      - name: webhook-certs
+        emptyDir: {}

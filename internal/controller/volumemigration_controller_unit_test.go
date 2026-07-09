@@ -208,8 +208,8 @@ func TestReconcileStart_EmptyMigrationUUID_Fails(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
 		t.Fatalf("phase = %q, want Failed", got.Status.Phase)
 	}
-	if !strings.Contains(got.Status.ErrorMessage, "empty migration ID") {
-		t.Errorf("ErrorMessage = %q, want empty migration ID", got.Status.ErrorMessage)
+	if !strings.Contains(got.Status.ErrorMessage, "empty migration UUID") {
+		t.Errorf("ErrorMessage = %q, want empty migration UUID", got.Status.ErrorMessage)
 	}
 }
 
@@ -395,7 +395,7 @@ func TestPollValidationJob_Succeeded_ContinuesToRunning(t *testing.T) {
 func TestPollValidationJob_Failed_CancelsAndFails(t *testing.T) {
 	var cancelCalled bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel") {
+		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/") {
 			cancelCalled = true
 			w.WriteHeader(http.StatusOK)
 			return
@@ -570,7 +570,7 @@ func assertAbort(t *testing.T, from simplyblockv1alpha1.VolumeMigrationPhase) {
 	t.Helper()
 	var cancelCalled bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel") {
+		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/") {
 			cancelCalled = true
 			w.WriteHeader(http.StatusOK)
 			return

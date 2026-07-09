@@ -54,6 +54,7 @@ const (
 	// pod from eviction while it sets up storage PDB protection on its own node.
 	managerPDBName = "simplyblock-operator-self"
 
+	nodeStatusOnline     = "online"
 	nodeStatusOffline    = "offline"
 	nodeStatusInRestart  = "in_restart"
 	nodeStatusInShutdown = "in_shutdown"
@@ -681,7 +682,7 @@ func (r *NodeDrainCoordinatorReconciler) handleRestartCalled(
 		log.Info("Failed to poll backend node status after restart, retrying", "node", state.Hostname, "err", err)
 		return 10 * time.Second, nil
 	}
-	if nodeInfo.Status != "online" {
+	if nodeInfo.Status != nodeStatusOnline {
 		state.Message = fmt.Sprintf("Kubernetes node Ready; waiting for node %s backend online, current: %s", activeUUID, nodeInfo.Status)
 		log.Info("Node not online yet", "node", state.Hostname, "nodeUUID", activeUUID, "status", nodeInfo.Status)
 		return 10 * time.Second, nil
@@ -1210,7 +1211,7 @@ func nextUUIDInList(uuids []string, current string) string {
 func isWorkerOnline(snCR *simplyblockv1alpha1.StorageNodeSet, workerName string) bool {
 	for _, n := range snCR.Status.Nodes {
 		if n.Hostname == workerName {
-			return n.Status == "online"
+			return n.Status == nodeStatusOnline
 		}
 	}
 	return false

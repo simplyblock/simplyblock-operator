@@ -217,6 +217,88 @@ spec:
                 description: VolumeMigrationSettings controls volume migration for
                   this cluster.
                 properties:
+                  autoRebalancing:
+                    description: |-
+                      AutoRebalancing configures automatic, latency-driven volume rebalancing. When
+                      nil/disabled the operator performs only manually-triggered VolumeMigrations.
+                    properties:
+                      defaultCoolDownSeconds:
+                        description: |-
+                          DefaultCoolDownSeconds is the cool-down period (seconds) applied to a volume after
+                          it has been migrated. Defaults to 600.
+                        format: int32
+                        type: integer
+                      enabled:
+                        description: Enabled activates automatic rebalancing for this
+                          cluster. Defaults to true.
+                        type: boolean
+                      evaluationInterval:
+                        description: EvaluationInterval is how often the rebalancer
+                          evaluates load. Defaults to 60s.
+                        type: string
+                      imbalanceThreshold:
+                        description: |-
+                          ImbalanceThreshold is the minimum latency deviation from baseline (in percent)
+                          that a node must exhibit before it is considered a rebalancing source. Defaults to 80.
+                        format: int32
+                        type: integer
+                      iopsWeight:
+                        description: IOPSWeight is the weight applied to per-volume
+                          IOPS in the volume IO score. Defaults to 1.0.
+                        type: number
+                      latencyBenchmarkEnabled:
+                        description: |-
+                          LatencyBenchmarkEnabled enables fio-based NVMe-oF latency measurement via Kubernetes Jobs.
+                          Defaults to false; set to true once a RebalancerImage is configured.
+                        type: boolean
+                      latencyBenchmarkInterval:
+                        description: |-
+                          LatencyBenchmarkInterval is how often fio benchmark Jobs run against each storage node.
+                          Defaults to 5m.
+                        type: string
+                      maxVolumeMigrationsPerCycle:
+                        description: MaxVolumeMigrationsPerCycle is the maximum number
+                          of volumes moved per cycle. Defaults to 10.
+                        format: int32
+                        type: integer
+                      metricsBackend:
+                        description: MetricsBackend selects the data source for I/O
+                          metrics. Defaults to "prometheus".
+                        enum:
+                        - controlplane
+                        - prometheus
+                        - uniform
+                        type: string
+                      migrationEnabled:
+                        description: |-
+                          MigrationEnabled controls whether the rebalancer actually creates VolumeMigration
+                          CRs. When false the rebalancer still runs every cycle — evaluating load, computing
+                          deviations, selecting candidates and emitting metrics — but discards the migrations
+                          instead of creating them (dry-run). Defaults to true.
+                        type: boolean
+                      minHotColdDifferencePct:
+                        description: |-
+                          MinHotColdDifferencePct is the minimum latency-deviation gap (in percentage points)
+                          that a candidate target node must be below the hot source node before a migration is
+                          performed. Prevents migrating between near-equally-loaded nodes. Defaults to 20.
+                        format: int32
+                        type: integer
+                      prometheusURL:
+                        description: PrometheusURL is required when MetricsBackend
+                          is "prometheus".
+                        type: string
+                      storageNodeCandidateCount:
+                        description: |-
+                          StorageNodeCandidateCount is the number of top-loaded nodes evaluated each cycle to
+                          find the best migration source. Defaults to 3.
+                        format: int32
+                        type: integer
+                      throughputWeight:
+                        description: |-
+                          ThroughputWeight is the weight applied to per-volume throughput (MB/s) in the volume
+                          IO score. Defaults to 0.1.
+                        type: number
+                    type: object
                   enabled:
                     description: |-
                       Enabled turns on volume migration for this cluster. When false, the operator
@@ -225,7 +307,8 @@ spec:
                   rebalancerImage:
                     description: |-
                       RebalancerImage is the container image used for the volume-migration path
-                      validation Job. The image must include nvme-cli.
+                      validation Job and the rebalancer latency/baseline Jobs. The image must include
+                      nvme-cli (and, for rebalancing, fio + jq).
                     type: string
                 type: object
               warningThreshold:
@@ -365,6 +448,58 @@ spec:
                 description: Rebalancing indicates whether cluster rebalancing is
                   currently active.
                 type: boolean
+              rebalancingMetrics:
+                description: RebalancingMetrics is updated by the auto-rebalancer
+                  each evaluation cycle.
+                properties:
+                  avgDeviationPct:
+                    description: AvgDeviationPct is the mean latency deviation across
+                      all nodes.
+                    type: number
+                  coolestNodeUUID:
+                    type: string
+                  hottestNodeUUID:
+                    type: string
+                  imbalancePercent:
+                    type: number
+                  lastEvaluatedAt:
+                    format: date-time
+                    type: string
+                  lastMigrationAt:
+                    format: date-time
+                    type: string
+                  maxDeviationPct:
+                    description: MaxDeviationPct is the highest per-node latency deviation
+                      (used as ImbalancePercent).
+                    type: number
+                  nodeMetrics:
+                    items:
+                      description: NodeLoadMetrics holds the latency deviation state
+                        for a single storage node.
+                      properties:
+                        lastUpdated:
+                          format: date-time
+                          type: string
+                        latencyDeviationPct:
+                          type: number
+                        nodeUUID:
+                          type: string
+                        volumeCount:
+                          type: integer
+                      required:
+                      - lastUpdated
+                      - latencyDeviationPct
+                      - nodeUUID
+                      - volumeCount
+                      type: object
+                    type: array
+                required:
+                - avgDeviationPct
+                - coolestNodeUUID
+                - hottestNodeUUID
+                - imbalancePercent
+                - maxDeviationPct
+                type: object
               status:
                 description: Status is the backend-reported lifecycle status.
                 type: string
