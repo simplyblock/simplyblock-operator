@@ -277,17 +277,54 @@ func (r *VolumeMigrationReconciler) pollValidationJob(
 	return r.performMigration(ctx, vm)
 }
 
-// performMigration calls ContinueMigration on the backend and advances
-// the VolumeMigration to the Running phase. Used both after a successful
-// validation job and when validation is skipped (no running consumer). On
-// ContinueMigration failure the migration is cancelled and marked Failed.
+// performMigration advances a validated (or validation-skipped) migration to
+// the Running phase. Used both after a successful validation job and when
+// validation is skipped (no running consumer).
+//
+// The backend's ContinueMigration is not idempotent: it only accepts a migration
+// in phase "pre_created" and rejects any later call. If a prior reconcile already
+// continued the migration but crashed before persisting phase=Running, blindly
+// re-issuing ContinueMigration would fail and — with the old logic — cancel a
+// perfectly healthy, running migration. To keep the transition crash-safe we
+// first read the backend phase and only continue when it hasn't advanced yet.
+// Per-object reconcile serialization (a key is processed by at most one worker at
+// a time) makes the read-then-continue window race-free within the operator.
 func (r *VolumeMigrationReconciler) performMigration(
 	ctx context.Context,
 	vm *simplyblockv1alpha1.VolumeMigration,
 ) (ctrl.Result, error) {
-	if err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID); err != nil {
-		_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID)
-		return r.setFailed(ctx, vm, fmt.Sprintf("ContinueMigration: %v", err))
+	log := logf.FromContext(ctx)
+
+	m, err := r.apiClient.GetMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID)
+	if err != nil {
+		// Transient read failure: requeue without failing or cancelling.
+		log.Error(err, "Cannot read migration before continue; requeuing", "migration", vm.Status.MigrationUUID)
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+
+	switch {
+	case webapi.MigrationIsTerminal(m.Status):
+		// The migration reached a terminal state out-of-band. Do not cancel or
+		// re-continue; advance to Running and let reconcileRunning classify it.
+		log.Info("Migration already terminal before continue; advancing to Running for classification",
+			"migration", vm.Status.MigrationUUID, "status", m.Status)
+	case m.Phase == webapi.MigrationPhasePreCreated:
+		if err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID); err != nil {
+			// The continue may have taken effect despite the error. Only a
+			// migration still stuck in pre_created is a genuine start failure
+			// worth cancelling; anything else means it already advanced.
+			if m2, gerr := r.apiClient.GetMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID); gerr == nil && m2.Phase == webapi.MigrationPhasePreCreated {
+				_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID)
+				return r.setFailed(ctx, vm, fmt.Sprintf("ContinueMigration: %v", err))
+			}
+			log.Info("ContinueMigration errored but migration has advanced past pre_created; treating as continued",
+				"migration", vm.Status.MigrationUUID, "error", err.Error())
+		}
+	default:
+		// Already past pre_created: a prior reconcile continued the migration but
+		// did not persist Running. Skip the (now-invalid) continue call.
+		log.Info("Migration already continued (past pre_created); skipping ContinueMigration",
+			"migration", vm.Status.MigrationUUID, "phase", m.Phase)
 	}
 
 	patch := client.MergeFrom(vm.DeepCopy())

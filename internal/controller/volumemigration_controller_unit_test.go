@@ -358,12 +358,16 @@ func TestPollValidationJob_InProgress_NoTransition(t *testing.T) {
 func TestPollValidationJob_Succeeded_ContinuesToRunning(t *testing.T) {
 	var continueCalled bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue") {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+			// performMigration reads the phase before continuing.
+			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
 			continueCalled = true
 			w.WriteHeader(http.StatusOK)
-			return
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 	})
 
 	vm := validatingVM("vmig-validate-1")
@@ -425,12 +429,16 @@ func TestPollValidationJob_Failed_CancelsAndFails(t *testing.T) {
 func TestReconcileValidating_NoRunningConsumer_SkipsValidationAndContinues(t *testing.T) {
 	var continueCalled bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue") {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+			// performMigration reads the phase before continuing.
+			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
 			continueCalled = true
 			w.WriteHeader(http.StatusOK)
-			return
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 	})
 
 	vm := validatingVM("") // no validation job yet
@@ -453,6 +461,88 @@ func TestReconcileValidating_NoRunningConsumer_SkipsValidationAndContinues(t *te
 	}
 	if got.Status.ValidationJobName != "" {
 		t.Errorf("ValidationJobName = %q, want empty (no job created)", got.Status.ValidationJobName)
+	}
+}
+
+// Regression test for the non-idempotent continue hazard: if a prior reconcile
+// already called ContinueMigration (promoting the backend migration past
+// pre_created) but crashed before persisting phase=Running, the replay must NOT
+// re-issue ContinueMigration (the backend would reject it) and must NOT cancel
+// the healthy, running migration. It should observe the advanced phase, skip the
+// continue call, and reach Running.
+func TestPerformMigration_AlreadyContinued_SkipsContinueAndCancel(t *testing.T) {
+	var continueCalled, cancelCalled bool
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+			// Backend already advanced: continue happened in a prior reconcile.
+			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"snap_copy","status":"running"}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
+			continueCalled = true
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/"):
+			cancelCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	// Skip path (unbound PV → no running consumer) drives performMigration.
+	vm := validatingVM("")
+	pv := csiPV("cluster-uuid:pool-uuid:vol-uuid")
+	r, cl := newVMReconciler(t, srv.URL, vm, pv)
+
+	res, err := r.Reconcile(context.Background(), vmRequest())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if continueCalled {
+		t.Errorf("ContinueMigration must not be re-issued when the migration already advanced")
+	}
+	if cancelCalled {
+		t.Errorf("CancelMigration must not be called for a healthy, already-advanced migration")
+	}
+	if res.RequeueAfter != vmigration.MigrationInitialDelay {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, vmigration.MigrationInitialDelay)
+	}
+	if got := getVM(t, cl); got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseRunning {
+		t.Errorf("phase = %q, want Running", got.Status.Phase)
+	}
+}
+
+// When ContinueMigration itself reports an error but the migration is genuinely
+// still stuck in pre_created (a real start failure), the migration is cancelled
+// and marked Failed.
+func TestPerformMigration_ContinueFails_StillPreCreated_CancelsAndFails(t *testing.T) {
+	var cancelCalled bool
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+			// Never advances past pre_created, even after the continue attempt.
+			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
+			http.Error(w, "boom", http.StatusInternalServerError)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/"):
+			cancelCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	vm := validatingVM("")
+	pv := csiPV("cluster-uuid:pool-uuid:vol-uuid")
+	r, cl := newVMReconciler(t, srv.URL, vm, pv)
+
+	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !cancelCalled {
+		t.Errorf("expected CancelMigration on a genuine continue failure")
+	}
+	if got := getVM(t, cl); got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
+		t.Errorf("phase = %q, want Failed", got.Status.Phase)
 	}
 }
 
