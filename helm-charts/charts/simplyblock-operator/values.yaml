@@ -1,0 +1,575 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Arm Limited and Contributors
+# Copyright (c) Intel Corporation
+---
+driverName: csi.simplyblock.io
+
+image:
+  csi:
+    repository: quay.io/simplyblock-io/spdkcsi
+    tag: v26.2.6
+    pullPolicy: Always
+  csiProvisioner:
+    repository: quay.io/simplyblock-io/csi-provisioner
+    tag: v5.1.0
+    pullPolicy: Always
+  csiAttacher:
+    repository: quay.io/simplyblock-io/csi-attacher
+    tag: v4.7.0
+    pullPolicy: Always
+  nodeDriverRegistrar:
+    repository: quay.io/simplyblock-io/csi-node-driver-registrar
+    tag: v2.12.0
+    pullPolicy: Always
+  csiSnapshotter:
+    repository: quay.io/simplyblock-io/csi-snapshotter
+    tag: v8.2.0
+    pullPolicy: Always
+  csiResizer:
+    repository: quay.io/simplyblock-io/csi-resizer
+    tag: v1.12.0
+    pullPolicy: Always
+  csiHealthMonitor:
+    repository: quay.io/simplyblock-io/csi-external-health-monitor-controller
+    tag: v0.14.0
+    pullPolicy: Always
+  csiSnapshotterController:
+    repository: quay.io/simplyblock-io/snapshot-controller
+    tag: v8.2.0
+    pullPolicy: Always
+  simplyblock:
+    repository: quay.io/simplyblock-io/simplyblock
+    tag: "26.2.6-PRE"
+    pullPolicy: Always
+  storageNode:
+    repository: quay.io/simplyblock-io/storage-node-handler
+    tag: v0.1.9
+    pullPolicy: Always
+  operator:
+    repository: quay.io/simplyblock-io/simplyblock-operator
+    tag: v26.2.6
+    pullPolicy: Always
+  numaResource:
+    repository: quay.io/simplyblock-io/numa-resource-plugin
+    tag: latest
+    pullPolicy: Always
+  mgmtAPI:
+    repository: quay.io/simplyblock-io/python
+    tag: "3.10"
+    pullPolicy: Always
+serviceAccount:
+  # Specifies whether a serviceAccount should be created
+  create: true
+
+rbac:
+  # Specifies whether RBAC resources should be created
+  create: true
+
+controller:
+  replicas: 1
+  tolerations:
+    create: false
+    list:
+    - operator: Exists
+      effect:
+      key:
+      value:
+  nodeSelector:
+    create: false
+    key:
+    value:
+  serviceAccountAuth:
+    # When enabled, the CSI driver authenticates with the simplyblock API using
+    # the pod's Kubernetes service account JWT instead of the static cluster_secret.
+    # The CSI controller service account is added to SB_K8S_ADMIN_SERVICE_ACCOUNTS
+    # on the control plane when this is true.
+    enabled: false
+
+snapshotclass:
+  create: true
+
+snapshotcontroller:
+  create: true
+
+externallyManagedConfigmap:
+  # Specifies whether a externallyManagedConfigmap should be created
+  create: true
+
+externallyManagedSecret:
+  # Specifies whether a externallyManagedSecret should be created
+  create: true
+
+spdkdev:
+  # Specifies whether a spdkdev should be created
+  create: false
+
+# Configuration for the CSI to connect to the cluster
+csiConfig:
+  simplybk:
+    uuid:
+    ip:
+
+# Configuration for the csiSecret
+csiSecret:
+  simplybk:
+    secret:
+  simplybkPvc:
+    crypto_key1: N2IzNjk1MjY4ZTJhNjYxMWEyNWFjNGIxZWUxNWYyN2Y5YmY2ZWE5NzgzZGFkYTY2YTRhNzMwZWJmMDQ5MmJmZA==
+    crypto_key2: Nzg1MDU2MzZjODEzM2Q5YmU0MmUzNDdmODI3ODViODFhODc5Y2Q4MTMzMDQ2ZjhmYzBiMzZmMTdiMDc4YWQwYw==
+
+logicalVolume:
+  pool_name: testing1
+  qos_rw_iops: "0"
+  qos_rw_mbytes: "0"
+  qos_r_mbytes: "0"
+  qos_w_mbytes: "0"
+  max_size: "0"
+  compression: "False"
+  encryption: "False"
+  replicate: "False"
+  numDataChunks: "1"
+  numParityChunks: "1"
+  lvol_priority_class: "0"
+  max_namespace_per_subsys: "1"
+  tune2fs_reserved_blocks: "0"
+  fabric: tcp
+
+podAnnotations: {}
+
+# SimplyBlock Daemonset, Deployment, Statefulset annotations
+simplyBlockAnnotations: {}
+
+benchmarks: 0
+
+# FIXME: this will not work if there are group of nodes with different AMI types like: AL2, AL2023
+# AL2_x86_64: eth0
+# AL2023_x86_64_STANDARD: ens5
+
+# not recommended to use it in production, use it only for testing purposes
+# automatic cluster activate is disabled by default because of core isolation
+# set this to true if you want to activate the cluster automatically after the NDCS + NPCS + 1 storage nodes ares up and running.
+autoClusterActivate: false 
+
+node:
+  serviceAccountAuth:
+    # When enabled, the CSI node DaemonSet authenticates with the simplyblock API using
+    # the pod's Kubernetes service account JWT instead of the static cluster_secret.
+    # The CSI node service account is added to SB_K8S_ADMIN_SERVICE_ACCOUNTS
+    # on the control plane when this is true.
+    enabled: false
+  tolerations:
+    create: false
+    list:
+    - operator: Exists
+      effect:
+      key:
+      value:
+  nodeSelector:
+    create: false
+    key:
+    value:
+
+storagenode:
+  create: false
+  ifname: eth0
+  numDataChunks: "1"
+  numParityChunks: "1"
+  spdkImage:
+  spdkProxyImage:
+  maxLogicalVolumes: 10
+  maxSnapshots: 10
+  maxSize:
+  numPartitions: 1
+  isolateCores: false
+  journalManager:
+  dataNic:
+  pciAllowed:
+  pciBlocked:
+  deviceNames:
+  format4k: false
+  socketsToUse: 
+  nodesPerSocket:
+  deviceModel:
+  sizeRange:
+  coresPercentage:
+  ubuntuHost: false
+  enableCpuTopology: false
+  enableDevicePlugin: true
+  skipKubeletConfiguration: false
+  openShiftCluster: false
+  reservedSystemCpu:
+  multiCluster:
+    enable: false
+    clusters:
+    - cluster_id: 
+      secret:
+      workers:
+  daemonsets:
+  - name: simplyblock-storage-node-ds
+    appLabel: storage-node
+    nodeSelector:
+      key: io.simplyblock.node-type
+      value: simplyblock-storage-plane
+    tolerations:
+      create: false
+      list:
+      - operator: Exists
+        effect:
+        key: 
+        value:
+  - name: simplyblock-storage-node-ds-restart
+    appLabel: storage-node-restart
+    nodeSelector:
+      key: io.simplyblock.node-type
+      value: simplyblock-storage-plane-restart
+    tolerations:
+      create: false
+      list:
+      - operator: Exists
+        effect:
+        key: 
+        value:
+      
+
+controlplane:
+  observability:
+    enabled: false
+    secret: "sWbpOgba1bKnCfcPkVQi"
+    deletionInterval: "3d"
+    level: "DEBUG"
+    graylog:
+      repository: quay.io/simplyblock-io/graylog
+      tag: "5.0"
+      pullPolicy: Always 
+      rootPasswordSha2: "b87c15a8ae4736d771ca60a7cc2014baaeab19b11c31f5fedef9421958a403c9"
+      passwordSecret: "is6SP2EdWg0NdmVGv6CEp5hRHNL7BKVMFem4t9pouMqDQnHwXMSomas1qcbKSt5yISr8eBHv4Y7Dbswhyz84Ut0TW6kqsiPs"
+      maxNumberIndex: "3"
+      retentionPeriod: "7d"
+    grafana:
+      repository: quay.io/simplyblock-io/grafana
+      tag: 10.0.12
+      pullPolicy: IfNotPresent
+      endpoint: ""
+      contactPoint: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+    thanos:
+      repository: quay.io/simplyblock-io/thanos
+      tag: v0.31.0
+      pullPolicy: IfNotPresent
+    minio:
+      repository: quay.io/simplyblock-io/minio
+      tag: RELEASE.2024-01-16T16-07-38Z
+      pullPolicy: IfNotPresent
+      mcRepository: quay.io/simplyblock-io/minio-client
+      mcTag: RELEASE.2024-01-16T16-06-34Z
+      bucket: thanos
+      accessKey: minioadmin
+      secretKey: minioadmin
+      storageSize: 50Gi
+      storageClass:
+    fluentbit:
+      repository: quay.io/simplyblock-io/fluent-bit
+      tag: "1.8.11"
+      pullPolicy: IfNotPresent
+
+  tolerations:
+    create: false
+    list:
+    - operator: Exists
+      effect:
+      key: 
+      value:
+  nodeSelector:
+    create: false
+    key: 
+    value:
+
+  ports:
+    lvolNvmfPortStart: 9110
+
+  csiHostpathDriver:
+    enabled: false
+    image:
+      csiProvisioner:
+        repository: quay.io/simplyblock-io/csi-provisioner
+        tag: v6.0.0
+      csiResizer:
+        repository: quay.io/simplyblock-io/csi-resizer
+        tag: v2.0.0
+      nodeDriverRegistrar:
+        repository: quay.io/simplyblock-io/csi-node-driver-registrar
+        tag: v2.12.0
+      hostpathPlugin:
+        repository: quay.io/simplyblock-io/hostpathplugin
+        tag: v1.15.0
+      livenessProbe:
+        repository: quay.io/simplyblock-io/livenessprobe
+        tag: v2.15.0
+
+  storageclass:  
+    name:  
+    allowedTopologyZones: []
+
+  foundationdb:
+    enabled: true
+    multiAZ: false
+    # redundancyMode controls FDB coordinator count:
+    # "double" = 3 coordinators (suitable for 3 workers, tolerates 1 failure)
+    # "triple" = 5 coordinators (suitable for 5+ workers, tolerates 2 failures)
+    redundancyMode: double
+    # nodeSelector pins FDB pods to dedicated nodes, leaving the remaining
+    # storage workers as non-FDB nodes that can be added in parallel.
+    # Label target nodes first: kubectl label node <node> simplyblock.io/fdb-node=true
+    # Example:
+    #   nodeSelector:
+    #     simplyblock.io/fdb-node: "true"
+    nodeSelector: {}
+    image:
+      operator:
+        repository: quay.io/simplyblock-io/fdb-kubernetes-operator
+        tag: v2.13.0
+      monitor:
+        repository: quay.io/simplyblock-io/fdb-kubernetes-monitor
+        tag: "7.3.63"
+      # Set baseImage to use a custom FDB image registry. With imageType: unified
+      # the same fdb-kubernetes-monitor image runs as the foundationdb container,
+      # so this points at the monitor repo. When empty, no imageConfigs block is
+      # rendered and the operator uses its default.
+      mainContainer:
+        baseImage: "quay.io/simplyblock-io/fdb-kubernetes-monitor"
+
+operator:
+  enabled: true
+
+mongodb-kubernetes:
+  name: "simplyblock-mongodb"
+  deployment_name: "simplyblock-mongodb"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 300Mi
+    limits:
+      cpu: 250m
+      memory: 1Gi
+  community:
+    mongodb:
+      repo: quay.io/simplyblock-io
+      imageType: ubi8
+    agent:
+      name: mongodb-agent
+      version: 108.0.2.8729-1
+    registry:
+      agent: quay.io/simplyblock-io
+
+  registry:
+    operator: quay.io/simplyblock-io
+    agent: quay.io/simplyblock-io
+    readinessProbe: quay.io/simplyblock-io
+    versionUpgradeHook: quay.io/simplyblock-io
+  nodeSelector: {}
+  tolerations: []
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - mongodb
+          topologyKey: "kubernetes.io/hostname"
+
+opensearch:
+  fullnameOverride: "simplyblock-opensearch"
+  singleNode: true
+  replicas: 1
+
+  nodeSelector: {}
+  tolerations: []
+
+  antiAffinity: "hard"
+  persistence:
+    enabled: true
+    image: quay.io/simplyblock-io/busybox
+    storageClass: 
+    size: 40Gi
+  image:
+    repository: "quay.io/simplyblock-io/opensearch"
+    tag: ""
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "3Gi"
+
+  extraEnvs:
+    - name: bootstrap.memory_lock
+      value: "true"
+    - name: action.auto_create_index
+      value: "false"
+    - name: plugins.security.ssl.http.enabled
+      value: "false"
+    - name: plugins.security.disabled
+      value: "true"
+
+  securityConfig:
+    enabled: false
+
+reloader:
+  nameOverride: simplyblock-reloader
+  fullnameOverride: simplyblock-reloader
+  reloader:
+    deployment:
+      image:
+        name: quay.io/simplyblock-io/reloader
+        tag: v1.3.0
+      nodeSelector: {}
+      tolerations: []
+
+prometheus:
+  simplyblock:
+    prometheusURL: simplyblock-prometheus
+    prometheusPORT: 9090   
+  server:
+    image:
+      repository: quay.io/simplyblock-io/prometheus
+      tag: v2.51.0
+    fullnameOverride: simplyblock-prometheus
+    enabled: true
+    statefulSet:
+      enabled: true
+    name: simplyblock-prometheus
+    replicaCount: 1
+    podLabels:
+      app: simplyblock-prometheus
+    podAnnotations:
+      log-collector/enabled: "true"
+      reloader.stakater.com/auto: "true"
+      reloader.stakater.com/configmap: "simplyblock-prometheus-config"
+    nodeSelector: {}
+    tolerations: []
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - simplyblock-prometheus
+            topologyKey: "kubernetes.io/hostname"
+    service:
+      servicePort: 9090
+      type: ClusterIP
+      gRPC:
+        enabled: true
+        servicePort: 10901
+      additionalPorts:
+        - name: http-thanos
+          port: 10902
+          targetPort: 10902
+          protocol: TCP
+    securityContext:
+      fsGroup: 65534
+    persistentVolume:
+      enabled: true
+      size: 20Gi
+      storageClass:
+    extraArgs:
+      storage.tsdb.min-block-duration: 2h
+      storage.tsdb.max-block-duration: 2h
+    sidecarContainers:
+      thanos-sidecar:
+        image: quay.io/simplyblock-io/thanos:v0.31.0
+        args:
+          - sidecar
+          - --tsdb.path=/prometheus
+          - --prometheus.url=http://localhost:9090
+          - --objstore.config-file=/etc/thanos/objstore.yml
+        ports:
+          - name: grpc
+            containerPort: 10901
+          - name: http
+            containerPort: 10902
+        volumeMounts:
+          - name: storage-volume
+            mountPath: /prometheus
+          - name: objstore-config
+            mountPath: /etc/thanos
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "250m"
+            memory: "1Gi"
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "512Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+    configPath: /etc/simplyblock-config/prometheus.yml
+    extraVolumes:
+      - name: simplyblock-prometheus-config
+        configMap:
+          name: simplyblock-prometheus-config
+      - name: objstore-config
+        configMap:
+          name: simplyblock-objstore-config
+      - name: prometheus-client-tls
+        secret:
+          secretName: simplyblock-prometheus-client-tls
+          optional: true
+    extraVolumeMounts:
+      - name: simplyblock-prometheus-config
+        mountPath: /etc/simplyblock-config
+      - name: prometheus-client-tls
+        mountPath: /etc/prometheus/certs
+        readOnly: true
+  alertmanager:
+    enabled: false
+
+  prometheus-pushgateway:
+    enabled: false
+
+  prometheus-node-exporter:
+    enabled: false
+
+  kube-state-metrics:
+    enabled: false
+  configmapReload:
+    prometheus:
+      image:
+        repository: quay.io/simplyblock-io/prometheus-config-reloader
+        tag: v0.72.0
+
+  defaultBackend:
+    enabled: false
+    name: defaultbackend
+    image:
+      registry: "quay.io/simplyblock-io"
+      image: defaultbackend-amd64
+      tag: "1.5"
+tls:
+  enabled: false
+
+  # Provider responsible for issuing serving certificates. One of: openshift, cert-manager. Required if enabled.
+  provider: cert-manager
+
+  # Required if provider == cert-manager. Names a ClusterIssuer used to mint
+  # the chart's own CA Certificate.
+  cert-manager:
+    # When true, the chart creates a self-signed ClusterIssuer whose name is
+    # given by cluster-issuer. Set to false to use an issuer you created yourself.
+    createSelfSignedIssuer: true
+    cluster-issuer: selfsigned
+    # Namespace where cert-manager is installed. The chart's CA secret is placed
+    # here so that the ClusterIssuer can locate it (ClusterIssuers always read CA
+    # secrets from the cert-manager controller namespace).
+    namespace: cert-manager
+
+  # Mutual TLS (clients present and verify certificates). Only allowed when provider == cert-manager.
+  mutual_enabled: false

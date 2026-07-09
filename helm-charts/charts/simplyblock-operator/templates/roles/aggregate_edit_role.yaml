@@ -1,0 +1,39 @@
+# Aggregates full CRUD on storage.simplyblock.io CRs into the built-in
+# Kubernetes "edit" and "admin" ClusterRoles. With the namespace-per-cluster
+# tenancy convention enforced by the Pool controller, binding "edit" or "admin"
+# in a namespace gives a tenant full control over the StorageCluster and Pools
+# in that namespace and nothing outside it.
+#
+# Cluster admins who want finer-grained delegation (e.g. resourceNames-scoped
+# access to a single StorageCluster) should write their own Role/RoleBinding
+# in addition to or instead of relying on this aggregation.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-aggregate-to-edit
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: Helm
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+rules:
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storageclusters
+  - pools
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storageclusters/status
+  - pools/status
+  verbs:
+  - get
