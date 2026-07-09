@@ -139,7 +139,7 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 	if clusterCR.Status.Status == utils.ClusterStatusUnready {
 		log.Info("Drain coordinator skipping — cluster is unready",
 			"cluster", snCR.Spec.ClusterName)
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: 120 * time.Second}, nil
 	}
 
 	maxFaultTolerance := 1
