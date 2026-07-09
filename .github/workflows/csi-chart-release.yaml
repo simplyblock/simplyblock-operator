@@ -1,0 +1,70 @@
+name: CSI Release Charts
+
+on:
+  push:
+    branches:
+      - master
+      - 'R[0-9]*'
+    paths:
+      - 'charts/spdk-csi/latest/spdk-csi/Chart.yaml'
+  
+jobs:
+  package-and-update:
+    runs-on: ubuntu-latest
+    outputs:
+      release_branch: ${{ steps.release_meta.outputs.branch }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.13.0
+
+      - name: Extract version and package chart
+        run: |
+          cd charts/spdk-csi/latest/
+          VERSION="$(grep '^version:' spdk-csi/Chart.yaml | awk '{print $2}' | tr -d '"')"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+          helm package spdk-csi
+          mkdir -p "../$VERSION"
+
+          mv "spdk-csi-$VERSION.tgz" "../$VERSION/"
+
+      - name: Prepare release metadata
+        id: release_meta
+        run: |
+          echo "branch=release-${{ env.VERSION }}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and create PR
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          BRANCH="${{ steps.release_meta.outputs.branch }}"
+          git fetch origin master
+          git checkout -b "$BRANCH" origin/master
+
+          helm repo index charts/spdk-csi/ --url https://install.simplyblock.io/helm
+          
+          git add charts/spdk-csi/index.yaml charts/spdk-csi/${{ env.VERSION }}/
+          git commit -m "helm release for simplyblock csi ${{ env.VERSION }}" || echo "No changes to commit"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "Helm release: ${{ env.VERSION }}" \
+            --body "Automated Helm release for simplyblock-csi ${{ env.VERSION}}" \
+            --head "$BRANCH" \
+            --base master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  upload-helm-charts:
+    needs: package-and-update
+    uses: ./.github/workflows/csi-chart-upload.yaml
+    with:
+      ref: ${{ needs.package-and-update.outputs.release_branch }}
+    secrets: inherit

@@ -1,0 +1,22 @@
+GOVERSION=1.19
+KUBE_VERSION=v1.25.0
+MINIKUBE_VERSION=v1.27.0
+CRITOOLS_VERSION=v1.25.0
+CRIDOCKERD_VERSION=0.2.5
+CNIPLUGIN_VERSION=v1.1.1
+SPDKIMAGE=spdkdev:latest
+
+# FIXME(avalluri): Using 'main' image instead of release image as the latest (v0.1.1) does support KVM.
+# Move to release v0.1.2+ image once it is available.
+OPIIMAGE=opiproject/opi-spdk-bridge@sha256:885f751030d83e6d13ca4efbdf1c1f5f41a8803f0bd9ff78d9b2922d6170532c
+
+JSONRPC_IP=127.0.0.1
+JSONRPC_PORT=9009
+JSONRPC_USER=spdkcsiuser
+JSONRPC_PASS=spdkcsipass
+
+DOCKER_MIRROR=mirror.gcr.io
+
+# source code root directory
+ROOTDIR="${DIR}/../.."
+WORKERDIR="${WORKERDIR:-/tmp/qemu-vm}"

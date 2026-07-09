@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Arm Limited and Contributors
+# Copyright (c) Intel Corporation
+---
+apiVersion: v2
+appVersion: latest
+description: Simplyblock CSI Driver for Kubernetes
+name: spdk-csi
+version: "26.2.6"
+keywords:
+- spdk
+- csi
+- spdk-csi
+- simplyblock
+- controller
+- mgmt
+- sbcli
+home: https://github.com/simplyblock-io/spdk-csi
+sources:
+- https://github.com/simplyblock-io/spdk-csi/tree/master/charts/spdk-csi
+

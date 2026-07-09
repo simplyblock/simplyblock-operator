@@ -1,0 +1,124 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Arm Limited and Contributors
+# Copyright (c) Intel Corporation
+---
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: simplyblock-csi-node
+spec:
+  selector:
+    matchLabels:
+      app: csi-node
+  template:
+    metadata:
+      labels:
+        app: csi-node
+    spec:
+      serviceAccountName: simplyblock-csi-node-sa
+      hostNetwork: true
+      containers:
+      - name: csi-registrar
+        securityContext:
+          privileged: true
+        image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.10.1
+        imagePullPolicy: "IfNotPresent"
+        args:
+        - "--v=5"
+        - "--csi-address=unix:///csi/csi.sock"
+        - "--kubelet-registration-path=/var/lib/kubelet/plugins/csi.simplyblock.io/csi.sock"
+        - "--health-port=9809"
+        ports:
+          - containerPort: 9809
+            name: healthz
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: healthz
+          initialDelaySeconds: 20
+          timeoutSeconds: 10
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /csi
+        - name: registration-dir
+          mountPath: /registration
+      - name: csi-node
+        securityContext:
+          privileged: true
+          capabilities:
+            add: ["SYS_ADMIN", "SYS_MODULE"]
+          allowPrivilegeEscalation: true
+        image: simplyblock/spdkcsi:latest
+        imagePullPolicy: "Always"
+        args:
+        - "--v=5"
+        - "--endpoint=unix:///csi/csi.sock"
+        - "--nodeid=$(NODE_ID)"
+        - "--node"
+        env:
+        - name: NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: SPDKCSI_API_TOKEN_PATH
+          value: /var/run/secrets/kubernetes.io/serviceaccount/token
+        lifecycle:
+          postStart:
+            exec:
+              command:
+                [
+                  "/bin/sh", "-c",
+                  "sudo modprobe nvme-tcp || echo failed to modprobe nvme-tcp && \
+                  if [ ! -f /var/lib/nvme/hostid ]; then uuidgen > /var/lib/nvme/hostid; fi && \
+                  cp /var/lib/nvme/hostid /etc/nvme/hostid && \
+                  echo \"nqn.2014-08.org.nvmexpress:uuid:$(cat /etc/nvme/hostid)\" > /etc/nvme/hostnqn"
+                ]
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /csi
+        - name: plugin-dir
+          mountPath: /var/lib/kubelet/plugins
+          mountPropagation: "Bidirectional"
+        - name: pod-dir
+          mountPath: /var/lib/kubelet/pods
+          mountPropagation: "Bidirectional"
+        - name: host-dev
+          mountPath: /dev
+        - name: host-sys
+          mountPath: /sys
+        - name: csi-config
+          mountPath: /etc/spdkcsi-config/
+          readOnly: true
+        - name: csi-secret
+          mountPath: /etc/spdkcsi-secret/
+          readOnly: true
+      volumes:
+      - name: socket-dir
+        hostPath:
+          path: /var/lib/kubelet/plugins/csi.simplyblock.io
+          type: DirectoryOrCreate
+      - name: registration-dir
+        hostPath:
+          path: /var/lib/kubelet/plugins_registry/
+          type: Directory
+      - name: plugin-dir
+        hostPath:
+          path: /var/lib/kubelet/plugins
+          type: Directory
+      - name: pod-dir
+        hostPath:
+          path: /var/lib/kubelet/pods
+          type: Directory
+      - name: host-dev
+        hostPath:
+          path: /dev
+      - name: host-sys
+        hostPath:
+          path: /sys
+      - name: csi-config
+        configMap:
+          name: simplyblock-csi-cm
+      - name: csi-secret
+        secret:
+          secretName: simplyblock-csi-secret
+

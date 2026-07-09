@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Arm Limited and Contributors
+# Copyright (c) Intel Corporation
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: simplyblock-csi-cm
+data:
+  config.json: |-
+    {
+      "simplybk": {
+        "uuid": "37bd2c95-5c26-4a97-bd74-88f22c3d283b",
+        "ip": "3.237.89.96"
+      }
+    }

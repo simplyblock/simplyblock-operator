@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Arm Limited and Contributors
+# Copyright (c) Intel Corporation
+
+{{- if .Values.externallyManagedConfigmap }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: simplyblock-csi-cm
+data:
+  # uuid: the simplyblock cluster UUID
+  # ip: the management IP of the simplyblock cluster
+  # targetAddr: target service IP
+  config.json: |-
+{{ toJson .Values.csiConfig | indent 4 -}}
+{{- end }}
+
+{{- if .Values.storagenode.create }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: simplyblock-clusters
+data:
+  clusters.json: |
+    {
+      "clusters": [
+{{- if .Values.storagenode.multiCluster.enable }}
+{{- $clusters := default (list) .Values.storagenode.multiCluster.clusters -}}
+{{- range $i, $c := $clusters }}
+        {{- if $i }},{{ end }}
+        {
+          "cluster_id": {{ required "storagenode.multiCluster.clusters[].cluster_id is required" $c.cluster_id | quote }},
+          "workers": {{ toJson (default (list) $c.workers) }}
+        }
+{{- end }}
+{{- else }}
+        {
+          "cluster_id": {{ .Values.csiConfig.simplybk.uuid | quote }},
+          "workers": []
+        }
+{{- end }}
+      ]
+    }
+{{- end }}
