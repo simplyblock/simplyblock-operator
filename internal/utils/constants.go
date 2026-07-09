@@ -29,6 +29,7 @@ const (
 
 	ClusterStatusActive    = "active"
 	ClusterStatusSuspended = "suspended"
+	ClusterStatusUnready   = "unready"
 
 	ClusterPhaseInitializing = "Initializing"
 	ClusterPhaseReady        = "Ready"

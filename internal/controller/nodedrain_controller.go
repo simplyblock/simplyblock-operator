@@ -132,6 +132,16 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
+	// Do not start drain coordination while the cluster is still unready.
+	// During initial provisioning the cluster status is "unready" until enough
+	// nodes join for the first activation; running drain/restart logic at that
+	// point would interfere with the node-add flow and produce spurious errors.
+	if clusterCR.Status.Status == utils.ClusterStatusUnready {
+		log.Info("Drain coordinator skipping — cluster is unready",
+			"cluster", snCR.Spec.ClusterName)
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	maxFaultTolerance := 1
 	if clusterCR.Status.MaxFaultTolerance != nil && *clusterCR.Status.MaxFaultTolerance > 0 {
 		maxFaultTolerance = int(*clusterCR.Status.MaxFaultTolerance)
