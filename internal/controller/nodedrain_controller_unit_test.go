@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -283,6 +284,46 @@ func TestNodeDrainReconcileNoClusterCRRequeues(t *testing.T) {
 	}
 	if res.RequeueAfter == 0 {
 		t.Fatalf("expected delayed requeue when cluster CR is missing")
+	}
+}
+
+func TestNodeDrainReconcileSkipsWhenClusterUnready(t *testing.T) {
+	const clusterName = "cluster-unready"
+
+	clusterCR := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: "default"},
+		Status: simplyblockv1alpha1.StorageClusterStatus{
+			Status: utils.ClusterStatusUnready,
+		},
+	}
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-unready", Namespace: "default"},
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			ClusterName: clusterName,
+		},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{UUID: "node-1", Status: utils.NodeStatusOnline, Hostname: "worker-1"},
+			},
+		},
+	}
+	r := newNodeDrainTestReconciler(t, snCR, clusterCR)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(snCR)})
+	if err != nil {
+		t.Fatalf("expected no error when cluster is unready, got %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatal("expected a delayed requeue when cluster is unready")
+	}
+
+	// No PDBs should have been created — drain coordinator must not run while cluster is unready.
+	var pdbList policyv1.PodDisruptionBudgetList
+	if err := r.List(context.Background(), &pdbList); err != nil {
+		t.Fatalf("list PDBs: %v", err)
+	}
+	if len(pdbList.Items) != 0 {
+		t.Errorf("expected no PDBs when cluster is unready, got %d", len(pdbList.Items))
 	}
 }
 
