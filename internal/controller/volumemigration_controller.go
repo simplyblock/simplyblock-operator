@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -43,6 +44,12 @@ type VolumeMigrationReconciler struct {
 	apiClient  *webapi.Client
 	coreClient corev1client.CoreV1Interface
 }
+
+// errNoRunningConsumer indicates that the volume is not currently mounted by a
+// running pod (the PVC is unbound, or the consuming pod is stopped). This is not
+// a failure: there is no consumer whose I/O paths need validating, so the
+// migration can proceed without the NVMe pre-connect validation step.
+var errNoRunningConsumer = errors.New("volume has no running consumer")
 
 func (r *VolumeMigrationReconciler) Reconcile(
 	ctx context.Context,
@@ -181,6 +188,15 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 	// Resolve the k8s node name of the worker running the pod that uses the PVC.
 	// NVMe connections must be established from that node, not the storage target node.
 	hostname, err := r.resolveConsumerNodeName(ctx, vm.Spec.PVName)
+	if errors.Is(err, errNoRunningConsumer) {
+		// No pod is currently consuming the volume, so there are no NVMe I/O
+		// paths to validate. Skip validation and continue the migration directly.
+		log.Info("No running consumer for volume; skipping NVMe path validation",
+			"pv", vm.Spec.PVName, "migration", vm.Status.MigrationUUID, "reason", err.Error())
+		r.Recorder.Eventf(vm, corev1.EventTypeNormal, "ValidationSkipped",
+			"No running consumer for PV %s; skipping NVMe path validation", vm.Spec.PVName)
+		return r.performMigration(ctx, vm)
+	}
 	if err != nil {
 		log.Error(err, "Cannot resolve consumer node name; requeuing")
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
@@ -263,6 +279,17 @@ func (r *VolumeMigrationReconciler) pollValidationJob(
 	log.Info("Validation job succeeded; calling ContinueMigration",
 		"migration", vm.Status.MigrationUUID)
 
+	return r.performMigration(ctx, vm)
+}
+
+// performMigration calls ContinueMigration on the backend and advances
+// the VolumeMigration to the Running phase. Used both after a successful
+// validation job and when validation is skipped (no running consumer). On
+// ContinueMigration failure the migration is cancelled and marked Failed.
+func (r *VolumeMigrationReconciler) performMigration(
+	ctx context.Context,
+	vm *simplyblockv1alpha1.VolumeMigration,
+) (ctrl.Result, error) {
 	if err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID); err != nil {
 		_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID)
 		return r.setFailed(ctx, vm, fmt.Sprintf("ContinueMigration: %v", err))
@@ -372,6 +399,10 @@ func safeNodeID(nodeUUID string) string {
 // running a pod that currently has the PVC (resolved from pvName) mounted.
 // NVMe connections must be established from that node so that the consuming
 // pod can reach the target subsystem after migration.
+//
+// It returns errNoRunningConsumer (wrapped) when the volume is not bound or no
+// running pod uses it, so callers can distinguish "nothing to validate" from a
+// genuine, retryable error.
 func (r *VolumeMigrationReconciler) resolveConsumerNodeName(
 	ctx context.Context,
 	pvName string,
@@ -381,7 +412,7 @@ func (r *VolumeMigrationReconciler) resolveConsumerNodeName(
 		return "", fmt.Errorf("get PV %q: %w", pvName, err)
 	}
 	if pv.Spec.ClaimRef == nil {
-		return "", fmt.Errorf("PV %q has no claimRef; volume may not be bound", pvName)
+		return "", fmt.Errorf("PV %q has no claimRef; volume may not be bound: %w", pvName, errNoRunningConsumer)
 	}
 	pvcName := pv.Spec.ClaimRef.Name
 	pvcNamespace := pv.Spec.ClaimRef.Namespace
@@ -400,7 +431,7 @@ func (r *VolumeMigrationReconciler) resolveConsumerNodeName(
 			}
 		}
 	}
-	return "", fmt.Errorf("no running pod found using PVC %q/%q", pvcNamespace, pvcName)
+	return "", fmt.Errorf("no running pod found using PVC %q/%q: %w", pvcNamespace, pvcName, errNoRunningConsumer)
 }
 
 // collectAndLogJobPodLogs fetches stdout/stderr from every pod that belongs to
