@@ -274,6 +274,54 @@ func (r *StorageNodeSetReconciler) drainClusterPauseCheck(
 	return false, ""
 }
 
+// handleFailedVolumeMigrations checks whether any VolumeMigration CR has reached
+// a terminal failure state. If the cluster is not ready it treats the failure as
+// a transient pause; otherwise it calls resumeAndFail. Returns (result, true)
+// when it has handled the situation and the caller should return immediately.
+func (r *StorageNodeSetReconciler) handleFailedVolumeMigrations(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID string,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+	items []simplyblockv1alpha1.VolumeMigration,
+) (ctrl.Result, bool) {
+	log := logf.FromContext(ctx)
+
+	for i := range items {
+		vm := &items[i]
+		if vm.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed &&
+			vm.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseAborted {
+			continue
+		}
+
+		// A suspended/degraded cluster causes ContinueMigration to return 400,
+		// making the VolumeMigrationReconciler mark the CR as Failed. Treat this
+		// as a transient pause so the drain resumes once the cluster is active.
+		if paused, reason := r.drainClusterPauseCheck(ctx, snCR); paused {
+			log.Info("drain: VolumeMigration failed but cluster is not ready — pausing",
+				"vm", vm.Name, "vmPhase", vm.Status.Phase, "clusterReason", reason)
+			patch := client.MergeFrom(snCR.DeepCopy())
+			snCR.Status.ActionStatus.Message = "drain paused (migration failed due to cluster state): " + reason
+			snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
+			if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+				log.Error(err, "drain: failed to patch paused message")
+			}
+			r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "DrainPaused",
+				"drain paused at Migrating: VolumeMigration %s failed because cluster is not ready (%s); will retry when cluster is active",
+				vm.Name, reason)
+			return ctrl.Result{RequeueAfter: drainRequeueBlocking}, true
+		}
+
+		reason := vm.Status.ErrorMessage
+		if reason == "" {
+			reason = fmt.Sprintf("VolumeMigration %s reached phase %s", vm.Name, vm.Status.Phase)
+		}
+		res, _ := r.resumeAndFail(ctx, apiClient, clusterUUID, snCR, reason)
+		return res, true
+	}
+	return ctrl.Result{}, false
+}
+
 // drainValidate classifies volumes on the node into system, PV-managed, pinned,
 // and unmanaged buckets and blocks the drain until all blocking volumes are gone.
 func (r *StorageNodeSetReconciler) drainValidate(
@@ -468,35 +516,9 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 		return ctrl.Result{RequeueAfter: drainRequeueMigrate}, nil
 	}
 
-	// If any migration failed, check the cluster first — a suspended or inactive
-	// cluster will cause ContinueMigration to return 400, making the
-	// VolumeMigrationReconciler mark the CR as Failed even though the drain should
-	// simply pause and retry. Treat cluster-caused failures as transient pauses
-	// rather than terminal drain failures.
-	for i := range vmigList.Items {
-		vm := &vmigList.Items[i]
-		if vm.Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseFailed ||
-			vm.Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseAborted {
-			if paused, reason := r.drainClusterPauseCheck(ctx, snCR); paused {
-				log.Info("drain: VolumeMigration failed but cluster is not ready — pausing instead of failing",
-					"vm", vm.Name, "vmPhase", vm.Status.Phase, "clusterReason", reason)
-				patch := client.MergeFrom(snCR.DeepCopy())
-				snCR.Status.ActionStatus.Message = "drain paused (migration failed due to cluster state): " + reason
-				snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
-				if err := r.Status().Patch(ctx, snCR, patch); err != nil {
-					log.Error(err, "drain: failed to patch paused message")
-				}
-				r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "DrainPaused",
-					"drain paused at Migrating: VolumeMigration %s failed because cluster is not ready (%s); will retry when cluster is active",
-					vm.Name, reason)
-				return ctrl.Result{RequeueAfter: drainRequeueBlocking}, nil
-			}
-			reason := vm.Status.ErrorMessage
-			if reason == "" {
-				reason = fmt.Sprintf("VolumeMigration %s reached phase %s", vm.Name, vm.Status.Phase)
-			}
-			return r.resumeAndFail(ctx, apiClient, clusterUUID, snCR, reason)
-		}
+	// If any migration failed, handle it — pausing if the cluster is the cause.
+	if res, handled := r.handleFailedVolumeMigrations(ctx, apiClient, clusterUUID, snCR, vmigList.Items); handled {
+		return res, nil
 	}
 
 	// Count completed vs in-progress migrations.
