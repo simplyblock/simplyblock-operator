@@ -207,6 +207,18 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		log.Error(err, "Failed to sync storage node status")
 	}
 
+	// On every reconcile, check whether the cluster is still unready and if
+	// the activation conditions are now met. This catches cases where the
+	// operator restarted after nodes came online but before activation fired,
+	// or where the activation trigger was missed during concurrent reconciles.
+	if clusterCR, err := utils.ResolveClusterCR(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName); err == nil {
+		if clusterCR.Status.Status == utils.ClusterStatusUnready {
+			if activateErr := maybeActivateCluster(ctx, apiClient, clusterUUID, snCR, r); activateErr != nil {
+				log.Info("Activation conditions not yet met", "reason", activateErr.Error())
+			}
+		}
+	}
+
 	hasTracked := false
 	for _, n := range snCR.Status.Nodes {
 		if n.UUID != "" {
