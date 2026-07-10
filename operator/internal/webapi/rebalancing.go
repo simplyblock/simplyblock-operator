@@ -293,10 +293,8 @@ func (c *Client) CreateMigration(
 		if cancelErr := c.cancelMigrationForVolume(ctx, clusterUUID, poolUUID, volumeUUID); cancelErr != nil {
 			return nil, fmt.Errorf("create migration for volume %s: cancel existing migrations: %w", volumeUUID, cancelErr)
 		}
-		body, statusCode, err = c.Do(ctx, http.MethodPost, endpoint, params)
-		if err != nil {
-			return nil, fmt.Errorf("create migration for volume %s (retry): %w", volumeUUID, err)
-		}
+		// After a successful cancellation, the next reconcile cycle should retry to create a migration.
+		return nil, nil
 	}
 
 	// FIXME: logging the full response body is a debugging aid and should be

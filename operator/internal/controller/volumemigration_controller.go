@@ -129,6 +129,10 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 	if err != nil {
 		return r.setFailed(ctx, vm, fmt.Sprintf("CreateMigration: %v", err))
 	}
+	if migration == nil {
+		// Previous migration had to be canceled, retry in the next reconcile cycle.
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
 	if migration.ID == "" {
 		return r.setFailed(ctx, vm, "CreateMigration returned empty migration UUID")
 	}
