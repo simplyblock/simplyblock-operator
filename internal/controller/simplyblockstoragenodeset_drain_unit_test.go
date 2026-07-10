@@ -795,6 +795,28 @@ func TestDrainMigrateFailedCRDeletedWhenClusterPaused(t *testing.T) {
 
 // ── drainMigrationName ────────────────────────────────────────────────────────
 
+func TestDrainMigrationNameNoCollisionOnLongPVNames(t *testing.T) {
+	// Two PV names that share a 60+ char common prefix must produce distinct CR
+	// names after sanitisation and truncation (collision guard via FNV suffix).
+	longBase := "pvc-" + strings.Repeat("a", 55) // 59 chars — produces a 63-char name when prefixed
+	pv1 := longBase + "1"
+	pv2 := longBase + "2"
+	nodeUUID := "aaaabbbb-cccc-dddd-eeee-ffffffffffff"
+
+	name1 := drainMigrationName(nodeUUID, pv1)
+	name2 := drainMigrationName(nodeUUID, pv2)
+
+	if name1 == name2 {
+		t.Errorf("collision: both PVs produced the same CR name %q", name1)
+	}
+	if len(name1) > 63 {
+		t.Errorf("name1 too long: %d chars", len(name1))
+	}
+	if len(name2) > 63 {
+		t.Errorf("name2 too long: %d chars", len(name2))
+	}
+}
+
 func TestDrainMigrationNameIsDNSValid(t *testing.T) {
 	cases := []struct {
 		nodeUUID string

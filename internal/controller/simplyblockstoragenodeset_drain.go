@@ -1157,8 +1157,35 @@ func drainMigrationName(nodeUUID, pvName string) string {
 		}
 	}
 	s := strings.Trim(string(result), "-")
-	if len(s) > 63 {
-		s = s[:63]
+
+	// Guard against name collisions when two PV names share a long common prefix
+	// that gets truncated to the same 63-char string. Append a 6-char FNV-32
+	// hash of the original pvName before truncating so each PV always maps to a
+	// unique CR name regardless of length.
+	const maxLen = 63
+	if len(s) > maxLen {
+		h := fnv32Hash(pvName)
+		suffix := fmt.Sprintf("-%06x", h) // 7 chars: '-' + 6 hex digits
+		keep := maxLen - len(suffix)
+		if keep < 0 {
+			keep = 0
+		}
+		s = s[:keep] + suffix
 	}
 	return s
+}
+
+// fnv32Hash returns a non-cryptographic 32-bit FNV-1a hash of s, used as a
+// short disambiguation suffix in drainMigrationName.
+func fnv32Hash(s string) uint32 {
+	const (
+		offset32 uint32 = 2166136261
+		prime32  uint32 = 16777619
+	)
+	h := offset32
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= prime32
+	}
+	return h
 }
