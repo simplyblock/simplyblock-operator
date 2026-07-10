@@ -388,7 +388,7 @@ func (r *StorageNodeSetReconciler) drainValidate(
 		return ctrl.Result{RequeueAfter: drainRequeueValidate}, nil
 	}
 
-	_, pinned, unmanaged, _, err := matchVolumesToPVs(ctx, r, volumes, sysFilter)
+	_, pinned, unmanaged, _, _, err := matchVolumesToPVs(ctx, r, volumes, sysFilter)
 	if err != nil {
 		log.Error(err, "drain: matchVolumesToPVs failed")
 		return ctrl.Result{RequeueAfter: drainRequeueValidate}, nil
@@ -621,7 +621,7 @@ func (r *StorageNodeSetReconciler) hasMissingVolumeMigrations(
 	if err != nil {
 		return false
 	}
-	pvm, _, _, pvByVol, err := matchVolumesToPVs(ctx, r, vols, sf)
+	pvm, _, _, pvByVol, _, err := matchVolumesToPVs(ctx, r, vols, sf)
 	if err != nil {
 		return false
 	}
@@ -661,9 +661,16 @@ func (r *StorageNodeSetReconciler) createMissingVolumeMigrations(
 		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 	}
 
-	pvManaged, _, _, pvNameByVolumeUUID, err := matchVolumesToPVs(ctx, r, volumes, sysFilter)
+	pvManaged, _, _, pvNameByVolumeUUID, pvcFetchFailed, err := matchVolumesToPVs(ctx, r, volumes, sysFilter)
 	if err != nil {
 		log.Error(err, "drain: matchVolumesToPVs failed during migration creation")
+		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
+	}
+	// A PV-backed volume appeared as unmanaged because its PVC GET failed
+	// transiently. Retrying avoids silently skipping the volume, which would
+	// leave it on the node and stall Verifying indefinitely.
+	if pvcFetchFailed {
+		log.Info("drain: PVC fetch failed for a PV-backed volume — retrying to avoid skipping it")
 		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 	}
 
@@ -1005,12 +1012,16 @@ func listNodeVolumes(
 // unmanaged bucket. This will block drain with an UnmanagedVolumeBlocking
 // event until the next reconcile succeeds. It is a transient false-positive,
 // not a permanent classification.
+// matchVolumesToPVs classifies backend volumes and additionally returns
+// pvcFetchFailed=true when at least one PV-backed volume could not be classified
+// because its PVC GET failed transiently. Callers in Migrating must requeue on
+// pvcFetchFailed to avoid silently skipping volumes that would stall Verifying.
 func matchVolumesToPVs(
 	ctx context.Context,
 	r *StorageNodeSetReconciler,
 	volumes []webapi.VolumeInfo,
 	sysFilter *regexp.Regexp,
-) (pvManaged, pinned, unmanaged []string, pvNameByVolumeUUID map[string]string, err error) {
+) (pvManaged, pinned, unmanaged []string, pvNameByVolumeUUID map[string]string, pvcFetchFailed bool, err error) {
 	log := logf.FromContext(ctx)
 
 	pvNameByVolumeUUID = make(map[string]string)
@@ -1018,7 +1029,7 @@ func matchVolumesToPVs(
 	// Build a map: volumeUUID → pvName for all simplyblock PVs.
 	var pvList corev1.PersistentVolumeList
 	if err = r.List(ctx, &pvList); err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("matchVolumesToPVs: list PVs: %w", err)
+		return nil, nil, nil, nil, false, fmt.Errorf("matchVolumesToPVs: list PVs: %w", err)
 	}
 
 	// pvByVolumeUUID maps volume UUID → PV object for simplyblock PVs.
@@ -1067,6 +1078,7 @@ func matchVolumesToPVs(
 			log.Error(err, "matchVolumesToPVs: failed to get PVC, treating volume as unmanaged",
 				"pvc", pv.Spec.ClaimRef.Name, "namespace", pv.Spec.ClaimRef.Namespace)
 			unmanaged = append(unmanaged, vol.UUID)
+			pvcFetchFailed = true
 			continue
 		}
 
@@ -1079,7 +1091,7 @@ func matchVolumesToPVs(
 		}
 	}
 
-	return pvManaged, pinned, unmanaged, pvNameByVolumeUUID, nil
+	return pvManaged, pinned, unmanaged, pvNameByVolumeUUID, pvcFetchFailed, nil
 }
 
 // getNodeBackendStatus fetches the current status string of a single storage
