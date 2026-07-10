@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -44,12 +43,6 @@ type VolumeMigrationReconciler struct {
 	apiClient  *webapi.Client
 	coreClient corev1client.CoreV1Interface
 }
-
-// errNoRunningConsumer indicates that the volume is not currently mounted by a
-// running pod (the PVC is unbound, or the consuming pod is stopped). This is not
-// a failure: there is no consumer whose I/O paths need validating, so the
-// migration can proceed without the NVMe pre-connect validation step.
-var errNoRunningConsumer = errors.New("volume has no running consumer")
 
 func (r *VolumeMigrationReconciler) Reconcile(
 	ctx context.Context,
@@ -188,18 +181,20 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 	// Resolve the k8s node name of the worker running the pod that uses the PVC.
 	// NVMe connections must be established from that node, not the storage target node.
 	hostname, err := r.resolveConsumerNodeName(ctx, vm.Spec.PVName)
-	if errors.Is(err, errNoRunningConsumer) {
-		// No pod is currently consuming the volume, so there are no NVMe I/O
-		// paths to validate. Skip validation and continue the migration directly.
+	if err != nil {
+		// A genuine lookup error (PV get / pod list failed) — retry later.
+		log.Error(err, "Cannot resolve consumer node name; requeuing")
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+	if hostname == nil {
+		// No pod is currently consuming the volume (the PV is unbound, or no
+		// running pod uses it), so there are no NVMe I/O paths to validate.
+		// Skip validation and continue the migration directly.
 		log.Info("No running consumer for volume; skipping NVMe path validation",
-			"pv", vm.Spec.PVName, "migration", vm.Status.MigrationUUID, "reason", err.Error())
+			"pv", vm.Spec.PVName, "migration", vm.Status.MigrationUUID)
 		r.Recorder.Eventf(vm, corev1.EventTypeNormal, "ValidationSkipped",
 			"No running consumer for PV %s; skipping NVMe path validation", vm.Spec.PVName)
 		return r.performMigration(ctx, vm)
-	}
-	if err != nil {
-		log.Error(err, "Cannot resolve consumer node name; requeuing")
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
 	// Get the simplyblock-rebalancer image from the StorageCluster (it contains nvme-cli).
@@ -209,7 +204,7 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	job := r.buildValidationJob(vm, hostname, image)
+	job := r.buildValidationJob(vm, *hostname, image)
 	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 		return ctrl.Result{}, fmt.Errorf("create validation job: %w", err)
 	}
@@ -400,26 +395,27 @@ func safeNodeID(nodeUUID string) string {
 // NVMe connections must be established from that node so that the consuming
 // pod can reach the target subsystem after migration.
 //
-// It returns errNoRunningConsumer (wrapped) when the volume is not bound or no
-// running pod uses it, so callers can distinguish "nothing to validate" from a
-// genuine, retryable error.
+// It returns nil, nil when the volume is not bound or no running pod uses it:
+// there is no consumer whose I/O paths need validating, so callers treat this as
+// "nothing to validate" rather than an error. A non-nil error is always a
+// genuine, retryable failure (PV get or pod list failed).
 func (r *VolumeMigrationReconciler) resolveConsumerNodeName(
 	ctx context.Context,
 	pvName string,
-) (string, error) {
+) (*string, error) {
 	pv := &corev1.PersistentVolume{}
 	if err := r.Get(ctx, types.NamespacedName{Name: pvName}, pv); err != nil {
-		return "", fmt.Errorf("get PV %q: %w", pvName, err)
+		return nil, fmt.Errorf("get PV %q: %w", pvName, err)
 	}
 	if pv.Spec.ClaimRef == nil {
-		return "", fmt.Errorf("PV %q has no claimRef; volume may not be bound: %w", pvName, errNoRunningConsumer)
+		return nil, nil
 	}
 	pvcName := pv.Spec.ClaimRef.Name
 	pvcNamespace := pv.Spec.ClaimRef.Namespace
 
 	var podList corev1.PodList
 	if err := r.List(ctx, &podList, client.InNamespace(pvcNamespace)); err != nil {
-		return "", fmt.Errorf("list pods in namespace %q: %w", pvcNamespace, err)
+		return nil, fmt.Errorf("list pods in namespace %q: %w", pvcNamespace, err)
 	}
 	for _, pod := range podList.Items {
 		if pod.Spec.NodeName == "" || pod.Status.Phase != corev1.PodRunning {
@@ -427,11 +423,11 @@ func (r *VolumeMigrationReconciler) resolveConsumerNodeName(
 		}
 		for _, vol := range pod.Spec.Volumes {
 			if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == pvcName {
-				return pod.Spec.NodeName, nil
+				return &pod.Spec.NodeName, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("no running pod found using PVC %q/%q: %w", pvcNamespace, pvcName, errNoRunningConsumer)
+	return nil, nil
 }
 
 // collectAndLogJobPodLogs fetches stdout/stderr from every pod that belongs to
