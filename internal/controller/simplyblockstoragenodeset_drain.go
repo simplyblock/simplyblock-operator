@@ -325,12 +325,34 @@ func (r *StorageNodeSetReconciler) handleFailedVolumeMigrations(
 			return ctrl.Result{RequeueAfter: drainRequeueBlocking}, true
 		}
 
+		// Delete the Failed VM and let createMissingVolumeMigrations recreate it
+		// with a fresh roundRobinTargetNodes assignment. The node remains suspended
+		// while we retry — resumeAndFail is not called here so the drain continues.
+		// If no target is available the DrainNoMigrationTarget event surfaces the stall.
 		reason := vm.Status.ErrorMessage
 		if reason == "" {
 			reason = fmt.Sprintf("VolumeMigration %s reached phase %s", vm.Name, vm.Status.Phase)
 		}
-		res, _ := r.resumeAndFail(ctx, apiClient, clusterUUID, snCR, reason)
-		return res, true
+		log.Info("drain: VolumeMigration failed — deleting and retrying with fresh target assignment",
+			"vm", vm.Name, "reason", reason)
+		for i := range items {
+			if items[i].Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseFailed ||
+				items[i].Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseAborted {
+				if err := r.Delete(ctx, &items[i]); err != nil {
+					log.Error(err, "drain: failed to delete Failed VolumeMigration for retry", "vm", items[i].Name)
+				}
+			}
+		}
+		patch := client.MergeFrom(snCR.DeepCopy())
+		snCR.Status.ActionStatus.Message = "migration failed, retrying with new target: " + reason
+		snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
+		if err := r.Status().Patch(ctx, snCR, patch); err != nil {
+			log.Error(err, "drain: failed to patch retry message")
+		}
+		r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "MigrationRetry",
+			"VolumeMigration %s failed (%s); deleted — will recreate with a different target node",
+			vm.Name, reason)
+		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, true
 	}
 	return ctrl.Result{}, false
 }

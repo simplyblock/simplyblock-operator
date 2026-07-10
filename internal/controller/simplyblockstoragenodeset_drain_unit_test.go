@@ -665,7 +665,10 @@ func TestDrainMigrateDoesNotRecreateExistingCRs(t *testing.T) {
 	}
 }
 
-func TestDrainMigrateFailedCRTriggersResumeAndFail(t *testing.T) {
+func TestDrainMigrateFailedCRDeletedAndRetriedWithNewTarget(t *testing.T) {
+	// Any VolumeMigration failure deletes the Failed CR and requeues so
+	// createMissingVolumeMigrations can recreate it with a fresh target.
+	// The node stays suspended — resumeAndFail is NOT called.
 	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseMigrating, utils.ActionStateRunning)
 	failedVM := &simplyblockv1alpha1.VolumeMigration{
 		ObjectMeta: metav1.ObjectMeta{
@@ -679,36 +682,44 @@ func TestDrainMigrateFailedCRTriggersResumeAndFail(t *testing.T) {
 		},
 		Status: simplyblockv1alpha1.VolumeMigrationStatus{
 			Phase:        simplyblockv1alpha1.VolumeMigrationPhaseFailed,
-			ErrorMessage: "backend rejected migration",
+			ErrorMessage: "ContinueMigration: status 400: target node not online",
 		},
 	}
 	r := newDrainReconciler(t, sn, failedVM)
 
 	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
 	defer mock.Close()
-	// Resume API call (best-effort, may fail in test — that is acceptable)
-	mock.Register(http.MethodPost,
-		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-nodes/"+drainTestNodeUUID+"/resume",
-		webapimock.RouteResponse{Status: http.StatusNoContent},
-	)
 
-	if _, err := r.drainMigrate(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn); err != nil {
+	res, err := r.drainMigrate(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn)
+	if err != nil {
 		t.Fatalf("drainMigrate: %v", err)
 	}
+	// Must requeue for retry, not zero (which would mean terminal).
+	if res.RequeueAfter == 0 {
+		t.Error("expected non-zero requeue when VM failed and retry is in progress")
+	}
 
-	// After resumeAndFail, actionStatus.state must be failed.
+	// State must still be running — the node is NOT resumed and drain NOT failed.
 	updated := &simplyblockv1alpha1.StorageNodeSet{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), updated); err != nil {
-		t.Fatalf("get StorageNodeSet: %v", err)
+		t.Fatalf("get: %v", err)
 	}
-	if updated.Status.ActionStatus == nil {
-		t.Fatal("expected actionStatus to be set")
+	if updated.Status.ActionStatus != nil && updated.Status.ActionStatus.State == utils.ActionStateFailed {
+		t.Error("drain must not be marked failed — should retry with a new target")
 	}
-	if updated.Status.ActionStatus.State != utils.ActionStateFailed {
-		t.Errorf("expected state=failed, got %q", updated.Status.ActionStatus.State)
+
+	// The Failed VM must be deleted so the next reconcile recreates it.
+	var vmList simplyblockv1alpha1.VolumeMigrationList
+	if err := r.List(context.Background(), &vmList,
+		client.InNamespace(drainTestNS),
+		client.MatchingLabels{"storage.simplyblock.io/drain-node": drainTestNodeUUID},
+	); err != nil {
+		t.Fatalf("list VMs: %v", err)
 	}
-	if updated.Status.ActionStatus.SubPhase != "" {
-		t.Errorf("expected SubPhase cleared on failure, got %q", updated.Status.ActionStatus.SubPhase)
+	for _, vm := range vmList.Items {
+		if vm.Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseFailed {
+			t.Errorf("Failed VM %q must be deleted so it can be recreated with a different target", vm.Name)
+		}
 	}
 }
 
