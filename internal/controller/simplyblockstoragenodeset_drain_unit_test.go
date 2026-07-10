@@ -712,6 +712,87 @@ func TestDrainMigrateFailedCRTriggersResumeAndFail(t *testing.T) {
 	}
 }
 
+func TestDrainMigrateFailedCRDeletedWhenClusterPaused(t *testing.T) {
+	// When a VolumeMigration fails AND the cluster is not ready, the drain
+	// should pause AND delete the Failed VM so it can be recreated with a fresh
+	// target assignment once the cluster recovers — not just defer the failure.
+	rebalancing := true
+	cluster := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: drainTestCluster, Namespace: drainTestNS},
+		Status: simplyblockv1alpha1.StorageClusterStatus{
+			Status:      utils.ClusterStatusActive,
+			Rebalancing: &rebalancing,
+		},
+	}
+	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseMigrating, utils.ActionStateRunning)
+	sn.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
+		Action:   utils.NodeActionRemove,
+		NodeUUID: drainTestNodeUUID,
+		State:    utils.ActionStateRunning,
+		SubPhase: drainSubPhaseMigrating,
+	}
+	failedVM := &simplyblockv1alpha1.VolumeMigration{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "drain-failed-pvc-a",
+			Namespace: drainTestNS,
+			Labels:    map[string]string{"storage.simplyblock.io/drain-node": drainTestNodeUUID},
+		},
+		Spec: simplyblockv1alpha1.VolumeMigrationSpec{
+			PVName:         "pv-a",
+			TargetNodeUUID: drainTestNodeUUID2,
+		},
+		Status: simplyblockv1alpha1.VolumeMigrationStatus{
+			Phase:        simplyblockv1alpha1.VolumeMigrationPhaseFailed,
+			ErrorMessage: "target node in_shutdown",
+		},
+	}
+
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	cl := newTestClient(t, scheme, []client.Object{
+		&simplyblockv1alpha1.StorageNodeSet{},
+		&simplyblockv1alpha1.StorageCluster{},
+		&simplyblockv1alpha1.VolumeMigration{},
+	}, cluster, sn, failedVM)
+	r := &StorageNodeSetReconciler{
+		Client:   cl,
+		Scheme:   scheme,
+		Recorder: record.NewFakeRecorder(8),
+	}
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	defer mock.Close()
+
+	res, err := r.drainMigrate(context.Background(), webapi.NewClient(mock.URL()), drainTestClusterUUID, sn)
+	if err != nil {
+		t.Fatalf("drainMigrate: %v", err)
+	}
+	// Must requeue (pause), not fail.
+	if res.RequeueAfter == 0 {
+		t.Error("expected non-zero requeue when cluster is paused due to rebalancing")
+	}
+	// State must still be running — NOT failed.
+	updated := &simplyblockv1alpha1.StorageNodeSet{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), updated); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if updated.Status.ActionStatus != nil && updated.Status.ActionStatus.State == utils.ActionStateFailed {
+		t.Error("drain must not be marked failed when pausing due to cluster state")
+	}
+	// The Failed VM must have been deleted so the drain can recreate it on resume.
+	var vmList simplyblockv1alpha1.VolumeMigrationList
+	if err := r.List(context.Background(), &vmList,
+		client.InNamespace(drainTestNS),
+		client.MatchingLabels{"storage.simplyblock.io/drain-node": drainTestNodeUUID},
+	); err != nil {
+		t.Fatalf("list VMs: %v", err)
+	}
+	for _, vm := range vmList.Items {
+		if vm.Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseFailed {
+			t.Errorf("Failed VolumeMigration %q must be deleted during cluster-state pause so it can be recreated on resume", vm.Name)
+		}
+	}
+}
+
 // ── drainMigrationName ────────────────────────────────────────────────────────
 
 func TestDrainMigrationNameIsDNSValid(t *testing.T) {

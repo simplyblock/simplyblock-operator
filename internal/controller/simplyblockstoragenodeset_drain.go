@@ -298,8 +298,21 @@ func (r *StorageNodeSetReconciler) handleFailedVolumeMigrations(
 		// making the VolumeMigrationReconciler mark the CR as Failed. Treat this
 		// as a transient pause so the drain resumes once the cluster is active.
 		if paused, reason := r.drainClusterPauseCheck(ctx, snCR); paused {
-			log.Info("drain: VolumeMigration failed but cluster is not ready — pausing",
+			log.Info("drain: VolumeMigration failed but cluster is not ready — pausing and deleting failed CR so it is recreated on resume",
 				"vm", vm.Name, "vmPhase", vm.Status.Phase, "clusterReason", reason)
+			// Delete ALL Failed/Aborted VMs now so that when the cluster
+			// recovers drainMigrate will recreate them with fresh target
+			// assignments. Leaving failed CRs in place would cause
+			// resumeAndFail to be called as soon as the cluster is active.
+			for i := range items {
+				if items[i].Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseFailed ||
+					items[i].Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseAborted {
+					if err := r.Delete(ctx, &items[i]); err != nil {
+						log.Error(err, "drain: failed to delete failed VolumeMigration during pause",
+							"vm", items[i].Name)
+					}
+				}
+			}
 			patch := client.MergeFrom(snCR.DeepCopy())
 			snCR.Status.ActionStatus.Message = "drain paused (migration failed due to cluster state): " + reason
 			snCR.Status.ActionStatus.UpdatedAt = metav1.Now()
@@ -307,7 +320,7 @@ func (r *StorageNodeSetReconciler) handleFailedVolumeMigrations(
 				log.Error(err, "drain: failed to patch paused message")
 			}
 			r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "DrainPaused",
-				"drain paused at Migrating: VolumeMigration %s failed because cluster is not ready (%s); will retry when cluster is active",
+				"drain paused at Migrating: VolumeMigration %s failed because cluster is not ready (%s); failed CRs deleted — will recreate when cluster is active",
 				vm.Name, reason)
 			return ctrl.Result{RequeueAfter: drainRequeueBlocking}, true
 		}
@@ -532,8 +545,17 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 		}
 	}
 
-	// First time entering Migrating: no CRs exist yet — create them.
-	if len(vmigList.Items) == 0 {
+	// Build the set of existing VM names so we can detect missing ones.
+	// On first entry len == 0; after a cluster-state pause some Failed CRs were
+	// deleted by handleFailedVolumeMigrations and need to be recreated here.
+	existingVMNames := make(map[string]struct{}, len(vmigList.Items))
+	for i := range vmigList.Items {
+		existingVMNames[vmigList.Items[i].Name] = struct{}{}
+	}
+
+	// Determine which PV-managed volumes need a VolumeMigration CR (either
+	// because none exist yet, or because some were deleted during a pause).
+	{
 		volumes, err := listNodeVolumes(ctx, apiClient, clusterUUID, nodeUUID)
 		if err != nil {
 			log.Error(err, "drain: failed to list volumes for migration creation")
@@ -552,8 +574,8 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 			return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 		}
 
-		if len(pvManaged) == 0 {
-			// No PV-managed volumes — skip straight to Verifying.
+		if len(pvManaged) == 0 && len(vmigList.Items) == 0 {
+			// No PV-managed volumes and no existing VMs — skip straight to Verifying.
 			if err := advanceDrainSubPhase(ctx, r, snCR, drainSubPhaseVerifying); err != nil {
 				log.Error(err, "drain: failed to advance to Verifying (no migrations needed)")
 				return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
@@ -561,12 +583,21 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 			return ctrl.Result{RequeueAfter: drainRequeueImmediate}, nil
 		}
 
-		// Build the PV name list for round-robin assignment.
+		// Build the PV name list for round-robin assignment (only missing ones).
 		pvNames := make([]string, 0, len(pvManaged))
 		for _, volUUID := range pvManaged {
-			if pv, ok := pvNameByVolumeUUID[volUUID]; ok {
-				pvNames = append(pvNames, pv)
+			pvName, ok := pvNameByVolumeUUID[volUUID]
+			if !ok {
+				continue
 			}
+			if _, exists := existingVMNames[drainMigrationName(nodeUUID, pvName)]; !exists {
+				pvNames = append(pvNames, pvName)
+			}
+		}
+
+		if len(pvNames) == 0 {
+			// All PVs already have VMs — nothing to create this cycle.
+			return ctrl.Result{RequeueAfter: drainRequeueMigrate}, nil
 		}
 
 		// Assign each PV a target node via round-robin across all online peers.
@@ -584,6 +615,10 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 			}
 
 			migName := drainMigrationName(nodeUUID, pvName)
+			// Skip PVs that already have an active VM (completed or in-progress).
+			if _, exists := existingVMNames[migName]; exists {
+				continue
+			}
 			vmig := &simplyblockv1alpha1.VolumeMigration{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      migName,
