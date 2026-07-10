@@ -220,6 +220,20 @@ type NodeDrainState struct {
 	ActiveNodeUUID string `json:"activeNodeUUID,omitempty"`
 }
 
+// NodeLatencyMetrics holds fio-measured 4K NVMe-oF latency for a single backend storage node.
+// The benchmark volume NQN and connection details are derived at runtime from the node UUID
+// and the cluster NQN — they are not stored here.
+type NodeLatencyMetrics struct {
+	// NodeUUID is the backend storage node UUID.
+	NodeUUID string `json:"nodeUUID"`
+	// BaselineP50NS is the p50 write latency (nanoseconds) from the initial empty-cluster benchmark.
+	BaselineP50NS int64 `json:"baselineP50NS,omitempty"`
+	// BaselineP99NS is the p99 write latency (nanoseconds) from the initial empty-cluster benchmark.
+	BaselineP99NS int64 `json:"baselineP99NS,omitempty"`
+	// BaselineMeasuredAt is when the baseline was established.
+	BaselineMeasuredAt *metav1.Time `json:"baselineMeasuredAt,omitempty"`
+}
+
 // StorageNodeSetStatus defines the observed state of StorageNodeSet.
 type StorageNodeSetStatus struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Nodes"
@@ -240,6 +254,9 @@ type StorageNodeSetStatus struct {
 	// a FailedScheduling event during node add. Used to emit a recovery event
 	// when the node subsequently comes online.
 	SchedulingFailedWorkers map[string]bool `json:"schedulingFailedWorkers,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Latency Metrics"
+	// LatencyMetrics holds per-backend-node fio-measured latency data for rebalancing decisions.
+	LatencyMetrics []NodeLatencyMetrics `json:"latencyMetrics,omitempty"`
 }
 
 type NodeStatus struct {

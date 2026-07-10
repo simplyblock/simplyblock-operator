@@ -502,6 +502,36 @@ spec:
                   - startedAt
                   type: object
                 type: array
+              latencyMetrics:
+                description: LatencyMetrics holds per-backend-node fio-measured latency
+                  data for rebalancing decisions.
+                items:
+                  description: |-
+                    NodeLatencyMetrics holds fio-measured 4K NVMe-oF latency for a single backend storage node.
+                    The benchmark volume NQN and connection details are derived at runtime from the node UUID
+                    and the cluster NQN — they are not stored here.
+                  properties:
+                    baselineMeasuredAt:
+                      description: BaselineMeasuredAt is when the baseline was established.
+                      format: date-time
+                      type: string
+                    baselineP50NS:
+                      description: BaselineP50NS is the p50 write latency (nanoseconds)
+                        from the initial empty-cluster benchmark.
+                      format: int64
+                      type: integer
+                    baselineP99NS:
+                      description: BaselineP99NS is the p99 write latency (nanoseconds)
+                        from the initial empty-cluster benchmark.
+                      format: int64
+                      type: integer
+                    nodeUUID:
+                      description: NodeUUID is the backend storage node UUID.
+                      type: string
+                  required:
+                  - nodeUUID
+                  type: object
+                type: array
               nodes:
                 description: Nodes is the observed state of each managed storage node.
                 items:

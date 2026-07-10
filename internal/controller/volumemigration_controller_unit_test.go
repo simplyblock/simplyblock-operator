@@ -208,8 +208,8 @@ func TestReconcileStart_EmptyMigrationUUID_Fails(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
 		t.Fatalf("phase = %q, want Failed", got.Status.Phase)
 	}
-	if !strings.Contains(got.Status.ErrorMessage, "empty migration ID") {
-		t.Errorf("ErrorMessage = %q, want empty migration ID", got.Status.ErrorMessage)
+	if !strings.Contains(got.Status.ErrorMessage, "empty migration UUID") {
+		t.Errorf("ErrorMessage = %q, want empty migration UUID", got.Status.ErrorMessage)
 	}
 }
 
@@ -395,7 +395,7 @@ func TestPollValidationJob_Succeeded_ContinuesToRunning(t *testing.T) {
 func TestPollValidationJob_Failed_CancelsAndFails(t *testing.T) {
 	var cancelCalled bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel") {
+		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/") {
 			cancelCalled = true
 			w.WriteHeader(http.StatusOK)
 			return
@@ -416,6 +416,43 @@ func TestPollValidationJob_Failed_CancelsAndFails(t *testing.T) {
 	got := getVM(t, cl)
 	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
 		t.Errorf("phase = %q, want Failed", got.Status.Phase)
+	}
+}
+
+// When no running pod consumes the volume there are no NVMe I/O paths to
+// validate, so validation is skipped and the migration continues directly to
+// Running instead of requeuing forever. Here the PV is unbound (no claimRef).
+func TestReconcileValidating_NoRunningConsumer_SkipsValidationAndContinues(t *testing.T) {
+	var continueCalled bool
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue") {
+			continueCalled = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+	})
+
+	vm := validatingVM("") // no validation job yet
+	pv := csiPV("cluster-uuid:pool-uuid:vol-uuid")
+	r, cl := newVMReconciler(t, srv.URL, vm, pv)
+
+	res, err := r.Reconcile(context.Background(), vmRequest())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !continueCalled {
+		t.Errorf("expected ContinueMigration to be called when validation is skipped")
+	}
+	if res.RequeueAfter != vmigration.MigrationInitialDelay {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, vmigration.MigrationInitialDelay)
+	}
+	got := getVM(t, cl)
+	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseRunning {
+		t.Errorf("phase = %q, want Running", got.Status.Phase)
+	}
+	if got.Status.ValidationJobName != "" {
+		t.Errorf("ValidationJobName = %q, want empty (no job created)", got.Status.ValidationJobName)
 	}
 }
 
@@ -570,7 +607,7 @@ func assertAbort(t *testing.T, from simplyblockv1alpha1.VolumeMigrationPhase) {
 	t.Helper()
 	var cancelCalled bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel") {
+		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/") {
 			cancelCalled = true
 			w.WriteHeader(http.StatusOK)
 			return
