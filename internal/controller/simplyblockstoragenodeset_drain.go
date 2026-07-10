@@ -497,6 +497,8 @@ func (r *StorageNodeSetReconciler) drainSuspend(
 	if nodeResp.Status != utils.NodeStatusSuspended {
 		log.Info("drain: node not yet suspended, requeuing",
 			"nodeUUID", nodeUUID, "currentStatus", nodeResp.Status)
+		r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "DrainSuspendPending",
+			"waiting for node %s to suspend (current status: %s)", nodeUUID, nodeResp.Status)
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
 
@@ -604,6 +606,9 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 		targetByPV, err := roundRobinTargetNodes(ctx, apiClient, clusterUUID, nodeUUID, pvNames)
 		if err != nil {
 			log.Error(err, "drain: no available target nodes for migration")
+			r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "DrainNoMigrationTarget",
+				"drain stalled: no online storage node available as migration target for node %s — will retry when a peer node is online",
+				nodeUUID)
 			return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 		}
 
@@ -734,6 +739,9 @@ func (r *StorageNodeSetReconciler) drainVerify(
 	if len(nonSystem) > 0 {
 		log.Info("drain: node still has non-system volumes, requeuing",
 			"nodeUUID", nodeUUID, "volumeUUIDs", strings.Join(nonSystem, ", "))
+		r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "DrainVerifyPending",
+			"node %s still has %d non-system volume(s) after migration (%s); waiting for backend to confirm empty",
+			nodeUUID, len(nonSystem), strings.Join(nonSystem, ", "))
 		return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
 	}
 
