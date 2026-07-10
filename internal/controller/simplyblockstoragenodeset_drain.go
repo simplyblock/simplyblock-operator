@@ -557,7 +557,32 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 
 	// Determine which PV-managed volumes need a VolumeMigration CR (either
 	// because none exist yet, or because some were deleted during a pause).
-	{
+	// Only enter this branch when there may be missing VMs; if all existing CRs
+	// are present the completion check below handles the rest.
+	if len(vmigList.Items) == 0 || func() bool {
+		// Peek at node volumes to check for missing VMs without a full API call
+		// on the hot path — only triggers when len > 0 (resume-after-pause case).
+		vols, lerr := listNodeVolumes(ctx, apiClient, clusterUUID, nodeUUID)
+		if lerr != nil {
+			return false
+		}
+		sf, serr := resolveSystemVolumeFilter(snCR, r)
+		if serr != nil {
+			return false
+		}
+		pvm, _, _, pvByVol, merr := matchVolumesToPVs(ctx, r, vols, sf)
+		if merr != nil {
+			return false
+		}
+		for _, volUUID := range pvm {
+			if pvName, ok := pvByVol[volUUID]; ok {
+				if _, exists := existingVMNames[drainMigrationName(nodeUUID, pvName)]; !exists {
+					return true
+				}
+			}
+		}
+		return false
+	}() {
 		volumes, err := listNodeVolumes(ctx, apiClient, clusterUUID, nodeUUID)
 		if err != nil {
 			log.Error(err, "drain: failed to list volumes for migration creation")
