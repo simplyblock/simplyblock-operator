@@ -20,7 +20,13 @@ What it does
    inside a webappapi pod (simplyblock namespace) and matching the PV's logical-volume
    UUID; the sbctl Hostname (e.g. vm19_4424) is mapped to a storage-node UUID via the
    `simplyblock-rebalancer-<nodeUUID>` benchmark volumes. Start and stop of every
-   migration are timestamped and logged for later correlation.
+   migration are timestamped and logged for later correlation. Before each migration,
+   with a configurable probability (default 15%, --snapshot-chance) the volume is first
+   snapshotted via a Kubernetes VolumeSnapshot CR, so the ensuing migration must carry
+   the snapshot. The snapshot's backend id is validated via `sbctl snapshot list` both
+   right after creation and again after the migration finishes (a migration that drops
+   its snapshots is a failure). Snapshotting only happens pre-migration, and a volume
+   already carrying a snapshot is snapshotted again regardless.
 4. Continuously monitors pod health. After the run it pulls every pod's fio logs and
    correlates the per-second IOPS timeline against the migration windows.
 
@@ -76,6 +82,13 @@ FIO_RWMIXREAD = 70  # randrw read percentage
 FIO_ETA_NEWLINE_SEC = 5
 
 API_GROUP = "storage.simplyblock.io/v1alpha1"
+
+# CSI snapshotting: while migrating, randomly snapshot a volume *before* migrating it
+# (via a Kubernetes VolumeSnapshot CR) so the ensuing migration must also carry the
+# snapshot. See run_one_migration().
+SNAPSHOT_APIVERSION = "snapshot.storage.k8s.io/v1"
+SNAPSHOTCLASS_NAME = "simplyblock-fio-migration-snapclass"
+SNAPSHOT_CHANCE = 0.15  # probability of snapshotting the volume before each migration
 
 
 def now_utc() -> datetime:
@@ -144,6 +157,13 @@ class MigrationRecord:
     phase: str = ""
     error: str = ""
     snaps: str = ""
+    pre_snapshot: str = ""       # VolumeSnapshot CR created on this volume right before migrating it
+    pre_snapshot_id: str = ""    # backend snapshot UUID (from the CSI VolumeSnapshotContent handle)
+    # snapshot must resolve via `sbctl snapshot list` both right after creation and again
+    # after the migration finishes (a migration must carry its snapshots, not drop them).
+    snapshot_created_ok: bool | None = None   # resolved right after creation
+    snapshot_post_ok: bool | None = None      # still resolved after the migration
+    snapshot_verify_msg: str = ""
     # post-migration verification (real primary node via sbctl vs expectation):
     #   Completed -> primary must be target; Failed/Timeout -> primary must stay source.
     actual_node: str = ""        # real primary node UUID after the migration (sbctl)
@@ -178,6 +198,8 @@ class FioMigrationTest:
         self._webappapi_pod: str = ""
         self._cluster_uuid: str = ""
         self.migrations: list[MigrationRecord] = []
+        self.snapshots: list[str] = []          # VolumeSnapshot CR names created (for cleanup)
+        self.snapshot_class: str = ""           # VolumeSnapshotClass bound to the simplyblock CSI driver
         self.health_events: list[PodHealthEvent] = []
         self._stop_monitor = threading.Event()
         self._monitor_thread: threading.Thread | None = None
@@ -248,6 +270,34 @@ class FioMigrationTest:
         self.log.info(f"(re)created xfs StorageClass {XFS_STORAGECLASS} "
                       f"(provisioner={sc['provisioner']}, fstype=xfs, "
                       f"cluster_id={cluster_uuid})")
+
+    def ensure_snapshot_class(self) -> str:
+        """Find (or create) a VolumeSnapshotClass bound to the simplyblock CSI driver and
+        cache its name. Snapshots during the run are taken via VolumeSnapshot CRs, which
+        need a VolumeSnapshotClass for the same driver as the pool StorageClass."""
+        driver = "csi.simplyblock.io"
+        src = kubectl_json(["get", "sc", SOURCE_STORAGECLASS], check=False)
+        if src:
+            driver = src.get("provisioner", driver)
+        existing = kubectl_json(["get", "volumesnapshotclass"], check=False)
+        for item in existing.get("items", []):
+            if item.get("driver") == driver:
+                self.snapshot_class = item["metadata"]["name"]
+                self.log.info(f"using existing VolumeSnapshotClass {self.snapshot_class} "
+                              f"(driver={driver})")
+                return self.snapshot_class
+        vsc = {
+            "apiVersion": SNAPSHOT_APIVERSION,
+            "kind": "VolumeSnapshotClass",
+            "metadata": {"name": SNAPSHOTCLASS_NAME,
+                         "labels": {"app.kubernetes.io/created-by": "fio-migration-test"}},
+            "driver": driver,
+            "deletionPolicy": "Delete",
+        }
+        kubectl_apply(json.dumps(vsc))
+        self.snapshot_class = SNAPSHOTCLASS_NAME
+        self.log.info(f"created VolumeSnapshotClass {SNAPSHOTCLASS_NAME} (driver={driver})")
+        return self.snapshot_class
 
     def fio_command(self) -> str:
         # fio always pre-writes ("lays out") a file-backed target before random I/O, and
@@ -567,6 +617,34 @@ class FioMigrationTest:
             raise RuntimeError(f"sbctl volume list failed: {cp.stderr.strip()}")
         return json.loads(cp.stdout)
 
+    def sbctl_snapshot_list(self) -> list[dict]:
+        """Run `sbctl snapshot list --json` inside a webappapi pod and parse it."""
+        pod = self.webappapi_pod()
+        cp = subprocess.run(
+            ["kubectl", "-n", SIMPLYBLOCK_NAMESPACE, "exec", pod, "--",
+             "sbctl", "snapshot", "list", "--json"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if cp.returncode != 0:
+            raise RuntimeError(f"sbctl snapshot list failed: {cp.stderr.strip()}")
+        return json.loads(cp.stdout)
+
+    def _snapshot_resolves(self, snap_id: str) -> "bool | None":
+        """Whether a backend snapshot UUID still appears in `sbctl snapshot list`.
+        True=present, False=absent (lost), None=inconclusive (id unknown or listing failed)."""
+        if not snap_id:
+            return None
+        try:
+            snaps = self.sbctl_snapshot_list()
+        except Exception as e:  # noqa: BLE001
+            self.log.warn(f"sbctl snapshot list failed: {e}")
+            return None
+        for s in snaps:
+            if snap_id in (s.get("UUID"), s.get("Id"), s.get("SnapshotID"),
+                           s.get("id"), s.get("uuid")):
+                return True
+        return False
+
     def sbctl_cluster_uuid(self) -> str:
         """Return the live cluster UUID from `sbctl cluster list --json`.
 
@@ -677,6 +755,93 @@ class FioMigrationTest:
                 return self.sbctl_host_to_node.get(v.get("Hostname", ""), "")
         return ""
 
+    def _snapshot_backend_id(self, snap_name: str, timeout: int = 90) -> str:
+        """Wait for a VolumeSnapshot to become readyToUse and return its backend snapshot
+        UUID, read from the bound VolumeSnapshotContent's snapshotHandle. Returns '' if the
+        snapshot never becomes ready or no handle is exposed."""
+        deadline = time.time() + timeout
+        content = ""
+        while time.time() < deadline:
+            vs = kubectl_json(["get", "volumesnapshot", snap_name], check=False)
+            st = vs.get("status", {}) if vs else {}
+            content = st.get("boundVolumeSnapshotContentName", "") or content
+            if content and st.get("readyToUse"):
+                break
+            time.sleep(3)
+        if not content:
+            return ""
+        # VolumeSnapshotContent is cluster-scoped (the -n flag is ignored for it).
+        vsc = kubectl_json(["get", "volumesnapshotcontent", content], check=False)
+        handle = vsc.get("status", {}).get("snapshotHandle", "") if vsc else ""
+        # CSI handle mirrors the volume handle form "<cluster>:<pool>:<snapUUID>"; the
+        # backend snapshot UUID is the last colon-separated field.
+        return handle.split(":")[-1] if handle else ""
+
+    def maybe_snapshot(self, rec: "MigrationRecord", idx: int) -> None:
+        """With SNAPSHOT_CHANCE probability, snapshot this volume via a VolumeSnapshot CR
+        *before* migrating it, then confirm the backend snapshot resolves via sbctl.
+
+        Done pre-migration only: snapshotting a volume after it has been migrated adds
+        nothing to this test. Whether the volume already carries a previous snapshot makes
+        no difference — a fresh one is always added. The ensuing migration must then carry
+        the snapshot; _verify_snapshot_after_migration re-checks it resolves afterwards."""
+        if not self.snapshot_class or random.random() >= self.a.snapshot_chance:
+            return
+        snap = f"{self.run_id}-snap-{idx}"
+        try:
+            kubectl_apply(json.dumps({
+                "apiVersion": SNAPSHOT_APIVERSION,
+                "kind": "VolumeSnapshot",
+                "metadata": {"name": snap, "labels": {"test": self.run_id}},
+                "spec": {
+                    "volumeSnapshotClassName": self.snapshot_class,
+                    "source": {"persistentVolumeClaimName": rec.pvc},
+                },
+            }))
+        except subprocess.CalledProcessError as e:
+            self.log.error(f"snapshot {snap} create failed: {e.stderr or e}")
+            return
+        self.snapshots.append(snap)
+        rec.pre_snapshot = snap
+        rec.pre_snapshot_id = self._snapshot_backend_id(snap)
+        self.log.event(
+            f"SNAPSHOT CREATE  {snap}  pvc={rec.pvc}  pv={rec.pv}  vol={rec.vol or '?'}  "
+            f"snap_id={rec.pre_snapshot_id or '?'} (pre-migration)")
+        # validate the snapshot id resolves right after creation
+        resolves = self._snapshot_resolves(rec.pre_snapshot_id)
+        rec.snapshot_created_ok = resolves
+        if resolves is True:
+            self.log.event(f"SNAPSHOT VERIFY  {snap}  OK  snap_id={rec.pre_snapshot_id} "
+                           "resolves via sbctl after creation")
+        elif resolves is False:
+            rec.snapshot_verify_msg = (f"snapshot {rec.pre_snapshot_id or snap} does NOT "
+                                       "resolve via sbctl right after creation")
+            self.log.crit(f"SNAPSHOT VERIFY FAIL  {snap}: {rec.snapshot_verify_msg}")
+        else:
+            rec.snapshot_verify_msg = ("could not resolve snapshot id after creation "
+                                       "(no backend id or sbctl listing failed)")
+            self.log.warn(f"SNAPSHOT VERIFY  {snap}: {rec.snapshot_verify_msg}")
+
+    def _verify_snapshot_after_migration(self, rec: "MigrationRecord") -> None:
+        """After the migration finishes, confirm the pre-migration snapshot still resolves
+        via `sbctl snapshot list` — a migration must carry its snapshots, not drop them."""
+        if not rec.pre_snapshot:
+            return
+        resolves = self._snapshot_resolves(rec.pre_snapshot_id)
+        rec.snapshot_post_ok = resolves
+        if resolves is True:
+            self.log.event(f"SNAPSHOT VERIFY  {rec.pre_snapshot}  OK  "
+                           f"snap_id={rec.pre_snapshot_id} still resolves after migration")
+        elif resolves is False:
+            msg = (f"snapshot {rec.pre_snapshot_id or rec.pre_snapshot} LOST — does not "
+                   f"resolve via sbctl after migration {rec.name} (phase={rec.phase})")
+            rec.snapshot_verify_msg = (rec.snapshot_verify_msg + "; " + msg
+                                       if rec.snapshot_verify_msg else msg)
+            self.log.crit(f"SNAPSHOT VERIFY FAIL  {rec.pre_snapshot}: {msg}")
+        else:
+            self.log.warn(f"SNAPSHOT VERIFY  {rec.pre_snapshot}: could not re-resolve "
+                          "snapshot id after migration (inconclusive)")
+
     def pick_target(self, pv: str) -> str:
         # placement[pv] is refreshed from sbctl before each pick (see run_one_migration),
         # so it reflects the real current node even when the auto-rebalancer has moved the
@@ -709,6 +874,10 @@ class FioMigrationTest:
         rec.vol = self.volume_uuid_of.get(pv, "")  # lvol UUID, as webappapi errors reference it
         rec.source = self.placement.get(pv, "")  # authoritative current node (sbctl)
         self.migrations.append(rec)
+
+        # Randomly snapshot the volume *before* migrating it, so the migration must carry
+        # the snapshot (validated again after it finishes).
+        self.maybe_snapshot(rec, idx)
 
         kubectl_apply(self.migration_manifest(name, pv, target))
         self.log.event(
@@ -754,6 +923,7 @@ class FioMigrationTest:
                 f"source={rec.source or '?'}  duration={dur:.0f}s  error={rec.error!r}")
 
         self._verify_migration(rec)
+        self._verify_snapshot_after_migration(rec)
         return rec
 
     def _verify_migration(self, rec: "MigrationRecord") -> None:
@@ -1314,6 +1484,9 @@ class FioMigrationTest:
                 "start": iso(m.start), "end": iso(m.end) if m.end else None,
                 "duration_s": round((m.end - m.start).total_seconds(), 0) if m.end else None,
                 "actual_node": m.actual_node, "verify_ok": m.verify_ok, "verify_msg": m.verify_msg,
+                "pre_snapshot": m.pre_snapshot, "pre_snapshot_id": m.pre_snapshot_id,
+                "snapshot_created_ok": m.snapshot_created_ok, "snapshot_post_ok": m.snapshot_post_ok,
+                "snapshot_verify_msg": m.snapshot_verify_msg,
             })
 
         # Migration placement verification: a completed migration must land on its target,
@@ -1324,6 +1497,16 @@ class FioMigrationTest:
              (m.target if m.phase == "Completed" else m.source),
              "actual": m.actual_node, "msg": m.verify_msg}
             for m in verify_failures]
+
+        # Snapshot verification: a snapshot taken before a migration must resolve via sbctl
+        # both right after creation and after the migration finishes. Either False = failure.
+        snapshot_failures = [m for m in self.migrations
+                             if m.snapshot_created_ok is False or m.snapshot_post_ok is False]
+        report["snapshot_failures"] = [
+            {"name": m.name, "pv": m.pv, "snapshot": m.pre_snapshot,
+             "snapshot_id": m.pre_snapshot_id, "created_ok": m.snapshot_created_ok,
+             "post_migration_ok": m.snapshot_post_ok, "msg": m.snapshot_verify_msg}
+            for m in snapshot_failures]
 
         # Guard against a false PASS on no data: if not a single pod produced per-second
         # samples, the run measured nothing (e.g. fio never left layout) and must not be
@@ -1341,6 +1524,10 @@ class FioMigrationTest:
             ok = False
         elif verify_failures:
             report["result"] = f"FAIL — {len(verify_failures)} migration placement irregularity(ies)"
+            ok = False
+        elif snapshot_failures:
+            report["result"] = (f"FAIL — {len(snapshot_failures)} snapshot(s) did not resolve "
+                                 "via sbctl after creation/migration")
             ok = False
         elif no_data:
             report["result"] = "INCONCLUSIVE — no fio samples collected (run produced no data)"
@@ -1364,6 +1551,11 @@ class FioMigrationTest:
                           "volume not on the expected node after migration:")
             for m in verify_failures:
                 self.log.crit(f"    {m.name}: {m.verify_msg}")
+        if snapshot_failures:
+            self.log.crit(f"SNAPSHOT VERIFICATION: {len(snapshot_failures)} snapshot(s) failed to "
+                          "resolve via sbctl after creation and/or migration:")
+            for m in snapshot_failures:
+                self.log.crit(f"    {m.name} (snapshot {m.pre_snapshot}): {m.snapshot_verify_msg}")
         if no_data and not io_lost and not verify_failures:
             self.log.crit("RESULT: INCONCLUSIVE — no per-second samples collected from any "
                           "pod; cannot confirm I/O continuity")
@@ -1410,6 +1602,14 @@ class FioMigrationTest:
         vfail = len([m for m in self.migrations if m.verify_ok is False])
         self.log.info(f"placement verified: {verified} ok / {vfail} irregular "
                       f"/ {len(self.migrations)} total")
+        snapped = [m for m in self.migrations if m.pre_snapshot]
+        if snapped:
+            sok = len([m for m in snapped
+                      if m.snapshot_created_ok is True and m.snapshot_post_ok is True])
+            sfail = len([m for m in snapped
+                        if m.snapshot_created_ok is False or m.snapshot_post_ok is False])
+            self.log.info(f"snapshots         : {len(snapped)} taken / {sok} resolved ok "
+                          f"(create+post-migration) / {sfail} failed")
         self.log.info(f"health events     : {len(self.health_events)}")
         self.log.info("")
         self.log.info("per-pod IOPS / latency (clat):")
@@ -1449,9 +1649,11 @@ class FioMigrationTest:
         if self.a.keep:
             self.log.info(f"--keep set; leaving resources (label test={self.run_id})")
             return
-        self.log.info("cleaning up pods, PVCs and migration CRs ...")
+        self.log.info("cleaning up pods, PVCs, migration CRs and snapshots ...")
         kubectl(["delete", "volumemigration", "-l", f"test={self.run_id}",
                  "--ignore-not-found", "--wait=false"], check=False)
+        kubectl(["delete", "volumesnapshot", "-l", f"test={self.run_id}",
+                 "--ignore-not-found", "--wait=false"], check=False, timeout=180)
         kubectl(["delete", "pod", "-l", f"test={self.run_id}",
                  "--ignore-not-found", "--grace-period=5"], check=False, timeout=180)
         kubectl(["delete", "pvc", "-l", f"test={self.run_id}",
@@ -1483,6 +1685,10 @@ class FioMigrationTest:
                     node = self.placement.get(pv, "")
                     self.log.info(f"    {pod}  {pv}  on  {node or '?'} "
                                   f"({self.node_host.get(node, '?')})")
+                if self.a.snapshot_chance > 0:
+                    self.ensure_snapshot_class()
+                    self.log.info(f"snapshots enabled: {self.a.snapshot_chance:.0%} chance "
+                                  "to snapshot a volume before migrating it")
             self.wait_io_flowing()
             self._io_start_time = now_utc()
 
@@ -1559,6 +1765,11 @@ def parse_args():
                    help="extra seconds past fio runtime to let a late migration finish (default 120)")
     p.add_argument("--migration-poll", type=int, default=5,
                    help="migration status poll interval seconds (default 5)")
+    p.add_argument("--snapshot-chance", type=float, default=SNAPSHOT_CHANCE,
+                   help="probability (0..1) of taking a VolumeSnapshot of a volume just "
+                        "before migrating it, so the migration must carry the snapshot; the "
+                        "snapshot id is validated via sbctl after creation and after the "
+                        f"migration (default {SNAPSHOT_CHANCE}; 0 disables snapshots)")
     p.add_argument("--health-poll", type=int, default=3,
                    help="pod health poll interval seconds (default 3)")
     p.add_argument("--stall-threshold", type=float, default=0.0,
