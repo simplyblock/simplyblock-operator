@@ -1,5 +1,10 @@
 name: "Helm: Release"
 
+# Packages the simplyblock-operator Helm chart and uploads it as the
+# `helm-charts-operator` artifact. It does NOT open a PR or publish anything —
+# merging and publishing the unified Helm repo is handled by the repo-global
+# release workflow (repo_release.yaml).
+
 on:
   push:
     branches:
@@ -8,19 +13,10 @@ on:
     paths:
       - 'helm-charts/charts/simplyblock-operator/Chart.yaml'
   workflow_call:
-    inputs:
-      package_only:
-        description: "Package + index the chart and upload it as an artifact, skipping the PR/publish flow"
-        required: false
-        default: false
-        type: boolean
 
 jobs:
-  release:
+  package:
     runs-on: ubuntu-latest
-    outputs:
-      release_branch: ${{ steps.release_meta.outputs.branch }}
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -30,55 +26,18 @@ jobs:
         with:
           version: latest
 
-      - name: Extract version and package chart
+      - name: Package chart
         run: |
           VERSION="$(grep '^version:' helm-charts/charts/simplyblock-operator/Chart.yaml | awk '{print $2}' | tr -d '"')"
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-
           mkdir -p "helm-charts/charts/$VERSION"
           helm package helm-charts/charts/simplyblock-operator --destination "helm-charts/charts/$VERSION/"
 
-      # ── Pipeline path: index the repo and hand it off as an artifact ──────────
       - name: Index chart repo
-        if: ${{ inputs.package_only }}
-        run: |
-          helm repo index helm-charts/charts/ --url https://install.simplyblock.io/helm
+        run: helm repo index helm-charts/charts/ --url https://install.simplyblock.io/helm
 
       - name: Upload chart artifact
-        if: ${{ inputs.package_only }}
         uses: actions/upload-artifact@v4
         with:
           name: helm-charts-operator
           path: helm-charts/charts/
           retention-days: 7
-
-      # ── Standalone path: open a PR bumping the committed chart repo ───────────
-      - name: Prepare release metadata
-        if: ${{ !inputs.package_only }}
-        id: release_meta
-        run: |
-          echo "branch=release-${{ env.VERSION }}" >> "$GITHUB_OUTPUT"
-
-      - name: Commit and create PR
-        if: ${{ !inputs.package_only }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          BRANCH="${{ steps.release_meta.outputs.branch }}"
-          git fetch origin main
-          git checkout -b "$BRANCH" origin/main
-
-          helm repo index helm-charts/charts/ --url https://simplyblock.github.io/helm-charts/charts
-
-          git add helm-charts/charts/index.yaml "helm-charts/charts/${{ env.VERSION }}/"
-          git commit -m "helm release for simplyblock-operator ${{ env.VERSION }}" || echo "No changes to commit"
-          git push origin "$BRANCH"
-
-          gh pr create \
-            --title "Helm release: ${{ env.VERSION }}" \
-            --body "Automated Helm release for simplyblock-operator ${{ env.VERSION }}" \
-            --head "$BRANCH" \
-            --base main
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

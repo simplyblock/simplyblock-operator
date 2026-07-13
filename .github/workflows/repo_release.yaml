@@ -81,8 +81,6 @@ jobs:
     name: Release csi
     needs: build-operator
     uses: ./.github/workflows/csi_chart_release.yaml
-    with:
-      package_only: true
     secrets: inherit
 
   # 5. release operator (quay images + OLM bundle)
@@ -99,8 +97,6 @@ jobs:
     name: Package operator chart
     needs: release-csi
     uses: ./.github/workflows/helm_release.yaml
-    with:
-      package_only: true
     secrets: inherit
 
   # 6. merge helm charts (operator + csi -> merged-helm-repo)
@@ -113,11 +109,24 @@ jobs:
       base_url: https://install.simplyblock.io/helm
     secrets: inherit
 
-  # 7. release helm charts (FTP the merged repo)
+  # 7. release helm charts (publish the merged repo via FTPS)
   release-helm:
     name: Release helm charts
     needs: merge-helm
-    uses: ./.github/workflows/csi_chart_upload.yaml
-    with:
-      artifact: merged-helm-repo
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download merged Helm repo
+        uses: actions/download-artifact@v4
+        with:
+          name: merged-helm-repo
+          path: merged-charts
+
+      - name: Publish to install.simplyblock.io via FTPS
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftps
+          server-dir: /
+          local-dir: ./merged-charts/

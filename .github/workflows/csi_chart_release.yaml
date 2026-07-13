@@ -1,5 +1,9 @@
 name: "CSI: Release Charts"
 
+# Packages the spdk-csi Helm chart and uploads it as the `helm-charts-csi` artifact.
+# It does NOT open a PR or publish anything — merging and publishing the unified
+# Helm repo is handled by the repo-global release workflow (repo_release.yaml).
+
 on:
   push:
     branches:
@@ -8,19 +12,10 @@ on:
     paths:
       - 'csi-driver/charts/spdk-csi/latest/spdk-csi/Chart.yaml'
   workflow_call:
-    inputs:
-      package_only:
-        description: "Package + index the chart and upload it as an artifact, skipping the PR/publish flow"
-        required: false
-        default: false
-        type: boolean
 
 jobs:
-  package-and-update:
+  package:
     runs-on: ubuntu-latest
-    outputs:
-      release_branch: ${{ steps.release_meta.outputs.branch }}
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -30,66 +25,20 @@ jobs:
         with:
           version: v3.13.0
 
-      - name: Extract version and package chart
+      - name: Package chart
         run: |
           cd csi-driver/charts/spdk-csi/latest/
           VERSION="$(grep '^version:' spdk-csi/Chart.yaml | awk '{print $2}' | tr -d '"')"
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-
           helm package spdk-csi
           mkdir -p "../$VERSION"
-
           mv "spdk-csi-$VERSION.tgz" "../$VERSION/"
 
-      # ── Pipeline path: index the repo and hand it off as an artifact ──────────
-      - name: Index and upload chart artifact
-        if: ${{ inputs.package_only }}
-        run: |
-          helm repo index csi-driver/charts/spdk-csi/ --url https://install.simplyblock.io/helm
+      - name: Index chart repo
+        run: helm repo index csi-driver/charts/spdk-csi/ --url https://install.simplyblock.io/helm
 
       - name: Upload chart artifact
-        if: ${{ inputs.package_only }}
         uses: actions/upload-artifact@v4
         with:
           name: helm-charts-csi
           path: csi-driver/charts/spdk-csi/
           retention-days: 7
-
-      # ── Standalone path: open a PR bumping the committed chart repo ───────────
-      - name: Prepare release metadata
-        if: ${{ !inputs.package_only }}
-        id: release_meta
-        run: |
-          echo "branch=release-${{ env.VERSION }}" >> "$GITHUB_OUTPUT"
-
-      - name: Commit and create PR
-        if: ${{ !inputs.package_only }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          BRANCH="${{ steps.release_meta.outputs.branch }}"
-          git fetch origin main
-          git checkout -b "$BRANCH" origin/main
-
-          helm repo index csi-driver/charts/spdk-csi/ --url https://install.simplyblock.io/helm
-
-          git add csi-driver/charts/spdk-csi/index.yaml csi-driver/charts/spdk-csi/${{ env.VERSION }}/
-          git commit -m "helm release for simplyblock csi ${{ env.VERSION }}" || echo "No changes to commit"
-          git push origin "$BRANCH"
-
-          gh pr create \
-            --title "Helm release: ${{ env.VERSION }}" \
-            --body "Automated Helm release for simplyblock-csi ${{ env.VERSION}}" \
-            --head "$BRANCH" \
-            --base main
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  upload-helm-charts:
-    needs: package-and-update
-    if: ${{ !inputs.package_only }}
-    uses: ./.github/workflows/csi_chart_upload.yaml
-    with:
-      ref: ${{ needs.package-and-update.outputs.release_branch }}
-    secrets: inherit
