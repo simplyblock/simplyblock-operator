@@ -7,7 +7,7 @@ metadata:
   name: storagenodeset-sample
 spec:
   clusterName: sample-cluster
-  clusterImage: simplyblock/snode:latest
+  clusterImage: quay.io/simplyblock-io/simplyblock:26.2.5-PRE
   maxLogicalVolumeCount: 256
   workerNodes:
     - worker-node-1
