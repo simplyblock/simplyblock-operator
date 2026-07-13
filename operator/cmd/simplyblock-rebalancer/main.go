@@ -288,7 +288,9 @@ func probe(configFile, metricsAddr string, interval time.Duration) {
 		case <-ctx.Done():
 			log.Println("shutting down")
 			wg.Wait()
-			srv.Shutdown(context.Background()) //nolint:errcheck
+			if err := srv.Shutdown(context.Background()); err != nil {
+				log.Printf("metrics server shutdown: %v", err)
+			}
 			return
 		case <-time.After(30 * time.Second):
 		}
@@ -314,7 +316,9 @@ func probeNodes(nodes []rebalancer.NodeConfig, metricsAddr string, interval time
 
 	wg.Wait()
 	log.Println("shutting down")
-	srv.Shutdown(context.Background()) //nolint:errcheck
+	if err := srv.Shutdown(context.Background()); err != nil {
+		log.Printf("metrics server shutdown: %v", err)
+	}
 }
 
 // probeNode runs the measurement loop for a single storage node.

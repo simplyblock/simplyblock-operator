@@ -79,9 +79,12 @@ var _ = ginkgo.Describe("SPDKCSI-RAWBLOCK", func() {
 		)
 
 		ginkgo.By("write a recognisable pattern to the raw device")
-		execCommandInPod(f,
+		execCommandInPod(
+			f,
 			"echo 'simplyblock-rawblock-persistence-test' | dd of=/dev/spdk-block bs=512 count=1 conv=notrunc 2>/dev/null",
-			ns, &blockPodLabel)
+			ns,
+			&blockPodLabel,
+		)
 
 		ginkgo.By("delete and recreate the pod to test persistence")
 		deleteBlockTestPod(ns)

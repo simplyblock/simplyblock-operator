@@ -104,7 +104,10 @@ func (m *Manager) PersistentVolumeByName(ctx context.Context, name string) (*cor
 // Served from the cache when synced, otherwise listed from the API and matched
 // client-side (the handle is not an API-queryable field). A missing or
 // ambiguous lvol ID is reported as a NotFound error.
-func (m *Manager) PersistentVolumeByLogicalVolumeID(ctx context.Context, lvolID string) (*corev1.PersistentVolume, error) {
+func (m *Manager) PersistentVolumeByLogicalVolumeID(
+	ctx context.Context,
+	lvolID string,
+) (*corev1.PersistentVolume, error) {
 	if m == nil {
 		return nil, apierrors.NewNotFound(corev1.Resource("persistentvolumes"), lvolID)
 	}

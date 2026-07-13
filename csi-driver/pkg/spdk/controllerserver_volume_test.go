@@ -123,7 +123,9 @@ func TestValidateVolumeCapabilities_ControlPlaneErrorMapping(t *testing.T) {
 			_, err := cs.ValidateVolumeCapabilities(ctx, &csi.ValidateVolumeCapabilitiesRequest{
 				VolumeId: volMapID,
 				VolumeCapabilities: []*csi.VolumeCapability{{
-					AccessMode: &csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER},
+					AccessMode: &csi.VolumeCapability_AccessMode{
+						Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+					},
 				}},
 			})
 			return err

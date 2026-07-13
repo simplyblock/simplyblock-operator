@@ -30,7 +30,12 @@ import (
 
 const rpcTimeout = 120 * time.Second
 
-func timeoutInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+func timeoutInterceptor(
+	ctx context.Context,
+	req interface{},
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (interface{}, error) {
 	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= rpcTimeout {
 		return handler(ctx, req)
 	}
@@ -81,7 +86,12 @@ func NewControllerServiceCapability(captype csi.ControllerServiceCapability_RPC_
 	}
 }
 
-func logGRPC(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+func logGRPC(
+	ctx context.Context,
+	req interface{},
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (interface{}, error) {
 	klog.V(3).Infof("GRPC call: %s", info.FullMethod)
 	klog.V(5).Infof("GRPC request: %s", protosanitizer.StripSecrets(req))
 	resp, err := handler(ctx, req)

@@ -114,7 +114,8 @@ func assertReads(t *testing.T, ctx context.Context, m *sbkube.Manager) {
 		t.Fatalf("PersistentVolumeByLogicalVolumeID(lvolMissing) error = %v, want NotFound", err)
 	}
 
-	if pvc, err := m.PersistentVolumeClaimByNamespaceAndName(ctx, "ns1", "claim-x"); err != nil || pvc == nil || pvc.Name != "claim-x" {
+	if pvc, err := m.PersistentVolumeClaimByNamespaceAndName(ctx, "ns1", "claim-x"); err != nil || pvc == nil ||
+		pvc.Name != "claim-x" {
 		t.Fatalf("PersistentVolumeClaimByNamespaceAndName(ns1/claim-x) = %v, %v", pvc, err)
 	}
 	if _, err := m.PersistentVolumeClaimByNamespaceAndName(ctx, "ns1", "missing"); !apierrors.IsNotFound(err) {

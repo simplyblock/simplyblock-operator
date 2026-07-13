@@ -66,8 +66,12 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT-FULLLOSS", func() {
 				// race where the new pod's NodePublish runs before kubelet unstages.
 				zero := int64(0)
 				framework.ExpectNoError(
-					f.ClientSet.CoreV1().Pods(w.ns).Delete(context.Background(), w.pod.Name, metav1.DeleteOptions{GracePeriodSeconds: &zero}),
-					"force-delete pod %s", w.pod.Name)
+					f.ClientSet.CoreV1().
+						Pods(w.ns).
+						Delete(context.Background(), w.pod.Name, metav1.DeleteOptions{GracePeriodSeconds: &zero}),
+					"force-delete pod %s",
+					w.pod.Name,
+				)
 
 				ginkgo.By("wait for the replacement pod to restage the mount and make the volume usable")
 				// Total path loss leaves the in-place mount dead (I/O error); it
@@ -169,7 +173,9 @@ func createPinnedDeployment(c kubernetes.Interface, ns, name, appLabel, pvcName,
 func waitForReadyPod(c kubernetes.Interface, ns, appLabel, excludeUID string, timeout time.Duration) *corev1.Pod {
 	var ready *corev1.Pod
 	gomega.Eventually(func() bool {
-		pods, err := c.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{LabelSelector: "app=" + appLabel})
+		pods, err := c.CoreV1().
+			Pods(ns).
+			List(context.Background(), metav1.ListOptions{LabelSelector: "app=" + appLabel})
 		if err != nil {
 			return false
 		}
@@ -202,7 +208,16 @@ func podReady(p *corev1.Pod) bool {
 func writeMarker(f *framework.Framework, ns, appLabel string, m fullLossMode, marker string) {
 	opt := metav1.ListOptions{LabelSelector: "app=" + appLabel}
 	if m.block {
-		execCommandInPod(f, fmt.Sprintf("printf '%%s' '%s' | dd of=%s bs=4096 count=1 conv=fsync 2>/dev/null", marker, fullLossBlockPath), ns, &opt)
+		execCommandInPod(
+			f,
+			fmt.Sprintf(
+				"printf '%%s' '%s' | dd of=%s bs=4096 count=1 conv=fsync 2>/dev/null",
+				marker,
+				fullLossBlockPath,
+			),
+			ns,
+			&opt,
+		)
 		return
 	}
 	execCommandInPod(f, fmt.Sprintf("printf '%%s' '%s' > %s && sync", marker, fullLossFSPath), ns, &opt)
@@ -218,7 +233,11 @@ func verifyVolumeUsableE(f *framework.Framework, ns, appLabel string, m fullLoss
 	writeCmd := fmt.Sprintf("printf '%%s' '%s' > %s && sync", token, fullLossFSPath)
 	readCmd := "cat " + fullLossFSPath
 	if m.block {
-		writeCmd = fmt.Sprintf("printf '%%s' '%s' | dd of=%s bs=4096 count=1 conv=fsync 2>/dev/null", token, fullLossBlockPath)
+		writeCmd = fmt.Sprintf(
+			"printf '%%s' '%s' | dd of=%s bs=4096 count=1 conv=fsync 2>/dev/null",
+			token,
+			fullLossBlockPath,
+		)
 		readCmd = fmt.Sprintf("dd if=%s bs=1 count=%d 2>/dev/null", fullLossBlockPath, len(token))
 	}
 	if _, _, err := execCommandInPodE(f, writeCmd, ns, &opt); err != nil {

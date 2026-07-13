@@ -331,6 +331,7 @@ func (g *Guardian) loop(ctx context.Context) {
 	}
 }
 
+//nolint:gocyclo // TODO: decompose tick() into smaller helpers to reduce complexity
 func (g *Guardian) tick(ctx context.Context) {
 	secretFile := FromEnv("SPDKCSI_SECRET", "/etc/spdkcsi-secret/secret.json")
 	var clusters ClustersInfo
@@ -393,8 +394,12 @@ func (g *Guardian) tick(ctx context.Context) {
 		// before checking status — the cluster may still be transitioning to suspended.
 		if firstBroken, hasBroken := earliestLvolBrokenAt[cid]; hasBroken {
 			if time.Since(firstBroken) < g.cfg.BrokenLvolGracePeriod {
-				klog.Infof("Guardian: cluster=%s has broken lvols detected %.0fs ago, waiting for grace period (%.0fs) before status check",
-					cid, time.Since(firstBroken).Seconds(), g.cfg.BrokenLvolGracePeriod.Seconds())
+				klog.Infof(
+					"Guardian: cluster=%s has broken lvols detected %.0fs ago, waiting for grace period (%.0fs) before status check",
+					cid,
+					time.Since(firstBroken).Seconds(),
+					g.cfg.BrokenLvolGracePeriod.Seconds(),
+				)
 				continue
 			}
 		}
@@ -879,7 +884,7 @@ func (g *Guardian) emitSharedSubsystemEvent(ctx context.Context, pod *v1.Pod) {
 			APIVersion: "v1",
 		},
 		Reason:  "AutoRestartSuppressed",
-		Message: "Guardian auto-restart skipped: volume shares an NVMe subsystem (max_namespace_per_subsys > 1). Restarting this pod would tear down the shared NVMe-oF paths used by other volumes on the same subsystem. Resolve the pathloss manually.",
+		Message: "Guardian auto-restart skipped: volume shares an NVMe subsystem (max_namespace_per_subsys > 1). Restarting this pod would tear down the shared NVMe-oF paths used by other volumes on the same subsystem. Resolve the pathloss manually.", //nolint:lll // unwrappable string/log/signature
 		Type:    v1.EventTypeWarning,
 		Source: v1.EventSource{
 			Component: "guardian",

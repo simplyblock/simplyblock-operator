@@ -13,7 +13,10 @@ import (
 // the given namespace and name. Served from the cache when synced, otherwise
 // fetched directly from the API. A missing claim is reported as a NotFound error
 // from either path.
-func (m *Manager) PersistentVolumeClaimByNamespaceAndName(ctx context.Context, namespace, name string) (*corev1.PersistentVolumeClaim, error) {
+func (m *Manager) PersistentVolumeClaimByNamespaceAndName(
+	ctx context.Context,
+	namespace, name string,
+) (*corev1.PersistentVolumeClaim, error) {
 	if m == nil {
 		return nil, apierrors.NewNotFound(corev1.Resource("persistentvolumeclaims"), name)
 	}
@@ -28,7 +31,7 @@ func (m *Manager) PersistentVolumeClaimByNamespaceAndName(ctx context.Context, n
 				return pvc, nil
 			}
 		} else {
-			klog.Warningf("kubernetes cache manager: PersistentVolumeClaim %s/%s lookup failed, falling back to API: %v", namespace, name, err)
+			klog.Warningf("kubernetes cache manager: PersistentVolumeClaim %s/%s lookup failed, falling back to API: %v", namespace, name, err) //nolint:lll // unwrappable string/log/signature
 		}
 	}
 

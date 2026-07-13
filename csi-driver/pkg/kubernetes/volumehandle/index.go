@@ -46,7 +46,12 @@ func Parse(handle string) (VolumeHandle, bool) {
 func MustParse(handle string) VolumeHandle {
 	parsed, ok := Parse(handle)
 	if !ok {
-		panic(fmt.Sprintf("volumehandle: invalid handle %q (expected {clusterID}:{poolID}:{lvolID} with UUID cluster/lvol)", handle))
+		panic(
+			fmt.Sprintf(
+				"volumehandle: invalid handle %q (expected {clusterID}:{poolID}:{lvolID} with UUID cluster/lvol)",
+				handle,
+			),
+		)
 	}
 	return parsed
 }

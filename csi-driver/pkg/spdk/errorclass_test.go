@@ -106,8 +106,11 @@ func TestClassifyControlPlaneError_TransportErrors(t *testing.T) {
 			retryable: true,
 		},
 		{
-			name:      "connection refused (real net.Error)",
-			err:       fmt.Errorf("POST: %w", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}),
+			name: "connection refused (real net.Error)",
+			err: fmt.Errorf(
+				"POST: %w",
+				&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+			),
 			wantCode:  codes.Unavailable,
 			retryable: true,
 		},

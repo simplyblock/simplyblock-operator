@@ -69,16 +69,19 @@ func writeTempFile(t *testing.T, content string) string {
 	if err != nil {
 		t.Fatalf("creating temp file: %v", err)
 	}
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 	if _, err := f.WriteString(content); err != nil {
 		t.Fatalf("writing temp file: %v", err)
 	}
-	f.Close()
+	_ = f.Close()
 	return f.Name()
 }
 
-const testSecretJSON = `{"clusters":[{"cluster_id":"test-cluster","cluster_endpoint":"http://localhost","cluster_secret":"static-secret"}]}`
-const testSecretNoCredJSON = `{"clusters":[{"cluster_id":"test-cluster","cluster_endpoint":"http://localhost","cluster_secret":""}]}`
+const testStaticSecret = "static-secret"
+
+const testSecretJSON = `{"clusters":[{"cluster_id":"test-cluster","cluster_endpoint":"http://localhost","cluster_secret":"static-secret"}]}` //nolint:lll // unwrappable string/log/signature
+
+const testSecretNoCredJSON = `{"clusters":[{"cluster_id":"test-cluster","cluster_endpoint":"http://localhost","cluster_secret":""}]}` //nolint:lll // unwrappable string/log/signature
 
 // TestCredentialAPITokenUsed verifies that when SPDKCSI_API_TOKEN_PATH points to a
 // file containing a valid token, that token is used as the credential instead
@@ -109,8 +112,8 @@ func TestCredentialClusterSecretFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if node.API.Credential != "static-secret" {
-		t.Errorf("expected cluster_secret %q, got %q", "static-secret", node.API.Credential)
+	if node.API.Credential != testStaticSecret {
+		t.Errorf("expected cluster_secret %q, got %q", testStaticSecret, node.API.Credential)
 	}
 }
 
@@ -177,8 +180,8 @@ func TestCredentialAPITokenFileUnreadableFallsBackToClusterSecret(t *testing.T) 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if node.API.Credential != "static-secret" {
-		t.Errorf("expected fallback to cluster_secret %q, got %q", "static-secret", node.API.Credential)
+	if node.API.Credential != testStaticSecret {
+		t.Errorf("expected fallback to cluster_secret %q, got %q", testStaticSecret, node.API.Credential)
 	}
 }
 
@@ -195,7 +198,7 @@ func TestCredentialAPITokenFileEmptyFallsBackToClusterSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if node.API.Credential != "static-secret" {
-		t.Errorf("expected fallback to cluster_secret %q, got %q", "static-secret", node.API.Credential)
+	if node.API.Credential != testStaticSecret {
+		t.Errorf("expected fallback to cluster_secret %q, got %q", testStaticSecret, node.API.Credential)
 	}
 }

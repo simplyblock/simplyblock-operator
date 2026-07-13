@@ -42,7 +42,13 @@ func poolUUIDFromPath(path string) string {
 }
 
 // newFindPoolTransport returns a roundTripFunc
-func newFindPoolTransport(pools []StoragePool, volumeInPool, lvolID string, unexpectedErrPools map[string]bool) roundTripFunc {
+//
+//nolint:unparam // test helper; lvolID kept for call-site readability
+func newFindPoolTransport(
+	pools []StoragePool,
+	volumeInPool, lvolID string,
+	unexpectedErrPools map[string]bool,
+) roundTripFunc {
 	return func(r *http.Request) (*http.Response, error) {
 		if strings.Contains(r.URL.Path, "/volumes/") {
 			poolUUID := poolUUIDFromPath(r.URL.Path)
@@ -83,7 +89,7 @@ func TestDoUsesBearerAuthForAPIV2(t *testing.T) {
 		return jsonResponse(), nil
 	})
 
-	if _, err := client.do(context.Background(), http.MethodGet, "/api/v2/clusters/cluster-id/storage-pools/", nil); err != nil {
+	if _, err := client.do(context.Background(), http.MethodGet, "/api/v2/clusters/cluster-id/storage-pools/", nil); err != nil { //nolint:lll // unwrappable string/log/signature
 		t.Fatalf("do: %v", err)
 	}
 	if gotAuth != "Bearer cluster-secret" {
@@ -123,7 +129,14 @@ func TestCloneVolumeUsesPostAndLocationHeader(t *testing.T) {
 		}, nil
 	})
 
-	cloneID, err := client.cloneVolume(context.Background(), "pool-id", "source-id", "clone name", "1073741824", "default/my-pvc")
+	cloneID, err := client.cloneVolume(
+		context.Background(),
+		"pool-id",
+		"source-id",
+		"clone name",
+		"1073741824",
+		"default/my-pvc",
+	)
 	if err != nil {
 		t.Fatalf("cloneVolume: %v", err)
 	}

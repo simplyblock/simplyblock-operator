@@ -80,7 +80,11 @@ func assertControlPlaneErrorMapping(
 	t.Run("connection_refused", func(t *testing.T) {
 		mock := newMockSBCLI()
 		mock.Close() // dead endpoint; the secret still captures its URL string
-		check(t, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}, invoke(t, context.Background(), mock))
+		check(
+			t,
+			&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")},
+			invoke(t, context.Background(), mock),
+		)
 	})
 }
 
@@ -107,12 +111,20 @@ func TestCreateSnapshot_ControlPlaneErrorMapping(t *testing.T) {
 		parsed, _ := parseVolumeID(src)
 		existingID := uuid.New().String()
 		mock.mu.Lock()
-		mock.snapshots[existingID] = &mockSnapshot{UUID: existingID, Name: snapName, VolUUID: parsed.lvolID, Size: 1 << 30}
+		mock.snapshots[existingID] = &mockSnapshot{
+			UUID:    existingID,
+			Name:    snapName,
+			VolUUID: parsed.lvolID,
+			Size:    1 << 30,
+		}
 		mock.strictSnapshotNameConflict = true
 		mock.mu.Unlock()
 		cs := newTestControllerServer(t, mock)
 
-		resp, err := cs.CreateSnapshot(context.Background(), &csi.CreateSnapshotRequest{SourceVolumeId: src, Name: snapName})
+		resp, err := cs.CreateSnapshot(
+			context.Background(),
+			&csi.CreateSnapshotRequest{SourceVolumeId: src, Name: snapName},
+		)
 		if err != nil {
 			t.Fatalf("409 with the same source must be idempotent success, got: %v", err)
 		}
@@ -128,12 +140,20 @@ func TestCreateSnapshot_ControlPlaneErrorMapping(t *testing.T) {
 		src := seedSnapshotSource(mock)
 		existingID := uuid.New().String()
 		mock.mu.Lock()
-		mock.snapshots[existingID] = &mockSnapshot{UUID: existingID, Name: snapName, VolUUID: "88888888-8888-8888-8888-888888888888", Size: 1 << 30}
+		mock.snapshots[existingID] = &mockSnapshot{
+			UUID:    existingID,
+			Name:    snapName,
+			VolUUID: "88888888-8888-8888-8888-888888888888",
+			Size:    1 << 30,
+		}
 		mock.strictSnapshotNameConflict = true
 		mock.mu.Unlock()
 		cs := newTestControllerServer(t, mock)
 
-		_, err := cs.CreateSnapshot(context.Background(), &csi.CreateSnapshotRequest{SourceVolumeId: src, Name: snapName})
+		_, err := cs.CreateSnapshot(
+			context.Background(),
+			&csi.CreateSnapshotRequest{SourceVolumeId: src, Name: snapName},
+		)
 		if got := status.Code(err); got != codes.AlreadyExists {
 			t.Fatalf("409 with a different source: got %s, want AlreadyExists (err: %v)", got, err)
 		}
@@ -258,7 +278,10 @@ func TestCreateSnapshot_NoAPICallBeforeMetadataResolved(t *testing.T) {
 		},
 		func(t *testing.T, ctx context.Context, m *mockSBCLI) error {
 			cs := newTestControllerServer(t, m)
-			_, err := cs.CreateSnapshot(ctx, &csi.CreateSnapshotRequest{SourceVolumeId: srcVolID, Name: "snap-ordering"})
+			_, err := cs.CreateSnapshot(
+				ctx,
+				&csi.CreateSnapshotRequest{SourceVolumeId: srcVolID, Name: "snap-ordering"},
+			)
 			return err
 		},
 		func(m *mockSBCLI) bool { m.mu.Lock(); defer m.mu.Unlock(); return len(m.snapshots) > 0 },

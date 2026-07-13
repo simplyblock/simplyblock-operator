@@ -56,6 +56,7 @@ type nodeServer struct {
 	guardian    *util.Guardian
 }
 
+//nolint:unparam // error return kept for constructor symmetry / future use
 func newNodeServer(d *csicommon.CSIDriver) (*nodeServer, error) {
 	ns := &nodeServer{
 		DefaultNodeServer: csicommon.NewDefaultNodeServer(d),
@@ -173,7 +174,10 @@ func (ns *nodeServer) buildAccessibleTopology(ctx context.Context) map[string]st
 	return segments
 }
 
-func (ns *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
+func (ns *nodeServer) NodeGetVolumeStats(
+	ctx context.Context,
+	req *csi.NodeGetVolumeStatsRequest,
+) (*csi.NodeGetVolumeStatsResponse, error) {
 	volID := req.GetVolumeId()
 	volumePath := req.GetVolumePath()
 
@@ -247,7 +251,10 @@ func (ns *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 	}, nil
 }
 
-func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+func (ns *nodeServer) NodeStageVolume(
+	ctx context.Context,
+	req *csi.NodeStageVolumeRequest,
+) (*csi.NodeStageVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
@@ -269,7 +276,7 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 			return &csi.NodeStageVolumeResponse{}, nil
 		}
 		klog.Warningf("volume %s already staged but its mount is dead; restaging", volumeID)
-		if err := ns.restageVolume(ctx, volumeID, stagingTargetPath, stagingParentPath, req.GetVolumeCapability()); err != nil {
+		if err := ns.restageVolume(ctx, volumeID, stagingTargetPath, stagingParentPath, req.GetVolumeCapability()); err != nil { //nolint:lll // unwrappable string/log/signature
 			return nil, status.Errorf(codes.Internal, "restage volume %s: %v", volumeID, err)
 		}
 		return &csi.NodeStageVolumeResponse{}, nil
@@ -344,7 +351,10 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
-func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+func (ns *nodeServer) NodeUnstageVolume(
+	ctx context.Context,
+	req *csi.NodeUnstageVolumeRequest,
+) (*csi.NodeUnstageVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
@@ -382,7 +392,10 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }
 
-func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+func (ns *nodeServer) NodePublishVolume(
+	ctx context.Context,
+	req *csi.NodePublishVolumeRequest,
+) (*csi.NodePublishVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
@@ -410,7 +423,10 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
-func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
+func (ns *nodeServer) NodeUnpublishVolume(
+	ctx context.Context,
+	req *csi.NodeUnpublishVolumeRequest,
+) (*csi.NodeUnpublishVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
@@ -428,7 +444,10 @@ func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
-func (ns *nodeServer) NodeGetCapabilities(_ context.Context, _ *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+func (ns *nodeServer) NodeGetCapabilities(
+	_ context.Context,
+	_ *csi.NodeGetCapabilitiesRequest,
+) (*csi.NodeGetCapabilitiesResponse, error) {
 	return &csi.NodeGetCapabilitiesResponse{
 		Capabilities: []*csi.NodeServiceCapability{
 			{
@@ -463,8 +482,11 @@ func (ns *nodeServer) NodeGetCapabilities(_ context.Context, _ *csi.NodeGetCapab
 	}, nil
 }
 
-func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
-	klog.Infof("NodeExpandVolume: called with args %+v", *req)
+func (ns *nodeServer) NodeExpandVolume(
+	ctx context.Context,
+	req *csi.NodeExpandVolumeRequest,
+) (*csi.NodeExpandVolumeResponse, error) {
+	klog.Infof("NodeExpandVolume: called with args %+v", req)
 
 	volumeID := req.GetVolumeId()
 	unlock := ns.volumeLocks.Lock(volumeID)
@@ -505,7 +527,12 @@ func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
 			return nil, status.Errorf(codes.Internal, "failed to resize volume %s: %v", volumeID, err)
 		}
 		if resized {
-			klog.Infof("Successfully resized volume %s (device: %s, mount path: %s)", volumeID, devicePath, volumeMountPath)
+			klog.Infof(
+				"Successfully resized volume %s (device: %s, mount path: %s)",
+				volumeID,
+				devicePath,
+				volumeMountPath,
+			)
 		} else {
 			klog.Warningf("Volume %s did not require resizing", volumeID)
 		}
@@ -534,8 +561,13 @@ func xfsStripeOptions(volumeContext map[string]string) []string {
 	case su == "" && sw == "":
 		su, sw = defaultXFSStripeUnit, defaultXFSStripeWidth
 	case su == "" || sw == "":
-		klog.Warningf("xfsStripeOptions: xfs_su and xfs_sw must both be set; got xfs_su=%q xfs_sw=%q, falling back to defaults su=%s,sw=%s",
-			su, sw, defaultXFSStripeUnit, defaultXFSStripeWidth)
+		klog.Warningf(
+			"xfsStripeOptions: xfs_su and xfs_sw must both be set; got xfs_su=%q xfs_sw=%q, falling back to defaults su=%s,sw=%s", //nolint:lll // unwrappable string/log/signature
+			su,
+			sw,
+			defaultXFSStripeUnit,
+			defaultXFSStripeWidth,
+		)
 		su, sw = defaultXFSStripeUnit, defaultXFSStripeWidth
 	}
 	if swVal, err := strconv.Atoi(sw); err != nil || swVal <= 0 {
@@ -548,9 +580,16 @@ func xfsStripeOptions(volumeContext map[string]string) []string {
 // must be idempotent
 //
 //nolint:cyclop // many cases in switch increases complexity
-func (ns *nodeServer) stageVolume(devicePath, stagingPath string, req *csi.NodeStageVolumeRequest, volumeContext map[string]string) error {
+func (ns *nodeServer) stageVolume(
+	devicePath, stagingPath string,
+	req *csi.NodeStageVolumeRequest,
+	volumeContext map[string]string,
+) error {
 	if req.GetVolumeCapability().GetBlock() != nil {
-		klog.Infof("NodeStageVolume: called for volume %s. Skipping staging since it is a block device.", req.GetVolumeId())
+		klog.Infof(
+			"NodeStageVolume: called for volume %s. Skipping staging since it is a block device.",
+			req.GetVolumeId(),
+		)
 		return nil
 	}
 
@@ -572,7 +611,14 @@ func (ns *nodeServer) stageVolume(devicePath, stagingPath string, req *csi.NodeS
 	klog.Infof("mount %s to %s, fstype: %s, flags: %v", devicePath, stagingPath, fsType, mntFlags)
 	klog.Infof("formatOptions %v", formatOptions)
 	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
-	err = mounter.FormatAndMountSensitiveWithFormatOptions(devicePath, stagingPath, fsType, mntFlags, nil, formatOptions)
+	err = mounter.FormatAndMountSensitiveWithFormatOptions(
+		devicePath,
+		stagingPath,
+		fsType,
+		mntFlags,
+		nil,
+		formatOptions,
+	)
 	if err != nil {
 		return err
 	}
@@ -583,7 +629,13 @@ func (ns *nodeServer) stageVolume(devicePath, stagingPath string, req *csi.NodeS
 			cmd := osexec.Command("tune2fs", "-m", reserved, devicePath)
 			output, err := cmd.CombinedOutput()
 			if err != nil {
-				klog.Errorf("Failed to apply tune2fs -m %s on %s: %v\nOutput: %s", reserved, devicePath, err, string(output))
+				klog.Errorf(
+					"Failed to apply tune2fs -m %s on %s: %v\nOutput: %s",
+					reserved,
+					devicePath,
+					err,
+					string(output),
+				)
 				return fmt.Errorf("tune2fs failed: %w", err)
 			}
 			klog.Infof("Applied tune2fs -m %s on %s", reserved, devicePath)
@@ -749,12 +801,20 @@ func deviceExists(path string) bool {
 // It force-unmounts the dead mount, reconnects the volume, and remounts the
 // EXISTING filesystem in place. It never reformats — the volume already holds
 // data. Filesystem (mount) volumes only; block volumes have no staging mount.
-func (ns *nodeServer) restageVolume(ctx context.Context, volumeID, stagingTargetPath, stagingParentPath string, volCap *csi.VolumeCapability) error {
+func (ns *nodeServer) restageVolume(
+	ctx context.Context,
+	volumeID, stagingTargetPath, stagingParentPath string,
+	volCap *csi.VolumeCapability,
+) error {
 	if volCap.GetMount() == nil {
 		klog.Warningf("restageVolume: volume %s is not a filesystem volume; skipping", volumeID)
 		return nil
 	}
-	klog.Warningf("restaging volume %s: staging mount %s is dead, reconnecting NVMe-oF and remounting", volumeID, stagingTargetPath)
+	klog.Warningf(
+		"restaging volume %s: staging mount %s is dead, reconnecting NVMe-oF and remounting",
+		volumeID,
+		stagingTargetPath,
+	)
 
 	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
 	if err != nil {
@@ -779,7 +839,7 @@ func (ns *nodeServer) restageVolume(ctx context.Context, volumeID, stagingTarget
 	}
 	// Plain Mount, not FormatAndMount: the volume already holds a filesystem and
 	// reformatting would destroy data.
-	if err := ns.mounter.Mount(devicePath, stagingTargetPath, fsTypeOrDefault(volCap), stagingMountFlags(volCap)); err != nil {
+	if err := ns.mounter.Mount(devicePath, stagingTargetPath, fsTypeOrDefault(volCap), stagingMountFlags(volCap)); err != nil { //nolint:lll // unwrappable string/log/signature
 		return fmt.Errorf("remount device %s at %s: %w", devicePath, stagingTargetPath, err)
 	}
 
@@ -816,7 +876,12 @@ func (ns *nodeServer) publishVolume(stagingPath string, req *csi.NodePublishVolu
 		stagingParentPath := req.GetStagingTargetPath()
 		volumeContext, err := util.LookupVolumeContext(stagingParentPath)
 		if err != nil {
-			return status.Errorf(codes.Internal, "failed to retrieve volume context for volume %s: %v", req.GetVolumeId(), err)
+			return status.Errorf(
+				codes.Internal,
+				"failed to retrieve volume context for volume %s: %v",
+				req.GetVolumeId(),
+				err,
+			)
 		}
 
 		devicePath, ok := volumeContext["devicePath"]
@@ -972,7 +1037,7 @@ func ioctlBlkGetSize64(path string) (uint64, error) {
 
 	var size uint64
 	_, _, errno := unix.Syscall(
-		unix.SYS_IOCTL,
+		unix.SYS_IOCTL, //nolint:staticcheck // SA1019: Linux target; direct ioctl syscall is intended
 		f.Fd(),
 		uintptr(blkGetSize64),
 		uintptr(unsafe.Pointer(&size)),

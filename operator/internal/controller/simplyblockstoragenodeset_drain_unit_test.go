@@ -49,19 +49,19 @@ func newDrainReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetR
 	}
 }
 
-func newDrainSN(nodeUUID, subPhase, state string) *simplyblockv1alpha1.StorageNodeSet { //nolint:unparam
+func newDrainSN(subPhase, state string) *simplyblockv1alpha1.StorageNodeSet {
 	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-drain", Namespace: drainTestNS},
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
 			ClusterName: drainTestCluster,
 			Action:      utils.NodeActionRemove,
-			NodeUUID:    nodeUUID,
+			NodeUUID:    drainTestNodeUUID,
 		},
 	}
 	if subPhase != "" || state != "" {
 		sn.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
 			Action:   utils.NodeActionRemove,
-			NodeUUID: nodeUUID,
+			NodeUUID: drainTestNodeUUID,
 			State:    state,
 			SubPhase: subPhase,
 		}
@@ -72,7 +72,7 @@ func newDrainSN(nodeUUID, subPhase, state string) *simplyblockv1alpha1.StorageNo
 // ── performDrainAndRemove: terminal state early return ────────────────────────
 
 func TestDrainSkipsWhenAlreadySuccess(t *testing.T) {
-	sn := newDrainSN(drainTestNodeUUID, "", utils.ActionStateSuccess)
+	sn := newDrainSN("", utils.ActionStateSuccess)
 	r := newDrainReconciler(t, sn)
 
 	res, err := r.performDrainAndRemove(context.Background(), webapi.NewClient("http://127.0.0.1:1"), drainTestClusterUUID, sn)
@@ -85,7 +85,7 @@ func TestDrainSkipsWhenAlreadySuccess(t *testing.T) {
 }
 
 func TestDrainSkipsWhenAlreadyFailed(t *testing.T) {
-	sn := newDrainSN(drainTestNodeUUID, "", utils.ActionStateFailed)
+	sn := newDrainSN("", utils.ActionStateFailed)
 	r := newDrainReconciler(t, sn)
 
 	res, err := r.performDrainAndRemove(context.Background(), webapi.NewClient("http://127.0.0.1:1"), drainTestClusterUUID, sn)
@@ -100,7 +100,7 @@ func TestDrainSkipsWhenAlreadyFailed(t *testing.T) {
 func TestDrainSkipsSuccessEvenWhenSubPhaseIsEmpty(t *testing.T) {
 	// Regression: stale reconcile reads SubPhase="" after success and must not
 	// re-initialize the drain (which would restart it on an already-removed node).
-	sn := newDrainSN(drainTestNodeUUID, "", utils.ActionStateSuccess)
+	sn := newDrainSN("", utils.ActionStateSuccess)
 	r := newDrainReconciler(t, sn)
 
 	// Run twice — second call must also return immediately without API calls.
@@ -203,13 +203,13 @@ func TestRoundRobinSkipsOfflineNodes(t *testing.T) {
 
 // ── matchVolumesToPVs ─────────────────────────────────────────────────────────
 
-func newPV(name, volumeUUID, clusterUUID, poolUUID string) *corev1.PersistentVolume { //nolint:unparam
+func newPV(name, volumeUUID string) *corev1.PersistentVolume {
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 	}
 	pv.Spec.CSI = &corev1.CSIPersistentVolumeSource{
 		Driver:       utils.CSIProvisioner,
-		VolumeHandle: clusterUUID + ":" + poolUUID + ":" + volumeUUID,
+		VolumeHandle: drainTestClusterUUID + ":pool-1:" + volumeUUID,
 	}
 	pv.Spec.ClaimRef = &corev1.ObjectReference{
 		Namespace: drainTestNS,
@@ -218,9 +218,9 @@ func newPV(name, volumeUUID, clusterUUID, poolUUID string) *corev1.PersistentVol
 	return pv
 }
 
-func newPVC(name, ns string, pinned bool) *corev1.PersistentVolumeClaim { //nolint:unparam
+func newPVC(name string, pinned bool) *corev1.PersistentVolumeClaim {
 	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: drainTestNS},
 	}
 	if pinned {
 		pvc.Annotations = map[string]string{
@@ -231,8 +231,8 @@ func newPVC(name, ns string, pinned bool) *corev1.PersistentVolumeClaim { //noli
 }
 
 func TestMatchVolumesToPVs_PVManaged(t *testing.T) {
-	pv := newPV("pv-a", "vol-1111", drainTestClusterUUID, "pool-1")
-	pvc := newPVC("pv-a-pvc", drainTestNS, false)
+	pv := newPV("pv-a", "vol-1111")
+	pvc := newPVC("pv-a-pvc", false)
 	r := newDrainReconciler(t, pv, pvc)
 
 	vols := []webapi.VolumeInfo{{UUID: "vol-1111", Name: "pvc-something"}}
@@ -252,8 +252,8 @@ func TestMatchVolumesToPVs_PVManaged(t *testing.T) {
 }
 
 func TestMatchVolumesToPVs_Pinned(t *testing.T) {
-	pv := newPV("pv-b", "vol-2222", drainTestClusterUUID, "pool-1")
-	pvc := newPVC("pv-b-pvc", drainTestNS, true) // pinned
+	pv := newPV("pv-b", "vol-2222")
+	pvc := newPVC("pv-b-pvc", true) // pinned
 	r := newDrainReconciler(t, pv, pvc)
 
 	vols := []webapi.VolumeInfo{{UUID: "vol-2222", Name: "pvc-something"}}
@@ -323,11 +323,11 @@ func TestDrainValidateBothPinnedAndUnmanagedSurfacedTogether(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: drainTestCluster, Namespace: drainTestNS},
 		Status:     simplyblockv1alpha1.StorageClusterStatus{Rebalancing: &rebalancing},
 	}
-	pv := newPV("pv-pin", "vol-pinned", drainTestClusterUUID, "pool-1")
-	pvc := newPVC("pv-pin-pvc", drainTestNS, true) // pinned annotation set
+	pv := newPV("pv-pin", "vol-pinned")
+	pvc := newPVC("pv-pin-pvc", true) // pinned annotation set
 
 	fakeRecorder := record.NewFakeRecorder(8)
-	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseValidating, utils.ActionStateRunning)
+	sn := newDrainSN(drainSubPhaseValidating, utils.ActionStateRunning)
 	sn.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
 		Action:   utils.NodeActionRemove,
 		NodeUUID: drainTestNodeUUID,
@@ -449,7 +449,7 @@ func newValidateSetup(
 		ObjectMeta: metav1.ObjectMeta{Name: drainTestCluster, Namespace: drainTestNS},
 		Status:     simplyblockv1alpha1.StorageClusterStatus{Rebalancing: &rebalancing},
 	}
-	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseValidating, utils.ActionStateRunning)
+	sn := newDrainSN(drainSubPhaseValidating, utils.ActionStateRunning)
 	sn.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
 		Action:   utils.NodeActionRemove,
 		NodeUUID: drainTestNodeUUID,
@@ -484,8 +484,8 @@ func collectEvents(rec *record.FakeRecorder) map[string]int {
 func TestDrainValidatePinnedVolumeEmitsEventAndBlocks(t *testing.T) {
 	// User sees: PinnedVolumeBlocking event; status message mentions "pinned";
 	// drain does not advance past Validating.
-	pv := newPV("pv-x", "vol-pinned", drainTestClusterUUID, "pool-1")
-	pvc := newPVC("pv-x-pvc", drainTestNS, true)
+	pv := newPV("pv-x", "vol-pinned")
+	pvc := newPVC("pv-x-pvc", true)
 	r, rec, mock, sn := newValidateSetup(t,
 		`[{"id":"vol-pinned","name":"pvc-x","storage_node_id":"`+drainTestNodeUUID+`"}]`,
 		pv, pvc,
@@ -626,7 +626,7 @@ func TestDrainValidateSystemOnlyNodeAdvancesToSuspending(t *testing.T) {
 func TestDrainMigrateDoesNotRecreateExistingCRs(t *testing.T) {
 	// Existing VolumeMigration CR for a drain — operator restart must not
 	// create a duplicate with the same drain label.
-	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseMigrating, utils.ActionStateRunning)
+	sn := newDrainSN(drainSubPhaseMigrating, utils.ActionStateRunning)
 	existingVM := &simplyblockv1alpha1.VolumeMigration{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "drain-existing-pvc-a",
@@ -669,7 +669,7 @@ func TestDrainMigrateFailedCRDeletedAndRetriedWithNewTarget(t *testing.T) {
 	// Any VolumeMigration failure deletes the Failed CR and requeues so
 	// createMissingVolumeMigrations can recreate it with a fresh target.
 	// The node stays suspended — resumeAndFail is NOT called.
-	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseMigrating, utils.ActionStateRunning)
+	sn := newDrainSN(drainSubPhaseMigrating, utils.ActionStateRunning)
 	failedVM := &simplyblockv1alpha1.VolumeMigration{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "drain-failed-pvc-a",
@@ -735,7 +735,7 @@ func TestDrainMigrateFailedCRDeletedWhenClusterPaused(t *testing.T) {
 			Rebalancing: &rebalancing,
 		},
 	}
-	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseMigrating, utils.ActionStateRunning)
+	sn := newDrainSN(drainSubPhaseMigrating, utils.ActionStateRunning)
 	sn.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
 		Action:   utils.NodeActionRemove,
 		NodeUUID: drainTestNodeUUID,
@@ -864,7 +864,7 @@ func TestDrainCancellationDeletesInFlightVolumeMigrationCRs(t *testing.T) {
 	// deleted so a subsequent drain starts fresh and emits MigrationCreated events.
 	// Without this, the re-applied drain silently reuses the old CRs and the user
 	// sees no indication that migration restarted.
-	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseMigrating, utils.ActionStateRunning)
+	sn := newDrainSN(drainSubPhaseMigrating, utils.ActionStateRunning)
 	sn.Spec.Action = "" // user cleared the action
 	sn.Spec.NodeUUID = ""
 	inFlightVM := &simplyblockv1alpha1.VolumeMigration{
@@ -919,7 +919,7 @@ func TestDrainCancellationDeletesInFlightVolumeMigrationCRs(t *testing.T) {
 
 func TestDrainCancellationSkipsWhenActionStillActive(t *testing.T) {
 	// If the live CR still has action=remove, a stale reconcile must not resume.
-	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseMigrating, utils.ActionStateRunning)
+	sn := newDrainSN(drainSubPhaseMigrating, utils.ActionStateRunning)
 	r := newDrainReconciler(t, sn)
 
 	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
@@ -942,7 +942,7 @@ func TestDrainValidateBlocksWhenClusterRebalancing(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: drainTestCluster, Namespace: drainTestNS},
 		Status:     simplyblockv1alpha1.StorageClusterStatus{Rebalancing: &rebalancing},
 	}
-	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseValidating, utils.ActionStateRunning)
+	sn := newDrainSN(drainSubPhaseValidating, utils.ActionStateRunning)
 	sn.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
 		Action:   utils.NodeActionRemove,
 		NodeUUID: drainTestNodeUUID,
@@ -984,7 +984,7 @@ func TestDrainValidateBlocksWhenClusterRebalancing(t *testing.T) {
 // and a StorageNodeSet in the provided sub-phase, for drainClusterPauseCheck tests.
 func newPauseCheckReconciler(t *testing.T, cluster *simplyblockv1alpha1.StorageCluster, subPhase string) (*StorageNodeSetReconciler, *simplyblockv1alpha1.StorageNodeSet) {
 	t.Helper()
-	sn := newDrainSN(drainTestNodeUUID, subPhase, utils.ActionStateRunning)
+	sn := newDrainSN(subPhase, utils.ActionStateRunning)
 	sn.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
 		Action:   utils.NodeActionRemove,
 		NodeUUID: drainTestNodeUUID,
@@ -1127,7 +1127,7 @@ func TestDrainContinuesWhenClusterActiveAndNotRebalancing(t *testing.T) {
 func TestRapidActionToggleDoesNotLeakState(t *testing.T) {
 	// Set action=remove, cancel immediately (Validating phase, before any suspend).
 	// After cancel the ActionStatus must be nil so re-applying remove starts fresh.
-	sn := newDrainSN(drainTestNodeUUID, drainSubPhaseValidating, utils.ActionStateRunning)
+	sn := newDrainSN(drainSubPhaseValidating, utils.ActionStateRunning)
 	// Simulate user clearing spec.action.
 	sn.Spec.Action = ""
 	sn.Spec.NodeUUID = ""

@@ -27,7 +27,10 @@ type stubNodeServer struct {
 	*csicommon.DefaultNodeServer
 }
 
-func (s *stubNodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+func (s *stubNodeServer) NodeStageVolume(
+	_ context.Context,
+	req *csi.NodeStageVolumeRequest,
+) (*csi.NodeStageVolumeResponse, error) {
 	if req.GetVolumeId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
 	}
@@ -40,7 +43,10 @@ func (s *stubNodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVo
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
-func (s *stubNodeServer) NodeUnstageVolume(_ context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+func (s *stubNodeServer) NodeUnstageVolume(
+	_ context.Context,
+	req *csi.NodeUnstageVolumeRequest,
+) (*csi.NodeUnstageVolumeResponse, error) {
 	if req.GetVolumeId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
 	}
@@ -50,7 +56,10 @@ func (s *stubNodeServer) NodeUnstageVolume(_ context.Context, req *csi.NodeUnsta
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }
 
-func (s *stubNodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+func (s *stubNodeServer) NodePublishVolume(
+	_ context.Context,
+	req *csi.NodePublishVolumeRequest,
+) (*csi.NodePublishVolumeResponse, error) {
 	if req.GetVolumeId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
 	}
@@ -67,7 +76,10 @@ func (s *stubNodeServer) NodePublishVolume(_ context.Context, req *csi.NodePubli
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
-func (s *stubNodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
+func (s *stubNodeServer) NodeUnpublishVolume(
+	_ context.Context,
+	req *csi.NodeUnpublishVolumeRequest,
+) (*csi.NodeUnpublishVolumeResponse, error) {
 	if req.GetVolumeId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
 	}

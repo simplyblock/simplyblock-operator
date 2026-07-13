@@ -22,7 +22,7 @@ var _ = ginkgo.Describe("SPDKCSI-MULTICLUSTER", func() {
 	f := newTestFramework("spdkcsi-multicluster")
 
 	ginkgo.BeforeEach(func() {
-		if os.Getenv("MULTI_CLUSTER_E2E") != "true" {
+		if os.Getenv("MULTI_CLUSTER_E2E") != trueStr {
 			ginkgo.Skip("MULTI_CLUSTER_E2E=true is required for multi-cluster E2E tests")
 		}
 	})
@@ -36,7 +36,9 @@ var _ = ginkgo.Describe("SPDKCSI-MULTICLUSTER", func() {
 		storageClassNames := envList("MULTI_CLUSTER_STORAGE_CLASS_NAMES", nil)
 
 		if len(clusterRefs) != 2 || len(zones) != 2 {
-			ginkgo.Fail("MULTI_CLUSTER_REFS and MULTI_CLUSTER_ZONES must each contain exactly two comma-separated values")
+			ginkgo.Fail(
+				"MULTI_CLUSTER_REFS and MULTI_CLUSTER_ZONES must each contain exactly two comma-separated values",
+			)
 		}
 		if len(storageClassNames) == 0 {
 			storageClassNames = deriveMultiClusterStorageClassNames(clusterRefs, poolName)
@@ -150,7 +152,13 @@ func waitForStorageClusterUUID(namespace, clusterName string, timeout time.Durat
 			return uuid != "", nil
 		})
 	if err != nil {
-		return "", fmt.Errorf("StorageCluster %s/%s uuid not available within %s: %w", namespace, clusterName, timeout, err)
+		return "", fmt.Errorf(
+			"StorageCluster %s/%s uuid not available within %s: %w",
+			namespace,
+			clusterName,
+			timeout,
+			err,
+		)
 	}
 	return uuid, nil
 }
@@ -201,7 +209,11 @@ func createTopologyPinnedPod(c kubernetes.Interface, namespace, podName, pvcClai
 	return err
 }
 
-func waitForPVCBound(c kubernetes.Interface, ns, pvcName string, timeout time.Duration) (*corev1.PersistentVolume, error) {
+func waitForPVCBound(
+	c kubernetes.Interface,
+	ns, pvcName string,
+	timeout time.Duration,
+) (*corev1.PersistentVolume, error) {
 	var pv *corev1.PersistentVolume
 	err := wait.PollUntilContextTimeout(context.Background(), 3*time.Second, timeout, true,
 		func(ctx context.Context) (bool, error) {
