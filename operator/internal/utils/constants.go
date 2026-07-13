@@ -14,6 +14,13 @@ const (
 	ClusterActionRestart     = "restart"
 	ClusterActionNodeRecycle = "node-recycle"
 
+	// StorageNode action names.
+	NodeActionShutdown = "shutdown"
+	NodeActionRestart  = "restart"
+	NodeActionSuspend  = "suspend"
+	NodeActionResume   = "resume"
+	NodeActionRemove   = "remove"
+
 	// NodeRecycle per-node phases
 	NodeRecyclePhaseSnodeRefresh     = "snode-refresh"
 	NodeRecyclePhaseSnodeRefreshWait = "snode-refresh-wait"
@@ -29,12 +36,14 @@ const (
 
 	ClusterStatusActive    = "active"
 	ClusterStatusSuspended = "suspended"
+	ClusterStatusUnready   = "unready"
 
 	ClusterPhaseInitializing = "Initializing"
 	ClusterPhaseReady        = "Ready"
 
 	NodeStatusOnline      = "online"
 	NodeStatusOffline     = "offline"
+	NodeStatusSuspended   = "suspended"
 	NodeStatusInShutdown  = "in_shutdown"
 	NodeStatusInRestart   = "in_restart"
 	NodeStatusUnreachable = "unreachable"

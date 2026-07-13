@@ -112,6 +112,28 @@ const (
 	MigrationStatusCancelled = "cancelled"
 )
 
+// Migration phase values reported in MigrationDTO.Phase. The backend advances a
+// migration through these phases; only MigrationPhasePreCreated accepts a
+// ContinueMigration call. Once past pre_created, ContinueMigration is rejected,
+// so callers use the phase to make the continue step idempotent across retries.
+const (
+	// MigrationPhasePreCreated is the initial phase after CreateMigration: the
+	// target infrastructure exists but the data migration has not been started.
+	// ContinueMigration is only valid in this phase.
+	MigrationPhasePreCreated = "pre_created"
+)
+
+// MigrationIsTerminal reports whether a migration status is terminal
+// (done, failed, or cancelled) and therefore no longer in flight.
+func MigrationIsTerminal(status string) bool {
+	switch status {
+	case MigrationStatusDone, MigrationStatusFailed, MigrationStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 // GetStoragePools lists all storage pools for the given cluster.
 func (c *Client) GetStoragePools(
 	ctx context.Context,

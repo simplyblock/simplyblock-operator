@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -42,7 +43,18 @@ type VolumeMigrationReconciler struct {
 	Recorder   record.EventRecorder
 	apiClient  *webapi.Client
 	coreClient corev1client.CoreV1Interface
+	// apiReader is an uncached reader (mgr.GetAPIReader) used for the
+	// "is this volume actively consumed?" decision. A stale informer cache could
+	// otherwise miss a genuinely-running consumer and cause validation to be
+	// skipped for a live volume, breaking its I/O path after cutover.
+	apiReader client.Reader
 }
+
+// errConsumerNotReady indicates that a pod references the volume's PVC but is not
+// Running yet (e.g. Pending or scheduling). A consumer is coming, so validation
+// must NOT be skipped: the caller should wait and validate on the consumer's node
+// once it is Running, rather than continuing the migration unvalidated.
+var errConsumerNotReady = errors.New("volume has a consumer that is not running yet")
 
 func (r *VolumeMigrationReconciler) Reconcile(
 	ctx context.Context,
@@ -181,19 +193,28 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 	// Resolve the k8s node name of the worker running the pod that uses the PVC.
 	// NVMe connections must be established from that node, not the storage target node.
 	hostname, err := r.resolveConsumerNodeName(ctx, vm.Spec.PVName)
-	if err != nil {
+	switch {
+	case errors.Is(err, errConsumerNotReady):
+		// A consumer pod exists but is not Running yet. Do not skip validation:
+		// wait so we can connect and validate the new paths on the consumer's
+		// node once it is Running.
+		log.Info("Consumer pod not Running yet; waiting before NVMe path validation",
+			"pv", vm.Spec.PVName, "migration", vm.Status.MigrationUUID)
+		r.Recorder.Eventf(vm, corev1.EventTypeNormal, "WaitingForConsumer",
+			"PV %s has a consumer pod that is not Running yet; waiting before validation", vm.Spec.PVName)
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	case err != nil:
 		// A genuine lookup error (PV get / pod list failed) — retry later.
 		log.Error(err, "Cannot resolve consumer node name; requeuing")
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
-	}
-	if hostname == nil {
-		// No pod is currently consuming the volume (the PV is unbound, or no
-		// running pod uses it), so there are no NVMe I/O paths to validate.
+	case hostname == nil:
+		// The volume has no consumer at all (the PV is unbound, or no pod
+		// references the PVC), so there are no NVMe I/O paths to validate.
 		// Skip validation and continue the migration directly.
-		log.Info("No running consumer for volume; skipping NVMe path validation",
+		log.Info("No consumer for volume; skipping NVMe path validation",
 			"pv", vm.Spec.PVName, "migration", vm.Status.MigrationUUID)
 		r.Recorder.Eventf(vm, corev1.EventTypeNormal, "ValidationSkipped",
-			"No running consumer for PV %s; skipping NVMe path validation", vm.Spec.PVName)
+			"No consumer for PV %s; skipping NVMe path validation", vm.Spec.PVName)
 		return r.performMigration(ctx, vm)
 	}
 
@@ -277,17 +298,54 @@ func (r *VolumeMigrationReconciler) pollValidationJob(
 	return r.performMigration(ctx, vm)
 }
 
-// performMigration calls ContinueMigration on the backend and advances
-// the VolumeMigration to the Running phase. Used both after a successful
-// validation job and when validation is skipped (no running consumer). On
-// ContinueMigration failure the migration is cancelled and marked Failed.
+// performMigration advances a validated (or validation-skipped) migration to
+// the Running phase. Used both after a successful validation job and when
+// validation is skipped (no running consumer).
+//
+// The backend's ContinueMigration is not idempotent: it only accepts a migration
+// in phase "pre_created" and rejects any later call. If a prior reconcile already
+// continued the migration but crashed before persisting phase=Running, blindly
+// re-issuing ContinueMigration would fail and — with the old logic — cancel a
+// perfectly healthy, running migration. To keep the transition crash-safe we
+// first read the backend phase and only continue when it hasn't advanced yet.
+// Per-object reconcile serialization (a key is processed by at most one worker at
+// a time) makes the read-then-continue window race-free within the operator.
 func (r *VolumeMigrationReconciler) performMigration(
 	ctx context.Context,
 	vm *simplyblockv1alpha1.VolumeMigration,
 ) (ctrl.Result, error) {
-	if err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID); err != nil {
-		_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID)
-		return r.setFailed(ctx, vm, fmt.Sprintf("ContinueMigration: %v", err))
+	log := logf.FromContext(ctx)
+
+	m, err := r.apiClient.GetMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID)
+	if err != nil {
+		// Transient read failure: requeue without failing or cancelling.
+		log.Error(err, "Cannot read migration before continue; requeuing", "migration", vm.Status.MigrationUUID)
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+
+	switch {
+	case webapi.MigrationIsTerminal(m.Status):
+		// The migration reached a terminal state out-of-band. Do not cancel or
+		// re-continue; advance to Running and let reconcileRunning classify it.
+		log.Info("Migration already terminal before continue; advancing to Running for classification",
+			"migration", vm.Status.MigrationUUID, "status", m.Status)
+	case m.Phase == webapi.MigrationPhasePreCreated:
+		if err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID); err != nil {
+			// The continue may have taken effect despite the error. Only a
+			// migration still stuck in pre_created is a genuine start failure
+			// worth cancelling; anything else means it already advanced.
+			if m2, gerr := r.apiClient.GetMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID); gerr == nil && m2.Phase == webapi.MigrationPhasePreCreated {
+				_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID)
+				return r.setFailed(ctx, vm, fmt.Sprintf("ContinueMigration: %v", err))
+			}
+			log.Info("ContinueMigration errored but migration has advanced past pre_created; treating as continued",
+				"migration", vm.Status.MigrationUUID, "error", err.Error())
+		}
+	default:
+		// Already past pre_created: a prior reconcile continued the migration but
+		// did not persist Running. Skip the (now-invalid) continue call.
+		log.Info("Migration already continued (past pre_created); skipping ContinueMigration",
+			"migration", vm.Status.MigrationUUID, "phase", m.Phase)
 	}
 
 	patch := client.MergeFrom(vm.DeepCopy())
@@ -395,16 +453,22 @@ func safeNodeID(nodeUUID string) string {
 // NVMe connections must be established from that node so that the consuming
 // pod can reach the target subsystem after migration.
 //
-// It returns nil, nil when the volume is not bound or no running pod uses it:
-// there is no consumer whose I/O paths need validating, so callers treat this as
-// "nothing to validate" rather than an error. A non-nil error is always a
-// genuine, retryable failure (PV get or pod list failed).
+// It distinguishes three consumer states so the caller can act safely:
+//   - (&node, nil): a Running consumer pod was found; its node name is returned.
+//   - (nil, errConsumerNotReady): a pod references the PVC but is not Running yet
+//     — a consumer is coming, so the caller must wait, not skip validation.
+//   - (nil, nil): the PVC is unbound or no pod references it at all — genuinely
+//     idle, so there is nothing to validate and the caller can skip validation.
+//
+// Any other non-nil error is a genuine, retryable failure (PV get or pod list
+// failed). Reads go through the uncached apiReader: a stale cache could otherwise
+// miss a running consumer and cause validation to be skipped for a live volume.
 func (r *VolumeMigrationReconciler) resolveConsumerNodeName(
 	ctx context.Context,
 	pvName string,
 ) (*string, error) {
 	pv := &corev1.PersistentVolume{}
-	if err := r.Get(ctx, types.NamespacedName{Name: pvName}, pv); err != nil {
+	if err := r.apiReader.Get(ctx, types.NamespacedName{Name: pvName}, pv); err != nil {
 		return nil, fmt.Errorf("get PV %q: %w", pvName, err)
 	}
 	if pv.Spec.ClaimRef == nil {
@@ -413,20 +477,37 @@ func (r *VolumeMigrationReconciler) resolveConsumerNodeName(
 	pvcName := pv.Spec.ClaimRef.Name
 	pvcNamespace := pv.Spec.ClaimRef.Namespace
 
+	// to ensure we don't miss a running consumer, we read from the uncached apiReader
 	var podList corev1.PodList
-	if err := r.List(ctx, &podList, client.InNamespace(pvcNamespace)); err != nil {
+	if err := r.apiReader.List(ctx, &podList, client.InNamespace(pvcNamespace)); err != nil {
 		return nil, fmt.Errorf("list pods in namespace %q: %w", pvcNamespace, err)
 	}
+
+	// referenced tracks whether any pod (regardless of phase) consumes the PVC,
+	// so we can tell "workload stopped" (skip) apart from "consumer not ready yet"
+	// (wait).
+	referenced := false
 	for _, pod := range podList.Items {
-		if pod.Spec.NodeName == "" || pod.Status.Phase != corev1.PodRunning {
-			continue
-		}
+		usesPVC := false
 		for _, vol := range pod.Spec.Volumes {
 			if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == pvcName {
-				return &pod.Spec.NodeName, nil
+				usesPVC = true
+				break
 			}
 		}
+		if !usesPVC {
+			continue
+		}
+		referenced = true
+		if pod.Spec.NodeName != "" && pod.Status.Phase == corev1.PodRunning {
+			return &pod.Spec.NodeName, nil
+		}
 	}
+	if referenced {
+		return nil, fmt.Errorf("consumer pod for PVC %q/%q is not running yet: %w", pvcNamespace, pvcName, errConsumerNotReady)
+	}
+	// No pod references the PVC at all (workload stopped / never scheduled): the
+	// volume is genuinely idle, so signal "nothing to validate" with (nil, nil).
 	return nil, nil
 }
 
@@ -530,6 +611,9 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 		vm.Status.SnapsTotal = result.Migration.SnapsTotal
 		vm.Status.SnapsMigrated = result.Migration.SnapsMigrated
 		if err := r.Status().Patch(ctx, vm, patch); err != nil {
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("patch progress: %w", err)
 		}
 	}
@@ -629,6 +713,8 @@ func (r *VolumeMigrationReconciler) SetupWithManager(
 		return fmt.Errorf("create k8s client for log collection: %w", err)
 	}
 	r.coreClient = k8s.CoreV1()
+	// Uncached reader for the consumer-detection decision (see resolveConsumerNodeName).
+	r.apiReader = mgr.GetAPIReader()
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.VolumeMigration{}).
 		Owns(&batchv1.Job{}).

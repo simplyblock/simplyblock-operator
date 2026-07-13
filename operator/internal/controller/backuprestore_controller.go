@@ -50,6 +50,7 @@ const (
 const (
 	eventReasonRestoreBackupNotFound     = "RestoreBackupNotFound"
 	eventReasonRestoreBackupNotReady     = "RestoreBackupNotReady"
+	eventReasonRestoreBackupFailed       = "RestoreBackupFailed"
 	eventReasonRestoreClusterLookupError = "RestoreClusterLookupError"
 	eventReasonRestorePoolLookupError    = "RestorePoolLookupError"
 	eventReasonRestoreAPIFailed          = "RestoreAPIFailed"
@@ -210,6 +211,20 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 		}
 		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreBackupNotFound, "%s", msg)
 		return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
+	}
+
+	// Mark the BackupRestore as Failed if the StorageBackup is in terminal state Failed.
+	if backup.Status.Phase == simplyblockv1alpha1.BackupPhaseFailed {
+		msg := fmt.Sprintf("StorageBackup %q failed and cannot be restored: %s",
+			backup.Name, backup.Status.Message)
+		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
+			s.Phase = simplyblockv1alpha1.RestorePhaseFailed
+			s.Message = msg
+		}); patchErr != nil {
+			return ctrl.Result{}, true, patchErr
+		}
+		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreBackupFailed, "%s", msg)
+		return ctrl.Result{}, true, nil
 	}
 
 	if backup.Status.Phase != simplyblockv1alpha1.BackupPhaseDone {

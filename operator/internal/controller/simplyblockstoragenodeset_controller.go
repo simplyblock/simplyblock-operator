@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -39,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -59,6 +61,10 @@ type StorageNodeSetReconciler struct {
 	TLSProvider      string
 	TLSMutualEnabled bool
 	Recorder         record.EventRecorder
+	// systemVolumeFilterCache caches compiled system-volume filter regexes keyed
+	// by the pattern string. Compilation errors are surfaced on first use and the
+	// CR is rejected, so subsequent reconciles reuse the valid compiled regex.
+	systemVolumeFilterCache sync.Map
 }
 
 type SNODEAPIResponse struct {
@@ -114,6 +120,9 @@ var (
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;update;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -159,7 +168,30 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	apiClient := webapi.NewClient()
 
 	if snCR.Spec.Action != "" {
+		// spdk-proxy EndpointSlice maintenance is pod-driven and must keep
+		// running during actions. The restart/migration flow blocks on the
+		// target worker's spdk-proxy DNS name
+		// (<node>.simplyblock-spdk-proxy.<ns>.svc) resolving once the control
+		// plane (re)creates its SPDK pod there. That name is only published by
+		// reconcileSpdkProxyEndpointSlices, which the early return below would
+		// otherwise skip for the entire duration of the action — so the pod
+		// comes up but its DNS entry never appears and the migration deadlocks.
+		// Reconcile the slices here so the entry is (re)built as soon as the new
+		// spdk-proxy pod becomes Ready; pod events and the action's own requeues
+		// re-drive this path until it converges.
+		if err := r.reconcileSpdkProxyEndpointSlices(ctx, snCR); err != nil {
+			log.Error(err, "failed to reconcile spdk-proxy EndpointSlices during action")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 		return r.reconcileAction(ctx, snCR, clusterUUID)
+	}
+
+	// If the user cleared the remove action while a drain was in progress, resume the node.
+	if snCR.Status.ActionStatus != nil &&
+		snCR.Status.ActionStatus.Action == utils.NodeActionRemove &&
+		snCR.Status.ActionStatus.SubPhase != "" &&
+		snCR.Status.ActionStatus.State == utils.ActionStateRunning {
+		return r.drainHandleCancellation(ctx, webapi.NewClient(), clusterUUID, snCR)
 	}
 
 	if err := r.labelWorkerNodes(ctx, snCR); err != nil {
@@ -205,6 +237,18 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	if err := r.syncTrackedNodesStatus(ctx, apiClient, clusterUUID, snCR); err != nil {
 		log.Error(err, "Failed to sync storage node status")
+	}
+
+	// On every reconcile, check whether the cluster is still unready and if
+	// the activation conditions are now met. This catches cases where the
+	// operator restarted after nodes came online but before activation fired,
+	// or where the activation trigger was missed during concurrent reconciles.
+	if clusterCR, err := utils.ResolveClusterCR(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName); err == nil {
+		if clusterCR.Status.Status == utils.ClusterStatusUnready {
+			if activateErr := maybeActivateCluster(ctx, apiClient, clusterUUID, snCR, r); activateErr != nil {
+				log.Info("Activation conditions not yet met", "reason", activateErr.Error())
+			}
+		}
 	}
 
 	hasTracked := false
@@ -338,7 +382,7 @@ func (r *StorageNodeSetReconciler) postStorageNodeSet(
 	log := logf.FromContext(ctx)
 
 	if err := checkNodeInfoReachable(ctx, nodeName, snCR.Namespace, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
-		log.Info("Storage node API not reachable yet, requeueing",
+		log.V(1).Info("Storage node API not reachable yet, requeueing",
 			"node", nodeName,
 			"ip", ip,
 			"error", err.Error(),
@@ -417,7 +461,22 @@ func (r *StorageNodeSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.spdkProxyPodToStorageNodeSetRequests),
-			builder.WithPredicates(predicate.NewPredicateFuncs(isSpdkProxyPod)),
+			builder.WithPredicates(
+				predicate.NewPredicateFuncs(isSpdkProxyPod),
+				predicate.Funcs{
+					UpdateFunc: func(e event.UpdateEvent) bool {
+						oldPod, ok := e.ObjectOld.(*corev1.Pod)
+						if !ok {
+							return true
+						}
+						newPod, ok := e.ObjectNew.(*corev1.Pod)
+						if !ok {
+							return true
+						}
+						return oldPod.Status.Phase != newPod.Status.Phase
+					},
+				},
+			),
 		).
 		Watches(
 			&corev1.Secret{},
@@ -429,6 +488,7 @@ func (r *StorageNodeSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.controlPlaneToStorageNodeSetRequests),
 			builder.WithPredicates(predicate.NewPredicateFuncs(isSimplyblockControlPlane)),
 		).
+		Owns(&simplyblockv1alpha1.VolumeMigration{}).
 		Complete(r)
 }
 
@@ -1295,7 +1355,7 @@ func waitForNodeInfoReachable(
 			return nil
 		} else {
 			lastErr = err
-			log.Info("Storage node API not reachable yet, retrying",
+			log.V(1).Info("Storage node API not reachable yet, retrying",
 				"node", nodeName,
 				"attempt", i,
 				"error", err.Error(),
@@ -1677,8 +1737,11 @@ func (r *StorageNodeSetReconciler) reconcileAction(
 	snCR *simplyblockv1alpha1.StorageNodeSet,
 	clusterUUID string,
 ) (ctrl.Result, error) {
-
 	apiClient := webapi.NewClient()
+
+	if snCR.Spec.Action == utils.NodeActionRemove {
+		return r.performDrainAndRemove(ctx, apiClient, clusterUUID, snCR)
+	}
 
 	if err := r.handleNodeAction(
 		ctx,
@@ -1700,11 +1763,16 @@ func (r *StorageNodeSetReconciler) handleNodeAction(
 ) error {
 	log := logf.FromContext(ctx)
 
-	// Skip if already successful
+	// Skip if this exact request already succeeded. The generation gate is
+	// essential: without it a re-request of the same action+node (clear
+	// spec.action, then set it again) would be skipped forever because the prior
+	// success is still recorded. A new request bumps the generation, so a stale
+	// success no longer matches and the action runs again.
 	if snCR.Status.ActionStatus != nil &&
 		snCR.Status.ActionStatus.Action == snCR.Spec.Action &&
 		snCR.Status.ActionStatus.NodeUUID == snCR.Spec.NodeUUID &&
-		snCR.Status.ActionStatus.State == utils.ActionStateSuccess {
+		snCR.Status.ActionStatus.State == utils.ActionStateSuccess &&
+		snCR.Status.ActionStatus.ObservedGeneration == snCR.Generation {
 		log.Info("Action already completed successfully, skipping",
 			"action", snCR.Spec.Action,
 			"nodeUUID", snCR.Spec.NodeUUID,
@@ -1712,11 +1780,25 @@ func (r *StorageNodeSetReconciler) handleNodeAction(
 		return nil
 	}
 
+	// Carry the Triggered flag forward for the same action and spec generation
+	// so a long-running backend action already fired on an earlier reconcile is
+	// not re-fired on requeue (which would reset the node and spawn a duplicate
+	// task). A new request bumps the generation and starts untriggered.
+	triggered := false
+	if prev := snCR.Status.ActionStatus; prev != nil &&
+		prev.Action == snCR.Spec.Action &&
+		prev.NodeUUID == snCR.Spec.NodeUUID &&
+		prev.ObservedGeneration == snCR.Generation {
+		triggered = prev.Triggered
+	}
+
 	snCR.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
-		Action:    snCR.Spec.Action,
-		NodeUUID:  snCR.Spec.NodeUUID,
-		State:     utils.ActionStateRunning,
-		UpdatedAt: metav1.Now(),
+		Action:             snCR.Spec.Action,
+		NodeUUID:           snCR.Spec.NodeUUID,
+		State:              utils.ActionStateRunning,
+		UpdatedAt:          metav1.Now(),
+		ObservedGeneration: snCR.Generation,
+		Triggered:          triggered,
 	}
 	if err := r.Status().Update(ctx, snCR); err != nil {
 		log.Error(err, "Failed to set action status to running")
@@ -1753,6 +1835,26 @@ func (r *StorageNodeSetReconciler) performNodeAction(
 
 	log := logf.FromContext(ctx)
 
+	// Idempotency guard (prevents the restart/migration retry storm): the
+	// backend actions are long-running and stateful. Re-issuing one while it is
+	// already executing resets the node to its in-progress state and spawns a
+	// duplicate task that the task runner aborts ("node is restarting, stopping
+	// task"), livelocking the operation. Consult the backend's current node
+	// status first and skip the trigger when the action is already underway or
+	// already complete; a subsequent requeue just polls for completion.
+	if cur, err := getNodeStatus(ctx, apiClient, clusterUUID, snCR.Spec.NodeUUID); err != nil {
+		log.Info("Could not read backend node status before action; proceeding to trigger",
+			"action", snCR.Spec.Action, "nodeUUID", snCR.Spec.NodeUUID, "error", err.Error())
+	} else if inProgress := actionInProgressStatus(snCR.Spec.Action); inProgress != "" && cur == inProgress {
+		log.Info("Backend action already in progress; waiting for completion instead of re-triggering",
+			"action", snCR.Spec.Action, "nodeUUID", snCR.Spec.NodeUUID, "status", cur)
+		return r.waitForActionCompletion(ctx, apiClient, clusterUUID, snCR.Spec.NodeUUID, snCR.Spec.Action)
+	} else if target, ok := actionTargetStatus(snCR.Spec.Action); ok && cur == target && actionAlreadyTriggered(snCR) {
+		log.Info("Backend action already completed; nothing to do",
+			"action", snCR.Spec.Action, "nodeUUID", snCR.Spec.NodeUUID, "status", cur)
+		return nil
+	}
+
 	var (
 		endpoint string
 		method   = http.MethodPost
@@ -1761,7 +1863,10 @@ func (r *StorageNodeSetReconciler) performNodeAction(
 
 	switch snCR.Spec.Action {
 
-	case "restart":
+	case utils.NodeActionRemove:
+		return fmt.Errorf("remove action must be handled by performDrainAndRemove, not performNodeAction")
+
+	case utils.NodeActionRestart:
 		payload := map[string]any{
 			"force":           nodeActionForce(snCR, true),
 			"reattach_volume": utils.BoolPtrOrFalse(snCR.Spec.ReattachVolume),
@@ -1799,16 +1904,6 @@ func (r *StorageNodeSetReconciler) performNodeAction(
 			snCR.Spec.NodeUUID,
 		)
 
-	case "remove":
-		method = http.MethodDelete
-		body = nil
-		endpoint = fmt.Sprintf(
-			"/api/v2/clusters/%s/storage-nodes/%s?force_remove=%t",
-			clusterUUID,
-			snCR.Spec.NodeUUID,
-			nodeActionForce(snCR, true),
-		)
-
 	default:
 		body = nil
 		endpoint = fmt.Sprintf(
@@ -1826,6 +1921,23 @@ func (r *StorageNodeSetReconciler) performNodeAction(
 		}
 		log.Error(err, "Node action API call failed", "action", snCR.Spec.Action, "nodeUUID", snCR.Spec.NodeUUID, "status", status, "response", string(respBody))
 		return fmt.Errorf("action API failed: status=%d err=%v", status, err)
+	}
+
+	// Record that the backend action has been fired so subsequent reconciles
+	// for this same spec generation poll for completion instead of re-firing.
+	// Persist immediately (best-effort): if the operator crashes after the POST
+	// succeeds but before handleNodeAction writes the final status, a restart of
+	// the operator could otherwise observe the node already back at its target
+	// state with Triggered still false and re-issue the action — a spurious,
+	// disruptive second restart of a healthy node. A failed persist is
+	// non-fatal: the in-progress status guard still prevents re-triggering while
+	// the action is underway.
+	if snCR.Status.ActionStatus != nil {
+		snCR.Status.ActionStatus.Triggered = true
+		if err := r.Status().Update(ctx, snCR); err != nil {
+			log.Error(err, "failed to persist Triggered flag after firing action; continuing",
+				"action", snCR.Spec.Action, "nodeUUID", snCR.Spec.NodeUUID)
+		}
 	}
 
 	log.Info(
@@ -1900,6 +2012,72 @@ func (r *StorageNodeSetReconciler) ensureWorkerInEndpointSlice(
 	return r.applyStorageNodeSetEndpointSlice(ctx, snCR, nodeIPs)
 }
 
+// actionTargetStatus returns the backend node status that signals the given
+// action completed successfully, and whether the action is recognized.
+func actionTargetStatus(action string) (string, bool) {
+	switch action {
+	case utils.NodeActionSuspend:
+		return "suspended", true
+	case utils.NodeActionResume, utils.NodeActionRestart:
+		return utils.NodeStatusOnline, true
+	case utils.NodeActionShutdown:
+		return utils.NodeStatusOffline, true
+	case utils.NodeActionRemove:
+		return "removed", true
+	default:
+		return "", false
+	}
+}
+
+// actionInProgressStatus returns the transient backend status a node reports
+// while the given action is executing, or "" if the action has no such state.
+// Observing this status means the backend is already working on the action and
+// it must not be re-triggered.
+func actionInProgressStatus(action string) string {
+	switch action {
+	case utils.NodeActionRestart:
+		return utils.NodeStatusInRestart
+	case utils.NodeActionShutdown:
+		return utils.NodeStatusInShutdown
+	default:
+		return ""
+	}
+}
+
+// actionAlreadyTriggered reports whether the backend action for the current
+// spec has already been fired, based on the persisted ActionStatus. It is
+// scoped to the exact action, node and spec generation so a fresh request
+// (new generation) is never mistaken for an in-flight one.
+func actionAlreadyTriggered(snCR *simplyblockv1alpha1.StorageNodeSet) bool {
+	as := snCR.Status.ActionStatus
+	return as != nil && as.Triggered &&
+		as.Action == snCR.Spec.Action &&
+		as.NodeUUID == snCR.Spec.NodeUUID &&
+		as.ObservedGeneration == snCR.Generation
+}
+
+// getNodeStatus reads the current backend status string for a storage node.
+func getNodeStatus(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID string,
+	nodeUUID string,
+) (string, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	if status >= 300 {
+		return "", fmt.Errorf("unexpected status %d: %s", status, string(body))
+	}
+	var resp utils.NodeStatusResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", err
+	}
+	return resp.Status, nil
+}
+
 func (r *StorageNodeSetReconciler) waitForActionCompletion(
 	ctx context.Context,
 	apiClient *webapi.Client,
@@ -1911,11 +2089,11 @@ func (r *StorageNodeSetReconciler) waitForActionCompletion(
 	log := logf.FromContext(ctx)
 
 	expectedStatus := map[string]string{
-		"suspend":  "suspended",
-		"resume":   "online",
-		"shutdown": "offline",
-		"restart":  "online",
-		"remove":   "removed",
+		utils.NodeActionSuspend:  "suspended",
+		utils.NodeActionResume:   "online",
+		utils.NodeActionShutdown: "offline",
+		utils.NodeActionRestart:  "online",
+		utils.NodeActionRemove:   "removed",
 	}
 
 	targetStatus, ok := expectedStatus[action]
@@ -1932,25 +2110,34 @@ func (r *StorageNodeSetReconciler) waitForActionCompletion(
 	for i := 0; i < waitForActionCompletionRetries; i++ {
 		body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 
-		if action == "remove" && status == http.StatusNotFound {
-			log.Info(
-				"Node successfully removed (404 returned)",
-				"nodeUUID", nodeUUID,
-			)
-			return nil
+		class := webapi.ClassifyError(err, status)
+
+		if class.ContextSpecific {
+			// 404/409 — interpret per action.
+			if status == http.StatusNotFound {
+				// Node no longer exists — treat as completed for shutdown/remove-like actions.
+				log.Info("Node not found during status poll, treating as complete",
+					"nodeUUID", nodeUUID, "action", action)
+				return nil
+			}
+			// 409 — unexpected during a status poll; retry.
+			waitForActionCompletionSleepFn(waitForActionCompletionWaitInterval)
+			continue
 		}
 
-		if err != nil || status >= 300 {
+		if !class.Retryable && (err != nil || status >= 300) {
+			// Permanent error — do not retry.
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d", status)
 			}
-			log.Error(
-				err,
-				"Failed to get node status",
-				"nodeUUID", nodeUUID,
-				"status", status,
-				"response", string(body),
-			)
+			log.Error(err, "Permanent error polling node status — aborting",
+				"nodeUUID", nodeUUID, "status", status)
+			return err
+		}
+
+		if class.Retryable {
+			log.Error(err, "Transient error polling node status, retrying",
+				"nodeUUID", nodeUUID, "status", status)
 			waitForActionCompletionSleepFn(waitForActionCompletionWaitInterval)
 			continue
 		}
@@ -1963,11 +2150,8 @@ func (r *StorageNodeSetReconciler) waitForActionCompletion(
 		}
 
 		if resp.Status == targetStatus {
-			log.Info(
-				"Node reached expected status",
-				"nodeUUID", nodeUUID,
-				"status", resp.Status,
-			)
+			log.Info("Node reached expected status",
+				"nodeUUID", nodeUUID, "status", resp.Status)
 			return nil
 		}
 

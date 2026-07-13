@@ -33,7 +33,7 @@ func TestBuildBackupConfig(t *testing.T) {
 		},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			Backup: &simplyblockv1alpha1.BackupSpec{
-				LocalEndpoint:   "http://10.10.11.10:9000",
+				LocalEndpoint:   "https://203.0.113.10:9000",
 				SnapshotBackups: &snapshotBackups,
 				WithCompression: &withCompression,
 				SecondaryTarget: &secondaryTarget,
@@ -75,7 +75,7 @@ func TestBuildBackupConfig(t *testing.T) {
 	if backupConfig.SecretAccessKey != "password" {
 		t.Fatalf("unexpected secret_access_key: %#v", backupConfig.SecretAccessKey)
 	}
-	if backupConfig.LocalEndpoint != "http://10.10.11.10:9000" {
+	if backupConfig.LocalEndpoint != "https://203.0.113.10:9000" {
 		t.Fatalf("unexpected local_endpoint: %#v", backupConfig.LocalEndpoint)
 	}
 	if backupConfig.SnapshotBackups == nil || *backupConfig.SnapshotBackups != true {

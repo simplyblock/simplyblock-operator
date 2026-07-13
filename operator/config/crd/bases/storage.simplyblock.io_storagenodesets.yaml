@@ -49,8 +49,10 @@ spec:
                 - remove
                 type: string
               clusterImage:
-                description: ClusterImage is the container image used for storage-node
-                  workloads.
+                description: |-
+                  ClusterImage is the container image used for storage-node workloads.
+                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
+                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               clusterName:
                 description: ClusterName is the target storage cluster name.
@@ -330,17 +332,28 @@ spec:
                   type: string
                 type: array
               spdkImage:
-                description: SpdkImage is the SPDK image reference used by node services.
+                description: |-
+                  SpdkImage is the SPDK image reference used by node services.
+                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
+                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               spdkProxyImage:
-                description: SpdkProxyImage is the SPDK proxy image reference used
-                  by node services.
+                description: |-
+                  SpdkProxyImage is the SPDK proxy image reference used by node services.
+                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
+                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               spdkSystemMemory:
                 description: |-
                   SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g. "4G", "512M").
                   When omitted the backend default is used.
                 pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
+                type: string
+              systemVolumeFilterRegex:
+                description: |-
+                  SystemVolumeFilterRegex is a Go regular expression matched against backend
+                  volume names. Matching volumes are excluded from drain migration and from
+                  the final verification check. Defaults to "^sb-fio-baseline-.*".
                 type: string
               tolerations:
                 description: Tolerations configures pod tolerations for storage-node
@@ -428,6 +441,16 @@ spec:
                     type: integer
                   state:
                     type: string
+                  subPhase:
+                    description: SubPhase tracks the active drain step within the
+                      remove action.
+                    enum:
+                    - Validating
+                    - Suspending
+                    - Migrating
+                    - Verifying
+                    - Removing
+                    type: string
                   triggered:
                     description: Triggered indicates whether the underlying backend
                       action has been fired.
@@ -436,6 +459,14 @@ spec:
                     description: UpdatedAt is the timestamp of the last status transition.
                     format: date-time
                     type: string
+                  volumesMigrated:
+                    description: VolumesMigrated is the count of volumes successfully
+                      migrated so far.
+                    type: integer
+                  volumesPending:
+                    description: VolumesPending is the count of volumes still awaiting
+                      migration.
+                    type: integer
                 type: object
               drainCoordination:
                 description: DrainCoordination tracks the upgrade-drain state per
