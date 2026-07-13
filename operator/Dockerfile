@@ -13,15 +13,19 @@ RUN apt-get update && apt-get install -y \
     libc6-dev-arm64-cross \
     && rm -rf /var/lib/apt/lists/*
 
+# atlas is a sibling module consumed via a local replace (../atlas-lib). The build
+# context is the repo root, so copy it next to the operator module (ready for when
+# the operator starts importing it).
+COPY atlas-lib/ /atlas-lib/
+
 # Copy the Go Modules manifests
-COPY go.mod go.mod
-COPY go.sum go.sum
+COPY operator/go.mod operator/go.sum ./
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
 RUN go mod download
 
-# Copy the Go source (relies on .dockerignore to filter)
-COPY . .
+# Copy the Go source
+COPY operator/ .
 
 # Build with BoringCrypto (FIPS 140-2 validated crypto).
 # CGO_ENABLED=1 is required by GOEXPERIMENT=boringcrypto.
