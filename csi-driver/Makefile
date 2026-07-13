@@ -57,6 +57,16 @@ $(GOLANGCI_BIN):
 	@echo === installing golangci-lint
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(TOOL_DIR) $(GOLANGCI_VERSION)
 
+.PHONY: fmt
+fmt:
+	@echo === running go fmt
+	@go fmt ./...
+
+.PHONY: vet
+vet:
+	@echo === running go vet
+	@go vet ./...
+
 .PHONY: yamllint
 yamllint:
 	@echo === running yamllint
