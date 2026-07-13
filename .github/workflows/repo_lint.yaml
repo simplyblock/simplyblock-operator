@@ -1,0 +1,44 @@
+name: "Repo: Lint"
+
+# golangci-lint across all three Go modules in the monorepo, one matrix job each.
+# operator uses its own operator/.golangci.yml; atlas-lib and csi-driver have no
+# (v2) config yet, so they lint against golangci-lint's v2 defaults.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "operator/**"
+      - "atlas-lib/**"
+      - "csi-driver/**"
+      - ".github/workflows/repo_lint.yaml"
+  pull_request:
+    paths:
+      - "operator/**"
+      - "atlas-lib/**"
+      - "csi-driver/**"
+      - ".github/workflows/repo_lint.yaml"
+
+jobs:
+  lint:
+    name: Lint (${{ matrix.component }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [operator, atlas-lib, csi-driver]
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: ${{ matrix.component }}/go.mod
+
+      - name: Run linter
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        with:
+          version: v2.11.4
+          working-directory: ${{ matrix.component }}
