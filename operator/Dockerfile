@@ -14,9 +14,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # atlas is a sibling module consumed via a local replace (../atlas-lib). The build
-# context is the repo root, so copy it next to the operator module (ready for when
-# the operator starts importing it).
-COPY atlas-lib/ /atlas-lib/
+# context is the repo root, so it lives next to the operator module. Copy only its
+# manifests first: go mod download needs atlas-lib's go.mod/go.sum to build the module
+# graph, but not its source (local-path replacements are never downloaded). Copying the
+# full tree here would invalidate the download layer on any atlas-lib source change.
+COPY atlas-lib/go.mod atlas-lib/go.sum /atlas-lib/
 
 # Copy the Go Modules manifests
 COPY operator/go.mod operator/go.sum ./
@@ -24,7 +26,8 @@ COPY operator/go.mod operator/go.sum ./
 # and so that source changes don't invalidate our downloaded layer
 RUN go mod download
 
-# Copy the Go source
+# Copy the full sources (operator + the atlas-lib tree resolved by the replace directive).
+COPY atlas-lib/ /atlas-lib/
 COPY operator/ .
 
 # Build with BoringCrypto (FIPS 140-2 validated crypto).
