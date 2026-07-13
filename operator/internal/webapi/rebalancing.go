@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -53,17 +54,17 @@ type ContinueMigrationParams struct {
 // connected and validated before calling ContinueMigration.
 type LvolConnectResp struct {
 	Nqn            string `json:"nqn"`
-	ReconnectDelay int    `json:"reconnect_delay"`
-	NrIoQueues     int    `json:"nr_io_queues"`
-	CtrlLossTmo    int    `json:"ctrl_loss_tmo"`
-	FastIOFailTmo  int    `json:"fast_io_fail_tmo"`
-	KeepAliveTmo   int    `json:"keep_alive_tmo"`
+	ReconnectDelay int    `json:"reconnect-delay"`
+	NrIoQueues     int    `json:"nr-io-queues"`
+	CtrlLossTmo    int    `json:"ctrl-loss-tmo"`
+	FastIOFailTmo  int    `json:"fast-io-fail-tmo"`
+	KeepAliveTmo   int    `json:"keep-alive-tmo"`
 	Port           int    `json:"port"`
 	TargetType     string `json:"transport"`
 	IP             string `json:"ip"`
 	Connect        string `json:"connect"`
-	NSID           int    `json:"ns_id"`
-	HostIface      string `json:"host_iface,omitempty"`
+	NSID           int    `json:"ns-id"`
+	HostIface      string `json:"host-iface,omitempty"`
 }
 
 // MigrateParams is the request body for
@@ -204,13 +205,49 @@ func (c *Client) GetVolume(
 	return &list[0], nil
 }
 
+// StorageNodeNIC is one network interface entry returned by the storage-node
+// /nics endpoint. Address is the data-network IP the lvol subsystem listens on
+// (the management IP is reported separately). Field tags match the capitalised,
+// space-containing keys the control plane emits for this endpoint.
+type StorageNodeNIC struct {
+	ID         string `json:"ID"`
+	DeviceName string `json:"Device name"`
+	Address    string `json:"Address"`
+	NetType    string `json:"Net type"`
+	Status     string `json:"Status"`
+}
+
+// GetStorageNodeNICs returns the data-network interfaces for a single storage
+// node. Used to target the fio latency baseline at the node's data-NIC IP rather
+// than its management IP (the lvol subsystem does not listen on mgmt_ip).
+func (c *Client) GetStorageNodeNICs(
+	ctx context.Context,
+	clusterUUID, nodeUUID string,
+) ([]StorageNodeNIC, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/nics", clusterUUID, nodeUUID)
+	body, statusCode, err := c.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get NICs for node %s: %w", nodeUUID, err)
+	}
+	if statusCode >= 300 {
+		return nil, fmt.Errorf("get NICs for node %s: status %d: %s", nodeUUID, statusCode, string(body))
+	}
+	var nics []StorageNodeNIC
+	if err := json.Unmarshal(body, &nics); err != nil {
+		return nil, fmt.Errorf("unmarshal node NICs: %w", err)
+	}
+	return nics, nil
+}
+
 // CreateMigration submits a new volume migration request.
 // Returns a MigrationDTO containing the migration ID and the NVMe-oF
 // connection strings for the target-side paths. The caller must establish and
 // validate those paths before calling ContinueMigration.
 //
-// If the API returns 409 (a migration already exists for the volume), any
-// existing migrations are cancelled and the request is retried once.
+// If the API reports that a migration already exists for the volume, any
+// existing migrations are cancelled and the request is retried once. The API
+// signals this as either 409 or 400 with an "...already exists... Cancel it
+// first" detail depending on deployment, so both are handled.
 func (c *Client) CreateMigration(
 	ctx context.Context,
 	clusterUUID, poolUUID, volumeUUID, targetNodeID string,
@@ -224,8 +261,9 @@ func (c *Client) CreateMigration(
 		return nil, fmt.Errorf("create migration for volume %s: %w", volumeUUID, err)
 	}
 
-	if statusCode == http.StatusConflict {
-		logger.Info("CreateMigration returned 409; cancelling existing migration(s) before retry", "volume", volumeUUID)
+	if isExistingMigrationConflict(statusCode, body) {
+		logger.Info("CreateMigration rejected: a migration already exists for the volume; cancelling before retry",
+			"volume", volumeUUID, "status", statusCode)
 		if cancelErr := c.cancelMigrationForVolume(ctx, clusterUUID, poolUUID, volumeUUID); cancelErr != nil {
 			return nil, fmt.Errorf("create migration for volume %s: cancel existing migrations: %w", volumeUUID, cancelErr)
 		}
@@ -250,6 +288,23 @@ func (c *Client) CreateMigration(
 	}
 	logger.Info("CreateMigration parsed", "volume", volumeUUID, "migration_id", m.ID, "connect_strings", len(m.ConnectStrings))
 	return &m, nil
+}
+
+// isExistingMigrationConflict reports whether a CreateMigration response
+// indicates an existing migration is blocking the request. Some deployments
+// return 409; others return 400 with a detail like "An active migration for
+// <vol> already exists targeting a different node (...). Cancel it first." Only
+// that specific 400 is treated as a conflict — other 400s (bad request, volume
+// already on the target node, etc.) must not trigger a cancel-and-retry.
+func isExistingMigrationConflict(statusCode int, body []byte) bool {
+	if statusCode == http.StatusConflict {
+		return true
+	}
+	if statusCode == http.StatusBadRequest {
+		b := strings.ToLower(string(body))
+		return strings.Contains(b, "already exists") && strings.Contains(b, "migration")
+	}
+	return false
 }
 
 // cancelMigrationForVolume lists migrations for the volume, finds the one
@@ -336,8 +391,8 @@ func (c *Client) CancelMigration(
 	ctx context.Context,
 	clusterUUID, poolUUID, volumeUUID, migrationID string,
 ) error {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/migrations/%s/cancel", clusterUUID, poolUUID, volumeUUID, migrationID)
-	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, nil)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/migrations/%s", clusterUUID, poolUUID, volumeUUID, migrationID)
+	body, statusCode, err := c.Do(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("cancel migration %s: %w", migrationID, err)
 	}

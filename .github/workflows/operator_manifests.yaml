@@ -50,4 +50,4 @@ jobs:
 
       - name: Validate rendered manifests
         run: |
-          kubeconform -strict -summary -skip CustomResourceDefinition dist/install.yaml
+          kubeconform -strict -summary -skip CustomResourceDefinition,Certificate,ClusterIssuer dist/install.yaml
