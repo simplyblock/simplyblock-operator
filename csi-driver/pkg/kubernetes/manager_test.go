@@ -39,7 +39,7 @@ func handle(lvolID string) string {
 func testPV(name, driver, handle string) *corev1.PersistentVolume {
 	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	if driver != "" || handle != "" {
-		pv.Spec.PersistentVolumeSource.CSI = &corev1.CSIPersistentVolumeSource{
+		pv.Spec.CSI = &corev1.CSIPersistentVolumeSource{
 			Driver:       driver,
 			VolumeHandle: handle,
 		}
@@ -114,7 +114,8 @@ func assertReads(t *testing.T, ctx context.Context, m *sbkube.Manager) {
 		t.Fatalf("PersistentVolumeByLogicalVolumeID(lvolMissing) error = %v, want NotFound", err)
 	}
 
-	if pvc, err := m.PersistentVolumeClaimByNamespaceAndName(ctx, "ns1", "claim-x"); err != nil || pvc == nil || pvc.Name != "claim-x" {
+	if pvc, err := m.PersistentVolumeClaimByNamespaceAndName(ctx, "ns1", "claim-x"); err != nil || pvc == nil ||
+		pvc.Name != "claim-x" {
 		t.Fatalf("PersistentVolumeClaimByNamespaceAndName(ns1/claim-x) = %v, %v", pvc, err)
 	}
 	if _, err := m.PersistentVolumeClaimByNamespaceAndName(ctx, "ns1", "missing"); !apierrors.IsNotFound(err) {

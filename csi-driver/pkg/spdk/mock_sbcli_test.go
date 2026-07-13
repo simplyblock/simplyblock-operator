@@ -105,14 +105,38 @@ func newMockSBCLI() *mockSBCLI {
 	mux.HandleFunc("GET /api/v2/clusters/{clusterID}/storage-pools/", m.locked(m.handleListPools))
 	mux.HandleFunc("GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/", m.locked(m.handleListVolumes))
 	mux.HandleFunc("POST /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/", m.locked(m.createVolume))
-	mux.HandleFunc("GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/", m.locked(m.handleGetVolume))
-	mux.HandleFunc("DELETE /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/", m.locked(m.handleDeleteVolume))
-	mux.HandleFunc("PUT /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/", m.locked(m.handleResizeVolume))
-	mux.HandleFunc("GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/connect", m.locked(m.handleVolumeConnect))
-	mux.HandleFunc("POST /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/snapshots", m.locked(m.handleCreateSnapshot))
-	mux.HandleFunc("POST /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/clone", m.locked(m.handleCloneVolume))
-	mux.HandleFunc("GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/snapshots/", m.locked(m.handleListSnapshots))
-	mux.HandleFunc("DELETE /api/v2/clusters/{clusterID}/storage-pools/{poolID}/snapshots/{snapshotID}/", m.locked(m.handleDeleteSnapshot))
+	mux.HandleFunc(
+		"GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/",
+		m.locked(m.handleGetVolume),
+	)
+	mux.HandleFunc(
+		"DELETE /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/",
+		m.locked(m.handleDeleteVolume),
+	)
+	mux.HandleFunc(
+		"PUT /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/",
+		m.locked(m.handleResizeVolume),
+	)
+	mux.HandleFunc(
+		"GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/connect",
+		m.locked(m.handleVolumeConnect),
+	)
+	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/snapshots",
+		m.locked(m.handleCreateSnapshot),
+	)
+	mux.HandleFunc(
+		"POST /api/v2/clusters/{clusterID}/storage-pools/{poolID}/volumes/{volumeID}/clone",
+		m.locked(m.handleCloneVolume),
+	)
+	mux.HandleFunc(
+		"GET /api/v2/clusters/{clusterID}/storage-pools/{poolID}/snapshots/",
+		m.locked(m.handleListSnapshots),
+	)
+	mux.HandleFunc(
+		"DELETE /api/v2/clusters/{clusterID}/storage-pools/{poolID}/snapshots/{snapshotID}/",
+		m.locked(m.handleDeleteSnapshot),
+	)
 
 	m.srv = httptest.NewServer(mux)
 	return m
@@ -258,7 +282,13 @@ func (m *mockSBCLI) handleCreateSnapshot(w http.ResponseWriter, r *http.Request)
 	if m.snapshotCreatePersistThenFail {
 		m.snapshotCreatePersistThenFail = false
 		id := uuid.New().String()
-		m.snapshots[id] = &mockSnapshot{UUID: id, Name: body.Name, VolUUID: volumeID, Size: volume.Size, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		m.snapshots[id] = &mockSnapshot{
+			UUID:      id,
+			Name:      body.Name,
+			VolUUID:   volumeID,
+			Size:      volume.Size,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "created but response lost"})
 		return
 	}
@@ -281,7 +311,13 @@ func (m *mockSBCLI) handleCreateSnapshot(w http.ResponseWriter, r *http.Request)
 	}
 
 	snapshotID := uuid.New().String()
-	m.snapshots[snapshotID] = &mockSnapshot{UUID: snapshotID, Name: body.Name, VolUUID: volumeID, Size: volume.Size, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	m.snapshots[snapshotID] = &mockSnapshot{
+		UUID:      snapshotID,
+		Name:      body.Name,
+		VolUUID:   volumeID,
+		Size:      volume.Size,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
 	w.Header().Set("Location", fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/snapshots/%s/",
 		sanityClusterID, sanityPoolUUID, snapshotID))
 	w.WriteHeader(http.StatusCreated)

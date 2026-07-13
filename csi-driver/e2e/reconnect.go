@@ -70,7 +70,10 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT", func() {
 			})
 			ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 			framework.ExpectNoError(createModePVC(f.ClientSet, ns, "spdkcsi-pvc", scName, false), "create PVC")
-			framework.ExpectNoError(createFilesystemTestPod(f.ClientSet, ns, testPodName, "spdkcsi-pvc", "spdkcsi-pvc"), "create test pod")
+			framework.ExpectNoError(
+				createFilesystemTestPod(f.ClientSet, ns, testPodName, "spdkcsi-pvc", "spdkcsi-pvc"),
+				"create test pod",
+			)
 			ginkgo.DeferCleanup(func() { deletePVCAndTestPod(ns) })
 			framework.ExpectNoError(
 				waitForTestPodReady(f.ClientSet, 5*time.Minute, ns, testPodName),
@@ -254,7 +257,7 @@ func waitForSubsystem(f *framework.Framework, podName, container, lvolID string,
 		found = subsystemForLvol(subs, lvolID)
 		return found
 	}, timeout, 3*time.Second).ShouldNot(gomega.BeNil(),
-		"NVMe subsystem for lvol %s never appeared on node (via %s).\nlast `nvme list-subsys -o json`:\n%s\nlast `nvme list`:\n%s",
+		"NVMe subsystem for lvol %s never appeared on node (via %s).\nlast `nvme list-subsys -o json`:\n%s\nlast `nvme list`:\n%s", //nolint:lll // unwrappable string/log/signature
 		lvolID, podName, lastSubsys, lastList)
 	return found
 }

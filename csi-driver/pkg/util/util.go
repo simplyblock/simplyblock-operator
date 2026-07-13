@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/simplyblock/atlas/errs/deferrers"
 	"k8s.io/klog"
 )
 
@@ -45,7 +46,7 @@ func ParseJSONFile(fileName string, result interface{}) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer deferrers.Close(file)
 
 	bytes, err := io.ReadAll(file)
 	if err != nil {
@@ -127,7 +128,8 @@ func CheckIfNvmeDeviceExists(nvmeModel string, ignorePaths map[string]struct{}) 
 		return "", fmt.Errorf("obtain uuid files error: %w", err)
 	}
 
-	// The content of uuid file should be in the form of, eg, "b9e38b18-511e-429d-9660-f665fa7d63d0\n", which is also the volumeId.
+	// The content of uuid file should be in the form of, eg,
+	// "b9e38b18-511e-429d-9660-f665fa7d63d0\n", which is also the volumeId.
 	for _, filePath := range uuidFilePaths {
 		if ignorePaths != nil {
 			if _, visited := ignorePaths[filePath]; visited {
@@ -172,7 +174,11 @@ func GetNvmeDeviceName(ctx context.Context, nvmeModel, bdf string) (string, erro
 	if bdf != "" {
 		var uuidFilePath string
 		// find the uuid file path for the nvme device based on the bdf
-		uuidFilePath, err = waitForDeviceReady(ctx, fmt.Sprintf("/sys/bus/pci/devices/%s/nvme/nvme*/nvme*n*/uuid", bdf), 20)
+		uuidFilePath, err = waitForDeviceReady(
+			ctx,
+			fmt.Sprintf("/sys/bus/pci/devices/%s/nvme/nvme*/nvme*n*/uuid", bdf),
+			20,
+		)
 		if err != nil {
 			return "", fmt.Errorf("failed find device at %s: %w", uuidFilePath, err)
 		}

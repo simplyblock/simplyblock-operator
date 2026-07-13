@@ -17,7 +17,7 @@ func init() {
 
 	if os.Getenv("KUBECONFIG") == "" {
 		kubeConfigPath := filepath.Join(os.Getenv("HOME"), ".kube", "config")
-		os.Setenv("KUBECONFIG", kubeConfigPath)
+		_ = os.Setenv("KUBECONFIG", kubeConfigPath)
 	}
 
 	config.CopyFlags(config.Flags, flag.CommandLine)

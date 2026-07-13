@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: storagenodesets.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -49,12 +49,17 @@ spec:
                 - remove
                 type: string
               clusterImage:
-                description: ClusterImage is the container image used for storage-node
-                  workloads.
+                description: |-
+                  ClusterImage is the container image used for storage-node workloads.
+                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
+                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               containerResources:
                 description: |-
                   ContainerResources sets CPU and memory requests/limits for the main storage-node container.
@@ -145,6 +150,9 @@ spec:
                 description: ForceFormat4K forces 4K blocksize formatting of the NVMe
                   device where supported.
                 type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               imagePullPolicy:
                 description: ImagePullPolicy controls when the container image is
                   pulled. Defaults to IfNotPresent.
@@ -248,6 +256,21 @@ spec:
                 description: MgmtIfname is the management interface name used by storage
                   nodes.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              nodeFailureDomains:
+                additionalProperties:
+                  format: int32
+                  type: integer
+                description: |-
+                  NodeFailureDomains assigns each worker node to a failure-domain group (integer ≥ 1).
+                  Required when the referenced StorageCluster has enableFailureDomains=true.
+                  Keys are Kubernetes worker node names; values are the failure-domain group index.
+                  Each node in the same physical failure domain (rack, AZ, power unit) should share
+                  the same group index so the control plane can spread erasure-coding chunks across
+                  independent fault groups.
+                type: object
               nodeUUID:
                 description: NodeUUID is required when action is specified
                 type: string
@@ -256,6 +279,9 @@ spec:
                   per NUMA socket.
                 format: int32
                 type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               openShiftCluster:
                 description: OpenShiftCluster indicates OpenShift-specific behavior
                   should be enabled.
@@ -271,6 +297,9 @@ spec:
                   storage device.
                 format: int32
                 type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               pcieAllowList:
                 description: PcieAllowList is the list of PCI addresses allowed for
                   use.
@@ -303,17 +332,28 @@ spec:
                   type: string
                 type: array
               spdkImage:
-                description: SpdkImage is the SPDK image reference used by node services.
+                description: |-
+                  SpdkImage is the SPDK image reference used by node services.
+                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
+                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               spdkProxyImage:
-                description: SpdkProxyImage is the SPDK proxy image reference used
-                  by node services.
+                description: |-
+                  SpdkProxyImage is the SPDK proxy image reference used by node services.
+                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
+                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
               spdkSystemMemory:
                 description: |-
                   SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g. "4G", "512M").
                   When omitted the backend default is used.
                 pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
+                type: string
+              systemVolumeFilterRegex:
+                description: |-
+                  SystemVolumeFilterRegex is a Go regular expression matched against backend
+                  volume names. Matching volumes are excluded from drain migration and from
+                  the final verification check. Defaults to "^sb-fio-baseline-.*".
                 type: string
               tolerations:
                 description: Tolerations configures pod tolerations for storage-node
@@ -336,9 +376,10 @@ spec:
                     operator:
                       description: |-
                         Operator represents a key's relationship to the value.
-                        Valid operators are Exists and Equal. Defaults to Equal.
+                        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                         Exists is equivalent to wildcard for value, so that a pod can
                         tolerate all taints of a particular category.
+                        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
                       type: string
                     tolerationSeconds:
                       description: |-
@@ -370,6 +411,15 @@ spec:
             required:
             - clusterName
             type: object
+            x-kubernetes-validations:
+            - message: field mgmtIfname is immutable once set
+              rule: '!has(oldSelf.mgmtIfname) || has(self.mgmtIfname)'
+            - message: field partitions is immutable once set
+              rule: '!has(oldSelf.partitions) || has(self.partitions)'
+            - message: field nodesPerSocket is immutable once set
+              rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
+            - message: field forceFormat4K is immutable once set
+              rule: '!has(oldSelf.forceFormat4K) || has(self.forceFormat4K)'
           status:
             description: status defines the observed state of StorageNodeSet
             properties:
@@ -392,6 +442,16 @@ spec:
                     type: integer
                   state:
                     type: string
+                  subPhase:
+                    description: SubPhase tracks the active drain step within the
+                      remove action.
+                    enum:
+                    - Validating
+                    - Suspending
+                    - Migrating
+                    - Verifying
+                    - Removing
+                    type: string
                   triggered:
                     description: Triggered indicates whether the underlying backend
                       action has been fired.
@@ -400,6 +460,14 @@ spec:
                     description: UpdatedAt is the timestamp of the last status transition.
                     format: date-time
                     type: string
+                  volumesMigrated:
+                    description: VolumesMigrated is the count of volumes successfully
+                      migrated so far.
+                    type: integer
+                  volumesPending:
+                    description: VolumesPending is the count of volumes still awaiting
+                      migration.
+                    type: integer
                 type: object
               drainCoordination:
                 description: DrainCoordination tracks the upgrade-drain state per
@@ -440,6 +508,36 @@ spec:
                   - hostname
                   - phase
                   - startedAt
+                  type: object
+                type: array
+              latencyMetrics:
+                description: LatencyMetrics holds per-backend-node fio-measured latency
+                  data for rebalancing decisions.
+                items:
+                  description: |-
+                    NodeLatencyMetrics holds fio-measured 4K NVMe-oF latency for a single backend storage node.
+                    The benchmark volume NQN and connection details are derived at runtime from the node UUID
+                    and the cluster NQN — they are not stored here.
+                  properties:
+                    baselineMeasuredAt:
+                      description: BaselineMeasuredAt is when the baseline was established.
+                      format: date-time
+                      type: string
+                    baselineP50NS:
+                      description: BaselineP50NS is the p50 write latency (nanoseconds)
+                        from the initial empty-cluster benchmark.
+                      format: int64
+                      type: integer
+                    baselineP99NS:
+                      description: BaselineP99NS is the p99 write latency (nanoseconds)
+                        from the initial empty-cluster benchmark.
+                      format: int64
+                      type: integer
+                    nodeUUID:
+                      description: NodeUUID is the backend storage node UUID.
+                      type: string
+                  required:
+                  - nodeUUID
                   type: object
                 type: array
               nodes:
@@ -533,6 +631,10 @@ spec:
           rule: (has(self.spec.action) && self.spec.action != "") || (has(self.spec.maxLogicalVolumeCount)
             && has(self.spec.workerNodes) && size(self.spec.workerNodes) > 0 && has(self.spec.mgmtIfname)
             && self.spec.mgmtIfname != "")
+        - message: all nodeFailureDomains values must be >= 1 (failure-domain group
+            index)
+          rule: '!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k,
+            self.spec.nodeFailureDomains[k] >= 1)'
     served: true
     storage: true
     subresources:

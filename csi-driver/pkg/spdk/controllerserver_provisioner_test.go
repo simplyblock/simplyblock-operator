@@ -89,7 +89,10 @@ func (p *fakeProvisioner) provision(ctx context.Context, pvc *corev1.PersistentV
 		ObjectMeta: metav1.ObjectMeta{Name: volName},
 		Spec: corev1.PersistentVolumeSpec{
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
-				CSI: &corev1.CSIPersistentVolumeSource{Driver: testDriverName, VolumeHandle: resp.GetVolume().GetVolumeId()},
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       testDriverName,
+					VolumeHandle: resp.GetVolume().GetVolumeId(),
+				},
 			},
 			ClaimRef: &corev1.ObjectReference{Namespace: pvc.Namespace, Name: pvc.Name, UID: pvc.UID},
 		},

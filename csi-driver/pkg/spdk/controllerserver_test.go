@@ -36,7 +36,11 @@ func makeSnapshots(n int) []*csi.ListSnapshotsResponse_Entry {
 
 // collectAllPages walks all pages and returns the collected entries plus the page
 // count. It fails the test if any call returns an error.
-func collectAllPages(t *testing.T, all []*csi.ListSnapshotsResponse_Entry, pageSize int) ([]*csi.ListSnapshotsResponse_Entry, int) {
+func collectAllPages(
+	t *testing.T,
+	all []*csi.ListSnapshotsResponse_Entry,
+	pageSize int,
+) ([]*csi.ListSnapshotsResponse_Entry, int) {
 	t.Helper()
 	var page []*csi.ListSnapshotsResponse_Entry
 	token := ""

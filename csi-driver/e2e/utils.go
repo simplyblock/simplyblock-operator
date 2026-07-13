@@ -38,6 +38,9 @@ var (
 )
 
 const (
+	// trueStr is the literal "true" used for env-var / kubectl output comparisons.
+	trueStr = "true"
+
 	// Template YAML paths (relative to the e2e/ directory).
 	pvcPath                  = "templates/pvc.yaml"
 	cachepvcPath             = "templates/pvc-cache.yaml"
@@ -74,7 +77,7 @@ func init() {
 	if snapshotClassName == "" {
 		snapshotClassName = "simplyblock-csi-snapshotclass"
 	}
-	operatorMode = os.Getenv("OPERATOR_MODE") == "true"
+	operatorMode = os.Getenv("OPERATOR_MODE") == trueStr
 	systemNamespace = os.Getenv("CSI_SYSTEM_NAMESPACE")
 	if systemNamespace == "" {
 		systemNamespace = "simplyblock"
@@ -118,11 +121,11 @@ func applyTemplateWithStorageClass(ns, path string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err = tmp.WriteString(modified); err != nil {
 		return err
 	}
-	tmp.Close()
+	_ = tmp.Close()
 	_, err = e2ekubectl.RunKubectl(ns, "apply", "-f", tmp.Name())
 	return err
 }
@@ -245,6 +248,7 @@ func waitForControllerReady(c kubernetes.Interface, timeout time.Duration) error
 	return nil
 }
 
+//nolint:unparam // e2e helper; timeout kept for call-site readability
 func waitForNodeServerReady(c kubernetes.Interface, timeout time.Duration) error {
 	ns := nameSpace
 	if operatorMode {
@@ -327,7 +331,12 @@ func waitForPvcGone(c kubernetes.Interface, ns, pvcName string) error {
 	return nil
 }
 
-func waitForPVCStorageCapacity(c kubernetes.Interface, ns, pvcName string, minSize resource.Quantity, timeout time.Duration) error {
+func waitForPVCStorageCapacity(
+	c kubernetes.Interface,
+	ns, pvcName string,
+	minSize resource.Quantity,
+	timeout time.Duration,
+) error {
 	err := wait.PollUntilContextTimeout(context.Background(), 3*time.Second, timeout, true,
 		func(ctx context.Context) (bool, error) {
 			pvc, err := c.CoreV1().PersistentVolumeClaims(ns).Get(ctx, pvcName, metav1.GetOptions{})
@@ -346,7 +355,14 @@ func waitForPVCStorageCapacity(c kubernetes.Interface, ns, pvcName string, minSi
 	return nil
 }
 
-func waitForFilesystemSize(f *framework.Framework, ns string, opt *metav1.ListOptions, mountPath string, minBytes int64, timeout time.Duration) error {
+func waitForFilesystemSize(
+	f *framework.Framework,
+	ns string,
+	opt *metav1.ListOptions,
+	mountPath string,
+	minBytes int64,
+	timeout time.Duration,
+) error {
 	err := wait.PollUntilContextTimeout(context.Background(), 5*time.Second, timeout, true,
 		func(_ context.Context) (bool, error) {
 			sizeBytes, err := filesystemSizeBytes(f, ns, opt, mountPath)
@@ -428,6 +444,7 @@ func resizePVC(c kubernetes.Interface, ns, pvcName string, newSize resource.Quan
 	})
 }
 
+//nolint:unparam // e2e helper; size kept for call-site readability
 func createPVC(c kubernetes.Interface, ns, pvcName, scName string, size int64) error {
 	_, err := c.CoreV1().PersistentVolumeClaims(ns).Create(context.Background(), &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: pvcName},
@@ -464,6 +481,8 @@ func execCommandInPod(f *framework.Framework, cmd, ns string, opt *metav1.ListOp
 // of failing the test, and targets a Running+Ready pod matching opt (the first
 // match otherwise). Use it inside polling assertions where the pod may be
 // mid-restart or its volume momentarily unreadable.
+//
+//nolint:unparam // shared helper; stdout is part of the (stdout, stderr, err) contract
 func execCommandInPodE(f *framework.Framework, cmd, ns string, opt *metav1.ListOptions) (string, string, error) {
 	podList, err := e2epod.PodClientNS(f, ns).List(context.Background(), *opt)
 	if err != nil {
@@ -540,10 +559,16 @@ func checkDataPersistForMultiPvcs(f *framework.Framework, ns string) {
 
 	ginkgo.By("deleting and recreating the pod to test persistence")
 	deleteTestPodWithMultiPvcs(ns)
-	framework.ExpectNoError(waitForTestPodGone(f.ClientSet, ns, multiTestPodName), "wait for multi-PVC pod to terminate")
+	framework.ExpectNoError(
+		waitForTestPodGone(f.ClientSet, ns, multiTestPodName),
+		"wait for multi-PVC pod to terminate",
+	)
 
 	deployTestPodWithMultiPvcs(ns)
-	framework.ExpectNoError(waitForTestPodReady(f.ClientSet, 3*time.Minute, ns, multiTestPodName), "wait for multi-PVC pod after restart")
+	framework.ExpectNoError(
+		waitForTestPodReady(f.ClientSet, 3*time.Minute, ns, multiTestPodName),
+		"wait for multi-PVC pod after restart",
+	)
 
 	ginkgo.By("verifying data survived the pod restart")
 	for i := range dataPaths {
@@ -620,7 +645,7 @@ func waitForSnapshotReady(ns, snapshotName string, timeout time.Duration) error 
 				framework.Logf("waiting for snapshot %s to be ready: %v", snapshotName, err)
 				return false, nil
 			}
-			return strings.TrimSpace(out) == "true", nil
+			return strings.TrimSpace(out) == trueStr, nil
 		})
 	if err != nil {
 		return fmt.Errorf("snapshot %q not ready within %s: %w", snapshotName, timeout, err)
@@ -686,7 +711,11 @@ func createStorageClassWithParams(c kubernetes.Interface, scName string, extraPa
 // createStorageClassWithParamsAndLabels is like createStorageClassWithParams but
 // also sets metadata labels on the StorageClass (e.g. the guardian
 // auto-restart-on-pathloss opt-in).
-func createStorageClassWithParamsAndLabels(c kubernetes.Interface, scName string, extraParams, scLabels map[string]string) {
+func createStorageClassWithParamsAndLabels(
+	c kubernetes.Interface,
+	scName string,
+	extraParams, scLabels map[string]string,
+) {
 	base, err := c.StorageV1().StorageClasses().Get(context.Background(), storageClassName, metav1.GetOptions{})
 	if err != nil {
 		ginkgo.Skip(fmt.Sprintf("base StorageClass %q unavailable (%v) — skipping", storageClassName, err))
@@ -760,7 +789,12 @@ func deleteStorageClass(c kubernetes.Interface, scName string) {
 // PVC annotation helper
 // ---------------------------------------------------------------------------
 
-func createAnnotatedPVC(c kubernetes.Interface, ns, pvcName, scName string, size resource.Quantity, annotations map[string]string) error {
+func createAnnotatedPVC(
+	c kubernetes.Interface,
+	ns, pvcName, scName string,
+	size resource.Quantity,
+	annotations map[string]string,
+) error {
 	_, err := c.CoreV1().PersistentVolumeClaims(ns).Create(context.Background(), &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        pvcName,
@@ -844,7 +878,7 @@ func poolNameForTests(c kubernetes.Interface) string {
 	if p := os.Getenv("E2E_SB_POOL"); p != "" {
 		return p
 	}
-	if sc, err := c.StorageV1().StorageClasses().Get(context.Background(), storageClassName, metav1.GetOptions{}); err == nil {
+	if sc, err := c.StorageV1().StorageClasses().Get(context.Background(), storageClassName, metav1.GetOptions{}); err == nil { //nolint:lll // unwrappable string/log/signature
 		if p := sc.Parameters["pool_name"]; p != "" {
 			return p
 		}
@@ -900,7 +934,7 @@ func setupManagedWorkload(f *framework.Framework, m fullLossMode, appLabel strin
 		scParams["csi.storage.k8s.io/fstype"] = m.fsType
 	}
 	createStorageClassWithParamsAndLabels(f.ClientSet, scName, scParams,
-		map[string]string{"simplyblock.io/auto-restart-on-pathloss": "true"})
+		map[string]string{"simplyblock.io/auto-restart-on-pathloss": trueStr})
 	ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 	framework.ExpectNoError(createModePVC(f.ClientSet, ns, pvcName, scName, m.block), "create PVC")
 

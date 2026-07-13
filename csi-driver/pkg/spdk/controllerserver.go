@@ -320,7 +320,10 @@ func copyTopologySegments(segments map[string]string) map[string]string {
 }
 
 // CreateVolume creates a new volume in the SimplyBlock storage system.
-func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+func (cs *controllerServer) CreateVolume(
+	ctx context.Context,
+	req *csi.CreateVolumeRequest,
+) (*csi.CreateVolumeResponse, error) {
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume name is required")
 	}
@@ -391,7 +394,10 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	return &csi.CreateVolumeResponse{Volume: csiVolume}, nil
 }
 
-func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
+func (cs *controllerServer) DeleteVolume(
+	ctx context.Context,
+	req *csi.DeleteVolumeRequest,
+) (*csi.DeleteVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
@@ -428,7 +434,10 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	return &csi.DeleteVolumeResponse{}, nil
 }
 
-func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
+func (cs *controllerServer) ValidateVolumeCapabilities(
+	ctx context.Context,
+	req *csi.ValidateVolumeCapabilitiesRequest,
+) (*csi.ValidateVolumeCapabilitiesResponse, error) {
 	volumeID := req.GetVolumeId()
 	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
@@ -474,7 +483,11 @@ func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 // existing one has the same source volume, returns it as success (CSI
 // idempotency — this is our own snapshot from an earlier attempt). If the source
 // differs, it is a real name conflict → AlreadyExists.
-func reconcileExistingSnapshot(ctx context.Context, sbclient util.ClusterAPI, sourceLvolID, snapshotName string) (*csi.CreateSnapshotResponse, error) {
+func reconcileExistingSnapshot(
+	ctx context.Context,
+	sbclient util.ClusterAPI,
+	sourceLvolID, snapshotName string,
+) (*csi.CreateSnapshotResponse, error) {
 	snaps, err := sbclient.ListSnapshots(ctx)
 	if err != nil {
 		return nil, classifyCreateSnapshotError(err)
@@ -484,7 +497,11 @@ func reconcileExistingSnapshot(ctx context.Context, sbclient util.ClusterAPI, so
 			continue
 		}
 		if lvolIDFromURL(s.LvolURL) != sourceLvolID {
-			return nil, status.Errorf(codes.AlreadyExists, "snapshot %q already exists with a different source volume", snapshotName)
+			return nil, status.Errorf(
+				codes.AlreadyExists,
+				"snapshot %q already exists with a different source volume",
+				snapshotName,
+			)
 		}
 		creationTime := timestamppb.Now()
 		if ts, perr := time.Parse(time.RFC3339Nano, s.CreatedAt); perr == nil {
@@ -503,7 +520,10 @@ func reconcileExistingSnapshot(ctx context.Context, sbclient util.ClusterAPI, so
 	return nil, status.Errorf(codes.Internal, "snapshot %q reported as existing but was not found", snapshotName)
 }
 
-func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
+func (cs *controllerServer) CreateSnapshot(
+	ctx context.Context,
+	req *csi.CreateSnapshotRequest,
+) (*csi.CreateSnapshotResponse, error) {
 	volumeID := req.GetSourceVolumeId()
 	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "source volume ID is required")
@@ -569,7 +589,10 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 	}, nil
 }
 
-func (cs *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
+func (cs *controllerServer) DeleteSnapshot(
+	ctx context.Context,
+	req *csi.DeleteSnapshotRequest,
+) (*csi.DeleteSnapshotResponse, error) {
 	csiSnapshotID := req.GetSnapshotId()
 	if csiSnapshotID == "" {
 		return nil, status.Error(codes.InvalidArgument, "snapshot ID is required")
@@ -621,7 +644,11 @@ func getBoolParameter(params map[string]string, key string) bool {
 	return exists && (valueStr == "true" || valueStr == "True")
 }
 
-func prepareCreateVolumeReq(ctx context.Context, req *csi.CreateVolumeRequest, capacityBytes int64) (*util.CreateLVolData, error) {
+func prepareCreateVolumeReq(
+	ctx context.Context,
+	req *csi.CreateVolumeRequest,
+	capacityBytes int64,
+) (*util.CreateLVolData, error) {
 	params := req.GetParameters()
 
 	priorClass, err := getIntParameter(params, "lvol_priority_class", 0)
@@ -705,7 +732,12 @@ func prepareCreateVolumeReq(ctx context.Context, req *csi.CreateVolumeRequest, c
 // check); a non-online leftover from a failed earlier attempt is deleted so the
 // caller can recreate. It returns the existing volume's UUID to reuse, "" to
 // recreate, or an error (a size conflict, or a list/delete failure).
-func reconcileExistingVolume(ctx context.Context, sbclient util.ClusterAPI, name string, requiredBytes int64) (string, error) {
+func reconcileExistingVolume(
+	ctx context.Context,
+	sbclient util.ClusterAPI,
+	name string,
+	requiredBytes int64,
+) (string, error) {
 	volumes, err := sbclient.ListVolumes(ctx)
 	if err != nil {
 		return "", err
@@ -718,7 +750,13 @@ func reconcileExistingVolume(ctx context.Context, sbclient util.ClusterAPI, name
 			if requiredBytes > 0 {
 				aligned := util.AlignToGiBBytes(requiredBytes)
 				if v.LvolSize != aligned {
-					return "", status.Errorf(codes.AlreadyExists, "volume %q exists with size %d but requested %d", name, v.LvolSize, aligned)
+					return "", status.Errorf(
+						codes.AlreadyExists,
+						"volume %q exists with size %d but requested %d",
+						name,
+						v.LvolSize,
+						aligned,
+					)
 				}
 			}
 			klog.Infof("reconcile: reusing online existing volume %q id=%s", name, v.UUID)
@@ -733,7 +771,11 @@ func reconcileExistingVolume(ctx context.Context, sbclient util.ClusterAPI, name
 	return "", nil
 }
 
-func (cs *controllerServer) createVolume(ctx context.Context, req *csi.CreateVolumeRequest, sbclient util.ClusterAPI) (*csi.Volume, error) {
+func (cs *controllerServer) createVolume(
+	ctx context.Context,
+	req *csi.CreateVolumeRequest,
+	sbclient util.ClusterAPI,
+) (*csi.Volume, error) {
 	size := req.GetCapacityRange().GetRequiredBytes()
 	if size == 0 {
 		klog.Warningln("invalid volume size, resize to 1G")
@@ -775,7 +817,12 @@ func (cs *controllerServer) createVolume(ctx context.Context, req *csi.CreateVol
 	if err != nil {
 		if errors.Is(err, util.ErrVolumeExists) {
 			klog.Infof("createVolume: volume %q already exists, reconciling", req.GetName())
-			existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, req.GetName(), req.GetCapacityRange().GetRequiredBytes())
+			existingUUID, rerr := reconcileExistingVolume(
+				ctx,
+				sbclient,
+				req.GetName(),
+				req.GetCapacityRange().GetRequiredBytes(),
+			)
 			if rerr != nil {
 				return nil, rerr
 			}
@@ -829,7 +876,11 @@ func parseSnapshotID(csiSnapshotID string) (*spdkSnapshot, error) {
 	}
 }
 
-func (cs *controllerServer) publishVolume(ctx context.Context, volumeID string, sbclient util.ClusterAPI) (map[string]string, error) {
+func (cs *controllerServer) publishVolume(
+	ctx context.Context,
+	volumeID string,
+	sbclient util.ClusterAPI,
+) (map[string]string, error) {
 	spdkVol, err := parseVolumeID(volumeID)
 	if err != nil {
 		return nil, err
@@ -874,7 +925,10 @@ func (cs *controllerServer) unpublishVolume(ctx context.Context, volumeID string
 	return sbclient.UnpublishVolume(ctx, spdkVol.lvolID)
 }
 
-func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
+func (cs *controllerServer) ControllerExpandVolume(
+	ctx context.Context,
+	req *csi.ControllerExpandVolumeRequest,
+) (*csi.ControllerExpandVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
@@ -913,7 +967,10 @@ func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 }
 
 // ListSnapshots lists all snapshots across all clusters
-func (cs *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
+func (cs *controllerServer) ListSnapshots(
+	ctx context.Context,
+	req *csi.ListSnapshotsRequest,
+) (*csi.ListSnapshotsResponse, error) {
 
 	var entries []*util.SnapshotResp
 	clusters, err := ListClusters()
@@ -972,7 +1029,11 @@ func (cs *controllerServer) ListSnapshots(ctx context.Context, req *csi.ListSnap
 
 // paginateSnapshots returns one page of entries starting at startingToken (an
 // absolute index from a prior call). pageSize 0 returns all remaining entries.
-func paginateSnapshots(all []*csi.ListSnapshotsResponse_Entry, startingToken string, pageSize int) ([]*csi.ListSnapshotsResponse_Entry, string, error) {
+func paginateSnapshots(
+	all []*csi.ListSnapshotsResponse_Entry,
+	startingToken string,
+	pageSize int,
+) ([]*csi.ListSnapshotsResponse_Entry, string, error) {
 	start := 0
 	if startingToken != "" {
 		var parseErr error
@@ -1019,7 +1080,9 @@ func ListClusters() (clusterIds []string, err error) {
 	return
 }
 
-// func (cs *controllerServer) ListVolumes(_ context.Context, _ *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
+// func (cs *controllerServer) ListVolumes(
+// 	_ context.Context, _ *csi.ListVolumesRequest,
+// ) (*csi.ListVolumesResponse, error) {
 // 	volumes := []*csi.ListVolumesResponse_Entry{}
 
 // 	volumeIDs, err := cs.spdkNode.ListVolumes()
@@ -1049,11 +1112,16 @@ func ListClusters() (clusterIds []string, err error) {
 // 	}, nil
 // }
 
-//	func (cs *controllerServer) GetCapacity(ctx context.Context, req *csi.GetCapacityRequest) (*csi.GetCapacityResponse, error) {
+//	func (cs *controllerServer) GetCapacity(
+//		ctx context.Context, req *csi.GetCapacityRequest,
+//	) (*csi.GetCapacityResponse, error) {
 //		return nil, status.Error(codes.Unimplemented, "")
 //	}
 
-func (cs *controllerServer) ControllerGetVolume(ctx context.Context, req *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {
+func (cs *controllerServer) ControllerGetVolume(
+	ctx context.Context,
+	req *csi.ControllerGetVolumeRequest,
+) (*csi.ControllerGetVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
@@ -1102,6 +1170,7 @@ func (cs *controllerServer) ControllerGetVolume(ctx context.Context, req *csi.Co
 	}, nil
 }
 
+//nolint:unparam // error return kept for constructor symmetry / future use
 func newControllerServer(d *csicommon.CSIDriver) (*controllerServer, error) {
 	server := controllerServer{
 		DefaultControllerServer: csicommon.NewDefaultControllerServer(d),
@@ -1110,7 +1179,13 @@ func newControllerServer(d *csicommon.CSIDriver) (*controllerServer, error) {
 	return &server, nil
 }
 
-func (cs *controllerServer) handleVolumeContentSource(ctx context.Context, req *csi.CreateVolumeRequest, poolName string, vol *csi.Volume, sizeBytes int64) (*csi.Volume, error) {
+func (cs *controllerServer) handleVolumeContentSource(
+	ctx context.Context,
+	req *csi.CreateVolumeRequest,
+	poolName string,
+	vol *csi.Volume,
+	sizeBytes int64,
+) (*csi.Volume, error) {
 	volumeSource := req.GetVolumeContentSource()
 	switch volumeSource.GetType().(type) {
 	case *csi.VolumeContentSource_Snapshot:
@@ -1122,7 +1197,14 @@ func (cs *controllerServer) handleVolumeContentSource(ctx context.Context, req *
 	}
 }
 
-func (cs *controllerServer) handleSnapshotSource(ctx context.Context, snapshot *csi.VolumeContentSource_SnapshotSource, req *csi.CreateVolumeRequest, poolName string, vol *csi.Volume, sizeBytes int64) (*csi.Volume, error) {
+func (cs *controllerServer) handleSnapshotSource(
+	ctx context.Context,
+	snapshot *csi.VolumeContentSource_SnapshotSource,
+	req *csi.CreateVolumeRequest,
+	poolName string,
+	vol *csi.Volume,
+	sizeBytes int64,
+) (*csi.Volume, error) {
 	if snapshot == nil {
 		return nil, nil
 	}
@@ -1178,7 +1260,15 @@ func (cs *controllerServer) handleSnapshotSource(ctx context.Context, snapshot *
 	return vol, nil
 }
 
-func (cs *controllerServer) handleVolumeSource(ctx context.Context, srcVolume *csi.VolumeContentSource_VolumeSource, req *csi.CreateVolumeRequest, poolName string, vol *csi.Volume, sizeBytes int64) (*csi.Volume, error) {
+//nolint:unparam // poolName retained for call-site clarity
+func (cs *controllerServer) handleVolumeSource(
+	ctx context.Context,
+	srcVolume *csi.VolumeContentSource_VolumeSource,
+	req *csi.CreateVolumeRequest,
+	poolName string,
+	vol *csi.Volume,
+	sizeBytes int64,
+) (*csi.Volume, error) {
 	if srcVolume == nil {
 		return nil, nil
 	}
@@ -1256,7 +1346,7 @@ func fetchPVCAnnotations(ctx context.Context, pvcName, pvcNamespace string) (map
 		return nil, fmt.Errorf("could not get PVC %s in namespace %s: %w", pvcName, pvcNamespace, err)
 	}
 
-	return pvc.ObjectMeta.Annotations, nil
+	return pvc.Annotations, nil
 }
 
 // pvcAnnotation returns the value for newKey, falling back to deprecatedKey for backward compat.

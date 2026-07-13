@@ -161,16 +161,24 @@ func NewsimplyBlockClient(ctx context.Context, clusterID, poolIDOrName string) (
 	credential := clusterConfig.ClusterSecret
 	if tokenPath := os.Getenv("SPDKCSI_API_TOKEN_PATH"); tokenPath != "" {
 		if tokenBytes, err := os.ReadFile(tokenPath); err != nil {
-			klog.Warningf("SPDKCSI_API_TOKEN_PATH is set but token file %q could not be read for cluster %s: %v; falling back to cluster_secret", tokenPath, clusterID, err)
+			klog.Warningf(
+				"SPDKCSI_API_TOKEN_PATH is set but token file %q could not be read for cluster %s: %v; falling back to cluster_secret", //nolint:lll // unwrappable string/log/signature
+				tokenPath,
+				clusterID,
+				err,
+			)
 		} else if token := strings.TrimSpace(string(tokenBytes)); token == "" {
-			klog.Warningf("SPDKCSI_API_TOKEN_PATH is set but token file %q is empty for cluster %s; falling back to cluster_secret", tokenPath, clusterID)
+			klog.Warningf("SPDKCSI_API_TOKEN_PATH is set but token file %q is empty for cluster %s; falling back to cluster_secret", tokenPath, clusterID) //nolint:lll // unwrappable string/log/signature
 		} else {
 			credential = token
 			klog.Infof("Using API token from file for cluster %s", clusterID)
 		}
 	}
 	if credential == "" {
-		return nil, fmt.Errorf("invalid cluster configuration for clusterID %s: no cluster_secret and no API token available", clusterID)
+		return nil, fmt.Errorf(
+			"invalid cluster configuration for clusterID %s: no cluster_secret and no API token available",
+			clusterID,
+		)
 	}
 
 	klog.Infof("Simplyblock client created for ClusterID:%s, Endpoint:%s",
@@ -222,7 +230,7 @@ func isUUID(s string) bool {
 				return false
 			}
 		default:
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 				return false
 			}
 		}
@@ -336,7 +344,7 @@ func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
 }
 
 func (nvmf *initiatorNVMf) Disconnect(ctx context.Context) error {
-	//deviceGlob := fmt.Sprintf(DevDiskByID, nvmf.model)
+	// deviceGlob := fmt.Sprintf(DevDiskByID, nvmf.model)
 	deviceGlob := fmt.Sprintf(DevDiskByID, fmt.Sprintf("%s*_[0-9]*", nvmf.model))
 	devicePath, err := filepath.Glob(deviceGlob)
 	if err != nil {
@@ -420,12 +428,12 @@ func disconnectDevicePath(ctx context.Context, devicePath string) error {
 
 	realPath, err := filepath.EvalSymlinks(devicePath)
 	if err != nil {
-		return fmt.Errorf("Failed to resolve device path from %s: %v", devicePath, err)
+		return fmt.Errorf("failed to resolve device path from %s: %w", devicePath, err)
 	}
 
 	subsystems, err := getSubsystemsForDevice(realPath)
 	if err != nil {
-		return fmt.Errorf("Failed to get subsystems for %s: %v", realPath, err)
+		return fmt.Errorf("failed to get subsystems for %s: %w", realPath, err)
 	}
 
 	for _, host := range subsystems {
@@ -687,7 +695,11 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 	for devPath := range devicePresentMap {
 		if !currentDevices[devPath] {
 			lvolID := deviceToLvolIDMap[devPath]
-			klog.Errorf("Device %s is no longer present — all NVMe-oF connections were lost and the kernel removed the device (lvolID=%s)", devPath, lvolID)
+			klog.Errorf(
+				"Device %s is no longer present — all NVMe-oF connections were lost and the kernel removed the device (lvolID=%s)",
+				devPath,
+				lvolID,
+			)
 			delete(devicePresentMap, devPath)
 			delete(deviceToLvolIDMap, devPath)
 			if lvolID != "" {
@@ -741,7 +753,7 @@ func isTCPReachable(ctx context.Context, ip string, port int) bool {
 	if err != nil {
 		return false
 	}
-	conn.Close()
+	_ = conn.Close()
 	return true
 }
 
@@ -763,7 +775,12 @@ func isNodeOnline(ctx context.Context, client *ClusterClient, nodeID, ip string,
 	return true
 }
 
-func fetchLvolConnection(ctx context.Context, client *ClusterClient, lvolID string, hostNQN string) ([]*LvolConnectResp, error) {
+func fetchLvolConnection(
+	ctx context.Context,
+	client *ClusterClient,
+	lvolID string,
+	hostNQN string,
+) ([]*LvolConnectResp, error) {
 	poolID, err := client.poolForVolume(ctx, lvolID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve pool for volume %s: %w", lvolID, err)
@@ -854,7 +871,11 @@ func MonitorConnection(markBroken func(lvolID string), manager *sbkube.Manager, 
 			klog.Errorf("MonitorConnection error (%d consecutive): %v", consecutiveErrors, err)
 
 			if consecutiveErrors >= monitorCircuitAfter {
-				klog.Warningf("MonitorConnection: circuit open after %d failures, cooling down for %s", consecutiveErrors, monitorCircuitCooldown)
+				klog.Warningf(
+					"MonitorConnection: circuit open after %d failures, cooling down for %s",
+					consecutiveErrors,
+					monitorCircuitCooldown,
+				)
 				time.Sleep(monitorCircuitCooldown)
 				continue
 			}
@@ -970,6 +991,7 @@ func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []pat
 	return nil
 }
 
+//nolint:unparam // devicePath kept for parity with reconcileNonOptimizedPaths
 func reconcileOptimizedPath(
 	sbcClient *ClusterClient,
 	nodeInfo *NodeInfo,
@@ -996,7 +1018,10 @@ func reconcileOptimizedPath(
 	}
 
 	if !isNodeOnline(context.Background(), sbcClient, nodeInfo.NodeID, conn.IP, conn.Port) {
-		klog.Infof("reconcileOptimizedPath: primary node %s not yet online, skipping IP change reconnect", nodeInfo.NodeID)
+		klog.Infof(
+			"reconcileOptimizedPath: primary node %s not yet online, skipping IP change reconnect",
+			nodeInfo.NodeID,
+		)
 		return
 	}
 	if err := connectViaNVMe(context.Background(), conn, ctrlLossTmo, 1); err != nil {
@@ -1006,6 +1031,8 @@ func reconcileOptimizedPath(
 
 // reconcileNonOptimizedPaths handles connections[1..N] (secondary nodes).
 // Works for both 2-path (1 secondary) and 3-path (2 secondaries).
+//
+//nolint:unparam // devicePath kept for parity with reconcileOptimizedPath
 func reconcileNonOptimizedPaths(
 	sbcClient *ClusterClient,
 	nodeInfo *NodeInfo,
@@ -1032,7 +1059,7 @@ func reconcileNonOptimizedPaths(
 	}
 
 	// Step 1: disconnect stale paths (IP no longer expected → node IP changed).
-	for ip, _ := range activeIPMap {
+	for ip := range activeIPMap {
 		if !expectedIPSet[ip] {
 			delete(activeIPMap, ip)
 		}

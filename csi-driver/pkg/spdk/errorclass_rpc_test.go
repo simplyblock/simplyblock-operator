@@ -82,9 +82,21 @@ func TestRPCErrorClassifiers(t *testing.T) {
 		err   error
 		want  controlPlaneErrorClass
 	}{
-		{"timeout", fmt.Errorf("POST: %w", context.DeadlineExceeded), controlPlaneErrorClass{Code: codes.DeadlineExceeded, Retryable: true}},
-		{"canceled", fmt.Errorf("POST: %w", context.Canceled), controlPlaneErrorClass{Code: codes.Canceled, Retryable: true}},
-		{"conn_refused", fmt.Errorf("POST: %w", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}), controlPlaneErrorClass{Code: codes.Unavailable, Retryable: true}},
+		{
+			"timeout",
+			fmt.Errorf("POST: %w", context.DeadlineExceeded),
+			controlPlaneErrorClass{Code: codes.DeadlineExceeded, Retryable: true},
+		},
+		{
+			"canceled",
+			fmt.Errorf("POST: %w", context.Canceled),
+			controlPlaneErrorClass{Code: codes.Canceled, Retryable: true},
+		},
+		{
+			"conn_refused",
+			fmt.Errorf("POST: %w", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}),
+			controlPlaneErrorClass{Code: codes.Unavailable, Retryable: true},
+		},
 		{"unknown", errors.New("secret parse failed"), controlPlaneErrorClass{Code: codes.Internal}},
 	}
 
@@ -106,12 +118,27 @@ func TestRPCErrorClassifiers(t *testing.T) {
 			404: {Code: codes.NotFound}, 409: {Idempotent: true}}},
 		{"DeleteSnapshot", DeleteSnapshotErrorClassifier, classifyDeleteSnapshotError, map[int]controlPlaneErrorClass{
 			404: {Code: codes.OK, Success: true}}},
-		{"ControllerExpandVolume", ControllerExpandVolumeErrorClassifier, classifyControllerExpandVolumeError, map[int]controlPlaneErrorClass{
-			404: {Code: codes.NotFound}}},
-		{"ControllerGetVolume", ControllerGetVolumeErrorClassifier, classifyControllerGetVolumeError, map[int]controlPlaneErrorClass{
-			404: {Code: codes.NotFound}}},
-		{"ValidateVolumeCapabilities", ValidateVolumeCapabilitiesErrorClassifier, classifyValidateVolumeCapabilitiesError, map[int]controlPlaneErrorClass{
-			404: {Code: codes.NotFound}}},
+		{
+			"ControllerExpandVolume",
+			ControllerExpandVolumeErrorClassifier,
+			classifyControllerExpandVolumeError,
+			map[int]controlPlaneErrorClass{
+				404: {Code: codes.NotFound}},
+		},
+		{
+			"ControllerGetVolume",
+			ControllerGetVolumeErrorClassifier,
+			classifyControllerGetVolumeError,
+			map[int]controlPlaneErrorClass{
+				404: {Code: codes.NotFound}},
+		},
+		{
+			"ValidateVolumeCapabilities",
+			ValidateVolumeCapabilitiesErrorClassifier,
+			classifyValidateVolumeCapabilitiesError,
+			map[int]controlPlaneErrorClass{
+				404: {Code: codes.NotFound}},
+		},
 		{"ListSnapshots", ListSnapshotsErrorClassifier, classifyListSnapshotsError, nil},
 	}
 
@@ -123,7 +150,12 @@ func TestRPCErrorClassifiers(t *testing.T) {
 				t.Errorf("%s: Classify = %+v, want %+v", label, got, want)
 			}
 			ce := rpc.classify(err)
-			got := outcome{code: status.Code(ce), success: ce.IsSuccess(), idempotent: ce.IsIdempotent(), retryable: ce.Retryable()}
+			got := outcome{
+				code:       status.Code(ce),
+				success:    ce.IsSuccess(),
+				idempotent: ce.IsIdempotent(),
+				retryable:  ce.Retryable(),
+			}
 			if want := observe(want); got != want {
 				t.Errorf("%s: handler outcome = %+v, want %+v", label, got, want)
 			}
@@ -171,7 +203,11 @@ func TestClassifyRPCErrorFunctions(t *testing.T) {
 		{"DeleteSnapshot", classifyDeleteSnapshotError, DeleteSnapshotErrorClassifier},
 		{"ControllerExpandVolume", classifyControllerExpandVolumeError, ControllerExpandVolumeErrorClassifier},
 		{"ControllerGetVolume", classifyControllerGetVolumeError, ControllerGetVolumeErrorClassifier},
-		{"ValidateVolumeCapabilities", classifyValidateVolumeCapabilitiesError, ValidateVolumeCapabilitiesErrorClassifier},
+		{
+			"ValidateVolumeCapabilities",
+			classifyValidateVolumeCapabilitiesError,
+			ValidateVolumeCapabilitiesErrorClassifier,
+		},
 		{"ListSnapshots", classifyListSnapshotsError, ListSnapshotsErrorClassifier},
 	}
 	for _, tc := range cases {

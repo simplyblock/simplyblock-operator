@@ -74,7 +74,7 @@ func TestVolumeContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	volumeContext := map[string]string{
 		"key1": "value1",

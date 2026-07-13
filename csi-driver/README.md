@@ -171,7 +171,7 @@ We welcome contributions!
 3. Commit your changes with a clear message
 4. Push to your fork and open a Pull Request
 
-Please review the [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+Please review the [CONTRIBUTING.md](../CONTRIBUTING.md) for details.
 
 ---
 

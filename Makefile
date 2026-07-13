@@ -6,6 +6,7 @@
 ATLAS_DIR    := atlas-lib
 CSI_DIR      := csi-driver
 OPERATOR_DIR := operator
+HELM_DIR     := helm-charts
 
 # Run orchestrated targets serially; each component's Makefile manages its own
 # internal parallelism.
@@ -16,12 +17,13 @@ OPERATOR_DIR := operator
 .PHONY: all build test lint fmt vet help \
         atlas atlas-build atlas-test atlas-lint atlas-fmt atlas-vet \
         csi csi-build csi-test csi-lint csi-fmt csi-vet \
-        operator operator-manifests operator-build-installer operator-build operator-test operator-lint operator-fmt operator-vet
+        operator operator-manifests operator-build-installer operator-build operator-test operator-lint operator-fmt operator-vet \
+        helm-sync
 
 # ─── Aggregate ──────────────────────────────────────────────────────────────
 all: build test ## Build and test every component.
 
-build: atlas-build csi-build operator-build ## Build every component.
+build: atlas-build csi-build operator-build-installer operator-build helm-sync ## Build every component.
 
 test: atlas-test csi-test operator-test ## Test every component.
 
@@ -90,6 +92,12 @@ operator-fmt: ## Format operator.
 
 operator-vet: ## Vet operator.
 	$(MAKE) -C $(OPERATOR_DIR) vet
+
+# ─── helm ─────────────────────────────────────────────────────────────────
+# Sync the operator's generated CRDs and RBAC roles into the Helm chart. Depends
+# on operator-manifests so the copied sources are freshly generated (not stale).
+helm-sync: operator-manifests ## Sync operator CRDs and RBAC into the Helm chart.
+	bash $(HELM_DIR)/scripts/sync-from-operator.sh $(OPERATOR_DIR)
 
 # ─── help ─────────────────────────────────────────────────────────────────
 help: ## Show this help.

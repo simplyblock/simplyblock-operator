@@ -144,7 +144,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build --build-arg VERSION=$(VERSION) --build-arg RELEASE=1 -t ${IMG} .
+	$(CONTAINER_TOOL) build --build-arg VERSION=$(VERSION) --build-arg RELEASE=1 -t ${IMG} -f Dockerfile ..
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -167,7 +167,7 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	fi
 	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
 	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
-	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} --build-arg VERSION=$(VERSION) --build-arg RELEASE=1 -f Dockerfile.cross .
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} --build-arg VERSION=$(VERSION) --build-arg RELEASE=1 -f Dockerfile.cross ..
 	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
 	rm Dockerfile.cross
 
@@ -180,13 +180,13 @@ docker-buildx-ecr: ## Build and push docker image to ECR public for cross-platfo
 	fi
 	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
 	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
-	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${ECR_IMG} --build-arg VERSION=$(VERSION) --build-arg RELEASE=1 -f Dockerfile.cross .
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${ECR_IMG} --build-arg VERSION=$(VERSION) --build-arg RELEASE=1 -f Dockerfile.cross ..
 	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
 	rm Dockerfile.cross
 
 .PHONY: docker-build-simplyblock-rebalancer
 docker-build-simplyblock-rebalancer: ## Build the simplyblock-rebalancer image.
-	$(CONTAINER_TOOL) build -t ${REBALANCER_IMG} -f Dockerfile.simplyblock-rebalancer .
+	$(CONTAINER_TOOL) build -t ${REBALANCER_IMG} -f Dockerfile.simplyblock-rebalancer ..
 
 .PHONY: docker-push-simplyblock-rebalancer
 docker-push-simplyblock-rebalancer: ## Push the simplyblock-rebalancer image.
@@ -196,14 +196,14 @@ docker-push-simplyblock-rebalancer: ## Push the simplyblock-rebalancer image.
 docker-buildx-simplyblock-rebalancer: ## Build and push multi-arch simplyblock-rebalancer image to quay.io.
 	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
 	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
-	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${REBALANCER_IMG} -f Dockerfile.simplyblock-rebalancer .
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${REBALANCER_IMG} -f Dockerfile.simplyblock-rebalancer ..
 	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
 
 .PHONY: docker-buildx-ecr-simplyblock-rebalancer
 docker-buildx-ecr-simplyblock-rebalancer: ## Build and push multi-arch simplyblock-rebalancer image to ECR.
 	- $(CONTAINER_TOOL) buildx create --name simplyblock-operator-builder
 	$(CONTAINER_TOOL) buildx use simplyblock-operator-builder
-	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${ECR_REBALANCER_IMG} -f Dockerfile.simplyblock-rebalancer .
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${ECR_REBALANCER_IMG} -f Dockerfile.simplyblock-rebalancer ..
 	- $(CONTAINER_TOOL) buildx rm simplyblock-operator-builder
 
 .PHONY: build-installer

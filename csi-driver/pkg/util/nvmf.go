@@ -61,7 +61,11 @@ func parseTLSMode(s string) (tlsMode, error) {
 	case "authenticated":
 		return tlsAuthenticated, nil
 	default:
-		return tlsDisabled, fmt.Errorf("invalid %s value %q (want disabled, anonymous, or authenticated)", envTLSConnect, s)
+		return tlsDisabled, fmt.Errorf(
+			"invalid %s value %q (want disabled, anonymous, or authenticated)",
+			envTLSConnect,
+			s,
+		)
 	}
 }
 
@@ -264,7 +268,10 @@ func (c *ClusterClient) ListSnapshots(ctx context.Context) ([]*SnapshotResp, err
 }
 
 // CloneSnapshot clones a snapshot to a new volume
-func (c *ClusterClient) CloneSnapshot(ctx context.Context, snapshotID, cloneName, newSize, pvcName string) (string, error) {
+func (c *ClusterClient) CloneSnapshot(
+	ctx context.Context,
+	snapshotID, cloneName, newSize, pvcName string,
+) (string, error) {
 	lvolID, err := c.API.cloneSnapshot(ctx, c.poolID, snapshotID, cloneName, newSize, pvcName)
 	if err != nil {
 		return "", err

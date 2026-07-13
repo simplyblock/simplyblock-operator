@@ -44,7 +44,12 @@ type nonBlockingGRPCServer struct {
 	server *grpc.Server
 }
 
-func (s *nonBlockingGRPCServer) Start(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer) {
+func (s *nonBlockingGRPCServer) Start(
+	endpoint string,
+	ids csi.IdentityServer,
+	cs csi.ControllerServer,
+	ns csi.NodeServer,
+) {
 	s.wg.Add(1)
 
 	go s.serve(endpoint, ids, cs, ns)
@@ -62,7 +67,12 @@ func (s *nonBlockingGRPCServer) ForceStop() {
 	s.server.Stop()
 }
 
-func (s *nonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer) {
+func (s *nonBlockingGRPCServer) serve(
+	endpoint string,
+	ids csi.IdentityServer,
+	cs csi.ControllerServer,
+	ns csi.NodeServer,
+) {
 	var err error
 
 	proto, addr, err := parseEndpoint(endpoint)
