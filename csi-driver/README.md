@@ -1,29 +1,26 @@
-# Simplyblock CSI Driver for Kubernetes
+# Simplyblock CSI Driver
 
-**High-performance NVMe/TCP (NVMe-over-Fabrics) CSI Driver for Kubernetes**
+**High-performance NVMe/TCP (NVMe-over-Fabrics) CSI driver for Kubernetes**
 
-[![Documentation](https://img.shields.io/badge/Docs-simplyblock-blue)](https://docs.simplyblock.io/latest/deployments/kubernetes/) [![Issues](https://img.shields.io/github/issues/simplyblock/simplyblock-csi)](https://github.com/simplyblock/simplyblock-csi/issues)
+![](../assets/simplyblock-logo.svg)
 
-![](assets/simplyblock-logo.svg)
+> Part of the [simplyblock-operator](../README.md) monorepo. For the repository overview, license,
+> and contribution guidelines, see the [root README](../README.md).
 
 ---
 
 ## 🚀 Overview
 
-`simplyblock-csi` is the official **simplyblock storage plugin for Kubernetes**. 
+The **simplyblock CSI driver** is the official simplyblock storage plugin for Kubernetes. It leverages
+SPDK and NVMe-over-TCP to deliver **high-performance, ultra-low-latency block storage** directly inside
+Kubernetes, without specialized hardware or vendor lock-in. It supports dynamic provisioning, snapshots,
+and seamless integration via the Container Storage Interface (CSI).
 
-The **simplyblock CSI** extension delivers **high-performance block storage** to Kubernetes. Simplyblock leverages SPDK and NVMe-over-TCP
-to implement a high-performance and ultra-low latency storage solution.
-
-Simplyblock's CSI driver enables **enterprise-grade, NVMe/TCP-powered block storage** directly inside Kubernetes, offering high performance,
-scalability, and resilience without the need for specialized hardware or vendor lock-in. It supports dynamic provisioning, snapshots, and
-seamless integration via the Container Storage Interface (CSI).
-
-With simplyblock, you can seamlessly integrate **software-defined storage (SDS)** into your Kubernetes environment, enabling support for
-advanced features like:
+Where the [operator](../operator/README.md) manages the lifecycle of the storage platform, the CSI
+driver provisions and attaches volumes to workloads, enabling **software-defined storage (SDS)** with
+features like:
 
 - ⚡ **Ultra-low latency**: Unlock performance with NVMe-over-TCP
-- 🧩 **Native Proxmox integration**: Manage volumes directly in Kubernetes
 - 🛡️ **Enterprise data services**: Snapshots, clones, erasure coding, multi-tenancy
 - 🔒 **Secure & robust**: Cluster authentication and Quality of Service (QoS)
 - ☁️ **Cloud & on-prem flexibility**: Deploy into any Kubernetes-based distribution
@@ -46,33 +43,22 @@ advanced features like:
 
 ---
 
-## Kubernetes Version Support
-
-| Branch/Tag     | Kubernetes Version | Stability |
-|----------------|--------------------|-----------|
-| `master`       | 1.21+              | Stable    |
-| `v0.1.0`       | 1.21+              | Beta      |
-| `v0.1.1`       | 1.21+              | Stable    |
-
----
-
 ## 📦 Getting Started
 
-The following section describes the installation of the CSI driver only. If you want to install a full simplyblock storage cluster into Kubernetes, please refer to the full documentation: [Simplyblock Kubernetes Deployment Guide](https://docs.simplyblock.io/latest/deployments/kubernetes/).
+This section covers installing the CSI driver on its own. To install a full simplyblock storage cluster
+into Kubernetes, refer to the [Simplyblock Kubernetes Deployment Guide](https://docs.simplyblock.io/latest/deployments/kubernetes/).
 
 ### 1. Prerequisites
 
-Ensure your cluster meets the requirements:
+Ensure the kernel NVMe/TCP driver is loaded on every node:
 
-- Kernel NVMe/TCP driver is loaded:
+```bash
+modprobe nvme-tcp
+lsmod | grep 'nvme_'
+```
 
-  ```bash
-  modprobe nvme-tcp
-  lsmod | grep 'nvme_'
-  ```
-
-You should see `nvme_tcp`, `nvme_fabrics`, and related modules.
-To make it persistent, add to `/etc/modules-load.d/nvme-tcp.conf` or `/etc/modules` depending on your distro.
+You should see `nvme_tcp`, `nvme_fabrics`, and related modules. To make it persistent, add the module
+to `/etc/modules-load.d/nvme-tcp.conf` or `/etc/modules`, depending on your distro.
 
 ### 2. Install via Helm (Recommended)
 
@@ -100,56 +86,37 @@ kubectl -n simplyblock-csi get pods -l release=simplyblock-csi
 
 You should see controller and node pods in the `Running` state.
 
-## Storage Cluster Installation in Kubernetes
+### Deployment topologies
 
 Simplyblock supports different Kubernetes deployment topologies:
 
-* **Disaggregated Setup**
-  Storage nodes on dedicated worker nodes or separate clusters; CSI driver connects client clusters to storage.
+* **Disaggregated Setup** — storage nodes on dedicated worker nodes or separate clusters; the CSI driver
+  connects client clusters to storage.
   📖 [Docs](https://docs.simplyblock.io/latest/deployments/kubernetes/k8s-disaggregated/)
-
-* **Hyper-Converged Setup**
-  CSI driver runs alongside storage and workloads in the same cluster, enabling local storage affinity and simplified topology.
+* **Hyper-Converged Setup** — the CSI driver runs alongside storage and workloads in the same cluster,
+  enabling local storage affinity and a simplified topology.
   📖 [Docs](https://docs.simplyblock.io/latest/deployments/kubernetes/k8s-hyperconverged/)
-
-For details, see the [Kubernetes Deployment Guide](https://docs.simplyblock.io/latest/deployments/kubernetes/).
 
 ---
 
 ## 🖥️ Usage
 
-Once deployed, you can manage persistent volumes using standard Kubernetes objects:
-
-* **StorageClasses**
-* **PersistentVolumeClaims**
-* **Volume Snapshots**
-* **Clones and resizing**
-* **QoS policies via CSI driver**
+Once deployed, manage persistent volumes using standard Kubernetes objects: **StorageClasses**,
+**PersistentVolumeClaims**, **Volume Snapshots**, clones, resizing, and QoS policies.
 
 See full examples in the [Usage Guide](https://docs.simplyblock.io/latest/usage/simplyblock-csi/).
 
 ---
 
-## 🛠️ Troubleshooting & Operations
+## 🛠️ Troubleshooting
 
-* Verify CSI pods are running:
+```bash
+kubectl -n simplyblock-csi get pods            # verify CSI pods are running
+kubectl -n simplyblock-csi logs <pod-name>     # inspect a node or controller pod
+```
 
-  ```bash
-  kubectl -n simplyblock-csi get pods
-  ```
-* Check logs for a node or controller pod:
-
-  ```bash
-  kubectl -n simplyblock-csi logs <pod-name>
-  ```
-
-For advanced troubleshooting, monitoring, and maintenance guidance, see the [Operations Docs](https://docs.simplyblock.io/25.7.1/usage/simplyblock-csi/).
-
----
-
-## 📄 License
-
-This project is licensed under the **Apache 2.0 License** — see the [LICENSE](LICENSE) file for details.
+For advanced troubleshooting, monitoring, and maintenance guidance, see the
+[Operations Docs](https://docs.simplyblock.io/latest/usage/simplyblock-csi/).
 
 ---
 
@@ -160,29 +127,4 @@ This project is licensed under the **Apache 2.0 License** — see the [LICENSE](
 * [Disaggregated Setup](https://docs.simplyblock.io/latest/deployments/kubernetes/k8s-disaggregated/)
 * [Hyper-Converged Setup](https://docs.simplyblock.io/latest/deployments/kubernetes/k8s-hyperconverged/)
 
----
-
-## 🤝 Contributing
-
-We welcome contributions!
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Commit your changes with a clear message
-4. Push to your fork and open a Pull Request
-
-Please review the [CONTRIBUTING.md](../CONTRIBUTING.md) for details.
-
----
-
-## 📬 Support
-
-* 📖 [Documentation](https://docs.simplyblock.io/latest/deployments/kubernetes/)
-* 🐞 [GitHub Issues](https://github.com/simplyblock/simplyblock-csi/issues)
-* 🌐 [Simplyblock Website](https://www.simplyblock.io)
-
-Maintained by the **simplyblock team**.
-
----
-
-**Unlock NVMe-grade performance for your Kubernetes workloads with Simplyblock CSI.**
+For license, contribution guidelines, and support, see the [root README](../README.md).

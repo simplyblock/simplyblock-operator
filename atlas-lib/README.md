@@ -1,13 +1,18 @@
-# atlas
+# Atlas
 
 Shared Go library for the simplyblock **Kubernetes operator** and **CSI
 driver**. It holds the node-level storage primitives both consumers need —
 NVMe discovery, NVMe-oF fabric management, NQN handling, and the
 logical-volume ↔ NVMe-device mapping — so neither re-implements them.
 
-```bash
-go get github.com/simplyblock/atlas
-```
+![](../assets/simplyblock-logo.svg)
+
+> Part of the [simplyblock-operator](../README.md) monorepo. For the repository overview, license,
+> and contribution guidelines, see the [root README](../README.md).
+
+The library lives in this monorepo and is consumed by the operator and CSI driver via a Go
+`replace` directive (module path `github.com/simplyblock/atlas` → `../atlas-lib`); it is not
+published or installed independently.
 
 ## Layout
 
