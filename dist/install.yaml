@@ -1294,6 +1294,7 @@ spec:
                     - name
                     type: object
                   localEndpoint:
+                    pattern: ^https://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                     type: string
                   localTesting:
                     type: boolean
@@ -1359,6 +1360,7 @@ spec:
                 properties:
                   baseURL:
                     description: BaseURL is the HashiCorp Vault endpoint (e.g. https://vault.example.com:8200).
+                    pattern: ^https://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                     type: string
                 type: object
               inflightIOThreshold:
