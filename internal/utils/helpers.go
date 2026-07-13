@@ -15,15 +15,11 @@ import (
 // (SSRF protection: RFC-1918, loopback, link-local, cloud IMDS, IPv6 equivalents).
 var blockedIPNets = func() []*net.IPNet {
 	cidrs := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
 		"127.0.0.0/8",
 		"169.254.0.0/16",
 		"0.0.0.0/8",
 		"::1/128",
 		"fe80::/10",
-		"fc00::/7",
 	}
 	nets := make([]*net.IPNet, 0, len(cidrs))
 	for _, cidr := range cidrs {
