@@ -21,7 +21,7 @@ OPERATOR_DIR := operator
 # ─── Aggregate ──────────────────────────────────────────────────────────────
 all: build test ## Build and test every component.
 
-build: atlas-build csi-build operator-build ## Build every component.
+build: atlas-build csi-build operator-build-installer operator-build ## Build every component.
 
 test: atlas-test csi-test operator-test ## Test every component.
 
