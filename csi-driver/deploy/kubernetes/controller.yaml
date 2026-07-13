@@ -1,0 +1,116 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Arm Limited and Contributors
+# Copyright (c) Intel Corporation
+---
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  name: simplyblock-csi-controller
+spec:
+  serviceName: simplyblock-csi-controller
+  replicas: 1
+  selector:
+    matchLabels:
+      app: csi-controller
+  template:
+    metadata:
+      labels:
+        app: csi-controller
+    spec:
+      serviceAccountName: simplyblock-csi-controller-sa
+      hostNetwork: true
+      containers:
+      - name: csi-provisioner
+        image: registry.k8s.io/sig-storage/csi-provisioner:v4.0.1
+        imagePullPolicy: "Always"
+        args:
+        - "--v=5"
+        - "--csi-address=unix:///csi/csi-provisioner.sock"
+        - "--timeout=30s"
+        - "--retry-interval-start=500ms"
+        - "--leader-election=false"
+        - "--extra-create-metadata=true"
+        - "--feature-gates=Topology=true"
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /csi
+      - name: csi-snapshotter
+        image: registry.k8s.io/sig-storage/csi-snapshotter:v8.2.0
+        args:
+        - "--csi-address=unix:///csi/csi-provisioner.sock"
+        - "--v=5"
+        - "--timeout=150s"
+        - "--leader-election=false"
+        imagePullPolicy: "Always"
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /csi
+      - name: csi-attacher
+        image: gcr.io/k8s-staging-sig-storage/csi-attacher:v4.5.1
+        imagePullPolicy: "Always"
+        args:
+        - "--v=5"
+        - "--csi-address=unix:///csi/csi-provisioner.sock"
+        - "--leader-election=false"
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /csi
+      - name: csi-resizer
+        image: gcr.io/k8s-staging-sig-storage/csi-resizer:v1.10.1
+        imagePullPolicy: "Always"
+        args:
+          - "--v=5"
+          - "--csi-address=unix:///csi/csi-provisioner.sock"
+          - "--leader-election=false"
+        volumeMounts:
+          - name: socket-dir
+            mountPath: /csi
+      - name: csi-health-monitor
+        image: gcr.io/k8s-staging-sig-storage/csi-external-health-monitor-controller:v0.11.0
+        imagePullPolicy: "Always"
+        args:
+          - "--v=5"
+          - "--csi-address=unix:///csi/csi-provisioner.sock"
+          #- "--leader-election"
+          - "--http-endpoint=:8080"
+        volumeMounts:
+          - name: socket-dir
+            mountPath:  /csi
+        ports:
+          - containerPort: 8080
+            name: http-endpoint
+            protocol: TCP
+      - name: csi-controller
+        image: simplyblock/spdkcsi:latest
+        imagePullPolicy: "Always"
+        args:
+        - "--v=5"
+        - "--endpoint=unix:///csi/csi-provisioner.sock"
+        - "--nodeid=$(NODE_ID)"
+        - "--controller"
+        env:
+        - name: NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /csi
+        - name: csi-config
+          mountPath: /etc/spdkcsi-config/
+          readOnly: true
+        - name: csi-secret
+          mountPath: /etc/spdkcsi-secret/
+          readOnly: true
+      volumes:
+      - name: socket-dir
+        emptyDir:
+          medium: "Memory"
+      - name: csi-config
+        configMap:
+          name: simplyblock-csi-cm
+      - name: csi-secret
+        secret:
+          secretName: simplyblock-csi-secret

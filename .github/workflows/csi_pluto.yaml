@@ -1,0 +1,35 @@
+name: "CSI: K8s API Version Check"
+on:
+    pull_request:
+      paths:
+        - "csi-driver/**"
+        - ".github/workflows/csi_pluto.yaml"
+    push:
+      branches: ['main']
+      paths:
+        - "csi-driver/**"
+        - ".github/workflows/csi_pluto.yaml"
+
+jobs:
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: csi-driver
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # https://pluto.docs.fairwinds.com/advanced/#display-options
+    - name: Download pluto
+      uses: FairwindsOps/pluto/github-action@master
+
+    - name: Check deploy folder
+      run: |
+        pluto detect-files -d deploy --ignore-deprecations --ignore-removals
+    - name: Check kubernetes folder
+      run: |
+        pluto detect-files -d deploy/kubernetes

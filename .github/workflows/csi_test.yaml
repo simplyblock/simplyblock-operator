@@ -1,0 +1,31 @@
+name: "CSI: Tests"
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - "csi-driver/**"
+      - ".github/workflows/csi_test.yaml"
+  workflow_dispatch:
+
+jobs:
+  unit-test:
+    name: Unit Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: csi-driver
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: csi-driver/go.mod
+
+    - name: Tidy Go modules
+      run: go mod tidy
+
+    - name: Test
+      run: make test SKIP_TESTS=TestSanity

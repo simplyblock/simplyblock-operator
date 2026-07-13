@@ -1,0 +1,27 @@
+name: "Atlas: Tests"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "atlas-lib/**"
+      - ".github/workflows/atlas_test.yaml"
+  pull_request:
+    paths:
+      - "atlas-lib/**"
+      - ".github/workflows/atlas_test.yaml"
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: atlas-lib
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go vet ./...
+      - run: go test -race -coverprofile=coverage.out ./...

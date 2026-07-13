@@ -1,0 +1,156 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Arm Limited and Contributors
+# Copyright (c) Intel Corporation
+---
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  name: simplyblock-csi-controller
+  namespace: {{ .Release.Namespace }}
+{{ include "spdk.labels" . | indent 2 }}
+  annotations:
+    {{- with .Values.simplyBlockAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  serviceName: simplyblock-csi-controller
+  replicas: {{ .Values.controller.replicas }}
+  selector:
+    matchLabels:
+      app: csi-controller
+  template:
+    metadata:
+{{ include "spdk.labels" . | indent 6 }}
+        app: csi-controller
+      annotations:
+        {{- range $key, $value := .Values.podAnnotations }}
+        {{ $key }}: {{ $value | quote }}
+        {{- end }}
+    spec:
+      serviceAccountName: simplyblock-csi-controller-sa
+      {{- if .Values.controller.nodeSelector.create }}
+      nodeSelector:
+        {{ .Values.controller.nodeSelector.key }}: {{ .Values.controller.nodeSelector.value }}
+      {{- end }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- if .Values.controller.tolerations.create }}
+      tolerations:
+      {{- range .Values.node.tolerations.list }}
+      - operator: {{ .operator | quote }}
+        {{- if .effect }}
+        effect: {{ .effect | quote }}
+        {{- end }}
+        {{- if .key }}
+        key: {{ .key | quote }}
+        {{- end }}
+        {{- if .value }}
+        value: {{ .value | quote }}
+        {{- end }}
+      {{- end }}
+      {{- end }}
+      containers:
+      - name: csi-provisioner
+        image: "{{ .Values.image.csiProvisioner.repository }}:{{ .Values.image.csiProvisioner.tag }}"
+        imagePullPolicy: {{ .Values.image.csiProvisioner.pullPolicy }}
+        args:
+        - "--v=5"
+        - "--csi-address=unix:///csi/csi-provisioner.sock"
+        - "--timeout=180s"
+        - "--kube-api-qps=50"
+        - "--kube-api-burst=100"
+        - "--worker-threads=1"
+        - "--retry-interval-start=2s"
+        - "--leader-election=false"
+        - "--extra-create-metadata=true"
+        - "--feature-gates=Topology=true"
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /csi
+      - name: csi-snapshotter
+        image: "{{ .Values.image.csiSnapshotter.repository }}:{{ .Values.image.csiSnapshotter.tag }}"
+        args:
+        - "--csi-address=unix:///csi/csi-provisioner.sock"
+        - "--v=5"
+        - "--timeout=150s"
+        - "--leader-election=false"
+        imagePullPolicy: {{ .Values.image.csiProvisioner.pullPolicy }}
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /csi
+      - name: csi-attacher
+        image: "{{ .Values.image.csiAttacher.repository }}:{{ .Values.image.csiAttacher.tag }}"
+        imagePullPolicy: {{ .Values.image.csiAttacher.pullPolicy }}
+        args:
+        - "--v=5"
+        - "--csi-address=unix:///csi/csi-provisioner.sock"
+        - "--leader-election=false"
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /csi
+      - name: csi-resizer
+        image: "{{ .Values.image.csiResizer.repository }}:{{ .Values.image.csiResizer.tag }}"
+        imagePullPolicy: {{ .Values.image.csiResizer.pullPolicy }}
+        args:
+          - "--v=5"
+          - "--csi-address=unix:///csi/csi-provisioner.sock"
+          - "--leader-election=false"
+        volumeMounts:
+          - name: socket-dir
+            mountPath: /csi
+      - name: csi-health-monitor
+        image: "{{ .Values.image.csiHealthMonitor.repository }}:{{ .Values.image.csiHealthMonitor.tag }}"
+        imagePullPolicy: {{ .Values.image.csiHealthMonitor.pullPolicy }}
+        args:
+          - "--v=5"
+          - "--csi-address=unix:///csi/csi-provisioner.sock"
+          - "--leader-election=false"
+         # - "--http-endpoint=:8081"
+        volumeMounts:
+          - name: socket-dir
+            mountPath:  /csi
+        ports:
+          - containerPort: 8080
+            name: http-endpoint
+            protocol: TCP
+      - name: csi-controller
+        image: "{{ .Values.image.csi.repository }}:{{ .Values.image.csi.tag }}"
+        imagePullPolicy: {{ .Values.image.csi.pullPolicy }}
+        args:
+        - "--v=5"
+        - "--endpoint=unix:///csi/csi-provisioner.sock"
+        - "--nodeid=$(NODE_ID)"
+        - "--controller"
+        env:
+        - name: NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        {{- include "simplyblock.tlsEnv" . | nindent 8 }}
+        {{- if .Values.controller.serviceAccountAuth.enabled }}
+        - name: SPDKCSI_API_TOKEN_PATH
+          value: /var/run/secrets/kubernetes.io/serviceaccount/token
+        {{- end }}
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /csi
+        - name: csi-config
+          mountPath: /etc/spdkcsi-config/
+          readOnly: true
+        - name: csi-secret
+          mountPath: /etc/spdkcsi-secret/
+          readOnly: true
+        {{- include "simplyblock.tlsVolumeMount" . | nindent 8 }}
+      volumes:
+      - name: socket-dir
+        emptyDir:
+          medium: "Memory"
+      - name: csi-config
+        configMap:
+          name: simplyblock-csi-cm
+      - name: csi-secret
+        secret:
+          secretName: simplyblock-csi-secret-v2
+      {{- include "simplyblock.clientTlsVolume" (dict "ctx" . "clientSecret" "simplyblock-csi-controller-client-tls") | nindent 6 }}

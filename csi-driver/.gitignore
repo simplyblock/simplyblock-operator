@@ -1,0 +1,10 @@
+/_out
+/vendor
+
+*.orig
+*.patch
+*.rej
+.gocache
+
+# Compiled test binaries produced by 'go test -c' / ginkgo
+*.test

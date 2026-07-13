@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Arm Limited and Contributors
+# Copyright (c) Intel Corporation
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-csi-sc
+provisioner: csi.simplyblock.io
+parameters:
+  csi.storage.k8s.io/fstype: ext4
+  pool_name: testing1
+  qos_rw_iops: "0"
+  qos_rw_mbytes: "0"
+  qos_r_mbytes: "0"
+  qos_w_mbytes: "0"
+  max_size: "0"
+  compression: "False"
+  encryption: "False"
+  distr_ndcs: "1"
+  distr_npcs: "1"
+  lvol_priority_class: "0"
+  tune2fs_reserved_blocks: "0"
+  # xfs_su and xfs_sw set the XFS stripe unit/width (mkfs.xfs -d su=,sw=).
+  # Both must be set together; if unset, they default to su=16k, sw=1.
+  # xfs_su: "16k"
+  # xfs_sw: "1"
+  zone_cluster_map: |
+    {"us-east-1a":"cluster-uuid-1","us-east-1b":"cluster-uuid-2"}
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+allowedTopologies:
+- matchLabelExpressions:
+  - key: topology.kubernetes.io/zone
+    values:
+    - us-east-1a
+    - us-east-1b

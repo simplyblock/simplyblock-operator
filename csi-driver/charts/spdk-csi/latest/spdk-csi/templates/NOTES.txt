@@ -1,0 +1,8 @@
+The Simplyblock CSI Driver is getting deployed to your cluster.
+
+The following components are being installed or updated:
+- Simplyblock CSI Driver
+
+To follow the pods status, please run:
+
+  kubectl --namespace={{ .Release.Namespace }} get pods --watch

@@ -1,0 +1,8 @@
+# Build & test artifacts
+/bin/
+*.out
+coverage.*
+
+# Editor / OS
+.DS_Store
+*.swp
