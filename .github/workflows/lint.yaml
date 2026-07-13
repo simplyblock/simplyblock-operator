@@ -6,11 +6,11 @@ on:
       - main
     paths:
       - "operator/**"
-      - ".github/workflows/lint.yml"
+      - ".github/workflows/lint.yaml"
   pull_request:
     paths:
       - "operator/**"
-      - ".github/workflows/lint.yml"
+      - ".github/workflows/lint.yaml"
 
 jobs:
   lint:

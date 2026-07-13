@@ -6,11 +6,11 @@ on:
       - main
     paths:
       - "operator/**"
-      - ".github/workflows/test.yml"
+      - ".github/workflows/test-operator.yaml"
   pull_request:
     paths:
       - "operator/**"
-      - ".github/workflows/test.yml"
+      - ".github/workflows/test-operator.yaml"
 
 jobs:
   test:
