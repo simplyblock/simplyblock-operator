@@ -89,7 +89,7 @@ jobs:
   upload-helm-charts:
     needs: package-and-update
     if: ${{ !inputs.package_only }}
-    uses: ./.github/workflows/csi_chart-upload.yaml
+    uses: ./.github/workflows/csi_chart_upload.yaml
     with:
       ref: ${{ needs.package-and-update.outputs.release_branch }}
     secrets: inherit

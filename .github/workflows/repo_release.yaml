@@ -80,7 +80,7 @@ jobs:
   release-csi:
     name: Release csi
     needs: build-operator
-    uses: ./.github/workflows/csi_chart-release.yaml
+    uses: ./.github/workflows/csi_chart_release.yaml
     with:
       package_only: true
     secrets: inherit
@@ -107,7 +107,7 @@ jobs:
   merge-helm:
     name: Merge helm charts
     needs: [release-operator, package-operator-chart]
-    uses: ./.github/workflows/helm-merge-charts.yaml
+    uses: ./.github/workflows/helm_merge_charts.yaml
     with:
       use_artifacts: true
       base_url: https://install.simplyblock.io/helm
@@ -117,7 +117,7 @@ jobs:
   release-helm:
     name: Release helm charts
     needs: merge-helm
-    uses: ./.github/workflows/csi_chart-upload.yaml
+    uses: ./.github/workflows/csi_chart_upload.yaml
     with:
       artifact: merged-helm-repo
     secrets: inherit

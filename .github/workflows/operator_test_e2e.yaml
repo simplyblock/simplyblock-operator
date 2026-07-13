@@ -6,11 +6,11 @@ on:
       - main
     paths:
       - "operator/**"
-      - ".github/workflows/operator_test-e2e.yaml"
+      - ".github/workflows/operator_test_e2e.yaml"
   pull_request:
     paths:
       - "operator/**"
-      - ".github/workflows/operator_test-e2e.yaml"
+      - ".github/workflows/operator_test_e2e.yaml"
 
 jobs:
   test-e2e:

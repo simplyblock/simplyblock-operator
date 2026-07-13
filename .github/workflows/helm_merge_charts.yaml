@@ -8,7 +8,7 @@ on:
       - "helm-charts/charts/**"
       - "csi-driver/charts/**"
       - "helm-charts/scripts/merge_helm_repos.py"
-      - ".github/workflows/helm-merge-charts.yaml"
+      - ".github/workflows/helm_merge_charts.yaml"
   workflow_dispatch:
     inputs:
       base_url:

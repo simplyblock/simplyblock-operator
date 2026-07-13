@@ -17,13 +17,13 @@ on:
     branches: [ main, 'release-**' ]
     paths:
       - "csi-driver/**"
-      - ".github/workflows/csi_codeql-analysis.yaml"
+      - ".github/workflows/csi_codeql_analysis.yaml"
   pull_request:
     # The branches below must be a subset of the branches above
     branches: [ main, 'release-**' ]
     paths:
       - "csi-driver/**"
-      - ".github/workflows/csi_codeql-analysis.yaml"
+      - ".github/workflows/csi_codeql_analysis.yaml"
   schedule:
     - cron: '0 */24 * * *'
 
