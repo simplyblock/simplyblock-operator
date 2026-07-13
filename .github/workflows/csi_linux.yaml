@@ -1,4 +1,4 @@
-name: Docker Build and Push (csi-driver)
+name: "CSI: Docker Build"
 
 on:
   push:

@@ -1,4 +1,4 @@
-name: Helm Lint (operator chart)
+name: "Helm: Lint"
 
 on:
   push:

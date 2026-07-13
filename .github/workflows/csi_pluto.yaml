@@ -1,4 +1,4 @@
-name: k8s api version check (csi-driver)
+name: "CSI: K8s API Version Check"
 on:
     pull_request:
       paths:

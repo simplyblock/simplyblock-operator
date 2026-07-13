@@ -1,4 +1,4 @@
-name: Security Scan (csi-driver)
+name: "CSI: Security Scan"
 
 on:
   push:

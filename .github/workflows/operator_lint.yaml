@@ -1,4 +1,4 @@
-name: Lint (operator)
+name: "Operator: Lint"
 
 on:
   push:

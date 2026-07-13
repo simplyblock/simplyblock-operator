@@ -1,4 +1,4 @@
-name: Manifests (operator)
+name: "Operator: Manifests"
 
 on:
   push:

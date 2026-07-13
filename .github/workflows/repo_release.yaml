@@ -1,4 +1,4 @@
-name: Repository Release
+name: "Repo: Release"
 
 # Unified, ordered release for the whole monorepo. Fires when a v* tag is pushed;
 # the `setup` job creates the GitHub Release for that tag, and the tag is the version

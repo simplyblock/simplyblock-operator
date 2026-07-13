@@ -1,4 +1,4 @@
-name: Merge Helm Repositories
+name: "Helm: Merge Charts"
 
 on:
   push:

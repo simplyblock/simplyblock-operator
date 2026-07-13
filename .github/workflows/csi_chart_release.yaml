@@ -1,4 +1,4 @@
-name: CSI Release Charts
+name: "CSI: Release Charts"
 
 on:
   push:

@@ -1,4 +1,4 @@
-name: E2E Tests (operator)
+name: "Operator: E2E Tests"
 
 on:
   push:

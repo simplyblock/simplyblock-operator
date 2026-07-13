@@ -1,4 +1,4 @@
-name: Build and Push Operator Image
+name: "Operator: Docker Build"
 
 on:
   push:

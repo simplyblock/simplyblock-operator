@@ -1,4 +1,4 @@
-name: Unit and Sanity Tests (csi-driver)
+name: "CSI: Tests"
 
 on:
   push:

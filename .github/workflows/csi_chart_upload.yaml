@@ -1,4 +1,4 @@
-name: CSI Upload Helm Charts
+name: "CSI: Upload Charts"
 
 on:
   workflow_dispatch:

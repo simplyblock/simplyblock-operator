@@ -1,4 +1,4 @@
-name: Release (operator bundle)
+name: "Operator: Release"
 
 on:
   workflow_call:

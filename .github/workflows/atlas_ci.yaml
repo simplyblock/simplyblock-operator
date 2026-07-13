@@ -1,4 +1,4 @@
-name: CI (atlas)
+name: "Atlas: CI"
 
 on:
   push:
