@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -59,6 +60,10 @@ type StorageNodeSetReconciler struct {
 	TLSProvider      string
 	TLSMutualEnabled bool
 	Recorder         record.EventRecorder
+	// systemVolumeFilterCache caches compiled system-volume filter regexes keyed
+	// by the pattern string. Compilation errors are surfaced on first use and the
+	// CR is rejected, so subsequent reconciles reuse the valid compiled regex.
+	systemVolumeFilterCache sync.Map
 }
 
 type SNODEAPIResponse struct {
@@ -114,6 +119,9 @@ var (
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;update;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -175,6 +183,14 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 		return r.reconcileAction(ctx, snCR, clusterUUID)
+	}
+
+	// If the user cleared the remove action while a drain was in progress, resume the node.
+	if snCR.Status.ActionStatus != nil &&
+		snCR.Status.ActionStatus.Action == utils.NodeActionRemove &&
+		snCR.Status.ActionStatus.SubPhase != "" &&
+		snCR.Status.ActionStatus.State == utils.ActionStateRunning {
+		return r.drainHandleCancellation(ctx, webapi.NewClient(), clusterUUID, snCR)
 	}
 
 	if err := r.labelWorkerNodes(ctx, snCR); err != nil {
@@ -456,6 +472,7 @@ func (r *StorageNodeSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.controlPlaneToStorageNodeSetRequests),
 			builder.WithPredicates(predicate.NewPredicateFuncs(isSimplyblockControlPlane)),
 		).
+		Owns(&simplyblockv1alpha1.VolumeMigration{}).
 		Complete(r)
 }
 
@@ -1704,8 +1721,11 @@ func (r *StorageNodeSetReconciler) reconcileAction(
 	snCR *simplyblockv1alpha1.StorageNodeSet,
 	clusterUUID string,
 ) (ctrl.Result, error) {
-
 	apiClient := webapi.NewClient()
+
+	if snCR.Spec.Action == utils.NodeActionRemove {
+		return r.performDrainAndRemove(ctx, apiClient, clusterUUID, snCR)
+	}
 
 	if err := r.handleNodeAction(
 		ctx,
@@ -1827,6 +1847,9 @@ func (r *StorageNodeSetReconciler) performNodeAction(
 
 	switch snCR.Spec.Action {
 
+	case utils.NodeActionRemove:
+		return fmt.Errorf("remove action must be handled by performDrainAndRemove, not performNodeAction")
+
 	case utils.NodeActionRestart:
 		payload := map[string]any{
 			"force":           nodeActionForce(snCR, true),
@@ -1863,16 +1886,6 @@ func (r *StorageNodeSetReconciler) performNodeAction(
 			"/api/v2/clusters/%s/storage-nodes/%s/restart",
 			clusterUUID,
 			snCR.Spec.NodeUUID,
-		)
-
-	case utils.NodeActionRemove:
-		method = http.MethodDelete
-		body = nil
-		endpoint = fmt.Sprintf(
-			"/api/v2/clusters/%s/storage-nodes/%s?force_remove=%t",
-			clusterUUID,
-			snCR.Spec.NodeUUID,
-			nodeActionForce(snCR, true),
 		)
 
 	default:
@@ -2059,7 +2072,15 @@ func (r *StorageNodeSetReconciler) waitForActionCompletion(
 
 	log := logf.FromContext(ctx)
 
-	targetStatus, ok := actionTargetStatus(action)
+	expectedStatus := map[string]string{
+		utils.NodeActionSuspend:  "suspended",
+		utils.NodeActionResume:   "online",
+		utils.NodeActionShutdown: "offline",
+		utils.NodeActionRestart:  "online",
+		utils.NodeActionRemove:   "removed",
+	}
+
+	targetStatus, ok := expectedStatus[action]
 	if !ok {
 		return fmt.Errorf("unknown action: %s", action)
 	}
@@ -2073,25 +2094,34 @@ func (r *StorageNodeSetReconciler) waitForActionCompletion(
 	for i := 0; i < waitForActionCompletionRetries; i++ {
 		body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 
-		if action == utils.NodeActionRemove && status == http.StatusNotFound {
-			log.Info(
-				"Node successfully removed (404 returned)",
-				"nodeUUID", nodeUUID,
-			)
-			return nil
+		class := webapi.ClassifyError(err, status)
+
+		if class.ContextSpecific {
+			// 404/409 — interpret per action.
+			if status == http.StatusNotFound {
+				// Node no longer exists — treat as completed for shutdown/remove-like actions.
+				log.Info("Node not found during status poll, treating as complete",
+					"nodeUUID", nodeUUID, "action", action)
+				return nil
+			}
+			// 409 — unexpected during a status poll; retry.
+			waitForActionCompletionSleepFn(waitForActionCompletionWaitInterval)
+			continue
 		}
 
-		if err != nil || status >= 300 {
+		if !class.Retryable && (err != nil || status >= 300) {
+			// Permanent error — do not retry.
 			if err == nil {
 				err = fmt.Errorf("unexpected status %d", status)
 			}
-			log.Error(
-				err,
-				"Failed to get node status",
-				"nodeUUID", nodeUUID,
-				"status", status,
-				"response", string(body),
-			)
+			log.Error(err, "Permanent error polling node status — aborting",
+				"nodeUUID", nodeUUID, "status", status)
+			return err
+		}
+
+		if class.Retryable {
+			log.Error(err, "Transient error polling node status, retrying",
+				"nodeUUID", nodeUUID, "status", status)
 			waitForActionCompletionSleepFn(waitForActionCompletionWaitInterval)
 			continue
 		}
@@ -2104,11 +2134,8 @@ func (r *StorageNodeSetReconciler) waitForActionCompletion(
 		}
 
 		if resp.Status == targetStatus {
-			log.Info(
-				"Node reached expected status",
-				"nodeUUID", nodeUUID,
-				"status", resp.Status,
-			)
+			log.Info("Node reached expected status",
+				"nodeUUID", nodeUUID, "status", resp.Status)
 			return nil
 		}
 

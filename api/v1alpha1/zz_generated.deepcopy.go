@@ -1723,6 +1723,11 @@ func (in *StorageNodeSetSpec) DeepCopyInto(out *StorageNodeSetSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.SystemVolumeFilterRegex != nil {
+		in, out := &in.SystemVolumeFilterRegex, &out.SystemVolumeFilterRegex
+		*out = new(string)
+		**out = **in
+	}
 	if in.NodeFailureDomains != nil {
 		in, out := &in.NodeFailureDomains, &out.NodeFailureDomains
 		*out = make(map[string]int32, len(*in))

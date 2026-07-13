@@ -371,6 +371,16 @@ spec:
                     type: integer
                   state:
                     type: string
+                  subPhase:
+                    description: SubPhase tracks the active drain step within the
+                      remove action.
+                    enum:
+                    - Validating
+                    - Suspending
+                    - Migrating
+                    - Verifying
+                    - Removing
+                    type: string
                   triggered:
                     description: Triggered indicates whether the underlying backend
                       action has been fired.
@@ -379,6 +389,14 @@ spec:
                     description: UpdatedAt is the timestamp of the last status transition.
                     format: date-time
                     type: string
+                  volumesMigrated:
+                    description: VolumesMigrated is the count of volumes successfully
+                      migrated so far.
+                    type: integer
+                  volumesPending:
+                    description: VolumesPending is the count of volumes still awaiting
+                      migration.
+                    type: integer
                 type: object
               clusterName:
                 description: ClusterName is the resolved backend cluster name.

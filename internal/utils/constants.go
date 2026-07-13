@@ -14,9 +14,9 @@ const (
 	ClusterActionRestart     = "restart"
 	ClusterActionNodeRecycle = "node-recycle"
 
-	// StorageNodeSet action names (spec.action).
-	NodeActionRestart  = "restart"
+	// StorageNode action names.
 	NodeActionShutdown = "shutdown"
+	NodeActionRestart  = "restart"
 	NodeActionSuspend  = "suspend"
 	NodeActionResume   = "resume"
 	NodeActionRemove   = "remove"
@@ -43,6 +43,7 @@ const (
 
 	NodeStatusOnline      = "online"
 	NodeStatusOffline     = "offline"
+	NodeStatusSuspended   = "suspended"
 	NodeStatusInShutdown  = "in_shutdown"
 	NodeStatusInRestart   = "in_restart"
 	NodeStatusUnreachable = "unreachable"

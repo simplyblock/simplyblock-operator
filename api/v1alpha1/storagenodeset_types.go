@@ -165,6 +165,12 @@ type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
 	// Force enables forced action execution where supported.
 	Force *bool `json:"force,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="System Volume Filter Regex"
+	// SystemVolumeFilterRegex is a Go regular expression matched against backend
+	// volume names. Matching volumes are excluded from drain migration and from
+	// the final verification check. Defaults to "^sb-fio-baseline-.*".
+	// +optional
+	SystemVolumeFilterRegex *string `json:"systemVolumeFilterRegex,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node Failure Domains"
 	// NodeFailureDomains assigns each worker node to a failure-domain group (integer ≥ 1).
@@ -179,6 +185,10 @@ type StorageNodeSetSpec struct {
 
 // Drain coordination phases for a worker node undergoing a rolling upgrade drain.
 const (
+	// AnnotationPinnedVolume is the PVC annotation that marks a volume as pinned to its current node.
+	AnnotationPinnedVolume = "simplyblock.io/pinned-volume"
+	// DefaultSystemVolumeFilterRegex is the default pattern for system/benchmark volumes.
+	DefaultSystemVolumeFilterRegex = "^sb-fio-baseline-.*"
 	// DrainPhaseDetected means the node is cordoned and waiting for a drain slot.
 	DrainPhaseDetected = "detected"
 	// DrainPhaseShutdownCalled means the simplyblock shutdown API has been called.
@@ -297,6 +307,16 @@ type ActionStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// Triggered indicates whether the underlying backend action has been fired.
 	Triggered bool `json:"triggered,omitempty"`
+	// SubPhase tracks the active drain step within the remove action.
+	// +kubebuilder:validation:Enum=Validating;Suspending;Migrating;Verifying;Removing
+	// +optional
+	SubPhase string `json:"subPhase,omitempty"`
+	// VolumesMigrated is the count of volumes successfully migrated so far.
+	// +optional
+	VolumesMigrated int `json:"volumesMigrated,omitempty"`
+	// VolumesPending is the count of volumes still awaiting migration.
+	// +optional
+	VolumesPending int `json:"volumesPending,omitempty"`
 }
 
 // +kubebuilder:object:root=true
