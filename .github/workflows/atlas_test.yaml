@@ -1,15 +1,15 @@
-name: "Atlas: CI"
+name: "Atlas: Tests"
 
 on:
   push:
     branches: [main]
     paths:
       - "atlas-lib/**"
-      - ".github/workflows/atlas_ci.yaml"
+      - ".github/workflows/atlas_test.yaml"
   pull_request:
     paths:
       - "atlas-lib/**"
-      - ".github/workflows/atlas_ci.yaml"
+      - ".github/workflows/atlas_test.yaml"
   workflow_call:
 
 jobs:

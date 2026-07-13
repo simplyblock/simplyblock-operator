@@ -55,7 +55,7 @@ jobs:
   build-atlas:
     name: Build atlas
     needs: setup
-    uses: ./.github/workflows/atlas_ci.yaml
+    uses: ./.github/workflows/atlas_test.yaml
     secrets: inherit
 
   # 2. build csi (container images)
