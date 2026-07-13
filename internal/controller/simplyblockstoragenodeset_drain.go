@@ -280,8 +280,6 @@ func (r *StorageNodeSetReconciler) drainClusterPauseCheck(
 // when it has handled the situation and the caller should return immediately.
 func (r *StorageNodeSetReconciler) handleFailedVolumeMigrations(
 	ctx context.Context,
-	apiClient *webapi.Client,
-	clusterUUID string,
 	snCR *simplyblockv1alpha1.StorageNodeSet,
 	items []simplyblockv1alpha1.VolumeMigration,
 ) (ctrl.Result, bool) {
@@ -554,7 +552,7 @@ func (r *StorageNodeSetReconciler) drainMigrate(
 	}
 
 	// If any migration failed, handle it — pausing if the cluster is the cause.
-	if res, handled := r.handleFailedVolumeMigrations(ctx, apiClient, clusterUUID, snCR, vmigList.Items); handled {
+	if res, handled := r.handleFailedVolumeMigrations(ctx, snCR, vmigList.Items); handled {
 		return res, nil
 	}
 
