@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: controlplanes.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -62,6 +62,8 @@ spec:
                   Image is the container image used for all simplyblock control-plane and
                   storage-node workloads (e.g. quay.io/simplyblock-io/simplyblock:26.2.2).
                   StorageNodeSet CRs that omit spec.clusterImage inherit this value.
+                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
+                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                 type: string
             type: object
           status:

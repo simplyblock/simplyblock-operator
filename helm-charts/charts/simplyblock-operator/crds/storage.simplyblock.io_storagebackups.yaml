@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: storagebackups.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -58,6 +58,9 @@ spec:
               clusterName:
                 description: ClusterName is the target storage cluster name.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               pvcRef:
                 description: |-
                   PVCRef identifies the PVC whose backing Simplyblock volume should be snapshotted and backed up.
@@ -113,6 +116,12 @@ spec:
               createdAt:
                 description: CreatedAt is when the backup was created.
                 format: date-time
+                type: string
+              fsType:
+                description: |-
+                  FSType is the filesystem type of the source PersistentVolume (e.g. "ext4",
+                  "xfs"), captured at backup time so a restore can preserve it regardless of
+                  which StorageClass the restored PVC ends up using.
                 type: string
               lvolID:
                 description: LvolID is the Simplyblock volume UUID.
