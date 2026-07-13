@@ -10,6 +10,7 @@ on:
     paths:
       - "atlas-lib/**"
       - ".github/workflows/atlas_ci.yaml"
+  workflow_call:
 
 jobs:
   test:

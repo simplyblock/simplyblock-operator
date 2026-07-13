@@ -7,6 +7,13 @@ on:
       - 'R[0-9]*'
     paths:
       - 'helm-charts/charts/simplyblock-operator/Chart.yaml'
+  workflow_call:
+    inputs:
+      package_only:
+        description: "Package + index the chart and upload it as an artifact, skipping the PR/publish flow"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   release:
@@ -31,12 +38,29 @@ jobs:
           mkdir -p "helm-charts/charts/$VERSION"
           helm package helm-charts/charts/simplyblock-operator --destination "helm-charts/charts/$VERSION/"
 
+      # ── Pipeline path: index the repo and hand it off as an artifact ──────────
+      - name: Index chart repo
+        if: ${{ inputs.package_only }}
+        run: |
+          helm repo index helm-charts/charts/ --url https://install.simplyblock.io/helm
+
+      - name: Upload chart artifact
+        if: ${{ inputs.package_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-charts-operator
+          path: helm-charts/charts/
+          retention-days: 7
+
+      # ── Standalone path: open a PR bumping the committed chart repo ───────────
       - name: Prepare release metadata
+        if: ${{ !inputs.package_only }}
         id: release_meta
         run: |
           echo "branch=release-${{ env.VERSION }}" >> "$GITHUB_OUTPUT"
 
       - name: Commit and create PR
+        if: ${{ !inputs.package_only }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

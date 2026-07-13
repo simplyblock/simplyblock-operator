@@ -1,0 +1,92 @@
+name: Merge Helm Repositories
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "helm-charts/charts/**"
+      - "csi-driver/charts/**"
+      - "helm-charts/scripts/merge_helm_repos.py"
+      - ".github/workflows/helm-merge-charts.yaml"
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Base URL for the unified Helm repo"
+        required: false
+        default: "https://install.simplyblock.io/helm"
+      force:
+        description: "Overwrite existing .tgz files in the output"
+        required: false
+        default: "false"
+        type: boolean
+  workflow_call:
+    inputs:
+      base_url:
+        description: "Base URL for the unified Helm repo"
+        required: false
+        default: "https://install.simplyblock.io/helm"
+        type: string
+      use_artifacts:
+        description: "Consume freshly packaged charts from pipeline artifacts instead of the committed in-repo charts"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # In the release pipeline, the operator and csi charts are packaged fresh by
+      # earlier jobs and handed over as artifacts; overlay them onto the in-repo repos.
+      - name: Download operator chart artifact
+        if: ${{ inputs.use_artifacts }}
+        uses: actions/download-artifact@v4
+        with:
+          name: helm-charts-operator
+          path: helm-charts/charts
+
+      - name: Download csi chart artifact
+        if: ${{ inputs.use_artifacts }}
+        uses: actions/download-artifact@v4
+        with:
+          name: helm-charts-csi
+          path: csi-driver/charts/spdk-csi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Merge Helm repositories
+        run: |
+          python helm-charts/scripts/merge_helm_repos.py \
+            --repo1-charts helm-charts/charts \
+            --repo2-charts csi-driver/charts/spdk-csi \
+            --output merged-charts \
+            --base-url "${{ inputs.base_url || 'https://install.simplyblock.io/helm' }}" \
+            ${{ (inputs.force == 'true') && '--force' || '' }}
+
+      - name: Verify merged index.yaml
+        run: |
+          echo "=== merged-charts/index.yaml ==="
+          cat merged-charts/index.yaml
+          echo ""
+          echo "=== .tgz files ==="
+          find merged-charts -name "*.tgz" | sort
+
+      - name: Upload merged charts as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-helm-repo
+          path: merged-charts/
+          retention-days: 7

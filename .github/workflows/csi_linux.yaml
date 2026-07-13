@@ -6,8 +6,12 @@ on:
     paths:
       - "csi-driver/**"
       - ".github/workflows/csi_linux.yaml"
-  release:
-    types: [created]
+  workflow_call:
+    inputs:
+      version:
+        description: "Image tag to publish (defaults to the branch/tag ref)"
+        required: false
+        type: string
   workflow_dispatch:
 
 env:
@@ -65,7 +69,8 @@ jobs:
           ${{ env.ECR_IMAGE_NAME }}
           ${{ env.QUAY_IMAGE_NAME }}
         tags: |
-          type=raw,value=latest,enable=${{ github.ref_name == 'main' || github.event_name == 'release' }}
+          type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
+          type=raw,value=latest,enable=${{ github.ref_name == 'main' || github.event_name == 'release' || inputs.version != '' }}
           type=ref,event=branch
           type=ref,event=tag
           type=sha,prefix=${{ github.ref_name }}-,format=short,enable=${{ github.event_name == 'push' }}

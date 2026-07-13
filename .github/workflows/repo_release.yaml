@@ -1,0 +1,123 @@
+name: Repository Release
+
+# Unified, ordered release for the whole monorepo. Fires when a v* tag is pushed;
+# the `setup` job creates the GitHub Release for that tag, and the tag is the version
+# fed to the container image builds. Runs:
+#   build atlas -> build csi -> build operator -> release csi -> release operator
+#   -> merge helm charts -> release (publish) helm charts
+# Each step is a reusable workflow invoked with `needs:` for ordering.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (e.g. v1.2.3) to run the pipeline for (tag must already exist)"
+        required: true
+        type: string
+
+permissions:
+  contents: write   # operator release attaches the OLM bundle to the GitHub release
+
+jobs:
+  setup:
+    name: Resolve version & ensure release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Resolve version
+        id: v
+        run: |
+          VERSION="${{ inputs.version || github.ref_name }}"
+          if [ -z "$VERSION" ]; then
+            echo "::error::No version resolved (v* tag push or workflow_dispatch input required)"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Release version: $VERSION"
+
+      - name: Ensure GitHub release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.v.outputs.version }}"
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists — reusing it"
+          else
+            echo "Creating release $VERSION"
+            gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --title "$VERSION" --generate-notes --verify-tag
+          fi
+
+  # 1. build atlas (vet + test gate)
+  build-atlas:
+    name: Build atlas
+    needs: setup
+    uses: ./.github/workflows/atlas_ci.yaml
+    secrets: inherit
+
+  # 2. build csi (container images)
+  build-csi:
+    name: Build csi
+    needs: [setup, build-atlas]
+    uses: ./.github/workflows/csi_linux.yaml
+    with:
+      version: ${{ needs.setup.outputs.version }}
+    secrets: inherit
+
+  # 3. build operator (container images)
+  build-operator:
+    name: Build operator
+    needs: [setup, build-csi]
+    uses: ./.github/workflows/operator_build.yaml
+    with:
+      version: ${{ needs.setup.outputs.version }}
+    secrets: inherit
+
+  # 4. release csi (package spdk-csi chart -> artifact helm-charts-csi)
+  release-csi:
+    name: Release csi
+    needs: build-operator
+    uses: ./.github/workflows/csi_chart-release.yaml
+    with:
+      package_only: true
+    secrets: inherit
+
+  # 5. release operator (quay images + OLM bundle)
+  release-operator:
+    name: Release operator
+    needs: [setup, release-csi]
+    uses: ./.github/workflows/operator_release.yaml
+    with:
+      version: ${{ needs.setup.outputs.version }}
+    secrets: inherit
+
+  # 5b. package operator chart -> artifact helm-charts-operator (feeds the merge)
+  package-operator-chart:
+    name: Package operator chart
+    needs: release-csi
+    uses: ./.github/workflows/helm_release.yaml
+    with:
+      package_only: true
+    secrets: inherit
+
+  # 6. merge helm charts (operator + csi -> merged-helm-repo)
+  merge-helm:
+    name: Merge helm charts
+    needs: [release-operator, package-operator-chart]
+    uses: ./.github/workflows/helm-merge-charts.yaml
+    with:
+      use_artifacts: true
+      base_url: https://install.simplyblock.io/helm
+    secrets: inherit
+
+  # 7. release helm charts (FTP the merged repo)
+  release-helm:
+    name: Release helm charts
+    needs: merge-helm
+    uses: ./.github/workflows/csi_chart-upload.yaml
+    with:
+      artifact: merged-helm-repo
+    secrets: inherit
