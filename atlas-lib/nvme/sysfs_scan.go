@@ -204,7 +204,7 @@ func parseAddress(s string) Address {
 	return a
 }
 
-// --- attribute readers (missing/unparseable values fall back to zero) ---
+// --- attribute readers (missing/unparsable values fall back to zero) ---
 
 func readStr(base, attr string) string {
 	s, _ := sysfs.ReadAttr(base, attr)

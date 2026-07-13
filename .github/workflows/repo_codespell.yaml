@@ -20,4 +20,5 @@ jobs:
           # top-level files. "." = the whole checkout; the skip list prunes noise.
           path: .
           skip: ./.git,.git,./.github/workflows/repo_codespell.yaml,*.png,*.jpg,*.svg,*.sum,*.tgz,./vendor,go.sum
-          ignore_words_list: "browseable,ro,NotIn"
+          # AfterAll: Ginkgo suite node (codespell lowercases it to "afterall")
+          ignore_words_list: "browseable,ro,NotIn,afterall"
