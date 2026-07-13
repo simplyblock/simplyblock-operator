@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -136,8 +138,9 @@ func TestHandleNodeActionTransitions(t *testing.T) {
 	t.Run("does not re-enter terminal success for same action and node", func(t *testing.T) {
 		sn := &simplyblockv1alpha1.StorageNodeSet{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "sn-a",
-				Namespace: "default",
+				Name:       "sn-a",
+				Namespace:  "default",
+				Generation: 5,
 			},
 			Spec: simplyblockv1alpha1.StorageNodeSetSpec{
 				Action:   "restart",
@@ -145,9 +148,12 @@ func TestHandleNodeActionTransitions(t *testing.T) {
 			},
 			Status: simplyblockv1alpha1.StorageNodeSetStatus{
 				ActionStatus: &simplyblockv1alpha1.ActionStatus{
-					Action:   "restart",
-					NodeUUID: "node-1",
-					State:    utils.ActionStateSuccess,
+					// Success recorded for the current generation must suppress a
+					// re-run of the same request.
+					Action:             "restart",
+					NodeUUID:           "node-1",
+					State:              utils.ActionStateSuccess,
+					ObservedGeneration: 5,
 				},
 			},
 		}
@@ -159,6 +165,46 @@ func TestHandleNodeActionTransitions(t *testing.T) {
 		}
 		if sn.Status.ActionStatus.State != utils.ActionStateSuccess {
 			t.Fatalf("expected success to remain stable, got %q", sn.Status.ActionStatus.State)
+		}
+	})
+
+	t.Run("re-executes when a new generation re-requests a previously successful action", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "sn-regen",
+				Namespace:  "default",
+				Generation: 2,
+			},
+			Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+				Action:   "restart",
+				NodeUUID: "node-1",
+			},
+			Status: simplyblockv1alpha1.StorageNodeSetStatus{
+				ActionStatus: &simplyblockv1alpha1.ActionStatus{
+					// Success recorded for an earlier generation must not suppress
+					// a fresh request at a newer generation.
+					Action:             "restart",
+					NodeUUID:           "node-1",
+					State:              utils.ActionStateSuccess,
+					ObservedGeneration: 1,
+				},
+			},
+		}
+
+		r := newStorageNodeSetStateTestReconciler(t, sn)
+		// The API is unreachable, so a re-executed action fails; a wrongly-skipped
+		// action would return nil and leave the state at success.
+		err := r.handleNodeAction(context.Background(), webapi.NewClient("http://127.0.0.1:1"), sn, "cluster")
+		if err == nil {
+			t.Fatalf("expected re-requested action to execute (and fail against the unreachable API), but it was skipped")
+		}
+
+		current := &simplyblockv1alpha1.StorageNodeSet{}
+		if getErr := r.Get(context.Background(), client.ObjectKeyFromObject(sn), current); getErr != nil {
+			t.Fatalf("failed to fetch storagenodeset: %v", getErr)
+		}
+		if current.Status.ActionStatus.State != utils.ActionStateFailed {
+			t.Fatalf("expected re-executed action to transition to failed, got %q", current.Status.ActionStatus.State)
 		}
 	})
 
@@ -1569,6 +1615,121 @@ func TestPollNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 	})
 }
 
+// TestPerformNodeActionIdempotentTrigger guards the fix for the restart/
+// migration retry storm (Defect B): performNodeAction must not re-issue a
+// backend action that is already in progress or already complete. Re-issuing a
+// restart while the node is in_restart resets it and spawns a duplicate task
+// the task runner aborts, livelocking the migration.
+func TestPerformNodeActionIdempotentTrigger(t *testing.T) {
+	origWait := waitForActionCompletionWaitInterval
+	origSleepFn := waitForActionCompletionSleepFn
+	origPostTriggerSleepFn := performNodeActionSleepFn
+	t.Cleanup(func() {
+		waitForActionCompletionWaitInterval = origWait
+		waitForActionCompletionSleepFn = origSleepFn
+		performNodeActionSleepFn = origPostTriggerSleepFn
+	})
+	waitForActionCompletionWaitInterval = 0
+	waitForActionCompletionSleepFn = func(time.Duration) {}
+	performNodeActionSleepFn = func(time.Duration) {}
+
+	newServer := func(statuses ...string) (*httptest.Server, *int32) {
+		var restartPosts int32
+		var mu sync.Mutex
+		idx := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/restart") {
+				atomic.AddInt32(&restartPosts, 1)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
+			// GET node status: walk through the provided statuses, holding on
+			// the last one.
+			mu.Lock()
+			s := statuses[idx]
+			if idx < len(statuses)-1 {
+				idx++
+			}
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(utils.NodeStatusResponse{UUID: "node-1", Status: s})
+		}))
+		return srv, &restartPosts
+	}
+
+	t.Run("skips trigger while backend already in_restart", func(t *testing.T) {
+		srv, restartPosts := newServer(utils.NodeStatusInRestart, utils.NodeStatusOnline)
+		defer srv.Close()
+
+		sn := &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-inflight", Namespace: "default"},
+			Spec:       simplyblockv1alpha1.StorageNodeSetSpec{Action: "restart", NodeUUID: "node-1"},
+		}
+
+		r := &StorageNodeSetReconciler{}
+		if err := r.performNodeAction(context.Background(), webapi.NewClient(srv.URL), "cluster-a", sn); err != nil {
+			t.Fatalf("performNodeAction returned error: %v", err)
+		}
+		if got := atomic.LoadInt32(restartPosts); got != 0 {
+			t.Fatalf("expected no restart to be POSTed while node in_restart, got %d", got)
+		}
+	})
+
+	t.Run("skips trigger when already triggered and node online", func(t *testing.T) {
+		srv, restartPosts := newServer(utils.NodeStatusOnline)
+		defer srv.Close()
+
+		sn := &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-done", Namespace: "default", Generation: 7},
+			Spec:       simplyblockv1alpha1.StorageNodeSetSpec{Action: "restart", NodeUUID: "node-1"},
+			Status: simplyblockv1alpha1.StorageNodeSetStatus{
+				ActionStatus: &simplyblockv1alpha1.ActionStatus{
+					Action: "restart", NodeUUID: "node-1", Triggered: true, ObservedGeneration: 7,
+				},
+			},
+		}
+
+		r := &StorageNodeSetReconciler{}
+		if err := r.performNodeAction(context.Background(), webapi.NewClient(srv.URL), "cluster-a", sn); err != nil {
+			t.Fatalf("performNodeAction returned error: %v", err)
+		}
+		if got := atomic.LoadInt32(restartPosts); got != 0 {
+			t.Fatalf("expected no restart to be POSTed for a completed action, got %d", got)
+		}
+	})
+
+	t.Run("re-triggers when Triggered is from a stale generation", func(t *testing.T) {
+		// Same node/action, but the Triggered flag was recorded against an older
+		// generation. A new request (bumped generation) must not be mistaken for
+		// the already-fired one, so the action is triggered exactly once. This is
+		// what makes the ObservedGeneration match load-bearing rather than a
+		// no-op self-comparison.
+		srv, restartPosts := newServer(utils.NodeStatusOnline)
+		defer srv.Close()
+
+		sn := &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-stale-gen", Namespace: "default", Generation: 8},
+			Spec:       simplyblockv1alpha1.StorageNodeSetSpec{Action: "restart", NodeUUID: "node-1"},
+			Status: simplyblockv1alpha1.StorageNodeSetStatus{
+				ActionStatus: &simplyblockv1alpha1.ActionStatus{
+					Action: "restart", NodeUUID: "node-1", Triggered: true, ObservedGeneration: 7,
+				},
+			},
+		}
+
+		// A client-backed reconciler so the best-effort Triggered persist after
+		// the POST has somewhere to write.
+		r := newStorageNodeSetStateTestReconciler(t, sn)
+		if err := r.performNodeAction(context.Background(), webapi.NewClient(srv.URL), "cluster-a", sn); err != nil {
+			t.Fatalf("performNodeAction returned error: %v", err)
+		}
+		if got := atomic.LoadInt32(restartPosts); got != 1 {
+			t.Fatalf("expected exactly one restart POST for a new generation, got %d", got)
+		}
+	})
+}
+
 func TestWaitForActionCompletionRetryBehavior(t *testing.T) {
 	origRetries := waitForActionCompletionRetries
 	origWait := waitForActionCompletionWaitInterval
@@ -2468,6 +2629,88 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 	}
 	if len(slices.Items) != 1 || slices.Items[0].Name != "spdk-proxy-endpoints-9001" {
 		t.Fatalf("expected only spdk-proxy-endpoints-9001 after pod2 deletion, got %v", sliceNames(slices.Items))
+	}
+}
+
+// TestReconcilePublishesSpdkProxyEndpointSliceDuringAction guards the fix for
+// the node-migration deadlock: while spec.action is set, Reconcile dispatches to
+// the action flow and returns early, so the pod-driven spdk-proxy EndpointSlice
+// reconciliation must still run in that path. Otherwise the target worker's
+// spdk-proxy DNS name never resolves and the control-plane restart hangs on
+// NameResolutionError. Reconcile must publish the slice even with an action set.
+func TestReconcilePublishesSpdkProxyEndpointSliceDuringAction(t *testing.T) {
+	const namespace = "default"
+	const clusterName = "cluster-action"
+
+	// Point the web API at an unreachable address so the action's own API call
+	// fails fast (the assertion below only cares that the slice was published
+	// before/independently of the action attempt).
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
+
+	cluster := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "cluster-uuid-action"},
+	}
+	// Finalizer pre-set so ensureFinalizer does not short-circuit before the
+	// action dispatch.
+	sn := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "sn-action",
+			Namespace:  namespace,
+			Finalizers: []string{utils.FinalizerStorageNodeSet},
+		},
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			ClusterName: clusterName,
+			Action:      "restart",
+			NodeUUID:    "node-uuid-1",
+		},
+	}
+	// A ready spdk-proxy pod that the control plane created on the target worker.
+	proxyPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "snode-spdk-pod-4422-cid",
+			Namespace: namespace,
+			Labels:    map[string]string{"role": utils.LabelSpdkProxyRole},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "worker-4",
+			Containers: []corev1.Container{
+				{
+					Name: "spdk-proxy-container",
+					Env:  []corev1.EnvVar{{Name: "RPC_PORT", Value: "4422"}},
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: "10.0.0.4",
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "spdk-proxy-container", Ready: true},
+			},
+		},
+	}
+
+	r := newStorageNodeSetStateTestReconciler(t, sn, cluster, proxyPod)
+
+	ctx := context.Background()
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)}); err != nil {
+		t.Fatalf("reconcile returned unexpected error: %v", err)
+	}
+
+	var slices discoveryv1.EndpointSliceList
+	if err := r.List(ctx, &slices,
+		client.InNamespace(namespace),
+		client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+	); err != nil {
+		t.Fatalf("list slices: %v", err)
+	}
+	if len(slices.Items) != 1 || slices.Items[0].Name != "spdk-proxy-endpoints-4422" {
+		t.Fatalf("expected spdk-proxy-endpoints-4422 to be published during action, got %v", sliceNames(slices.Items))
+	}
+	if len(slices.Items[0].Endpoints) != 1 ||
+		slices.Items[0].Endpoints[0].Hostname == nil ||
+		*slices.Items[0].Endpoints[0].Hostname != "worker-4" {
+		t.Fatalf("expected a worker-4 endpoint, got %#v", slices.Items[0].Endpoints)
 	}
 }
 

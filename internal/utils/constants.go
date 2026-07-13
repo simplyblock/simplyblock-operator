@@ -14,6 +14,13 @@ const (
 	ClusterActionRestart     = "restart"
 	ClusterActionNodeRecycle = "node-recycle"
 
+	// StorageNodeSet action names (spec.action).
+	NodeActionRestart  = "restart"
+	NodeActionShutdown = "shutdown"
+	NodeActionSuspend  = "suspend"
+	NodeActionResume   = "resume"
+	NodeActionRemove   = "remove"
+
 	// NodeRecycle per-node phases
 	NodeRecyclePhaseSnodeRefresh     = "snode-refresh"
 	NodeRecyclePhaseSnodeRefreshWait = "snode-refresh-wait"
