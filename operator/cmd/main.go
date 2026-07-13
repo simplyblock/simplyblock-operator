@@ -254,16 +254,18 @@ func main() {
 	}
 
 	if err := (&controller.ControlPlaneReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
 		Recorder: mgr.GetEventRecorderFor("controlplane-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlane")
 		os.Exit(1)
 	}
 	if err := (&controller.StorageClusterReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
 		Recorder:  mgr.GetEventRecorderFor("storagecluster-controller"),
 		Namespace: operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
@@ -277,7 +279,8 @@ func main() {
 		TLSEnabled:       tlsEnabled,
 		TLSProvider:      tlsProvider,
 		TLSMutualEnabled: tlsMutualEnabled,
-		Recorder:         mgr.GetEventRecorderFor("storagenodeset-controller"),
+		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
+		Recorder: mgr.GetEventRecorderFor("storagenodeset-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeSet")
 		os.Exit(1)

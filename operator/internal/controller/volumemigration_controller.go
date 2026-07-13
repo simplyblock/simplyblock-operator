@@ -700,7 +700,7 @@ func (r *VolumeMigrationReconciler) setFailed(
 	if err := r.Status().Patch(ctx, vm, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch status Failed: %w", err)
 	}
-	r.Recorder.Eventf(vm, corev1.EventTypeWarning, "MigrationFailed", reason)
+	r.Recorder.Event(vm, corev1.EventTypeWarning, "MigrationFailed", reason)
 	return ctrl.Result{}, nil
 }
 
