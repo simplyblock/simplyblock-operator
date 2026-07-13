@@ -1,10 +1,16 @@
-name: CI
+name: Helm Lint (operator chart)
 
 on:
   push:
     branches:
-      - master
+      - main
+    paths:
+      - "helm-charts/charts/simplyblock-operator/**"
+      - ".github/workflows/ci-operator.yaml"
   pull_request:
+    paths:
+      - "helm-charts/charts/simplyblock-operator/**"
+      - ".github/workflows/ci-operator.yaml"
 
 jobs:
   lint:
@@ -19,7 +25,7 @@ jobs:
           version: latest
 
       - name: Lint
-        run: helm lint charts/simplyblock-operator
+        run: helm lint helm-charts/charts/simplyblock-operator
 
       - name: Template
-        run: helm template simplyblock-operator charts/simplyblock-operator
+        run: helm template simplyblock-operator helm-charts/charts/simplyblock-operator

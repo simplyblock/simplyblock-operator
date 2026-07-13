@@ -1,13 +1,22 @@
-name: CI
+name: CI (atlas)
 
 on:
   push:
     branches: [main]
+    paths:
+      - "atlas-lib/**"
+      - ".github/workflows/ci-atlas.yaml"
   pull_request:
+    paths:
+      - "atlas-lib/**"
+      - ".github/workflows/ci-atlas.yaml"
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: atlas-lib
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

@@ -6,13 +6,13 @@ on:
       ref:
         description: Git ref (branch/tag/SHA) to upload charts from
         required: false
-        default: master
+        default: main
         type: string
   workflow_call:
     inputs:
       ref:
         required: false
-        default: master
+        default: main
         type: string
 
 jobs:
@@ -32,4 +32,4 @@ jobs:
           password: ${{ secrets.FTP_PASSWORD }}
           protocol: ftps
           server-dir: /
-          local-dir: ./charts/spdk-csi/
+          local-dir: ./csi-driver/charts/spdk-csi/

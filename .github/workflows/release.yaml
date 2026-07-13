@@ -1,4 +1,4 @@
-name: Helm Release
+name: Helm Release (operator chart)
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - main
       - 'R[0-9]*'
     paths:
-      - 'charts/simplyblock-operator/Chart.yaml'
+      - 'helm-charts/charts/simplyblock-operator/Chart.yaml'
 
 jobs:
   release:
@@ -25,11 +25,11 @@ jobs:
 
       - name: Extract version and package chart
         run: |
-          VERSION="$(grep '^version:' charts/simplyblock-operator/Chart.yaml | awk '{print $2}' | tr -d '"')"
+          VERSION="$(grep '^version:' helm-charts/charts/simplyblock-operator/Chart.yaml | awk '{print $2}' | tr -d '"')"
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
-          mkdir -p "charts/$VERSION"
-          helm package charts/simplyblock-operator --destination "charts/$VERSION/"
+          mkdir -p "helm-charts/charts/$VERSION"
+          helm package helm-charts/charts/simplyblock-operator --destination "helm-charts/charts/$VERSION/"
 
       - name: Prepare release metadata
         id: release_meta
@@ -45,9 +45,9 @@ jobs:
           git fetch origin main
           git checkout -b "$BRANCH" origin/main
 
-          helm repo index charts/ --url https://simplyblock.github.io/helm-charts/charts
+          helm repo index helm-charts/charts/ --url https://simplyblock.github.io/helm-charts/charts
 
-          git add charts/index.yaml "charts/${{ env.VERSION }}/"
+          git add helm-charts/charts/index.yaml "helm-charts/charts/${{ env.VERSION }}/"
           git commit -m "helm release for simplyblock-operator ${{ env.VERSION }}" || echo "No changes to commit"
           git push origin "$BRANCH"
 

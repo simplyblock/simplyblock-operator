@@ -1,11 +1,17 @@
 # GitHub Action to automate the identification of common misspellings in text files.
 # https://github.com/codespell-project/actions-codespell
 # https://github.com/codespell-project/codespell
-name: codespell
+name: codespell (csi-driver)
 on:
-  push: 
-    branches: ['master', 'dev']
+  push:
+    branches: ['main']
+    paths:
+      - "csi-driver/**"
+      - ".github/workflows/codespell.yml"
   pull_request:
+    paths:
+      - "csi-driver/**"
+      - ".github/workflows/codespell.yml"
 
 jobs:
   codespell:

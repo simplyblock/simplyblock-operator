@@ -1,9 +1,12 @@
-name: Security Scan
+name: Security Scan (csi-driver)
 
 on:
   push:
     branches:
-      - master
+      - main
+    paths:
+      - "csi-driver/**"
+      - ".github/workflows/security-csi-driver.yml"
   schedule:
     - cron: '0 6 * * *'  # Daily at 06:00 UTC
   workflow_dispatch:
@@ -29,8 +32,8 @@ jobs:
       - name: Build image for scanning (linux/amd64 only)
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: deploy/image/Dockerfile
+          context: ./csi-driver
+          file: csi-driver/deploy/image/Dockerfile
           platforms: linux/amd64
           load: true
           tags: ${{ env.IMAGE_NAME }}:scan

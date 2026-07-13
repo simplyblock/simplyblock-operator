@@ -1,10 +1,16 @@
-name: Lint
+name: Lint (operator)
 
 on:
   push:
     branches:
       - main
+    paths:
+      - "operator/**"
+      - ".github/workflows/lint.yml"
   pull_request:
+    paths:
+      - "operator/**"
+      - ".github/workflows/lint.yml"
 
 jobs:
   lint:
@@ -17,9 +23,10 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
+          go-version-file: operator/go.mod
 
       - name: Run linter
         uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:
           version: v2.11.4
+          working-directory: operator

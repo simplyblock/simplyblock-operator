@@ -1,14 +1,23 @@
-name: k8s api version check
+name: k8s api version check (csi-driver)
 on:
     pull_request:
+      paths:
+        - "csi-driver/**"
+        - ".github/workflows/pluto.yaml"
     push:
-      branches: ['master', 'dev']
+      branches: ['main']
+      paths:
+        - "csi-driver/**"
+        - ".github/workflows/pluto.yaml"
 
 jobs:
 
   build:
     name: Build
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: csi-driver
     steps:
 
     - name: Checkout

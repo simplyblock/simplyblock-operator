@@ -1,4 +1,4 @@
-name: Docker Base Image Build
+name: Docker Base Image Build (csi-driver)
 
 on:
   schedule:
@@ -10,6 +10,9 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: csi-driver
 
     steps:
     - uses: actions/checkout@master

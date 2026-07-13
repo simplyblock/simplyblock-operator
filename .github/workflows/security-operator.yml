@@ -1,9 +1,12 @@
-name: Security Scan
+name: Security Scan (operator)
 
 on:
   push:
     branches:
       - main
+    paths:
+      - "operator/**"
+      - ".github/workflows/security-operator.yml"
   schedule:
     - cron: '0 6 * * *'  # Daily at 06:00 UTC
   workflow_dispatch:
@@ -28,7 +31,8 @@ jobs:
       - name: Build image for scanning (linux/amd64 only)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: .
+          context: ./operator
+          file: operator/Dockerfile
           platforms: linux/amd64
           load: true
           tags: ${{ env.IMAGE_NAME }}:scan

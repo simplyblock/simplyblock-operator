@@ -1,4 +1,4 @@
-name: Release
+name: Release (operator bundle)
 
 on:
   release:
@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write   # needed to upload release assets if desired
+    defaults:
+      run:
+        working-directory: operator
 
     steps:
       - name: Checkout repository
@@ -22,7 +25,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
+          go-version-file: operator/go.mod
 
       - name: Extract version
         id: version
@@ -68,7 +71,7 @@ jobs:
       - name: Install kustomize
         run: |
           make kustomize
-          echo "${{ github.workspace }}/bin" >> "$GITHUB_PATH"
+          echo "${{ github.workspace }}/operator/bin" >> "$GITHUB_PATH"
 
       - name: Generate bundle
         run: |
@@ -93,6 +96,6 @@ jobs:
         with:
           name: bundle-${{ steps.version.outputs.tag }}
           path: |
-            bundle/manifests/
-            bundle/metadata/
+            operator/bundle/manifests/
+            operator/bundle/metadata/
           retention-days: 90

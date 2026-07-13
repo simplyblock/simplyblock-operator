@@ -1,8 +1,11 @@
-name: Docker Build and Push
+name: Docker Build and Push (csi-driver)
 
 on:
   push:
     branches: ['**']
+    paths:
+      - "csi-driver/**"
+      - ".github/workflows/linux.yaml"
   release:
     types: [created]
   workflow_dispatch:
@@ -62,7 +65,7 @@ jobs:
           ${{ env.ECR_IMAGE_NAME }}
           ${{ env.QUAY_IMAGE_NAME }}
         tags: |
-          type=raw,value=latest,enable=${{ github.ref_name == 'master' || github.event_name == 'release' }}
+          type=raw,value=latest,enable=${{ github.ref_name == 'main' || github.event_name == 'release' }}
           type=ref,event=branch
           type=ref,event=tag
           type=sha,prefix=${{ github.ref_name }}-,format=short,enable=${{ github.event_name == 'push' }}
@@ -70,8 +73,8 @@ jobs:
     - name: Build and push
       uses: docker/build-push-action@v6
       with:
-        context: .
-        file: deploy/image/Dockerfile
+        context: ./csi-driver
+        file: csi-driver/deploy/image/Dockerfile
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ${{ steps.meta.outputs.tags }}

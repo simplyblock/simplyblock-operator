@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Build and Push Operator Image
 
 on:
   push:
@@ -6,6 +6,9 @@ on:
       - "**"
     tags:
       - "v*"
+    paths:
+      - "operator/**"
+      - ".github/workflows/build.yml"
 
 env:
   IMAGE_NAME: simplyblock/simplyblock-operator
@@ -48,7 +51,8 @@ jobs:
       - name: Build and push multi-arch operator image (DockerHub + ECR)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: .
+          context: ./operator
+          file: operator/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
@@ -63,8 +67,8 @@ jobs:
       - name: Build and push simplyblock-rebalancer multi-arch image (DockerHub + ECR)
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: Dockerfile.simplyblock-rebalancer
+          context: ./operator
+          file: operator/Dockerfile.simplyblock-rebalancer
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
