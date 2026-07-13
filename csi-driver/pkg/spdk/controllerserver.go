@@ -1256,7 +1256,7 @@ func fetchPVCAnnotations(ctx context.Context, pvcName, pvcNamespace string) (map
 		return nil, fmt.Errorf("could not get PVC %s in namespace %s: %w", pvcName, pvcNamespace, err)
 	}
 
-	return pvc.ObjectMeta.Annotations, nil
+	return pvc.Annotations, nil
 }
 
 // pvcAnnotation returns the value for newKey, falling back to deprecatedKey for backward compat.

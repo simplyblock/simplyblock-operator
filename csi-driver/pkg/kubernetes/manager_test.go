@@ -39,7 +39,7 @@ func handle(lvolID string) string {
 func testPV(name, driver, handle string) *corev1.PersistentVolume {
 	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	if driver != "" || handle != "" {
-		pv.Spec.PersistentVolumeSource.CSI = &corev1.CSIPersistentVolumeSource{
+		pv.Spec.CSI = &corev1.CSIPersistentVolumeSource{
 			Driver:       driver,
 			VolumeHandle: handle,
 		}

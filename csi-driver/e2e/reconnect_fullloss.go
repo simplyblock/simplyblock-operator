@@ -56,7 +56,7 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT-FULLLOSS", func() {
 		}
 
 		for _, m := range modes {
-			m := m
+
 			ginkgo.It(fmt.Sprintf("reconnects and keeps data for a %s volume", m.name), func() {
 				w := setupManagedWorkload(f, m, "fullloss")
 				w.induceTotalPathLoss(f)

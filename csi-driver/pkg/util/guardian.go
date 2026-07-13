@@ -884,9 +884,9 @@ func (g *Guardian) emitSharedSubsystemEvent(ctx context.Context, pod *v1.Pod) {
 		Source: v1.EventSource{
 			Component: "guardian",
 		},
-		FirstTimestamp:      now,
-		LastTimestamp:       now,
-		Count: 1,
+		FirstTimestamp: now,
+		LastTimestamp:  now,
+		Count:          1,
 	}
 	if _, err := g.cs.CoreV1().Events(pod.Namespace).Create(ctx, event, metav1.CreateOptions{}); err != nil {
 		klog.Warningf("Guardian: failed to emit AutoRestartSuppressed event for pod %s/%s: %v",

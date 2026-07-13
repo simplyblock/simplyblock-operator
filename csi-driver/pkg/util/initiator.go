@@ -1032,7 +1032,7 @@ func reconcileNonOptimizedPaths(
 	}
 
 	// Step 1: disconnect stale paths (IP no longer expected → node IP changed).
-	for ip, _ := range activeIPMap {
+	for ip := range activeIPMap {
 		if !expectedIPSet[ip] {
 			delete(activeIPMap, ip)
 		}

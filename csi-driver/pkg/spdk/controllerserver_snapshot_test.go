@@ -58,7 +58,7 @@ func assertControlPlaneErrorMapping(
 		500, 501, 502, 503, 504, 505, 507, 508, 511,
 	}
 	for _, s := range statuses {
-		s := s
+
 		t.Run(fmt.Sprintf("http_%d", s), func(t *testing.T) {
 			mock := newMockSBCLI()
 			defer mock.Close()
@@ -278,8 +278,8 @@ func TestCreateSnapshot_ReconcilesLeftoverOnRetry(t *testing.T) {
 	mock := newMockSBCLI()
 	defer mock.Close()
 	mock.mu.Lock()
-	mock.strictSnapshotNameConflict = true        // real web API 409s on a duplicate name
-	mock.snapshotCreatePersistThenFail = true     // attempt 1: created server-side, response lost
+	mock.strictSnapshotNameConflict = true    // real web API 409s on a duplicate name
+	mock.snapshotCreatePersistThenFail = true // attempt 1: created server-side, response lost
 	mock.mu.Unlock()
 
 	cs := newTestControllerServer(t, mock)
