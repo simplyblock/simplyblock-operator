@@ -1,5 +1,8 @@
 # More info: https://docs.docker.com/engine/reference/builder/#dockerignore-file
-# Ignore everything by default and re-include only needed files
+# Ignore everything by default and re-include only needed files.
+# NOTE: the build context is the repo root (operator/, csi-driver/ and atlas-lib/ are
+# nested), so re-include patterns must be depth-agnostic (**/) — a bare "go.mod" would
+# only match a root-level file and would exclude operator/go.mod, csi-driver/go.mod, etc.
 **
 
 # Re-include Go source files (but not *_test.go)
@@ -7,11 +10,11 @@
 **/*_test.go
 
 # Re-include Go module files
-!go.mod
-!go.sum
+!**/go.mod
+!**/go.sum
 
 # Re-include bundle directory
-!bundle/
+!**/bundle/
 
-Re-include LICENSE file
+# Re-include LICENSE file
 !LICENSE
