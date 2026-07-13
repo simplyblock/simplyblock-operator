@@ -98,6 +98,9 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 		}},
 	}
+	if sn.Spec.MaxParallelNodeAdds != nil {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *sn.Spec.MaxParallelNodeAdds)})
+	}
 	if sn.Spec.OpenShiftMachineConfigPool != "" {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "OPENSHIFT_MCP", Value: sn.Spec.OpenShiftMachineConfigPool})
 	}

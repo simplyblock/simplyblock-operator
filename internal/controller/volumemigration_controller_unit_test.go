@@ -55,6 +55,8 @@ func newVMReconciler(t *testing.T, apiURL string, objs ...client.Object) (*Volum
 		Recorder:   record.NewFakeRecorder(64),
 		apiClient:  webapi.NewClient(apiURL),
 		coreClient: k8sfake.NewSimpleClientset().CoreV1(),
+		// The fake client serves both cached and uncached reads in tests.
+		apiReader: cl,
 	}
 	return r, cl
 }
@@ -100,6 +102,30 @@ func csiPV(handle string) *corev1.PersistentVolume {
 				CSI: &corev1.CSIPersistentVolumeSource{VolumeHandle: handle},
 			},
 		},
+	}
+}
+
+// boundCSIPV returns a CSI PV bound to the given PVC (sets ClaimRef).
+func boundCSIPV(handle, pvcName, pvcNamespace string) *corev1.PersistentVolume {
+	pv := csiPV(handle)
+	pv.Spec.ClaimRef = &corev1.ObjectReference{Name: pvcName, Namespace: pvcNamespace}
+	return pv
+}
+
+// consumerPod returns a pod in the given phase that references pvcName.
+func consumerPod(name, namespace, nodeName, pvcName string, phase corev1.PodPhase) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: corev1.PodSpec{
+			NodeName: nodeName,
+			Volumes: []corev1.Volume{{
+				Name: "data",
+				VolumeSource: corev1.VolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvcName},
+				},
+			}},
+		},
+		Status: corev1.PodStatus{Phase: phase},
 	}
 }
 
@@ -358,12 +384,16 @@ func TestPollValidationJob_InProgress_NoTransition(t *testing.T) {
 func TestPollValidationJob_Succeeded_ContinuesToRunning(t *testing.T) {
 	var continueCalled bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue") {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+			// performMigration reads the phase before continuing.
+			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
 			continueCalled = true
 			w.WriteHeader(http.StatusOK)
-			return
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 	})
 
 	vm := validatingVM("vmig-validate-1")
@@ -425,12 +455,16 @@ func TestPollValidationJob_Failed_CancelsAndFails(t *testing.T) {
 func TestReconcileValidating_NoRunningConsumer_SkipsValidationAndContinues(t *testing.T) {
 	var continueCalled bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue") {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+			// performMigration reads the phase before continuing.
+			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
 			continueCalled = true
 			w.WriteHeader(http.StatusOK)
-			return
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 	})
 
 	vm := validatingVM("") // no validation job yet
@@ -453,6 +487,181 @@ func TestReconcileValidating_NoRunningConsumer_SkipsValidationAndContinues(t *te
 	}
 	if got.Status.ValidationJobName != "" {
 		t.Errorf("ValidationJobName = %q, want empty (no job created)", got.Status.ValidationJobName)
+	}
+}
+
+// A bound PVC that no pod references (workload scaled to zero) is genuinely idle:
+// validation is skipped and the migration continues, just like the unbound case.
+func TestReconcileValidating_BoundButNoConsumerPod_SkipsValidation(t *testing.T) {
+	var continueCalled bool
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
+			continueCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	vm := validatingVM("")
+	pv := boundCSIPV("cluster-uuid:pool-uuid:vol-uuid", "app-pvc", testVMNamespace)
+	// No pod references app-pvc.
+	r, cl := newVMReconciler(t, srv.URL, vm, pv)
+
+	res, err := r.Reconcile(context.Background(), vmRequest())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !continueCalled {
+		t.Errorf("expected ContinueMigration to be called (no consumer pod → skip validation)")
+	}
+	if res.RequeueAfter != vmigration.MigrationInitialDelay {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, vmigration.MigrationInitialDelay)
+	}
+	if got := getVM(t, cl); got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseRunning {
+		t.Errorf("phase = %q, want Running", got.Status.Phase)
+	}
+}
+
+// A consumer pod that exists but is not Running yet must NOT skip validation:
+// the migration waits (requeues) so it can validate on the consumer's node once
+// the pod is Running. The storage API must not be touched while waiting.
+func TestReconcileValidating_ConsumerNotReady_WaitsWithoutContinuing(t *testing.T) {
+	vm := validatingVM("")
+	pv := boundCSIPV("cluster-uuid:pool-uuid:vol-uuid", "app-pvc", testVMNamespace)
+	pod := consumerPod("app-0", testVMNamespace, "", "app-pvc", corev1.PodPending)
+	r, cl := newVMReconciler(t, unreachableAPI, vm, pv, pod)
+
+	res, err := r.Reconcile(context.Background(), vmRequest())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.RequeueAfter != 15*time.Second {
+		t.Errorf("RequeueAfter = %v, want 15s (waiting for consumer)", res.RequeueAfter)
+	}
+	got := getVM(t, cl)
+	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseValidating {
+		t.Errorf("phase = %q, want still Validating while waiting", got.Status.Phase)
+	}
+	if got.Status.ValidationJobName != "" {
+		t.Errorf("ValidationJobName = %q, want empty (no job while consumer not ready)", got.Status.ValidationJobName)
+	}
+}
+
+// A Running consumer pod drives the normal validation path: a validation Job is
+// created on the consumer's node and the storage API is not continued yet.
+func TestReconcileValidating_RunningConsumer_CreatesValidationJob(t *testing.T) {
+	vm := validatingVM("")
+	pv := boundCSIPV("cluster-uuid:pool-uuid:vol-uuid", "app-pvc", testVMNamespace)
+	pod := consumerPod("app-0", testVMNamespace, "worker-1", "app-pvc", corev1.PodRunning)
+	// migrationCluster provides the rebalancer image resolveRebalancerImage needs.
+	r, cl := newVMReconciler(t, unreachableAPI, vm, pv, pod, migrationCluster())
+
+	res, err := r.Reconcile(context.Background(), vmRequest())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.RequeueAfter != 5*time.Second {
+		t.Errorf("RequeueAfter = %v, want 5s after job creation", res.RequeueAfter)
+	}
+	got := getVM(t, cl)
+	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseValidating {
+		t.Errorf("phase = %q, want still Validating", got.Status.Phase)
+	}
+	if got.Status.ValidationJobName == "" {
+		t.Errorf("ValidationJobName should be set after job creation")
+	}
+	job := &batchv1.Job{}
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: testVMNamespace, Name: got.Status.ValidationJobName}, job); err != nil {
+		t.Fatalf("expected validation job %q to exist: %v", got.Status.ValidationJobName, err)
+	}
+	if node := job.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"]; node != "worker-1" {
+		t.Errorf("job node selector = %q, want worker-1 (the consumer's node)", node)
+	}
+}
+
+// Regression test for the non-idempotent continue hazard: if a prior reconcile
+// already called ContinueMigration (promoting the backend migration past
+// pre_created) but crashed before persisting phase=Running, the replay must NOT
+// re-issue ContinueMigration (the backend would reject it) and must NOT cancel
+// the healthy, running migration. It should observe the advanced phase, skip the
+// continue call, and reach Running.
+func TestPerformMigration_AlreadyContinued_SkipsContinueAndCancel(t *testing.T) {
+	var continueCalled, cancelCalled bool
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+			// Backend already advanced: continue happened in a prior reconcile.
+			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"snap_copy","status":"running"}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
+			continueCalled = true
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/"):
+			cancelCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	// Skip path (unbound PV → no running consumer) drives performMigration.
+	vm := validatingVM("")
+	pv := csiPV("cluster-uuid:pool-uuid:vol-uuid")
+	r, cl := newVMReconciler(t, srv.URL, vm, pv)
+
+	res, err := r.Reconcile(context.Background(), vmRequest())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if continueCalled {
+		t.Errorf("ContinueMigration must not be re-issued when the migration already advanced")
+	}
+	if cancelCalled {
+		t.Errorf("CancelMigration must not be called for a healthy, already-advanced migration")
+	}
+	if res.RequeueAfter != vmigration.MigrationInitialDelay {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, vmigration.MigrationInitialDelay)
+	}
+	if got := getVM(t, cl); got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseRunning {
+		t.Errorf("phase = %q, want Running", got.Status.Phase)
+	}
+}
+
+// When ContinueMigration itself reports an error but the migration is genuinely
+// still stuck in pre_created (a real start failure), the migration is cancelled
+// and marked Failed.
+func TestPerformMigration_ContinueFails_StillPreCreated_CancelsAndFails(t *testing.T) {
+	var cancelCalled bool
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+			// Never advances past pre_created, even after the continue attempt.
+			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
+			http.Error(w, "boom", http.StatusInternalServerError)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/"):
+			cancelCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	vm := validatingVM("")
+	pv := csiPV("cluster-uuid:pool-uuid:vol-uuid")
+	r, cl := newVMReconciler(t, srv.URL, vm, pv)
+
+	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !cancelCalled {
+		t.Errorf("expected CancelMigration on a genuine continue failure")
+	}
+	if got := getVM(t, cl); got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
+		t.Errorf("phase = %q, want Failed", got.Status.Phase)
 	}
 }
 
