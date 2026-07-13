@@ -1193,7 +1193,7 @@ func extractSpdkProxyRpcPort(pod *corev1.Pod) (int32, bool) {
 			if e.Name != "RPC_PORT" || e.Value == "" {
 				continue
 			}
-			n, err := strconv.Atoi(e.Value)
+			n, err := strconv.ParseInt(e.Value, 10, 32)
 			if err != nil {
 				return 0, false
 			}
@@ -1204,7 +1204,7 @@ func extractSpdkProxyRpcPort(pod *corev1.Pod) (int32, bool) {
 	const prefix = "snode-spdk-pod-"
 	if rest, ok := strings.CutPrefix(pod.Name, prefix); ok {
 		if dash := strings.Index(rest, "-"); dash > 0 {
-			if n, err := strconv.Atoi(rest[:dash]); err == nil {
+			if n, err := strconv.ParseInt(rest[:dash], 10, 32); err == nil {
 				return int32(n), true
 			}
 		}
