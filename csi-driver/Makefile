@@ -17,7 +17,7 @@ OUT_DIR := ./_out
 # dir for tools: e.g., golangci-lint
 TOOL_DIR := $(OUT_DIR)/tool
 # use golangci-lint for static code check
-GOLANGCI_VERSION := v1.56.2
+GOLANGCI_VERSION := v2.11.4
 GOLANGCI_BIN := $(TOOL_DIR)/golangci-lint
 # go source, scripts
 SOURCE_DIRS := cmd pkg
@@ -51,7 +51,7 @@ lint: golangci
 .PHONY: golangci
 golangci: $(GOLANGCI_BIN)
 	@echo === running golangci-lint
-	@$(TOOL_DIR)/golangci-lint --config=scripts/golangci.yml run ./...
+	@$(TOOL_DIR)/golangci-lint run ./...
 
 $(GOLANGCI_BIN):
 	@echo === installing golangci-lint
