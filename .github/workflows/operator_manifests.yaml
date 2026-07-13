@@ -6,11 +6,11 @@ on:
       - main
     paths:
       - "operator/**"
-      - ".github/workflows/manifests.yaml"
+      - ".github/workflows/operator_manifests.yaml"
   pull_request:
     paths:
       - "operator/**"
-      - ".github/workflows/manifests.yaml"
+      - ".github/workflows/operator_manifests.yaml"
 
 jobs:
   manifests:

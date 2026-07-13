@@ -5,11 +5,11 @@ on:
     branches: [main]
     paths:
       - "atlas-lib/**"
-      - ".github/workflows/ci-atlas.yaml"
+      - ".github/workflows/atlas_ci.yaml"
   pull_request:
     paths:
       - "atlas-lib/**"
-      - ".github/workflows/ci-atlas.yaml"
+      - ".github/workflows/atlas_ci.yaml"
 
 jobs:
   test:

@@ -6,11 +6,11 @@ on:
       - main
     paths:
       - "helm-charts/charts/simplyblock-operator/**"
-      - ".github/workflows/ci-operator.yaml"
+      - ".github/workflows/helm_lint.yaml"
   pull_request:
     paths:
       - "helm-charts/charts/simplyblock-operator/**"
-      - ".github/workflows/ci-operator.yaml"
+      - ".github/workflows/helm_lint.yaml"
 
 jobs:
   lint:

@@ -1,4 +1,4 @@
-name: Lint (operator)
+name: Tests (operator)
 
 on:
   push:
@@ -6,16 +6,19 @@ on:
       - main
     paths:
       - "operator/**"
-      - ".github/workflows/lint.yaml"
+      - ".github/workflows/operator_test.yaml"
   pull_request:
     paths:
       - "operator/**"
-      - ".github/workflows/lint.yaml"
+      - ".github/workflows/operator_test.yaml"
 
 jobs:
-  lint:
+  test:
     name: Run on Ubuntu
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: operator
     steps:
       - name: Clone the code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -25,8 +28,8 @@ jobs:
         with:
           go-version-file: operator/go.mod
 
-      - name: Run linter
-        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
-        with:
-          version: v2.11.4
-          working-directory: operator
+      - name: Running Tests
+        run: |
+          go mod tidy -diff
+          make setup-envtest
+          go test ./...

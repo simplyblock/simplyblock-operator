@@ -7,11 +7,11 @@ on:
     branches: ['main']
     paths:
       - "csi-driver/**"
-      - ".github/workflows/codespell.yaml"
+      - ".github/workflows/csi_codespell.yaml"
   pull_request:
     paths:
       - "csi-driver/**"
-      - ".github/workflows/codespell.yaml"
+      - ".github/workflows/csi_codespell.yaml"
 
 jobs:
   codespell:
@@ -22,5 +22,5 @@ jobs:
       - uses: codespell-project/actions-codespell@master
         with:
           check_filenames: true
-          skip: ./.git,./.github/workflows/codespell.yaml,.git,*.png,*.jpg,*.svg,*.sum,./vendor,go.sum
+          skip: ./.git,./.github/workflows/csi_codespell.yaml,.git,*.png,*.jpg,*.svg,*.sum,./vendor,go.sum
           ignore_words_list: "browseable,ro,NotIn"

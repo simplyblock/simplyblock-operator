@@ -3,12 +3,12 @@ on:
     pull_request:
       paths:
         - "csi-driver/**"
-        - ".github/workflows/pluto.yaml"
+        - ".github/workflows/csi_pluto.yaml"
     push:
       branches: ['main']
       paths:
         - "csi-driver/**"
-        - ".github/workflows/pluto.yaml"
+        - ".github/workflows/csi_pluto.yaml"
 
 jobs:
 

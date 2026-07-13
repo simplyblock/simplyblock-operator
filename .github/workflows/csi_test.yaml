@@ -5,7 +5,7 @@ on:
     branches: ['**']
     paths:
       - "csi-driver/**"
-      - ".github/workflows/test-csi-driver.yaml"
+      - ".github/workflows/csi_test.yaml"
   workflow_dispatch:
 
 jobs:

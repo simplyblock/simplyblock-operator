@@ -8,7 +8,7 @@ on:
       - "v*"
     paths:
       - "operator/**"
-      - ".github/workflows/build.yaml"
+      - ".github/workflows/operator_build.yaml"
 
 env:
   IMAGE_NAME: simplyblock/simplyblock-operator
