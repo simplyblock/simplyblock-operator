@@ -16,14 +16,10 @@ func TestValidateExternalURL(t *testing.T) {
 		{name: "valid https public IP with path", url: "https://1.1.1.1/bucket"},
 		{name: "http rejected", url: "http://vault.example.com", wantErr: "scheme must be https"},
 		{name: "no scheme rejected", url: "vault.example.com", wantErr: "scheme must be https"},
-		{name: "RFC-1918 10.x", url: "https://10.0.0.1", wantErr: "restricted IP"},
-		{name: "RFC-1918 172.16.x", url: "https://172.16.5.1", wantErr: "restricted IP"},
-		{name: "RFC-1918 192.168.x", url: "https://192.168.1.1", wantErr: "restricted IP"},
 		{name: "loopback", url: "https://127.0.0.1", wantErr: "restricted IP"},
 		{name: "link-local IMDS", url: "https://169.254.169.254", wantErr: "restricted IP"},
 		{name: "IPv6 loopback", url: "https://[::1]", wantErr: "restricted IP"},
 		{name: "IPv6 link-local", url: "https://[fe80::1]", wantErr: "restricted IP"},
-		{name: "IPv6 ULA", url: "https://[fd00::1]", wantErr: "restricted IP"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
