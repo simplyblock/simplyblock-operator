@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/simplyblock/atlas/errs/deferrers"
 	"k8s.io/klog"
 )
 
@@ -628,7 +629,7 @@ func (client APIClient) do(ctx context.Context, method, path string, body any) (
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", method, err)
 	}
-	defer resp.Body.Close()
+	defer deferrers.Close(resp.Body)
 
 	// 204 No Content — success, no body
 	if resp.StatusCode == http.StatusNoContent {

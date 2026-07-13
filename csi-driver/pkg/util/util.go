@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/simplyblock/atlas/errs/deferrers"
 	"k8s.io/klog"
 )
 
@@ -45,7 +46,7 @@ func ParseJSONFile(fileName string, result interface{}) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer deferrers.Close(file)
 
 	bytes, err := io.ReadAll(file)
 	if err != nil {

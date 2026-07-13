@@ -32,6 +32,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/simplyblock/atlas/errs/deferrers"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
@@ -963,7 +964,7 @@ func ioctlBlkGetSize64(path string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
+	defer deferrers.Close(f)
 
 	// blkGetSize64 is the Linux BLKGETSIZE64 ioctl code.
 	// It returns the total size (in bytes) of a block device.
