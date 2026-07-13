@@ -1,17 +1,11 @@
 # GitHub Action to automate the identification of common misspellings in text files.
 # https://github.com/codespell-project/actions-codespell
 # https://github.com/codespell-project/codespell
-name: "CSI: Codespell"
+name: "Repo: Codespell"
 on:
   push:
     branches: ['main']
-    paths:
-      - "csi-driver/**"
-      - ".github/workflows/csi_codespell.yaml"
   pull_request:
-    paths:
-      - "csi-driver/**"
-      - ".github/workflows/csi_codespell.yaml"
 
 jobs:
   codespell:
@@ -22,5 +16,8 @@ jobs:
       - uses: codespell-project/actions-codespell@master
         with:
           check_filenames: true
-          skip: ./.git,./.github/workflows/csi_codespell.yaml,.git,*.png,*.jpg,*.svg,*.sum,./vendor,go.sum
+          # Scan every component (operator, atlas-lib, csi-driver, helm-charts) plus
+          # top-level files. "." = the whole checkout; the skip list prunes noise.
+          path: .
+          skip: ./.git,.git,./.github/workflows/repo_codespell.yaml,*.png,*.jpg,*.svg,*.sum,*.tgz,./vendor,go.sum
           ignore_words_list: "browseable,ro,NotIn"
