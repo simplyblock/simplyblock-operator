@@ -16,6 +16,7 @@
 #   8 — Rapid action toggle: set/clear/set does not leak state
 #   9 — System-volume-only node: sb-fio-baseline-* volumes skipped, no migrations (removes a node)
 #  10 — Both pinned + unmanaged visible simultaneously: both blocking events emitted
+#  11 — Drain pauses when a second storage node is shut down (cluster degraded), resumes after restart
 
 set -euo pipefail
 
@@ -999,12 +1000,139 @@ delete_backend_volume "$UNMANAGED_UUID"
 cleanup_test_ns
 } # end run_test_10
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Test 11: Drain pauses when cluster becomes rebalancing mid-drain, resumes when active
+# ══════════════════════════════════════════════════════════════════════════════
+run_test_11() {
+section "Test 11: Drain pauses when second node shuts down (cluster degraded), resumes after restart"
+
+# Get the admin-control pod to run sbctl commands.
+ADMINPOD=$(kubectl get pods -n "$NAMESPACE" -l app=simplyblock-admin-control \
+  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+[[ -z "$ADMINPOD" ]] && { fail "Test 11: Could not find admin-control pod"; return; }
+
+# More PVCs so migration runs long enough to observe the pause mid-flight.
+cleanup_test_ns
+create_pvcs_and_pods 24
+
+# Pick drain node (index 0) and the node to shut down (index 1).
+DRAIN_NODE=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+  -o jsonpath='{.status.nodes[0].uuid}')
+SECOND_NODE=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+  -o jsonpath='{.status.nodes[1].uuid}')
+[[ -z "$DRAIN_NODE" || -z "$SECOND_NODE" ]] && {
+  fail "Test 11: Could not determine drain/second node UUIDs"
+  cleanup_test_ns; return
+}
+info "Drain node: $DRAIN_NODE  Second node (to shut down): $SECOND_NODE"
+
+info "Triggering drain on $DRAIN_NODE"
+trigger_drain "$DRAIN_NODE"
+
+# Wait until Migrating so volumes are actively being moved.
+if ! wait_for_subphase "Migrating" 180; then
+  fail "Test 11: Drain did not reach Migrating within 180s"
+  clear_action
+  cleanup_test_ns
+  return
+fi
+pass "Test 11: Drain reached Migrating phase"
+
+# Shut down the second storage node — this degrades the cluster, which should
+# cause the drain to pause rather than continue or fail.
+info "Shutting down second node $SECOND_NODE to degrade the cluster..."
+kubectl exec -n "$NAMESPACE" "$ADMINPOD" -- \
+  sbctl sn shutdown "$SECOND_NODE" 2>/dev/null || true
+
+# Wait up to 120s for the cluster to become degraded and the drain to pause.
+info "Waiting for drain to pause (cluster degraded)..."
+deadline=$((SECONDS + 120))
+paused=false
+while [[ $SECONDS -lt $deadline ]]; do
+  sp=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+    -o jsonpath='{.status.actionStatus.subPhase}' 2>/dev/null || true)
+  msg=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+    -o jsonpath='{.status.actionStatus.message}' 2>/dev/null || true)
+  cluster_status=$(kubectl get storagecluster -n "$NAMESPACE" \
+    -o jsonpath='{.items[0].status.status}' 2>/dev/null || true)
+  info "  subPhase=$sp cluster_status=$cluster_status message=$msg"
+  if echo "$msg" | grep -qi "paused"; then
+    paused=true; break
+  fi
+  sleep 10
+done
+
+$paused \
+  && pass "Test 11: Drain paused while cluster is degraded" \
+  || fail "Test 11: Drain did not pause within 120s after second node shutdown"
+
+event=$(kubectl get events -n "$NAMESPACE" --field-selector reason=DrainPaused \
+  --sort-by=.lastTimestamp -o jsonpath='{.items[-1].reason}' 2>/dev/null || true)
+[[ "$event" == "DrainPaused" ]] \
+  && pass "Test 11: DrainPaused event emitted" \
+  || fail "Test 11: DrainPaused event not found"
+
+# Restart the second node to bring the cluster back to active.
+info "Restarting second node $SECOND_NODE to recover the cluster..."
+kubectl exec -n "$NAMESPACE" "$ADMINPOD" -- \
+  sbctl sn restart "$SECOND_NODE" 2>/dev/null || true
+
+# Wait for cluster to become active again.
+info "Waiting for cluster to become active..."
+deadline=$((SECONDS + 300))
+while [[ $SECONDS -lt $deadline ]]; do
+  cluster_status=$(kubectl get storagecluster -n "$NAMESPACE" \
+    -o jsonpath='{.items[0].status.status}' 2>/dev/null || true)
+  info "  cluster_status=$cluster_status"
+  [[ "$cluster_status" == "active" ]] && break
+  sleep 15
+done
+cluster_status=$(kubectl get storagecluster -n "$NAMESPACE" \
+  -o jsonpath='{.items[0].status.status}' 2>/dev/null || true)
+[[ "$cluster_status" == "active" ]] \
+  && pass "Test 11: Cluster returned to active after node restart" \
+  || fail "Test 11: Cluster did not become active within 300s"
+
+# Wait for drain to advance past Migrating (resume).
+info "Waiting for drain to resume..."
+deadline=$((SECONDS + 600))
+resumed=false
+while [[ $SECONDS -lt $deadline ]]; do
+  sp=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+    -o jsonpath='{.status.actionStatus.subPhase}' 2>/dev/null || true)
+  state=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+    -o jsonpath='{.status.actionStatus.state}' 2>/dev/null || true)
+  migrated=$(kubectl get storagenodeset "$STORAGENODESET" -n "$NAMESPACE" \
+    -o jsonpath='{.status.actionStatus.volumesMigrated}' 2>/dev/null || echo "0")
+  info "  subPhase=$sp state=$state migrated=$migrated"
+  if [[ "$sp" != "Migrating" || "$state" == "success" || "$state" == "failed" ]]; then
+    resumed=true; break
+  fi
+  sleep 10
+done
+
+$resumed \
+  && pass "Test 11: Drain resumed after cluster became active" \
+  || fail "Test 11: Drain did not resume within 300s after cluster activated"
+
+# Cancel the drain — non-destructive, node stays online.
+info "Cancelling drain"
+clear_action
+if wait_for_node_online "$DRAIN_NODE" 90; then
+  pass "Test 11: Drain node resumed online after cancel"
+else
+  fail "Test 11: Drain node did not return to online after cancel"
+fi
+
+cleanup_test_ns
+} # end run_test_11
+
 # ── Dispatcher ────────────────────────────────────────────────────────────────
 # Default order: non-destructive tests first, node-removing tests last
 if [[ $# -gt 0 ]]; then
   TESTS=("$@")
 else
-  TESTS=(2 3 4 5 8 10 9 7 1 6)
+  TESTS=(2 3 4 5 8 11 10 9 7 1 6)
 fi
 
 for t in "${TESTS[@]}"; do
@@ -1019,7 +1147,8 @@ for t in "${TESTS[@]}"; do
     8) run_test_8 ;;
     9) run_test_9 ;;
     10) run_test_10 ;;
-    *) echo "[WARN] Unknown test number: $t (valid: 1-10)"; FAILED=$((FAILED + 1)) ;;
+    11) run_test_11 ;;
+    *) echo "[WARN] Unknown test number: $t (valid: 1-11)"; FAILED=$((FAILED + 1)) ;;
   esac
 done
 
