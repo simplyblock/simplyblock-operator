@@ -10,6 +10,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
@@ -147,6 +150,77 @@ func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
 	}
 	if got["uuid"] != lvolUUID || got["name"] != lvolUUID || got["model"] != lvolUUID {
 		t.Fatalf("unexpected identity CSI attrs: %#v", got)
+	}
+}
+
+// TestBackupRestoreFailsWhenBackupIsFailed verifies that a BackupRestore referencing a
+// StorageBackup stuck in a terminal Failed phase is itself marked Failed (with no further
+// requeue), rather than looping in Pending forever.
+func TestBackupRestoreFailsWhenBackupIsFailed(t *testing.T) {
+	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+
+	cluster := testCluster("default", "mycluster", "cluster-uuid")
+	backup := &simplyblockv1alpha1.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "backup-sample",
+			Namespace: "default",
+		},
+		Status: simplyblockv1alpha1.StorageBackupStatus{
+			Phase:   simplyblockv1alpha1.BackupPhaseFailed,
+			Message: "Snapshot snap-1 not found",
+		},
+	}
+	restore := &simplyblockv1alpha1.BackupRestore{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "restore-sample",
+			Namespace: "default",
+		},
+		Spec: simplyblockv1alpha1.BackupRestoreSpec{
+			ClusterName: "mycluster",
+			BackupRef:   simplyblockv1alpha1.BackupRef{Name: "backup-sample"},
+			PVCTemplate: simplyblockv1alpha1.PVCTemplate{
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resourceMustParse(t, "10Gi"),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	k8sClient := newTestClient(t, scheme,
+		[]client.Object{&simplyblockv1alpha1.BackupRestore{}},
+		cluster, backup, restore,
+	)
+
+	r := &BackupRestoreReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: record.NewFakeRecorder(10),
+	}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "restore-sample", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("RequeueAfter = %v, want 0 (restore must terminate, not poll forever)", res.RequeueAfter)
+	}
+
+	got := &simplyblockv1alpha1.BackupRestore{}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "restore-sample", Namespace: "default"}, got); err != nil {
+		t.Fatalf("failed to get restore: %v", err)
+	}
+	if got.Status.Phase != simplyblockv1alpha1.RestorePhaseFailed {
+		t.Fatalf("Phase = %q, want %q", got.Status.Phase, simplyblockv1alpha1.RestorePhaseFailed)
+	}
+	if !strings.Contains(got.Status.Message, "Snapshot snap-1 not found") {
+		t.Fatalf("Message = %q, want it to include the backup's failure reason", got.Status.Message)
 	}
 }
 
