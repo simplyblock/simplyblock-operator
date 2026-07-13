@@ -202,8 +202,11 @@ func (ns *nodeServer) NodeGetVolumeStats(
 			return nil, status.Errorf(codes.Internal, "statfs %q: %v", volumePath, err)
 		}
 
-		totalBytes := int64(s.Blocks) * int64(s.Bsize)
-		availBytes := int64(s.Bavail) * int64(s.Bsize)
+		// Compute in uint64 (Bsize is int64 on Linux but uint32 on darwin; the block
+		// counts are uint64 on both) and convert the product once, so neither conversion
+		// is a platform-dependent no-op.
+		totalBytes := int64(s.Blocks * uint64(s.Bsize))
+		availBytes := int64(s.Bavail * uint64(s.Bsize))
 		usedBytes := totalBytes - availBytes
 		if usedBytes < 0 {
 			usedBytes = 0
