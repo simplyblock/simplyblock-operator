@@ -1,6 +1,6 @@
 module github.com/simplyblock/atlas
 
-go 1.26.0
+go 1.26.2
 
 require (
 	k8s.io/api v0.36.2
