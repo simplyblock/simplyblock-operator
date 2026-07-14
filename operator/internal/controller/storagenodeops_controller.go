@@ -110,7 +110,7 @@ func (r *StorageNodeOpsReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// Cluster pause check for drain operations.
-	if ops.Spec.Action == "remove" {
+	if ops.Spec.Action == utils.NodeActionRemove {
 		if res, paused := r.clusterPauseCheck(ctx, &ops, apiClient); paused {
 			return res, nil
 		}
@@ -144,7 +144,7 @@ func (r *StorageNodeOpsReconciler) acquireLock(
 	opsPatch := client.MergeFrom(ops.DeepCopy())
 	ops.Status.Phase = simplyblockv1alpha1.StorageNodeOpsPhaseRunning
 	ops.Status.StartedAt = &now
-	if ops.Spec.Action == "remove" {
+	if ops.Spec.Action == utils.NodeActionRemove {
 		ops.Status.SubPhase = simplyblockv1alpha1.StorageNodeOpsSubPhaseValidating
 	}
 	if err := r.Status().Patch(ctx, ops, opsPatch); err != nil {
@@ -163,7 +163,7 @@ func (r *StorageNodeOpsReconciler) dispatch(
 	apiClient *webapi.Client,
 ) (ctrl.Result, error) {
 	switch ops.Spec.Action {
-	case "remove":
+	case utils.NodeActionRemove:
 		return r.runDrain(ctx, ops, sn, clusterUUID, apiClient)
 	case "shutdown", "restart", "suspend", "resume":
 		return r.runSimpleAction(ctx, ops, sn, sns, clusterUUID, apiClient)
@@ -399,7 +399,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 	}
 
 	// Handle failed migrations.
-	if res, handled := r.handleFailedVolumeMigrations(ctx, ops, clusterUUID, apiClient, vmigList.Items); handled {
+	if res, handled := r.handleFailedVolumeMigrations(ctx, ops, apiClient, vmigList.Items); handled {
 		return res, nil
 	}
 
@@ -449,7 +449,6 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.StorageNodeOps,
-	clusterUUID string,
 	apiClient *webapi.Client,
 	items []simplyblockv1alpha1.VolumeMigration,
 ) (ctrl.Result, bool) {

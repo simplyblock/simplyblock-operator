@@ -1282,11 +1282,11 @@ func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tls
 	return nil
 }
 
-func waitForNodeInfoReachable( //nolint:unparam
+func waitForNodeInfoReachable(
 	ctx context.Context,
 	nodeName string,
-	namespace string,
-	tlsEnabled, tlsMutualEnabled bool,
+	namespace string,       //nolint:unparam
+	tlsEnabled, tlsMutualEnabled bool, //nolint:unparam
 ) error {
 	log := logf.FromContext(ctx)
 
