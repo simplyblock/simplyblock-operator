@@ -37,6 +37,7 @@ all: spdkcsi lint test
 .PHONY: spdkcsi
 spdkcsi:
 	@echo === building spdkcsi binary
+	@mkdir -p $(BUILD_DIR)
 	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(BUILD_DIR)/spdkcsi ./cmd/
 
 # static code check, text lint
@@ -149,7 +150,7 @@ helm-test:
 # atlas-lib/ module) -- not $(BUILD_DIR), and no pre-built binary is required.
 image:
 	@echo === running docker build
-	@if [ -n $(HTTP_PROXY) ]; then \
+	@if [ -n "$(HTTP_PROXY)" ]; then \
 		proxy_opt="--build-arg http_proxy=$(HTTP_PROXY) --build-arg https_proxy=$(HTTP_PROXY)"; \
 	fi; \
 	sudo docker build --no-cache -t $(CSI_IMAGE)-amd64 $$proxy_opt \

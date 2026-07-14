@@ -48,7 +48,8 @@ TOOLS_STRICT="${TOOLS_STRICT:-0}"
 # Platforms for which `lock` records checksums.
 SUPPORTED_PLATFORMS=(linux/amd64 linux/arm64 darwin/amd64 darwin/arm64)
 
-WORK_DIR="$(mktemp -d)"
+# Explicit template keeps this portable across GNU and older BSD/busybox mktemp.
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/simplyblock-tools.XXXXXXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 log() { printf '>> %s\n' "$*" >&2; }

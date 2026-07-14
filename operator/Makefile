@@ -49,24 +49,6 @@ SHELL = /usr/bin/env bash -o pipefail
 .PHONY: all
 all: build
 
-# ENVTEST_VERSION / ENVTEST_K8S_VERSION are derived from go.mod and MUST be set
-# before including tools.mk: its envtest rule embeds $(ENVTEST_VERSION) in the
-# target name, which make expands when the rule is parsed.
-# gomodver resolves the effective version of a go.mod dependency (honoring replace).
-define gomodver
-$(shell go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' $(1) 2>/dev/null)
-endef
-
-#ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
-ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
-  [ -n "$$v" ] || { echo "Set ENVTEST_VERSION manually (controller-runtime replace has no tag)" >&2; exit 1; }; \
-  printf '%s\n' "$$v" | sed -E 's/^v?([0-9]+)\.([0-9]+).*/release-\1.\2/')
-
-#ENVTEST_K8S_VERSION is the version of Kubernetes to use for setting up ENVTEST binaries (i.e. 1.31)
-ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
-  [ -n "$$v" ] || { echo "Set ENVTEST_K8S_VERSION manually (k8s.io/api replace has no tag)" >&2; exit 1; }; \
-  printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
-
 # Shared dev-tool downloader: pins golangci-lint, kustomize, controller-gen, yq
 # and setup-envtest into the repo-root .bin with checksum verification. Defines
 # $(BIN_DIR), $(GOLANGCI_LINT), $(KUSTOMIZE), $(CONTROLLER_GEN), $(YQ), $(ENVTEST).
@@ -157,6 +139,7 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
+	mkdir -p build
 	go build -o build/manager cmd/main.go
 
 .PHONY: run
@@ -318,6 +301,24 @@ KIND ?= kind
 
 # envtest's Kubernetes asset binaries (etcd, kube-apiserver, ...) also live in .bin.
 LOCALBIN := $(BIN_DIR)
+
+# setup-envtest's version and its Kubernetes asset version are derived from
+# go.mod (not statically pinned in the manifest); the envtest target in
+# tools.mk consumes $(ENVTEST_VERSION) at recipe time.
+# gomodver resolves the effective version of a go.mod dependency (honoring replace).
+define gomodver
+$(shell go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' $(1) 2>/dev/null)
+endef
+
+#ENVTEST_VERSION is the controller-runtime release branch matching go.mod (i.e. release-0.20).
+ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
+  [ -n "$$v" ] || { echo "Set ENVTEST_VERSION manually (controller-runtime replace has no tag)" >&2; exit 1; }; \
+  printf '%s\n' "$$v" | sed -E 's/^v?([0-9]+)\.([0-9]+).*/release-\1.\2/')
+
+#ENVTEST_K8S_VERSION is the Kubernetes version for envtest assets, from go.mod (i.e. 1.31).
+ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
+  [ -n "$$v" ] || { echo "Set ENVTEST_K8S_VERSION manually (k8s.io/api replace has no tag)" >&2; exit 1; }; \
+  printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
 
 .PHONY: setup-envtest
 setup-envtest: envtest ## Download the binaries required for ENVTEST in the local bin directory.
