@@ -217,14 +217,11 @@ func buildStorageNodeCR(
 	sns *simplyblockv1alpha1.StorageNodeSet,
 	name, worker, socket string,
 ) *simplyblockv1alpha1.StorageNode {
-	var socketIndex *int32
-	if socket != "0" && socket != "" {
-		// Parse the socket string to an int32; default to nil (= socket 0) on failure.
-		var idx int32
-		if n, err := fmt.Sscanf(socket, "%d", &idx); n == 1 && err == nil {
-			socketIndex = &idx
-		}
+	var idx int32
+	if socket != "" {
+		fmt.Sscanf(socket, "%d", &idx) //nolint:errcheck
 	}
+	socketIndex := &idx
 
 	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{

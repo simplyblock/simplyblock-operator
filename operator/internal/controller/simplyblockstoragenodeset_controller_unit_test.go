@@ -2234,7 +2234,6 @@ func TestPendingNodeAddsBlocksDuplicatePost(t *testing.T) {
 	r := newStorageNodeSetStateTestReconciler(t, sn, node)
 	res, err := r.reconcileWorkerNode(
 		context.Background(),
-		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)},
 		sn, workerName, clusterUUID, webapi.NewClient(srv.URL), 1,
 	)
 	if err != nil {
@@ -2283,7 +2282,6 @@ func TestPendingNodeAddsLegacyPlaceholderBlocksPost(t *testing.T) {
 	r := newStorageNodeSetStateTestReconciler(t, sn, node)
 	_, err := r.reconcileWorkerNode(
 		context.Background(),
-		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)},
 		sn, workerName, clusterUUID, webapi.NewClient(srv.URL), 1,
 	)
 	if err != nil {
@@ -2332,10 +2330,9 @@ func TestParallelNodeAddContinuesPastPendingWorker(t *testing.T) {
 
 	r := newStorageNodeSetStateTestReconciler(t, sn, node1, node2)
 	apiClient := webapi.NewClient(srv.URL)
-	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)}
 
 	// worker-1: pending — must return RequeueAfter without touching worker-2.
-	res1, err := r.reconcileWorkerNode(context.Background(), req, sn, "worker-1", clusterUUID, apiClient, 1)
+	res1, err := r.reconcileWorkerNode(context.Background(), sn, "worker-1", clusterUUID, apiClient, 1)
 	if err != nil {
 		t.Fatalf("worker-1: unexpected error: %v", err)
 	}
@@ -2352,7 +2349,7 @@ func TestParallelNodeAddContinuesPastPendingWorker(t *testing.T) {
 	// PendingNodeAdds["worker-2"] before attempting the POST. checkNodeInfoReachable
 	// will fail (no real snode API in tests), so the marker is cleared and
 	// RequeueAfter is returned — but worker-2 WAS reached and processed.
-	res2, err := r.reconcileWorkerNode(context.Background(), req, sn, "worker-2", clusterUUID, apiClient, 1)
+	res2, err := r.reconcileWorkerNode(context.Background(), sn, "worker-2", clusterUUID, apiClient, 1)
 	if err != nil {
 		t.Fatalf("worker-2: unexpected error: %v", err)
 	}

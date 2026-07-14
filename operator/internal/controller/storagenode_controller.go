@@ -221,20 +221,20 @@ func (r *StorageNodeReconciler) provisionNode(
 	nodeAddress := utils.StorageNodeSetAPIAddress(sn.Spec.WorkerNode, sn.Namespace)
 	params := utils.StorageNodeSetAddParams{
 		NodeAddress:      nodeAddress,
-		InterfaceName:    sns.Spec.MgmtIfname,                                         // fleet-only (immutable)
-		SPDKImage:        eff.SpdkImage,                                                // per-node override
-		SPDKProxyImage:   eff.SpdkProxyImage,                                           // per-node override
-		DataNics:         sns.Spec.DataIfname,                                          // fleet-only
+		InterfaceName:    sns.Spec.MgmtIfname,
+		SPDKImage:        eff.SpdkImage,
+		SPDKProxyImage:   eff.SpdkProxyImage,
+		DataNics:         sns.Spec.DataIfname,
 		Namespace:        sn.Namespace,
-		JMPercent:        journalManagerPercentPerDeviceFromSpec(eff.JournalManagerSpec), // per-node override
-		Partitions:       utils.IntPtrOrDefault(sns.Spec.Partitions, 1),               // fleet-only (immutable)
-		HaJMCount:        journalManagerCountFromSpec(eff.JournalManagerSpec),           // per-node override
+		JMPercent:        journalManagerPercentPerDeviceFromSpec(eff.JournalManagerSpec),
+		Partitions:       utils.IntPtrOrDefault(sns.Spec.Partitions, 1),
+		HaJMCount:        journalManagerCountFromSpec(eff.JournalManagerSpec),
 		CRName:           sns.Name,
 		CRNameSpace:      sns.Namespace,
 		CRPlural:         "storagenodesets",
-		Format4K:         utils.BoolPtrOrFalse(sns.Spec.ForceFormat4K),                // fleet-only (immutable)
-		SpdkSystemMemory: eff.SpdkSystemMemory,                                        // per-node override
-		FailureDomain:    effectiveFailureDomain(sn, sns),                             // per-node override
+		Format4K:         utils.BoolPtrOrFalse(sns.Spec.ForceFormat4K),
+		SpdkSystemMemory: eff.SpdkSystemMemory,
+		FailureDomain:    effectiveFailureDomain(sn, sns),
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)

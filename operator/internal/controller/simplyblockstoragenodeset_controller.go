@@ -200,7 +200,7 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		log.Error(err, "failed to reconcile StorageNode CRs")
 	}
 
-	if res, err := r.reconcileWorkerNodes(ctx, req, snCR, clusterUUID, apiClient, expectedPerHost); err != nil || res.RequeueAfter > 0 {
+	if res, err := r.reconcileWorkerNodes(ctx, snCR, clusterUUID, apiClient, expectedPerHost); err != nil || res.RequeueAfter > 0 {
 		return res, err
 	}
 
@@ -236,7 +236,6 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 // reconcileWorkerNode handles provisioning and online-wait for a single worker node.
 func (r *StorageNodeSetReconciler) reconcileWorkerNode(
 	ctx context.Context,
-	req ctrl.Request,
 	snCR *simplyblockv1alpha1.StorageNodeSet,
 	nodeName, clusterUUID string,
 	apiClient *webapi.Client,
@@ -829,7 +828,6 @@ func (r *StorageNodeSetReconciler) recordSpdkPodEvents(
 // always populates it before the CR is stored — it is safe to dereference directly.
 func (r *StorageNodeSetReconciler) reconcileWorkerNodes(
 	ctx context.Context,
-	req ctrl.Request,
 	snCR *simplyblockv1alpha1.StorageNodeSet,
 	clusterUUID string,
 	apiClient *webapi.Client,
@@ -867,7 +865,7 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNodes(
 				continue
 			}
 		}
-		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
+		res, err := r.reconcileWorkerNode(ctx, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -883,7 +881,7 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNodes(
 	}
 
 	for _, nodeName := range sequentialWorkers {
-		res, err := r.reconcileWorkerNode(ctx, req, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
+		res, err := r.reconcileWorkerNode(ctx, snCR, nodeName, clusterUUID, apiClient, expectedPerHost)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -1441,32 +1439,4 @@ func maybeActivateCluster(
 	}
 
 	return nil
-}
-
-// nodeFailureDomain returns the failure-domain group for a specific worker node,
-// looked up from the StorageNodeSet's NodeFailureDomains map. Returns 0 (omitted)
-// when no entry is configured, which the backend interprets as no failure domain.
-func nodeFailureDomain(snCR *simplyblockv1alpha1.StorageNodeSet, nodeName string) int {
-	if snCR.Spec.NodeFailureDomains == nil {
-		return 0
-	}
-	return int(snCR.Spec.NodeFailureDomains[nodeName])
-}
-
-func journalManagerPercentPerDevice(
-	snCR *simplyblockv1alpha1.StorageNodeSet,
-) int {
-	if snCR.Spec.JournalManagerSpec == nil {
-		return 3
-	}
-	return utils.IntPtrOrDefault(snCR.Spec.JournalManagerSpec.PercentPerDevice, 3)
-}
-
-func journalManagerCount(
-	snCR *simplyblockv1alpha1.StorageNodeSet,
-) int {
-	if snCR.Spec.JournalManagerSpec == nil {
-		return 3
-	}
-	return utils.IntPtrOrDefault(snCR.Spec.JournalManagerSpec.Count, 3)
 }
