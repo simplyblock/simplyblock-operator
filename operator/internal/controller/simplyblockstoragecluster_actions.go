@@ -34,6 +34,10 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
+// clusterRestartPhaseShutdown is the sub-phase message stored in
+// ActionStatus.Message during the shutdown leg of a cluster restart.
+const clusterRestartPhaseShutdown = "shutdown"
+
 // failAction marks the current ActionStatus as failed with the given error.
 func (r *StorageClusterReconciler) failAction(
 	ctx context.Context,
@@ -229,7 +233,7 @@ func (r *StorageClusterReconciler) reconcileRestart(
 		clusterCR.Status.ActionStatus = &simplyblockv1alpha1.ActionStatus{
 			Action:             utils.ClusterActionRestart,
 			State:              utils.ActionStateRunning,
-			Message:            "shutdown", // restart sub-phase
+			Message:            clusterRestartPhaseShutdown, // restart sub-phase
 			ObservedGeneration: clusterCR.Generation,
 		}
 		return ctrl.Result{Requeue: true}, r.Status().Update(ctx, clusterCR)
@@ -246,7 +250,7 @@ func (r *StorageClusterReconciler) reconcileRestart(
 
 	if !clusterCR.Status.ActionStatus.Triggered {
 		var apiEndpoint string
-		if phase == "shutdown" {
+		if phase == clusterRestartPhaseShutdown {
 			apiEndpoint = fmt.Sprintf("/api/v2/clusters/%s/shutdown", clusterUUID)
 		} else {
 			apiEndpoint = fmt.Sprintf("/api/v2/clusters/%s/start", clusterUUID)
@@ -285,7 +289,7 @@ func (r *StorageClusterReconciler) reconcileRestart(
 
 	clusterCR.Status.Status = resp.Status
 
-	if phase == "shutdown" && resp.Status == utils.ClusterStatusSuspended {
+	if phase == clusterRestartPhaseShutdown && resp.Status == utils.ClusterStatusSuspended {
 		clusterCR.Status.ActionStatus.Message = "start"
 		clusterCR.Status.ActionStatus.Triggered = false
 		if err := r.Status().Update(ctx, clusterCR); err != nil {

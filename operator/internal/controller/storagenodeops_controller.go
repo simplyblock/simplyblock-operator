@@ -111,7 +111,7 @@ func (r *StorageNodeOpsReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Cluster pause check for drain operations.
 	if ops.Spec.Action == "remove" {
-		if res, paused := r.clusterPauseCheck(ctx, &ops, clusterUUID, apiClient); paused {
+		if res, paused := r.clusterPauseCheck(ctx, &ops, apiClient); paused {
 			return res, nil
 		}
 	}
@@ -399,7 +399,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 	}
 
 	// Handle failed migrations.
-	if res, handled := r.handleFailedVolumeMigrations(ctx, ops, sn, clusterUUID, apiClient, vmigList.Items); handled {
+	if res, handled := r.handleFailedVolumeMigrations(ctx, ops, clusterUUID, apiClient, vmigList.Items); handled {
 		return res, nil
 	}
 
@@ -449,7 +449,6 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.StorageNodeOps,
-	sn *simplyblockv1alpha1.StorageNode,
 	clusterUUID string,
 	apiClient *webapi.Client,
 	items []simplyblockv1alpha1.VolumeMigration,
@@ -467,7 +466,7 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 	}
 
 	// Check if the cluster is paused — if so, delete and wait.
-	if res, paused := r.clusterPauseCheck(ctx, ops, clusterUUID, apiClient); paused {
+	if res, paused := r.clusterPauseCheck(ctx, ops, apiClient); paused {
 		for i := range failed {
 			_ = r.Delete(ctx, &failed[i])
 		}
@@ -747,7 +746,6 @@ func (r *StorageNodeOpsReconciler) resumeAndFail(
 func (r *StorageNodeOpsReconciler) clusterPauseCheck(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.StorageNodeOps,
-	clusterUUID string,
 	_ *webapi.Client,
 ) (ctrl.Result, bool) {
 	log := logf.FromContext(ctx)

@@ -424,7 +424,7 @@ func (r *StorageNodeReconciler) ensureRemoveOps(
 	ops.Name = opsName
 	ops.Namespace = sn.Namespace
 	ops.Spec.StorageNodeRef = sn.Name
-	ops.Spec.Action = "remove"
+	ops.Spec.Action = utils.NodeActionRemove
 	if err := controllerutil.SetControllerReference(sn, &ops, r.Scheme); err != nil {
 		return err
 	}

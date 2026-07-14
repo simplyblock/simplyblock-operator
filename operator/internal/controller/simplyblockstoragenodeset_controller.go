@@ -196,7 +196,7 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Phase-1 bridge: create/sync/delete owned StorageNode CRs to match
 	// spec.workerNodes × spec.socketsToUse. The StorageNodeReconciler owns
 	// the per-node provisioning; this only manages CR lifecycle.
-	if _, err := r.reconcileStorageNodeCRs(ctx, snCR); err != nil {
+	if err := r.reconcileStorageNodeCRs(ctx, snCR); err != nil {
 		log.Error(err, "failed to reconcile StorageNode CRs")
 	}
 
@@ -1282,7 +1282,7 @@ func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tls
 	return nil
 }
 
-func waitForNodeInfoReachable(
+func waitForNodeInfoReachable( //nolint:unparam
 	ctx context.Context,
 	nodeName string,
 	namespace string,
@@ -1677,26 +1677,4 @@ func journalManagerCount(
 		return 3
 	}
 	return utils.IntPtrOrDefault(snCR.Spec.JournalManagerSpec.Count, 3)
-}
-
-// getNodeStatus reads the current backend status string for a storage node.
-func getNodeStatus(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	clusterUUID string,
-	nodeUUID string,
-) (string, error) {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, nodeUUID)
-	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return "", err
-	}
-	if status >= 300 {
-		return "", fmt.Errorf("unexpected status %d: %s", status, string(body))
-	}
-	var resp utils.NodeStatusResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", err
-	}
-	return resp.Status, nil
 }

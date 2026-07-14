@@ -33,7 +33,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -48,7 +47,7 @@ import (
 func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 	ctx context.Context,
 	sns *simplyblockv1alpha1.StorageNodeSet,
-) (ctrl.Result, error) {
+) error {
 	log := logf.FromContext(ctx)
 
 	// Build the expected set of (worker, socket) pairs.
@@ -67,7 +66,7 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 		client.InNamespace(sns.Namespace),
 		client.MatchingFields{"spec.storageNodeSetRef": sns.Name},
 	); err != nil {
-		return ctrl.Result{}, fmt.Errorf("listing owned StorageNode CRs: %w", err)
+		return fmt.Errorf("listing owned StorageNode CRs: %w", err)
 	}
 
 	// Delete stale CRs (worker removed from spec.workerNodes or socket removed).
@@ -99,7 +98,7 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 		log.Error(err, "failed to aggregate StorageNode status into StorageNodeSet")
 	}
 
-	return ctrl.Result{}, nil
+	return nil
 }
 
 // ensureStorageNodeCR creates or patches a StorageNode CR for (worker, socket).

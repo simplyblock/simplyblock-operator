@@ -43,6 +43,7 @@ func newSNReconciler(t *testing.T, objects ...client.Object) *StorageNodeReconci
 	}
 }
 
+//nolint:unparam
 func newStorageNodeSet(name, ns, cluster string, nodeConfigs map[string]simplyblockv1alpha1.StorageNodeOverrides) *simplyblockv1alpha1.StorageNodeSet {
 	return &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -54,6 +55,7 @@ func newStorageNodeSet(name, ns, cluster string, nodeConfigs map[string]simplybl
 	}
 }
 
+//nolint:unparam
 func newStorageNode(name, ns, snsRef, worker string) *simplyblockv1alpha1.StorageNode {
 	return &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},

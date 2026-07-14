@@ -20,6 +20,8 @@ const (
 	opsTestCluster  = "cluster-a"
 	opsTestWorker   = "worker-1.example.com"
 	opsTestNodeUUID = "aaaa0000-0000-0000-0000-000000000001"
+	opsTestOpsName  = "ops-1"
+	opsTestOtherOps = "ops-other"
 )
 
 func newOpsReconciler(t *testing.T, objects ...client.Object) *StorageNodeOpsReconciler {
@@ -45,6 +47,7 @@ func newOpsReconciler(t *testing.T, objects ...client.Object) *StorageNodeOpsRec
 	}
 }
 
+//nolint:unparam
 func newTestStorageNode(name, ns, snsRef, worker, uuid string) *simplyblockv1alpha1.StorageNode {
 	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -57,6 +60,7 @@ func newTestStorageNode(name, ns, snsRef, worker, uuid string) *simplyblockv1alp
 	return sn
 }
 
+//nolint:unparam
 func newTestStorageNodeOps(name, ns, snRef, action string) *simplyblockv1alpha1.StorageNodeOps {
 	return &simplyblockv1alpha1.StorageNodeOps{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -71,7 +75,7 @@ func newTestStorageNodeOps(name, ns, snRef, action string) *simplyblockv1alpha1.
 
 func TestAcquireLock_SetsActiveOpsRefAndTransitionsToRunning(t *testing.T) {
 	sn := newTestStorageNode("sn-1", opsTestNS, "sns", opsTestWorker, opsTestNodeUUID)
-	ops := newTestStorageNodeOps("ops-1", opsTestNS, "sn-1", "suspend")
+	ops := newTestStorageNodeOps(opsTestOpsName, opsTestNS, "sn-1", "suspend")
 	r := newOpsReconciler(t, sn, ops)
 
 	_, err := r.acquireLock(context.Background(), ops, sn)
@@ -82,13 +86,13 @@ func TestAcquireLock_SetsActiveOpsRefAndTransitionsToRunning(t *testing.T) {
 	// Check StorageNode.status.activeOpsRef was set.
 	var updatedSN simplyblockv1alpha1.StorageNode
 	_ = r.Get(context.Background(), types.NamespacedName{Name: "sn-1", Namespace: opsTestNS}, &updatedSN)
-	if updatedSN.Status.ActiveOpsRef != "ops-1" {
+	if updatedSN.Status.ActiveOpsRef != opsTestOpsName {
 		t.Errorf("activeOpsRef: got %q want ops-1", updatedSN.Status.ActiveOpsRef)
 	}
 
 	// Check ops phase was set to Running.
 	var updatedOps simplyblockv1alpha1.StorageNodeOps
-	_ = r.Get(context.Background(), types.NamespacedName{Name: "ops-1", Namespace: opsTestNS}, &updatedOps)
+	_ = r.Get(context.Background(), types.NamespacedName{Name: opsTestOpsName, Namespace: opsTestNS}, &updatedOps)
 	if updatedOps.Status.Phase != simplyblockv1alpha1.StorageNodeOpsPhaseRunning {
 		t.Errorf("phase: got %q want Running", updatedOps.Status.Phase)
 	}
@@ -96,8 +100,8 @@ func TestAcquireLock_SetsActiveOpsRefAndTransitionsToRunning(t *testing.T) {
 
 func TestAcquireLock_RequeuesWhenAnotherOpsActive(t *testing.T) {
 	sn := newTestStorageNode("sn-1", opsTestNS, "sns", opsTestWorker, opsTestNodeUUID)
-	sn.Status.ActiveOpsRef = "ops-other"
-	ops := newTestStorageNodeOps("ops-1", opsTestNS, "sn-1", "suspend")
+	sn.Status.ActiveOpsRef = opsTestOtherOps
+	ops := newTestStorageNodeOps(opsTestOpsName, opsTestNS, "sn-1", "suspend")
 	r := newOpsReconciler(t, sn, ops)
 
 	result, err := r.acquireLock(context.Background(), ops, sn)
@@ -111,7 +115,7 @@ func TestAcquireLock_RequeuesWhenAnotherOpsActive(t *testing.T) {
 	// StorageNode.activeOpsRef must NOT be changed.
 	var updatedSN simplyblockv1alpha1.StorageNode
 	_ = r.Get(context.Background(), types.NamespacedName{Name: "sn-1", Namespace: opsTestNS}, &updatedSN)
-	if updatedSN.Status.ActiveOpsRef != "ops-other" {
+	if updatedSN.Status.ActiveOpsRef != opsTestOtherOps {
 		t.Errorf("activeOpsRef should not change: got %q", updatedSN.Status.ActiveOpsRef)
 	}
 }
@@ -137,8 +141,8 @@ func TestAcquireLock_RemoveDrainSetsValidatingSubPhase(t *testing.T) {
 
 func TestSucceedOps_SetsPhaseAndClearsLock(t *testing.T) {
 	sn := newTestStorageNode("sn-1", opsTestNS, "sns", opsTestWorker, opsTestNodeUUID)
-	sn.Status.ActiveOpsRef = "ops-1"
-	ops := newTestStorageNodeOps("ops-1", opsTestNS, "sn-1", "suspend")
+	sn.Status.ActiveOpsRef = opsTestOpsName
+	ops := newTestStorageNodeOps(opsTestOpsName, opsTestNS, "sn-1", "suspend")
 	ops.Status.Phase = simplyblockv1alpha1.StorageNodeOpsPhaseRunning
 	r := newOpsReconciler(t, sn, ops)
 
@@ -148,7 +152,7 @@ func TestSucceedOps_SetsPhaseAndClearsLock(t *testing.T) {
 	}
 
 	var updatedOps simplyblockv1alpha1.StorageNodeOps
-	_ = r.Get(context.Background(), types.NamespacedName{Name: "ops-1", Namespace: opsTestNS}, &updatedOps)
+	_ = r.Get(context.Background(), types.NamespacedName{Name: opsTestOpsName, Namespace: opsTestNS}, &updatedOps)
 	if updatedOps.Status.Phase != simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded {
 		t.Errorf("phase: got %q want Succeeded", updatedOps.Status.Phase)
 	}
@@ -167,8 +171,8 @@ func TestSucceedOps_SetsPhaseAndClearsLock(t *testing.T) {
 
 func TestFailOps_SetsPhaseAndClearsLock(t *testing.T) {
 	sn := newTestStorageNode("sn-1", opsTestNS, "sns", opsTestWorker, opsTestNodeUUID)
-	sn.Status.ActiveOpsRef = "ops-1"
-	ops := newTestStorageNodeOps("ops-1", opsTestNS, "sn-1", "suspend")
+	sn.Status.ActiveOpsRef = opsTestOpsName
+	ops := newTestStorageNodeOps(opsTestOpsName, opsTestNS, "sn-1", "suspend")
 	ops.Status.Phase = simplyblockv1alpha1.StorageNodeOpsPhaseRunning
 	r := newOpsReconciler(t, sn, ops)
 
@@ -178,7 +182,7 @@ func TestFailOps_SetsPhaseAndClearsLock(t *testing.T) {
 	}
 
 	var updatedOps simplyblockv1alpha1.StorageNodeOps
-	_ = r.Get(context.Background(), types.NamespacedName{Name: "ops-1", Namespace: opsTestNS}, &updatedOps)
+	_ = r.Get(context.Background(), types.NamespacedName{Name: opsTestOpsName, Namespace: opsTestNS}, &updatedOps)
 	if updatedOps.Status.Phase != simplyblockv1alpha1.StorageNodeOpsPhaseFailed {
 		t.Errorf("phase: got %q want Failed", updatedOps.Status.Phase)
 	}
@@ -197,17 +201,17 @@ func TestFailOps_SetsPhaseAndClearsLock(t *testing.T) {
 
 func TestReleaseLock_OnlyClearsIfOwner(t *testing.T) {
 	sn := newTestStorageNode("sn-1", opsTestNS, "sns", opsTestWorker, opsTestNodeUUID)
-	sn.Status.ActiveOpsRef = "ops-other"
+	sn.Status.ActiveOpsRef = opsTestOtherOps
 	r := newOpsReconciler(t, sn)
 
 	// Releasing with a different name should be a no-op.
-	if err := r.releaseLock(context.Background(), sn, "ops-1"); err != nil {
+	if err := r.releaseLock(context.Background(), sn, opsTestOpsName); err != nil {
 		t.Fatalf("releaseLock returned error: %v", err)
 	}
 
 	var updated simplyblockv1alpha1.StorageNode
 	_ = r.Get(context.Background(), types.NamespacedName{Name: "sn-1", Namespace: opsTestNS}, &updated)
-	if updated.Status.ActiveOpsRef != "ops-other" {
+	if updated.Status.ActiveOpsRef != opsTestOtherOps {
 		t.Error("releaseLock should not clear a lock it does not own")
 	}
 }
@@ -244,7 +248,7 @@ func TestDispatch_UnknownActionFails(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "sns", Namespace: opsTestNS},
 		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: opsTestCluster},
 	}
-	ops := newTestStorageNodeOps("ops-1", opsTestNS, "sn-1", "bogus-action")
+	ops := newTestStorageNodeOps(opsTestOpsName, opsTestNS, "sn-1", "bogus-action")
 	ops.Status.Phase = simplyblockv1alpha1.StorageNodeOpsPhaseRunning
 	r := newOpsReconciler(t, sn, sns, ops)
 
@@ -254,7 +258,7 @@ func TestDispatch_UnknownActionFails(t *testing.T) {
 	}
 
 	var updated simplyblockv1alpha1.StorageNodeOps
-	_ = r.Get(context.Background(), types.NamespacedName{Name: "ops-1", Namespace: opsTestNS}, &updated)
+	_ = r.Get(context.Background(), types.NamespacedName{Name: opsTestOpsName, Namespace: opsTestNS}, &updated)
 	if updated.Status.Phase != simplyblockv1alpha1.StorageNodeOpsPhaseFailed {
 		t.Errorf("expected Failed for unknown action, got %q", updated.Status.Phase)
 	}
@@ -263,7 +267,7 @@ func TestDispatch_UnknownActionFails(t *testing.T) {
 // ── TestResolveOpsSystemVolumeFilter ─────────────────────────────────────────
 
 func TestResolveOpsSystemVolumeFilter_UsesDefaultWhenNoDrain(t *testing.T) {
-	ops := newTestStorageNodeOps("ops-1", opsTestNS, "sn-1", "remove")
+	ops := newTestStorageNodeOps(opsTestOpsName, opsTestNS, "sn-1", "remove")
 	r := newOpsReconciler(t, ops)
 
 	re, err := r.resolveOpsSystemVolumeFilter(ops)
@@ -281,7 +285,7 @@ func TestResolveOpsSystemVolumeFilter_UsesDefaultWhenNoDrain(t *testing.T) {
 
 func TestResolveOpsSystemVolumeFilter_UsesCustomPattern(t *testing.T) {
 	custom := "^bench-.*"
-	ops := newTestStorageNodeOps("ops-1", opsTestNS, "sn-1", "remove")
+	ops := newTestStorageNodeOps(opsTestOpsName, opsTestNS, "sn-1", "remove")
 	ops.Spec.Drain = &simplyblockv1alpha1.DrainOpsSpec{SystemVolumeFilterRegex: &custom}
 	r := newOpsReconciler(t, ops)
 
@@ -299,7 +303,7 @@ func TestResolveOpsSystemVolumeFilter_UsesCustomPattern(t *testing.T) {
 
 func TestResolveOpsSystemVolumeFilter_InvalidPatternReturnsError(t *testing.T) {
 	bad := "["
-	ops := newTestStorageNodeOps("ops-1", opsTestNS, "sn-1", "remove")
+	ops := newTestStorageNodeOps(opsTestOpsName, opsTestNS, "sn-1", "remove")
 	ops.Spec.Drain = &simplyblockv1alpha1.DrainOpsSpec{SystemVolumeFilterRegex: &bad}
 	r := newOpsReconciler(t, ops)
 
