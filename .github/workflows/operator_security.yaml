@@ -87,11 +87,12 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": ":rotating_light: *Security scan failed* — vulnerabilities found in `${{ github.repository }}`",
+              "text": ":rotating_light: *Security scan failed* — vulnerabilities found in `${{ matrix.image }}`",
               "attachments": [
                 {
                   "color": "danger",
                   "fields": [
+                    { "title": "Image",    "value": "${{ matrix.image }}", "short": true },
                     { "title": "Branch",   "value": "${{ github.ref_name }}", "short": true },
                     { "title": "Commit",   "value": "${{ github.sha }}", "short": true },
                     { "title": "Workflow", "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>", "short": false }
