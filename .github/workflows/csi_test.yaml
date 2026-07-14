@@ -28,4 +28,4 @@ jobs:
       run: go mod tidy
 
     - name: Test
-      run: make test SKIP_TESTS=TestSanity
+      run: make test
