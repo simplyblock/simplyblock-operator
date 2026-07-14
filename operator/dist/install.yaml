@@ -1770,7 +1770,33 @@ spec:
     singular: storagenodeset
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.totalNodes
+      name: Total
+      type: integer
+    - jsonPath: .status.onlineNodes
+      name: Online
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - jsonPath: .status.offlineNodes
+      name: Offline
+      priority: 1
+      type: integer
+    - jsonPath: .status.suspendedNodes
+      name: Suspended
+      priority: 1
+      type: integer
+    - jsonPath: .status.creatingNodes
+      name: Creating
+      priority: 1
+      type: integer
+    - jsonPath: .status.removedNodes
+      name: Removed
+      priority: 1
+      type: integer
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: StorageNodeSet is the Schema for the storagenodesets API
@@ -2267,6 +2293,10 @@ spec:
           status:
             description: status defines the observed state of StorageNodeSet
             properties:
+              creatingNodes:
+                description: CreatingNodes is the count of StorageNode CRs with status
+                  "in_creation".
+                type: integer
               drainCoordination:
                 description: DrainCoordination tracks the upgrade-drain state per
                   worker node.
@@ -2399,7 +2429,7 @@ spec:
                 type: array
               offlineNodes:
                 description: OfflineNodes is the count of StorageNode CRs with status
-                  "offline" or "suspended".
+                  "offline".
                 type: integer
               onlineNodes:
                 description: OnlineNodes is the count of StorageNode CRs with status
@@ -2416,6 +2446,10 @@ spec:
                   POSTs — it is a separate map field so patches to Status.Nodes never
                   inadvertently delete it.
                 type: object
+              removedNodes:
+                description: RemovedNodes is the count of StorageNode CRs with status
+                  "removed".
+                type: integer
               schedulingFailedWorkers:
                 additionalProperties:
                   type: boolean
@@ -2424,6 +2458,10 @@ spec:
                   a FailedScheduling event during node add. Used to emit a recovery event
                   when the node subsequently comes online.
                 type: object
+              suspendedNodes:
+                description: SuspendedNodes is the count of StorageNode CRs with status
+                  "suspended".
+                type: integer
               totalNodes:
                 description: TotalNodes is the total number of owned StorageNode CRs.
                 type: integer
