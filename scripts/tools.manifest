@@ -1,0 +1,48 @@
+# Tool registry for scripts/tools.sh. One "<tool>.<field> = <value>" per line;
+# blank lines and lines starting with '#' are ignored. Add a tool here (no
+# script change needed), then run `scripts/tools.sh lock <tool> <version>` to
+# pin its hash in tools.lock.
+#
+# Fields:
+#   backend   binary | go                         (required)
+#   version   the pinned version, e.g. v2.11.4    (default when none is passed;
+#             omit for tools whose version is supplied by the caller, such as
+#             setup-envtest, whose version is derived from the operator go.mod)
+#   binary tools (downloaded release artifacts, verified by sha256):
+#     kind    tar.gz | raw                         (archive type)
+#     url     download URL template                (required)
+#     inner   path to the binary inside a tar.gz   (omit for kind=raw)
+#   go tools (installed via `go install`, verified by module h1: checksum):
+#     package  Go package path to install          (required)
+#
+# URL/inner templates support these placeholders:
+#   {version}      the requested version, e.g. v2.11.4
+#   {version_nov}  the version without a leading "v", e.g. 2.11.4
+#   {os}           linux | darwin
+#   {arch}         amd64 | arm64
+
+golangci-lint.backend = binary
+golangci-lint.version = v2.11.4
+golangci-lint.kind    = tar.gz
+golangci-lint.url     = https://github.com/golangci/golangci-lint/releases/download/{version}/golangci-lint-{version_nov}-{os}-{arch}.tar.gz
+golangci-lint.inner   = golangci-lint-{version_nov}-{os}-{arch}/golangci-lint
+
+kustomize.backend = binary
+kustomize.version = v5.7.1
+kustomize.kind    = tar.gz
+kustomize.url     = https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/{version}/kustomize_{version}_{os}_{arch}.tar.gz
+kustomize.inner   = kustomize
+
+yq.backend = binary
+yq.version = v4.44.3
+yq.kind    = raw
+yq.url     = https://github.com/mikefarah/yq/releases/download/{version}/yq_{os}_{arch}
+
+controller-gen.backend = go
+controller-gen.version = v0.21.0
+controller-gen.package = sigs.k8s.io/controller-tools/cmd/controller-gen
+
+# setup-envtest.version is intentionally omitted: the operator derives it from
+# its go.mod (controller-runtime release branch) and passes it explicitly.
+setup-envtest.backend = go
+setup-envtest.package = sigs.k8s.io/controller-runtime/tools/setup-envtest

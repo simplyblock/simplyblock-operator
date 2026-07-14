@@ -12,13 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# output dir
-OUT_DIR := ./_out
-# dir for tools: e.g., golangci-lint
-TOOL_DIR := $(OUT_DIR)/tool
-# use golangci-lint for static code check
-GOLANGCI_VERSION := v2.11.4
-GOLANGCI_BIN := $(TOOL_DIR)/golangci-lint
+# build output dir
+BUILD_DIR := ./build
 # go source, scripts
 SOURCE_DIRS := cmd pkg
 SCRIPT_DIRS := scripts deploy e2e
@@ -42,20 +37,20 @@ all: spdkcsi lint test
 .PHONY: spdkcsi
 spdkcsi:
 	@echo === building spdkcsi binary
-	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(OUT_DIR)/spdkcsi ./cmd/
+	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(BUILD_DIR)/spdkcsi ./cmd/
 
 # static code check, text lint
 # lint: golangci yamllint shellcheck mdl codespell
 lint: golangci
 
-.PHONY: golangci
-golangci: $(GOLANGCI_BIN)
-	@echo === running golangci-lint
-	@$(TOOL_DIR)/golangci-lint run ./...
+# golangci-lint (and any other dev tools) are downloaded, checksum-verified, and
+# pinned into the repo-root .bin by the shared downloader.
+include ../scripts/tools.mk
 
-$(GOLANGCI_BIN):
-	@echo === installing golangci-lint
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(TOOL_DIR) $(GOLANGCI_VERSION)
+.PHONY: golangci
+golangci: golangci-lint
+	@echo === running golangci-lint
+	@"$(GOLANGCI_LINT)" run ./...
 
 .PHONY: fmt
 fmt:
@@ -149,22 +144,23 @@ helm-test:
 	@./scripts/install-helm.sh clean
 
 # docker image
-image: spdkcsi
+# The Dockerfile is a multi-stage build that compiles spdkcsi from source, so the
+# build context is the repo root (it needs both csi-driver/ and the sibling
+# atlas-lib/ module) -- not $(BUILD_DIR), and no pre-built binary is required.
+image:
 	@echo === running docker build
 	@if [ -n $(HTTP_PROXY) ]; then \
 		proxy_opt="--build-arg http_proxy=$(HTTP_PROXY) --build-arg https_proxy=$(HTTP_PROXY)"; \
 	fi; \
 	sudo docker build --no-cache -t $(CSI_IMAGE)-amd64 $$proxy_opt \
-	-f deploy/image/Dockerfile $(OUT_DIR); \
-
-	make spdkcsi GOARCH=arm64 ; \
+	-f deploy/image/Dockerfile ..; \
 	sudo apt-get update; \
 	sudo apt-get install -y qemu qemu-user-static ;\
 	export DOCKER_DEFAULT_PLATFORM=linux/arm64 ;\
 	sudo docker buildx build --platform linux/arm64 -t $(CSI_IMAGE)-arm64 $$proxy_opt \
-	-f deploy/image/Dockerfile $(OUT_DIR); \
+	-f deploy/image/Dockerfile ..; \
 
 .PHONY: clean
 clean:
-	rm -f $(OUT_DIR)/spdkcsi
+	rm -f $(BUILD_DIR)/spdkcsi
 	go clean -testcache
