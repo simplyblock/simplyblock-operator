@@ -321,6 +321,10 @@ type ActionStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Total",type=integer,JSONPath=".status.totalNodes"
+// +kubebuilder:printcolumn:name="Online",type=integer,JSONPath=".status.onlineNodes"
+// +kubebuilder:printcolumn:name="Offline",type=integer,JSONPath=".status.offlineNodes"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k, self.spec.nodeFailureDomains[k] >= 1)",message="all nodeFailureDomains values must be >= 1 (failure-domain group index)"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Storage Node",resources={{ServiceAccount,v1,simplyblock-storage-node},{Service,v1,simplyblock-storage-node},{DaemonSet,v1,simplyblock-storage-node},{ClusterRole,v1,simplyblock-storage-node},{ClusterRoleBinding,v1,simplyblock-storage-node}}
 // StorageNodeSet is the Schema for the storagenodesets API

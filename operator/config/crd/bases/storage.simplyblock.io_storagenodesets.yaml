@@ -14,7 +14,20 @@ spec:
     singular: storagenodeset
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.totalNodes
+      name: Total
+      type: integer
+    - jsonPath: .status.onlineNodes
+      name: Online
+      type: integer
+    - jsonPath: .status.offlineNodes
+      name: Offline
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: StorageNodeSet is the Schema for the storagenodesets API
