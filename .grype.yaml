@@ -11,6 +11,7 @@ ignore:
   - vulnerability: ELSA-2025-28011   # fixed only in 3.5.1-4.0.2.el9_7_fips
   - vulnerability: ELSA-2026-50345   # fixed only in 3.5.5-3.0.1.el9_8_fips
   - vulnerability: ELSA-2026-50075   # fixed only in 3.5.1-7.0.1.el9_7_fips
+  - vulnerability: ELSA-2026-50379   # fixed only in 3.5.5-4.0.1.el9_8_fips
 
   # gnutls
   - vulnerability: ELSA-2024-12336   # fixed only in 3.7.6-23.el9_3.4_fips
