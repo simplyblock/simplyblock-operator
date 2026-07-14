@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/container-storage-interface/spec v1.12.0
-	github.com/kubernetes-csi/csi-lib-utils v0.7.0
+	github.com/kubernetes-csi/csi-lib-utils v0.24.0
 	github.com/kubernetes-csi/csi-test/v5 v5.2.0
 	github.com/onsi/gomega v1.39.1
 	github.com/simplyblock/atlas v0.0.0-00010101000000-000000000000
@@ -63,7 +63,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
-	github.com/go-openapi/jsonreference v0.20.2 // indirect
+	github.com/go-openapi/jsonreference v0.21.0 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
@@ -71,7 +71,7 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/mailru/easyjson v0.7.7 // indirect
+	github.com/mailru/easyjson v0.9.0 // indirect
 	github.com/moby/spdystream v0.5.1 // indirect
 	github.com/moby/sys/mountinfo v0.7.2 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
