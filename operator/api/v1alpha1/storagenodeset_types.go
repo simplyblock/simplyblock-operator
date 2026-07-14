@@ -43,13 +43,6 @@ type StorageNodeSetSpec struct {
 	// Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
 	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	ClusterImage string `json:"clusterImage,omitempty"`
-	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume;remove
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
-	// Action triggers an imperative node operation.
-	Action string `json:"action,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node UUID"
-	// NodeUUID is required when action is specified
-	NodeUUID string `json:"nodeUUID,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Logical Volume Count"
 	// MaxLogicalVolumeCount is the maximum number of logical volumes per node.
@@ -106,12 +99,6 @@ type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Worker Nodes"
 	// WorkerNodes is the set of Kubernetes worker nodes to manage.
 	WorkerNodes []string `json:"workerNodes,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Worker Node"
-	// WorkerNode is a single worker node used by action flows.
-	WorkerNode string `json:"workerNode,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Reattach Volume"
-	// ReattachVolume reattaches volumes during restart where supported by the backend.
-	ReattachVolume *bool `json:"reattachVolume,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="OpenShift Cluster"
 	// OpenShiftCluster indicates OpenShift-specific behavior should be enabled.
 	OpenShiftCluster *bool `json:"openShiftCluster,omitempty"`
@@ -168,15 +155,6 @@ type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Image Pull Policy"
 	// ImagePullPolicy controls when the container image is pulled. Defaults to IfNotPresent.
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Force"
-	// Force enables forced action execution where supported.
-	Force *bool `json:"force,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="System Volume Filter Regex"
-	// SystemVolumeFilterRegex is a Go regular expression matched against backend
-	// volume names. Matching volumes are excluded from drain migration and from
-	// the final verification check. Defaults to "^sb-fio-baseline-.*".
-	// +optional
-	SystemVolumeFilterRegex *string `json:"systemVolumeFilterRegex,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node Failure Domains"
 	// NodeFailureDomains assigns each worker node to a failure-domain group (integer ≥ 1).
@@ -187,6 +165,14 @@ type StorageNodeSetSpec struct {
 	// independent fault groups.
 	// +optional
 	NodeFailureDomains map[string]int32 `json:"nodeFailureDomains,omitempty"`
+
+	// NodeConfigs allows per-worker-node configuration overrides keyed by the
+	// Kubernetes worker node name. Entries are propagated to the corresponding
+	// StorageNode.spec.overrides by the StorageNodeReconciler on every reconcile.
+	// The StorageNodeSet is the single source of truth for all per-node config,
+	// including failure domain assignment via nodeConfigs[worker].failureDomain.
+	// +optional
+	NodeConfigs map[string]StorageNodeOverrides `json:"nodeConfigs,omitempty"`
 }
 
 // Drain coordination phases for a worker node undergoing a rolling upgrade drain.
@@ -242,11 +228,19 @@ type NodeLatencyMetrics struct {
 
 // StorageNodeSetStatus defines the observed state of StorageNodeSet.
 type StorageNodeSetStatus struct {
+	// TotalNodes is the total number of owned StorageNode CRs.
+	// +optional
+	TotalNodes int `json:"totalNodes,omitempty"`
+	// OnlineNodes is the count of StorageNode CRs with status "online".
+	// +optional
+	OnlineNodes int `json:"onlineNodes,omitempty"`
+	// OfflineNodes is the count of StorageNode CRs with status "offline" or "suspended".
+	// +optional
+	OfflineNodes int `json:"offlineNodes,omitempty"`
+
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Nodes"
 	// Nodes is the observed state of each managed storage node.
 	Nodes []NodeStatus `json:"nodes,omitempty"`
-	// ActionStatus tracks the latest action execution status.
-	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Drain Coordination"
 	// DrainCoordination tracks the upgrade-drain state per worker node.
 	DrainCoordination []NodeDrainState `json:"drainCoordination,omitempty"`

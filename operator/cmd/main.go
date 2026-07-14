@@ -362,6 +362,24 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeMigration")
 		os.Exit(1)
 	}
+	if err := (&controller.StorageNodeReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorderFor("storagenode-controller"),
+		TLSEnabled:       tlsEnabled,
+		TLSMutualEnabled: tlsMutualEnabled,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
+		os.Exit(1)
+	}
+	if err := (&controller.StorageNodeOpsReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("storagenodeops-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeOps")
+		os.Exit(1)
+	}
 	if err := (&controller.VolumeRebalancerReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),

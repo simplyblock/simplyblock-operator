@@ -1,8 +1,8 @@
 # Design Document: StorageNodeSet / StorageNode / StorageNodeOps Three-Tier Model
 
-**Status:** Draft  
+**Status:** Phase 1 Complete  
 **Author:** Israel Geoffrey  
-**Date:** 2026-07-13
+**Date:** 2026-07-14
 
 ---
 
@@ -318,24 +318,36 @@ Owns `VolumeMigration` CRs during drain (`.Owns(&VolumeMigration{})`).
 
 ## 7. Migration Strategy
 
-### Phase 1 — Introduce new CRDs (non-breaking)
+### Phase 1 — Complete ✓
 
-- Add `StorageNode` and `StorageNodeOps` CRDs.
-- `StorageNodeSetReconciler` creates `StorageNode` CRs from its existing `status.nodes[]`.
-- Existing action fields on `StorageNodeSet` continue to work via a shim that creates a `StorageNodeOps` internally.
-- No behavioural change for existing deployments.
+Implemented on 2026-07-14. Deviations from the original plan:
 
-### Phase 2 — Move lifecycle to new controllers
+- `StorageNodeSet.spec.action`, `spec.nodeUUID`, `spec.workerNode`, `spec.force`,
+  `spec.reattachVolume`, `spec.systemVolumeFilterRegex` and `status.actionStatus` were
+  **removed outright** rather than shimmed. All imperative operations must now use a
+  `StorageNodeOps` CR. This is a breaking API change but results in a significantly
+  cleaner codebase.
+- `StorageNodeSetReconciler` creates `StorageNode` CRs for every `(workerNode, socket)`
+  pair in `spec.workerNodes × spec.socketsToUse` and aggregates their status into
+  `StorageNodeSetStatus.TotalNodes / OnlineNodes / OfflineNodes`.
+- `StorageNodeOpsReconciler` watches `StorageNode` changes so pending ops acquire the
+  lock immediately when `activeOpsRef` is cleared, rather than waiting for the poll timer.
+- CRD YAMLs generated and deployed to the helm chart.
+- 28 unit tests added covering both new reconcilers.
 
-- `StorageNodeReconciler` takes over node provisioning.
-- `StorageNodeOpsReconciler` takes over action handling and drain.
-- Feature flag: `StorageNodeSet.spec.nodeManagement: legacy | managed` (default: `legacy`).
+### Phase 2 — Move provisioning to StorageNodeReconciler
 
-### Phase 3 — Deprecate legacy fields
+- `StorageNodeReconciler` takes over node-add POST and status sync from
+  `StorageNodeSetReconciler.reconcileWorkerNodes`. The `provisionNode` and `syncStatus`
+  stubs are already in place; they need to consume the existing `postStorageNodeSet` and
+  `pollNodeOnline` logic refactored to read from `StorageNode` instead of `StorageNodeSet`.
 
-- Deprecate `spec.action`, `spec.nodeUUID`, `status.nodes`, `status.actionStatus`,
-  `status.drainCoordination` on `StorageNodeSet`.
-- Remove in the next major version.
+### Phase 3 — Remove legacy provisioning fields
+
+- Remove `status.nodes[]`, `status.pendingNodeAdds`, `status.schedulingFailedWorkers`
+  and `status.drainCoordination` from `StorageNodeSet` once `StorageNodeReconciler`
+  drives provisioning end-to-end.
+- Remove `reconcileWorkerNodes` and related helpers from `StorageNodeSetReconciler`.
 
 ---
 
