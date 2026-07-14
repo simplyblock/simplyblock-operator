@@ -16,9 +16,9 @@ import (
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 const (
-	opsTestNS      = "test"
-	opsTestCluster = "cluster-a"
-	opsTestWorker  = "worker-1.example.com"
+	opsTestNS       = "test"
+	opsTestCluster  = "cluster-a"
+	opsTestWorker   = "worker-1.example.com"
 	opsTestNodeUUID = "aaaa0000-0000-0000-0000-000000000001"
 )
 

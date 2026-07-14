@@ -1700,4 +1700,3 @@ func getNodeStatus(
 	}
 	return resp.Status, nil
 }
-

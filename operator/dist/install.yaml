@@ -1795,15 +1795,6 @@ spec:
           spec:
             description: spec defines the desired state of StorageNodeSet
             properties:
-              action:
-                description: Action triggers an imperative node operation.
-                enum:
-                - shutdown
-                - restart
-                - suspend
-                - resume
-                - remove
-                type: string
               clusterImage:
                 description: |-
                   ClusterImage is the container image used for storage-node workloads.
@@ -1898,9 +1889,6 @@ spec:
                 type: string
               enableCpuTopology:
                 description: EnableCpuTopology enables topology-aware CPU handling.
-                type: boolean
-              force:
-                description: Force enables forced action execution where supported.
                 type: boolean
               forceFormat4K:
                 description: ForceFormat4K forces 4K blocksize formatting of the NVMe
@@ -2015,6 +2003,122 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              nodeConfigs:
+                additionalProperties:
+                  description: |-
+                    StorageNodeOverrides holds per-node configuration that overrides the parent
+                    StorageNodeSet fleet defaults for a specific worker node. Populated by the
+                    StorageNodeSetReconciler from StorageNodeSet.spec.nodeConfigs[workerNode] on
+                    every reconcile. The StorageNodeSet is the single source of truth — users
+                    should not edit this struct directly on the StorageNode.
+
+                    Fields here mirror the configurable (non-immutable, non-infrastructure) fields
+                    of StorageNodeSetSpec. When a field is set here it takes precedence over the
+                    fleet default; when omitted the fleet default applies.
+                  properties:
+                    corePercentage:
+                      description: CorePercentage overrides the percentage of cores
+                        allocated to SPDK for this node (0-99).
+                      format: int32
+                      type: integer
+                    deviceNames:
+                      description: |-
+                        DeviceNames explicitly defines the NVMe namespace names to use on this node
+                        (e.g. ["nvme0n1","nvme1n1"]).
+                      items:
+                        type: string
+                      type: array
+                    driveSizeRange:
+                      description: DriveSizeRange overrides the drive size range filter
+                        for this node.
+                      type: string
+                    enableCpuTopology:
+                      description: EnableCpuTopology overrides topology-aware CPU
+                        handling for this node.
+                      type: boolean
+                    failureDomain:
+                      description: |-
+                        FailureDomain is the failure-domain group index (≥ 1) for this node.
+                        Required when the parent StorageCluster has enableFailureDomains=true.
+                        Overrides StorageNodeSet.spec.nodeFailureDomains[workerNode] when both are set.
+                      format: int32
+                      minimum: 1
+                      type: integer
+                    journalManager:
+                      description: JournalManagerSpec overrides journal manager tuning
+                        for this node.
+                      properties:
+                        count:
+                          description: Count is the number of journal managers to
+                            configure.
+                          format: int32
+                          type: integer
+                        percentPerDevice:
+                          description: PercentPerDevice is the journal manager capacity
+                            percentage per device.
+                          format: int32
+                          type: integer
+                      type: object
+                    maxLogicalVolumeCount:
+                      description: MaxLogicalVolumeCount overrides the maximum number
+                        of logical volumes for this node.
+                      format: int32
+                      type: integer
+                    maxSize:
+                      description: MaxSize overrides the maximum allocatable size
+                        of huge pages for this node.
+                      type: string
+                    pcieAllowList:
+                      description: PcieAllowList overrides the list of PCI addresses
+                        allowed for use on this node.
+                      items:
+                        type: string
+                      type: array
+                    pcieDenyList:
+                      description: PcieDenyList overrides the list of PCI addresses
+                        excluded from use on this node.
+                      items:
+                        type: string
+                      type: array
+                    pcieModel:
+                      description: PcieModel overrides the PCI model filter for this
+                        node.
+                      type: string
+                    reservedSystemCPU:
+                      description: ReservedSystemCPU overrides the CPUs reserved for
+                        system workloads on this node.
+                      type: string
+                    skipKubeletConfiguration:
+                      description: |-
+                        SkipKubeletConfiguration overrides whether kubelet configuration changes are
+                        skipped for this node.
+                      type: boolean
+                    spdkImage:
+                      description: SpdkImage overrides the SPDK image for this node
+                        (e.g. for phased rollouts).
+                      type: string
+                    spdkProxyImage:
+                      description: SpdkProxyImage overrides the SPDK proxy image for
+                        this node.
+                      type: string
+                    spdkSystemMemory:
+                      description: |-
+                        SpdkSystemMemory overrides the SPDK huge-page memory allocation for this node
+                        (e.g. "4G", "512M").
+                      pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
+                      type: string
+                    ubuntuHost:
+                      description: UbuntuHost overrides the Ubuntu host OS flag for
+                        this node.
+                      type: boolean
+                  type: object
+                description: |-
+                  NodeConfigs allows per-worker-node configuration overrides keyed by the
+                  Kubernetes worker node name. Entries are propagated to the corresponding
+                  StorageNode.spec.overrides by the StorageNodeReconciler on every reconcile.
+                  The StorageNodeSet is the single source of truth for all per-node config,
+                  including failure domain assignment via nodeConfigs[worker].failureDomain.
+                type: object
               nodeFailureDomains:
                 additionalProperties:
                   format: int32
@@ -2027,9 +2131,6 @@ spec:
                   the same group index so the control plane can spread erasure-coding chunks across
                   independent fault groups.
                 type: object
-              nodeUUID:
-                description: NodeUUID is required when action is specified
-                type: string
               nodesPerSocket:
                 description: NodesPerSocket defines how many storage nodes are created
                   per NUMA socket.
@@ -2071,10 +2172,6 @@ spec:
               pcieModel:
                 description: PcieModel filters devices by PCI model.
                 type: string
-              reattachVolume:
-                description: ReattachVolume reattaches volumes during restart where
-                  supported by the backend.
-                type: boolean
               reservedSystemCPU:
                 description: ReservedSystemCPU defines CPUs reserved for system workloads.
                 type: string
@@ -2104,12 +2201,6 @@ spec:
                   SpdkSystemMemory is the amount of memory reserved for SPDK system use (e.g. "4G", "512M").
                   When omitted the backend default is used.
                 pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
-                type: string
-              systemVolumeFilterRegex:
-                description: |-
-                  SystemVolumeFilterRegex is a Go regular expression matched against backend
-                  volume names. Matching volumes are excluded from drain migration and from
-                  the final verification check. Defaults to "^sb-fio-baseline-.*".
                 type: string
               tolerations:
                 description: Tolerations configures pod tolerations for storage-node
@@ -2155,9 +2246,6 @@ spec:
               ubuntuHost:
                 description: UbuntuHost indicates the node host OS is Ubuntu.
                 type: boolean
-              workerNode:
-                description: WorkerNode is a single worker node used by action flows.
-                type: string
               workerNodes:
                 description: WorkerNodes is the set of Kubernetes worker nodes to
                   manage.
@@ -2179,52 +2267,6 @@ spec:
           status:
             description: status defines the observed state of StorageNodeSet
             properties:
-              actionStatus:
-                description: ActionStatus tracks the latest action execution status.
-                properties:
-                  action:
-                    description: Action is the requested action name.
-                    type: string
-                  message:
-                    description: Message is a human-readable action result or error.
-                    type: string
-                  nodeUUID:
-                    description: NodeUUID is the target node UUID for the action.
-                    type: string
-                  observedGeneration:
-                    description: ObservedGeneration is the resource generation observed
-                      by this status.
-                    format: int64
-                    type: integer
-                  state:
-                    type: string
-                  subPhase:
-                    description: SubPhase tracks the active drain step within the
-                      remove action.
-                    enum:
-                    - Validating
-                    - Suspending
-                    - Migrating
-                    - Verifying
-                    - Removing
-                    type: string
-                  triggered:
-                    description: Triggered indicates whether the underlying backend
-                      action has been fired.
-                    type: boolean
-                  updatedAt:
-                    description: UpdatedAt is the timestamp of the last status transition.
-                    format: date-time
-                    type: string
-                  volumesMigrated:
-                    description: VolumesMigrated is the count of volumes successfully
-                      migrated so far.
-                    type: integer
-                  volumesPending:
-                    description: VolumesPending is the count of volumes still awaiting
-                      migration.
-                    type: integer
-                type: object
               drainCoordination:
                 description: DrainCoordination tracks the upgrade-drain state per
                   worker node.
@@ -2355,6 +2397,14 @@ spec:
                       type: integer
                   type: object
                 type: array
+              offlineNodes:
+                description: OfflineNodes is the count of StorageNode CRs with status
+                  "offline" or "suspended".
+                type: integer
+              onlineNodes:
+                description: OnlineNodes is the count of StorageNode CRs with status
+                  "online".
+                type: integer
               pendingNodeAdds:
                 additionalProperties:
                   format: date-time
@@ -2374,6 +2424,9 @@ spec:
                   a FailedScheduling event during node add. Used to emit a recovery event
                   when the node subsequently comes online.
                 type: object
+              totalNodes:
+                description: TotalNodes is the total number of owned StorageNode CRs.
+                type: integer
             type: object
         required:
         - spec
@@ -2935,6 +2988,8 @@ rules:
   - snapshotreplications
   - storagebackups
   - storageclusters
+  - storagenodeops
+  - storagenodes
   - storagenodesets
   - tasks
   - volumemigrations
@@ -2956,6 +3011,8 @@ rules:
   - snapshotreplications/finalizers
   - storagebackups/finalizers
   - storageclusters/finalizers
+  - storagenodeops/finalizers
+  - storagenodes/finalizers
   - storagenodesets/finalizers
   - tasks/finalizers
   - volumemigrations/finalizers
@@ -2972,6 +3029,8 @@ rules:
   - snapshotreplications/status
   - storagebackups/status
   - storageclusters/status
+  - storagenodeops/status
+  - storagenodes/status
   - storagenodesets/status
   - tasks/status
   - volumemigrations/status

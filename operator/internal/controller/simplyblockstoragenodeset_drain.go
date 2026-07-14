@@ -40,7 +40,6 @@ import (
 // is malformed — intentional fast-fail for a hardcoded value.
 var defaultSystemVolumeFilter = regexp.MustCompile(simplyblockv1alpha1.DefaultSystemVolumeFilterRegex)
 
-
 // Requeue intervals used by the drain state machine.
 const (
 	drainRequeueImmediate  = 1 * time.Second
