@@ -110,15 +110,49 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	apiClient := webapi.NewClient()
-
-	// Node not yet provisioned → post to backend.
+	// Phase 1 bridge: the StorageNodeSetReconciler still owns provisioning.
+	// Sync the UUID from StorageNodeSet.status.nodes[] so this reconciler
+	// can see when the node is online without re-POSTing.
 	if sn.Status.UUID == "" {
-		return r.provisionNode(ctx, &sn, &sns, clusterUUID, apiClient)
+		if err := r.syncUUIDFromNodeSet(ctx, &sn, &sns); err != nil {
+			return ctrl.Result{}, err
+		}
+		// Re-read after patch — if UUID is still empty, old reconciler hasn't
+		// provisioned yet; requeue and wait.
+		if sn.Status.UUID == "" {
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 	}
+
+	apiClient := webapi.NewClient()
 
 	// Node provisioned → sync status periodically.
 	return r.syncStatus(ctx, &sn, clusterUUID, apiClient)
+}
+
+// syncUUIDFromNodeSet copies the backend UUID from StorageNodeSet.status.nodes[]
+// into StorageNode.status.uuid. This is the Phase 1 bridge: the old
+// StorageNodeSetReconciler owns provisioning and tracks UUIDs in its own status;
+// the StorageNodeReconciler reads that status so it doesn't re-POST.
+func (r *StorageNodeReconciler) syncUUIDFromNodeSet(
+	ctx context.Context,
+	sn *simplyblockv1alpha1.StorageNode,
+	sns *simplyblockv1alpha1.StorageNodeSet,
+) error {
+	for _, ns := range sns.Status.Nodes {
+		if ns.Hostname != sn.Spec.WorkerNode || ns.UUID == "" {
+			continue
+		}
+		patch := client.MergeFrom(sn.DeepCopy())
+		sn.Status.UUID = ns.UUID
+		sn.Status.Status = ns.Status
+		sn.Status.Health = ns.Health
+		if err := r.Status().Patch(ctx, sn, patch); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("syncing UUID for StorageNode %s: %w", sn.Name, err)
+		}
+		return nil
+	}
+	return nil
 }
 
 // syncOverrides propagates StorageNodeSet.spec.nodeConfigs[worker] into
