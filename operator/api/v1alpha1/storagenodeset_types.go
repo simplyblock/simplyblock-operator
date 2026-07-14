@@ -234,9 +234,18 @@ type StorageNodeSetStatus struct {
 	// OnlineNodes is the count of StorageNode CRs with status "online".
 	// +optional
 	OnlineNodes int `json:"onlineNodes,omitempty"`
-	// OfflineNodes is the count of StorageNode CRs with status "offline" or "suspended".
+	// OfflineNodes is the count of StorageNode CRs with status "offline".
 	// +optional
 	OfflineNodes int `json:"offlineNodes,omitempty"`
+	// SuspendedNodes is the count of StorageNode CRs with status "suspended".
+	// +optional
+	SuspendedNodes int `json:"suspendedNodes,omitempty"`
+	// CreatingNodes is the count of StorageNode CRs with status "in_creation".
+	// +optional
+	CreatingNodes int `json:"creatingNodes,omitempty"`
+	// RemovedNodes is the count of StorageNode CRs with status "removed".
+	// +optional
+	RemovedNodes int `json:"removedNodes,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Nodes"
 	// Nodes is the observed state of each managed storage node.
@@ -323,8 +332,11 @@ type ActionStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Total",type=integer,JSONPath=".status.totalNodes"
 // +kubebuilder:printcolumn:name="Online",type=integer,JSONPath=".status.onlineNodes"
-// +kubebuilder:printcolumn:name="Offline",type=integer,JSONPath=".status.offlineNodes"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="Offline",type=integer,JSONPath=".status.offlineNodes",priority=1
+// +kubebuilder:printcolumn:name="Suspended",type=integer,JSONPath=".status.suspendedNodes",priority=1
+// +kubebuilder:printcolumn:name="Creating",type=integer,JSONPath=".status.creatingNodes",priority=1
+// +kubebuilder:printcolumn:name="Removed",type=integer,JSONPath=".status.removedNodes",priority=1
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k, self.spec.nodeFailureDomains[k] >= 1)",message="all nodeFailureDomains values must be >= 1 (failure-domain group index)"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Storage Node",resources={{ServiceAccount,v1,simplyblock-storage-node},{Service,v1,simplyblock-storage-node},{DaemonSet,v1,simplyblock-storage-node},{ClusterRole,v1,simplyblock-storage-node},{ClusterRoleBinding,v1,simplyblock-storage-node}}
 // StorageNodeSet is the Schema for the storagenodesets API

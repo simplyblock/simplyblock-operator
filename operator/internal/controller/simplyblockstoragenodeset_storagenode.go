@@ -158,20 +158,29 @@ func (r *StorageNodeSetReconciler) aggregateStorageNodeStatus(
 		return err
 	}
 
-	total, online, offline := len(owned.Items), 0, 0
+	var online, offline, suspended, creating, removed int
 	for _, sn := range owned.Items {
 		switch sn.Status.Status {
 		case "online":
 			online++
-		case "offline", "suspended":
+		case "offline":
 			offline++
+		case "suspended":
+			suspended++
+		case "in_creation":
+			creating++
+		case "removed":
+			removed++
 		}
 	}
 
 	patch := client.MergeFrom(sns.DeepCopy())
-	sns.Status.TotalNodes = total
+	sns.Status.TotalNodes = len(owned.Items)
 	sns.Status.OnlineNodes = online
 	sns.Status.OfflineNodes = offline
+	sns.Status.SuspendedNodes = suspended
+	sns.Status.CreatingNodes = creating
+	sns.Status.RemovedNodes = removed
 	return r.Status().Patch(ctx, sns, patch)
 }
 
