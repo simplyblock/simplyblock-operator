@@ -114,7 +114,7 @@ func (sns *StorageNodeSelector) SelectStorageNodes(
 ) ([]NodeMigrationPair, error) {
 	// computeLatencyDeviations also emits the per-node / max deviation gauges as a side
 	// effect; the per-cluster stats it returns are not needed for pairing here.
-	deviations, _, err := sns.computeLatencyDeviations(ctx, cfg.PrometheusURL, cfg.LatencyPercentile, inputs...)
+	deviations, err := sns.computeLatencyDeviations(ctx, cfg.PrometheusURL, cfg.LatencyPercentile, inputs...)
 	if err != nil {
 		return nil, err
 	}
@@ -157,6 +157,41 @@ func (sns *StorageNodeSelector) SelectStorageNodes(
 	return pairs, nil
 }
 
+// SelectBestNode returns the least-loaded eligible node — the one with the lowest current
+// latency deviation — for primary volume placement at creation time. Unlike pickColdTarget
+// (migration-target selection), there is no source node to compare against and no
+// MinHotColdDifferencePct gate: placement always wants the single best candidate, however
+// small its lead over the second-best. A node absent from the current Prometheus reading
+// (e.g. freshly onboarded, not yet scraped) is treated as deviation 0 — the best possible
+// score — rather than excluded, so it isn't systematically avoided.
+func (sns *StorageNodeSelector) SelectBestNode(
+	ctx context.Context,
+	cfg RebalancingConfig,
+	eligible map[string]bool,
+	inputs ...StorageNodeSelectorInput,
+) (nodeUUID string, ok bool, err error) {
+	deviations, err := sns.computeLatencyDeviations(ctx, cfg.PrometheusURL, cfg.LatencyPercentile, inputs...)
+	if err != nil {
+		return "", false, err
+	}
+
+	var best string
+	var bestDev float64
+	found := false
+	for uuid, isEligible := range eligible {
+		if !isEligible {
+			continue
+		}
+		dev := deviations[uuid]
+		if !found || dev < bestDev {
+			best = uuid
+			bestDev = dev
+			found = true
+		}
+	}
+	return best, found, nil
+}
+
 // pickColdTarget returns the coolest eligible migration target for the hot source from
 // the flat node pool, or ok=false when none qualifies. A candidate qualifies when it is
 // eligible (isMigrationTargetEligible) and at least cfg.MinHotColdDifferencePct
@@ -191,17 +226,18 @@ func isMigrationTargetEligible(src, cand nodeRef, _ RebalancingConfig) bool {
 }
 
 // computeLatencyDeviations collects per-node latency from Prometheus and StorageNode CRs,
-// computes deviation from baseline, emits Prometheus gauges, and returns the per-node
-// deviation map and per-cluster aggregate statistics.
+// computes deviation from baseline, and emits Prometheus gauges (per-node deviation and
+// per-cluster max deviation) as a side effect. Only the per-node deviation map is returned —
+// no caller currently needs the per-cluster stats beyond the gauge they're emitted into.
 func (sns *StorageNodeSelector) computeLatencyDeviations(
 	ctx context.Context,
 	prometheusURL string,
 	percentile string,
 	inputs ...StorageNodeSelectorInput,
-) (deviations map[string]float64, statsByCluster map[string]ClusterDeviationStats, err error) {
+) (deviations map[string]float64, err error) {
 	latencyByNode, err := sns.collectLatencyState(ctx, prometheusURL, percentile, inputs...)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	deviations = make(map[string]float64, len(latencyByNode))
 	for nodeUUID, ld := range latencyByNode {
@@ -209,11 +245,11 @@ func (sns *StorageNodeSelector) computeLatencyDeviations(
 		rebalancerNodeLatencyDeviationPct.WithLabelValues(ld.clusterUUID, nodeUUID).Set(dev)
 		deviations[nodeUUID] = dev
 	}
-	statsByCluster = deviationStats(latencyByNode, deviations)
+	statsByCluster := deviationStats(latencyByNode, deviations)
 	for clusterUUID, stats := range statsByCluster {
 		rebalancerMaxLatencyDeviationPct.WithLabelValues(clusterUUID).Set(stats.MaxDeviationPct)
 	}
-	return deviations, statsByCluster, nil
+	return deviations, nil
 }
 
 // collectLatencyState builds a nodeUUID → nodeLatencyData map by combining:

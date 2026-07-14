@@ -42,6 +42,7 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	internalwebhook "github.com/simplyblock/simplyblock-operator/internal/webhook"
 	// +kubebuilder:scaffold:imports
@@ -444,6 +445,14 @@ func main() {
 				APIClient: webapi.NewClient(),
 			}})
 		setupLog.Info("registered pinned-volume validating webhook")
+
+		mgr.GetWebhookServer().Register("/mutate-v1-pvc-simplyblock-placement",
+			&webhook.Admission{Handler: &internalwebhook.SimplyblockVolumePlacementInjector{
+				Client:       mgr.GetClient(),
+				APIClient:    webapi.NewClient(),
+				NodeSelector: autobalancing.NewStorageNodeSelector(mgr.GetClient()),
+			}})
+		setupLog.Info("registered simplyblock-volume-placement mutating webhook")
 	}()
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
