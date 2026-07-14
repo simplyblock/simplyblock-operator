@@ -110,21 +110,19 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	// Phase 1 bridge: the StorageNodeSetReconciler still owns provisioning.
-	// Sync the UUID from StorageNodeSet.status.nodes[] so this reconciler
-	// can see when the node is online without re-POSTing.
+	apiClient := webapi.NewClient()
+
 	if sn.Status.UUID == "" {
+		// Check if the old StorageNodeSetReconciler already provisioned this node
+		// (present in status.nodes[]) — adopt its UUID to avoid a double POST.
 		if err := r.syncUUIDFromNodeSet(ctx, &sn, &sns); err != nil {
 			return ctrl.Result{}, err
 		}
-		// Re-read after patch — if UUID is still empty, old reconciler hasn't
-		// provisioned yet; requeue and wait.
 		if sn.Status.UUID == "" {
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			// Not yet provisioned — this reconciler is now the sole owner of the POST.
+			return r.provisionNode(ctx, &sn, &sns, clusterUUID, apiClient)
 		}
 	}
-
-	apiClient := webapi.NewClient()
 
 	// Node provisioned → sync status periodically.
 	return r.syncStatus(ctx, &sn, clusterUUID, apiClient)
@@ -174,7 +172,9 @@ func (r *StorageNodeReconciler) syncOverrides(
 	return nil
 }
 
-// provisionNode posts the node to the backend API and begins polling for online status.
+// provisionNode posts the node to the backend API. StorageNodeReconciler is the
+// sole owner of provisioning — the old StorageNodeSetReconciler skips nodes
+// whose StorageNode CR already has PostedAt set.
 func (r *StorageNodeReconciler) provisionNode(
 	ctx context.Context,
 	sn *simplyblockv1alpha1.StorageNode,
@@ -184,40 +184,57 @@ func (r *StorageNodeReconciler) provisionNode(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	// Guard: if enableFailureDomains is set on the cluster, failureDomain must be populated.
+	// POST already sent — poll until the UUID appears via syncUUIDFromNodeSet.
+	if sn.Status.PostedAt != nil {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	// Respect MaxParallelNodeAdds: count sibling StorageNode CRs in this set
+	// that are in-flight (PostedAt set, UUID not yet assigned) and block if the
+	// limit is reached. This replicates the old PendingNodeAdds gate.
+	if sns.Spec.MaxParallelNodeAdds != nil {
+		inFlight, err := r.countInFlightNodes(ctx, sn.Namespace, sn.Spec.StorageNodeSetRef, sn.Name)
+		if err == nil && inFlight >= int(*sns.Spec.MaxParallelNodeAdds) {
+			log.Info("parallel node add limit reached, requeuing",
+				"inFlight", inFlight, "max", *sns.Spec.MaxParallelNodeAdds)
+			return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
+		}
+	}
+
+	// Guard: failure domain must be set if the feature is enabled.
 	if err := r.checkFailureDomain(ctx, sn, sns); err != nil {
 		r.Recorder.Event(sn, "Warning", "FailureDomainMissing", err.Error())
 		log.Info("blocking node-add: "+err.Error(), "node", sn.Name)
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 
-	// Wait until the node's API endpoint is reachable.
+	// Wait until the node's SPDK API endpoint is reachable.
 	if err := checkNodeInfoReachable(ctx, sn.Spec.WorkerNode, sn.Namespace, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
 		log.V(1).Info("storage node API not reachable yet, requeuing",
 			"worker", sn.Spec.WorkerNode, "error", err.Error())
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	// Build effective config: fleet defaults merged with per-node overrides.
+	// Merge fleet defaults with per-node overrides — overrides always win.
 	eff := effectiveNodeConfig(sn, sns)
 
 	nodeAddress := utils.StorageNodeSetAPIAddress(sn.Spec.WorkerNode, sn.Namespace)
 	params := utils.StorageNodeSetAddParams{
 		NodeAddress:      nodeAddress,
-		InterfaceName:    sns.Spec.MgmtIfname,
-		SPDKImage:        eff.SpdkImage,
-		SPDKProxyImage:   eff.SpdkProxyImage,
-		DataNics:         sns.Spec.DataIfname,
+		InterfaceName:    sns.Spec.MgmtIfname,                                         // fleet-only (immutable)
+		SPDKImage:        eff.SpdkImage,                                                // per-node override
+		SPDKProxyImage:   eff.SpdkProxyImage,                                           // per-node override
+		DataNics:         sns.Spec.DataIfname,                                          // fleet-only
 		Namespace:        sn.Namespace,
-		JMPercent:        journalManagerPercentPerDevice(sns),
-		Partitions:       utils.IntPtrOrDefault(sns.Spec.Partitions, 1),
-		HaJMCount:        journalManagerCount(sns),
+		JMPercent:        journalManagerPercentPerDeviceFromSpec(eff.JournalManagerSpec), // per-node override
+		Partitions:       utils.IntPtrOrDefault(sns.Spec.Partitions, 1),               // fleet-only (immutable)
+		HaJMCount:        journalManagerCountFromSpec(eff.JournalManagerSpec),           // per-node override
 		CRName:           sns.Name,
 		CRNameSpace:      sns.Namespace,
 		CRPlural:         "storagenodesets",
-		Format4K:         utils.BoolPtrOrFalse(sns.Spec.ForceFormat4K),
-		SpdkSystemMemory: eff.SpdkSystemMemory,
-		FailureDomain:    effectiveFailureDomain(sn, sns),
+		Format4K:         utils.BoolPtrOrFalse(sns.Spec.ForceFormat4K),                // fleet-only (immutable)
+		SpdkSystemMemory: eff.SpdkSystemMemory,                                        // per-node override
+		FailureDomain:    effectiveFailureDomain(sn, sns),                             // per-node override
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
@@ -232,7 +249,6 @@ func (r *StorageNodeReconciler) provisionNode(
 
 	log.Info("storage node add POST sent", "endpoint", endpoint, "status", status)
 
-	// Mark PostedAt so the next reconcile can poll online status.
 	now := metav1.Now()
 	patch := client.MergeFrom(sn.DeepCopy())
 	sn.Status.PostedAt = &now
@@ -240,6 +256,50 @@ func (r *StorageNodeReconciler) provisionNode(
 		log.Error(err, "failed to patch PostedAt")
 	}
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+// countInFlightNodes returns how many sibling StorageNode CRs in the same
+// StorageNodeSet have PostedAt set but no UUID yet (i.e. add is in progress).
+// The calling node is excluded from the count.
+func (r *StorageNodeReconciler) countInFlightNodes(
+	ctx context.Context,
+	namespace, snsRef, excludeName string,
+) (int, error) {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList,
+		client.InNamespace(namespace),
+		client.MatchingFields{"spec.storageNodeSetRef": snsRef},
+	); err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, sn := range snList.Items {
+		if sn.Name == excludeName {
+			continue
+		}
+		if sn.Status.PostedAt != nil && sn.Status.UUID == "" {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// journalManagerPercentPerDeviceFromSpec returns JM percent from the effective
+// JournalManagerSpec, defaulting to 3 when nil.
+func journalManagerPercentPerDeviceFromSpec(spec *simplyblockv1alpha1.JournalManagerSpec) int {
+	if spec == nil {
+		return 3
+	}
+	return utils.IntPtrOrDefault(spec.PercentPerDevice, 3)
+}
+
+// journalManagerCountFromSpec returns JM count from the effective
+// JournalManagerSpec, defaulting to 3 when nil.
+func journalManagerCountFromSpec(spec *simplyblockv1alpha1.JournalManagerSpec) int {
+	if spec == nil {
+		return 3
+	}
+	return utils.IntPtrOrDefault(spec.Count, 3)
 }
 
 // syncStatus fetches the current node status from the backend and updates StorageNode.status.
@@ -497,6 +557,18 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		func(obj client.Object) []string {
 			sn := obj.(*simplyblockv1alpha1.StorageNode)
 			return []string{sn.Spec.StorageNodeSetRef}
+		},
+	); err != nil {
+		return err
+	}
+
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&simplyblockv1alpha1.StorageNode{},
+		"spec.workerNode",
+		func(obj client.Object) []string {
+			sn := obj.(*simplyblockv1alpha1.StorageNode)
+			return []string{sn.Spec.WorkerNode}
 		},
 	); err != nil {
 		return err

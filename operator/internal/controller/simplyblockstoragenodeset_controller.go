@@ -262,164 +262,16 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNode(
 		return ctrl.Result{RequeueAfter: time.Second * 10}, nil
 	}
 
-	// PendingNodeAdds is the authoritative guard against duplicate POSTs.
-	// It is a separate map field so patches to Status.Nodes by
-	// syncTrackedNodesStatus can never inadvertently delete it.
-	// The legacy UUID=="" placeholder check is kept as a fallback for
-	// CRs that existed before PendingNodeAdds was introduced.
-	_, isPending := snCR.Status.PendingNodeAdds[nodeName]
-	if !isPending {
-		for _, n := range snCR.Status.Nodes {
-			if n.Hostname == nodeName && n.UUID == "" {
-				isPending = true
-				break
-			}
-		}
+	// StorageNodeReconciler is now the sole owner of provisioning. Skip this
+	// node if its StorageNode CR already has PostedAt set — the new reconciler
+	// has taken over and we must not double-POST.
+	if r.storageNodeAlreadyPosted(ctx, snCR.Namespace, nodeName) {
+		return r.pollNodeOnline(ctx, apiClient, clusterUUID, ip, nodeName, expectedPerHost, snCR)
 	}
 
-	if !isPending {
-		// Proactive: check if nodes already exist on backend (e.g. from Helm deployment)
-		// before sending a POST that would either fail or create a duplicate.
-		// For multi-socket deployments (expectedPerHost > 1) a single POST creates all
-		// NUMA-socket nodes at once, so we skip POST if ANY node for this IP already
-		// exists. pollNodeOnline then waits for all expectedPerHost nodes to be online.
-		allNodes, lookupErr := listStorageNodesForCluster(ctx, apiClient, clusterUUID)
-		if lookupErr == nil {
-			existingCount := 0
-			for _, n := range allNodes {
-				if n.IP == ip {
-					existingCount++
-				}
-			}
-			if existingCount > 0 {
-				log.Info("Storage node(s) already exist on backend, adopting", "node", nodeName, "count", existingCount)
-				if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
-					return ctrl.Result{}, err
-				}
-				var matchingNodes []SNODEAPIResponse
-				for _, n := range allNodes {
-					if n.IP == ip {
-						matchingNodes = append(matchingNodes, n)
-					}
-				}
-				adoptStorageNodeStatus(snCR, nodeName, matchingNodes)
-				if err := r.Status().Update(ctx, snCR); err != nil {
-					log.Error(err, "Failed to set node status for adoption")
-					return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-				}
-				log.Info("Storage node(s) adopted from backend", "node", nodeName, "count", existingCount)
-				return ctrl.Result{}, nil
-			}
-		}
-		// Persist the pending marker BEFORE the POST so that every future
-		// reconcile — including those triggered while sbcli is retrying
-		// internally after a failure — sees the marker and skips the POST.
-		patch := client.MergeFrom(snCR.DeepCopy())
-		if snCR.Status.PendingNodeAdds == nil {
-			snCR.Status.PendingNodeAdds = make(map[string]metav1.Time)
-		}
-		snCR.Status.PendingNodeAdds[nodeName] = metav1.Now()
-		if err := r.Status().Patch(ctx, snCR, patch); err != nil {
-			log.Error(err, "Failed to persist pending node add marker before POST, retrying", "node", nodeName)
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		}
-
-		if res, err := r.postStorageNodeSet(ctx, req, snCR, nodeName, ip, clusterUUID, apiClient); err != nil || res.RequeueAfter > 0 {
-			// POST failed — clear the pending marker so the next reconcile
-			// retries the POST rather than waiting on a node that was never created.
-			clearPatch := client.MergeFrom(snCR.DeepCopy())
-			delete(snCR.Status.PendingNodeAdds, nodeName)
-			if patchErr := r.Status().Patch(ctx, snCR, clearPatch); patchErr != nil {
-				log.Error(patchErr, "Failed to clear pending node add marker after POST failure", "node", nodeName)
-			}
-			return res, err
-		}
-	}
-
-	return r.pollNodeOnline(ctx, apiClient, clusterUUID, ip, nodeName, expectedPerHost, snCR)
-}
-
-// postStorageNodeSet calls the backend storage-node creation API and records the
-// placeholder status entry.
-func (r *StorageNodeSetReconciler) postStorageNodeSet(
-	ctx context.Context,
-	req ctrl.Request,
-	snCR *simplyblockv1alpha1.StorageNodeSet,
-	nodeName, ip, clusterUUID string,
-	apiClient *webapi.Client,
-) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
-	if err := checkNodeInfoReachable(ctx, nodeName, snCR.Namespace, r.TLSEnabled, r.TLSMutualEnabled); err != nil {
-		log.V(1).Info("Storage node API not reachable yet, requeueing",
-			"node", nodeName,
-			"ip", ip,
-			"error", err.Error(),
-		)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	nodeAddress := utils.StorageNodeSetAPIAddress(nodeName, snCR.Namespace)
-	params := utils.StorageNodeSetAddParams{
-		NodeAddress:         nodeAddress,
-		InterfaceName:       snCR.Spec.MgmtIfname,
-		SPDKImage:           snCR.Spec.SpdkImage,
-		SPDKProxyImage:      snCR.Spec.SpdkProxyImage,
-		SPDKDebug:           false,
-		IdDeviceByNQN:       false,
-		DataNics:            snCR.Spec.DataIfname,
-		Namespace:           snCR.Namespace,
-		JMPercent:           journalManagerPercentPerDevice(snCR),
-		Partitions:          utils.IntPtrOrDefault(snCR.Spec.Partitions, 1),
-		IOBufSmallPoolCount: 0,
-		IOBufLargePoolCount: 0,
-		HaJMCount:           journalManagerCount(snCR),
-		CRName:              snCR.Name,
-		CRNameSpace:         snCR.Namespace,
-		CRPlural:            "storagenodesets",
-		Format4K:            utils.BoolPtrOrFalse(snCR.Spec.ForceFormat4K),
-		SpdkSystemMemory:    snCR.Spec.SpdkSystemMemory,
-		FailureDomain:       nodeFailureDomain(snCR, nodeName),
-	}
-
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
-
-	jsonParams, err := json.MarshalIndent(params, "", "  ")
-	if err != nil {
-		log.Error(err, "Failed to marshal params")
-	} else {
-		log.Info("Sending Storage Node Add Request",
-			"endpoint", endpoint,
-			"request_body", string(jsonParams),
-		)
-	}
-
-	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, params)
-	if err != nil || status >= 300 {
-		if err == nil {
-			err = fmt.Errorf("unexpected status %d", status)
-		}
-		log.Error(err, "StorageNodeSet creation failed", "status", status, "response", string(body))
-		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-	}
-
-	log.Info("SNODE API call",
-		"endpoint", endpoint,
-		"status", status,
-		"response", string(body),
-	)
-
-	if err := r.Get(ctx, req.NamespacedName, snCR); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	ensureNodeStatus(snCR, nodeName, ip)
-
-	if err := r.Status().Update(ctx, snCR); err != nil {
-		log.Error(err, "Failed to update storage node status")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-	return ctrl.Result{}, nil
+	// StorageNodeReconciler is the sole owner of provisioning. If it hasn't
+	// POSTed yet, requeue and wait — never POST from here.
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -1174,73 +1026,6 @@ func getNodeInternalIP(ctx context.Context, c client.Client, nodeName string) (s
 	return "", fmt.Errorf("node %s has no InternalIP", nodeName)
 }
 
-// listStorageNodesForCluster fetches all backend storage nodes for the given cluster.
-func listStorageNodesForCluster(ctx context.Context, apiClient *webapi.Client, clusterUUID string) ([]SNODEAPIResponse, error) {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
-	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
-	if err != nil || status >= 300 {
-		return nil, fmt.Errorf("list storage nodes failed, status %d: %v", status, err)
-	}
-	var nodes []SNODEAPIResponse
-	if err := json.Unmarshal(body, &nodes); err != nil {
-		return nil, fmt.Errorf("failed to parse storage node list: %w", err)
-	}
-	return nodes, nil
-}
-
-func ensureNodeStatus(
-	snCR *simplyblockv1alpha1.StorageNodeSet,
-	nodeName, ip string,
-) *simplyblockv1alpha1.NodeStatus {
-
-	for i := range snCR.Status.Nodes {
-		if snCR.Status.Nodes[i].Hostname == nodeName {
-			return &snCR.Status.Nodes[i]
-		}
-	}
-
-	now := metav1.Now()
-	snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
-		Hostname: nodeName,
-		MgmtIp:   ip,
-		Status:   "in_creation",
-		PostedAt: &now,
-	})
-
-	return &snCR.Status.Nodes[len(snCR.Status.Nodes)-1]
-}
-
-func adoptStorageNodeStatus(snCR *simplyblockv1alpha1.StorageNodeSet, nodeName string, nodes []SNODEAPIResponse) {
-	for _, res := range nodes {
-		entry := simplyblockv1alpha1.NodeStatus{
-			Hostname: nodeName,
-			UUID:     res.UUID,
-			Status:   res.Status,
-			MgmtIp:   res.IP,
-			Health:   res.Health,
-			Devices:  fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
-			CPU:      utils.IntToInt32Ptr(res.CPU),
-			Memory:   utils.HumanBytes(res.Memory, "iec"),
-			Volumes:  utils.IntToInt32Ptr(res.Volumes),
-			RpcPort:  utils.IntToInt32Ptr(res.RPC_PORT),
-			LvolPort: utils.IntToInt32Ptr(res.LVOL_PORT),
-			NvmfPort: utils.IntToInt32Ptr(res.NVMF_PORT),
-		}
-		matched := false
-		for i := range snCR.Status.Nodes {
-			n := &snCR.Status.Nodes[i]
-			if n.Hostname == nodeName && (n.UUID == res.UUID || n.UUID == "") {
-				*n = entry
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			snCR.Status.Nodes = append(snCR.Status.Nodes, entry)
-		}
-	}
-}
-
 func checkNodeInfoReachable(ctx context.Context, nodeName, namespace string, tlsEnabled, tlsMutualEnabled bool) error {
 	scheme := "http"
 	httpClient := &http.Client{Timeout: 3 * time.Second}
@@ -1394,23 +1179,30 @@ func (r *StorageNodeSetReconciler) nodeOnlineRequeueOrTimeout(
 	log := logf.FromContext(ctx)
 	timeout := time.Duration(waitForNodeOnlineRetries) * waitForNodeOnlineWaitInterval
 
-	// PendingNodeAdds is the primary source for the post timestamp.
-	// Fall back to the legacy UUID=="" PostedAt for backward compatibility.
-	if postedAt, ok := snCR.Status.PendingNodeAdds[nodeName]; ok {
+	// Read the post timestamp from the StorageNode CR (set by StorageNodeReconciler).
+	// Fall back to PendingNodeAdds (legacy) and status.nodes[].PostedAt for
+	// deployments that pre-date the StorageNodeReconciler.
+	var postedAt *metav1.Time
+	if t := r.storageNodePostedAt(ctx, snCR.Namespace, nodeName); t != nil {
+		postedAt = t
+	} else if t2, ok := snCR.Status.PendingNodeAdds[nodeName]; ok {
+		postedAt = &t2
+	} else {
+		for i := range snCR.Status.Nodes {
+			n := &snCR.Status.Nodes[i]
+			if n.Hostname == nodeName && n.UUID == "" && n.PostedAt != nil {
+				postedAt = n.PostedAt
+				break
+			}
+		}
+	}
+
+	if postedAt != nil {
 		if time.Since(postedAt.Time) <= timeout {
 			if time.Since(postedAt.Time) >= spdkPodEventDelay {
 				r.recordSpdkPodEvents(ctx, snCR, nodeName)
 			}
 			return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
-		}
-	} else {
-		for i := range snCR.Status.Nodes {
-			n := &snCR.Status.Nodes[i]
-			if n.Hostname == nodeName && n.UUID == "" && n.PostedAt != nil {
-				if time.Since(n.PostedAt.Time) <= timeout {
-					return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
-				}
-			}
 		}
 	}
 

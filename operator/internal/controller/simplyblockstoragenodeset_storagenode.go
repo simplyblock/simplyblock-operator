@@ -249,6 +249,49 @@ func buildStorageNodeCR(
 	return sn
 }
 
+// storageNodePostedAt returns the PostedAt timestamp from the StorageNode CR
+// for the given worker, or nil if not found / not yet set.
+func (r *StorageNodeSetReconciler) storageNodePostedAt(
+	ctx context.Context,
+	namespace, workerNode string,
+) *metav1.Time {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList,
+		client.InNamespace(namespace),
+		client.MatchingFields{"spec.workerNode": workerNode},
+	); err != nil {
+		return nil
+	}
+	for _, sn := range snList.Items {
+		if sn.Status.PostedAt != nil {
+			return sn.Status.PostedAt
+		}
+	}
+	return nil
+}
+
+// storageNodeAlreadyPosted returns true if the StorageNode CR for the given
+// worker node already has PostedAt set, meaning StorageNodeReconciler has taken
+// over provisioning and this reconciler must not duplicate the POST.
+func (r *StorageNodeSetReconciler) storageNodeAlreadyPosted(
+	ctx context.Context,
+	namespace, workerNode string,
+) bool {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList,
+		client.InNamespace(namespace),
+		client.MatchingFields{"spec.workerNode": workerNode},
+	); err != nil {
+		return false
+	}
+	for _, sn := range snList.Items {
+		if sn.Status.PostedAt != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // effectiveSockets returns the list of socket identifiers to use. When
 // SocketsToUse is empty, a single socket "0" is assumed.
 func effectiveSockets(sns *simplyblockv1alpha1.StorageNodeSet) []string {

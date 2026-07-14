@@ -32,33 +32,6 @@ const (
 	caVolumeName  = "certificate-authority"
 )
 
-func TestEnsureNodeStatus(t *testing.T) {
-	cr := &simplyblockv1alpha1.StorageNodeSet{}
-
-	s := ensureNodeStatus(cr, "node-a", mgmtIP)
-	if s == nil {
-		t.Fatalf("ensureNodeStatus returned nil")
-	}
-	if s.Hostname != "node-a" || s.MgmtIp != mgmtIP || s.Status != "in_creation" {
-		t.Fatalf("unexpected initial node status: %#v", *s)
-	}
-	if len(cr.Status.Nodes) != 1 {
-		t.Fatalf("expected one node, got %d", len(cr.Status.Nodes))
-	}
-
-	s2 := ensureNodeStatus(cr, "node-a", "10.0.0.99")
-	if s2 == nil {
-		t.Fatalf("ensureNodeStatus second call returned nil")
-	}
-	if len(cr.Status.Nodes) != 1 {
-		t.Fatalf("should not append duplicate node entry")
-	}
-	// existing value should be retained
-	if s2.MgmtIp != mgmtIP {
-		t.Fatalf("expected existing node status to be reused, got %#v", *s2)
-	}
-}
-
 func TestStorageNodeSetFinalizerLifecycleHelpers(t *testing.T) {
 	now := metav1.NewTime(time.Now())
 
