@@ -17,13 +17,16 @@ func init() {
 
 	if os.Getenv("KUBECONFIG") == "" {
 		kubeConfigPath := filepath.Join(os.Getenv("HOME"), ".kube", "config")
-		os.Setenv("KUBECONFIG", kubeConfigPath)
+		_ = os.Setenv("KUBECONFIG", kubeConfigPath)
 	}
 
 	config.CopyFlags(config.Flags, flag.CommandLine)
 	framework.RegisterCommonFlags(flag.CommandLine)
 	framework.RegisterClusterFlags(flag.CommandLine)
-	klog.InitFlags(flag.CommandLine)
+	// framework.RegisterCommonFlags already registers the logging flags (incl. "-v")
+	// on flag.CommandLine, so initialize klog on a throwaway set to avoid a
+	// "flag redefined: v" panic during init.
+	klog.InitFlags(flag.NewFlagSet("klog", flag.ContinueOnError))
 
 	testing.Init()
 	flag.Parse()

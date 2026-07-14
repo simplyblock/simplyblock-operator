@@ -32,7 +32,7 @@ jobs:
       - name: Build image for scanning (linux/amd64 only)
         uses: docker/build-push-action@v6
         with:
-          context: ./csi-driver
+          context: .
           file: csi-driver/deploy/image/Dockerfile
           platforms: linux/amd64
           load: true

@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/simplyblock/atlas/errs/deferrers"
 	"k8s.io/klog"
 )
 
@@ -113,7 +114,7 @@ type LvolConnectResp struct {
 	TargetType     string `json:"transport"`
 	IP             string `json:"ip"`
 	Connect        string `json:"connect"`
-	NSID           int    `json:"ns_id"`
+	NSID           int    `json:"ns-id"`
 	HostIface      string `json:"host-iface,omitempty"`
 }
 
@@ -396,7 +397,10 @@ func (client APIClient) unpublishVolume(ctx context.Context, poolID, lvolID stri
 }
 
 // cloneVolume clones a volume by UUID, returning the new volume's UUID
-func (client APIClient) cloneVolume(ctx context.Context, poolID, lvolID, cloneName, newSize, pvcName string) (string, error) {
+func (client APIClient) cloneVolume(
+	ctx context.Context,
+	poolID, lvolID, cloneName, newSize, pvcName string,
+) (string, error) {
 	q := url.Values{"clone_name": {cloneName}}
 	if newSize != "" {
 		q.Set("new_size", newSize)
@@ -419,7 +423,10 @@ func (client APIClient) cloneVolume(ctx context.Context, poolID, lvolID, cloneNa
 }
 
 // cloneSnapshot creates a new volume from a snapshot, returning the new volume's UUID
-func (client APIClient) cloneSnapshot(ctx context.Context, poolID, snapshotID, cloneName, newSize, pvcName string) (string, error) {
+func (client APIClient) cloneSnapshot(
+	ctx context.Context,
+	poolID, snapshotID, cloneName, newSize, pvcName string,
+) (string, error) {
 	params := struct {
 		Name       string `json:"name"`
 		SnapshotID string `json:"snapshot_id"`
@@ -553,7 +560,10 @@ func (client APIClient) findPoolForVolume(ctx context.Context, lvolID string) (s
 }
 
 // getLvolConnections returns the raw NVMe-oF connection list for a volume.
-func (client APIClient) getLvolConnections(ctx context.Context, poolID, lvolID, hostNQN string) ([]*LvolConnectResp, error) {
+func (client APIClient) getLvolConnections(
+	ctx context.Context,
+	poolID, lvolID, hostNQN string,
+) ([]*LvolConnectResp, error) {
 	path := client.v2volumeConnect(poolID, lvolID)
 	if hostNQN != "" {
 		path += "?" + url.Values{"host_nqn": {hostNQN}}.Encode()
@@ -628,7 +638,7 @@ func (client APIClient) do(ctx context.Context, method, path string, body any) (
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", method, err)
 	}
-	defer resp.Body.Close()
+	defer deferrers.Close(resp.Body)
 
 	// 204 No Content — success, no body
 	if resp.StatusCode == http.StatusNoContent {

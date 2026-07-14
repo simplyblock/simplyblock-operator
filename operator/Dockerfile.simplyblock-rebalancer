@@ -20,10 +20,20 @@ ARG TARGETOS
 ARG TARGETARCH
 
 WORKDIR /workspace
-COPY go.mod go.sum ./
+
+# atlas sibling module (consumed via ../atlas-lib replace); build context is the repo
+# root, so it lives next to the operator module. Copy only its manifests before
+# go mod download: the download needs atlas-lib's go.mod/go.sum for the module graph,
+# not its source (local-path replacements are never downloaded). Copying the full tree
+# here would invalidate the download layer on any atlas-lib source change.
+COPY atlas-lib/go.mod atlas-lib/go.sum /atlas-lib/
+
+COPY operator/go.mod operator/go.sum ./
 RUN go mod download
 
-COPY . .
+# Copy the full sources (operator + the atlas-lib tree resolved by the replace directive).
+COPY atlas-lib/ /atlas-lib/
+COPY operator/ .
 
 # CGO disabled — simplyblock-rebalancer has no CGO dependencies.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \

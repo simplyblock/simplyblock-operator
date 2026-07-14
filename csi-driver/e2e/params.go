@@ -18,6 +18,7 @@ var _ = ginkgo.Describe("SPDKCSI-PARAMS", func() {
 	// QoS parameter: qos_rw_iops
 	// -------------------------------------------------------------------------
 
+	//nolint:dupl // parameterized QoS scenario; parallel structure kept for test readability
 	ginkgo.It("StorageClass with qos_rw_iops=1000 provisions a usable volume", func() {
 		ns := f.Namespace.Name
 		const scName = "spdkcsi-e2e-qos-iops"
@@ -63,6 +64,7 @@ var _ = ginkgo.Describe("SPDKCSI-PARAMS", func() {
 	// QoS parameter: qos_rw_mbytes
 	// -------------------------------------------------------------------------
 
+	//nolint:dupl // parameterized QoS scenario; parallel structure kept for test readability
 	ginkgo.It("StorageClass with qos_rw_mbytes=100 provisions a usable volume", func() {
 		ns := f.Namespace.Name
 		const scName = "spdkcsi-e2e-qos-mbytes"
@@ -158,6 +160,7 @@ var _ = ginkgo.Describe("SPDKCSI-PARAMS", func() {
 	// Encryption parameter
 	// -------------------------------------------------------------------------
 
+	//nolint:dupl // parameterized QoS scenario; parallel structure kept for test readability
 	ginkgo.It("StorageClass with encryption=True provisions and mounts an encrypted volume", func() {
 		ns := f.Namespace.Name
 		const scName = "spdkcsi-e2e-encrypted"

@@ -1,8 +1,10 @@
-# Contributing to simplyblock-csi
+# Contributing to simplyblock-operator
 
-🎉 Thanks for your interest in contributing!  
+🎉 Thanks for your interest in contributing!
 
-We welcome community contributions to improve **simplyblock-csi** and make it even better for Kubernetes users worldwide.  
+We welcome community contributions to improve the **simplyblock Kubernetes stack** — the operator, CSI
+driver, shared `atlas` library, and Helm charts all live in this monorepo — and make it even better for
+Kubernetes users worldwide.
 
 This document outlines guidelines and steps to help you get started.
 
@@ -10,7 +12,7 @@ This document outlines guidelines and steps to help you get started.
 
 There are many ways to help:
 
-- **Report bugs** — open an [issue](https://github.com/simplyblock/simplyblock-csi/issues) if you encounter problems.
+- **Report bugs** — open an [issue](https://github.com/simplyblock/simplyblock-operator/issues) if you encounter problems.
 - **Suggest features** — request improvements or new capabilities.
 - **Improve documentation** — clarify instructions, fix typos, or add examples.
 - **Submit code** — fix bugs, add features, or refactor code.
@@ -20,22 +22,23 @@ There are many ways to help:
 
 When reporting a bug, please include:
 
-1. **Description** of the problem  
-2. **Steps to reproduce** (if applicable)  
-3. **Expected behavior** vs. what actually happened  
-4. **Environment details**: Kubernetes distribution and version, Simplyblock version, OS, etc.  
-5. Relevant **logs or error messages**
+1. **Description** of the problem
+2. **Which component** it affects (operator, csi-driver, atlas-lib, or helm-charts)
+3. **Steps to reproduce** (if applicable)
+4. **Expected behavior** vs. what actually happened
+5. **Environment details**: Kubernetes distribution and version, simplyblock version, OS, etc.
+6. Relevant **logs or error messages**
 
 This helps us resolve issues faster.
 
 ## 🚀 Submitting Pull Requests
 
-1. **Fork the repository**  
+1. **Fork the repository**
    Click “Fork” on the top-right of this repo and clone your fork locally.
 
    ```bash
-   git clone https://github.com/<your-username>/simplyblock-csi.git
-   cd simplyblock-csi
+   git clone https://github.com/<your-username>/simplyblock-operator.git
+   cd simplyblock-operator
    ```
 
 2. **Create a new branch**
@@ -69,18 +72,19 @@ This helps us resolve issues faster.
 
 To keep the project consistent:
 
-* Follow standard **Python/Bash/Go** conventions (depending on the file).
+* Follow standard **Go** conventions; each component has its own `Makefile` with `fmt`, `vet`, and `lint` targets.
+* Build and test from the repository root with `make build` and `make test`, or target a single component (e.g. `make operator-test`). Run `make help` for the full list.
 * Keep code **readable and well-documented**.
 * Write **small, focused commits**.
 * Add or update **tests** where applicable.
-* Run linting/formatting tools if defined (we may add CI checks in the future).
 
 ## ✅ Pull Request Checklist
 
 Before submitting, please ensure:
 
-* [ ] Code builds and runs locally
-* [ ] Changes are tested (unit or integration tests where possible)
+* [ ] Code builds and runs locally (`make build`)
+* [ ] Changes are tested (`make test`; add unit or integration tests where possible)
+* [ ] Code is formatted and passes lint/vet (`make fmt lint vet`)
 * [ ] Documentation updated if required
 * [ ] Commit message(s) are descriptive
 * [ ] PR references related issues (e.g. "Fixes #123")
@@ -95,7 +99,7 @@ Before submitting, please ensure:
 
 If you’re unsure about anything, feel free to:
 
-* Create an [Issue](https://github.com/simplyblock/simplyblock-csi/issues)
+* Create an [Issue](https://github.com/simplyblock/simplyblock-operator/issues)
 * Reach out via the simplyblock community
 
-💡 Together, we can make **simplyblock-csi** the best NVMe-first storage plugin for Kubernetes!
+💡 Together, we can make **simplyblock** the best NVMe-first storage platform for Kubernetes!

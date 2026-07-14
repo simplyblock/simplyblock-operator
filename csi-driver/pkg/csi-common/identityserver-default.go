@@ -31,7 +31,10 @@ type DefaultIdentityServer struct {
 	csi.UnimplementedIdentityServer
 }
 
-func (ids *DefaultIdentityServer) GetPluginInfo(ctx context.Context, req *csi.GetPluginInfoRequest) (*csi.GetPluginInfoResponse, error) {
+func (ids *DefaultIdentityServer) GetPluginInfo(
+	ctx context.Context,
+	req *csi.GetPluginInfoRequest,
+) (*csi.GetPluginInfoResponse, error) {
 	klog.V(5).Infof("Using default GetPluginInfo")
 
 	if ids.Driver.name == "" {
@@ -52,7 +55,10 @@ func (ids *DefaultIdentityServer) Probe(ctx context.Context, req *csi.ProbeReque
 	return &csi.ProbeResponse{}, nil
 }
 
-func (ids *DefaultIdentityServer) GetPluginCapabilities(ctx context.Context, req *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error) {
+func (ids *DefaultIdentityServer) GetPluginCapabilities(
+	ctx context.Context,
+	req *csi.GetPluginCapabilitiesRequest,
+) (*csi.GetPluginCapabilitiesResponse, error) {
 	klog.V(5).Infof("Using default capabilities")
 	return &csi.GetPluginCapabilitiesResponse{
 		Capabilities: []*csi.PluginCapability{

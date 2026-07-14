@@ -34,7 +34,10 @@ func newIdentityServer(d *csicommon.CSIDriver) *identityServer {
 	}
 }
 
-func (ids *identityServer) GetPluginCapabilities(_ context.Context, _ *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error) {
+func (ids *identityServer) GetPluginCapabilities(
+	_ context.Context,
+	_ *csi.GetPluginCapabilitiesRequest,
+) (*csi.GetPluginCapabilitiesResponse, error) {
 	return &csi.GetPluginCapabilitiesResponse{
 		Capabilities: []*csi.PluginCapability{
 			{

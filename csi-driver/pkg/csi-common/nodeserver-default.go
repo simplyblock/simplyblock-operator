@@ -31,15 +31,24 @@ type DefaultNodeServer struct {
 	csi.UnimplementedNodeServer
 }
 
-func (ns *DefaultNodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+func (ns *DefaultNodeServer) NodePublishVolume(
+	ctx context.Context,
+	req *csi.NodePublishVolumeRequest,
+) (*csi.NodePublishVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
-func (ns *DefaultNodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
+func (ns *DefaultNodeServer) NodeUnpublishVolume(
+	ctx context.Context,
+	req *csi.NodeUnpublishVolumeRequest,
+) (*csi.NodeUnpublishVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
-func (ns *DefaultNodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
+func (ns *DefaultNodeServer) NodeGetInfo(
+	ctx context.Context,
+	req *csi.NodeGetInfoRequest,
+) (*csi.NodeGetInfoResponse, error) {
 	klog.V(5).Infof("Using default NodeGetInfo")
 
 	return &csi.NodeGetInfoResponse{
@@ -47,7 +56,10 @@ func (ns *DefaultNodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetIn
 	}, nil
 }
 
-func (ns *DefaultNodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+func (ns *DefaultNodeServer) NodeGetCapabilities(
+	ctx context.Context,
+	req *csi.NodeGetCapabilitiesRequest,
+) (*csi.NodeGetCapabilitiesResponse, error) {
 	klog.V(5).Infof("Using default NodeGetCapabilities")
 
 	return &csi.NodeGetCapabilitiesResponse{
@@ -63,18 +75,30 @@ func (ns *DefaultNodeServer) NodeGetCapabilities(ctx context.Context, req *csi.N
 	}, nil
 }
 
-func (ns *DefaultNodeServer) NodeGetVolumeStats(ctx context.Context, in *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
+func (ns *DefaultNodeServer) NodeGetVolumeStats(
+	ctx context.Context,
+	in *csi.NodeGetVolumeStatsRequest,
+) (*csi.NodeGetVolumeStatsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
-func (ns *DefaultNodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+func (ns *DefaultNodeServer) NodeStageVolume(
+	ctx context.Context,
+	req *csi.NodeStageVolumeRequest,
+) (*csi.NodeStageVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
-func (ns *DefaultNodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+func (ns *DefaultNodeServer) NodeUnstageVolume(
+	ctx context.Context,
+	req *csi.NodeUnstageVolumeRequest,
+) (*csi.NodeUnstageVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
-func (ns *DefaultNodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
+func (ns *DefaultNodeServer) NodeExpandVolume(
+	ctx context.Context,
+	req *csi.NodeExpandVolumeRequest,
+) (*csi.NodeExpandVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "")
 }

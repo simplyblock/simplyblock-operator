@@ -7,10 +7,20 @@ ARG TARGETOS
 ARG TARGETARCH
 
 WORKDIR /workspace
-COPY go.mod go.sum ./
+
+# Build context is the repo root. atlas is a sibling module consumed via a local
+# replace (../atlas-lib), so it must sit next to the csi module. Copy only its
+# manifests before go mod download: the download needs atlas-lib's go.mod/go.sum to
+# build the module graph, not its source (local-path replacements are never
+# downloaded). Copying the full tree here would invalidate the download layer on any
+# atlas-lib source change.
+COPY atlas-lib/go.mod atlas-lib/go.sum /atlas-lib/
+
+COPY csi-driver/go.mod csi-driver/go.sum ./
 RUN go mod download
-COPY cmd/ cmd/
-COPY pkg/ pkg/
+COPY atlas-lib/ /atlas-lib/
+COPY csi-driver/cmd/ cmd/
+COPY csi-driver/pkg/ pkg/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o spdkcsi ./cmd/
 
 FROM simplyblock/spdkcsi:base_image_e2fsprogs

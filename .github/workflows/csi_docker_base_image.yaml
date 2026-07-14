@@ -47,7 +47,7 @@ jobs:
         docker buildx build --platform linux/amd64,linux/arm64 \
         -t simplyblock/spdkcsi:base_image_e2fsprogs \
         -t public.ecr.aws/simply-block/spdkcsi:base_image_e2fsprogs \
-        -f deploy/image/Dockerfile_base . --push
+        -f deploy/image/Dockerfile_base .. --push
         echo "::notice title=Docker.com::simplyblock/spdkcsi:base_image_e2fsprogs
         echo "::notice title=AWS-ECR::public.ecr.aws/simply-block/spdkcsi:base_image_e2fsprogs
         
