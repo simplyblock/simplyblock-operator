@@ -206,7 +206,6 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		log.Error(err, "failed to reconcile StorageNode CRs")
 	}
 
-
 	if res, err := r.reconcileWorkerNodes(ctx, snCR, clusterUUID, apiClient, expectedPerHost); err != nil || res.RequeueAfter > 0 {
 		return res, err
 	}
