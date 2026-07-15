@@ -305,7 +305,7 @@ func (r *StorageNodeReconciler) provisionNode(
 	// would reduce FDB fault tolerance. If this worker hosts an FDB pod and any
 	// other FDB worker in the same StorageNodeSet is currently in-flight, block.
 	if r.isWorkerFDB(ctx, sn.Namespace, sn.Spec.WorkerNode) {
-		if blocked, err := r.isFDBWorkerBlocked(ctx, sn, sns); err == nil && blocked {
+		if blocked, err := r.isFDBWorkerBlocked(ctx, sn); err == nil && blocked {
 			log.Info("FDB worker: another FDB node is in-flight, requeuing sequentially",
 				"worker", sn.Spec.WorkerNode)
 			return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
@@ -389,7 +389,6 @@ func (r *StorageNodeReconciler) isWorkerFDB(ctx context.Context, namespace, work
 func (r *StorageNodeReconciler) isFDBWorkerBlocked(
 	ctx context.Context,
 	sn *simplyblockv1alpha1.StorageNode,
-	sns *simplyblockv1alpha1.StorageNodeSet,
 ) (bool, error) {
 	var snList simplyblockv1alpha1.StorageNodeList
 	if err := r.List(ctx, &snList,
