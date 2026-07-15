@@ -58,6 +58,7 @@ RUN dnf update -y --nogpgcheck && \
         fio \
         nvme-cli \
         sudo \
+    && dnf remove -y python3-urllib3 python3-requests python3-idna --nogpgcheck \
     && dnf clean all
 
 COPY --from=builder /workspace/simplyblock-rebalancer /usr/local/bin/simplyblock-rebalancer
