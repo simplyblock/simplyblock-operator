@@ -2280,6 +2280,7 @@ spec:
                   type: string
                 maxItems: 200
                 type: array
+                x-kubernetes-list-type: set
             required:
             - clusterName
             type: object
@@ -2479,9 +2480,6 @@ spec:
         - message: nodeConfigs keys must match a workerNode entry
           rule: '!has(self.spec.nodeConfigs) || self.spec.nodeConfigs.all(k, self.spec.workerNodes.exists(w,
             w == k))'
-        - message: workerNodes must not contain duplicate entries
-          rule: '!has(self.spec.workerNodes) || self.spec.workerNodes.all(w, self.spec.workerNodes.filter(x,
-            x == w).size() == 1)'
     served: true
     storage: true
     subresources:

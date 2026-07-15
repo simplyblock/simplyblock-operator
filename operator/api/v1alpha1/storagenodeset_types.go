@@ -99,6 +99,7 @@ type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Worker Nodes"
 	// WorkerNodes is the set of Kubernetes worker nodes to manage.
 	// +kubebuilder:validation:MaxItems=200
+	// +listType=set
 	WorkerNodes []string `json:"workerNodes,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="OpenShift Cluster"
 	// OpenShiftCluster indicates OpenShift-specific behavior should be enabled.
@@ -341,7 +342,6 @@ type ActionStatus struct {
 // +kubebuilder:printcolumn:name="Removed",type=integer,JSONPath=".status.removedNodes",priority=1
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k, self.spec.nodeFailureDomains[k] >= 1)",message="all nodeFailureDomains values must be >= 1 (failure-domain group index)"
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.nodeConfigs) || self.spec.nodeConfigs.all(k, self.spec.workerNodes.exists(w, w == k))",message="nodeConfigs keys must match a workerNode entry"
-// +kubebuilder:validation:XValidation:rule="!has(self.spec.workerNodes) || self.spec.workerNodes.all(w, self.spec.workerNodes.filter(x, x == w).size() == 1)",message="workerNodes must not contain duplicate entries"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Storage Node",resources={{ServiceAccount,v1,simplyblock-storage-node},{Service,v1,simplyblock-storage-node},{DaemonSet,v1,simplyblock-storage-node},{ClusterRole,v1,simplyblock-storage-node},{ClusterRoleBinding,v1,simplyblock-storage-node}}
 // StorageNodeSet is the Schema for the storagenodesets API
 type StorageNodeSet struct {
