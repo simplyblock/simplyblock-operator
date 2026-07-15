@@ -200,6 +200,11 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		log.Error(err, "failed to reconcile StorageNode CRs")
 	}
 
+	// Reconcile per-node ConfigMap used by the DaemonSet init container.
+	if err := r.reconcilePerNodeConfigMap(ctx, snCR); err != nil {
+		log.Error(err, "failed to reconcile per-node ConfigMap")
+	}
+
 	if res, err := r.reconcileWorkerNodes(ctx, snCR, clusterUUID, apiClient, expectedPerHost); err != nil || res.RequeueAfter > 0 {
 		return res, err
 	}

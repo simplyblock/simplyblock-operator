@@ -291,10 +291,10 @@ func TestStorageNodeSetDaemonSetReconcileTLSEnabled(t *testing.T) {
 		t.Fatalf("expected projected sources for secret and ca configmap, got secret=%v ca=%v", gotSecret, gotCA)
 	}
 
-	if len(ds.Spec.Template.Spec.InitContainers) != 1 {
-		t.Fatalf("expected single init container")
+	if len(ds.Spec.Template.Spec.InitContainers) != 2 {
+		t.Fatalf("expected 2 init containers (node-env-writer + s-node-api-config-generator)")
 	}
-	checkTLSMounts(t, "init container", ds.Spec.Template.Spec.InitContainers[0].VolumeMounts)
+	checkTLSMounts(t, "init container", ds.Spec.Template.Spec.InitContainers[1].VolumeMounts)
 	if len(ds.Spec.Template.Spec.Containers) != 1 {
 		t.Fatalf("expected single main container")
 	}
@@ -351,10 +351,10 @@ func TestStorageNodeSetDaemonSetReconcileTLSCertManagerProvider(t *testing.T) {
 		t.Fatalf("expected Secret volume referencing simplyblock-storage-node-api-tls, got %#v", tlsVol.Secret)
 	}
 
-	if len(ds.Spec.Template.Spec.InitContainers) != 1 {
-		t.Fatalf("expected single init container")
+	if len(ds.Spec.Template.Spec.InitContainers) != 2 {
+		t.Fatalf("expected 2 init containers (node-env-writer + s-node-api-config-generator)")
 	}
-	checkTLSMounts(t, "init container", ds.Spec.Template.Spec.InitContainers[0].VolumeMounts)
+	checkTLSMounts(t, "init container", ds.Spec.Template.Spec.InitContainers[1].VolumeMounts)
 	if len(ds.Spec.Template.Spec.Containers) != 1 {
 		t.Fatalf("expected single main container")
 	}
