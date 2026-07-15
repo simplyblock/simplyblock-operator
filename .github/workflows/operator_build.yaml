@@ -14,17 +14,28 @@ on:
         required: false
         type: string
 
-env:
-  IMAGE_NAME: simplyblock/simplyblock-operator
-  ECR_IMAGE_NAME: simply-block/simplyblock-operator
-  REBALANCER_IMAGE_NAME: simplyblock/simplyblock-rebalancer
-  ECR_REBALANCER_IMAGE_NAME: simply-block/simplyblock-rebalancer
-
 jobs:
   build-and-push:
+    name: "Build and push (${{ matrix.name }})"
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: operator
+            dockerfile: operator/Dockerfile
+            image_name: simplyblock/simplyblock-operator
+            ecr_image_name: simply-block/simplyblock-operator
+            build_args: |
+              VERSION=0.1.0
+              RELEASE=1
+          - name: rebalancer
+            dockerfile: operator/Dockerfile.simplyblock-rebalancer
+            image_name: simplyblock/simplyblock-rebalancer
+            ecr_image_name: simply-block/simplyblock-rebalancer
+            build_args: ""
 
     steps:
       - name: Checkout repository
@@ -52,31 +63,24 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Build and push multi-arch operator image (DockerHub + ECR)
+      - name: Compute image tag
+        id: image_tag
+        # Docker tags cannot contain "/", but branch names (e.g. feature/foo) can —
+        # sanitize before using the ref name as a tag.
+        run: |
+          version="${{ inputs.version || github.ref_name }}"
+          echo "tag=${version//\//-}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push multi-arch ${{ matrix.name }} image (DockerHub + ECR)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
-          file: operator/Dockerfile
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.IMAGE_NAME }}:${{ inputs.version || github.ref_name }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_IMAGE_NAME }}:${{ inputs.version || github.ref_name }}
-          build-args: |
-            VERSION=0.1.0
-            RELEASE=1
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push simplyblock-rebalancer multi-arch image (DockerHub + ECR)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: operator/Dockerfile.simplyblock-rebalancer
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.REBALANCER_IMAGE_NAME }}:${{ inputs.version || github.ref_name }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REBALANCER_IMAGE_NAME }}:${{ inputs.version || github.ref_name }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ matrix.image_name }}:${{ steps.image_tag.outputs.tag }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ matrix.ecr_image_name }}:${{ steps.image_tag.outputs.tag }}
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
