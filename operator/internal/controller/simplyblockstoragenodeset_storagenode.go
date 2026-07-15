@@ -93,9 +93,44 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 		}
 	}
 
+	// Determine which workers host FDB pods — these must be added sequentially.
+	fdbWorkers := r.fdbWorkerSet(ctx, sns)
+
+	// Track whether any FDB worker's StorageNode CR is still awaiting its UUID.
+	// If so, stop creating new FDB CRs — the StorageNodeReconciler will POST
+	// the current one and we wait until it comes online before creating the next.
+	fdbInFlight := false
+	for _, sn := range owned.Items {
+		if !fdbWorkers[sn.Spec.WorkerNode] {
+			continue
+		}
+		if sn.Status.UUID == "" {
+			fdbInFlight = true
+			break
+		}
+	}
+
 	// Create or sync each expected (worker, socket).
 	for _, worker := range sns.Spec.WorkerNodes {
 		for _, socket := range sockets {
+			// For FDB workers: only create the next CR when no other FDB
+			// worker is still being provisioned (UUID not yet assigned).
+			if fdbWorkers[worker] && fdbInFlight {
+				// Check if THIS worker already has a CR (already in progress or done).
+				crName := storageNodeCRName(sns.Name, worker, socket)
+				alreadyExists := false
+				for _, sn := range owned.Items {
+					if sn.Name == crName {
+						alreadyExists = true
+						break
+					}
+				}
+				if !alreadyExists {
+					log.Info("FDB worker: deferring StorageNode CR creation until previous FDB node is online",
+						"worker", worker)
+					continue // skip — revisit on next reconcile
+				}
+			}
 			if err := r.ensureStorageNodeCR(ctx, sns, worker, socket); err != nil {
 				log.Error(err, "failed to ensure StorageNode CR", "worker", worker, "socket", socket)
 			}
