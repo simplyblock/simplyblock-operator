@@ -44,6 +44,31 @@ non-destructive), or **E2E** (live cluster, may remove/modify nodes).
 | `TestResolveOpsSystemVolumeFilter_UsesCustomPattern` | Custom regex overrides default |
 | `TestResolveOpsSystemVolumeFilter_InvalidPatternReturnsError` | Invalid regex returns error |
 
+### `simplyblockstoragenodeset_storagenode_unit_test.go`
+
+| Test | Scenario |
+|---|---|
+| `TestStorageNodeCRName_SimpleCase` | Name is non-empty, ≤ 63 chars, lowercase |
+| `TestStorageNodeCRName_TruncatesLongNames` | Long worker hostnames truncated to 63 chars |
+| `TestStorageNodeCRName_CollisionGuard` | Two workers with shared long prefix produce distinct names |
+| `TestStorageNodeCRName_IsDNSLabelSafe` | Generated name contains only valid DNS characters |
+| `TestSanitiseDNSLabel_ReplacesInvalidChars` | Uppercase and underscores replaced |
+| `TestSanitiseDNSLabel_StripsLeadingTrailingHyphens` | Leading/trailing hyphens stripped |
+| `TestBuildPerNodeEnvFile_UsesFleetDefaults` | Fleet-level values appear in env file |
+| `TestBuildPerNodeEnvFile_OverrideWinsOverFleet` | Per-node override beats fleet default |
+| `TestBuildPerNodeEnvFile_WorkerNotInNodeConfigs_UsesFleet` | Worker absent from nodeConfigs gets fleet values |
+| `TestBuildPerNodeEnvFile_ContainsAllRequiredKeys` | All required env keys present |
+| `TestCountInFlightNodes_ZeroWhenNonePosted` | Returns 0 when no siblings have PostedAt set |
+| `TestCountInFlightNodes_CountsSiblingsWithPostedAtAndNoUUID` | Counts only in-flight siblings (PostedAt set, UUID empty) |
+| `TestCountInFlightNodes_ExcludesSelf` | Self not counted in in-flight total |
+| `TestSyncUUIDFromNodeSet_CopiesUUIDWhenFound` | UUID and status copied from StorageNodeSet.status.nodes[] |
+| `TestSyncUUIDFromNodeSet_NoopWhenWorkerNotInNodes` | UUID stays empty when worker absent from status.nodes[] |
+| `TestSyncUUIDFromNodeSet_SkipsEmptyUUID` | Placeholder entry (UUID="") skipped |
+| `TestSyncManualStorageNodeStatus_AddsManualNodeToSNSStatus` | Manual StorageNode UUID added to StorageNodeSet.status.nodes[] |
+| `TestSyncManualStorageNodeStatus_SkipsUnprovisionedNodes` | Node without UUID not added |
+| `TestSyncManualStorageNodeStatus_SkipsWorkerInSpecWorkerNodes` | Operator-managed nodes not duplicated |
+| `TestSyncManualStorageNodeStatus_IdempotentOnSecondCall` | Second call does not duplicate the entry |
+
 ### `simplyblockstoragenodeset_drain_unit_test.go` (standalone helpers)
 
 | Test | Scenario |
