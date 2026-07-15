@@ -109,7 +109,7 @@ func TestBuildStorageNodeSetDaemonSetUserResourcesOverrideDefaults(t *testing.T)
 		t.Errorf("main container: expected user memory limit 4Gi, got %v", mainMem.String())
 	}
 
-	init := ds.Spec.Template.Spec.InitContainers[0]
+	init := ds.Spec.Template.Spec.InitContainers[1] // [0]=node-env-writer, [1]=s-node-api-config-generator
 	initMem := init.Resources.Limits[corev1.ResourceMemory]
 	if initMem.String() != "128Mi" {
 		t.Errorf("init container: expected user memory limit 128Mi, got %v", initMem.String())

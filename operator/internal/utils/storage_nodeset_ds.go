@@ -78,6 +78,16 @@ eval sudo -E python3 simplyblock_web/node_configure.py ${ARGS}
 `
 	initCmd := []string{"sh", "-c", initScript}
 
+	// nodeEnvWriterScript copies the per-node env file from the mounted ConfigMap
+	// (keyed by hostname) into the shared node-env emptyDir volume.
+	nodeEnvWriterScript := `mkdir -p /etc/node-env
+if [ -f /etc/per-node-config/${HOSTNAME} ]; then
+  cp /etc/per-node-config/${HOSTNAME} /etc/node-env/env.sh
+else
+  touch /etc/node-env/env.sh
+fi`
+	nodeEnvWriterCmd := []string{"sh", "-c", nodeEnvWriterScript}
+
 	imagePullPolicy := sn.Spec.ImagePullPolicy
 	if imagePullPolicy == "" {
 		imagePullPolicy = corev1.PullAlways
@@ -284,21 +294,15 @@ eval sudo -E python3 simplyblock_web/node_configure.py ${ARGS}
 						// so both the config-generator and the main container can source it.
 						{
 							Name:            "node-env-writer",
-							Image:           "busybox:1.36",
-							ImagePullPolicy: corev1.PullIfNotPresent,
-							Command: []string{"sh", "-c",
-								`mkdir -p /etc/node-env
-if [ -f /etc/per-node-config/${HOSTNAME} ]; then
-  cp /etc/per-node-config/${HOSTNAME} /etc/node-env/env.sh
-else
-  touch /etc/node-env/env.sh
-fi`,
-							},
+							Image:           image,
+							ImagePullPolicy: imagePullPolicy,
+							Command:         nodeEnvWriterCmd,
 							Env: []corev1.EnvVar{
 								{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 								}},
 							},
+							Resources: effectiveResources(sn.Spec.InitContainerResources, defaultInitContainerResources),
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "per-node-config", MountPath: "/etc/per-node-config", ReadOnly: true},
 								nodeEnvMount,
