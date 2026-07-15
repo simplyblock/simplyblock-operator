@@ -286,6 +286,84 @@ func (r *StorageNodeSetReconciler) emitOnStorageNodeForWorker(
 	}
 }
 
+// syncManualStorageNodeStatus merges manually created StorageNode CRs (those
+// without a controller OwnerReference pointing to this StorageNodeSet, i.e.
+// not in spec.workerNodes) into StorageNodeSet.status.nodes[] so their status
+// is visible in the fleet view alongside operator-managed nodes.
+func (r *StorageNodeSetReconciler) syncManualStorageNodeStatus(
+	ctx context.Context,
+	sns *simplyblockv1alpha1.StorageNodeSet,
+) error {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList,
+		client.InNamespace(sns.Namespace),
+		client.MatchingFields{"spec.storageNodeSetRef": sns.Name},
+	); err != nil {
+		return err
+	}
+
+	// Build a set of workers already covered by spec.workerNodes.
+	managed := make(map[string]struct{}, len(sns.Spec.WorkerNodes))
+	for _, w := range sns.Spec.WorkerNodes {
+		managed[w] = struct{}{}
+	}
+
+	changed := false
+	patch := client.MergeFrom(sns.DeepCopy())
+
+	for _, sn := range snList.Items {
+		if _, ok := managed[sn.Spec.WorkerNode]; ok {
+			continue // already tracked by reconcileWorkerNodes
+		}
+		if sn.Status.UUID == "" {
+			continue // not yet provisioned
+		}
+
+		// Check if this node is already in status.nodes[].
+		found := false
+		for i := range sns.Status.Nodes {
+			if sns.Status.Nodes[i].UUID == sn.Status.UUID {
+				// Update in-place if fields changed.
+				n := &sns.Status.Nodes[i]
+				if n.Status != sn.Status.Status || n.Health != sn.Status.Health {
+					n.Status = sn.Status.Status
+					n.Health = sn.Status.Health
+					n.MgmtIp = sn.Status.MgmtIp
+					n.Hostname = sn.Status.Hostname
+					n.CPU = sn.Status.CPU
+					n.Volumes = sn.Status.Volumes
+					n.RpcPort = sn.Status.RpcPort
+					n.LvolPort = sn.Status.LvolPort
+					n.NvmfPort = sn.Status.NvmfPort
+					changed = true
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			sns.Status.Nodes = append(sns.Status.Nodes, simplyblockv1alpha1.NodeStatus{
+				Hostname: sn.Spec.WorkerNode,
+				UUID:     sn.Status.UUID,
+				Status:   sn.Status.Status,
+				Health:   sn.Status.Health,
+				MgmtIp:   sn.Status.MgmtIp,
+				CPU:      sn.Status.CPU,
+				Volumes:  sn.Status.Volumes,
+				RpcPort:  sn.Status.RpcPort,
+				LvolPort: sn.Status.LvolPort,
+				NvmfPort: sn.Status.NvmfPort,
+			})
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+	return r.Status().Patch(ctx, sns, patch)
+}
+
 // storageNodePostedAt returns the PostedAt timestamp from the StorageNode CR
 // for the given worker, or nil if not found / not yet set.
 func (r *StorageNodeSetReconciler) storageNodePostedAt(

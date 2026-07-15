@@ -214,6 +214,12 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		log.Error(err, "Failed to sync storage node status")
 	}
 
+	// Sync manually created StorageNode CRs (not in spec.workerNodes) into
+	// StorageNodeSet.status.nodes[] so their status is visible in the fleet view.
+	if err := r.syncManualStorageNodeStatus(ctx, snCR); err != nil {
+		log.Error(err, "Failed to sync manual StorageNode status")
+	}
+
 	// On every reconcile, check whether the cluster is still unready and if
 	// the activation conditions are now met. This catches cases where the
 	// operator restarted after nodes came online but before activation fired,

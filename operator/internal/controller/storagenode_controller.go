@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -113,19 +114,117 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	apiClient := webapi.NewClient()
 
 	if sn.Status.UUID == "" {
-		// Check if the old StorageNodeSetReconciler already provisioned this node
-		// (present in status.nodes[]) — adopt its UUID to avoid a double POST.
+		// Fast path: old StorageNodeSetReconciler recorded UUID in status.nodes[].
 		if err := r.syncUUIDFromNodeSet(ctx, &sn, &sns); err != nil {
 			return ctrl.Result{}, err
 		}
+
+		if sn.Status.UUID == "" && sn.Status.PostedAt != nil {
+			// POST already sent but UUID not in status.nodes[] — this happens for
+			// manually created StorageNodes whose worker is not in spec.workerNodes.
+			// Poll the backend by worker IP to retrieve the UUID directly.
+			if err := r.pollUUIDFromBackend(ctx, &sn, clusterUUID, apiClient); err != nil {
+				return ctrl.Result{}, err
+			}
+			if sn.Status.UUID == "" {
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+		}
+
 		if sn.Status.UUID == "" {
-			// Not yet provisioned — this reconciler is now the sole owner of the POST.
 			return r.provisionNode(ctx, &sn, &sns, clusterUUID, apiClient)
 		}
 	}
 
 	// Node provisioned → sync status periodically.
 	return r.syncStatus(ctx, &sn, clusterUUID, apiClient)
+}
+
+// pollUUIDFromBackend lists all backend nodes for the cluster, finds the ones
+// matching the worker's internal IP, and assigns the UUID to this StorageNode
+// based on its socketIndex. For multi-socket workers (multiple nodes per IP),
+// backend nodes are sorted by RPC port (ascending) and matched by position
+// to the socketIndex — socket 0 → lowest RPC port, socket 1 → next, etc.
+// Called every 10s while PostedAt is set but UUID is still empty; stops as
+// soon as the UUID is assigned.
+func (r *StorageNodeReconciler) pollUUIDFromBackend(
+	ctx context.Context,
+	sn *simplyblockv1alpha1.StorageNode,
+	clusterUUID string,
+	apiClient *webapi.Client,
+) error {
+	log := logf.FromContext(ctx)
+
+	ip, err := getNodeInternalIP(ctx, r.Client, sn.Spec.WorkerNode)
+	if err != nil {
+		log.V(1).Info("pollUUIDFromBackend: could not get worker IP, retrying",
+			"worker", sn.Spec.WorkerNode, "error", err.Error())
+		return nil
+	}
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
+	body, httpStatus, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil || httpStatus >= 300 {
+		return nil // transient — requeue silently
+	}
+
+	var allNodes []SNODEAPIResponse
+	if err := json.Unmarshal(body, &allNodes); err != nil {
+		return nil
+	}
+
+	// Collect all backend nodes for this worker's IP.
+	// Multi-socket: one backend node per socket, each with a different RPC port.
+	var matching []SNODEAPIResponse
+	for _, n := range allNodes {
+		if n.IP == ip && n.UUID != "" {
+			matching = append(matching, n)
+		}
+	}
+	if len(matching) == 0 {
+		return nil // node not yet visible on backend — requeue
+	}
+
+	// Sort by RPC port ascending: socket 0 → lowest port, socket 1 → next, etc.
+	slices.SortFunc(matching, func(a, b SNODEAPIResponse) int {
+		return a.RPC_PORT - b.RPC_PORT
+	})
+
+	socketIdx := 0
+	if sn.Spec.SocketIndex != nil {
+		socketIdx = int(*sn.Spec.SocketIndex)
+	}
+	if socketIdx >= len(matching) {
+		log.V(1).Info("pollUUIDFromBackend: socket not yet online",
+			"worker", sn.Spec.WorkerNode, "socketIndex", socketIdx, "found", len(matching))
+		return nil
+	}
+	n := matching[socketIdx]
+
+	cpu := int32(n.CPU)
+	volumes := int32(n.Volumes)
+	rpcPort := int32(n.RPC_PORT)
+	lvolPort := int32(n.LVOL_PORT)
+	nvmfPort := int32(n.NVMF_PORT)
+
+	patch := client.MergeFrom(sn.DeepCopy())
+	sn.Status.UUID = n.UUID
+	sn.Status.Status = n.Status
+	sn.Status.Health = n.Health
+	sn.Status.MgmtIp = n.IP
+	sn.Status.Hostname = n.Hostname
+	sn.Status.CPU = &cpu
+	sn.Status.Volumes = &volumes
+	sn.Status.RpcPort = &rpcPort
+	sn.Status.LvolPort = &lvolPort
+	sn.Status.NvmfPort = &nvmfPort
+	if err := r.Status().Patch(ctx, sn, patch); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("pollUUIDFromBackend: %w", err)
+	}
+	log.Info("pollUUIDFromBackend: UUID assigned",
+		"worker", sn.Spec.WorkerNode, "socketIndex", socketIdx,
+		"uuid", n.UUID, "status", n.Status)
+	return nil
 }
 
 // syncUUIDFromNodeSet copies the backend UUID from StorageNodeSet.status.nodes[]
