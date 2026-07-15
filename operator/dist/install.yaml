@@ -2474,6 +2474,12 @@ spec:
             index)
           rule: '!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k,
             self.spec.nodeFailureDomains[k] >= 1)'
+        - message: nodeConfigs keys must match a workerNode entry
+          rule: '!has(self.spec.nodeConfigs) || self.spec.nodeConfigs.all(k, self.spec.workerNodes.exists(w,
+            w == k))'
+        - message: workerNodes must not contain duplicate entries
+          rule: '!has(self.spec.workerNodes) || self.spec.workerNodes.all(w, self.spec.workerNodes.filter(x,
+            x == w).size() == 1)'
     served: true
     storage: true
     subresources:
