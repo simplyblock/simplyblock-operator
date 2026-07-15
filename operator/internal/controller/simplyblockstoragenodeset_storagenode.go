@@ -38,6 +38,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // reconcileStorageNodeCRs creates a StorageNode CR for every (worker, socket)
@@ -169,7 +170,7 @@ func (r *StorageNodeSetReconciler) aggregateStorageNodeStatus(
 	var online, offline, suspended, creating, removed int
 	for _, sn := range owned.Items {
 		switch sn.Status.Status {
-		case "online":
+		case utils.NodeStatusOnline:
 			online++
 		case "offline":
 			offline++

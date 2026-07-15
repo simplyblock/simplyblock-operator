@@ -78,7 +78,7 @@ func TestStorageNodeCRName_CollisionGuard(t *testing.T) {
 func TestStorageNodeCRName_IsDNSLabelSafe(t *testing.T) {
 	name := storageNodeCRName("my-sns", "vm01.simplyblock3.localdomain", "0")
 	for _, c := range name {
-		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.') {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '.' {
 			t.Errorf("invalid character %q in name %q", c, name)
 		}
 	}

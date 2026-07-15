@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 )
@@ -27,15 +28,24 @@ func newSNReconciler(t *testing.T, objects ...client.Object) *StorageNodeReconci
 		simplyblockv1alpha1.AddToScheme,
 		corev1.AddToScheme,
 	)
-	cl := newTestClient(t, scheme,
-		[]client.Object{
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(
 			&simplyblockv1alpha1.StorageNode{},
 			&simplyblockv1alpha1.StorageNodeOps{},
 			&simplyblockv1alpha1.StorageCluster{},
 			&simplyblockv1alpha1.StorageNodeSet{},
-		},
-		objects...,
-	)
+		).
+		WithObjects(objects...).
+		WithIndex(&simplyblockv1alpha1.StorageNode{}, "spec.storageNodeSetRef", func(obj client.Object) []string {
+			sn := obj.(*simplyblockv1alpha1.StorageNode)
+			return []string{sn.Spec.StorageNodeSetRef}
+		}).
+		WithIndex(&simplyblockv1alpha1.StorageNode{}, "spec.workerNode", func(obj client.Object) []string {
+			sn := obj.(*simplyblockv1alpha1.StorageNode)
+			return []string{sn.Spec.WorkerNode}
+		}).
+		Build()
 	return &StorageNodeReconciler{
 		Client:   cl,
 		Scheme:   scheme,
