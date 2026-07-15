@@ -72,10 +72,15 @@ spec:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             privileged: false
-          {{- if .Values.tls.enabled }}
           volumeMounts:
+            # The webhook serving cert is written at runtime to controller-runtime's
+            # default location under /tmp. With readOnlyRootFilesystem the root fs
+            # (including /tmp) is read-only, so this must be a writable volume.
+            - mountPath: /tmp/k8s-webhook-server/serving-certs
+              name: webhook-certs
+            {{- if .Values.tls.enabled }}
             {{- include "simplyblock.tlsVolumeMount" . | nindent 12 }}
-          {{- end }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -88,10 +93,12 @@ spec:
               port: 8081
             initialDelaySeconds: 5
             periodSeconds: 10
-      {{- if .Values.tls.enabled }}
       volumes:
+        - name: webhook-certs
+          emptyDir: {}
+        {{- if .Values.tls.enabled }}
         {{- include "simplyblock.clientTlsVolume" (dict "ctx" . "clientSecret" "simplyblock-operator-client-tls") | nindent 8 }}
-      {{- end }}
+        {{- end }}
       terminationGracePeriodSeconds: 10
 
 ################# ROLE AND ROLE BINDING ##############################
