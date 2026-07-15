@@ -15,6 +15,7 @@ import (
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -174,7 +175,7 @@ func CountOnlineHealthyNodes(
 ) int {
 	count := 0
 	for _, n := range nodes {
-		if n.Status == "online" && n.Health {
+		if n.Status == utils.NodeStatusOnline && n.Health {
 			count++
 		}
 	}

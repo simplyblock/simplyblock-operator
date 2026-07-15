@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 const (
@@ -228,7 +229,7 @@ func TestSyncUUIDFromNodeSet_CopiesUUIDWhenFound(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "sns", Namespace: snsTestNS},
 		Status: simplyblockv1alpha1.StorageNodeSetStatus{
 			Nodes: []simplyblockv1alpha1.NodeStatus{
-				{Hostname: snTestWorker, UUID: "backend-uuid-123", Status: "online", Health: true},
+				{Hostname: snTestWorker, UUID: "backend-uuid-123", Status: utils.NodeStatusOnline, Health: true},
 			},
 		},
 	}
@@ -243,7 +244,7 @@ func TestSyncUUIDFromNodeSet_CopiesUUIDWhenFound(t *testing.T) {
 	if updated.Status.UUID != "backend-uuid-123" {
 		t.Errorf("UUID not synced: got %q", updated.Status.UUID)
 	}
-	if updated.Status.Status != "online" {
+	if updated.Status.Status != utils.NodeStatusOnline {
 		t.Errorf("status not synced: got %q", updated.Status.Status)
 	}
 }
@@ -300,7 +301,7 @@ func TestSyncManualStorageNodeStatus_AddsManualNodeToSNSStatus(t *testing.T) {
 	// A StorageNode without OwnerReference (manual) that has a UUID
 	sn := newStorageNode("manual-sn", snsTestNS, "sns", "manual-worker.example.com")
 	sn.Status.UUID = "manual-uuid-456"
-	sn.Status.Status = "online"
+	sn.Status.Status = utils.NodeStatusOnline
 	sn.Status.Health = true
 
 	sns := &simplyblockv1alpha1.StorageNodeSet{
@@ -321,7 +322,7 @@ func TestSyncManualStorageNodeStatus_AddsManualNodeToSNSStatus(t *testing.T) {
 	for _, n := range updated.Status.Nodes {
 		if n.UUID == "manual-uuid-456" {
 			found = true
-			if n.Status != "online" {
+			if n.Status != utils.NodeStatusOnline {
 				t.Errorf("status not synced: got %q", n.Status)
 			}
 		}
@@ -380,7 +381,7 @@ func TestSyncManualStorageNodeStatus_SkipsWorkerInSpecWorkerNodes(t *testing.T) 
 func TestSyncManualStorageNodeStatus_IdempotentOnSecondCall(t *testing.T) {
 	sn := newStorageNode("manual-sn", snsTestNS, "sns", "manual-worker.example.com")
 	sn.Status.UUID = "manual-uuid-789"
-	sn.Status.Status = "online"
+	sn.Status.Status = utils.NodeStatusOnline
 
 	sns := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sns", Namespace: snsTestNS},

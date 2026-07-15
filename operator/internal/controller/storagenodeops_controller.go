@@ -217,8 +217,8 @@ func (r *StorageNodeOpsReconciler) runSimpleAction(
 	// Poll node status until terminal.
 	terminalStatus := map[string]string{
 		"suspend":  utils.NodeStatusSuspended,
-		"resume":   "online",
-		"restart":  "online",
+		"resume":   utils.NodeStatusOnline,
+		"restart":  utils.NodeStatusOnline,
 		"shutdown": "offline",
 	}
 	want := terminalStatus[action]
