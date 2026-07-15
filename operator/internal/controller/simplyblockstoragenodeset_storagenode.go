@@ -70,10 +70,18 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 	}
 
 	// Delete stale CRs (worker removed from spec.workerNodes or socket removed).
+	// Manually created StorageNode CRs (no controller OwnerReference pointing to
+	// this StorageNodeSet) are preserved — they can reference the fleet config
+	// without being listed in spec.workerNodes.
 	for i := range owned.Items {
 		sn := &owned.Items[i]
 		key := workerSocket{sn.Spec.WorkerNode, socketLabel(sn.Spec.SocketIndex)}
 		if _, ok := expected[key]; ok {
+			continue
+		}
+		// Skip if this CR was not created by the operator (no controller owner).
+		owner := metav1.GetControllerOf(sn)
+		if owner == nil || owner.Name != sns.Name {
 			continue
 		}
 		if err := r.Delete(ctx, sn); err != nil && !apierrors.IsNotFound(err) {

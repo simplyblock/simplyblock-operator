@@ -72,6 +72,30 @@ func (r *StorageNodeSetReconciler) reconcilePerNodeConfigMap(
 		data[worker] = buildPerNodeEnvFile(sns, worker)
 	}
 
+	// Also include manually created StorageNode CRs that reference this StorageNodeSet
+	// but whose worker is not in spec.workerNodes. Their overrides are merged with
+	// fleet defaults so the DaemonSet init container gets the right per-node config.
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList,
+		client.InNamespace(sns.Namespace),
+		client.MatchingFields{"spec.storageNodeSetRef": sns.Name},
+	); err == nil {
+		for _, sn := range snList.Items {
+			if _, ok := data[sn.Spec.WorkerNode]; ok {
+				continue // already covered by spec.workerNodes
+			}
+			// Manually created: use its overrides on top of fleet defaults.
+			snsCopy := sns.DeepCopy()
+			if sn.Spec.Overrides != nil {
+				if snsCopy.Spec.NodeConfigs == nil {
+					snsCopy.Spec.NodeConfigs = make(map[string]simplyblockv1alpha1.StorageNodeOverrides)
+				}
+				snsCopy.Spec.NodeConfigs[sn.Spec.WorkerNode] = *sn.Spec.Overrides
+			}
+			data[sn.Spec.WorkerNode] = buildPerNodeEnvFile(snsCopy, sn.Spec.WorkerNode)
+		}
+	}
+
 	var existing corev1.ConfigMap
 	err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: sns.Namespace}, &existing)
 
