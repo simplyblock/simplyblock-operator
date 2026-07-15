@@ -167,6 +167,34 @@ func (r *StorageNodeSetReconciler) ensureStorageNodeCR(
 			return fmt.Errorf("creating StorageNode %s: %w", name, createErr)
 		}
 		log.Info("created StorageNode CR", "name", name, "worker", worker, "socket", socket)
+
+		// Backward compatibility: pre-populate UUID and status from the legacy
+		// StorageNodeSet.status.nodes[] so nodes that were already provisioned
+		// before the three-tier model are adopted immediately (no re-POST).
+		for i := range sns.Status.Nodes {
+			ns := &sns.Status.Nodes[i]
+			if ns.Hostname != worker || ns.UUID == "" {
+				continue
+			}
+			patch := client.MergeFrom(sn.DeepCopy())
+			sn.Status.UUID = ns.UUID
+			sn.Status.Status = ns.Status
+			sn.Status.Health = ns.Health
+			sn.Status.MgmtIp = ns.MgmtIp
+			sn.Status.Hostname = ns.Hostname
+			sn.Status.CPU = ns.CPU
+			sn.Status.Volumes = ns.Volumes
+			sn.Status.RpcPort = ns.RpcPort
+			sn.Status.LvolPort = ns.LvolPort
+			sn.Status.NvmfPort = ns.NvmfPort
+			if patchErr := r.Status().Patch(ctx, sn, patch); patchErr != nil {
+				log.Error(patchErr, "failed to pre-populate StorageNode status", "name", name)
+			} else {
+				log.Info("pre-populated StorageNode status from legacy nodes[]",
+					"name", name, "uuid", ns.UUID, "status", ns.Status)
+			}
+			break
+		}
 		return nil
 	}
 	if err != nil {
