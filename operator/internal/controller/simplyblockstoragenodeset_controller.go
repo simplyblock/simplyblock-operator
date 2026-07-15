@@ -421,7 +421,27 @@ func (r *StorageNodeSetReconciler) ensureFinalizer(
 }
 
 func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *simplyblockv1alpha1.StorageNodeSet) error {
-	for _, nodeName := range sn.Spec.WorkerNodes {
+	// Collect all workers: spec.workerNodes plus any manually created StorageNode CRs
+	// that reference this StorageNodeSet but are not in spec.workerNodes.
+	workers := make(map[string]struct{}, len(sn.Spec.WorkerNodes))
+	for _, w := range sn.Spec.WorkerNodes {
+		workers[w] = struct{}{}
+	}
+
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList,
+		client.InNamespace(sn.Namespace),
+		client.MatchingFields{"spec.storageNodeSetRef": sn.Name},
+	); err == nil {
+		for _, snCR := range snList.Items {
+			workers[snCR.Spec.WorkerNode] = struct{}{}
+		}
+	}
+
+	key := "io.simplyblock.node-type"
+	value := "simplyblock-storage-plane-" + sn.Spec.ClusterName
+
+	for nodeName := range workers {
 		var node corev1.Node
 		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
 			return err
@@ -430,9 +450,6 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *sim
 		if node.Labels == nil {
 			node.Labels = map[string]string{}
 		}
-
-		key := "io.simplyblock.node-type"
-		value := "simplyblock-storage-plane-" + sn.Spec.ClusterName
 
 		if node.Labels[key] == value {
 			continue
