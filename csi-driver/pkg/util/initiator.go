@@ -49,6 +49,14 @@ const (
 
 	// DefaultCtrlLossTmo is the NVMe-oF controller loss timeout in seconds.
 	DefaultCtrlLossTmo = 60
+
+	// nvmeQueryTimeoutSeconds bounds read-only "nvme list"/"nvme list-subsys"
+	// queries. MonitorConnection is a single, sequential loop with no
+	// concurrency of its own; without this timeout, a stuck nvme-cli/kernel
+	// call would block that goroutine forever, silently disabling path
+	// recovery and guardian broken-lvol detection for the rest of the
+	// process's life.
+	nvmeQueryTimeoutSeconds = 10
 )
 
 // SpdkCsiInitiator defines interface for NVMeoF/iSCSI initiator
@@ -275,7 +283,7 @@ func execWithTimeoutRetry(ctx context.Context, cmdLine []string, timeout, retry 
 }
 
 func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
-	alreadyConnected, err := isNqnConnected(nvmf.nqn)
+	alreadyConnected, err := isNqnConnected(ctx, nvmf.nqn)
 	if err != nil {
 		klog.Errorf("Failed to check existing connections: %v", err)
 		return "", err
@@ -423,6 +431,26 @@ func execWithTimeout(ctx context.Context, cmdLine []string, timeout int) error {
 	return err
 }
 
+// execNVMeQuery runs a read-only "nvme" CLI query (list/list-subsys) bounded
+// by nvmeQueryTimeoutSeconds, so a stuck nvme-cli/kernel call can never block
+// a caller forever — notably the single-threaded reconnect monitor loop,
+// which has no other goroutine to pick up the work if this one wedges.
+func execNVMeQuery(ctx context.Context, cmdLine ...string) ([]byte, error) {
+	execCtx, cancel := context.WithTimeout(ctx, nvmeQueryTimeoutSeconds*time.Second)
+	defer cancel()
+
+	//nolint:gosec // execNVMeQuery assumes valid cmd arguments
+	cmd := exec.CommandContext(execCtx, cmdLine[0], cmdLine[1:]...)
+	output, err := cmd.Output()
+	if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
+		return nil, fmt.Errorf("timed out running %v", cmdLine)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute %v: %w", cmdLine, err)
+	}
+	return output, nil
+}
+
 func disconnectDevicePath(ctx context.Context, devicePath string) error {
 	var paths []path
 
@@ -431,7 +459,7 @@ func disconnectDevicePath(ctx context.Context, devicePath string) error {
 		return fmt.Errorf("failed to resolve device path from %s: %w", devicePath, err)
 	}
 
-	subsystems, err := getSubsystemsForDevice(realPath)
+	subsystems, err := getSubsystemsForDevice(ctx, realPath)
 	if err != nil {
 		return fmt.Errorf("failed to get subsystems for %s: %w", realPath, err)
 	}
@@ -486,11 +514,10 @@ func logicalVolumeIdByDevicePath(devicePath string) string {
 	return uuid
 }
 
-func getNVMeDeviceInfos() ([]nvmeDeviceInfo, error) {
-	cmd := exec.Command("nvme", "list", "-o", "json")
-	output, err := cmd.Output()
+func getNVMeDeviceInfos(ctx context.Context) ([]nvmeDeviceInfo, error) {
+	output, err := execNVMeQuery(ctx, "nvme", "list", "-o", "json")
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute nvme list: %v", err)
+		return nil, err
 	}
 
 	var deviceResponse struct {
@@ -547,11 +574,10 @@ func getNVMeDeviceInfos() ([]nvmeDeviceInfo, error) {
 	return devices, nil
 }
 
-func isNqnConnected(nqn string) (bool, error) {
-	cmd := exec.Command("nvme", "list-subsys", "-o", "json")
-	output, err := cmd.Output()
+func isNqnConnected(ctx context.Context, nqn string) (bool, error) {
+	output, err := execNVMeQuery(ctx, "nvme", "list-subsys", "-o", "json")
 	if err != nil {
-		return false, fmt.Errorf("failed to execute nvme list-subsys: %v", err)
+		return false, err
 	}
 
 	var subsystems []subsystemResponse
@@ -568,11 +594,10 @@ func isNqnConnected(nqn string) (bool, error) {
 	return false, nil
 }
 
-func getSubsystemsForDevice(devicePath string) ([]subsystemResponse, error) {
-	cmd := exec.Command("nvme", "list-subsys", "-o", "json", devicePath)
-	output, err := cmd.Output()
+func getSubsystemsForDevice(ctx context.Context, devicePath string) ([]subsystemResponse, error) {
+	output, err := execNVMeQuery(ctx, "nvme", "list-subsys", "-o", "json", devicePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute nvme list-subsys: %v", err)
+		return nil, err
 	}
 
 	var subsystems []subsystemResponse
@@ -619,7 +644,9 @@ func isManagedLvol(manager *sbkube.Manager, lvolID, driver string) bool {
 }
 
 func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager, driver string) error {
-	devices, err := getNVMeDeviceInfos()
+	ctx := context.Background()
+
+	devices, err := getNVMeDeviceInfos(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get NVMe device paths: %v", err)
 	}
@@ -627,7 +654,7 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 	currentDevices := make(map[string]bool)
 
 	for _, device := range devices {
-		subsystems, err := getSubsystemsForDevice(device.devicePath)
+		subsystems, err := getSubsystemsForDevice(ctx, device.devicePath)
 		if err != nil {
 			klog.Errorf("failed to get subsystems for device %s: %v", device.devicePath, err)
 			continue
@@ -675,7 +702,7 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 					continue
 				}
 
-				if !confirmSubsystemNeedsRecovery(&subsystem, device.devicePath, numActive) {
+				if !confirmSubsystemNeedsRecovery(ctx, &subsystem, device.devicePath, numActive) {
 					continue
 				}
 
@@ -817,9 +844,14 @@ func connectViaNVMe(ctx context.Context, conn *LvolConnectResp, ctrlLossTmo int,
 // confirmSubsystemNeedsRecovery re-checks the subsystem 5 times over 5 seconds
 // and returns true only if the path count remained stable at initialPathCount for
 // all 5 checks. This debounces spurious triggers during normal ANA switchovers.
-func confirmSubsystemNeedsRecovery(subsystem *subsystem, devicePath string, initialPathCount int) bool {
+func confirmSubsystemNeedsRecovery(
+	ctx context.Context,
+	subsystem *subsystem,
+	devicePath string,
+	initialPathCount int,
+) bool {
 	for i := 0; i < 5; i++ {
-		recheck, err := getSubsystemsForDevice(devicePath)
+		recheck, err := getSubsystemsForDevice(ctx, devicePath)
 		if err != nil {
 			klog.Errorf("failed to recheck subsystems for device %s: %v", devicePath, err)
 			continue
