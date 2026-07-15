@@ -24,6 +24,7 @@ import (
 	"slices"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -300,6 +301,17 @@ func (r *StorageNodeReconciler) provisionNode(
 		}
 	}
 
+	// FDB workers must be added sequentially to avoid simultaneous reboots that
+	// would reduce FDB fault tolerance. If this worker hosts an FDB pod and any
+	// other FDB worker in the same StorageNodeSet is currently in-flight, block.
+	if r.isWorkerFDB(ctx, sn.Namespace, sn.Spec.WorkerNode) {
+		if blocked, err := r.isFDBWorkerBlocked(ctx, sn, sns); err == nil && blocked {
+			log.Info("FDB worker: another FDB node is in-flight, requeuing sequentially",
+				"worker", sn.Spec.WorkerNode)
+			return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
+		}
+	}
+
 	// Guard: failure domain must be set if the feature is enabled.
 	if err := r.checkFailureDomain(ctx, sn, sns); err != nil {
 		r.Recorder.Event(sn, "Warning", "FailureDomainMissing", err.Error())
@@ -355,6 +367,50 @@ func (r *StorageNodeReconciler) provisionNode(
 		log.Error(err, "failed to patch PostedAt")
 	}
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+// isWorkerFDB returns true if the given worker node currently hosts at least
+// one FDB pod.
+func (r *StorageNodeReconciler) isWorkerFDB(ctx context.Context, namespace, workerNode string) bool {
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList,
+		client.InNamespace(namespace),
+		client.HasLabels{utils.LabelFDBClusterName},
+		client.MatchingFields{"spec.nodeName": workerNode},
+	); err != nil {
+		return false
+	}
+	return len(podList.Items) > 0
+}
+
+// isFDBWorkerBlocked returns true if any sibling StorageNode in the same
+// StorageNodeSet is an FDB worker currently in-flight (PostedAt set, UUID
+// empty). Used to enforce sequential adds for FDB nodes.
+func (r *StorageNodeReconciler) isFDBWorkerBlocked(
+	ctx context.Context,
+	sn *simplyblockv1alpha1.StorageNode,
+	sns *simplyblockv1alpha1.StorageNodeSet,
+) (bool, error) {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList,
+		client.InNamespace(sn.Namespace),
+		client.MatchingFields{"spec.storageNodeSetRef": sn.Spec.StorageNodeSetRef},
+	); err != nil {
+		return false, err
+	}
+	for _, sibling := range snList.Items {
+		if sibling.Name == sn.Name {
+			continue
+		}
+		if sibling.Status.PostedAt == nil || sibling.Status.UUID != "" {
+			continue
+		}
+		// Sibling is in-flight — check if it's also an FDB worker.
+		if r.isWorkerFDB(ctx, sn.Namespace, sibling.Spec.WorkerNode) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // countInFlightNodes returns how many sibling StorageNode CRs in the same
@@ -668,6 +724,22 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		func(obj client.Object) []string {
 			sn := obj.(*simplyblockv1alpha1.StorageNode)
 			return []string{sn.Spec.WorkerNode}
+		},
+	); err != nil {
+		return err
+	}
+
+	// Index Pods by spec.nodeName for efficient FDB worker detection.
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&corev1.Pod{},
+		"spec.nodeName",
+		func(obj client.Object) []string {
+			pod := obj.(*corev1.Pod)
+			if pod.Spec.NodeName == "" {
+				return nil
+			}
+			return []string{pod.Spec.NodeName}
 		},
 	); err != nil {
 		return err
