@@ -12,6 +12,130 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+  name: backupimports.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: BackupImport
+    listKind: BackupImportList
+    plural: backupimports
+    shortNames:
+    - bi
+    singular: backupimport
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.sourceClusterName
+      name: Source
+      type: string
+    - jsonPath: .spec.targetClusterName
+      name: Target
+      type: string
+    - jsonPath: .status.storageBackupRef
+      name: BackupRef
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          BackupImport imports a completed backup from a source cluster into a target cluster,
+          creating a StorageBackup CR that can be referenced by a BackupRestore.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of BackupImport
+            properties:
+              sourceBackupID:
+                description: SourceBackupID is the UUID of the backup on the source
+                  cluster to import.
+                pattern: ^[a-zA-Z0-9_-]{1,128}$
+                type: string
+              sourceClusterName:
+                description: SourceClusterName is the StorageCluster CR name of the
+                  cluster that owns the backup.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              targetClusterName:
+                description: TargetClusterName is the StorageCluster CR name of the
+                  cluster to import into.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+            required:
+            - sourceBackupID
+            - sourceClusterName
+            - targetClusterName
+            type: object
+          status:
+            description: status defines the observed state of BackupImport
+            properties:
+              completedAt:
+                description: CompletedAt is when the import completed.
+                format: date-time
+                type: string
+              importedBackupID:
+                description: ImportedBackupID is the backup UUID after successful
+                  import into the target cluster.
+                type: string
+              message:
+                description: Message contains the latest reconciliation detail or
+                  error.
+                type: string
+              phase:
+                description: Phase is the high-level lifecycle shown in kubectl output.
+                type: string
+              sourceClusterUUID:
+                description: SourceClusterUUID is the resolved UUID of the source
+                  cluster.
+                type: string
+              storageBackupRef:
+                description: |-
+                  StorageBackupRef is the name of the StorageBackup CR created in the target namespace
+                  after a successful import. This CR can be referenced directly in a BackupRestore.
+                type: string
+              targetClusterUUID:
+                description: TargetClusterUUID is the resolved UUID of the target
+                  cluster.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: backuppolicies.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -543,6 +667,103 @@ spec:
         x-kubernetes-validations:
         - message: backupRef.name is immutable once set
           rule: '!has(oldSelf.spec.backupRef) || self.spec.backupRef.name == oldSelf.spec.backupRef.name'
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: controlplanes.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: ControlPlane
+    listKind: ControlPlaneList
+    plural: controlplanes
+    singular: controlplane
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Initializing while FDB is not ready; Ready once the control plane
+        is operational
+      jsonPath: .status.phase
+      name: Phase
+      type: string
+    - description: Human-readable status detail
+      jsonPath: .status.message
+      name: Message
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ControlPlane is a singleton resource (one per namespace, named "simplyblock")
+          that reflects the readiness of the simplyblock control plane. It is created
+          automatically by the Helm chart and should not be created or deleted manually.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ControlPlaneSpec holds configuration for the singleton ControlPlane resource
+              created by the Helm chart.
+            properties:
+              image:
+                description: |-
+                  Image is the container image used for all simplyblock control-plane and
+                  storage-node workloads (e.g. quay.io/simplyblock-io/simplyblock:26.2.2).
+                  StorageNodeSet CRs that omit spec.clusterImage inherit this value.
+                  Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
+                pattern: ^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
+                type: string
+            type: object
+          status:
+            description: |-
+              ControlPlaneStatus reflects the observed readiness of the simplyblock
+              control plane (FDB + management API).
+            properties:
+              lastChecked:
+                description: LastChecked is the timestamp of the most recent FDB health
+                  probe.
+                format: date-time
+                type: string
+              message:
+                description: |-
+                  Message contains a human-readable explanation of the current phase,
+                  for example the FDB error returned by the health endpoint.
+                type: string
+              phase:
+                description: |-
+                  Phase is Initializing while the control plane is not yet healthy,
+                  and Ready once the FDB health check passes.
+                enum:
+                - Initializing
+                - Ready
+                type: string
+            type: object
+        type: object
     served: true
     storage: true
     subresources:
@@ -1749,6 +1970,428 @@ spec:
             type: object
         required:
         - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: storagenodeops.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: StorageNodeOps
+    listKind: StorageNodeOpsList
+    plural: storagenodeops
+    shortNames:
+    - snops
+    singular: storagenodeops
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.storageNodeRef
+      name: Node
+      type: string
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.subPhase
+      name: SubPhase
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageNodeOps is a one-shot operational CR targeting a single StorageNode.
+          Analogous to a Kubernetes Job — it drives an action (shutdown, restart, suspend,
+          resume, remove/drain) to completion and records the result. Only one
+          StorageNodeOps can be active per StorageNode at a time.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StorageNodeOpsSpec defines the desired state of a StorageNodeOps.
+            properties:
+              action:
+                description: Action is the operation to perform. Immutable.
+                enum:
+                - shutdown
+                - restart
+                - suspend
+                - resume
+                - remove
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              drain:
+                description: Drain configures the drain workflow. Only applicable
+                  when action=remove.
+                properties:
+                  systemVolumeFilterRegex:
+                    description: |-
+                      SystemVolumeFilterRegex is a Go regular expression matched against backend
+                      volume names. Matching volumes are treated as system volumes: excluded from
+                      drain migration and deleted inline during the Verifying phase.
+                      Defaults to "^sb-fio-baseline-.*".
+                    type: string
+                type: object
+              force:
+                description: Force enables forced execution where the backend supports
+                  it.
+                type: boolean
+              reattachVolume:
+                description: |-
+                  ReattachVolume reattaches volumes during restart.
+                  Only applicable when action=restart.
+                type: boolean
+              storageNodeRef:
+                description: StorageNodeRef is the name of the target StorageNode.
+                  Immutable.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+            required:
+            - action
+            - storageNodeRef
+            type: object
+          status:
+            description: StorageNodeOpsStatus holds the observed state of a StorageNodeOps.
+            properties:
+              completedAt:
+                description: CompletedAt is when the operation finished (successfully
+                  or not).
+                format: date-time
+                type: string
+              message:
+                description: Message is a human-readable description of the current
+                  state or failure reason.
+                type: string
+              phase:
+                description: Phase is the high-level lifecycle phase.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              startedAt:
+                description: StartedAt is when the operation began.
+                format: date-time
+                type: string
+              subPhase:
+                description: SubPhase tracks the active drain step when action=remove
+                  and phase=Running.
+                enum:
+                - Validating
+                - Suspending
+                - Migrating
+                - Verifying
+                - Removing
+                type: string
+              triggered:
+                description: |-
+                  Triggered indicates the backend action POST has been sent (used during
+                  Suspending to avoid duplicate POSTs across reconcile iterations).
+                type: boolean
+              volumesMigrated:
+                description: VolumesMigrated is the count of volumes successfully
+                  migrated (drain only).
+                type: integer
+              volumesPending:
+                description: VolumesPending is the count of volumes awaiting migration
+                  (drain only).
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: storagenodes.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: StorageNode
+    listKind: StorageNodeList
+    plural: storagenodes
+    shortNames:
+    - sn
+    singular: storagenode
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.workerNode
+      name: Worker
+      type: string
+    - jsonPath: .spec.socketIndex
+      name: Socket
+      type: integer
+    - jsonPath: .status.uuid
+      name: UUID
+      type: string
+    - jsonPath: .status.status
+      name: Status
+      type: string
+    - jsonPath: .status.health
+      name: Health
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageNode is the Schema for a single backend storage node instance.
+          One StorageNode CR exists per (workerNode, socketIndex) pair and is owned
+          by the parent StorageNodeSet.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StorageNodeSpec defines the desired state of a StorageNode.
+            properties:
+              overrides:
+                description: |-
+                  Overrides holds per-node configuration propagated from
+                  StorageNodeSet.spec.nodeConfigs[workerNode] on every reconcile.
+                properties:
+                  corePercentage:
+                    description: CorePercentage overrides the percentage of cores
+                      allocated to SPDK for this node (0-99).
+                    format: int32
+                    type: integer
+                  deviceNames:
+                    description: |-
+                      DeviceNames explicitly defines the NVMe namespace names to use on this node
+                      (e.g. ["nvme0n1","nvme1n1"]).
+                    items:
+                      type: string
+                    type: array
+                  driveSizeRange:
+                    description: DriveSizeRange overrides the drive size range filter
+                      for this node.
+                    type: string
+                  enableCpuTopology:
+                    description: EnableCpuTopology overrides topology-aware CPU handling
+                      for this node.
+                    type: boolean
+                  failureDomain:
+                    description: |-
+                      FailureDomain is the failure-domain group index (≥ 1) for this node.
+                      Required when the parent StorageCluster has enableFailureDomains=true.
+                      Overrides StorageNodeSet.spec.nodeFailureDomains[workerNode] when both are set.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  journalManager:
+                    description: JournalManagerSpec overrides journal manager tuning
+                      for this node.
+                    properties:
+                      count:
+                        description: Count is the number of journal managers to configure.
+                        format: int32
+                        type: integer
+                      percentPerDevice:
+                        description: PercentPerDevice is the journal manager capacity
+                          percentage per device.
+                        format: int32
+                        type: integer
+                    type: object
+                  maxLogicalVolumeCount:
+                    description: MaxLogicalVolumeCount overrides the maximum number
+                      of logical volumes for this node.
+                    format: int32
+                    type: integer
+                  maxSize:
+                    description: MaxSize overrides the maximum allocatable size of
+                      huge pages for this node.
+                    type: string
+                  pcieAllowList:
+                    description: PcieAllowList overrides the list of PCI addresses
+                      allowed for use on this node.
+                    items:
+                      type: string
+                    type: array
+                  pcieDenyList:
+                    description: PcieDenyList overrides the list of PCI addresses
+                      excluded from use on this node.
+                    items:
+                      type: string
+                    type: array
+                  pcieModel:
+                    description: PcieModel overrides the PCI model filter for this
+                      node.
+                    type: string
+                  reservedSystemCPU:
+                    description: ReservedSystemCPU overrides the CPUs reserved for
+                      system workloads on this node.
+                    type: string
+                  skipKubeletConfiguration:
+                    description: |-
+                      SkipKubeletConfiguration overrides whether kubelet configuration changes are
+                      skipped for this node.
+                    type: boolean
+                  spdkImage:
+                    description: SpdkImage overrides the SPDK image for this node
+                      (e.g. for phased rollouts).
+                    type: string
+                  spdkProxyImage:
+                    description: SpdkProxyImage overrides the SPDK proxy image for
+                      this node.
+                    type: string
+                  spdkSystemMemory:
+                    description: |-
+                      SpdkSystemMemory overrides the SPDK huge-page memory allocation for this node
+                      (e.g. "4G", "512M").
+                    pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
+                    type: string
+                  ubuntuHost:
+                    description: UbuntuHost overrides the Ubuntu host OS flag for
+                      this node.
+                    type: boolean
+                type: object
+              socketIndex:
+                description: SocketIndex is the NUMA socket index (0-based). Immutable.
+                format: int32
+                type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              storageNodeSetRef:
+                description: StorageNodeSetRef is the name of the owning StorageNodeSet.
+                  Immutable.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              workerNode:
+                description: WorkerNode is the Kubernetes node hostname this StorageNode
+                  runs on. Immutable.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+            required:
+            - storageNodeSetRef
+            - workerNode
+            type: object
+            x-kubernetes-validations:
+            - message: field socketIndex is immutable once set
+              rule: '!has(oldSelf.socketIndex) || has(self.socketIndex)'
+          status:
+            description: StorageNodeStatus holds the observed state of a StorageNode.
+            properties:
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef is the name of the currently active StorageNodeOps CR targeting
+                  this node. Empty when no operation is in progress. Used for mutual exclusion.
+                type: string
+              cpu:
+                description: CPU is the number of CPU cores allocated to the node.
+                format: int32
+                type: integer
+              devices:
+                description: Devices is the device list reported by the backend.
+                type: string
+              health:
+                description: Health is the backend-reported node health flag.
+                type: boolean
+              hostname:
+                description: Hostname is the node hostname as reported by the backend.
+                type: string
+              lvolPort:
+                description: LvolPort is the lvol port of the node.
+                format: int32
+                type: integer
+              memory:
+                description: Memory is the memory allocation reported by the backend.
+                type: string
+              mgmtIp:
+                description: MgmtIp is the management IP address of the node.
+                type: string
+              nvmfPort:
+                description: NvmfPort is the NVMe-oF port of the node.
+                format: int32
+                type: integer
+              postedAt:
+                description: |-
+                  PostedAt is the timestamp when the node-add POST was sent.
+                  Used as a provisioning guard against duplicate POSTs.
+                format: date-time
+                type: string
+              rpcPort:
+                description: RpcPort is the RPC port of the node.
+                format: int32
+                type: integer
+              status:
+                description: Status is the backend-reported node status (e.g. online,
+                  suspended, offline).
+                type: string
+              uptime:
+                description: Uptime is the node uptime as reported by the backend.
+                type: string
+              uuid:
+                description: UUID is the backend storage node UUID. Set once after
+                  node-add completes.
+                type: string
+              volumes:
+                description: Volumes is the number of logical volumes on this node.
+                format: int32
+                type: integer
+            type: object
         type: object
     served: true
     storage: true
