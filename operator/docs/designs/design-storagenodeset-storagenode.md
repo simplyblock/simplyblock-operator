@@ -1,8 +1,8 @@
 # Design Document: StorageNodeSet / StorageNode / StorageNodeOps Three-Tier Model
 
-**Status:** Phase 1 Complete  
+**Status:** Phase 2 Complete  
 **Author:** Israel Geoffrey  
-**Date:** 2026-07-14
+**Date:** 2026-07-15
 
 ---
 
@@ -335,12 +335,47 @@ Implemented on 2026-07-14. Deviations from the original plan:
 - CRD YAMLs generated and deployed to the helm chart.
 - 28 unit tests added covering both new reconcilers.
 
-### Phase 2 — Move provisioning to StorageNodeReconciler
+### Phase 2 — Complete ✓
 
-- `StorageNodeReconciler` takes over node-add POST and status sync from
-  `StorageNodeSetReconciler.reconcileWorkerNodes`. The `provisionNode` and `syncStatus`
-  stubs are already in place; they need to consume the existing `postStorageNodeSet` and
-  `pollNodeOnline` logic refactored to read from `StorageNode` instead of `StorageNodeSet`.
+Implemented on 2026-07-15.
+
+- **`StorageNodeReconciler` is now the sole owner of provisioning.** `postStorageNodeSet`
+  and related helpers were removed from `StorageNodeSetReconciler`. `reconcileWorkerNode`
+  no longer POSTs — it only polls for online status after `StorageNodeReconciler` has sent
+  the POST.
+- **`provisionNode`** merges fleet defaults with per-node `StorageNodeOverrides` for every
+  API parameter (`SpdkImage`, `SpdkSystemMemory`, `JMPercent`, `HaJMCount`, `FailureDomain`,
+  `PcieAllowList`, `DeviceNames`, etc.).
+- **Parallel node add** enforced via `countInFlightNodes` (counts siblings with
+  `PostedAt != nil && UUID == ""`). **FDB sequential constraint** preserved via
+  `isFDBWorkerBlocked` — any FDB worker waits until no other FDB sibling is in-flight.
+- **`pollUUIDFromBackend`** polls the backend by worker IP + socket index to retrieve the UUID
+  for manually created `StorageNode` CRs (whose worker is not in `spec.workerNodes` and
+  therefore never appears in `StorageNodeSet.status.nodes[]`). Supports multi-socket by
+  sorting backend nodes by RPC port and matching by socket index position.
+- **Manually created `StorageNode` CRs** — users can create a `StorageNode` CR referencing
+  an existing `StorageNodeSet` without adding the worker to `spec.workerNodes`. The operator:
+  - Does NOT delete it (no OwnerReference = not stale)
+  - Labels the Kubernetes node so the DaemonSet pod is scheduled on it
+  - Adds the worker to the storage-node-api EndpointSlice for DNS resolution
+  - Adds the worker to the per-node ConfigMap for DaemonSet init container config
+  - Provisions the backend node via `provisionNode`
+  - Syncs the status back into `StorageNodeSet.status.nodes[]` via `syncManualStorageNodeStatus`
+- **Per-node ConfigMap** (`{sns}-per-node-config`) created before the DaemonSet, containing
+  a shell-sourceable env file per worker. The `node-env-writer` init container copies the
+  node's section into a shared `emptyDir`; the config-generator and main containers source it.
+- **`StorageNodeOps` drives all actions** (shutdown, restart, suspend, resume, remove/drain).
+  Events are mirrored from `StorageNodeOps` and `StorageNodeSet` onto the specific `StorageNode`
+  CR so `kubectl describe storagenode` shows the full event history.
+- **`StorageNodeSet` status** now includes `TotalNodes`, `OnlineNodes`, `OfflineNodes`,
+  `SuspendedNodes`, `CreatingNodes`, `RemovedNodes`. Wide columns (`-o wide`) show the
+  breakdown; default view shows `Total` and `Online`.
+- **Validation**: `spec.workerNodes` enforced unique via `+listType=set`; `spec.nodeConfigs`
+  keys must match a `workerNodes` entry (CEL rule with `MaxItems=200`, `MaxProperties=200`
+  to bound cost).
+- **42+ unit tests** covering both new reconcilers, drain state machine helpers,
+  and StorageNodeSet status aggregation. See full test plan:
+  [`docs/tests/test-plan-storagenode-ops.md`](../tests/test-plan-storagenode-ops.md)
 
 ### Phase 3 — Remove legacy provisioning fields
 
@@ -355,308 +390,25 @@ Implemented on 2026-07-14. Deviations from the original plan:
 
 **Q1: StorageNodeOps retention policy**  
 How long should completed `StorageNodeOps` CRs be retained? Similar to `ttlSecondsAfterFinished`
-on Jobs, or retained indefinitely for audit?
+on Jobs, or retained indefinitely for audit? Not yet implemented.
 
 **Q2: Concurrent ops on different nodes of the same set**  
 Multiple `StorageNodeOps` targeting different `StorageNode` CRs in the same `StorageNodeSet`
-should be allowed. How many concurrent drains are permitted given FTT constraints?
+should be allowed. How many concurrent drains are permitted given FTT constraints? Currently
+unlimited — one per node simultaneously. FDB sequential constraint is enforced.
 
-**Q3: StorageNode naming**  
-Name pattern: `{storagenodeset-name}-{sanitised-worker}-{socket}`. Needs to be deterministic
-and DNS-label safe.
+**Q3: StorageNode naming** — Resolved ✓  
+Pattern: `{storagenodeset-name}-{sanitised-worker}-{socket}`. Implemented in
+`storageNodeCRName()` with FNV-32 collision guard on truncation.
 
-**Q4: Adoption of pre-existing backend nodes**  
-If a node already exists in the backend (from a prior deployment), the `StorageNode` CR should
-be created with `status.uuid` pre-populated rather than triggering a new node-add.
+**Q4: Adoption of pre-existing backend nodes** — Resolved ✓  
+`syncUUIDFromNodeSet` reads existing UUIDs from `StorageNodeSet.status.nodes[]`.
+`pollUUIDFromBackend` handles manually created `StorageNode` CRs and multi-socket workers.
 
 **Q5: Who triggers the drain StorageNodeOps on scale-down?**  
-When `StorageNodeSet.spec.workerNodes` shrinks, the controller must decide whether to trigger
-`action=remove` or simply delete the `StorageNode` CR. Explicit `StorageNodeOps(action=remove)`
-is safer.
+When a worker is removed from `spec.workerNodes`, the `StorageNodeSetReconciler` deletes the
+owned `StorageNode` CR. The `StorageNodeReconciler` finalizer creates a `StorageNodeOps(action=remove)`
+if the node is online before allowing the CR to be deleted.
 
 ---
 
-## 9. Architecture Diagrams
-
-**Ownership Diagram** — Shows the ownership hierarchy from StorageCluster through StorageNodeSet down to individual StorageNode and StorageNodeOps resources, including how VolumeMigration CRs are created during drain operations.
-
-```
-StorageCluster
-  spec.enableFailureDomains = true
-  │
-  │  (referenced by clusterName)
-  ▼
-StorageNodeSet                              (fleet / template)
-  spec.nodeFailureDomains:
-    worker-A: 1
-    worker-B: 2
-    worker-C: 1
-  spec.nodeConfigs:
-    worker-A: { maxLogicalVolumeCount: 50 }
-  spec.workerNodes: [worker-A, worker-B, worker-C]
-  │
-  │  owns (OwnerReference)
-  ├──────────────────────────────────────────────────────┐
-  ▼                                                      ▼
-StorageNode                                         StorageNode
-  name: sns-worker-a-0                                name: sns-worker-b-0
-  spec.workerNode:    worker-A                         spec.workerNode:    worker-B
-  spec.socketIndex:   0                                spec.socketIndex:   0
-  spec.failureDomain: 1   ◄── propagated               spec.failureDomain: 2   ◄── propagated
-  spec.overrides:                                      status.uuid:        <uuid-b>
-    maxLogicalVolumeCount: 50                          status.activeOpsRef: "ops-restart-b"
-  status.uuid:        <uuid-a>                         │
-  status.activeOpsRef: "ops-remove-a"                 │  targeted by
-  │                                                    ▼
-  │  targeted by                                  StorageNodeOps
-  ▼                                                 name: ops-restart-b
-StorageNodeOps                                      spec.storageNodeRef: sns-worker-b-0
-  name: ops-remove-a                                spec.action: restart
-  spec.storageNodeRef: sns-worker-a-0               status.phase: Running
-  spec.action:  remove                              status.subPhase: ""
-  spec.drain:                                       (no VolumeMigration CRs)
-    systemVolumeFilterRegex: "^sb-fio-.*"
-  status.phase:    Running
-  status.subPhase: Migrating
-  status.volumesMigrated: 3
-  status.volumesPending:  2
-  │
-  │  owns (during drain only)
-  ├──────────────────────────┐
-  ▼                          ▼
-VolumeMigration          VolumeMigration
-  name: vm-lvol-aaa          name: vm-lvol-bbb
-  status.phase: Completed    status.phase: Running
-  (deleted on Verifying)     (in-flight)
-
-  ┌─────────────────────────────────────────────────────────┐
-  │  StorageNode  (worker-C, socket 0)                      │
-  │    spec.failureDomain: 1                                │
-  │    status.activeOpsRef: ""  (no active operation)       │
-  └─────────────────────────────────────────────────────────┘
-```
-
----
-
-**Reconciler Flow** — Illustrates the three controllers and what each reconciler watches, manages, and produces.
-
-```
-  ┌───────────────────────────────────────────────────────────────────────────────────┐
-  │                          Kubernetes Controller Manager                            │
-  └───────────────────────────────────────────────────────────────────────────────────┘
-           │                         │                          │
-           ▼                         ▼                          ▼
-  ┌─────────────────────┐  ┌──────────────────────┐  ┌──────────────────────────┐
-  │ StorageNodeSet      │  │ StorageNode           │  │ StorageNodeOps           │
-  │ Reconciler          │  │ Reconciler  (new)     │  │ Reconciler  (new)        │
-  ├─────────────────────┤  ├──────────────────────┤  ├──────────────────────────┤
-  │ WATCHES             │  │ WATCHES               │  │ WATCHES                  │
-  │  • StorageNodeSet   │  │  • StorageNode        │  │  • StorageNodeOps        │
-  │  • Pod (SPDK ready) │  │  • StorageNodeSet     │  │  • StorageNode           │
-  │  • Node (labels)    │  │    (read config)      │  │  • VolumeMigration       │
-  ├─────────────────────┤  ├──────────────────────┤  ├──────────────────────────┤
-  │ MANAGES             │  │ MANAGES               │  │ MANAGES                  │
-  │  • DaemonSet        │  │  • backend node-add   │  │  • backend actions:      │
-  │  • ServiceAccount   │  │    POST (if uuid=="") │  │    shutdown / restart    │
-  │  • ClusterRole /    │  │  • status sync (30s)  │  │    suspend / resume      │
-  │    ClusterRoleBinding│  │  • pollNodeOnline     │  │    remove/drain          │
-  │  • Service          │  │  • creates            │  │  • VolumeMigration CRs   │
-  │  • EndpointSlices   │  │    StorageNodeOps     │  │    (drain only)          │
-  │  • TLS Certificates │  │    (action=remove)    │  │  • StorageNode.status    │
-  │  • StorageNode CRs  │  │    on deletion        │  │    .activeOpsRef         │
-  │    (create/delete)  │  │  • StorageNode.status │  │                          │
-  │  • status aggregate │  │    (uuid, health...)  │  │ MUTUAL EXCLUSION         │
-  │    (totalNodes,     │  │                       │  │  checks activeOpsRef     │
-  │     online/offline) │  │ READS EFFECTIVE CFG   │  │  before starting;        │
-  │  • nodeConfigs sync │  │  StorageNodeSet.spec  │  │  requeues if set         │
-  │    → StorageNode    │  │  defaults merged with │  │                          │
-  │    .spec.overrides  │  │  StorageNode.spec     │  │ ON COMPLETION            │
-  │  • failureDomain    │  │  .overrides           │  │  Phase=Succeeded/Failed  │
-  │    sync             │  │                       │  │  clears activeOpsRef     │
-  └─────────────────────┘  └──────────────────────┘  └──────────────────────────┘
-           │  creates/deletes            │                        │  owns
-           ▼                            ▼                        ▼
-      StorageNode CRs           backend API calls         VolumeMigration CRs
-      (one per worker/socket)   /api/v2/clusters/...      (drain sub-phase only)
-```
-
----
-
-**Drain State Machine** — The five sequential sub-phases of the remove/drain operation, including the cluster pause guard, migration retry loop, and cancellation path.
-
-```
-  StorageNodeOps(action=remove) created
-                            │
-                            ▼
-  ╔══════════════════════════════════════════════════════╗
-  ║  ENTRY: SubPhase=Validating, Triggered=false         ║
-  ╚══════════════════════════════════════════════════════╝
-                            │
-                            ▼
-  ┌───────────────────────────────────────────────────────────────┐
-  │  [1] VALIDATING                                               │
-  │  • Fetch all volumes on the node from backend API             │
-  │  • Identify pinned / unmanaged volumes (no matching PVC)      │
-  │  ─────────────────────────────────────────────────────────────│
-  │  EXIT → SUSPENDING  : no pinned or unmanaged volumes          │
-  │  BLOCK (requeue 60s): pinned or unmanaged volumes present     │
-  └───────────────────────────────────────────────────────────────┘
-                            │
-  ┌─────────────────────────▼──────────────────────────────────────────┐
-  │              CLUSTER PAUSE GUARD  (all phases after Validating)    │
-  │  if cluster.status != "active" OR rebalancing == true              │
-  │  → emit DrainPaused event, requeue 60s                             │
-  │  → auto-resumes when cluster is active and not rebalancing         │
-  └─────────────────────────┬──────────────────────────────────────────┘
-                            │
-                            ▼
-  ┌───────────────────────────────────────────────────────────────┐
-  │  [2] SUSPENDING                                               │
-  │  • GET node status; if already suspended → skip POST          │
-  │  • POST /storage-nodes/{uuid}/suspend, set Triggered=true     │
-  │  • Poll GET every 10s                                         │
-  │  ─────────────────────────────────────────────────────────────│
-  │  EXIT → MIGRATING  : node.status == "suspended"               │
-  │  RETRY (10s)       : node not yet suspended                   │
-  └───────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-  ┌───────────────────────────────────────────────────────────────────────────┐
-  │  [3] MIGRATING                                                            │
-  │  • createMissingVolumeMigrations: one CR per PV-managed volume            │
-  │    with round-robin target node assignment                                │
-  │  • Track VolumesMigrated / VolumesPending                                │
-  │  ┌────────────────────────────────────────────────────────────┐           │
-  │  │  FAILURE RETRY LOOP                                        │           │
-  │  │  VolumeMigration.phase == Failed/Aborted:                  │           │
-  │  │    cluster not ready → delete CR, pause (DrainPaused)      │           │
-  │  │    cluster ready     → delete CR, recreate with new target  │           │
-  │  └────────────────────────────────────────────────────────────┘           │
-  │  ─────────────────────────────────────────────────────────────────────────│
-  │  EXIT → VERIFYING  : all migrations complete, no in-flight                │
-  │  RETRY (15s)       : migrations still running                             │
-  └───────────────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-  ┌───────────────────────────────────────────────────────────────┐
-  │  [4] VERIFYING                                                │
-  │  • GET all volumes remaining on node                          │
-  │  • Delete system volumes (match systemVolumeFilterRegex)      │
-  │  • Poll 30s until none remain                                 │
-  │  ─────────────────────────────────────────────────────────────│
-  │  EXIT → REMOVING   : no non-system volumes remain             │
-  │  RETRY (30s)       : volumes still present                    │
-  └───────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-  ┌───────────────────────────────────────────────────────────────┐
-  │  [5] REMOVING                                                 │
-  │  • DELETE /api/v2/clusters/{uuid}/storage-nodes/{nodeUUID}    │
-  │  ─────────────────────────────────────────────────────────────│
-  │  200/204/404 → SUCCEEDED                                      │
-  │  error       → FAILED (resume node best-effort)               │
-  └───────────────────────────────────────────────────────────────┘
-            │                              │
-            ▼                             ▼
-  ╔══════════════════════╗      ╔═══════════════════════════════════╗
-  ║  SUCCEEDED           ║      ║  FAILED                           ║
-  ║  Phase=Succeeded     ║      ║  POST /resume (best-effort)       ║
-  ║  activeOpsRef=""     ║      ║  Phase=Failed, activeOpsRef=""    ║
-  ╚══════════════════════╝      ╚═══════════════════════════════════╝
-
-  CANCELLATION (any phase after Suspending):
-    spec.action cleared → POST /resume if suspended
-                        → delete all owned VolumeMigration CRs
-                        → ActionStatus = nil
-```
-
----
-
-**Failure Domain Propagation** — How `enableFailureDomains` and `nodeFailureDomains` flow from StorageCluster and StorageNodeSet down to individual StorageNode specs and the backend API, including the blocking guard for missing entries.
-
-```
-  ┌─────────────────────────────────────────────────┐
-  │  StorageCluster                                 │
-  │    spec.enableFailureDomains: true              │
-  └─────────────────────────────────────────────────┘
-                    │  referenced by StorageNodeSet.spec.clusterName
-                    ▼
-  ┌─────────────────────────────────────────────────┐
-  │  StorageNodeSet                                 │
-  │    spec.nodeFailureDomains:                     │
-  │      worker-A: 1   ← rack-1 / AZ-1             │
-  │      worker-B: 2   ← rack-2 / AZ-2             │
-  │      worker-C: 1   ← rack-1 / AZ-1             │
-  │      worker-D: ?   ← MISSING                   │
-  │                                                 │
-  │  CEL rule: all values >= 1                      │
-  └──────────┬──────────────┬──────────────┬────────┘
-             │ sync         │ sync         │ MISSING
-             ▼              ▼              ▼
-  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐
-  │ StorageNode  │  │ StorageNode  │  │ StorageNode  (worker-D)  │
-  │ worker-A, s0 │  │ worker-B, s0 │  │                          │
-  │ .failureDomain│  │ .failureDomain│  │ enableFailureDomains=T  │
-  │  = 1         │  │  = 2         │  │ no entry in map          │
-  └──────┬───────┘  └──────┬───────┘  │ → Warning event emitted  │
-         │                 │          │ → node-add BLOCKED        │
-         ▼                 ▼          │ → requeue until populated │
-  ┌────────────────────────────────┐  └──────────────────────────┘
-  │  Backend API POST              │
-  │  { "failure_domain": 1 }       │
-  │  { "failure_domain": 2 }       │
-  └────────────────────────────────┘
-```
-
----
-
-**StorageNodeOps Lifecycle** — Full lifecycle from creation through mutual exclusion gate, action dispatch, sub-phases for `action=remove`, and terminal states with `activeOpsRef` cleanup.
-
-```
-  kubectl apply -f ops.yaml  (or auto-created on StorageNode deletion)
-                    │
-                    ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │  PENDING  — reconciler checks StorageNode.status.activeOpsRef│
-  │                                                             │
-  │  activeOpsRef == ""          activeOpsRef != ""             │
-  │  → set activeOpsRef = self   → requeue (back-off)           │
-  │  → phase = Running           (another op is running)        │
-  └──────────────────────┬──────────────────────────────────────┘
-                         │
-                         ▼
-  ╔═════════════════════════════════════════════════════╗
-  ║  status.phase: Running                              ║
-  ╚═════════════════════════════════════════════════════╝
-                         │
-          ┌──────────────┴───────────────────────────┐
-          │  action dispatch                          │
-          ▼                                           ▼
-  ┌────────────────────────────┐   ┌──────────────────────────────────────┐
-  │  shutdown / restart /      │   │  remove                              │
-  │  suspend  / resume         │   │                                      │
-  │                            │   │  Validating → Suspending             │
-  │  POST action to backend    │   │      → Migrating                     │
-  │  poll until terminal state │   │        (VolumeMigration CRs owned)   │
-  │    suspend  → "suspended"  │   │      → Verifying                     │
-  │    resume   → "online"     │   │      → Removing                      │
-  │    restart  → "online"     │   │                                      │
-  │    shutdown → "offline"    │   │  VolumesMigrated / VolumesPending    │
-  └─────────────┬──────────────┘   │  tracked in status                   │
-                │                  └──────────────────┬───────────────────┘
-                │                                     │
-                └──────────────────┬──────────────────┘
-                                   │
-                    ┌──────────────┴──────────────┐
-                    ▼                             ▼
-  ╔═══════════════════════════╗    ╔═══════════════════════════════╗
-  ║  Succeeded                ║    ║  Failed                       ║
-  ║  completedAt: <now>       ║    ║  message: <reason>            ║
-  ╚═══════════════════════════╝    ║  completedAt: <now>           ║
-                    │              ╚═══════════════════════════════╝
-                    └──────────────────┬──────────────────────────┘
-                                       │  both terminal states:
-                                       ▼
-                       StorageNode.status.activeOpsRef = ""
-                       (next StorageNodeOps may now acquire the lock)
-```
