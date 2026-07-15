@@ -41,6 +41,7 @@ jobs:
       # Grype uses Red Hat's Security Data API — much more current than Trivy's OVAL source.
       - name: Run Grype vulnerability scan (Red Hat advisories)
         id: grype
+        continue-on-error: true
         uses: anchore/scan-action@v6
         with:
           image: ${{ env.IMAGE_NAME }}:scan
@@ -80,6 +81,12 @@ jobs:
           path: sbom.cdx.json
           retention-days: 90
 
+      - name: Fail job if Grype found vulnerabilities
+        if: steps.grype.outcome == 'failure'
+        run: |
+          echo "Grype found vulnerabilities at or above the medium severity cutoff."
+          exit 1
+
       - name: Notify Slack on scan failure
         if: failure()
         uses: slackapi/slack-github-action@v2
@@ -88,11 +95,12 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": ":rotating_light: *Security scan failed* — vulnerabilities found in `${{ github.repository }}`",
+              "text": ":rotating_light: *Security scan failed* — vulnerabilities found in `${{ env.IMAGE_NAME }}`",
               "attachments": [
                 {
                   "color": "danger",
                   "fields": [
+                    { "title": "Image",    "value": "${{ env.IMAGE_NAME }}", "short": true },
                     { "title": "Branch",   "value": "${{ github.ref_name }}", "short": true },
                     { "title": "Commit",   "value": "${{ github.sha }}", "short": true },
                     { "title": "Workflow", "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>", "short": false }

@@ -11,15 +11,22 @@ on:
     - cron: '0 6 * * *'  # Daily at 06:00 UTC
   workflow_dispatch:
 
-env:
-  IMAGE_NAME: simplyblock/simplyblock-operator
-
 jobs:
   scan:
-    name: Security Scan
+    name: Security Scan (${{ matrix.name }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: operator
+            image: simplyblock/simplyblock-operator
+            dockerfile: operator/Dockerfile
+          - name: simplyblock-rebalancer
+            image: simplyblock/simplyblock-rebalancer
+            dockerfile: operator/Dockerfile.simplyblock-rebalancer
 
     steps:
       - name: Checkout repository
@@ -32,17 +39,17 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
-          file: operator/Dockerfile
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
           load: true
-          tags: ${{ env.IMAGE_NAME }}:scan
+          tags: ${{ matrix.image }}:scan
 
       # Grype uses Red Hat's Security Data API — much more current than Trivy's OVAL source.
       - name: Run Grype vulnerability scan (Red Hat advisories)
         id: grype
         uses: anchore/scan-action@1638637db639e0ade3258b51db49a9a137574c3e # v6
         with:
-          image: ${{ env.IMAGE_NAME }}:scan
+          image: ${{ matrix.image }}:scan
           severity-cutoff: medium
           fail-build: true
           only-fixed: true
@@ -51,7 +58,7 @@ jobs:
       - name: Run Trivy vulnerability scan (Go binary + secrets)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
-          image-ref: ${{ env.IMAGE_NAME }}:scan
+          image-ref: ${{ matrix.image }}:scan
           format: table
           severity: CRITICAL,HIGH,MEDIUM
           ignore-unfixed: true
@@ -61,14 +68,14 @@ jobs:
       - name: Generate SBOM (CycloneDX)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
-          image-ref: ${{ env.IMAGE_NAME }}:scan
+          image-ref: ${{ matrix.image }}:scan
           format: cyclonedx
           output: sbom.cdx.json
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sbom-${{ github.sha }}
+          name: sbom-${{ matrix.name }}-${{ github.sha }}
           path: sbom.cdx.json
           retention-days: 90
 
@@ -80,11 +87,12 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": ":rotating_light: *Security scan failed* — vulnerabilities found in `${{ github.repository }}`",
+              "text": ":rotating_light: *Security scan failed* — vulnerabilities found in `${{ matrix.image }}`",
               "attachments": [
                 {
                   "color": "danger",
                   "fields": [
+                    { "title": "Image",    "value": "${{ matrix.image }}", "short": true },
                     { "title": "Branch",   "value": "${{ github.ref_name }}", "short": true },
                     { "title": "Commit",   "value": "${{ github.sha }}", "short": true },
                     { "title": "Workflow", "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>", "short": false }
