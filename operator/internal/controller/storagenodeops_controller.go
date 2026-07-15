@@ -296,6 +296,7 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 		r.Recorder.Eventf(ops, corev1.EventTypeWarning, "PinnedVolumeBlocking",
 			"drain blocked: %d pinned volume(s) on node %s — remove the %s annotation to proceed",
 			len(pinned), nodeUUID, simplyblockv1alpha1.AnnotationPinnedVolume)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "PinnedVolumeBlocking", fmt.Sprintf("drain blocked: %d pinned volume(s) on node %s — remove the %s annotation to proceed", len(pinned), nodeUUID, simplyblockv1alpha1.AnnotationPinnedVolume))
 		patch := client.MergeFrom(ops.DeepCopy())
 		ops.Status.Message = fmt.Sprintf("blocked: %d pinned volume(s) — remove simplyblock.io/pinned-volume annotation", len(pinned))
 		_ = r.Status().Patch(ctx, ops, patch)
@@ -306,6 +307,7 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 		r.Recorder.Eventf(ops, corev1.EventTypeWarning, "UnmanagedVolumeBlocking",
 			"drain blocked: %d unmanaged volume(s) on node %s — remove them manually",
 			len(unmanaged), nodeUUID)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "UnmanagedVolumeBlocking", fmt.Sprintf("drain blocked: %d unmanaged volume(s) on node %s — remove them manually", len(unmanaged), nodeUUID))
 		patch := client.MergeFrom(ops.DeepCopy())
 		ops.Status.Message = fmt.Sprintf("blocked: %d unmanaged volume(s) — remove manually", len(unmanaged))
 		_ = r.Status().Patch(ctx, ops, patch)
@@ -374,6 +376,7 @@ func (r *StorageNodeOpsReconciler) drainSuspend(
 	if nodeResp.Status != utils.NodeStatusSuspended {
 		r.Recorder.Eventf(ops, corev1.EventTypeWarning, "DrainSuspendPending",
 			"waiting for node %s to suspend (current status: %s)", nodeUUID, nodeResp.Status)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainSuspendPending", fmt.Sprintf("waiting for node %s to suspend (current status: %s)", nodeUUID, nodeResp.Status))
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
 	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating)
@@ -435,6 +438,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 		}
 		r.Recorder.Eventf(ops, corev1.EventTypeNormal, "MigrationCompleted",
 			"all %d volume migrations completed", completed)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "MigrationCompleted", fmt.Sprintf("all %d volume migrations completed", completed))
 		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseVerifying)
 	}
 
@@ -482,6 +486,7 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 		}
 		r.Recorder.Eventf(ops, corev1.EventTypeWarning, "MigrationRetry",
 			"VolumeMigration %s failed, deleted and will retry with new target", vm.Name)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "MigrationRetry", fmt.Sprintf("VolumeMigration %s failed, deleted and will retry with new target", vm.Name))
 	}
 	return ctrl.Result{RequeueAfter: drainRequeueImmediate}, true
 }
@@ -571,6 +576,7 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 		log.Error(err, "drain: no available target nodes for migration")
 		r.Recorder.Eventf(ops, corev1.EventTypeWarning, "DrainNoMigrationTarget",
 			"drain stalled: no online storage node available as migration target for node %s", nodeUUID)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainNoMigrationTarget", fmt.Sprintf("drain stalled: no online storage node available as migration target for node %s", nodeUUID))
 		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 	}
 
@@ -648,6 +654,7 @@ func (r *StorageNodeOpsReconciler) drainVerify(
 		r.Recorder.Eventf(ops, corev1.EventTypeWarning, "DrainVerifyPending",
 			"node %s still has %d non-system volume(s) after migration; waiting for backend to confirm empty",
 			nodeUUID, len(nonSystem))
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainVerifyPending", fmt.Sprintf("node %s still has %d non-system volume(s) after migration; waiting for backend to confirm empty", nodeUUID, len(nonSystem)))
 		return ctrl.Result{RequeueAfter: drainRequeueVerify}, nil
 	}
 
@@ -704,6 +711,7 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 	if err == nil && (status == http.StatusOK || status == http.StatusNoContent || status == http.StatusNotFound) {
 		r.Recorder.Eventf(ops, corev1.EventTypeNormal, "NodeRemoved",
 			"storage node %s removed successfully", nodeUUID)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "NodeRemoved", fmt.Sprintf("storage node %s removed successfully", nodeUUID))
 		return r.succeedOps(ctx, ops, sn)
 	}
 
@@ -738,6 +746,7 @@ func (r *StorageNodeOpsReconciler) resumeAndFail(
 	}
 	r.Recorder.Eventf(ops, corev1.EventTypeWarning, "NodeResumed",
 		"drain failed, attempted resume of node %s: %s", nodeUUID, reason)
+	r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "NodeResumed", fmt.Sprintf("drain failed, attempted resume of node %s: %s", nodeUUID, reason))
 	return r.failOps(ctx, ops, reason)
 }
 
@@ -781,6 +790,7 @@ func (r *StorageNodeOpsReconciler) clusterPauseCheck(
 	_ = r.Status().Patch(ctx, ops, patch)
 	r.Recorder.Eventf(ops, corev1.EventTypeWarning, "DrainPaused",
 		"drain paused: %s — will resume when cluster is active", reason)
+	r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainPaused", fmt.Sprintf("drain paused: %s — will resume when cluster is active", reason))
 	log.Info("drain: pausing — cluster not ready", "reason", reason)
 	return ctrl.Result{RequeueAfter: 60 * time.Second}, true
 }
@@ -827,6 +837,7 @@ func (r *StorageNodeOpsReconciler) failOps(
 	log := logf.FromContext(ctx)
 	log.Error(nil, "ops failed", "ops", ops.Name, "reason", reason)
 	r.Recorder.Event(ops, "Warning", "OpsFailed", reason)
+	r.emitOnStorageNode(ctx, ops, "Warning", "OpsFailed", reason)
 
 	now := metav1.Now()
 	patch := client.MergeFrom(ops.DeepCopy())
@@ -846,6 +857,20 @@ func (r *StorageNodeOpsReconciler) failOps(
 		_ = r.releaseLock(ctx, &sn, ops.Name)
 	}
 	return ctrl.Result{}, nil
+}
+
+// emitOnStorageNode emits an event on the StorageNode that this ops targets,
+// mirroring events that are also emitted on the StorageNodeOps CR itself.
+func (r *StorageNodeOpsReconciler) emitOnStorageNode(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.StorageNodeOps,
+	eventType, reason, message string,
+) {
+	var sn simplyblockv1alpha1.StorageNode
+	if err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.StorageNodeRef, Namespace: ops.Namespace}, &sn); err != nil {
+		return
+	}
+	r.Recorder.Event(&sn, eventType, reason, message)
 }
 
 // releaseLock clears StorageNode.status.activeOpsRef if it still points to opsName.

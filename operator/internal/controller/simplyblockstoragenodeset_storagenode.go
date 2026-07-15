@@ -255,6 +255,29 @@ func buildStorageNodeCR(
 	return sn
 }
 
+// emitOnStorageNodeForWorker emits an event on the StorageNode CR for the given
+// worker, mirroring events that are emitted on the StorageNodeSet.
+func (r *StorageNodeSetReconciler) emitOnStorageNodeForWorker(
+	ctx context.Context,
+	sns *simplyblockv1alpha1.StorageNodeSet,
+	workerNode string,
+	eventType, reason, message string,
+) {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList,
+		client.InNamespace(sns.Namespace),
+		client.MatchingFields{"spec.workerNode": workerNode},
+	); err != nil {
+		return
+	}
+	for i := range snList.Items {
+		if snList.Items[i].Spec.StorageNodeSetRef == sns.Name {
+			r.Recorder.Event(&snList.Items[i], eventType, reason, message)
+			return
+		}
+	}
+}
+
 // storageNodePostedAt returns the PostedAt timestamp from the StorageNode CR
 // for the given worker, or nil if not found / not yet set.
 func (r *StorageNodeSetReconciler) storageNodePostedAt(

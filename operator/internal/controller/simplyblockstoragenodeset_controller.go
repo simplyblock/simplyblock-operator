@@ -815,6 +815,7 @@ func (r *StorageNodeSetReconciler) recordSpdkPodEvents(
 
 	r.Recorder.Eventf(snCR, corev1.EventTypeWarning, latest.Reason,
 		"worker %s: %s", nodeName, latest.Message)
+	r.emitOnStorageNodeForWorker(ctx, snCR, nodeName, corev1.EventTypeWarning, latest.Reason, latest.Message)
 
 	// Persist the flag so the recovery event is emitted correctly even if the
 	// operator restarts before the node comes online.
@@ -1296,6 +1297,8 @@ func onAllSocketNodesOnline(
 	if snCR.Status.SchedulingFailedWorkers[nodeName] {
 		r.Recorder.Eventf(snCR, corev1.EventTypeNormal, "NodeOnline",
 			"worker %s: SPDK pod is now online after previous scheduling failure", nodeName)
+		r.emitOnStorageNodeForWorker(ctx, snCR, nodeName, corev1.EventTypeNormal, "NodeOnline",
+			fmt.Sprintf("SPDK pod is now online after previous scheduling failure on %s", nodeName))
 		delete(snCR.Status.SchedulingFailedWorkers, nodeName)
 		changed = true
 	}
