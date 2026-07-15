@@ -608,6 +608,7 @@ func (r *StorageNodeSetReconciler) reconcileEndpointSlice(
 ) error {
 	log := logf.FromContext(ctx)
 
+	// Start with workers from spec.workerNodes.
 	nodeIPs := make(map[string]string)
 	for _, nodeName := range snCR.Spec.WorkerNodes {
 		ip, err := getNodeInternalIP(ctx, r.Client, nodeName)
@@ -616,6 +617,26 @@ func (r *StorageNodeSetReconciler) reconcileEndpointSlice(
 			continue
 		}
 		nodeIPs[nodeName] = ip
+	}
+
+	// Also include workers from manually created StorageNode CRs so their
+	// per-node DNS hostname resolves and checkNodeInfoReachable succeeds.
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList,
+		client.InNamespace(snCR.Namespace),
+		client.MatchingFields{"spec.storageNodeSetRef": snCR.Name},
+	); err == nil {
+		for _, sn := range snList.Items {
+			if _, ok := nodeIPs[sn.Spec.WorkerNode]; ok {
+				continue // already covered
+			}
+			ip, err := getNodeInternalIP(ctx, r.Client, sn.Spec.WorkerNode)
+			if err != nil {
+				log.Error(err, "failed to get IP for manual StorageNode worker, skipping", "worker", sn.Spec.WorkerNode)
+				continue
+			}
+			nodeIPs[sn.Spec.WorkerNode] = ip
+		}
 	}
 
 	return r.applyStorageNodeSetEndpointSlice(ctx, snCR, nodeIPs)
