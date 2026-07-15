@@ -98,6 +98,7 @@ type StorageNodeSetSpec struct {
 	DataIfname []string `json:"dataIfname,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Worker Nodes"
 	// WorkerNodes is the set of Kubernetes worker nodes to manage.
+	// +kubebuilder:validation:MaxItems=200
 	WorkerNodes []string `json:"workerNodes,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="OpenShift Cluster"
 	// OpenShiftCluster indicates OpenShift-specific behavior should be enabled.
@@ -166,6 +167,7 @@ type StorageNodeSetSpec struct {
 	// +optional
 	NodeFailureDomains map[string]int32 `json:"nodeFailureDomains,omitempty"`
 
+	// +kubebuilder:validation:MaxProperties=200
 	// NodeConfigs allows per-worker-node configuration overrides keyed by the
 	// Kubernetes worker node name. Entries are propagated to the corresponding
 	// StorageNode.spec.overrides by the StorageNodeReconciler on every reconcile.

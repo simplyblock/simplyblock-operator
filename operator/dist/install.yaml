@@ -2144,6 +2144,7 @@ spec:
                   StorageNode.spec.overrides by the StorageNodeReconciler on every reconcile.
                   The StorageNodeSet is the single source of truth for all per-node config,
                   including failure domain assignment via nodeConfigs[worker].failureDomain.
+                maxProperties: 200
                 type: object
               nodeFailureDomains:
                 additionalProperties:
@@ -2277,6 +2278,7 @@ spec:
                   manage.
                 items:
                   type: string
+                maxItems: 200
                 type: array
             required:
             - clusterName
