@@ -635,7 +635,7 @@ func (r *StorageNodeReconciler) handleDeletion(
 
 	if sn.Status.Status == utils.NodeStatusSuspended ||
 		sn.Status.Status == utils.ClusterStatusActive ||
-		sn.Status.Status == "online" {
+		sn.Status.Status == utils.NodeStatusOnline {
 		if err := r.ensureRemoveOps(ctx, sn); err != nil {
 			return ctrl.Result{}, err
 		}
