@@ -119,7 +119,7 @@ var (
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;update;patch
@@ -1848,7 +1848,7 @@ func (r *StorageNodeSetReconciler) performNodeAction(
 	} else if inProgress := actionInProgressStatus(snCR.Spec.Action); inProgress != "" && cur == inProgress {
 		log.Info("Backend action already in progress; waiting for completion instead of re-triggering",
 			"action", snCR.Spec.Action, "nodeUUID", snCR.Spec.NodeUUID, "status", cur)
-		return r.waitForActionCompletion(ctx, apiClient, clusterUUID, snCR.Spec.NodeUUID, snCR.Spec.Action)
+		return r.waitForActionCompletion(ctx, apiClient, clusterUUID, snCR)
 	} else if target, ok := actionTargetStatus(snCR.Spec.Action); ok && cur == target && actionAlreadyTriggered(snCR) {
 		log.Info("Backend action already completed; nothing to do",
 			"action", snCR.Spec.Action, "nodeUUID", snCR.Spec.NodeUUID, "status", cur)
@@ -1953,8 +1953,7 @@ func (r *StorageNodeSetReconciler) performNodeAction(
 		ctx,
 		apiClient,
 		clusterUUID,
-		snCR.Spec.NodeUUID,
-		snCR.Spec.Action,
+		snCR,
 	); err != nil {
 		return fmt.Errorf(
 			"node did not reach expected state after action %s: %w",
@@ -2082,11 +2081,13 @@ func (r *StorageNodeSetReconciler) waitForActionCompletion(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
-	nodeUUID string,
-	action string,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
 ) error {
 
 	log := logf.FromContext(ctx)
+
+	nodeUUID := snCR.Spec.NodeUUID
+	action := snCR.Spec.Action
 
 	expectedStatus := map[string]string{
 		utils.NodeActionSuspend:  "suspended",
@@ -2152,7 +2153,7 @@ func (r *StorageNodeSetReconciler) waitForActionCompletion(
 		if resp.Status == targetStatus {
 			log.Info("Node reached expected status",
 				"nodeUUID", nodeUUID, "status", resp.Status)
-			return nil
+			return r.verifyWorkerAssignment(ctx, snCR, resp)
 		}
 
 		waitForActionCompletionSleepFn(waitForActionCompletionWaitInterval)
@@ -2163,5 +2164,57 @@ func (r *StorageNodeSetReconciler) waitForActionCompletion(
 		nodeUUID,
 		targetStatus,
 		action,
+	)
+}
+
+// verifyWorkerAssignment confirms that a migration actually landed the storage
+// node on the requested worker. It only applies to a restart that targets a
+// specific worker (spec.workerNode) — the migration flow.
+//
+// A failed migration can silently report success on the ORIGINAL worker: the
+// webapp resets the node to OFFLINE without committing the new api_endpoint, so
+// the tasks-runner picks up the offline node, restarts it against the stale
+// (old-worker) endpoint, and the node comes back online where it started.
+// Checking only status == "online" passes in that case. To catch it we compare
+// the node's reported mgmt_ip against the requested worker's InternalIP; a
+// mismatch means the node came online on the wrong worker.
+func (r *StorageNodeSetReconciler) verifyWorkerAssignment(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+	resp utils.NodeStatusResponse,
+) error {
+	if snCR.Spec.Action != "restart" || snCR.Spec.WorkerNode == "" {
+		return nil
+	}
+
+	log := logf.FromContext(ctx)
+
+	expectedIP, err := getNodeInternalIP(ctx, r.Client, snCR.Spec.WorkerNode)
+	if err != nil {
+		return fmt.Errorf(
+			"cannot verify worker assignment for node %s: %w",
+			snCR.Spec.NodeUUID, err,
+		)
+	}
+
+	if resp.IP == expectedIP {
+		log.Info(
+			"Node came online on the expected worker",
+			"nodeUUID", snCR.Spec.NodeUUID,
+			"workerNode", snCR.Spec.WorkerNode,
+			"mgmtIp", resp.IP,
+		)
+		return nil
+	}
+
+	r.Recorder.Eventf(
+		snCR, corev1.EventTypeWarning, "WorkerAssignmentMismatch",
+		"Node %s came online on the wrong worker after migration: expected %s (%s), got mgmt_ip %s",
+		snCR.Spec.NodeUUID, snCR.Spec.WorkerNode, expectedIP, resp.IP,
+	)
+
+	return fmt.Errorf(
+		"node %s online on wrong worker: expected %s (%s), got mgmt_ip %s",
+		snCR.Spec.NodeUUID, snCR.Spec.WorkerNode, expectedIP, resp.IP,
 	)
 }
