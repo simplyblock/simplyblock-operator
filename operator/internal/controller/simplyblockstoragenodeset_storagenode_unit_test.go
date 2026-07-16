@@ -45,7 +45,7 @@ func newSNSReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetRec
 // ── TestStorageNodeCRName ──────────────────────────────────────────────────────
 
 func TestStorageNodeCRName_SimpleCase(t *testing.T) {
-	name := storageNodeCRName("my-sns", "worker-a.example.com", "0")
+	name := storageNodeCRName("my-sns", "worker-a.example.com", "0", 0)
 	if name == "" {
 		t.Fatal("expected non-empty name")
 	}
@@ -60,7 +60,7 @@ func TestStorageNodeCRName_SimpleCase(t *testing.T) {
 
 func TestStorageNodeCRName_TruncatesLongNames(t *testing.T) {
 	longWorker := "vm" + strings.Repeat("a", 60) + ".simplyblock3.localdomain"
-	name := storageNodeCRName("simplyblock-node", longWorker, "0")
+	name := storageNodeCRName("simplyblock-node", longWorker, "0", 0)
 	if len(name) > 63 {
 		t.Errorf("truncated name still exceeds 63 chars: len=%d", len(name))
 	}
@@ -69,15 +69,15 @@ func TestStorageNodeCRName_TruncatesLongNames(t *testing.T) {
 func TestStorageNodeCRName_CollisionGuard(t *testing.T) {
 	// Two workers sharing a long prefix must produce distinct names.
 	base := "vm" + strings.Repeat("x", 55) + ".example.com"
-	name1 := storageNodeCRName("sns", base+"1", "0")
-	name2 := storageNodeCRName("sns", base+"2", "0")
+	name1 := storageNodeCRName("sns", base+"1", "0", 0)
+	name2 := storageNodeCRName("sns", base+"2", "0", 0)
 	if name1 == name2 {
 		t.Errorf("collision: both workers mapped to %q", name1)
 	}
 }
 
 func TestStorageNodeCRName_IsDNSLabelSafe(t *testing.T) {
-	name := storageNodeCRName("my-sns", "vm01.simplyblock3.localdomain", "0")
+	name := storageNodeCRName("my-sns", "vm01.simplyblock3.localdomain", "0", 0)
 	for _, c := range name {
 		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '.' {
 			t.Errorf("invalid character %q in name %q", c, name)

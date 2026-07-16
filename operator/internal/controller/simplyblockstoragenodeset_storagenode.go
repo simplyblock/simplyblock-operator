@@ -51,13 +51,28 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 ) error {
 	log := logf.FromContext(ctx)
 
-	// Build the expected set of (worker, socket) pairs.
+	// Compute nodesPerSocket (default 1).
+	nodesPerSocket := 1
+	if sns.Spec.NodesPerSocket != nil && *sns.Spec.NodesPerSocket > 1 {
+		nodesPerSocket = int(*sns.Spec.NodesPerSocket)
+	}
 	sockets := effectiveSockets(sns)
-	type workerSocket struct{ worker, socket string }
-	expected := make(map[workerSocket]struct{}, len(sns.Spec.WorkerNodes)*len(sockets))
+
+	// Build the expected set of (worker, globalOrdinal) pairs.
+	// globalOrdinal = socketPosition * nodesPerSocket + nodeIndex
+	// This uniquely identifies each backend storage node per worker host.
+	type workerOrdinal struct {
+		worker  string
+		ordinal int
+	}
+	expected := make(map[workerOrdinal]struct{}, len(sns.Spec.WorkerNodes)*len(sockets)*nodesPerSocket)
 	for _, worker := range sns.Spec.WorkerNodes {
-		for _, socket := range sockets {
-			expected[workerSocket{worker, socket}] = struct{}{}
+		for si, socket := range sockets {
+			_ = socket // socket string is embedded in the ordinal calculation
+			for ni := 0; ni < nodesPerSocket; ni++ {
+				ordinal := si*nodesPerSocket + ni
+				expected[workerOrdinal{worker, ordinal}] = struct{}{}
+			}
 		}
 	}
 
@@ -70,35 +85,32 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 		return fmt.Errorf("listing owned StorageNode CRs: %w", err)
 	}
 
-	// Delete stale CRs (worker removed from spec.workerNodes or socket removed).
-	// Manually created StorageNode CRs (no controller OwnerReference pointing to
-	// this StorageNodeSet) are preserved — they can reference the fleet config
-	// without being listed in spec.workerNodes.
+	// Delete stale CRs (worker removed from spec.workerNodes, socket removed,
+	// or nodesPerSocket reduced). Manually created CRs (no OwnerReference) are kept.
 	for i := range owned.Items {
 		sn := &owned.Items[i]
-		key := workerSocket{sn.Spec.WorkerNode, socketLabel(sn.Spec.SocketIndex)}
-		if _, ok := expected[key]; ok {
+		ordinal := 0
+		if sn.Spec.SocketIndex != nil {
+			ordinal = int(*sn.Spec.SocketIndex)
+		}
+		if _, ok := expected[workerOrdinal{sn.Spec.WorkerNode, ordinal}]; ok {
 			continue
 		}
-		// Skip if this CR was not created by the operator (no controller owner).
 		owner := metav1.GetControllerOf(sn)
 		if owner == nil || owner.Name != sns.Name {
-			continue
+			continue // manually created — preserve
 		}
 		if err := r.Delete(ctx, sn); err != nil && !apierrors.IsNotFound(err) {
 			log.Error(err, "failed to delete stale StorageNode CR", "name", sn.Name)
 		} else {
 			log.Info("deleted stale StorageNode CR", "name", sn.Name,
-				"worker", sn.Spec.WorkerNode, "socket", socketLabel(sn.Spec.SocketIndex))
+				"worker", sn.Spec.WorkerNode, "ordinal", ordinal)
 		}
 	}
 
-	// Determine which workers host FDB pods — these must be added sequentially.
+	// Determine which workers host FDB pods — added sequentially.
 	fdbWorkers := r.fdbWorkerSet(ctx, sns)
 
-	// Track whether any FDB worker's StorageNode CR is still awaiting its UUID.
-	// If so, stop creating new FDB CRs — the StorageNodeReconciler will POST
-	// the current one and we wait until it comes online before creating the next.
 	fdbInFlight := false
 	for _, sn := range owned.Items {
 		if !fdbWorkers[sn.Spec.WorkerNode] {
@@ -110,29 +122,33 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 		}
 	}
 
-	// Create or sync each expected (worker, socket).
+	// Create or sync one StorageNode CR per (worker, socket, nodeIdx).
+	// globalOrdinal = socketPosition × nodesPerSocket + nodeIdx is stored as
+	// SocketIndex and used by pollUUIDFromBackend to select the correct backend node.
 	for _, worker := range sns.Spec.WorkerNodes {
-		for _, socket := range sockets {
-			// For FDB workers: only create the next CR when no other FDB
-			// worker is still being provisioned (UUID not yet assigned).
-			if fdbWorkers[worker] && fdbInFlight {
-				// Check if THIS worker already has a CR (already in progress or done).
-				crName := storageNodeCRName(sns.Name, worker, socket)
-				alreadyExists := false
-				for _, sn := range owned.Items {
-					if sn.Name == crName {
-						alreadyExists = true
-						break
+		for si, socket := range sockets {
+			for ni := 0; ni < nodesPerSocket; ni++ {
+				globalOrdinal := si*nodesPerSocket + ni
+
+				if fdbWorkers[worker] && fdbInFlight {
+					crName := storageNodeCRName(sns.Name, worker, socket, ni)
+					alreadyExists := false
+					for _, sn := range owned.Items {
+						if sn.Name == crName {
+							alreadyExists = true
+							break
+						}
+					}
+					if !alreadyExists {
+						log.Info("FDB worker: deferring StorageNode CR creation until previous FDB node is online",
+							"worker", worker, "socket", socket, "nodeIdx", ni)
+						continue
 					}
 				}
-				if !alreadyExists {
-					log.Info("FDB worker: deferring StorageNode CR creation until previous FDB node is online",
-						"worker", worker)
-					continue // skip — revisit on next reconcile
+				if err := r.ensureStorageNodeCR(ctx, sns, worker, socket, ni, globalOrdinal); err != nil {
+					log.Error(err, "failed to ensure StorageNode CR",
+						"worker", worker, "socket", socket, "nodeIdx", ni)
 				}
-			}
-			if err := r.ensureStorageNodeCR(ctx, sns, worker, socket); err != nil {
-				log.Error(err, "failed to ensure StorageNode CR", "worker", worker, "socket", socket)
 			}
 		}
 	}
@@ -145,28 +161,32 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 	return nil
 }
 
-// ensureStorageNodeCR creates or patches a StorageNode CR for (worker, socket).
+// ensureStorageNodeCR creates or patches a StorageNode CR.
+// socket is the NUMA socket identifier (from socketsToUse), nodeIdx is the
+// per-socket node index (0..nodesPerSocket-1), and globalOrdinal is used as
+// SocketIndex for backend node lookup in pollUUIDFromBackend.
 func (r *StorageNodeSetReconciler) ensureStorageNodeCR(
 	ctx context.Context,
 	sns *simplyblockv1alpha1.StorageNodeSet,
 	worker, socket string,
+	nodeIdx, globalOrdinal int,
 ) error {
 	log := logf.FromContext(ctx)
-	name := storageNodeCRName(sns.Name, worker, socket)
+	name := storageNodeCRName(sns.Name, worker, socket, nodeIdx)
 
 	var existing simplyblockv1alpha1.StorageNode
 	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: sns.Namespace}, &existing)
 
 	if apierrors.IsNotFound(err) {
 		// Create.
-		sn := buildStorageNodeCR(sns, name, worker, socket)
+		sn := buildStorageNodeCR(sns, name, worker, globalOrdinal)
 		if setErr := controllerutil.SetControllerReference(sns, sn, r.Scheme); setErr != nil {
 			return fmt.Errorf("setting owner reference on StorageNode %s: %w", name, setErr)
 		}
 		if createErr := r.Create(ctx, sn); createErr != nil {
 			return fmt.Errorf("creating StorageNode %s: %w", name, createErr)
 		}
-		log.Info("created StorageNode CR", "name", name, "worker", worker, "socket", socket)
+		log.Info("created StorageNode CR", "name", name, "worker", worker, "socket", socket, "nodeIdx", nodeIdx)
 
 		// Backward compatibility: pre-populate UUID and status from the legacy
 		// StorageNodeSet.status.nodes[] so nodes that were already provisioned
@@ -263,18 +283,22 @@ func (r *StorageNodeSetReconciler) aggregateStorageNodeStatus(
 // storageNodeCRName builds a deterministic, DNS-label-safe name for a StorageNode CR.
 // Pattern: {sns-name}-{sanitised-worker}-{socket}, truncated to 63 chars with
 // an FNV-32 suffix to prevent collisions on long names.
-func storageNodeCRName(snsName, worker, socket string) string {
-	// Sanitise worker hostname: lowercase, replace non-alnum with '-'.
+// storageNodeCRName builds a deterministic, DNS-label-safe name for a StorageNode CR.
+// Pattern: {sns}-{worker}-s{socket}-n{nodeIdx}
+// Both the NUMA socket identifier and the per-socket node index are encoded in the
+// name so it is unambiguous across different socketsToUse × nodesPerSocket combinations.
+func storageNodeCRName(snsName, worker, socket string, nodeIdx int) string {
+	nodeIdxStr := fmt.Sprintf("%d", nodeIdx)
 	sanitised := sanitiseDNSLabel(worker)
-	raw := snsName + "-" + sanitised + "-" + socket
-	raw = strings.ToLower(raw)
+	raw := strings.ToLower(snsName + "-" + sanitised + "-s" + socket + "-n" + nodeIdxStr)
 
 	const maxLen = 63
 	if len(raw) <= maxLen {
 		return raw
 	}
-	// Append 7-char FNV hash suffix before truncation.
-	h := fnv32Hash(worker + socket)
+	// Append 7-char FNV-32 hash suffix before truncation to prevent collisions
+	// when two workers share a long common prefix.
+	h := fnv32Hash(worker + socket + nodeIdxStr)
 	suffix := fmt.Sprintf("-%06x", h)
 	keep := maxLen - len(suffix)
 	if keep < 1 {
@@ -300,13 +324,10 @@ func sanitiseDNSLabel(s string) string {
 // buildStorageNodeCR constructs a new StorageNode CR for the given worker and socket.
 func buildStorageNodeCR(
 	sns *simplyblockv1alpha1.StorageNodeSet,
-	name, worker, socket string,
+	name, worker string,
+	ordinal int,
 ) *simplyblockv1alpha1.StorageNode {
-	var idx int32
-	if socket != "" {
-		fmt.Sscanf(socket, "%d", &idx) //nolint:errcheck
-	}
-	socketIndex := &idx
+	idx := int32(ordinal)
 
 	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
@@ -320,7 +341,7 @@ func buildStorageNodeCR(
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			StorageNodeSetRef: sns.Name,
 			WorkerNode:        worker,
-			SocketIndex:       socketIndex,
+			SocketIndex:       &idx,
 		},
 	}
 
@@ -493,11 +514,3 @@ func effectiveSockets(sns *simplyblockv1alpha1.StorageNodeSet) []string {
 	return sns.Spec.SocketsToUse
 }
 
-// socketLabel converts a *int32 socket index back to the string representation
-// used in storageNodeCRName, for matching against expected keys.
-func socketLabel(idx *int32) string {
-	if idx == nil {
-		return "0"
-	}
-	return fmt.Sprintf("%d", *idx)
-}
