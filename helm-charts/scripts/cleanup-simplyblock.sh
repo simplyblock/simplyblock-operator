@@ -9,37 +9,81 @@ Usage: $(basename "$0") [OPTIONS] [NAMESPACE]
 Remove all simplyblock resources from a Kubernetes cluster.
 
 Arguments:
-  NAMESPACE    Target namespace (default: simplyblock)
+  NAMESPACE                Target namespace (default: simplyblock)
 
 Options:
-  -f, --force  Skip interactive confirmation
-  -h, --help   Show this help message
+  -f, --force              Skip interactive confirmation
+      --helm-release NAME  Helm release to uninstall (default: simplyblock-operator,
+                           or \$HELM_RELEASE)
+      --csi-driver NAME    CSI driver name whose PVs are cleaned up
+                           (default: csi.simplyblock.io, or \$CSI_DRIVER)
+  -h, --help               Show this help message
 EOF
     exit 0
 }
 
+# Abort with usage if an option that takes a value was given none.
+# $1 = option name (for the message), $2 = the value passed (may be empty).
+require_value() {
+    if [[ -z "$2" ]]; then
+        echo "Option $1 requires a value" >&2
+        usage
+    fi
+}
+
 FORCE=false
 NAMESPACE=""
+HELM_RELEASE_ARG=""
+CSI_DRIVER_ARG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -f|--force) FORCE=true; shift ;;
-        -h|--help)  usage ;;
-        -*)         echo "Unknown option: $1" >&2; usage ;;
+        -f|--force)
+            FORCE=true
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        --helm-release)
+            require_value "$1" "${2:-}"
+            HELM_RELEASE_ARG="$2"
+            shift 2
+            ;;
+        --helm-release=*)
+            HELM_RELEASE_ARG="${1#*=}"
+            shift
+            ;;
+        --csi-driver)
+            require_value "$1" "${2:-}"
+            CSI_DRIVER_ARG="$2"
+            shift 2
+            ;;
+        --csi-driver=*)
+            CSI_DRIVER_ARG="${1#*=}"
+            shift
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            usage
+            ;;
         *)
             if [[ -z "$NAMESPACE" ]]; then
                 NAMESPACE="$1"
             else
-                echo "Unexpected argument: $1" >&2; usage
+                echo "Unexpected argument: $1" >&2
+                usage
             fi
             shift
             ;;
     esac
 done
 
+# Precedence for HELM_RELEASE / CSI_DRIVER: CLI flag > environment variable > default.
 NAMESPACE="${NAMESPACE:-simplyblock}"
-HELM_RELEASE="simplyblock-operator"
+HELM_RELEASE="${HELM_RELEASE_ARG:-${HELM_RELEASE:-simplyblock-operator}}"
 CRD_GROUP="storage.simplyblock.io"
+CSI_DRIVER="${CSI_DRIVER_ARG:-${CSI_DRIVER:-csi.simplyblock.io}}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -69,9 +113,11 @@ CURRENT_CONTEXT=$($KUBECTL config current-context 2>/dev/null || echo "<unknown>
 CLUSTER_NAME=$($KUBECTL config view -o jsonpath="{.contexts[?(@.name==\"${CURRENT_CONTEXT}\")].context.cluster}" 2>/dev/null || echo "<unknown>")
 
 section "Cleanup target"
-echo -e "  Context:   ${RED}${CURRENT_CONTEXT}${NC}"
-echo -e "  Cluster:   ${RED}${CLUSTER_NAME}${NC}"
-echo -e "  Namespace: ${RED}${NAMESPACE}${NC}"
+echo -e "  Context:      ${RED}${CURRENT_CONTEXT}${NC}"
+echo -e "  Cluster:      ${RED}${CLUSTER_NAME}${NC}"
+echo -e "  Namespace:    ${RED}${NAMESPACE}${NC}"
+echo -e "  Helm release: ${RED}${HELM_RELEASE}${NC}"
+echo -e "  CSI driver:   ${RED}${CSI_DRIVER}${NC}"
 echo ""
 
 if [[ "$FORCE" != true ]]; then
@@ -196,8 +242,7 @@ for pvc in $pvcs; do
     [[ -n "$pv" ]] && pvs_to_delete+=("$pv")
     info "Deleting PVC $pvc (bound to PV: ${pv:-none})..."
     $KUBECTL patch pvc "$pvc" -n "$NAMESPACE" \
-        --type=merge -p '{"metadata":{"finalizers":[]}}' \
-        --ignore-not-found 2>/dev/null || true
+        --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || true
     $KUBECTL delete pvc "$pvc" -n "$NAMESPACE" \
         --ignore-not-found --timeout=30s 2>/dev/null || true
 done
@@ -206,8 +251,7 @@ for pv in "${pvs_to_delete[@]:-}"; do
     [[ -z "$pv" ]] && continue
     info "Deleting PV $pv..."
     $KUBECTL patch pv "$pv" \
-        --type=merge -p '{"metadata":{"finalizers":[]}}' \
-        --ignore-not-found 2>/dev/null || true
+        --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || true
     $KUBECTL delete pv "$pv" \
         --ignore-not-found --timeout=30s 2>/dev/null || true
 done
@@ -222,10 +266,32 @@ for pv in $released_pvs; do
     if [[ "$claim_ns" == "$NAMESPACE" ]]; then
         info "  Deleting released PV $pv..."
         $KUBECTL patch pv "$pv" \
-            --type=merge -p '{"metadata":{"finalizers":[]}}' \
-            --ignore-not-found 2>/dev/null || true
+            --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || true
         $KUBECTL delete pv "$pv" --ignore-not-found --timeout=30s 2>/dev/null || true
     fi
+done
+
+info "Cleaning up PVs provisioned by CSI driver '$CSI_DRIVER' claimed from namespace '$NAMESPACE'..."
+csi_pvs=$($KUBECTL get pv --ignore-not-found \
+    -o jsonpath="{range .items[?(@.spec.csi.driver==\"${CSI_DRIVER}\")]}{.metadata.name}{\"\n\"}{end}" 2>/dev/null || true)
+for pv in $csi_pvs; do
+    [[ -z "$pv" ]] && continue
+    claim_ns=$($KUBECTL get pv "$pv" --ignore-not-found \
+        -o jsonpath='{.spec.claimRef.namespace}' 2>/dev/null || true)
+    [[ "$claim_ns" != "$NAMESPACE" ]] && continue
+    claim_name=$($KUBECTL get pv "$pv" --ignore-not-found \
+        -o jsonpath='{.spec.claimRef.name}' 2>/dev/null || true)
+    if [[ -n "$claim_name" ]]; then
+        info "  Deleting PVC $claim_ns/$claim_name (bound to CSI PV $pv)..."
+        $KUBECTL patch pvc "$claim_name" -n "$claim_ns" \
+            --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || true
+        $KUBECTL delete pvc "$claim_name" -n "$claim_ns" \
+            --ignore-not-found --timeout=30s 2>/dev/null || true
+    fi
+    info "  Deleting CSI PV $pv (claim=$claim_ns/${claim_name:-none})..."
+    $KUBECTL patch pv "$pv" \
+        --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || true
+    $KUBECTL delete pv "$pv" --ignore-not-found --timeout=30s 2>/dev/null || true
 done
 
 # ---------------------------------------------------------------------------

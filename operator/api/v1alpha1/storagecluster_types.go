@@ -71,6 +71,32 @@ type VolumeMigrationSettings struct {
 	// nvme-cli (and, for rebalancing, fio + jq).
 	// +optional
 	RebalancerImage *string `json:"rebalancerImage,omitempty"`
+	// DataRealignment configures the periodic control-plane data realignment that
+	// runs after volumes have been moved. Realignment re-aligns the cluster's internal
+	// data structures to the current volume placement so fault-tolerance (FTT) and
+	// node-affinity guarantees are preserved. It applies to *all* volume moves —
+	// auto-rebalancing, manual VolumeMigrations, and drain/removal-triggered moves —
+	// so it lives here rather than under AutoRebalancing. Enabled by default.
+	// +optional
+	DataRealignment *DataRealignmentSettings `json:"dataRealignment,omitempty"`
+}
+
+// DataRealignmentSettings controls the periodic, post-migration control-plane data
+// realignment. After one or more volumes have been moved the operator asks the
+// control plane to re-align its internal data structures to the new placement,
+// restoring fault-tolerance (FTT) and node-affinity guarantees.
+type DataRealignmentSettings struct {
+	// Enabled activates automatic post-migration data realignment for this cluster.
+	// Defaults to true.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+	// Interval is how often the operator checks whether a realignment is pending
+	// (i.e. at least one volume has moved since the last successful realignment) and,
+	// if so, triggers it. Explicit triggers (see the
+	// simplyblock.io/trigger-realignment annotation) bypass this spacing. Defaults to
+	// 10m.
+	// +optional
+	Interval *metav1.Duration `json:"interval,omitempty"`
 }
 
 // MetricsBackend selects the NodeMetricsProvider implementation.
@@ -320,6 +346,18 @@ type StorageClusterStatus struct {
 	Status string `json:"status,omitempty"`
 	// Rebalancing indicates whether cluster rebalancing is currently active.
 	Rebalancing *bool `json:"rebalancing,omitempty"`
+	// PendingDataRealignment indicates that at least one volume has been moved since
+	// the last successful control-plane data realignment, so a realignment is due on
+	// the next DataRealignment.Interval tick. It is persisted so a pending realignment
+	// survives an operator restart, and is cleared once a realignment completes
+	// successfully.
+	// +optional
+	PendingDataRealignment *bool `json:"pendingDataRealignment,omitempty"`
+	// LastDataRealignmentAt is the time of the last successful control-plane data
+	// realignment. It is used to space realignments by DataRealignment.Interval and to
+	// avoid re-running at the end of an interval when nothing is pending.
+	// +optional
+	LastDataRealignmentAt *metav1.Time `json:"lastDataRealignmentAt,omitempty"`
 	// ErasureCodingScheme is the active erasure-coding layout, for example "2x1".
 	ErasureCodingScheme string `json:"erasureCodingScheme,omitempty"`
 	// LastUpdated is the last backend update timestamp.
