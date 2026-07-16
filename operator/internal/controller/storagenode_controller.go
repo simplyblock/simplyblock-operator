@@ -212,13 +212,17 @@ func (r *StorageNodeReconciler) pollUUIDFromBackend(
 	sn.Status.UUID = n.UUID
 	sn.Status.Status = n.Status
 	sn.Status.Health = n.Health
-	sn.Status.MgmtIp = n.IP
 	sn.Status.Hostname = n.Hostname
-	sn.Status.CPU = &cpu
-	sn.Status.Volumes = &volumes
-	sn.Status.RpcPort = &rpcPort
-	sn.Status.LvolPort = &lvolPort
-	sn.Status.NvmfPort = &nvmfPort
+	sn.Status.Resources = &simplyblockv1alpha1.StorageNodeResources{
+		CPU:     &cpu,
+		Volumes: &volumes,
+	}
+	sn.Status.Ports = &simplyblockv1alpha1.StorageNodePorts{
+		Management: n.IP,
+		NvmeOf:     &nvmfPort,
+		Lvol:       &lvolPort,
+		Rpc:        &rpcPort,
+	}
 	if err := r.Status().Patch(ctx, sn, patch); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("pollUUIDFromBackend: %w", err)
 	}
@@ -490,13 +494,17 @@ func (r *StorageNodeReconciler) syncStatus(
 	patch := client.MergeFrom(sn.DeepCopy())
 	sn.Status.Status = resp.Status
 	sn.Status.Health = resp.Health
-	sn.Status.CPU = &cpu
-	sn.Status.Volumes = &volumes
-	sn.Status.MgmtIp = resp.IP
 	sn.Status.Hostname = resp.Hostname
-	sn.Status.RpcPort = &rpcPort
-	sn.Status.LvolPort = &lvolPort
-	sn.Status.NvmfPort = &nvmfPort
+	sn.Status.Resources = &simplyblockv1alpha1.StorageNodeResources{
+		CPU:     &cpu,
+		Volumes: &volumes,
+	}
+	sn.Status.Ports = &simplyblockv1alpha1.StorageNodePorts{
+		Management: resp.IP,
+		NvmeOf:     &nvmfPort,
+		Lvol:       &lvolPort,
+		Rpc:        &rpcPort,
+	}
 
 	if err := r.Status().Patch(ctx, sn, patch); err != nil {
 		log.Error(err, "failed to patch StorageNode status")

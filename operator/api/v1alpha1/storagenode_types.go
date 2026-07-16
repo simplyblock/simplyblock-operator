@@ -129,6 +129,38 @@ type StorageNodeSpec struct {
 	Overrides *StorageNodeOverrides `json:"overrides,omitempty"`
 }
 
+// StorageNodeResources groups compute and storage resource fields reported by the backend.
+type StorageNodeResources struct {
+	// CPU is the number of SPDK CPU cores allocated to this node.
+	// +optional
+	CPU *int32 `json:"cpu,omitempty"`
+	// Memory is the SPDK memory allocation reported by the backend.
+	// +optional
+	Memory string `json:"memory,omitempty"`
+	// Volumes is the current number of logical volumes on this node.
+	// +optional
+	Volumes *int32 `json:"volumes,omitempty"`
+	// Devices is the device summary (online/total) reported by the backend.
+	// +optional
+	Devices string `json:"devices,omitempty"`
+}
+
+// StorageNodePorts groups the network port and address fields reported by the backend.
+type StorageNodePorts struct {
+	// Management is the management IP address of the node.
+	// +optional
+	Management string `json:"management,omitempty"`
+	// NvmeOf is the NVMe-oF fabric port.
+	// +optional
+	NvmeOf *int32 `json:"nvmeof,omitempty"`
+	// Lvol is the logical-volume subsystem port.
+	// +optional
+	Lvol *int32 `json:"lvol,omitempty"`
+	// Rpc is the RPC/management API port.
+	// +optional
+	Rpc *int32 `json:"rpc,omitempty"`
+}
+
 // StorageNodeStatus holds the observed state of a StorageNode.
 type StorageNodeStatus struct {
 	// UUID is the backend storage node UUID. Set once after node-add completes.
@@ -143,26 +175,6 @@ type StorageNodeStatus struct {
 	// +optional
 	Health bool `json:"health,omitempty"`
 
-	// CPU is the number of CPU cores allocated to the node.
-	// +optional
-	CPU *int32 `json:"cpu,omitempty"`
-
-	// Memory is the memory allocation reported by the backend.
-	// +optional
-	Memory string `json:"memory,omitempty"`
-
-	// Volumes is the number of logical volumes on this node.
-	// +optional
-	Volumes *int32 `json:"volumes,omitempty"`
-
-	// Devices is the device list reported by the backend.
-	// +optional
-	Devices string `json:"devices,omitempty"`
-
-	// MgmtIp is the management IP address of the node.
-	// +optional
-	MgmtIp string `json:"mgmtIp,omitempty"`
-
 	// Hostname is the node hostname as reported by the backend.
 	// +optional
 	Hostname string `json:"hostname,omitempty"`
@@ -171,17 +183,13 @@ type StorageNodeStatus struct {
 	// +optional
 	Uptime string `json:"uptime,omitempty"`
 
-	// RpcPort is the RPC port of the node.
+	// Resources groups compute and storage resource metrics.
 	// +optional
-	RpcPort *int32 `json:"rpcPort,omitempty"`
+	Resources *StorageNodeResources `json:"resources,omitempty"`
 
-	// LvolPort is the lvol port of the node.
+	// Ports groups network connectivity fields (addresses and ports).
 	// +optional
-	LvolPort *int32 `json:"lvolPort,omitempty"`
-
-	// NvmfPort is the NVMe-oF port of the node.
-	// +optional
-	NvmfPort *int32 `json:"nvmfPort,omitempty"`
+	Ports *StorageNodePorts `json:"ports,omitempty"`
 
 	// PostedAt is the timestamp when the node-add POST was sent.
 	// Used as a provisioning guard against duplicate POSTs.
@@ -192,6 +200,11 @@ type StorageNodeStatus struct {
 	// this node. Empty when no operation is in progress. Used for mutual exclusion.
 	// +optional
 	ActiveOpsRef string `json:"activeOpsRef,omitempty"`
+
+	// LatencyMetrics holds the fio-measured baseline NVMe-oF latency for this node,
+	// used by the volume rebalancer to make data-placement decisions.
+	// +optional
+	LatencyMetrics *NodeLatencyMetrics `json:"latencyMetrics,omitempty"`
 }
 
 // +kubebuilder:object:root=true

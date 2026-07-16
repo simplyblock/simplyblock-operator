@@ -199,43 +199,85 @@ spec:
                   ActiveOpsRef is the name of the currently active StorageNodeOps CR targeting
                   this node. Empty when no operation is in progress. Used for mutual exclusion.
                 type: string
-              cpu:
-                description: CPU is the number of CPU cores allocated to the node.
-                format: int32
-                type: integer
-              devices:
-                description: Devices is the device list reported by the backend.
-                type: string
               health:
                 description: Health is the backend-reported node health flag.
                 type: boolean
               hostname:
                 description: Hostname is the node hostname as reported by the backend.
                 type: string
-              lvolPort:
-                description: LvolPort is the lvol port of the node.
-                format: int32
-                type: integer
-              memory:
-                description: Memory is the memory allocation reported by the backend.
-                type: string
-              mgmtIp:
-                description: MgmtIp is the management IP address of the node.
-                type: string
-              nvmfPort:
-                description: NvmfPort is the NVMe-oF port of the node.
-                format: int32
-                type: integer
+              latencyMetrics:
+                description: |-
+                  LatencyMetrics holds the fio-measured baseline NVMe-oF latency for this node,
+                  used by the volume rebalancer to make data-placement decisions.
+                properties:
+                  baselineMeasuredAt:
+                    description: BaselineMeasuredAt is when the baseline was established.
+                    format: date-time
+                    type: string
+                  baselineP50NS:
+                    description: BaselineP50NS is the p50 write latency (nanoseconds)
+                      from the initial empty-cluster benchmark.
+                    format: int64
+                    type: integer
+                  baselineP99NS:
+                    description: BaselineP99NS is the p99 write latency (nanoseconds)
+                      from the initial empty-cluster benchmark.
+                    format: int64
+                    type: integer
+                  nodeUUID:
+                    description: NodeUUID is the backend storage node UUID.
+                    type: string
+                required:
+                - nodeUUID
+                type: object
+              ports:
+                description: Ports groups network connectivity fields (addresses and
+                  ports).
+                properties:
+                  lvol:
+                    description: Lvol is the logical-volume subsystem port.
+                    format: int32
+                    type: integer
+                  management:
+                    description: Management is the management IP address of the node.
+                    type: string
+                  nvmeof:
+                    description: NvmeOf is the NVMe-oF fabric port.
+                    format: int32
+                    type: integer
+                  rpc:
+                    description: Rpc is the RPC/management API port.
+                    format: int32
+                    type: integer
+                type: object
               postedAt:
                 description: |-
                   PostedAt is the timestamp when the node-add POST was sent.
                   Used as a provisioning guard against duplicate POSTs.
                 format: date-time
                 type: string
-              rpcPort:
-                description: RpcPort is the RPC port of the node.
-                format: int32
-                type: integer
+              resources:
+                description: Resources groups compute and storage resource metrics.
+                properties:
+                  cpu:
+                    description: CPU is the number of SPDK CPU cores allocated to
+                      this node.
+                    format: int32
+                    type: integer
+                  devices:
+                    description: Devices is the device summary (online/total) reported
+                      by the backend.
+                    type: string
+                  memory:
+                    description: Memory is the SPDK memory allocation reported by
+                      the backend.
+                    type: string
+                  volumes:
+                    description: Volumes is the current number of logical volumes
+                      on this node.
+                    format: int32
+                    type: integer
+                type: object
               status:
                 description: Status is the backend-reported node status (e.g. online,
                   suspended, offline).
@@ -247,10 +289,6 @@ spec:
                 description: UUID is the backend storage node UUID. Set once after
                   node-add completes.
                 type: string
-              volumes:
-                description: Volumes is the number of logical volumes on this node.
-                format: int32
-                type: integer
             type: object
         type: object
     served: true

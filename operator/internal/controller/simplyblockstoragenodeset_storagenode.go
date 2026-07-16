@@ -180,13 +180,17 @@ func (r *StorageNodeSetReconciler) ensureStorageNodeCR(
 			sn.Status.UUID = ns.UUID
 			sn.Status.Status = ns.Status
 			sn.Status.Health = ns.Health
-			sn.Status.MgmtIp = ns.MgmtIp
 			sn.Status.Hostname = ns.Hostname
-			sn.Status.CPU = ns.CPU
-			sn.Status.Volumes = ns.Volumes
-			sn.Status.RpcPort = ns.RpcPort
-			sn.Status.LvolPort = ns.LvolPort
-			sn.Status.NvmfPort = ns.NvmfPort
+			sn.Status.Resources = &simplyblockv1alpha1.StorageNodeResources{
+				CPU:     ns.CPU,
+				Volumes: ns.Volumes,
+			}
+			sn.Status.Ports = &simplyblockv1alpha1.StorageNodePorts{
+				Management: ns.MgmtIp,
+				Rpc:        ns.RpcPort,
+				Lvol:       ns.LvolPort,
+				NvmeOf:     ns.NvmfPort,
+			}
 			if patchErr := r.Status().Patch(ctx, sn, patch); patchErr != nil {
 				log.Error(patchErr, "failed to pre-populate StorageNode status", "name", name)
 			} else {
@@ -392,13 +396,17 @@ func (r *StorageNodeSetReconciler) syncManualStorageNodeStatus(
 				if n.Status != sn.Status.Status || n.Health != sn.Status.Health {
 					n.Status = sn.Status.Status
 					n.Health = sn.Status.Health
-					n.MgmtIp = sn.Status.MgmtIp
 					n.Hostname = sn.Status.Hostname
-					n.CPU = sn.Status.CPU
-					n.Volumes = sn.Status.Volumes
-					n.RpcPort = sn.Status.RpcPort
-					n.LvolPort = sn.Status.LvolPort
-					n.NvmfPort = sn.Status.NvmfPort
+					if p := sn.Status.Ports; p != nil {
+						n.MgmtIp = p.Management
+						n.RpcPort = p.Rpc
+						n.LvolPort = p.Lvol
+						n.NvmfPort = p.NvmeOf
+					}
+					if r := sn.Status.Resources; r != nil {
+						n.CPU = r.CPU
+						n.Volumes = r.Volumes
+					}
 					changed = true
 				}
 				found = true
@@ -406,18 +414,23 @@ func (r *StorageNodeSetReconciler) syncManualStorageNodeStatus(
 			}
 		}
 		if !found {
-			sns.Status.Nodes = append(sns.Status.Nodes, simplyblockv1alpha1.NodeStatus{
+			entry := simplyblockv1alpha1.NodeStatus{
 				Hostname: sn.Spec.WorkerNode,
 				UUID:     sn.Status.UUID,
 				Status:   sn.Status.Status,
 				Health:   sn.Status.Health,
-				MgmtIp:   sn.Status.MgmtIp,
-				CPU:      sn.Status.CPU,
-				Volumes:  sn.Status.Volumes,
-				RpcPort:  sn.Status.RpcPort,
-				LvolPort: sn.Status.LvolPort,
-				NvmfPort: sn.Status.NvmfPort,
-			})
+			}
+			if p := sn.Status.Ports; p != nil {
+				entry.MgmtIp = p.Management
+				entry.RpcPort = p.Rpc
+				entry.LvolPort = p.Lvol
+				entry.NvmfPort = p.NvmeOf
+			}
+			if r := sn.Status.Resources; r != nil {
+				entry.CPU = r.CPU
+				entry.Volumes = r.Volumes
+			}
+			sns.Status.Nodes = append(sns.Status.Nodes, entry)
 			changed = true
 		}
 	}
