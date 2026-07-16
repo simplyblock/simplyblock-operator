@@ -367,10 +367,26 @@ Implemented on 2026-07-15.
 - **Parallel node add** enforced via `countInFlightNodes` (counts siblings with
   `PostedAt != nil && UUID == ""`). **FDB sequential constraint** preserved via
   `isFDBWorkerBlocked` — any FDB worker waits until no other FDB sibling is in-flight.
-- **`pollUUIDFromBackend`** polls the backend by worker IP + socket index to retrieve the UUID
+- **`pollUUIDFromBackend`** polls the backend by worker IP + global ordinal to retrieve the UUID
   for manually created `StorageNode` CRs (whose worker is not in `spec.workerNodes` and
-  therefore never appears in `StorageNodeSet.status.nodes[]`). Supports multi-socket by
-  sorting backend nodes by RPC port and matching by socket index position.
+  therefore never appears in `StorageNodeSet.status.nodes[]`). Supports multi-socket and
+  multi-node-per-socket by sorting backend nodes by RPC port and picking `matching[globalOrdinal]`.
+- **`StorageNode` CR naming** uses the pattern `{sns}-{worker}-s{socket}-n{nodeIdx}` encoding
+  both the NUMA socket identifier (from `spec.socketsToUse`) and the per-socket node index
+  (0..`nodesPerSocket-1`). The `SocketIndex` field stores the global ordinal
+  `socketPosition × nodesPerSocket + nodeIdx` used by `pollUUIDFromBackend` to select the
+  correct backend node. This is unambiguous across all `socketsToUse × nodesPerSocket`
+  combinations — e.g. `s0-n1` (socket 0, node 1) and `s1-n0` (socket 1, node 0) are
+  always distinct regardless of the configuration.
+
+  Examples:
+
+  | `socketsToUse` | `nodesPerSocket` | CRs created per worker |
+  |---|---|---|
+  | `["0"]` | `1` | `s0-n0` |
+  | `["0","1"]` | `1` | `s0-n0`, `s1-n0` |
+  | `["0"]` | `2` | `s0-n0`, `s0-n1` |
+  | `["0","1"]` | `2` | `s0-n0`, `s0-n1`, `s1-n0`, `s1-n1` |
 - **Manually created `StorageNode` CRs** — users can create a `StorageNode` CR referencing
   an existing `StorageNodeSet` without adding the worker to `spec.workerNodes`. The operator:
   - Does NOT delete it (no OwnerReference = not stale)
@@ -422,8 +438,11 @@ should be allowed. How many concurrent drains are permitted given FTT constraint
 unlimited — one per node simultaneously. FDB sequential constraint is enforced.
 
 **Q3: StorageNode naming** — Resolved ✓  
-Pattern: `{storagenodeset-name}-{sanitised-worker}-{socket}`. Implemented in
-`storageNodeCRName()` with FNV-32 collision guard on truncation.
+Pattern: `{sns}-{worker}-s{socket}-n{nodeIdx}`. Both the NUMA socket identifier (from
+`spec.socketsToUse`) and the per-socket node index (0..`nodesPerSocket-1`) are encoded so
+names are unambiguous across all `socketsToUse × nodesPerSocket` combinations. FNV-32 hash
+suffix prevents collision when long worker names are truncated to the 63-char Kubernetes
+limit. Implemented in `storageNodeCRName()` in `simplyblockstoragenodeset_storagenode.go`.
 
 **Q4: Adoption of pre-existing backend nodes** — Resolved ✓  
 `syncUUIDFromNodeSet` reads existing UUIDs from `StorageNodeSet.status.nodes[]`.

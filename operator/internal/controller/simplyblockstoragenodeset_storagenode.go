@@ -513,4 +513,3 @@ func effectiveSockets(sns *simplyblockv1alpha1.StorageNodeSet) []string {
 	}
 	return sns.Spec.SocketsToUse
 }
-
