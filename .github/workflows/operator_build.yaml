@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - "**"
-    paths:
-      - "operator/**"
-      - ".github/workflows/operator_build.yaml"
   workflow_call:
     inputs:
       version:

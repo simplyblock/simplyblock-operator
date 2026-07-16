@@ -3,9 +3,6 @@ name: "CSI: Docker Build"
 on:
   push:
     branches: ['**']
-    paths:
-      - "csi-driver/**"
-      - ".github/workflows/csi_linux.yaml"
   workflow_call:
     inputs:
       version:
