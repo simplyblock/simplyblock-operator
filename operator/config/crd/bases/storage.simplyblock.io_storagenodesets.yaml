@@ -160,6 +160,13 @@ spec:
               enableCpuTopology:
                 description: EnableCpuTopology enables topology-aware CPU handling.
                 type: boolean
+              expand:
+                description: |-
+                  Expand indicates that storage nodes added from this StorageNodeSet are being
+                  added to expand an already-active cluster. When true the backend node-add
+                  endpoint receives expand=true, which triggers the appropriate rebalancing
+                  behaviour for in-place cluster growth.
+                type: boolean
               forceFormat4K:
                 description: ForceFormat4K forces 4K blocksize formatting of the NVMe
                   device where supported.
@@ -305,6 +312,12 @@ spec:
                     enableCpuTopology:
                       description: EnableCpuTopology overrides topology-aware CPU
                         handling for this node.
+                      type: boolean
+                    expand:
+                      description: |-
+                        Expand marks this node as a cluster-expansion add. When true the backend
+                        node-add endpoint receives expand=true, triggering rebalancing behaviour
+                        appropriate for in-place cluster growth. Overrides StorageNodeSet.spec.expand.
                       type: boolean
                     failureDomain:
                       description: |-

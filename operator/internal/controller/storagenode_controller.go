@@ -350,6 +350,7 @@ func (r *StorageNodeReconciler) provisionNode(
 		Format4K:         utils.BoolPtrOrFalse(sns.Spec.ForceFormat4K),
 		SpdkSystemMemory: eff.SpdkSystemMemory,
 		FailureDomain:    effectiveFailureDomain(sn, sns),
+		Expand:           utils.BoolPtrOrFalse(eff.Expand),
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
@@ -557,6 +558,7 @@ func effectiveNodeConfig(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1
 		EnableCpuTopology:     sns.Spec.EnableCpuTopology,
 		ReservedSystemCPU:     sns.Spec.ReservedSystemCPU,
 		UbuntuHost:            sns.Spec.UbuntuHost,
+		Expand:                sns.Spec.Expand,
 	}
 	if sn.Spec.Overrides == nil {
 		return eff
@@ -609,6 +611,9 @@ func effectiveNodeConfig(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1
 	}
 	if o.FailureDomain != nil {
 		eff.FailureDomain = o.FailureDomain
+	}
+	if o.Expand != nil {
+		eff.Expand = o.Expand
 	}
 	return eff
 }

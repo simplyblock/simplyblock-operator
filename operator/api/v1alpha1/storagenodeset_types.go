@@ -168,6 +168,13 @@ type StorageNodeSetSpec struct {
 	// +optional
 	NodeFailureDomains map[string]int32 `json:"nodeFailureDomains,omitempty"`
 
+	// Expand indicates that storage nodes added from this StorageNodeSet are being
+	// added to expand an already-active cluster. When true the backend node-add
+	// endpoint receives expand=true, which triggers the appropriate rebalancing
+	// behaviour for in-place cluster growth.
+	// +optional
+	Expand *bool `json:"expand,omitempty"`
+
 	// +kubebuilder:validation:MaxProperties=200
 	// NodeConfigs allows per-worker-node configuration overrides keyed by the
 	// Kubernetes worker node name. Entries are propagated to the corresponding

@@ -104,6 +104,12 @@ type StorageNodeOverrides struct {
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	FailureDomain *int32 `json:"failureDomain,omitempty"`
+
+	// Expand marks this node as a cluster-expansion add. When true the backend
+	// node-add endpoint receives expand=true, triggering rebalancing behaviour
+	// appropriate for in-place cluster growth. Overrides StorageNodeSet.spec.expand.
+	// +optional
+	Expand *bool `json:"expand,omitempty"`
 }
 
 // StorageNodeSpec defines the desired state of a StorageNode.
