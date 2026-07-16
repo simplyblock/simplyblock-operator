@@ -1754,6 +1754,29 @@ spec:
                 description: VolumeMigrationSettings controls volume migration for
                   this cluster.
                 properties:
+                  dataRealignment:
+                    description: |-
+                      DataRealignment configures the periodic control-plane data realignment that
+                      runs after volumes have been moved. Realignment re-aligns the cluster's internal
+                      data structures to the current volume placement so fault-tolerance (FTT) and
+                      node-affinity guarantees are preserved. It applies to *all* volume moves —
+                      auto-rebalancing, manual VolumeMigrations, and drain/removal-triggered moves —
+                      so it lives here rather than under AutoRebalancing. Enabled by default.
+                    properties:
+                      enabled:
+                        description: |-
+                          Enabled activates automatic post-migration data realignment for this cluster.
+                          Defaults to true.
+                        type: boolean
+                      interval:
+                        description: |-
+                          Interval is how often the operator checks whether a realignment is pending
+                          (i.e. at least one volume has moved since the last successful realignment) and,
+                          if so, triggers it. Explicit triggers (see the
+                          simplyblock.io/trigger-realignment annotation) bypass this spacing. Defaults to
+                          10m.
+                        type: string
+                    type: object
                   enabled:
                     description: |-
                       Enabled turns on volume migration for this cluster. When false, the operator
@@ -1869,6 +1892,13 @@ spec:
                 description: ErasureCodingScheme is the active erasure-coding layout,
                   for example "2x1".
                 type: string
+              lastDataRealignmentAt:
+                description: |-
+                  LastDataRealignmentAt is the time of the last successful control-plane data
+                  realignment. It is used to space realignments by DataRealignment.Interval and to
+                  avoid re-running at the end of an interval when nothing is pending.
+                format: date-time
+                type: string
               lastUpdated:
                 description: |-
                   LastUpdated is the last backend update timestamp.
@@ -1917,6 +1947,14 @@ spec:
               nqn:
                 description: NQN is the cluster NVM subsystem qualified name.
                 type: string
+              pendingDataRealignment:
+                description: |-
+                  PendingDataRealignment indicates that at least one volume has been moved since
+                  the last successful control-plane data realignment, so a realignment is due on
+                  the next DataRealignment.Interval tick. It is persisted so a pending realignment
+                  survives an operator restart, and is cleared once a realignment completes
+                  successfully.
+                type: boolean
               rebalancing:
                 description: Rebalancing indicates whether cluster rebalancing is
                   currently active.

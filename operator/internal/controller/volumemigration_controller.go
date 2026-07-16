@@ -35,6 +35,7 @@ import (
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/status,verbs=get;update;patch
 
 // VolumeMigrationReconciler reconciles VolumeMigration resources.
 type VolumeMigrationReconciler struct {
@@ -644,6 +645,10 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 		}
 		r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationCompleted", "MigrationCompleted",
 			"Migration %s completed successfully", vm.Status.MigrationUUID)
+		// A volume moved: flag the owning cluster so the rebalancer's periodic loop
+		// triggers a control-plane data realignment. Best-effort — the flag is
+		// re-asserted on every completed migration and realignment is idempotent.
+		r.markClusterPendingRealignment(ctx, vm.Namespace, vm.Status.ClusterUUID)
 	} else {
 		vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseFailed
 		vm.Status.ErrorMessage = result.Migration.ErrorMessage
@@ -654,6 +659,47 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 			"Migration %s failed: %s", vm.Status.MigrationUUID, result.Migration.ErrorMessage)
 	}
 	return ctrl.Result{}, nil
+}
+
+// markClusterPendingRealignment sets status.pendingDataRealignment=true on the
+// StorageCluster whose backend UUID matches clusterUUID, recording that a volume has
+// moved and a control-plane data realignment is due. The persisted flag is picked up
+// by the VolumeRebalancerReconciler's periodic loop.
+//
+// Best-effort: any failure is logged but does not fail the migration. The flag is a
+// monotonic "something moved" marker — it is re-asserted by every completed migration
+// and only ever cleared by a successful realignment — so a missed write is corrected
+// by the next completing migration.
+func (r *VolumeMigrationReconciler) markClusterPendingRealignment(
+	ctx context.Context,
+	namespace, clusterUUID string,
+) {
+	log := logf.FromContext(ctx)
+	if clusterUUID == "" {
+		return
+	}
+	var clusters simplyblockv1alpha1.StorageClusterList
+	if err := r.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
+		log.Error(err, "Cannot list StorageClusters to flag pending realignment", "clusterUUID", clusterUUID)
+		return
+	}
+	for i := range clusters.Items {
+		cr := &clusters.Items[i]
+		if cr.Status.UUID != clusterUUID {
+			continue
+		}
+		if cr.Status.PendingDataRealignment != nil && *cr.Status.PendingDataRealignment {
+			return // already flagged; nothing to do
+		}
+		patch := client.MergeFrom(cr.DeepCopy())
+		pending := true
+		cr.Status.PendingDataRealignment = &pending
+		if err := r.Status().Patch(ctx, cr, patch); err != nil {
+			log.Error(err, "Cannot flag StorageCluster pending realignment", "cluster", cr.Name)
+		}
+		return
+	}
+	log.Info("No StorageCluster matched volume's cluster UUID; cannot flag pending realignment", "clusterUUID", clusterUUID)
 }
 
 // reconcileAbort cancels an in-progress migration.
