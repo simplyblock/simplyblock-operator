@@ -77,6 +77,7 @@ func NewDefaultGuardianConfig(nodeName string) GuardianConfig {
 type persistedLvolState struct {
 	PodUIDs   []string  `json:"podUIDs,omitempty"`
 	ClusterID string    `json:"clusterID,omitempty"`
+	NQN       string    `json:"nqn,omitempty"`
 	BrokenAt  time.Time `json:"brokenAt,omitempty"`
 }
 
@@ -90,11 +91,52 @@ type LvolState struct {
 	// podUID -> present
 	PodUIDs map[string]struct{} `json:"-"` // persisted as []string
 
-	// derived from NQN
 	ClusterID string `json:"clusterID"`
+
+	// NQN is the exact subsystem NQN this lvol was published under, as handed
+	// to us in the NodeStageVolume/NodePublishVolume volume context — the same
+	// string used for the "nvme connect" that established it. reconnectSubsystems
+	// checks this NQN's live state directly, so it must be the real wire value,
+	// not reconstructed from clusterID+lvolID (which is wrong whenever this lvol
+	// shares a subsystem with others, since the NQN then carries the *master*
+	// lvol's ID, not this one's).
+	NQN string `json:"nqn,omitempty"`
 
 	// zero value means "not broken"
 	BrokenAt time.Time `json:"brokenAt,omitempty"`
+}
+
+// TrackedLvol is a snapshot of the connection Guardian expects to be live for
+// a given lvol, derived entirely from its own publish/unpublish bookkeeping
+// rather than from anything discovered on the host.
+type TrackedLvol struct {
+	ClusterID string
+	NQN       string
+
+	// AlreadyBroken is true once this lvol has already been marked broken by
+	// a prior check, so reconnectSubsystems can log/persist a fresh loss
+	// exactly once instead of repeating on every poll for as long as the
+	// volume stays disconnected.
+	AlreadyBroken bool
+}
+
+// TrackedLvols returns a snapshot of every lvol currently published on this
+// node, per Guardian's own registry (kept accurate synchronously by
+// RegisterPublish/RegisterUnpublishByTargetPath) — the authoritative
+// "should have a live NVMe-oF connection" set that reconnectSubsystems
+// checks host state against.
+func (g *Guardian) TrackedLvols() map[string]TrackedLvol {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	out := make(map[string]TrackedLvol, len(g.lvols))
+	for lvolID, st := range g.lvols {
+		if st == nil || st.ClusterID == "" || st.NQN == "" {
+			continue
+		}
+		out[lvolID] = TrackedLvol{ClusterID: st.ClusterID, NQN: st.NQN, AlreadyBroken: !st.BrokenAt.IsZero()}
+	}
+	return out
 }
 
 // Guardian tracks which pod uses which lvol and restarts affected pods
@@ -159,6 +201,7 @@ func (g *Guardian) loadState() {
 			g.lvols[lvolID] = &LvolState{
 				PodUIDs:   set,
 				ClusterID: pls.ClusterID,
+				NQN:       pls.NQN,
 				BrokenAt:  pls.BrokenAt,
 			}
 		}
@@ -230,8 +273,10 @@ func StartGuardian(ctx context.Context, cfg GuardianConfig, manager *sbkube.Mana
 }
 
 // RegisterPublish records that a volume (identified by its per-namespace lvol
-// UUID) is published to a pod via targetPath.
-func (g *Guardian) RegisterPublish(clusterID, lvolID, targetPath string) {
+// UUID) is published to a pod via targetPath, along with the exact subsystem
+// NQN it was connected under — the source of truth reconnectSubsystems uses
+// to check this lvol's live connection state.
+func (g *Guardian) RegisterPublish(clusterID, lvolID, nqn, targetPath string) {
 	podUID := podUIDFromTargetPath(targetPath)
 	if lvolID == "" || podUID == "" || clusterID == "" {
 		return
@@ -250,6 +295,9 @@ func (g *Guardian) RegisterPublish(clusterID, lvolID, targetPath string) {
 	}
 	st.PodUIDs[podUID] = struct{}{}
 	st.ClusterID = clusterID
+	if nqn != "" {
+		st.NQN = nqn
+	}
 
 	if _, exists := g.clusterWasInactive[clusterID]; !exists {
 		g.clusterWasInactive[clusterID] = true
@@ -631,6 +679,7 @@ func (g *Guardian) persistLocked() {
 		}
 		pls := persistedLvolState{
 			ClusterID: lvs.ClusterID,
+			NQN:       lvs.NQN,
 			BrokenAt:  lvs.BrokenAt,
 		}
 		for uid := range lvs.PodUIDs {

@@ -33,10 +33,7 @@ import (
 	"sync"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/klog"
-
-	sbkube "github.com/spdk/spdk-csi/pkg/kubernetes"
 )
 
 const (
@@ -109,17 +106,7 @@ type NodeInfo struct {
 	Status string   `json:"status"`
 }
 
-type nvmeDeviceInfo struct {
-	devicePath   string
-	serialNumber string
-	lvolID       string // UUID from /sys/block/<dev>/uuid — set for namespaced LVols
-}
-
 var (
-	devicePresentMap  = make(map[string]bool)
-	deviceToLvolIDMap = make(map[string]string)
-	mu                sync.Mutex
-
 	// maxSeenPathsMap caches the highest number of active NVMe-oF paths ever
 	// observed per NQN. Used by the connection monitor to detect degradation
 	// without querying the API on every cycle.
@@ -348,6 +335,7 @@ func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
 			}
 		}
 	}
+
 	return devicePath, nil
 }
 
@@ -491,107 +479,38 @@ func disconnectDevicePath(ctx context.Context, devicePath string) error {
 		}
 	}
 
-	mu.Lock()
-	delete(devicePresentMap, realPath)
-	delete(deviceToLvolIDMap, realPath)
-	mu.Unlock()
-
 	return nil
 }
 
-// logicalVolumeIdByDevicePath reads /sys/block/<dev>/uuid for a device path like /dev/nvme0n2.
-// Returns an empty string if the file is absent, unreadable, or not a valid UUID.
-func logicalVolumeIdByDevicePath(devicePath string) string {
-	name := filepath.Base(devicePath)
-	data, err := os.ReadFile(filepath.Join("/sys/block", name, "uuid"))
-	if err != nil {
-		return ""
-	}
-	uuid := strings.TrimSpace(string(data))
-	if !isUUID(uuid) {
-		return ""
-	}
-	return uuid
-}
-
-func getNVMeDeviceInfos(ctx context.Context) ([]nvmeDeviceInfo, error) {
-	output, err := execNVMeQuery(ctx, "nvme", "list", "-o", "json")
+// listAllSubsystems returns every NVMe-oF subsystem currently visible on this
+// host, keyed by NQN, from a single unscoped `nvme list-subsys` query.
+func listAllSubsystems(ctx context.Context) (map[string]subsystem, error) {
+	output, err := execNVMeQuery(ctx, "nvme", "list-subsys", "-o", "json")
 	if err != nil {
 		return nil, err
 	}
 
-	var deviceResponse struct {
-		Devices []struct {
-			Subsystems []struct {
-				Namespaces []struct {
-					NameSpace string `json:"NameSpace"`
-				} `json:"Namespaces"`
-			} `json:"Subsystems"`
-		} `json:"Devices"`
-	}
-	if err := json.Unmarshal(output, &deviceResponse); err == nil {
-		var devices []nvmeDeviceInfo
-		for _, host := range deviceResponse.Devices {
-			for _, sub := range host.Subsystems {
-				for _, ns := range sub.Namespaces {
-					if ns.NameSpace == "" {
-						continue
-					}
-					dp := "/dev/" + ns.NameSpace
-					devices = append(devices, nvmeDeviceInfo{
-						devicePath: dp,
-						lvolID:     logicalVolumeIdByDevicePath(dp),
-					})
-				}
-			}
-		}
-		if len(devices) > 0 {
-			return devices, nil
-		}
+	var hosts []subsystemResponse
+	if err := json.Unmarshal(output, &hosts); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal nvme list-subsys output: %v", err)
 	}
 
-	// Legacy flat format: Devices[].DevicePath
-	var legacyDeviceResp struct {
-		Devices []struct {
-			DevicePath   string `json:"DevicePath"`
-			SerialNumber string `json:"SerialNumber"`
-		} `json:"Devices"`
-	}
-	if err := json.Unmarshal(output, &legacyDeviceResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal nvme list output: %v", err)
-	}
-	var devices []nvmeDeviceInfo
-	for _, dev := range legacyDeviceResp.Devices {
-		if dev.DevicePath == "" {
-			continue
+	byNQN := make(map[string]subsystem, len(hosts))
+	for _, host := range hosts {
+		for _, s := range host.Subsystems {
+			byNQN[s.NQN] = s
 		}
-		devices = append(devices, nvmeDeviceInfo{
-			devicePath:   dev.DevicePath,
-			serialNumber: dev.SerialNumber,
-			lvolID:       logicalVolumeIdByDevicePath(dev.DevicePath),
-		})
 	}
-	return devices, nil
+	return byNQN, nil
 }
 
 func isNqnConnected(ctx context.Context, nqn string) (bool, error) {
-	output, err := execNVMeQuery(ctx, "nvme", "list-subsys", "-o", "json")
+	subsystems, err := listAllSubsystems(ctx)
 	if err != nil {
 		return false, err
 	}
-
-	var subsystems []subsystemResponse
-	if err := json.Unmarshal(output, &subsystems); err != nil {
-		return false, fmt.Errorf("failed to unmarshal nvme list-subsys output: %v", err)
-	}
-	for _, host := range subsystems {
-		for _, s := range host.Subsystems {
-			if s.NQN == nqn {
-				return true, nil
-			}
-		}
-	}
-	return false, nil
+	_, ok := subsystems[nqn]
+	return ok, nil
 }
 
 func getSubsystemsForDevice(ctx context.Context, devicePath string) ([]subsystemResponse, error) {
@@ -629,116 +548,63 @@ func parseAddress(address string) string {
 	return ""
 }
 
-// isManagedLvol reports whether lvolID is backed by a PersistentVolume
-// provisioned by the given CSI driver. Only such lvols are reconnected;
-// benchmark and foreign (non-simplyblock, or other-driver) volumes are skipped.
-func isManagedLvol(manager *sbkube.Manager, lvolID, driver string) bool {
-	pv, err := manager.PersistentVolumeByLogicalVolumeID(context.Background(), lvolID)
-	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			klog.Errorf("reconnect: failed to read PersistentVolume for lvolID %s: %v", lvolID, err)
-		}
-		return false
-	}
-	return pv.Spec.CSI != nil && pv.Spec.CSI.Driver == driver
-}
-
-func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager, driver string) error {
+// reconnectSubsystems checks every lvol the guardian currently has published
+// on this node against the host's live NVMe-oF state, using the guardian's
+// own registry (kept accurate synchronously by RegisterPublish/
+// RegisterUnpublishByTargetPath at NodeStageVolume/NodePublishVolume/
+// NodeUnpublishVolume time) as the source of truth for what should be
+// connected.
+//
+// This deliberately does not discover connections by scanning `nvme list`
+// and diffing successive snapshots against each other: that approach can
+// only ever detect a lost connection if some earlier poll happened to
+// observe it as present first. A volume that connects and loses all its
+// paths faster than one poll interval was invisible to it forever, since
+// there was nothing in its history to diff against. Comparing the guardian's
+// registry (known the instant a volume is staged, independent of poll
+// timing) against a single live snapshot has no such gap.
+func reconnectSubsystems(guardian *Guardian) error {
 	ctx := context.Background()
 
-	devices, err := getNVMeDeviceInfos(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get NVMe device paths: %v", err)
+	tracked := guardian.TrackedLvols()
+	if len(tracked) == 0 {
+		return nil
 	}
 
-	currentDevices := make(map[string]bool)
+	subsystems, err := listAllSubsystems(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list NVMe-oF subsystems: %v", err)
+	}
 
-	for _, device := range devices {
-		subsystems, err := getSubsystemsForDevice(ctx, device.devicePath)
-		if err != nil {
-			klog.Errorf("failed to get subsystems for device %s: %v", device.devicePath, err)
+	for lvolID, tl := range tracked {
+		sub, ok := subsystems[tl.NQN]
+		numActive := len(sub.Paths)
+		if !ok || numActive == 0 {
+			if !tl.AlreadyBroken {
+				klog.Errorf(
+					"lvol %s (nqn=%s) has no NVMe-oF connection on this node — all paths lost",
+					lvolID, tl.NQN,
+				)
+				guardian.MarkBrokenLvol(lvolID)
+			}
 			continue
 		}
 
-		currentDevices[device.devicePath] = true
+		expected := resolveExpectedPathCount(tl.NQN, tl.ClusterID, lvolID, numActive)
 
-		for _, host := range subsystems {
-			for _, subsystem := range host.Subsystems {
-				clusterID, nqnLvolID := getLvolIDFromNQN(subsystem.NQN)
-				if nqnLvolID == "" {
-					continue
-				}
-				// Prefer the sysfs UUID when available — it always identifies the
-				// exact namespace LVol. Falls back to the NQN-derived ID.
-				lvolID := device.lvolID
-				if lvolID == "" {
-					lvolID = nqnLvolID
-				}
-
-				// Only act on lvols backed by a PV from our CSI driver; skip
-				// benchmark and foreign volumes.
-				if !isManagedLvol(manager, lvolID, driver) {
-					continue
-				}
-
-				// Only mark the device present once we have a confirmed lvolID,
-				// so the cleanup loop never sees a device without a mapping.
-				mu.Lock()
-				devicePresentMap[device.devicePath] = true
-				deviceToLvolIDMap[device.devicePath] = lvolID
-				mu.Unlock()
-
-				numActive := len(subsystem.Paths)
-				if numActive == 0 {
-					continue
-				}
-
-				expected := resolveExpectedPathCount(subsystem.NQN, clusterID, lvolID, numActive)
-
-				needsRecovery := numActive < expected ||
-					(expected > 1 && hasConnectingPath(subsystem.Paths))
-
-				if !needsRecovery {
-					continue
-				}
-
-				if !confirmSubsystemNeedsRecovery(ctx, &subsystem, device.devicePath, numActive) {
-					continue
-				}
-
-				klog.Infof("Degraded subsystem: NQN=%s active=%d expected=%d device=%s",
-					subsystem.NQN, numActive, expected, device.devicePath)
-
-				if err := recoverPathsWithANA(clusterID, lvolID, device.devicePath, subsystem.Paths); err != nil {
-					klog.Errorf("failed to recover paths for lvolID %s: %v", lvolID, err)
-				}
-			}
+		needsRecovery := numActive < expected || (expected > 1 && hasConnectingPath(sub.Paths))
+		if !needsRecovery {
+			continue
 		}
-	}
 
-	var goneLvols []string
-
-	mu.Lock()
-	for devPath := range devicePresentMap {
-		if !currentDevices[devPath] {
-			lvolID := deviceToLvolIDMap[devPath]
-			klog.Errorf(
-				"Device %s is no longer present — all NVMe-oF connections were lost and the kernel removed the device (lvolID=%s)",
-				devPath,
-				lvolID,
-			)
-			delete(devicePresentMap, devPath)
-			delete(deviceToLvolIDMap, devPath)
-			if lvolID != "" {
-				goneLvols = append(goneLvols, lvolID)
-			}
+		if !confirmSubsystemNeedsRecovery(ctx, tl.NQN, numActive) {
+			continue
 		}
-	}
-	mu.Unlock()
 
-	if markBroken != nil {
-		for _, lvolID := range goneLvols {
-			markBroken(lvolID)
+		klog.Infof("Degraded subsystem: NQN=%s active=%d expected=%d", tl.NQN, numActive, expected)
+
+		if err := recoverPathsWithANA(tl.ClusterID, lvolID, sub.Paths); err != nil {
+			klog.Errorf("failed to recover paths for lvolID %s: %v", lvolID, err)
 		}
 	}
 
@@ -844,33 +710,20 @@ func connectViaNVMe(ctx context.Context, conn *LvolConnectResp, ctrlLossTmo int,
 // confirmSubsystemNeedsRecovery re-checks the subsystem 5 times over 5 seconds
 // and returns true only if the path count remained stable at initialPathCount for
 // all 5 checks. This debounces spurious triggers during normal ANA switchovers.
-func confirmSubsystemNeedsRecovery(
-	ctx context.Context,
-	subsystem *subsystem,
-	devicePath string,
-	initialPathCount int,
-) bool {
+func confirmSubsystemNeedsRecovery(ctx context.Context, nqn string, initialPathCount int) bool {
 	for i := 0; i < 5; i++ {
-		recheck, err := getSubsystemsForDevice(ctx, devicePath)
+		subsystems, err := listAllSubsystems(ctx)
 		if err != nil {
-			klog.Errorf("failed to recheck subsystems for device %s: %v", devicePath, err)
+			klog.Errorf("failed to recheck subsystems for NQN %s: %v", nqn, err)
 			continue
 		}
 
-		found := false
-		for _, h := range recheck {
-			for _, s := range h.Subsystems {
-				if s.NQN == subsystem.NQN {
-					found = true
-					if len(s.Paths) != initialPathCount {
-						return false
-					}
-				}
-			}
-		}
-
+		sub, found := subsystems[nqn]
 		if !found {
-			klog.Warningf("Subsystem %s not found during recheck, assuming it's gone", subsystem.NQN)
+			klog.Warningf("Subsystem %s not found during recheck, assuming it's gone", nqn)
+			return false
+		}
+		if len(sub.Paths) != initialPathCount {
 			return false
 		}
 
@@ -890,14 +743,14 @@ const (
 	monitorCircuitCooldown = 30 * time.Second
 )
 
-func MonitorConnection(markBroken func(lvolID string), manager *sbkube.Manager, driver string) {
+func MonitorConnection(guardian *Guardian) {
 	var (
 		consecutiveErrors int
 		backoff           = monitorBaseInterval
 	)
 
 	for {
-		err := reconnectSubsystems(markBroken, manager, driver)
+		err := reconnectSubsystems(guardian)
 		if err != nil {
 			consecutiveErrors++
 			klog.Errorf("MonitorConnection error (%d consecutive): %v", consecutiveErrors, err)
@@ -977,7 +830,7 @@ func resolveExpectedPathCount(nqn, clusterID, lvolID string, currentActive int) 
 	return cached
 }
 
-func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []path) error {
+func recoverPathsWithANA(clusterID, lvolID string, activePaths []path) error {
 	sbcClient, err := NewsimplyBlockClient(context.Background(), clusterID, "")
 	if err != nil {
 		return fmt.Errorf("failed to create SimplyBlock client: %w", err)
@@ -1017,17 +870,15 @@ func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []pat
 		}
 	}
 
-	reconcileOptimizedPath(sbcClient, nodeInfo, devicePath, optConn, activeOpt, ctrlLossTmo)
-	reconcileNonOptimizedPaths(sbcClient, nodeInfo, devicePath, nonOptConns, activeNonOpt, ctrlLossTmo)
+	reconcileOptimizedPath(sbcClient, nodeInfo, optConn, activeOpt, ctrlLossTmo)
+	reconcileNonOptimizedPaths(sbcClient, nodeInfo, nonOptConns, activeNonOpt, ctrlLossTmo)
 
 	return nil
 }
 
-//nolint:unparam // devicePath kept for parity with reconcileNonOptimizedPaths
 func reconcileOptimizedPath(
 	sbcClient *ClusterClient,
 	nodeInfo *NodeInfo,
-	devicePath string,
 	conn *LvolConnectResp,
 	active []path,
 	ctrlLossTmo int,
@@ -1063,12 +914,9 @@ func reconcileOptimizedPath(
 
 // reconcileNonOptimizedPaths handles connections[1..N] (secondary nodes).
 // Works for both 2-path (1 secondary) and 3-path (2 secondaries).
-//
-//nolint:unparam // devicePath kept for parity with reconcileOptimizedPath
 func reconcileNonOptimizedPaths(
 	sbcClient *ClusterClient,
 	nodeInfo *NodeInfo,
-	devicePath string,
 	conns []*LvolConnectResp,
 	active []path,
 	ctrlLossTmo int,

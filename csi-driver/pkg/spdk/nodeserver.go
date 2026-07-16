@@ -77,11 +77,11 @@ func newNodeServer(d *csicommon.CSIDriver) (*nodeServer, error) {
 	}
 
 	// Build one Kubernetes cache manager and share it across the node plugin:
-	// the reconnect loop reads PVs every ~3s and the guardian reads PVs/PVCs
-	// per pod on every poll, so a single shared instance means a single PV
-	// Watch and a single PVC Watch. The manager serves reads from cache once
-	// synced and transparently falls back to the API until then (and if it
-	// never syncs), so consumers need no fallback of their own.
+	// the guardian reads PVs/PVCs per pod on every poll, so a single shared
+	// instance means a single PV Watch and a single PVC Watch. The manager
+	// serves reads from cache once synced and transparently falls back to the
+	// API until then (and if it never syncs), so consumers need no fallback
+	// of their own.
 	manager := sbkube.NewManager(ns.kubeClient)
 	manager.Start(context.Background())
 
@@ -92,13 +92,10 @@ func newNodeServer(d *csicommon.CSIDriver) (*nodeServer, error) {
 		klog.Errorf("failed to start guardian: %v", gerr)
 	} else {
 		ns.guardian = guardian
+		// The reconnect loop checks the guardian's own published-lvol registry
+		// against live NVMe-oF state, so it needs a guardian to check against.
+		go util.MonitorConnection(guardian)
 	}
-
-	go util.MonitorConnection(func(lvolID string) {
-		if ns.guardian != nil {
-			ns.guardian.MarkBrokenLvol(lvolID)
-		}
-	}, manager, ns.Driver.GetName())
 
 	return ns, nil
 }
@@ -420,7 +417,9 @@ func (ns *nodeServer) NodePublishVolume(
 	}
 
 	if ns.guardian != nil {
-		ns.guardian.RegisterPublish(req.VolumeContext[paramClusterID], req.VolumeContext["uuid"], req.TargetPath)
+		ns.guardian.RegisterPublish(
+			req.VolumeContext[paramClusterID], req.VolumeContext["uuid"], req.VolumeContext["nqn"], req.TargetPath,
+		)
 	}
 
 	return &csi.NodePublishVolumeResponse{}, nil
