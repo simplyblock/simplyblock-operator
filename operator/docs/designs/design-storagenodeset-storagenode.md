@@ -162,21 +162,39 @@ type StorageNodeOverrides struct {
     // ... other mutable per-node tuning knobs
 }
 
+// StorageNodeResources groups compute and storage resource fields.
+type StorageNodeResources struct {
+    CPU     *int32 `json:"cpu,omitempty"`
+    Memory  string `json:"memory,omitempty"`
+    Volumes *int32 `json:"volumes,omitempty"`
+    Devices string `json:"devices,omitempty"`
+}
+
+// StorageNodePorts groups network connectivity fields.
+type StorageNodePorts struct {
+    Management string `json:"management,omitempty"` // management IP
+    NvmeOf     *int32 `json:"nvmeof,omitempty"`     // NVMe-oF fabric port
+    Lvol       *int32 `json:"lvol,omitempty"`        // lvol subsystem port
+    Rpc        *int32 `json:"rpc,omitempty"`          // RPC/management API port
+}
+
 type StorageNodeStatus struct {
     // UUID is the backend storage node UUID. Set once after node-add completes.
     UUID     string `json:"uuid,omitempty"`
     Status   string `json:"status,omitempty"`
     Health   bool   `json:"health,omitempty"`
-    CPU      *int32 `json:"cpu,omitempty"`
-    Memory   string `json:"memory,omitempty"`
-    Volumes  *int32 `json:"volumes,omitempty"`
-    Devices  string `json:"devices,omitempty"`
-    MgmtIp   string `json:"mgmtIp,omitempty"`
     Hostname string `json:"hostname,omitempty"`
     Uptime   string `json:"uptime,omitempty"`
-    RpcPort  *int32 `json:"rpcPort,omitempty"`
-    LvolPort *int32 `json:"lvolPort,omitempty"`
-    NvmfPort *int32 `json:"nvmfPort,omitempty"`
+
+    // Resources groups compute and storage resource metrics.
+    Resources *StorageNodeResources `json:"resources,omitempty"`
+
+    // Ports groups network connectivity fields (addresses and ports).
+    Ports *StorageNodePorts `json:"ports,omitempty"`
+
+    // LatencyMetrics holds fio-measured baseline NVMe-oF latency for this node,
+    // used by the volume rebalancer for data-placement decisions.
+    LatencyMetrics *NodeLatencyMetrics `json:"latencyMetrics,omitempty"`
 
     // PostedAt is when the node-add POST was sent (provisioning guard).
     PostedAt *metav1.Time `json:"postedAt,omitempty"`
@@ -373,6 +391,12 @@ Implemented on 2026-07-15.
 - **Validation**: `spec.workerNodes` enforced unique via `+listType=set`; `spec.nodeConfigs`
   keys must match a `workerNodes` entry (CEL rule with `MaxItems=200`, `MaxProperties=200`
   to bound cost).
+- **`StorageNodeStatus` restructured** into logical nested groups per reviewer feedback:
+  - `status.resources` — cpu, memory, volumes, devices
+  - `status.ports` — management (IP), nvmeof, lvol, rpc
+  - `status.latencyMetrics` — fio-measured baseline NVMe-oF latency (p50/p99) for the
+    volume rebalancer, mirroring the existing `NodeLatencyMetrics` type already on
+    `StorageNodeSet.status.latencyMetrics[]`
 - **42+ unit tests** covering both new reconcilers, drain state machine helpers,
   and StorageNodeSet status aggregation. See full test plan:
   [`docs/tests/test-plan-storagenode-ops.md`](../tests/test-plan-storagenode-ops.md)
