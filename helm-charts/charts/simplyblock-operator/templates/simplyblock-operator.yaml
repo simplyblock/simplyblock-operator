@@ -72,10 +72,14 @@ spec:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             privileged: false
-          {{- if .Values.tls.enabled }}
           volumeMounts:
+            # Writable dir for the runtime-provisioned webhook serving cert
+            # (root fs is read-only; cert-controller/cert-manager write here).
+            - name: webhook-certs
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+            {{- if .Values.tls.enabled }}
             {{- include "simplyblock.tlsVolumeMount" . | nindent 12 }}
-          {{- end }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -88,10 +92,27 @@ spec:
               port: 8081
             initialDelaySeconds: 5
             periodSeconds: 10
-      {{- if .Values.tls.enabled }}
       volumes:
+        # Serving cert for the mutating webhook. Source depends on the TLS provider:
+        #   cert-manager: the operator writes tls.crt/tls.key here itself, so this
+        #     must be a writable dir (root fs is read-only).
+        #   otherwise (self-signed via cert-controller): cert-controller only
+        #     populates the webhook-server-cert Secret, never disk — so we mount
+        #     that Secret and let the kubelet project it. optional:true lets the pod
+        #     boot before the operator has created the Secret; RestartOnSecretRefresh
+        #     restarts the pod once it is populated.
+        {{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") }}
+        - name: webhook-certs
+          emptyDir: {}
+        {{- else }}
+        - name: webhook-certs
+          secret:
+            secretName: webhook-server-cert
+            optional: true
+        {{- end }}
+        {{- if .Values.tls.enabled }}
         {{- include "simplyblock.clientTlsVolume" (dict "ctx" . "clientSecret" "simplyblock-operator-client-tls") | nindent 8 }}
-      {{- end }}
+        {{- end }}
       terminationGracePeriodSeconds: 10
 
 ################# ROLE AND ROLE BINDING ##############################
