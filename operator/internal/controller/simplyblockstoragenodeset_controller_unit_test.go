@@ -3540,14 +3540,28 @@ func TestWorkerNameFromHostname(t *testing.T) {
 	}
 }
 
-func newOfflineRecoveryServer() (*httptest.Server, *int32) {
+// newOfflineRecoveryServer serves the endpoints the recovery loop touches:
+// GET .../tasks/ returns tasksJSON (default "[]" = no active task) and
+// POST .../restart is counted.
+func newOfflineRecoveryServer(tasksJSON ...string) (*httptest.Server, *int32) {
+	tasks := "[]"
+	if len(tasksJSON) > 0 {
+		tasks = tasksJSON[0]
+	}
 	var restartPosts int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/restart") {
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/restart"):
 			atomic.AddInt32(&restartPosts, 1)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/tasks/"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(tasks))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
 		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{}`))
 	}))
 	return srv, &restartPosts
 }
@@ -3664,6 +3678,34 @@ func TestReconcileOfflineNodeRecovery(t *testing.T) {
 		}
 	})
 
+	t.Run("does not restart when a backend restart task is in flight", func(t *testing.T) {
+		// An active node_restart task means offline is a valid transient — defer.
+		active := `[{"storage_node_id":"node-1","status":"running","canceled":false,"function_name":"node_restart"}]`
+		srv, posts := newOfflineRecoveryServer(active)
+		defer srv.Close()
+		sn := offlineRecoverySN(utils.NodeStatusOffline)
+		r := newStorageNodeSetStateTestReconciler(t, healthyNode())
+
+		r.reconcileOfflineStorageNodeRecovery(context.Background(), webapi.NewClient(srv.URL), "cluster-a", sn)
+		if got := atomic.LoadInt32(posts); got != 0 {
+			t.Fatalf("expected no restart POST while a restart task is active, got %d", got)
+		}
+	})
+
+	t.Run("restarts when the only restart task for the node has finished", func(t *testing.T) {
+		// A done task must not block a fresh restart.
+		done := `[{"storage_node_id":"node-1","status":"done","canceled":false,"function_name":"node_restart"}]`
+		srv, posts := newOfflineRecoveryServer(done)
+		defer srv.Close()
+		sn := offlineRecoverySN(utils.NodeStatusOffline)
+		r := newStorageNodeSetStateTestReconciler(t, healthyNode())
+
+		r.reconcileOfflineStorageNodeRecovery(context.Background(), webapi.NewClient(srv.URL), "cluster-a", sn)
+		if got := atomic.LoadInt32(posts); got != 1 {
+			t.Fatalf("expected 1 restart POST when prior restart task is done, got %d", got)
+		}
+	})
+
 	t.Run("does not restart when node RPC port is unknown", func(t *testing.T) {
 		srv, posts := newOfflineRecoveryServer()
 		defer srv.Close()
@@ -3716,4 +3758,51 @@ func TestReconcileOfflineNodeRecovery(t *testing.T) {
 			t.Fatalf("expected 2 restart POSTs after backoff expired, got %d", got)
 		}
 	})
+}
+
+func TestHasActiveNodeRestartTask(t *testing.T) {
+	cases := []struct {
+		name  string
+		tasks string
+		want  bool
+	}{
+		{"running restart for node", `[{"storage_node_id":"n1","status":"running","canceled":false,"function_name":"node_restart"}]`, true},
+		{"new restart for node", `[{"storage_node_id":"n1","status":"new","canceled":false,"function_name":"node_restart"}]`, true},
+		{"done restart", `[{"storage_node_id":"n1","status":"done","canceled":false,"function_name":"node_restart"}]`, false},
+		{"failed restart", `[{"storage_node_id":"n1","status":"failed","canceled":false,"function_name":"node_restart"}]`, false},
+		{"canceled restart", `[{"storage_node_id":"n1","status":"running","canceled":true,"function_name":"node_restart"}]`, false},
+		{"running task for other node", `[{"storage_node_id":"n2","status":"running","canceled":false,"function_name":"node_restart"}]`, false},
+		{"running non-restart task", `[{"storage_node_id":"n1","status":"running","canceled":false,"function_name":"node_add"}]`, false},
+		{"empty list", `[]`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(tc.tasks))
+			}))
+			defer srv.Close()
+			r := &StorageNodeSetReconciler{}
+			got, err := r.hasActiveNodeRestartTask(context.Background(), webapi.NewClient(srv.URL), "cluster-a", "n1")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("hasActiveNodeRestartTask=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHasActiveNodeRestartTaskErrorsSurface(t *testing.T) {
+	// A non-2xx response must surface as an error so the caller defers (does not
+	// fire a restart it cannot verify is safe).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	r := &StorageNodeSetReconciler{}
+	if _, err := r.hasActiveNodeRestartTask(context.Background(), webapi.NewClient(srv.URL), "cluster-a", "n1"); err == nil {
+		t.Fatalf("expected an error on 500 response")
+	}
 }

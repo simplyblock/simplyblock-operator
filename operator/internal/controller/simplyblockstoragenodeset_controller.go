@@ -1866,6 +1866,20 @@ func (r *StorageNodeSetReconciler) reconcileOfflineStorageNodeRecovery(
 			continue
 		}
 
+		// If the control plane already has a restart in flight for this node, the
+		// OFFLINE status is a valid transient of that restart
+		// (offline -> in_restart -> online), not a stranded node — don't fire a
+		// duplicate. Conservative on error: defer rather than risk colliding.
+		if active, err := r.hasActiveNodeRestartTask(ctx, apiClient, clusterUUID, n.UUID); err != nil {
+			log.Info("Offline-node recovery: could not check for an active restart task; deferring",
+				"node", n.UUID, "error", err.Error())
+			continue
+		} else if active {
+			log.Info("Offline-node recovery: backend restart task already in flight; deferring",
+				"node", n.UUID)
+			continue
+		}
+
 		// Per-node backoff: caps the restart rate and absorbs residual
 		// scheduler-level failures the condition gate can't foresee.
 		if v, ok := r.recoveryBackoff.Load(n.UUID); ok {
@@ -1931,6 +1945,55 @@ func (r *StorageNodeSetReconciler) isStorageNodePodMissing(
 		}
 	}
 	return true
+}
+
+// Control-plane task fields the operator inspects. A task is finished once its
+// status is "done" or "failed" (or it was canceled); anything else is in flight.
+const (
+	taskFuncNodeRestart = "node_restart"
+	taskStatusDone      = "done"
+	taskStatusFailed    = "failed"
+)
+
+// hasActiveNodeRestartTask reports whether the control plane currently has a
+// node_restart task in flight for nodeUUID — one that has not finished
+// ("done"/"failed") and is not canceled.
+//
+// When such a task is active the node's OFFLINE status is a valid transient of
+// that restart (offline -> in_restart -> online), so the operator must not fire
+// a duplicate restart and race the backend's task.
+func (r *StorageNodeSetReconciler) hasActiveNodeRestartTask(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID, nodeUUID string,
+) (bool, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/tasks/", clusterUUID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false, err
+	}
+	if status >= 300 {
+		return false, fmt.Errorf("list tasks: unexpected status %d: %s", status, string(body))
+	}
+	var tasks []struct {
+		StorageNodeID string `json:"storage_node_id"`
+		Status        string `json:"status"`
+		Canceled      bool   `json:"canceled"`
+		FunctionName  string `json:"function_name"`
+	}
+	if err := json.Unmarshal(body, &tasks); err != nil {
+		return false, fmt.Errorf("list tasks: %w", err)
+	}
+	for _, t := range tasks {
+		if t.FunctionName != taskFuncNodeRestart || t.StorageNodeID != nodeUUID || t.Canceled {
+			continue
+		}
+		if !strings.EqualFold(t.Status, taskStatusDone) &&
+			!strings.EqualFold(t.Status, taskStatusFailed) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // triggerStorageNodeRestart POSTs an in-place force restart for a single storage
