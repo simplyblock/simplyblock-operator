@@ -1,6 +1,12 @@
 name: "CSI: Docker Base Image"
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "csi-driver/deploy/image/Dockerfile_base"
+      - ".github/workflows/csi_docker_base_image.yaml"
   schedule:
     - cron: '0 5 * * SUN'  # Sundays at 5am
   workflow_dispatch:
