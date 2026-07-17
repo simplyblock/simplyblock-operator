@@ -475,16 +475,17 @@ func (r *StorageNodeReconciler) syncStatus(
 	if err != nil || status >= 300 {
 		if status == http.StatusNotFound {
 			// The stored UUID no longer exists on the backend — the cluster may
-			// have been reset and nodes re-created with new UUIDs. Clear the UUID
-			// so the next reconcile calls syncUUIDFromNodeSet to adopt the new one
-			// from StorageNodeSet.status.nodes[].
-			log.Info("backend node not found (404) — clearing stale UUID to trigger re-adoption",
+			// have been reset and nodes re-created with new UUIDs.
+			// Clear only UUID (PostedAt is intentionally preserved): provisionNode
+			// checks PostedAt and returns early without POSTing, while
+			// syncUUIDFromNodeSet and pollUUIDFromBackend find the new UUID from
+			// StorageNodeSet.status.nodes[] or by querying the backend by IP.
+			log.Info("backend node not found (404) — clearing stale UUID for re-adoption",
 				"staleUUID", sn.Status.UUID)
 			patch := client.MergeFrom(sn.DeepCopy())
 			sn.Status.UUID = ""
 			sn.Status.Status = ""
 			sn.Status.Health = false
-			sn.Status.PostedAt = nil
 			if patchErr := r.Status().Patch(ctx, sn, patch); patchErr != nil {
 				log.Error(patchErr, "failed to clear stale UUID from StorageNode")
 			}
