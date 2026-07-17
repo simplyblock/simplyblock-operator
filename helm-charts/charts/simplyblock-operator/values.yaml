@@ -336,6 +336,22 @@ controlplane:
       # rendered and the operator uses its default.
       mainContainer:
         baseImage: "quay.io/simplyblock-io/fdb-kubernetes-monitor"
+    # Prometheus exporter for the FoundationDB cluster. Reads the machine-readable
+    # `status json` via the multi-version FDB client and exposes DB-level metrics
+    # (workload, latency, storage, coordinator health) on :9444/metrics.
+    # Upstream: https://github.com/aikoven/foundationdb-exporter
+    exporter:
+      enabled: true
+      image:
+        repository: aikoven/foundationdb-exporter
+        tag: "3.1.0"
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 200m
+          memory: 128Mi
 
 operator:
   enabled: true
