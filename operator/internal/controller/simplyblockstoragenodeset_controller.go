@@ -103,7 +103,20 @@ var (
 	syncNodeStatusInterval = 30 * time.Second
 
 	spdkPodEventDelay = 20 * time.Second
+
+	// nodeAddRetryBackoff is how long the operator waits after a node-add times
+	// out before re-driving the add. It converts the old dead-end timeout — which
+	// only re-logged the same error on every reconcile without ever recovering —
+	// into a self-healing retry: back off, clear the stale placeholder, POST
+	// again. The backoff also caps the log/re-POST rate for a node that can
+	// never come online, so a permanently broken worker no longer spams.
+	nodeAddRetryBackoff = 3 * time.Minute
 )
+
+// nodeStatusTimeout is the sentinel Status written to a NodeStatus entry when a
+// node-add times out. It is deliberately NOT treated as an in-flight POST (see
+// isPending / workerIsInFlight) so the add can be re-driven.
+const nodeStatusTimeout = "timeout"
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodesets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodesets/status,verbs=get;update;patch
@@ -287,6 +300,33 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNode(
 		return ctrl.Result{}, nil
 	}
 
+	// A previous add attempt for this node may have timed out. Rather than
+	// hot-looping pollNodeOnline (which only re-logs the same timeout on every
+	// reconcile because the backend already deleted the half-created node),
+	// back off and then re-drive the add from a clean slate.
+	for i := range snCR.Status.Nodes {
+		n := &snCR.Status.Nodes[i]
+		if n.Hostname != nodeName || n.Status != nodeStatusTimeout {
+			continue
+		}
+		// Still within the backoff window: requeue quietly — no API poll, no log.
+		if n.PostedAt != nil {
+			if elapsed := time.Since(n.PostedAt.Time); elapsed < nodeAddRetryBackoff {
+				return ctrl.Result{RequeueAfter: nodeAddRetryBackoff - elapsed}, nil
+			}
+		}
+		// Backoff elapsed: clear the stale placeholder and the pending marker so
+		// the next reconcile performs a fresh adopt-or-POST for this node.
+		log.Info("Re-driving storage node add after previous timeout", "node", nodeName)
+		snCR.Status.Nodes = append(snCR.Status.Nodes[:i], snCR.Status.Nodes[i+1:]...)
+		delete(snCR.Status.PendingNodeAdds, nodeName)
+		if err := r.Status().Update(ctx, snCR); err != nil {
+			log.Error(err, "Failed to clear timed-out node status before retry", "node", nodeName)
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+
 	ip, err := getNodeInternalIP(ctx, r.Client, nodeName)
 	if err != nil {
 		log.Error(err, "failed to get internal IP", "node", nodeName)
@@ -301,7 +341,10 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNode(
 	_, isPending := snCR.Status.PendingNodeAdds[nodeName]
 	if !isPending {
 		for _, n := range snCR.Status.Nodes {
-			if n.Hostname == nodeName && n.UUID == "" {
+			// A timed-out placeholder has UUID=="" too, but it is NOT an
+			// in-flight POST — treating it as one is what wedged the node in a
+			// perpetual timeout loop. The backoff/retry handler above owns it.
+			if n.Hostname == nodeName && n.UUID == "" && n.Status != nodeStatusTimeout {
 				isPending = true
 				break
 			}
@@ -947,7 +990,10 @@ func workerIsInFlight(snCR *simplyblockv1alpha1.StorageNodeSet, nodeName string)
 		return true
 	}
 	for _, n := range snCR.Status.Nodes {
-		if n.Hostname == nodeName && n.UUID == "" {
+		// A timed-out node is awaiting a backed-off retry, not actively being
+		// added, so it must not hold a parallel-add slot (that would starve
+		// other workers behind a node that keeps timing out).
+		if n.Hostname == nodeName && n.UUID == "" && n.Status != nodeStatusTimeout {
 			return true
 		}
 	}
@@ -1467,13 +1513,22 @@ func (r *StorageNodeSetReconciler) nodeOnlineRequeueOrTimeout(
 		}
 	}
 
-	// Timed out (or no post timestamp found — treat as timed-out).
-	log.Error(nil, "Timeout waiting for node to become online", "node", nodeName)
+	// Timed out. Mark the node as timed-out and stamp PostedAt as the retry
+	// clock (reconcileWorkerNode backs off nodeAddRetryBackoff before re-driving
+	// the add). Clear the pending marker so that retry is not blocked by the
+	// duplicate-POST guard. Log/emit an event ONCE — on the transition into
+	// timeout — so a node that keeps timing out does not spam every reconcile.
+	now := metav1.Now()
+	alreadyTimedOut := false
 	updated := false
 	for i := range snCR.Status.Nodes {
 		if snCR.Status.Nodes[i].Hostname == nodeName {
-			snCR.Status.Nodes[i].Status = "timeout"
+			if snCR.Status.Nodes[i].Status == nodeStatusTimeout {
+				alreadyTimedOut = true
+			}
+			snCR.Status.Nodes[i].Status = nodeStatusTimeout
 			snCR.Status.Nodes[i].MgmtIp = ip
+			snCR.Status.Nodes[i].PostedAt = &now
 			updated = true
 		}
 	}
@@ -1481,13 +1536,26 @@ func (r *StorageNodeSetReconciler) nodeOnlineRequeueOrTimeout(
 		snCR.Status.Nodes = append(snCR.Status.Nodes, simplyblockv1alpha1.NodeStatus{
 			Hostname: nodeName,
 			MgmtIp:   ip,
-			Status:   "timeout",
+			Status:   nodeStatusTimeout,
+			PostedAt: &now,
 		})
+	}
+	delete(snCR.Status.PendingNodeAdds, nodeName)
+
+	if !alreadyTimedOut {
+		log.Error(nil, "Timeout waiting for node to become online; will retry the add",
+			"node", nodeName, "retryAfter", nodeAddRetryBackoff.String())
+		if r.Recorder != nil {
+			r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "NodeAddTimeout",
+				"worker %s did not come online within %s; retrying add in %s",
+				nodeName, timeout.String(), nodeAddRetryBackoff.String())
+		}
 	}
 	if err := r.Status().Update(ctx, snCR); err != nil {
 		log.Error(err, "Failed to update node status after timeout", "node", nodeName)
+		return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
 	}
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: nodeAddRetryBackoff}, nil
 }
 
 // onAllSocketNodesOnline syncs the StorageNodeSet status entries for all online

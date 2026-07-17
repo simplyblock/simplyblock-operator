@@ -1603,14 +1603,22 @@ func TestPollNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected no error on timeout, got: %v", err)
 		}
-		if res.RequeueAfter != 0 {
-			t.Fatalf("expected done result after timeout, got requeue: %v", res)
+		// A timeout is no longer a dead-end: the node is marked timed-out and the
+		// reconcile is requeued after nodeAddRetryBackoff so reconcileWorkerNode
+		// can re-drive the add once the backoff elapses.
+		if res.RequeueAfter != nodeAddRetryBackoff {
+			t.Fatalf("expected requeue after %s to retry the add, got: %v", nodeAddRetryBackoff, res)
 		}
 		if len(sn.Status.Nodes) != 1 {
 			t.Fatalf("expected timeout status node entry, got %d", len(sn.Status.Nodes))
 		}
-		if sn.Status.Nodes[0].Hostname != "node-timeout" || sn.Status.Nodes[0].Status != "timeout" {
+		if sn.Status.Nodes[0].Hostname != "node-timeout" || sn.Status.Nodes[0].Status != nodeStatusTimeout {
 			t.Fatalf("unexpected timeout node status: %#v", sn.Status.Nodes[0])
+		}
+		// PostedAt must be refreshed to now (the retry clock), not the expired
+		// add timestamp — otherwise the backoff would be skipped immediately.
+		if pa := sn.Status.Nodes[0].PostedAt; pa == nil || time.Since(pa.Time) > time.Minute {
+			t.Fatalf("expected refreshed PostedAt retry clock, got: %#v", sn.Status.Nodes[0].PostedAt)
 		}
 	})
 }
@@ -3262,6 +3270,116 @@ func TestPendingNodeAddsLegacyPlaceholderBlocksPost(t *testing.T) {
 	}
 	if postCalled {
 		t.Error("POST should not be called when legacy UUID=empty placeholder exists")
+	}
+}
+
+// TestTimedOutNodeBacksOffWithoutRepost guards the self-healing timeout fix: a
+// node marked "timeout" must NOT be treated as an in-flight POST (which used to
+// wedge it in a perpetual pollNodeOnline/timeout loop). Within the backoff
+// window the reconcile requeues quietly — no POST, no poll — and preserves the
+// placeholder so the retry clock keeps ticking.
+func TestTimedOutNodeBacksOffWithoutRepost(t *testing.T) {
+	const namespace = "default"
+	const clusterUUID = "cluster-uuid-timeout-backoff"
+	const workerName = "worker-timeout-backoff"
+
+	postCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodPost {
+			postCalled = true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	recent := metav1.Now()
+	sn := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-timeout-backoff", Namespace: namespace, Finalizers: []string{utils.FinalizerStorageNodeSet}},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{WorkerNodes: []string{workerName}},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: workerName, UUID: "", Status: nodeStatusTimeout, PostedAt: &recent},
+			},
+		},
+	}
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: workerName},
+		Status:     corev1.NodeStatus{Addresses: []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "10.0.0.1"}}},
+	}
+
+	r := newStorageNodeSetStateTestReconciler(t, sn, node)
+	res, err := r.reconcileWorkerNode(
+		context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)},
+		sn, workerName, clusterUUID, webapi.NewClient(srv.URL), 1,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if postCalled {
+		t.Error("POST must not be called while a timed-out node is within its retry backoff")
+	}
+	if res.RequeueAfter <= 0 || res.RequeueAfter > nodeAddRetryBackoff {
+		t.Errorf("expected a quiet requeue within the backoff window, got: %v", res.RequeueAfter)
+	}
+	if len(sn.Status.Nodes) != 1 || sn.Status.Nodes[0].Status != nodeStatusTimeout {
+		t.Errorf("timeout placeholder should be preserved during backoff, got: %#v", sn.Status.Nodes)
+	}
+}
+
+// TestTimedOutNodeRetriesAfterBackoff guards the other half of the fix: once the
+// backoff has elapsed, the stale timeout placeholder and pending marker are
+// cleared so a subsequent reconcile performs a fresh POST — the operator heals
+// itself instead of looping forever.
+func TestTimedOutNodeRetriesAfterBackoff(t *testing.T) {
+	const namespace = "default"
+	const clusterUUID = "cluster-uuid-timeout-retry"
+	const workerName = "worker-timeout-retry"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	expired := metav1.NewTime(time.Now().Add(-2 * nodeAddRetryBackoff))
+	sn := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-timeout-retry", Namespace: namespace, Finalizers: []string{utils.FinalizerStorageNodeSet}},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{WorkerNodes: []string{workerName}},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			PendingNodeAdds: map[string]metav1.Time{workerName: expired},
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: workerName, UUID: "", Status: nodeStatusTimeout, PostedAt: &expired},
+			},
+		},
+	}
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: workerName},
+		Status:     corev1.NodeStatus{Addresses: []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "10.0.0.1"}}},
+	}
+
+	r := newStorageNodeSetStateTestReconciler(t, sn, node)
+	res, err := r.reconcileWorkerNode(
+		context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)},
+		sn, workerName, clusterUUID, webapi.NewClient(srv.URL), 1,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter <= 0 {
+		t.Errorf("expected a prompt requeue to re-drive the add, got: %v", res.RequeueAfter)
+	}
+	for _, n := range sn.Status.Nodes {
+		if n.Hostname == workerName && n.Status == nodeStatusTimeout {
+			t.Errorf("stale timeout placeholder should be cleared after backoff, got: %#v", n)
+		}
+	}
+	if _, ok := sn.Status.PendingNodeAdds[workerName]; ok {
+		t.Errorf("pending marker should be cleared after backoff so the retry can POST")
 	}
 }
 
