@@ -3553,13 +3553,33 @@ func newOfflineRecoveryServer() (*httptest.Server, *int32) {
 }
 
 func offlineRecoverySN(status string) *simplyblockv1alpha1.StorageNodeSet {
+	port := int32(4426)
 	return &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "default"},
 		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-a"},
 		Status: simplyblockv1alpha1.StorageNodeSetStatus{
 			Nodes: []simplyblockv1alpha1.NodeStatus{
-				{UUID: "node-1", Hostname: "worker-3_4426", Status: status},
+				{UUID: "node-1", Hostname: "worker-3_4426", Status: status, RpcPort: &port},
 			},
+		},
+	}
+}
+
+// snodeSpdkPod builds a snode-spdk pod on workerName for the given RPC port,
+// matching how isStorageNodePodMissing discovers presence.
+func snodeSpdkPod(name, workerName string, rpcPort int32) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+			Labels:    map[string]string{"role": utils.LabelSpdkProxyRole},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: workerName,
+			Containers: []corev1.Container{{
+				Name: "spdk-proxy-container",
+				Env:  []corev1.EnvVar{{Name: "RPC_PORT", Value: fmt.Sprintf("%d", rpcPort)}},
+			}},
 		},
 	}
 }
@@ -3626,6 +3646,34 @@ func TestReconcileOfflineNodeRecovery(t *testing.T) {
 		r.reconcileOfflineStorageNodeRecovery(context.Background(), webapi.NewClient(srv.URL), "cluster-a", sn)
 		if got := atomic.LoadInt32(posts); got != 0 {
 			t.Fatalf("expected no restart POST when Spec.Action set, got %d", got)
+		}
+	})
+
+	t.Run("does not restart when snode pod is present on host", func(t *testing.T) {
+		srv, posts := newOfflineRecoveryServer()
+		defer srv.Close()
+		// Host healthy, node offline — but the snode pod is still there (SPDK
+		// sick, not evicted). That is the backend's to fix, not ours.
+		pod := snodeSpdkPod("snode-spdk-pod-4426-abc", "worker-3", 4426)
+		sn := offlineRecoverySN(utils.NodeStatusOffline)
+		r := newStorageNodeSetStateTestReconciler(t, healthyNode(), pod)
+
+		r.reconcileOfflineStorageNodeRecovery(context.Background(), webapi.NewClient(srv.URL), "cluster-a", sn)
+		if got := atomic.LoadInt32(posts); got != 0 {
+			t.Fatalf("expected no restart POST when snode pod present, got %d", got)
+		}
+	})
+
+	t.Run("does not restart when node RPC port is unknown", func(t *testing.T) {
+		srv, posts := newOfflineRecoveryServer()
+		defer srv.Close()
+		sn := offlineRecoverySN(utils.NodeStatusOffline)
+		sn.Status.Nodes[0].RpcPort = nil // never came online; can't confirm missing
+		r := newStorageNodeSetStateTestReconciler(t, healthyNode())
+
+		r.reconcileOfflineStorageNodeRecovery(context.Background(), webapi.NewClient(srv.URL), "cluster-a", sn)
+		if got := atomic.LoadInt32(posts); got != 0 {
+			t.Fatalf("expected no restart POST when RPC port unknown, got %d", got)
 		}
 	})
 

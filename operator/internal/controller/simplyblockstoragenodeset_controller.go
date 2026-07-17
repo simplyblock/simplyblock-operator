@@ -1856,6 +1856,16 @@ func (r *StorageNodeSetReconciler) reconcileOfflineStorageNodeRecovery(
 			continue
 		}
 
+		// Discover whether the storage node's pod is actually gone from the host
+		// (evicted) rather than running-but-unhealthy. Only a genuinely missing
+		// pod is ours to recover; a present-but-sick pod is the backend's to fix
+		// (its own restart task / auto_restart machinery), so don't fight it.
+		if !r.isStorageNodePodMissing(ctx, snCR, workerName, n.RpcPort) {
+			log.Info("Offline-node recovery: snode pod present on host; not an eviction, skipping",
+				"node", n.UUID, "worker", workerName)
+			continue
+		}
+
 		// Per-node backoff: caps the restart rate and absorbs residual
 		// scheduler-level failures the condition gate can't foresee.
 		if v, ok := r.recoveryBackoff.Load(n.UUID); ok {
@@ -1882,6 +1892,45 @@ func (r *StorageNodeSetReconciler) reconcileOfflineStorageNodeRecovery(
 				"node", n.UUID, "worker", workerName)
 		}
 	}
+}
+
+// isStorageNodePodMissing reports whether no snode-spdk pod for the given RPC
+// port is present on workerName — i.e. the storage node's pod is actually gone
+// from the host (evicted), as opposed to running-but-unhealthy (which is the
+// backend's failure to fix, not ours).
+//
+// Conservative on uncertainty: an unreadable pod list, or a node whose RPC port
+// was never learned (RpcPort nil — it never came online), returns false so the
+// operator does not fire a blind restart.
+func (r *StorageNodeSetReconciler) isStorageNodePodMissing(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+	workerName string,
+	rpcPort *int32,
+) bool {
+	if rpcPort == nil {
+		return false
+	}
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods,
+		client.InNamespace(snCR.Namespace),
+		client.MatchingLabels{"role": utils.LabelSpdkProxyRole},
+	); err != nil {
+		logf.FromContext(ctx).Error(err,
+			"Offline-node recovery: failed to list snode pods; assuming present",
+			"worker", workerName)
+		return false
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Spec.NodeName != workerName {
+			continue
+		}
+		if port, ok := extractSpdkProxyRpcPort(p); ok && port == *rpcPort {
+			return false // a pod for this node is present on the host
+		}
+	}
+	return true
 }
 
 // triggerStorageNodeRestart POSTs an in-place force restart for a single storage
