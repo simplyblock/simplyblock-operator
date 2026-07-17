@@ -65,6 +65,11 @@ type StorageNodeSetReconciler struct {
 	// by the pattern string. Compilation errors are surfaced on first use and the
 	// CR is rejected, so subsequent reconciles reuse the valid compiled regex.
 	systemVolumeFilterCache sync.Map
+	// recoveryBackoff throttles the offline-node auto-restart: nodeUUID ->
+	// earliest time.Time the operator may re-attempt a restart. In-memory (a
+	// reset on operator restart is safe — performNodeAction's in-progress guard
+	// prevents restarting a node that is already restarting).
+	recoveryBackoff sync.Map
 }
 
 type SNODEAPIResponse struct {
@@ -111,6 +116,15 @@ var (
 	// again. The backoff also caps the log/re-POST rate for a node that can
 	// never come online, so a permanently broken worker no longer spams.
 	nodeAddRetryBackoff = 3 * time.Minute
+
+	// offlineRecoveryBackoff throttles the offline-node auto-restart per node:
+	// it absorbs residual scheduler-level failures the condition gate can't
+	// foresee (e.g. Insufficient cpu) and caps the restart rate for a node that
+	// genuinely will not come back.
+	offlineRecoveryBackoff = 3 * time.Minute
+
+	// recoveryNowFn is a seam for tests to control the recovery backoff clock.
+	recoveryNowFn = time.Now
 )
 
 // nodeStatusTimeout is the sentinel Status written to a NodeStatus entry when a
@@ -248,9 +262,14 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return res, err
 	}
 
-	if err := r.syncTrackedNodesStatus(ctx, apiClient, clusterUUID, snCR); err != nil {
+	if err := r.syncTrackedStorageNodesStatus(ctx, apiClient, clusterUUID, snCR); err != nil {
 		log.Error(err, "Failed to sync storage node status")
 	}
+
+	// Auto-recover a node that was evicted by host resource pressure, once the
+	// pressure has cleared. The control plane cannot see k8s node conditions and
+	// parks such a node (auto_restart_disabled) after its own retries time out.
+	r.reconcileOfflineStorageNodeRecovery(ctx, apiClient, clusterUUID, snCR)
 
 	// On every reconcile, check whether the cluster is still unready and if
 	// the activation conditions are now met. This catches cases where the
@@ -304,27 +323,8 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNode(
 	// hot-looping pollNodeOnline (which only re-logs the same timeout on every
 	// reconcile because the backend already deleted the half-created node),
 	// back off and then re-drive the add from a clean slate.
-	for i := range snCR.Status.Nodes {
-		n := &snCR.Status.Nodes[i]
-		if n.Hostname != nodeName || n.Status != nodeStatusTimeout {
-			continue
-		}
-		// Still within the backoff window: requeue quietly — no API poll, no log.
-		if n.PostedAt != nil {
-			if elapsed := time.Since(n.PostedAt.Time); elapsed < nodeAddRetryBackoff {
-				return ctrl.Result{RequeueAfter: nodeAddRetryBackoff - elapsed}, nil
-			}
-		}
-		// Backoff elapsed: clear the stale placeholder and the pending marker so
-		// the next reconcile performs a fresh adopt-or-POST for this node.
-		log.Info("Re-driving storage node add after previous timeout", "node", nodeName)
-		snCR.Status.Nodes = append(snCR.Status.Nodes[:i], snCR.Status.Nodes[i+1:]...)
-		delete(snCR.Status.PendingNodeAdds, nodeName)
-		if err := r.Status().Update(ctx, snCR); err != nil {
-			log.Error(err, "Failed to clear timed-out node status before retry", "node", nodeName)
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		}
-		return ctrl.Result{RequeueAfter: time.Second}, nil
+	if handled, res := r.handleTimedOutStorageNodeAdd(ctx, snCR, nodeName); handled {
+		return res, nil
 	}
 
 	ip, err := getNodeInternalIP(ctx, r.Client, nodeName)
@@ -413,6 +413,42 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNode(
 	return r.pollNodeOnline(ctx, apiClient, clusterUUID, ip, nodeName, expectedPerHost, snCR)
 }
 
+// handleTimedOutNodeAdd re-drives a storage-node add whose previous attempt
+// timed out: it requeues quietly during the backoff window, then clears the
+// stale placeholder and pending marker so the next reconcile performs a fresh
+// adopt-or-POST. Returns handled=true when the caller should return (res, err)
+// immediately.
+func (r *StorageNodeSetReconciler) handleTimedOutStorageNodeAdd(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+	nodeName string,
+) (bool, ctrl.Result) {
+	log := logf.FromContext(ctx)
+	for i := range snCR.Status.Nodes {
+		n := &snCR.Status.Nodes[i]
+		if n.Hostname != nodeName || n.Status != nodeStatusTimeout {
+			continue
+		}
+		// Still within the backoff window: requeue quietly — no API poll, no log.
+		if n.PostedAt != nil {
+			if elapsed := time.Since(n.PostedAt.Time); elapsed < nodeAddRetryBackoff {
+				return true, ctrl.Result{RequeueAfter: nodeAddRetryBackoff - elapsed}
+			}
+		}
+		// Backoff elapsed: clear the stale placeholder and the pending marker so
+		// the next reconcile performs a fresh adopt-or-POST for this node.
+		log.Info("Re-driving storage node add after previous timeout", "node", nodeName)
+		snCR.Status.Nodes = append(snCR.Status.Nodes[:i], snCR.Status.Nodes[i+1:]...)
+		delete(snCR.Status.PendingNodeAdds, nodeName)
+		if err := r.Status().Update(ctx, snCR); err != nil {
+			log.Error(err, "Failed to clear timed-out node status before retry", "node", nodeName)
+			return true, ctrl.Result{RequeueAfter: 5 * time.Second}
+		}
+		return true, ctrl.Result{RequeueAfter: time.Second}
+	}
+	return false, ctrl.Result{}
+}
+
 // postStorageNodeSet calls the backend storage-node creation API and records the
 // placeholder status entry.
 func (r *StorageNodeSetReconciler) postStorageNodeSet(
@@ -453,7 +489,7 @@ func (r *StorageNodeSetReconciler) postStorageNodeSet(
 		CRPlural:            "storagenodesets",
 		Format4K:            utils.BoolPtrOrFalse(snCR.Spec.ForceFormat4K),
 		SpdkSystemMemory:    snCR.Spec.SpdkSystemMemory,
-		FailureDomain:       nodeFailureDomain(snCR, nodeName),
+		FailureDomain:       storageNodeFailureDomain(snCR, nodeName),
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
@@ -530,6 +566,28 @@ func (r *StorageNodeSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&simplyblockv1alpha1.ControlPlane{},
 			handler.EnqueueRequestsFromMapFunc(r.controlPlaneToStorageNodeSetRequests),
 			builder.WithPredicates(predicate.NewPredicateFuncs(isSimplyblockControlPlane)),
+		).
+		Watches(
+			&corev1.Node{},
+			handler.EnqueueRequestsFromMapFunc(r.storageNodeToStorageNodeSetRequests),
+			// Nodes heartbeat every ~10s; only wake on a schedulability edge
+			// (e.g. DiskPressure True->False, cordon/uncordon, Ready flip) so the
+			// offline-node recovery re-evaluates exactly when a host recovers.
+			builder.WithPredicates(predicate.Funcs{
+				UpdateFunc: func(e event.UpdateEvent) bool {
+					oldN, ok1 := e.ObjectOld.(*corev1.Node)
+					newN, ok2 := e.ObjectNew.(*corev1.Node)
+					if !ok1 || !ok2 {
+						return true
+					}
+					oldBlocked, _ := isWorkerNodeUnschedulable(oldN)
+					newBlocked, _ := isWorkerNodeUnschedulable(newN)
+					return oldBlocked != newBlocked
+				},
+				CreateFunc:  func(event.CreateEvent) bool { return false },
+				DeleteFunc:  func(event.DeleteEvent) bool { return false },
+				GenericFunc: func(event.GenericEvent) bool { return false },
+			}),
 		).
 		Owns(&simplyblockv1alpha1.VolumeMigration{}).
 		Complete(r)
@@ -608,6 +666,67 @@ func (r *StorageNodeSetReconciler) spdkProxyPodToStorageNodeSetRequests(
 	return reqs
 }
 
+// isWorkerNodeUnschedulable reports whether a k8s node cannot currently host the
+// storage-node pod, and a human-readable reason when it cannot.
+//
+// The signal is deliberately NOT the node's Ready condition (a node stays
+// Ready=True under DiskPressure) nor its taints (the snode pod tolerates every
+// NoSchedule/NoExecute taint). What actually blocks the pod is kubelet
+// node-pressure admission/eviction, which keys off the node's *Pressure
+// conditions — so any *Pressure condition that is True means blocked. Handled
+// generically so disk/memory/pid (and any future *Pressure condition) all count.
+// A cordon (Unschedulable) and a Ready=False host are treated as blocked too:
+// the former is a deliberate operator action, the latter means the host is down.
+func isWorkerNodeUnschedulable(node *corev1.Node) (bool, string) {
+	if node.Spec.Unschedulable {
+		return true, "node cordoned (unschedulable)"
+	}
+	for _, c := range node.Status.Conditions {
+		if strings.HasSuffix(string(c.Type), "Pressure") && c.Status == corev1.ConditionTrue {
+			return true, fmt.Sprintf("%s=True", c.Type)
+		}
+		if c.Type == corev1.NodeReady && c.Status != corev1.ConditionTrue {
+			return true, "node not Ready"
+		}
+	}
+	return false, ""
+}
+
+// workerNameFromHostname maps a backend storage-node hostname ("<node>_<rpcport>",
+// e.g. "worker-3_4426") to its Kubernetes node name.
+func workerNameFromHostname(hostname string) string {
+	if i := strings.IndexByte(hostname, '_'); i > 0 {
+		return hostname[:i]
+	}
+	return hostname
+}
+
+// storageNodeToStorageNodeSetRequests enqueues the StorageNodeSet(s) that track a
+// storage node hosted on the changed k8s node, so an offline node can be
+// re-evaluated for auto-restart once its host's resource pressure clears.
+func (r *StorageNodeSetReconciler) storageNodeToStorageNodeSetRequests(
+	ctx context.Context,
+	obj client.Object,
+) []reconcile.Request {
+	nodeName := obj.GetName()
+	var snList simplyblockv1alpha1.StorageNodeSetList
+	if err := r.List(ctx, &snList); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, sn := range snList.Items {
+		for _, n := range sn.Status.Nodes {
+			if workerNameFromHostname(n.Hostname) == nodeName {
+				reqs = append(reqs, reconcile.Request{
+					NamespacedName: types.NamespacedName{Namespace: sn.Namespace, Name: sn.Name},
+				})
+				break
+			}
+		}
+	}
+	return reqs
+}
+
 func (r *StorageNodeSetReconciler) handleDeletion(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNodeSet,
@@ -640,50 +759,15 @@ func (r *StorageNodeSetReconciler) ensureFinalizer(
 
 func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *simplyblockv1alpha1.StorageNodeSet) error {
 	for _, nodeName := range sn.Spec.WorkerNodes {
-		var node corev1.Node
-		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
-			return err
-		}
-
-		if node.Labels == nil {
-			node.Labels = map[string]string{}
-		}
-
-		key := "io.simplyblock.node-type"
-		value := "simplyblock-storage-plane-" + sn.Spec.ClusterName
-
-		if node.Labels[key] == value {
-			continue
-		}
-
-		node.Labels[key] = value
-		if err := r.Update(ctx, &node); err != nil {
+		if err := r.ensureWorkerNodeLabeled(ctx, sn, nodeName); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
 func (r *StorageNodeSetReconciler) labelWorkerNode(ctx context.Context, sn *simplyblockv1alpha1.StorageNodeSet) error {
-	var node corev1.Node
-	if err := r.Get(ctx, client.ObjectKey{Name: sn.Spec.WorkerNode}, &node); err != nil {
-		return err
-	}
-
-	if node.Labels == nil {
-		node.Labels = map[string]string{}
-	}
-
-	key := "io.simplyblock.node-type"
-	value := "simplyblock-storage-plane-" + sn.Spec.ClusterName
-
-	node.Labels[key] = value
-	if err := r.Update(ctx, &node); err != nil {
-		return err
-	}
-
-	return nil
+	return r.ensureWorkerNodeLabeled(ctx, sn, sn.Spec.WorkerNode)
 }
 
 func (r *StorageNodeSetReconciler) reconcileDaemonSet(
@@ -1635,11 +1719,11 @@ func onAllSocketNodesOnline(
 	return maybeActivateCluster(ctx, apiClient, clusterUUID, snCR, r)
 }
 
-// syncTrackedNodesStatus refreshes all tracked (UUID != "") NodeStatus entries
+// syncTrackedStorageNodesStatus refreshes all tracked (UUID != "") NodeStatus entries
 // from the backend API. It is called on every completed reconcile pass to keep
 // Health, Status, LvolPort and the other fields up-to-date after initial
 // provisioning. PostedAt is preserved because it is a creation timestamp.
-func (r *StorageNodeSetReconciler) syncTrackedNodesStatus(
+func (r *StorageNodeSetReconciler) syncTrackedStorageNodesStatus(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
@@ -1721,6 +1805,137 @@ func (r *StorageNodeSetReconciler) syncTrackedNodesStatus(
 	return nil
 }
 
+// reconcileOfflineStorageNodeRecovery auto-restarts a tracked storage node that went
+// OFFLINE because its host hit resource pressure (kubelet evicted the snode
+// pod), once that pressure has cleared.
+//
+// The control plane cannot see Kubernetes node conditions: after its restart
+// task exhausts its retry budget it sets auto_restart_disabled and parks the
+// node for an operator. The operator CAN see the conditions, so it bridges the
+// gap — and the explicit restart clears auto_restart_disabled on the backend.
+func (r *StorageNodeSetReconciler) reconcileOfflineStorageNodeRecovery(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID string,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+) {
+	log := logf.FromContext(ctx)
+
+	// Never fight an explicit, operator/user-requested action on this CR.
+	if snCR.Spec.Action != "" {
+		return
+	}
+
+	for i := range snCR.Status.Nodes {
+		n := &snCR.Status.Nodes[i]
+		if n.UUID == "" {
+			continue
+		}
+		// Only OFFLINE is a safe trigger (mirrors the backend's _AUTO_RESTART_OK:
+		// OFFLINE means SPDK is confirmed gone). unreachable / in_restart /
+		// in_shutdown are transient or already in flight — leave them, and clear
+		// any stale backoff so a genuine later outage is not throttled.
+		if !strings.EqualFold(n.Status, utils.NodeStatusOffline) {
+			r.recoveryBackoff.Delete(n.UUID)
+			continue
+		}
+
+		workerName := workerNameFromHostname(n.Hostname)
+		var node corev1.Node
+		if err := r.Get(ctx, types.NamespacedName{Name: workerName}, &node); err != nil {
+			log.Info("Offline-node recovery: host node not found; skipping",
+				"node", n.UUID, "worker", workerName, "error", err.Error())
+			continue
+		}
+
+		// Corrected schedulability gate: the host must be able to accept the
+		// snode pod again. A cordon here also means a deliberate drain — leave it.
+		if blocked, reason := isWorkerNodeUnschedulable(&node); blocked {
+			log.Info("Offline-node recovery: deferring, host cannot host storage node yet",
+				"node", n.UUID, "worker", workerName, "reason", reason)
+			continue
+		}
+
+		// Per-node backoff: caps the restart rate and absorbs residual
+		// scheduler-level failures the condition gate can't foresee.
+		if v, ok := r.recoveryBackoff.Load(n.UUID); ok {
+			if next, isTime := v.(time.Time); isTime && recoveryNowFn().Before(next) {
+				continue
+			}
+		}
+
+		log.Info("Offline-node recovery: host pressure cleared, auto-restarting storage node",
+			"node", n.UUID, "worker", workerName)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(snCR, corev1.EventTypeNormal, "AutoRestart",
+				"Host %s recovered (no resource pressure); restarting offline storage node %s",
+				workerName, n.UUID)
+		}
+
+		// Back off before attempting, regardless of outcome: a success moves the
+		// node out of OFFLINE (next sync clears the entry); a failure waits out
+		// the backoff before re-attempting.
+		r.recoveryBackoff.Store(n.UUID, recoveryNowFn().Add(offlineRecoveryBackoff))
+
+		if err := r.triggerStorageNodeRestart(ctx, apiClient, clusterUUID, n.UUID); err != nil {
+			log.Error(err, "Offline-node recovery: restart failed; will retry after backoff",
+				"node", n.UUID, "worker", workerName)
+		}
+	}
+}
+
+// triggerStorageNodeRestart POSTs an in-place force restart for a single storage
+// node.
+//
+// node_address is intentionally omitted: it is only for relocating a node to a
+// different host — the control plane rewrites the node's api_endpoint/mgmt_ip
+// when it is set (storage_node_ops.restart_storage_node), and nulls it out when
+// it equals the current endpoint. An in-place restart just needs force; the
+// node's SNodeAPI (the storage-node DaemonSet pod) is already running and
+// reachable at its current address, so no worker labeling / EndpointSlice /
+// reachability prep is needed either. The restart clears auto_restart_disabled
+// on the backend.
+func (r *StorageNodeSetReconciler) triggerStorageNodeRestart(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID string,
+	nodeUUID string,
+) error {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
+	respBody, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, map[string]any{"force": true})
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("unexpected status %d: %s", status, string(respBody))
+		}
+		return fmt.Errorf("restart API call failed: %w", err)
+	}
+	return nil
+}
+
+// ensureWorkerNodeLabeled sets the storage-plane node-type label on a specific
+// worker (a no-op when already set). Generalizes labelWorkerNode to an arbitrary
+// worker name so the offline-node recovery can label the node it is restarting.
+func (r *StorageNodeSetReconciler) ensureWorkerNodeLabeled(
+	ctx context.Context,
+	sn *simplyblockv1alpha1.StorageNodeSet,
+	workerName string,
+) error {
+	var node corev1.Node
+	if err := r.Get(ctx, client.ObjectKey{Name: workerName}, &node); err != nil {
+		return err
+	}
+	key := "io.simplyblock.node-type"
+	value := "simplyblock-storage-plane-" + sn.Spec.ClusterName
+	if node.Labels[key] == value {
+		return nil
+	}
+	if node.Labels == nil {
+		node.Labels = map[string]string{}
+	}
+	node.Labels[key] = value
+	return r.Update(ctx, &node)
+}
+
 // maybeActivateCluster activates the cluster when online-node conditions are met.
 func maybeActivateCluster(
 	ctx context.Context,
@@ -1772,10 +1987,10 @@ func maybeActivateCluster(
 	return nil
 }
 
-// nodeFailureDomain returns the failure-domain group for a specific worker node,
+// storageNodeFailureDomain returns the failure-domain group for a specific worker node,
 // looked up from the StorageNodeSet's NodeFailureDomains map. Returns 0 (omitted)
 // when no entry is configured, which the backend interprets as no failure domain.
-func nodeFailureDomain(snCR *simplyblockv1alpha1.StorageNodeSet, nodeName string) int {
+func storageNodeFailureDomain(snCR *simplyblockv1alpha1.StorageNodeSet, nodeName string) int {
 	if snCR.Spec.NodeFailureDomains == nil {
 		return 0
 	}

@@ -2272,7 +2272,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		r := newStorageNodeSetStateTestReconciler(t, sn)
 		// Unreachable server — if the function makes an HTTP call it will fail.
 		c := webapi.NewClient("http://127.0.0.1:1")
-		if err := r.syncTrackedNodesStatus(context.Background(), c, clusterUUID, sn); err != nil {
+		if err := r.syncTrackedStorageNodesStatus(context.Background(), c, clusterUUID, sn); err != nil {
 			t.Fatalf("expected no error when no tracked nodes, got: %v", err)
 		}
 	})
@@ -2304,7 +2304,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		defer srv.Close()
 
 		r := newStorageNodeSetStateTestReconciler(t, sn)
-		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn); err != nil {
+		if err := r.syncTrackedStorageNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn); err != nil {
 			t.Fatalf("syncTrackedNodesStatus returned error: %v", err)
 		}
 
@@ -2348,7 +2348,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		defer srv.Close()
 
 		r := newStorageNodeSetStateTestReconciler(t, sn)
-		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn); err != nil {
+		if err := r.syncTrackedStorageNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn); err != nil {
 			t.Fatalf("syncTrackedNodesStatus returned error: %v", err)
 		}
 
@@ -2381,7 +2381,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		defer srv.Close()
 
 		r := newStorageNodeSetStateTestReconciler(t, sn)
-		if err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn); err != nil {
+		if err := r.syncTrackedStorageNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn); err != nil {
 			t.Fatalf("syncTrackedNodesStatus returned error: %v", err)
 		}
 
@@ -2409,7 +2409,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		defer srv.Close()
 
 		r := newStorageNodeSetStateTestReconciler(t, sn)
-		err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn)
+		err := r.syncTrackedStorageNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn)
 		if err == nil {
 			t.Fatalf("expected error on API failure")
 		}
@@ -2435,7 +2435,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		defer srv.Close()
 
 		r := newStorageNodeSetStateTestReconciler(t, sn)
-		err := r.syncTrackedNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn)
+		err := r.syncTrackedStorageNodesStatus(context.Background(), webapi.NewClient(srv.URL), clusterUUID, sn)
 		if err == nil {
 			t.Fatalf("expected error on invalid JSON")
 		}
@@ -3449,4 +3449,223 @@ func TestParallelNodeAddContinuesPastPendingWorker(t *testing.T) {
 	if res2.RequeueAfter == 0 {
 		t.Error("worker-2: expected RequeueAfter after processing")
 	}
+}
+
+// --- offline-node auto-restart ---------------------------------------------
+
+func readyCond(status corev1.ConditionStatus) corev1.NodeCondition {
+	return corev1.NodeCondition{Type: corev1.NodeReady, Status: status}
+}
+
+func pressureCond(t corev1.NodeConditionType, status corev1.ConditionStatus) corev1.NodeCondition {
+	return corev1.NodeCondition{Type: t, Status: status}
+}
+
+func TestWorkerNodeUnschedulable(t *testing.T) {
+	cases := []struct {
+		name        string
+		node        *corev1.Node
+		wantBlocked bool
+	}{
+		{
+			name: "healthy node accepts pod",
+			node: &corev1.Node{Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+				readyCond(corev1.ConditionTrue),
+				pressureCond(corev1.NodeDiskPressure, corev1.ConditionFalse),
+				pressureCond(corev1.NodeMemoryPressure, corev1.ConditionFalse),
+				pressureCond(corev1.NodePIDPressure, corev1.ConditionFalse),
+			}}},
+			wantBlocked: false,
+		},
+		{
+			// The exact worker-3 case: Ready=True yet DiskPressure=True.
+			name: "disk pressure blocks despite Ready=True",
+			node: &corev1.Node{Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+				readyCond(corev1.ConditionTrue),
+				pressureCond(corev1.NodeDiskPressure, corev1.ConditionTrue),
+			}}},
+			wantBlocked: true,
+		},
+		{
+			name: "memory pressure blocks",
+			node: &corev1.Node{Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+				pressureCond(corev1.NodeMemoryPressure, corev1.ConditionTrue),
+			}}},
+			wantBlocked: true,
+		},
+		{
+			name: "pid pressure blocks",
+			node: &corev1.Node{Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+				pressureCond(corev1.NodePIDPressure, corev1.ConditionTrue),
+			}}},
+			wantBlocked: true,
+		},
+		{
+			name:        "cordon blocks",
+			node:        &corev1.Node{Spec: corev1.NodeSpec{Unschedulable: true}},
+			wantBlocked: true,
+		},
+		{
+			name: "not ready blocks",
+			node: &corev1.Node{Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+				readyCond(corev1.ConditionFalse),
+			}}},
+			wantBlocked: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, reason := isWorkerNodeUnschedulable(tc.node)
+			if got != tc.wantBlocked {
+				t.Fatalf("workerNodeUnschedulable=%v (reason %q), want %v", got, reason, tc.wantBlocked)
+			}
+			if got && reason == "" {
+				t.Fatalf("blocked node must return a non-empty reason")
+			}
+		})
+	}
+}
+
+func TestWorkerNameFromHostname(t *testing.T) {
+	cases := map[string]string{
+		"worker-3_4426": "worker-3",
+		"worker-3":      "worker-3",
+		"vm19_4424":     "vm19",
+		"":              "",
+	}
+	for in, want := range cases {
+		if got := workerNameFromHostname(in); got != want {
+			t.Errorf("workerNameFromHostname(%q)=%q, want %q", in, got, want)
+		}
+	}
+}
+
+func newOfflineRecoveryServer() (*httptest.Server, *int32) {
+	var restartPosts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/restart") {
+			atomic.AddInt32(&restartPosts, 1)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	return srv, &restartPosts
+}
+
+func offlineRecoverySN(status string) *simplyblockv1alpha1.StorageNodeSet {
+	return &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "default"},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-a"},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{UUID: "node-1", Hostname: "worker-3_4426", Status: status},
+			},
+		},
+	}
+}
+
+func TestReconcileOfflineNodeRecovery(t *testing.T) {
+	healthyNode := func() *corev1.Node {
+		return &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "worker-3"},
+			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+				readyCond(corev1.ConditionTrue),
+				pressureCond(corev1.NodeDiskPressure, corev1.ConditionFalse),
+			}},
+		}
+	}
+
+	t.Run("restarts offline node when host pressure cleared", func(t *testing.T) {
+		srv, posts := newOfflineRecoveryServer()
+		defer srv.Close()
+		sn := offlineRecoverySN(utils.NodeStatusOffline)
+		r := newStorageNodeSetStateTestReconciler(t, healthyNode())
+
+		r.reconcileOfflineStorageNodeRecovery(context.Background(), webapi.NewClient(srv.URL), "cluster-a", sn)
+		if got := atomic.LoadInt32(posts); got != 1 {
+			t.Fatalf("expected 1 restart POST, got %d", got)
+		}
+	})
+
+	t.Run("does not restart while host under disk pressure", func(t *testing.T) {
+		srv, posts := newOfflineRecoveryServer()
+		defer srv.Close()
+		node := healthyNode()
+		node.Status.Conditions = []corev1.NodeCondition{
+			readyCond(corev1.ConditionTrue),
+			pressureCond(corev1.NodeDiskPressure, corev1.ConditionTrue),
+		}
+		sn := offlineRecoverySN(utils.NodeStatusOffline)
+		r := newStorageNodeSetStateTestReconciler(t, node)
+
+		r.reconcileOfflineStorageNodeRecovery(context.Background(), webapi.NewClient(srv.URL), "cluster-a", sn)
+		if got := atomic.LoadInt32(posts); got != 0 {
+			t.Fatalf("expected no restart POST under disk pressure, got %d", got)
+		}
+	})
+
+	t.Run("does not restart online node", func(t *testing.T) {
+		srv, posts := newOfflineRecoveryServer()
+		defer srv.Close()
+		sn := offlineRecoverySN(utils.NodeStatusOnline)
+		r := newStorageNodeSetStateTestReconciler(t, healthyNode())
+
+		r.reconcileOfflineStorageNodeRecovery(context.Background(), webapi.NewClient(srv.URL), "cluster-a", sn)
+		if got := atomic.LoadInt32(posts); got != 0 {
+			t.Fatalf("expected no restart POST for online node, got %d", got)
+		}
+	})
+
+	t.Run("skips when an explicit action is requested", func(t *testing.T) {
+		srv, posts := newOfflineRecoveryServer()
+		defer srv.Close()
+		sn := offlineRecoverySN(utils.NodeStatusOffline)
+		sn.Spec.Action = utils.NodeActionRestart
+		r := newStorageNodeSetStateTestReconciler(t, healthyNode())
+
+		r.reconcileOfflineStorageNodeRecovery(context.Background(), webapi.NewClient(srv.URL), "cluster-a", sn)
+		if got := atomic.LoadInt32(posts); got != 0 {
+			t.Fatalf("expected no restart POST when Spec.Action set, got %d", got)
+		}
+	})
+
+	t.Run("does not restart cordoned host", func(t *testing.T) {
+		srv, posts := newOfflineRecoveryServer()
+		defer srv.Close()
+		node := healthyNode()
+		node.Spec.Unschedulable = true
+		sn := offlineRecoverySN(utils.NodeStatusOffline)
+		r := newStorageNodeSetStateTestReconciler(t, node)
+
+		r.reconcileOfflineStorageNodeRecovery(context.Background(), webapi.NewClient(srv.URL), "cluster-a", sn)
+		if got := atomic.LoadInt32(posts); got != 0 {
+			t.Fatalf("expected no restart POST for cordoned host, got %d", got)
+		}
+	})
+
+	t.Run("backoff prevents a second restart until it expires", func(t *testing.T) {
+		srv, posts := newOfflineRecoveryServer()
+		defer srv.Close()
+		sn := offlineRecoverySN(utils.NodeStatusOffline)
+		r := newStorageNodeSetStateTestReconciler(t, healthyNode())
+
+		now := time.Unix(1_000_000, 0)
+		origNow := recoveryNowFn
+		recoveryNowFn = func() time.Time { return now }
+		t.Cleanup(func() { recoveryNowFn = origNow })
+
+		api := webapi.NewClient(srv.URL)
+		r.reconcileOfflineStorageNodeRecovery(context.Background(), api, "cluster-a", sn)
+		// Second call within the backoff window: no new POST.
+		r.reconcileOfflineStorageNodeRecovery(context.Background(), api, "cluster-a", sn)
+		if got := atomic.LoadInt32(posts); got != 1 {
+			t.Fatalf("expected exactly 1 restart POST within backoff window, got %d", got)
+		}
+		// Advance past the backoff: a retry fires.
+		now = now.Add(offlineRecoveryBackoff + time.Second)
+		r.reconcileOfflineStorageNodeRecovery(context.Background(), api, "cluster-a", sn)
+		if got := atomic.LoadInt32(posts); got != 2 {
+			t.Fatalf("expected 2 restart POSTs after backoff expired, got %d", got)
+		}
+	})
 }
