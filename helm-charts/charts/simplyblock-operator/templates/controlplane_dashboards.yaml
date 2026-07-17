@@ -12510,6 +12510,22 @@ data:
         "uid": "d56e0ae7-48d5-481d-a2ea-3192da4d9e40",
         "version": 5,
         "weekStart": ""
-    }  
-
+    }
+{{- if .Values.controlplane.foundationdb.exporter.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: simplyblock-grafana-dashboard-fdb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    grafana_dashboard: "1"
+data:
+  # Upstream dashboard shipped with github.com/aikoven/foundationdb-exporter.
+  # Loaded via .Files.Get (not inlined) because it contains Grafana legend
+  # templates like {{ "{{" }}state{{ "}}" }} that Helm would otherwise try to render.
+  # Panels use the default datasource, which is the Thanos datasource.
+  foundationdb.json: |
+{{ .Files.Get "dashboards/foundationdb.json" | indent 4 }}
+{{- end }}
 {{- end }}
