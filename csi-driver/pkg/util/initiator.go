@@ -158,7 +158,7 @@ func NewsimplyBlockClient(ctx context.Context, clusterID, poolIDOrName string) (
 	}
 
 	if clusterConfig == nil {
-		return nil, fmt.Errorf("failed to find secret for clusterID %s", clusterID)
+		return nil, fmt.Errorf("failed to find secret for clusterID %s: %w", clusterID, ErrClusterNotFound)
 	}
 
 	if clusterConfig.ClusterEndpoint == "" {

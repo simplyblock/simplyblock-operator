@@ -416,6 +416,12 @@ func (cs *controllerServer) DeleteVolume(
 	switch {
 	case errors.Is(err, util.ErrVolumeUnpublished):
 		klog.Warningf("volume not published: %s", volumeID)
+	case errors.Is(err, util.ErrClusterNotFound):
+		// The cluster this volume lived on has been removed from management. The
+		// volume is unreachable and effectively gone; report success so the
+		// external-provisioner drops its finalizer instead of retrying forever.
+		klog.Warningf("cluster for volume %s no longer managed, treating as already deleted: %v", volumeID, err)
+		return &csi.DeleteVolumeResponse{}, nil
 	case err != nil:
 		klog.Errorf("failed to unpublish volume, volumeID: %s err: %v", volumeID, err)
 		return nil, classifyDeleteVolumeError(err)
@@ -609,6 +615,13 @@ func (cs *controllerServer) DeleteSnapshot(
 	}
 	sbclient, err := util.NewsimplyBlockClient(ctx, sbSnapshot.clusterID, sbSnapshot.poolID)
 	if err != nil {
+		if errors.Is(err, util.ErrClusterNotFound) {
+			// The cluster this snapshot lived on has been removed from management.
+			// The snapshot is unreachable and effectively gone; report success so the
+			// external-snapshotter drops its finalizer instead of retrying forever.
+			klog.Warningf("cluster for snapshot %s no longer managed, treating as already deleted: %v", csiSnapshotID, err)
+			return &csi.DeleteSnapshotResponse{}, nil
+		}
 		klog.Errorf("failed to create spdk client: %v", err)
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
