@@ -114,7 +114,6 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 		}
 	})
 
-
 	t.Run("labelWorkerNodes records an event when a worker node is missing", func(t *testing.T) {
 		sn := &simplyblockv1alpha1.StorageNodeSet{
 			ObjectMeta: metav1.ObjectMeta{
