@@ -472,29 +472,6 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *sim
 	return nil
 }
 
-func (r *StorageNodeSetReconciler) labelWorkerNode(ctx context.Context, sn *simplyblockv1alpha1.StorageNodeSet) error {
-	var node corev1.Node
-	if err := r.Get(ctx, client.ObjectKey{Name: sn.Spec.WorkerNode}, &node); err != nil {
-		r.Recorder.Eventf(sn, corev1.EventTypeWarning, "WorkerNodeNotFound",
-			"worker node %q: %v", sn.Spec.WorkerNode, err)
-		return err
-	}
-
-	if node.Labels == nil {
-		node.Labels = map[string]string{}
-	}
-
-	key := "io.simplyblock.node-type"
-	value := "simplyblock-storage-plane-" + sn.Spec.ClusterName
-
-	node.Labels[key] = value
-	if err := r.Update(ctx, &node); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func (r *StorageNodeSetReconciler) reconcileDaemonSet(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNodeSet,
