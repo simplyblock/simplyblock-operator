@@ -42,7 +42,7 @@ func TestClientVolume(t *testing.T) {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"name":"vol1","pool_name":"pool1","size":20971520,` +
+		_, _ = w.Write([]byte(`{"name":"vol1","pool_name":"pool1","size":20971520,` +
 			`"nqn":"nqn.2023-02.io.simplyblock:c:lvol:v"}`))
 	})
 
@@ -71,7 +71,7 @@ func TestClientConnection(t *testing.T) {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`[{"transport":"tcp","ip":"10.10.10.1","port":4420,"nqn":"nqn.x"},` +
+		_, _ = w.Write([]byte(`[{"transport":"tcp","ip":"10.10.10.1","port":4420,"nqn":"nqn.x"},` +
 			`{"transport":"tcp","ip":"10.10.10.2","port":4420,"nqn":"nqn.x"}]`))
 	})
 
@@ -97,7 +97,7 @@ func TestClientListVolumes(t *testing.T) {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`[{"id":"` + testVolume + `","name":"vol1","pool_name":"pool1","size":100,"nqn":"nqn.a"},` +
+		_, _ = w.Write([]byte(`[{"id":"` + testVolume + `","name":"vol1","pool_name":"pool1","size":100,"nqn":"nqn.a"},` +
 			`{"id":"44444444-4444-4444-4444-444444444444","name":"vol2","pool_name":"pool1","size":200,"nqn":"nqn.b"}]`))
 	})
 

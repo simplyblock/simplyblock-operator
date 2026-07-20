@@ -54,7 +54,7 @@ func identifyControllerNN(devicePath string) (uint32, error) {
 	if err != nil {
 		return 0, fmt.Errorf("open %s: %w", devicePath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	buf := make([]byte, nvmeIdentifyDataLen)
 	cmd := nvmePassthruCmd{

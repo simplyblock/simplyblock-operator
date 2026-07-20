@@ -117,7 +117,7 @@ func (c *Client) ListStorageNodeNICs(ctx context.Context, clusterID, nodeID stri
 	}
 	out := make([]NIC, 0, len(raw))
 	for _, e := range raw {
-		out = append(out, NIC{ID: e.ID, Device: e.Device, Address: e.Address, NetType: e.NetType, Status: e.Status})
+		out = append(out, NIC(e))
 	}
 	return out, nil
 }

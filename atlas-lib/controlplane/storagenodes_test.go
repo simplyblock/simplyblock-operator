@@ -11,7 +11,7 @@ const testNode = "77777777-7777-7777-7777-777777777777"
 func TestClientListStorageNodes(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`[{"id":"` + testNode + `","cluster_id":"` + testCluster + `","hostname":"node1",` +
+		_, _ = w.Write([]byte(`[{"id":"` + testNode + `","cluster_id":"` + testCluster + `","hostname":"node1",` +
 			`"status":"online","mgmt_ip":"10.0.0.5","lvols":3,"lvols_max":100,"device_count":4,` +
 			`"capacity":{},"secondary_node_id":null}]`))
 	})
@@ -34,7 +34,7 @@ func TestClientListStorageNodes(t *testing.T) {
 
 func TestClientGetStorageNode(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"id":"` + testNode + `","cluster_id":"` + testCluster + `","hostname":"node1",` +
+		_, _ = w.Write([]byte(`{"id":"` + testNode + `","cluster_id":"` + testCluster + `","hostname":"node1",` +
 			`"status":"online","mgmt_ip":"10.0.0.5","lvols":0,"lvols_max":0,"device_count":0,` +
 			`"capacity":{},"secondary_node_id":null}`))
 	})
@@ -49,7 +49,7 @@ func TestClientGetStorageNode(t *testing.T) {
 
 func TestClientListStorageNodeNICs(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`[{"ID":"nic-1","Device name":"eth0","Address":"10.10.10.5",` +
+		_, _ = w.Write([]byte(`[{"ID":"nic-1","Device name":"eth0","Address":"10.10.10.5",` +
 			`"Net type":"tcp","Status":"online"}]`))
 	})
 	nics, err := c.ListStorageNodeNICs(context.Background(), testCluster, testNode)

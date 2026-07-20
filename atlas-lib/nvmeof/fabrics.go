@@ -197,7 +197,7 @@ func writeFabricsDevice(_ context.Context, options string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := f.WriteString(options); err != nil {
 		return "", err
@@ -217,7 +217,7 @@ func writeSysfs(path, val string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, err = f.WriteString(val)
 	return err
 }

@@ -11,7 +11,7 @@ const testMigration = "88888888-8888-8888-8888-888888888888"
 func TestClientListVolumeMigrations(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`[{"id":"` + testMigration + `","lvol_id":"` + testVolume + `",` +
+		_, _ = w.Write([]byte(`[{"id":"` + testMigration + `","lvol_id":"` + testVolume + `",` +
 			`"source_node_id":"a","target_node_id":"b","phase":"pre_created","status":"running",` +
 			`"error_message":"","retry_count":0,"max_retries":3,"snaps_migrated":1,"snaps_total":2,` +
 			`"completed_at":0,"started_at":0,"intermediate_snap_rounds":0,"max_intermediate_snap_rounds":0}]`))
@@ -63,7 +63,7 @@ func TestClientCreateVolumeMigration(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte(`{"id":"` + testMigration + `","lvol_id":"` + testVolume + `","source_node_id":"s",` +
+		_, _ = w.Write([]byte(`{"id":"` + testMigration + `","lvol_id":"` + testVolume + `","source_node_id":"s",` +
 			`"target_node_id":"` + target + `","phase":"pre_created","status":"running","error_message":"",` +
 			`"retry_count":0,"max_retries":3,"snaps_migrated":0,"snaps_total":0,"completed_at":0,` +
 			`"started_at":0,"intermediate_snap_rounds":0,"max_intermediate_snap_rounds":0}`))

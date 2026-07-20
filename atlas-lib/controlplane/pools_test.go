@@ -19,7 +19,7 @@ func TestClientListAndFindPools(t *testing.T) {
 
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("[" + p1 + "," + p2 + "]"))
+		_, _ = w.Write([]byte("[" + p1 + "," + p2 + "]"))
 	})
 
 	pools, err := c.ListStoragePools(context.Background(), testCluster)
@@ -62,7 +62,7 @@ func TestClientCreateStoragePool(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte(`{"id":"` + testPool + `","cluster_id":"` + testCluster + `","name":"newpool",` +
+		_, _ = w.Write([]byte(`{"id":"` + testPool + `","cluster_id":"` + testCluster + `","name":"newpool",` +
 			`"max_size":5000,"capacity":{},"max_r_mbytes":0,"max_rw_iops":0,"max_rw_mbytes":0,` +
 			`"max_w_mbytes":0,"volume_max_size":0,"status":"active"}`))
 	})
