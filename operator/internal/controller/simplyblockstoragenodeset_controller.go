@@ -599,6 +599,8 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *sim
 	for _, nodeName := range sn.Spec.WorkerNodes {
 		var node corev1.Node
 		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
+			r.Recorder.Eventf(sn, corev1.EventTypeWarning, "WorkerNodeNotFound",
+				"worker node %q: %v", nodeName, err)
 			return err
 		}
 
@@ -625,6 +627,8 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *sim
 func (r *StorageNodeSetReconciler) labelWorkerNode(ctx context.Context, sn *simplyblockv1alpha1.StorageNodeSet) error {
 	var node corev1.Node
 	if err := r.Get(ctx, client.ObjectKey{Name: sn.Spec.WorkerNode}, &node); err != nil {
+		r.Recorder.Eventf(sn, corev1.EventTypeWarning, "WorkerNodeNotFound",
+			"worker node %q: %v", sn.Spec.WorkerNode, err)
 		return err
 	}
 
