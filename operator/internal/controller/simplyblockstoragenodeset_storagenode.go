@@ -487,6 +487,31 @@ func (r *StorageNodeSetReconciler) storageNodePostedAt(
 	return nil
 }
 
+// allStorageNodesOnline returns true if the number of StorageNode CRs for the
+// given worker that have a non-empty UUID equals expectedPerHost. Used to gate
+// pollNodeOnline so it is only called once every node has been posted AND
+// received its UUID from the backend, avoiding premature timeout.
+func (r *StorageNodeSetReconciler) allStorageNodesOnline(
+	ctx context.Context,
+	namespace, workerNode string,
+	expectedPerHost int,
+) bool {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList,
+		client.InNamespace(namespace),
+		client.MatchingFields{"spec.workerNode": workerNode},
+	); err != nil {
+		return false
+	}
+	online := 0
+	for _, sn := range snList.Items {
+		if sn.Status.UUID != "" {
+			online++
+		}
+	}
+	return online >= expectedPerHost
+}
+
 // storageNodeAlreadyPosted returns true if the StorageNode CR for the given
 // worker node already has PostedAt set, meaning StorageNodeReconciler has taken
 // over provisioning and this reconciler must not duplicate the POST.

@@ -273,11 +273,15 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNode(
 		return ctrl.Result{RequeueAfter: time.Second * 10}, nil
 	}
 
-	// StorageNodeReconciler is now the sole owner of provisioning. Skip this
-	// node if its StorageNode CR already has PostedAt set — the new reconciler
-	// has taken over and we must not double-POST.
+	// StorageNodeReconciler is the sole owner of provisioning. Only call
+	// pollNodeOnline once ALL StorageNode CRs for this worker have their UUID set
+	// (all nodes confirmed online). Until then requeue — calling pollNodeOnline
+	// before all nodes are posted would time out waiting for expectedPerHost nodes.
 	if r.storageNodeAlreadyPosted(ctx, snCR.Namespace, nodeName) {
-		return r.pollNodeOnline(ctx, apiClient, clusterUUID, ip, nodeName, expectedPerHost, snCR)
+		if r.allStorageNodesOnline(ctx, snCR.Namespace, nodeName, expectedPerHost) {
+			return r.pollNodeOnline(ctx, apiClient, clusterUUID, ip, nodeName, expectedPerHost, snCR)
+		}
+		return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
 	}
 
 	// StorageNodeReconciler is the sole owner of provisioning. If it hasn't
