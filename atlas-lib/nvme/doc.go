@@ -44,11 +44,10 @@
 //
 // A volume is identified by its namespace UUID. When native NVMe multipath is
 // disabled it can surface as several block devices sharing that UUID;
-// SiblingsIn returns the other devices backing the same volume (empty under
+// Siblings returns the other devices backing the same volume (empty under
 // native multipath, where the volume is a single multipath head).
 //
-//	for _, s := range dev.SiblingsIn(all) {
-//		fmt.Println("same volume, another device:", s.Namespace.DevicePath)
+//	for _, s := range dev.Siblings(all) {
 //	}
 //
 //	// When you hold a Device and a resolver but not a list, re-scan for a
