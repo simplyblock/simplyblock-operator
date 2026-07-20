@@ -124,7 +124,19 @@ type StorageNodeSpec struct {
 	// +k8s:immutable
 	WorkerNode string `json:"workerNode"`
 
-	// SocketIndex is the NUMA socket index (0-based). Immutable.
+	// SocketID is the NUMA socket identifier from spec.socketsToUse (e.g. "0", "1"). Immutable.
+	// +k8s:immutable
+	// +optional
+	SocketID string `json:"socketId,omitempty"`
+
+	// NodeIndex is the per-socket node index (0..nodesPerSocket-1). Immutable.
+	// +k8s:immutable
+	// +optional
+	NodeIndex *int32 `json:"nodeIndex,omitempty"`
+
+	// SocketIndex is the global ordinal (socketPosition × nodesPerSocket + nodeIndex).
+	// Used internally by the operator to select the correct backend node from the
+	// RPC-port-sorted list in pollUUIDFromBackend. Immutable.
 	// +k8s:immutable
 	// +optional
 	SocketIndex *int32 `json:"socketIndex,omitempty"`
@@ -217,7 +229,8 @@ type StorageNodeStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=sn
 // +kubebuilder:printcolumn:name="Worker",type=string,JSONPath=".spec.workerNode"
-// +kubebuilder:printcolumn:name="Socket",type=integer,JSONPath=".spec.socketIndex"
+// +kubebuilder:printcolumn:name="Socket",type=string,JSONPath=".spec.socketId"
+// +kubebuilder:printcolumn:name="NodeIdx",type=integer,JSONPath=".spec.nodeIndex"
 // +kubebuilder:printcolumn:name="UUID",type=string,JSONPath=".status.uuid"
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.status"
 // +kubebuilder:printcolumn:name="Health",type=boolean,JSONPath=".status.health"

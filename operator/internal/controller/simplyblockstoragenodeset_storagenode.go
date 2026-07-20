@@ -179,7 +179,7 @@ func (r *StorageNodeSetReconciler) ensureStorageNodeCR(
 
 	if apierrors.IsNotFound(err) {
 		// Create.
-		sn := buildStorageNodeCR(sns, name, worker, globalOrdinal)
+		sn := buildStorageNodeCR(sns, name, worker, socket, nodeIdx, globalOrdinal)
 		if setErr := controllerutil.SetControllerReference(sns, sn, r.Scheme); setErr != nil {
 			return fmt.Errorf("setting owner reference on StorageNode %s: %w", name, setErr)
 		}
@@ -321,13 +321,15 @@ func sanitiseDNSLabel(s string) string {
 	return strings.Trim(b.String(), "-.")
 }
 
-// buildStorageNodeCR constructs a new StorageNode CR for the given worker and socket.
+// buildStorageNodeCR constructs a new StorageNode CR for the given worker,
+// NUMA socket identifier, per-socket node index, and global ordinal.
 func buildStorageNodeCR(
 	sns *simplyblockv1alpha1.StorageNodeSet,
-	name, worker string,
-	ordinal int,
+	name, worker, socketID string,
+	nodeIdx, ordinal int,
 ) *simplyblockv1alpha1.StorageNode {
-	idx := int32(ordinal)
+	globalOrdinal := int32(ordinal)
+	ni := int32(nodeIdx)
 
 	sn := &simplyblockv1alpha1.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{
@@ -341,7 +343,9 @@ func buildStorageNodeCR(
 		Spec: simplyblockv1alpha1.StorageNodeSpec{
 			StorageNodeSetRef: sns.Name,
 			WorkerNode:        worker,
-			SocketIndex:       &idx,
+			SocketID:          socketID,
+			NodeIndex:         &ni,
+			SocketIndex:       &globalOrdinal,
 		},
 	}
 

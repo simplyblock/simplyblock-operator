@@ -2160,8 +2160,11 @@ spec:
     - jsonPath: .spec.workerNode
       name: Worker
       type: string
-    - jsonPath: .spec.socketIndex
+    - jsonPath: .spec.socketId
       name: Socket
+      type: string
+    - jsonPath: .spec.nodeIndex
+      name: NodeIdx
       type: integer
     - jsonPath: .status.uuid
       name: UUID
@@ -2203,6 +2206,14 @@ spec:
           spec:
             description: StorageNodeSpec defines the desired state of a StorageNode.
             properties:
+              nodeIndex:
+                description: NodeIndex is the per-socket node index (0..nodesPerSocket-1).
+                  Immutable.
+                format: int32
+                type: integer
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               overrides:
                 description: |-
                   Overrides holds per-node configuration propagated from
@@ -2309,8 +2320,18 @@ spec:
                       this node.
                     type: boolean
                 type: object
+              socketId:
+                description: SocketID is the NUMA socket identifier from spec.socketsToUse
+                  (e.g. "0", "1"). Immutable.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               socketIndex:
-                description: SocketIndex is the NUMA socket index (0-based). Immutable.
+                description: |-
+                  SocketIndex is the global ordinal (socketPosition × nodesPerSocket + nodeIndex).
+                  Used internally by the operator to select the correct backend node from the
+                  RPC-port-sorted list in pollUUIDFromBackend. Immutable.
                 format: int32
                 type: integer
                 x-kubernetes-validations:
@@ -2335,6 +2356,10 @@ spec:
             - workerNode
             type: object
             x-kubernetes-validations:
+            - message: field socketId is immutable once set
+              rule: '!has(oldSelf.socketId) || has(self.socketId)'
+            - message: field nodeIndex is immutable once set
+              rule: '!has(oldSelf.nodeIndex) || has(self.nodeIndex)'
             - message: field socketIndex is immutable once set
               rule: '!has(oldSelf.socketIndex) || has(self.socketIndex)'
           status:
