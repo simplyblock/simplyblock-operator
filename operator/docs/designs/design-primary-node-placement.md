@@ -74,8 +74,8 @@ same node-hotness signal the rebalancer already uses, and stamps it onto the PVC
   the load signal isn't available for a cluster — this feature is strictly
   additive on top of clusters that already opted into latency benchmarking
   (Issue #130).
-- Avoid picking a node that is offline, unhealthy, a secondary node, or already at
-  subsystem capacity.
+- Avoid picking a node that is offline, unhealthy, or already at subsystem
+  capacity.
 
 ### Non-Goals
 
@@ -104,7 +104,7 @@ PVC created (user)
 │  3. Resolve StorageCluster CR by Status.UUID == cluster_id              │
 │  4. Skip if AutoRebalancing disabled or PrometheusURL unset             │
 │  5. GET storage-nodes (webapi.Client) → filter online/healthy/          │
-│     non-secondary/under-capacity                                        │
+│     under-capacity                                                       │
 │  6. autobalancing.StorageNodeSelector.SelectBestNode(...)               │
 │     → lowest current-latency-deviation eligible node                   │
 │  7. Patch PVC: simplyblock.io/host-id = <chosen node UUID>              │
@@ -208,8 +208,18 @@ unmeasured nodes as migration targets (Issue #130 §6 Step 5).
 |---|---|---|
 | `status == "online"` | `webapi.StorageNodeInfo.Status` | Never place on an offline node |
 | `health_check == true` | `webapi.StorageNodeInfo.Healthy` | Mirrors rebalancer target eligibility (Issue #130 §6 Step 5) |
-| not a secondary node | `webapi.StorageNodeInfo.IsSecondary` (new field, §6) | Only primary-capable nodes host a new lvol's primary subsystem |
 | `Lvols < LvolsMax` | `webapi.StorageNodeInfo.Lvols` / `.LvolsMax` (new fields, §6) | Mirrors `sbcli`'s own `max_lvol` capacity gate (`_resolve_lvol_subsystem`) so we don't hand the backend a node it will immediately reject |
+
+There is deliberately no "is this a secondary/replica-only node" filter. `sbcli`'s
+`StorageNode.is_secondary_node` models a dedicated-replica-capacity node type
+(one that's never handed a new primary, but can back an unlimited number of
+other primaries' HA groups — see `get_secondary_nodes` in
+`storage_node_ops.py`), but nothing in the current backend ever sets it to
+`True`: `add_node` takes no such parameter, and no CLI or API endpoint (v1 or
+v2) exposes it as input — only test fixtures construct it. Every real node is
+`is_secondary_node == False` today, so the filter would be dead weight. If a
+future `sbcli` release wires up a way to actually provision such nodes, this
+filter should be reinstated (see Open Questions §12).
 
 The capacity check is an approximation of `sbcli`'s `count_lvol_subsystems` (which
 counts distinct subsystems, not raw lvol count, since namespaced pools share a
@@ -304,13 +314,12 @@ All additions are additive; nothing existing changes shape.
 
 ```go
 type StorageNodeInfo struct {
-    UUID        string `json:"id"`
-    Status      string `json:"status"`
-    Healthy     bool   `json:"health_check"`
-    TotalBytes  int64  `json:"total_capacity_bytes"`
-    Lvols       int    `json:"lvols"`        // NEW — already returned by the v2 API
-    LvolsMax    int    `json:"lvols_max"`    // NEW — already returned by the v2 API
-    IsSecondary bool   `json:"is_secondary"` // NEW — requires a backend field addition, §7
+    UUID       string `json:"id"`
+    Status     string `json:"status"`
+    Healthy    bool   `json:"health_check"`
+    TotalBytes int64  `json:"total_capacity_bytes"`
+    Lvols      int    `json:"lvols"`
+    LvolsMax   int    `json:"lvols_max"`
 }
 ```
 
@@ -329,29 +338,16 @@ implemented on `StorageNodeSet` in this codebase).
 
 ## 7. Backend API Requirements
 
-One additive field, the **only** `sbcli` change in this design:
+None. `Lvols`/`LvolsMax` (§6.1) are already returned by the existing v2
+`GET /storage-nodes/` response — this design requires **zero `sbcli` changes**.
 
-`simplyblock_web/api/v2/_dtos.py` — `StorageNodeDTO` doesn't currently expose
-whether a node is a secondary node (only `secondary_node_id`, which is a
-*primary's* pointer to its own secondary; a secondary node's own record isn't
-distinguishable via the v2 API today). Add a passthrough field mirroring
-`model.is_secondary_node`:
-
-```python
-class StorageNodeDTO(BaseModel):
-    ...
-    is_secondary: bool  # NEW
-
-    @staticmethod
-    def from_model(model: StorageNode, stat_obj: ...):
-        return StorageNodeDTO(
-            ...,
-            is_secondary=model.is_secondary_node,  # NEW
-        )
-```
-
-No new logic, no new endpoint — a one-field API exposure of data the model
-already tracks (`simplyblock_core/models/storage_node.py:72`).
+An earlier draft of this design also mapped `StorageNodeDTO`'s
+`is_secondary_node` into the operator to exclude dedicated-secondary nodes
+from placement. That was dropped: nothing in `sbcli` currently sets
+`is_secondary_node` to `True` on any real node (no `add_node` parameter, no
+CLI/API input path — only test fixtures construct it), so the filter would
+never exclude anything in practice. See §4's eligibility filter note and
+§12 Open Questions.
 
 ---
 
@@ -365,7 +361,7 @@ already tracks (`simplyblock_core/models/storage_node.py:72`).
 | `AutoRebalancing` nil/disabled or `PrometheusURL` unset for the cluster | Skip — cluster hasn't opted into the load signal |
 | Backend API (`GetStorageNodes`) unreachable | Skip (log); `failurePolicy=Ignore` also protects at the webhook-server level |
 | Prometheus unreachable / query error | Skip (log) |
-| No eligible node (all offline/unhealthy/secondary/at-capacity) | Skip (log) |
+| No eligible node (all offline/unhealthy/at-capacity) | Skip (log) |
 | Pool has `qos_host` set (`pool.has_qos()`) | Not special-cased — `add_lvol_ha` overrides any `host_id` with `pool.qos_host` regardless, so the injected annotation is harmless but ignored. Documented, not fixed, in v1. |
 
 In every skip case the PVC is admitted unmodified and `sbcli`'s existing
@@ -424,7 +420,7 @@ Prometheus response:
 - StorageClass missing / not simplyblock-provisioned → PVC unmodified.
 - `AutoRebalancing` disabled or `PrometheusURL` unset → PVC unmodified.
 - Multiple eligible nodes with different deviations → lowest-deviation node chosen.
-- Offline / unhealthy / secondary / at-capacity nodes excluded from candidates.
+- Offline / unhealthy / at-capacity nodes excluded from candidates.
 - No eligible node → PVC unmodified (no error surfaced to the CO).
 - Backend or Prometheus error → PVC unmodified, error logged, request still `Allowed`.
 
@@ -475,3 +471,12 @@ have access to at PVC-admission time (topology is resolved later, during
 scheduling). For such StorageClasses the webhook cannot determine `cluster_id`
 up front and must skip. Confirm this is an acceptable, documented limitation
 rather than a gap to close.
+
+**Q6: Dedicated secondary-node exclusion.** `sbcli`'s `is_secondary_node` models
+a node type that should never receive a new primary, but no current code path
+sets it to `True` on a real node (see §4, §7). If a future `sbcli` change
+actually provisions such nodes, this webhook's eligibility filter should add
+back `!n.IsSecondary` (would require re-adding the field to
+`webapi.StorageNodeInfo`, mapped from `StorageNodeDTO`, which itself would need
+the passthrough field added — see the reverted approach in earlier revisions
+of this document).

@@ -20,10 +20,6 @@ type StorageNodeInfo struct {
 	// node, used to filter out at-capacity nodes during primary node placement.
 	Lvols    int `json:"lvols"`
 	LvolsMax int `json:"lvols_max"`
-	// IsSecondary is true when this node record is a secondary (HA failover) node
-	// rather than a primary-capable one. Secondary nodes are never eligible as a
-	// new volume's primary.
-	IsSecondary bool `json:"is_secondary"`
 }
 
 // CapacityStat holds the capacity sub-object present on VolumeDTO.

@@ -270,14 +270,12 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 		{ClusterUUID: testClusterUUID, NodeUUID: "hot", ValueNS: 3_000_000},      // dev = 200%
 		{ClusterUUID: testClusterUUID, NodeUUID: "cool", ValueNS: 1_100_000},     // dev = 10% — winner
 		{ClusterUUID: testClusterUUID, NodeUUID: "offline", ValueNS: 500_000},    // excluded: offline
-		{ClusterUUID: testClusterUUID, NodeUUID: "secondary", ValueNS: 500_000},  // excluded: secondary
 		{ClusterUUID: testClusterUUID, NodeUUID: "atcapacity", ValueNS: 500_000}, // excluded: at capacity
 	})
 	webSrv := fakeWebapiServer(t, []webapi.StorageNodeInfo{
 		{UUID: "hot", Status: "online", Healthy: true, Lvols: 1, LvolsMax: 10},
 		{UUID: "cool", Status: "online", Healthy: true, Lvols: 1, LvolsMax: 10},
 		{UUID: "offline", Status: "offline", Healthy: true, Lvols: 1, LvolsMax: 10},
-		{UUID: "secondary", Status: "online", Healthy: true, IsSecondary: true, Lvols: 1, LvolsMax: 10},
 		{UUID: "atcapacity", Status: "online", Healthy: true, Lvols: 10, LvolsMax: 10},
 	})
 
@@ -295,7 +293,7 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 		ObjectMeta: metav1.ObjectMeta{Name: "nodeset1", Namespace: namespace},
 	}
 	nodeSet.Status.LatencyMetrics = []simplyblockv1alpha1.NodeLatencyMetrics{
-		baseline("hot"), baseline("cool"), baseline("offline"), baseline("secondary"), baseline("atcapacity"),
+		baseline("hot"), baseline("cool"), baseline("offline"), baseline("atcapacity"),
 	}
 
 	scheme := newScheme(t)

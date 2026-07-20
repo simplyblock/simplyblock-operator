@@ -188,7 +188,7 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 	storageNodes := make([]volumemigration.StorageNode, 0, len(nodes))
 	for _, n := range nodes {
 		storageNodes = append(storageNodes, volumemigration.StorageNode{UUID: n.UUID, ClusterUUID: clusterUUID})
-		eligible[n.UUID] = n.Status == "online" && n.Healthy && !n.IsSecondary && n.Lvols < n.LvolsMax
+		eligible[n.UUID] = n.Status == "online" && n.Healthy && n.Lvols < n.LvolsMax
 	}
 
 	nodeUUID, ok, err = h.NodeSelector.SelectBestNode(ctx, cfg, eligible, autobalancing.StorageNodeSelectorInput{
