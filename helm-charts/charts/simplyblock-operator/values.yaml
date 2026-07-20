@@ -55,7 +55,7 @@ image:
     pullPolicy: Always
   mgmtAPI:
     repository: quay.io/simplyblock-io/python
-    tag: "3.10"
+    tag: "3.9-slim"
     pullPolicy: Always
 serviceAccount:
   # Specifies whether a serviceAccount should be created
