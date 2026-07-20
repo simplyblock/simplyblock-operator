@@ -21,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -113,6 +114,88 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("labelWorkerNode labels single worker node", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "sn-label-one",
+				Namespace: "default",
+			},
+			Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+				ClusterName: "cluster-b",
+				WorkerNode:  "node-one",
+			},
+		}
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-one"}}
+		r := newStorageNodeSetStateTestReconciler(t, sn, node)
+
+		if err := r.labelWorkerNode(context.Background(), sn); err != nil {
+			t.Fatalf("labelWorkerNode returned error: %v", err)
+		}
+
+		var out corev1.Node
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "node-one"}, &out); err != nil {
+			t.Fatalf("failed to fetch node: %v", err)
+		}
+		if out.Labels["io.simplyblock.node-type"] != "simplyblock-storage-plane-cluster-b" {
+			t.Fatalf("expected worker node label to be set")
+		}
+	})
+
+	t.Run("labelWorkerNodes records an event when a worker node is missing", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "sn-label-missing",
+				Namespace: "default",
+			},
+			Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+				ClusterName: "cluster-a",
+				WorkerNodes: []string{"vm12.simplyblock4.localdomain"},
+			},
+		}
+		r := newStorageNodeSetStateTestReconciler(t, sn)
+
+		if err := r.labelWorkerNodes(context.Background(), sn); err == nil {
+			t.Fatalf("expected labelWorkerNodes to return an error for a missing node")
+		}
+
+		recorder := r.Recorder.(*record.FakeRecorder)
+		select {
+		case event := <-recorder.Events:
+			if !strings.Contains(event, "WorkerNodeNotFound") || !strings.Contains(event, "vm12.simplyblock4.localdomain") {
+				t.Fatalf("unexpected event content: %q", event)
+			}
+		default:
+			t.Fatalf("expected a WorkerNodeNotFound event to be recorded")
+		}
+	})
+
+	t.Run("labelWorkerNode records an event when the worker node is missing", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "sn-label-one-missing",
+				Namespace: "default",
+			},
+			Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+				ClusterName: "cluster-b",
+				WorkerNode:  "vm12.simplyblock4.localdomain",
+			},
+		}
+		r := newStorageNodeSetStateTestReconciler(t, sn)
+
+		if err := r.labelWorkerNode(context.Background(), sn); err == nil {
+			t.Fatalf("expected labelWorkerNode to return an error for a missing node")
+		}
+
+		recorder := r.Recorder.(*record.FakeRecorder)
+		select {
+		case event := <-recorder.Events:
+			if !strings.Contains(event, "WorkerNodeNotFound") || !strings.Contains(event, "vm12.simplyblock4.localdomain") {
+				t.Fatalf("unexpected event content: %q", event)
+			}
+		default:
+			t.Fatalf("expected a WorkerNodeNotFound event to be recorded")
+		}
+	})
 }
 
 func TestStorageNodeSetDaemonSetReconcileCreatesWhenMissing(t *testing.T) {
@@ -1301,6 +1384,7 @@ func newStorageNodeSetStateTestReconciler(
 		Client:    cl,
 		Scheme:    scheme,
 		Namespace: testOperatorNamespace,
+		Recorder:  record.NewFakeRecorder(32),
 	}
 }
 

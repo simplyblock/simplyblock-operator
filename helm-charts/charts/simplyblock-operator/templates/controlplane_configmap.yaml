@@ -130,6 +130,18 @@ data:
         basic_auth:
           username:
           password:
+      {{- if .Values.controlplane.foundationdb.exporter.enabled }}
+
+      - job_name: 'fdb_metrics'
+        static_configs:
+          - targets: ['simplyblock-fdb-exporter:9444']
+            # The FoundationDB Grafana dashboard filters every panel by a
+            # `namespace` label; attach it here since a static target has none.
+            labels:
+              namespace: {{ .Release.Namespace }}
+        honor_labels: true
+        metrics_path: '/metrics'
+      {{- end }}
   {{- end }}
   
 ---

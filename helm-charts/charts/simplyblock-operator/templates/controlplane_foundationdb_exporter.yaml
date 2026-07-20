@@ -1,0 +1,111 @@
+{{- if and .Values.operator.enabled .Values.controlplane.foundationdb.enabled .Values.controlplane.foundationdb.exporter.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simplyblock-fdb-exporter
+  labels:
+    app: simplyblock-fdb-exporter
+  annotations:
+    # Restart when the cluster file changes (coordinator churn) and, under mTLS,
+    # when the FDB peer certificate rotates.
+    reloader.stakater.com/configmap: "simplyblock-fdb-cluster-config"
+    {{- if .Values.tls.mutual_enabled }}
+    reloader.stakater.com/auto: "true"
+    {{- end }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: simplyblock-fdb-exporter
+  template:
+    metadata:
+      labels:
+        app: simplyblock-fdb-exporter
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 4059
+        runAsGroup: 4059
+        fsGroup: 4059
+      {{- if .Values.controlplane.foundationdb.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.controlplane.foundationdb.nodeSelector | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: fdb-cluster-file
+          configMap:
+            name: simplyblock-fdb-cluster-config
+            items:
+              - key: cluster-file
+                path: fdb.cluster
+        {{- if .Values.tls.mutual_enabled }}
+        - name: tls-fdb
+          secret:
+            secretName: simplyblock-foundationdb-tls
+        {{- end }}
+      containers:
+        - name: exporter
+          image: {{ .Values.controlplane.foundationdb.exporter.image.repository }}:{{ .Values.controlplane.foundationdb.exporter.image.tag }}
+          env:
+            - name: FDB_CLUSTER_FILE
+              value: /etc/foundationdb/fdb.cluster
+            {{- if .Values.tls.mutual_enabled }}
+            - name: FDB_TLS_CERTIFICATE_FILE
+              value: /var/fdb/tls/tls.crt
+            - name: FDB_TLS_KEY_FILE
+              value: /var/fdb/tls/tls.key
+            - name: FDB_TLS_CA_FILE
+              value: /var/fdb/tls/ca.crt
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: 9444
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            privileged: false
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: fdb-cluster-file
+              mountPath: /etc/foundationdb/fdb.cluster
+              subPath: fdb.cluster
+              readOnly: true
+            {{- if .Values.tls.mutual_enabled }}
+            - name: tls-fdb
+              mountPath: /var/fdb/tls
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.controlplane.foundationdb.exporter.resources | nindent 12 }}
+      terminationGracePeriodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: simplyblock-fdb-exporter
+  labels:
+    app: simplyblock-fdb-exporter
+spec:
+  selector:
+    app: simplyblock-fdb-exporter
+  ports:
+    - name: metrics
+      port: 9444
+      targetPort: metrics
+{{- end }}

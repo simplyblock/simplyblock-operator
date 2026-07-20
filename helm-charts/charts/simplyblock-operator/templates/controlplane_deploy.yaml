@@ -1168,6 +1168,11 @@ spec:
             - name: dashboard-pools
               mountPath: /var/lib/grafana/dashboards/pools.json
               subPath: pools.json
+            {{- if .Values.controlplane.foundationdb.exporter.enabled }}
+            - name: dashboard-fdb
+              mountPath: /var/lib/grafana/dashboards/foundationdb.json
+              subPath: foundationdb.json
+            {{- end }}
             - name: grafana-data
               mountPath: /var/lib/grafana
       volumes:
@@ -1195,6 +1200,11 @@ spec:
         - name: dashboard-pools
           configMap:
             name: simplyblock-grafana-dashboard-pools
+        {{- if .Values.controlplane.foundationdb.exporter.enabled }}
+        - name: dashboard-fdb
+          configMap:
+            name: simplyblock-grafana-dashboard-fdb
+        {{- end }}
         - name: grafana-data
           emptyDir: {}
 
