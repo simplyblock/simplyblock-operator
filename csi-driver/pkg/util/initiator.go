@@ -348,6 +348,22 @@ func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
 			}
 		}
 	}
+
+	// Register presence synchronously instead of waiting for the next
+	// MonitorConnection poll to discover it. Without this, a device that
+	// connects and then loses all paths faster than one poll interval
+	// (~3s+jitter) is never seen as "present", so the guardian's gone-device
+	// detection in reconnectSubsystems has nothing to diff against and can
+	// silently miss the loss forever.
+	if realPath, err := filepath.EvalSymlinks(devicePath); err == nil {
+		mu.Lock()
+		devicePresentMap[realPath] = true
+		deviceToLvolIDMap[realPath] = nvmf.lvolID
+		mu.Unlock()
+	} else {
+		klog.Warningf("Connect: failed to resolve device path %s for lvol %s: %v", devicePath, nvmf.lvolID, err)
+	}
+
 	return devicePath, nil
 }
 
