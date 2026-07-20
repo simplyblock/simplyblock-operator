@@ -3,7 +3,6 @@ package nvme
 import (
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/simplyblock/atlas/internal/sysfs"
@@ -41,12 +40,12 @@ func scanSubsystems(sysRoot, devRoot string) ([]Subsystem, error) {
 		s := Subsystem{
 			ID:          SubsystemID(name),
 			SysfsPath:   base,
-			NQN:         readStr(base, "subsysnqn"),
-			Model:       readStr(base, "model"),
-			Serial:      readStr(base, "serial"),
-			FirmwareRev: readStr(base, "firmware_rev"),
-			Type:        readStr(base, "subsystype"),
-			IOPolicy:    readStr(base, "iopolicy"),
+			NQN:         sysfs.String(base, "subsysnqn"),
+			Model:       sysfs.String(base, "model"),
+			Serial:      sysfs.String(base, "serial"),
+			FirmwareRev: sysfs.String(base, "firmware_rev"),
+			Type:        sysfs.String(base, "subsystype"),
+			IOPolicy:    sysfs.String(base, "iopolicy"),
 		}
 
 		entries, err := sysfs.List(base)
@@ -109,22 +108,22 @@ func scanControllers(sysRoot, devRoot string) ([]Controller, error) {
 			ID:                ControllerID(name),
 			SysfsPath:         base,
 			DevicePath:        filepath.Join(devRoot, name),
-			Dev:               readStr(base, "dev"),
-			NQN:               readStr(base, "subsysnqn"),
-			CntlID:            readU16(base, "cntlid"),
-			Type:              readStr(base, "cntrltype"),
-			Transport:         readStr(base, "transport"),
-			State:             readStr(base, "state"),
-			Address:           parseAddress(readStr(base, "address")),
-			HostNQN:           readStr(base, "hostnqn"),
-			HostID:            readStr(base, "hostid"),
-			NUMANode:          readInt(base, "numa_node", -1),
-			QueueCount:        readInt(base, "queue_count", 0),
-			SQSize:            readInt(base, "sqsize", 0),
-			KeepAliveTOSec:    readInt(base, "kato", 0),
-			CtrlLossTMOSec:    readInt(base, "ctrl_loss_tmo", 0),
-			ReconnectDelaySec: readInt(base, "reconnect_delay", 0),
-			FastIOFailTMO:     readStr(base, "fast_io_fail_tmo"),
+			Dev:               sysfs.String(base, "dev"),
+			NQN:               sysfs.String(base, "subsysnqn"),
+			CntlID:            sysfs.Uint16(base, "cntlid"),
+			Type:              sysfs.String(base, "cntrltype"),
+			Transport:         sysfs.String(base, "transport"),
+			State:             sysfs.String(base, "state"),
+			Address:           parseAddress(sysfs.String(base, "address")),
+			HostNQN:           sysfs.String(base, "hostnqn"),
+			HostID:            sysfs.String(base, "hostid"),
+			NUMANode:          sysfs.Int(-1, base, "numa_node"),
+			QueueCount:        sysfs.Int(0, base, "queue_count"),
+			SQSize:            sysfs.Int(0, base, "sqsize"),
+			KeepAliveTOSec:    sysfs.Int(0, base, "kato"),
+			CtrlLossTMOSec:    sysfs.Int(0, base, "ctrl_loss_tmo"),
+			ReconnectDelaySec: sysfs.Int(0, base, "reconnect_delay"),
+			FastIOFailTMO:     sysfs.String(base, "fast_io_fail_tmo"),
 		})
 	}
 	return out, nil
@@ -154,9 +153,9 @@ func scanPaths(sysRoot string) ([]Path, error) {
 				Controller: ControllerID(cn),
 				Name:       leg,
 				SysfsPath:  lbase,
-				NSID:       NamespaceID(readU32(lbase, "nsid")),
-				ANAState:   ANAState(readStr(lbase, "ana_state")),
-				ANAGroupID: readU32(lbase, "ana_grpid"),
+				NSID:       NamespaceID(sysfs.Uint32(lbase, "nsid")),
+				ANAState:   ANAState(sysfs.String(lbase, "ana_state")),
+				ANAGroupID: sysfs.Uint32(lbase, "ana_grpid"),
 			})
 		}
 	}
@@ -165,21 +164,21 @@ func scanPaths(sysRoot string) ([]Path, error) {
 
 func scanNamespace(base, devRoot, name string) Namespace {
 	return Namespace{
-		ID:               NamespaceID(readU32(base, "nsid")),
+		ID:               NamespaceID(sysfs.Uint32(base, "nsid")),
 		Name:             name,
 		SysfsPath:        base,
 		DevicePath:       filepath.Join(devRoot, name),
-		Dev:              readStr(base, "dev"),
-		UUID:             readStr(base, "uuid"),
-		NGUID:            readStr(base, "nguid"),
-		WWID:             readStr(base, "wwid"),
-		CSI:              readInt(base, "csi", 0),
-		LogicalBlockSize: readU32(base, "queue/logical_block_size"),
-		Capacity:         readU64(base, "size"),
-		Used:             readU64(base, "nuse"),
-		MetadataBytes:    readU32(base, "metadata_bytes"),
-		ReadOnly:         readBool(base, "ro"),
-		Hidden:           readBool(base, "hidden"),
+		Dev:              sysfs.String(base, "dev"),
+		UUID:             sysfs.String(base, "uuid"),
+		NGUID:            sysfs.String(base, "nguid"),
+		WWID:             sysfs.String(base, "wwid"),
+		CSI:              sysfs.Int(0, base, "csi"),
+		LogicalBlockSize: sysfs.Uint32(base, "queue/logical_block_size"),
+		Capacity:         sysfs.Uint64(base, "size"),
+		Used:             sysfs.Uint64(base, "nuse"),
+		MetadataBytes:    sysfs.Uint32(base, "metadata_bytes"),
+		ReadOnly:         sysfs.Bool(base, "ro"),
+		Hidden:           sysfs.Bool(base, "hidden"),
 	}
 }
 
@@ -202,42 +201,4 @@ func parseAddress(s string) Address {
 		}
 	}
 	return a
-}
-
-// --- attribute readers (missing/unparsable values fall back to zero) ---
-
-func readStr(base, attr string) string {
-	s, _ := sysfs.ReadAttr(base, attr)
-	return s
-}
-
-func readInt(base, attr string, def int) int {
-	s := readStr(base, attr)
-	if s == "" {
-		return def
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return def
-	}
-	return n
-}
-
-func readU16(base, attr string) uint16 {
-	n, _ := strconv.ParseUint(readStr(base, attr), 10, 16)
-	return uint16(n)
-}
-
-func readU32(base, attr string) uint32 {
-	n, _ := strconv.ParseUint(readStr(base, attr), 10, 32)
-	return uint32(n)
-}
-
-func readU64(base, attr string) uint64 {
-	n, _ := strconv.ParseUint(readStr(base, attr), 10, 64)
-	return n
-}
-
-func readBool(base, attr string) bool {
-	return readStr(base, attr) == "1"
 }

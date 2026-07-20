@@ -1,0 +1,44 @@
+# Generated client for the simplyblock control-plane v2 API.
+# The non-/api/v2 paths (legacy /{resource}/{full_path} catch-all proxies
+# and the root redirect) are excluded — they are not part of the typed v2
+# surface and their {full_path} param is undeclared in the spec.
+package: cpapi
+output: cpapi.gen.go
+generate:
+  models: true
+  client: true
+output-options:
+  # Patches spec bugs (e.g. the migrations-list op's missing path params)
+  # without editing the vendored openapi.json, so re-exports stay clean.
+  overlay:
+    path: overlay.yaml
+  exclude-operation-ids:
+    - redirect_legacy__get
+    - redirect_legacy_cluster__full_path__get
+    - redirect_legacy_cluster__full_path__get
+    - redirect_legacy_cluster__full_path__get
+    - redirect_legacy_cluster__full_path__get
+    - redirect_legacy_device__full_path__get
+    - redirect_legacy_device__full_path__get
+    - redirect_legacy_device__full_path__get
+    - redirect_legacy_device__full_path__get
+    - redirect_legacy_lvol__full_path__get
+    - redirect_legacy_lvol__full_path__get
+    - redirect_legacy_lvol__full_path__get
+    - redirect_legacy_lvol__full_path__get
+    - redirect_legacy_mgmtnode__full_path__get
+    - redirect_legacy_mgmtnode__full_path__get
+    - redirect_legacy_mgmtnode__full_path__get
+    - redirect_legacy_mgmtnode__full_path__get
+    - redirect_legacy_pool__full_path__get
+    - redirect_legacy_pool__full_path__get
+    - redirect_legacy_pool__full_path__get
+    - redirect_legacy_pool__full_path__get
+    - redirect_legacy_snapshot__full_path__get
+    - redirect_legacy_snapshot__full_path__get
+    - redirect_legacy_snapshot__full_path__get
+    - redirect_legacy_snapshot__full_path__get
+    - redirect_legacy_storagenode__full_path__get
+    - redirect_legacy_storagenode__full_path__get
+    - redirect_legacy_storagenode__full_path__get
+    - redirect_legacy_storagenode__full_path__get
