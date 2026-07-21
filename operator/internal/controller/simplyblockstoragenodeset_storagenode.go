@@ -125,6 +125,12 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 	// Create or sync one StorageNode CR per (worker, socket, nodeIdx).
 	// globalOrdinal = socketPosition × nodesPerSocket + nodeIdx is stored as
 	// SocketIndex and used by pollUUIDFromBackend to select the correct backend node.
+	//
+	// FDB workers are created one at a time: after creating a new FDB CR in this
+	// reconcile pass we flip fdbInFlight=true so all subsequent FDB workers are
+	// deferred. This prevents the cache-lag race where multiple new CRs are
+	// created simultaneously and the StorageNode controller reconciles them all
+	// before any PostedAt is set, bypassing the sequential add gate.
 	for _, worker := range sns.Spec.WorkerNodes {
 		for si, socket := range sockets {
 			for ni := 0; ni < nodesPerSocket; ni++ {
@@ -145,9 +151,28 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 						continue
 					}
 				}
+
+				crName := storageNodeCRName(sns.Name, worker, socket, ni)
+				existedBefore := false
+				for _, sn := range owned.Items {
+					if sn.Name == crName {
+						existedBefore = true
+						break
+					}
+				}
+
 				if err := r.ensureStorageNodeCR(ctx, sns, worker, socket, ni, globalOrdinal); err != nil {
 					log.Error(err, "failed to ensure StorageNode CR",
 						"worker", worker, "socket", socket, "nodeIdx", ni)
+					continue
+				}
+
+				// If this was a brand-new FDB CR (didn't exist before this reconcile),
+				// mark fdbInFlight so the remaining FDB workers are deferred until the
+				// next reconcile — preventing multiple new CRs from being created and
+				// reconciled simultaneously by the StorageNode controller.
+				if fdbWorkers[worker] && !existedBefore {
+					fdbInFlight = true
 				}
 			}
 		}

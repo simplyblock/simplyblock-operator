@@ -295,14 +295,17 @@ func (r *StorageNodeReconciler) provisionNode(
 
 	// Respect MaxParallelNodeAdds: count sibling StorageNode CRs in this set
 	// that are in-flight (PostedAt set, UUID not yet assigned) and block if the
-	// limit is reached. This replicates the old PendingNodeAdds gate.
+	// limit is reached. Defaults to 1 (sequential) when not set, which is safe
+	// for FDB clusters where simultaneous node reboots reduce fault tolerance.
+	maxParallel := 1
 	if sns.Spec.MaxParallelNodeAdds != nil {
-		inFlight, err := r.countInFlightNodes(ctx, sn.Namespace, sn.Spec.StorageNodeSetRef, sn.Name)
-		if err == nil && inFlight >= int(*sns.Spec.MaxParallelNodeAdds) {
-			log.Info("parallel node add limit reached, requeuing",
-				"inFlight", inFlight, "max", *sns.Spec.MaxParallelNodeAdds)
-			return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
-		}
+		maxParallel = int(*sns.Spec.MaxParallelNodeAdds)
+	}
+	inFlight, err := r.countInFlightNodes(ctx, sn.Namespace, sn.Spec.StorageNodeSetRef, sn.Name)
+	if err == nil && inFlight >= maxParallel {
+		log.Info("parallel node add limit reached, requeuing",
+			"inFlight", inFlight, "max", maxParallel)
+		return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
 	}
 
 	// FDB workers must be added sequentially to avoid simultaneous reboots that
