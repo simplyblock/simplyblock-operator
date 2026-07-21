@@ -424,15 +424,16 @@ func (r *StorageNodeSetReconciler) drainValidate(
 			continue
 		}
 		pvName := pvNameByVolume[volUUID]
-		if target == "" {
+		switch target {
+		case "":
 			r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "PinnedVolumeBlocking",
 				"drain blocked: PV %s is pinned with no target node; set annotation %s to a valid storage-node UUID or remove it",
 				pvName, simplyblockv1alpha1.AnnotationPinnedVolume)
-		} else if target == nodeUUID {
+		case nodeUUID:
 			r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "PinnedVolumeBlocking",
 				"drain blocked: PV %s is pinned to the node being drained (%s); re-pin to a different storage-node UUID",
 				pvName, nodeUUID)
-		} else {
+		default:
 			r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "PinnedVolumeBlocking",
 				"drain blocked: PV %s has invalid pin target %q; annotation %s must be a valid storage-node UUID",
 				pvName, target, simplyblockv1alpha1.AnnotationPinnedVolume)
