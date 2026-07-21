@@ -12,7 +12,7 @@ import (
 )
 
 func TestDoAgainstSpecMockSendsHeadersBodyAndReturnsResponse(t *testing.T) {
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 
 	mock.Register(
@@ -74,7 +74,7 @@ func TestDoAgainstSpecMockSendsHeadersBodyAndReturnsResponse(t *testing.T) {
 }
 
 func TestDoAgainstStrictSpecMockReturns400ForUnknownPath(t *testing.T) {
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 
 	c := NewClient(mock.URL())

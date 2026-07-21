@@ -113,7 +113,7 @@ func TestSnapshotReplicationEnsureConfigured(t *testing.T) {
 			tgtUUID  = "tgt-uuid-cfg"
 			poolUUID = "pool-uuid-cfg"
 		)
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(http.MethodPost, "/api/v2/clusters/"+srcUUID+"/addreplication/",
 			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`})
@@ -156,7 +156,7 @@ func TestSnapshotReplicationEnsureConfigured(t *testing.T) {
 
 	t.Run("requeues when addreplication returns error", func(t *testing.T) {
 		const srcUUID = "src-uuid-cfg-fail"
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(http.MethodPost, "/api/v2/clusters/"+srcUUID+"/addreplication/",
 			webapimock.RouteResponse{Status: http.StatusInternalServerError, Body: `internal error`})
@@ -198,7 +198,7 @@ func TestSnapshotReplicationEnsureConfigured(t *testing.T) {
 
 	t.Run("skips addreplication when already configured", func(t *testing.T) {
 		const srcUUID = "src-uuid-skip-cfg"
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		// register addreplication — it must NOT be called
 		mock.Register(http.MethodPost, "/api/v2/clusters/"+srcUUID+"/addreplication/",
@@ -243,7 +243,7 @@ func TestSnapshotReplicationNormalReplication(t *testing.T) {
 			poolUUID = "pool-uuid-normal"
 			lvolUUID = "lvol-uuid-normal"
 		)
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		// cluster active check
 		mock.Register(http.MethodGet, "/api/v2/clusters/"+srcUUID,
@@ -319,7 +319,7 @@ func TestSnapshotReplicationNormalReplication(t *testing.T) {
 			lvolUUID    = "lvol-not-allowed"
 			allowedUUID = "lvol-allowed"
 		)
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(http.MethodGet, "/api/v2/clusters/"+srcUUID,
 			webapimock.RouteResponse{Status: http.StatusOK, Body: `{"id":"` + srcUUID + `","status":"active"}`})
@@ -364,7 +364,7 @@ func TestSnapshotReplicationNormalReplication(t *testing.T) {
 func TestSnapshotReplicationFailbackGenerationGuard(t *testing.T) {
 	t.Run("skips failback when generation already processed", func(t *testing.T) {
 		const srcUUID = "src-uuid-gen-guard"
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 

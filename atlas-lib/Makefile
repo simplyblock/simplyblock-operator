@@ -16,7 +16,7 @@ all: build test ## Build and test the library.
 
 generate: $(CPAPI_GEN) ## Generate the control-plane API client from its OpenAPI spec.
 
-$(CPAPI_GEN): internal/cpapi/openapi.json internal/cpapi/oapi-codegen.yaml internal/cpapi/gen.go
+$(CPAPI_GEN): ../shared/openapi.json internal/cpapi/oapi-codegen.yaml internal/cpapi/overlay.yaml internal/cpapi/gen.go
 	go generate ./internal/cpapi/...
 
 build: $(CPAPI_GEN) ## Build all packages.

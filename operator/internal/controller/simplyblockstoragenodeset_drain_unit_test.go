@@ -50,7 +50,7 @@ func newDrainReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetR
 }
 
 func TestRoundRobinDistributesEvenly(t *testing.T) {
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 	defer mock.Close()
 	mock.Register(http.MethodGet,
 		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-nodes/",
@@ -90,7 +90,7 @@ func TestRoundRobinDistributesEvenly(t *testing.T) {
 }
 
 func TestRoundRobinErrorsWhenNoTargetAvailable(t *testing.T) {
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 	defer mock.Close()
 	// Only one node, and it is the excluded one.
 	mock.Register(http.MethodGet,
@@ -107,7 +107,7 @@ func TestRoundRobinErrorsWhenNoTargetAvailable(t *testing.T) {
 }
 
 func TestRoundRobinSkipsOfflineNodes(t *testing.T) {
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 	defer mock.Close()
 	mock.Register(http.MethodGet,
 		"/api/v2/clusters/"+drainTestClusterUUID+"/storage-nodes/",

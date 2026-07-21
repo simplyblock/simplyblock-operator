@@ -157,7 +157,7 @@ func TestTaskReconcileWorksInNonDefaultNamespace(t *testing.T) {
 	const clusterUUID = "cluster-uuid-tenant-a"
 
 	// Task endpoints are not present in current OpenAPI spec, so keep allowUnknown=true.
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 	defer mock.Close()
 	mock.Register(
 		http.MethodGet,
@@ -215,7 +215,7 @@ func TestTaskReconcileFiltersCompletedTasksViaMock(t *testing.T) {
 	const clusterUUID = "cluster-uuid-filter"
 
 	// Task endpoints are not present in the current OpenAPI spec; allow unknown for this controller path.
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 	defer mock.Close()
 
 	mock.Register(
@@ -275,7 +275,7 @@ func TestTaskReconcileNon2xxTaskAPIRequeuesAndPreservesStatus(t *testing.T) {
 	const clusterUUID = "cluster-uuid-task-non2xx"
 
 	// Task endpoints are not present in current OpenAPI spec; allow unknown for this controller path.
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 	defer mock.Close()
 
 	mock.Register(

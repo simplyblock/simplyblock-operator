@@ -39,7 +39,7 @@ func TestBackupPolicyReconcileAnnotationAddAttachesLvol(t *testing.T) {
 		lvolID      = "lvol-add"
 	)
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
@@ -103,7 +103,7 @@ func TestBackupPolicyReconcileAnnotationRemovalDetachesLvol(t *testing.T) {
 		lvolID      = "lvol-remove"
 	)
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
@@ -162,7 +162,7 @@ func TestBackupPolicyReconcilePolicySwitchMovesAttachment(t *testing.T) {
 		lvolID      = "lvol-switch"
 	)
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
@@ -232,7 +232,7 @@ func TestBackupPolicyReconcileLvolAnnotationMismatchDetachesStaleAttachment(t *t
 		staleLvol   = "lvol-stale-annotation"
 	)
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
@@ -287,7 +287,7 @@ func TestBackupPolicyReconcilePVCRebindSwapsLvolID(t *testing.T) {
 		newLvolID   = "lvol-new"
 	)
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
 		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
