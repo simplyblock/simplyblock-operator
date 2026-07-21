@@ -373,9 +373,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageNodeOpsReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("storagenodeops-controller"),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorder("storagenodeops-controller"),
+		TLSEnabled:       tlsEnabled,
+		TLSMutualEnabled: tlsMutualEnabled,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeOps")
 		os.Exit(1)

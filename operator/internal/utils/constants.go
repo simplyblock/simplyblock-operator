@@ -20,6 +20,7 @@ const (
 	NodeActionSuspend  = "suspend"
 	NodeActionResume   = "resume"
 	NodeActionRemove   = "remove"
+	NodeActionMigrate  = "migrate"
 
 	// NodeRecycle per-node phases
 	NodeRecyclePhaseSnodeRefresh     = "snode-refresh"

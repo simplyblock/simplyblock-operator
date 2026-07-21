@@ -117,6 +117,21 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	apiClient := webapi.NewClient()
 
 	if sn.Status.UUID == "" {
+		// Migration adoption: a migrate StorageNodeOps created this CR bound to the
+		// target host and stamped the relocated backend node's UUID. Adopt it (the
+		// node already exists on the backend, just on a new host) rather than POSTing
+		// a duplicate node-add. Idempotent: re-runs while UUID is still empty.
+		if uuid := sn.Annotations[simplyblockv1alpha1.AnnotationAdoptUUID]; uuid != "" {
+			patch := client.MergeFrom(sn.DeepCopy())
+			sn.Status.UUID = uuid
+			sn.Status.Hostname = sn.Spec.WorkerNode
+			if err := r.Status().Patch(ctx, &sn, patch); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("adopting migrated UUID for StorageNode %s: %w", sn.Name, err)
+			}
+			log.Info("adopted migrated backend node UUID", "name", sn.Name, "uuid", uuid, "worker", sn.Spec.WorkerNode)
+			return ctrl.Result{Requeue: true}, nil
+		}
+
 		// Fast path: old StorageNodeSetReconciler recorded UUID in status.nodes[].
 		if err := r.syncUUIDFromNodeSet(ctx, &sn, &sns); err != nil {
 			return ctrl.Result{}, err
@@ -135,6 +150,12 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 
 		if sn.Status.UUID == "" {
+			// A migration is in flight for this CR but the UUID has not been adopted
+			// yet (adopt annotation not written, or was cleared). Never provision a
+			// fresh node-add while migration-pending is set — wait for the migrate op.
+			if _, pending := sn.Annotations[simplyblockv1alpha1.AnnotationMigrationPending]; pending {
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
 			return r.provisionNode(ctx, &sn, &sns, clusterUUID, apiClient)
 		}
 	}
@@ -483,6 +504,14 @@ func (r *StorageNodeReconciler) syncStatus(
 	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
 		if status == http.StatusNotFound {
+			// During a migration the backend node may transiently 404 while it is
+			// being relocated to the target host (restart-with-node_address). Do not
+			// thrash the stored UUID in that window — the migrate op owns adoption.
+			if _, pending := sn.Annotations[simplyblockv1alpha1.AnnotationMigrationPending]; pending {
+				log.Info("backend node 404 during migration — keeping UUID, migration in progress",
+					"uuid", sn.Status.UUID)
+				return ctrl.Result{RequeueAfter: storageNodeSyncInterval}, nil
+			}
 			// The stored UUID no longer exists on the backend — the cluster may
 			// have been reset and nodes re-created with new UUIDs.
 			// Clear only UUID (PostedAt is intentionally preserved): provisionNode
@@ -666,6 +695,16 @@ func (r *StorageNodeReconciler) handleDeletion(
 	_ *simplyblockv1alpha1.StorageNodeSet,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+
+	// Migrated away: a migrate op relocated this backend node to another host and
+	// created a replacement CR bound there (carrying the same UUID). This origin CR
+	// must NOT drain+remove the backend node — that would destroy the relocated node.
+	// Just drop the finalizer and let it be garbage-collected.
+	if _, migrated := sn.Annotations[simplyblockv1alpha1.AnnotationMigratedAway]; migrated {
+		log.Info("StorageNode migrated away to another host — skipping drain/remove", "name", sn.Name)
+		controllerutil.RemoveFinalizer(sn, storageNodeFinalizer)
+		return ctrl.Result{}, r.Update(ctx, sn)
+	}
 
 	// If the node was never provisioned, skip ops and remove finalizer immediately.
 	if sn.Status.UUID == "" {

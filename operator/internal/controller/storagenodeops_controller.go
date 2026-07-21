@@ -49,13 +49,19 @@ type StorageNodeOpsReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
+	// TLSEnabled / TLSMutualEnabled gate how the migrate flow probes a target
+	// worker's storage-node-api endpoint (checkNodeInfoReachable).
+	TLSEnabled       bool
+	TLSMutualEnabled bool
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodeops,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodeops/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodeops/finalizers,verbs=update
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodesets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;patch
 
 func (r *StorageNodeOpsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -144,8 +150,11 @@ func (r *StorageNodeOpsReconciler) acquireLock(
 	opsPatch := client.MergeFrom(ops.DeepCopy())
 	ops.Status.Phase = simplyblockv1alpha1.StorageNodeOpsPhaseRunning
 	ops.Status.StartedAt = &now
-	if ops.Spec.Action == utils.NodeActionRemove {
+	switch ops.Spec.Action {
+	case utils.NodeActionRemove:
 		ops.Status.SubPhase = simplyblockv1alpha1.StorageNodeOpsSubPhaseValidating
+	case utils.NodeActionMigrate:
+		ops.Status.SubPhase = simplyblockv1alpha1.StorageNodeOpsSubPhasePreparing
 	}
 	if err := r.Status().Patch(ctx, ops, opsPatch); err != nil {
 		return ctrl.Result{}, err
@@ -165,6 +174,8 @@ func (r *StorageNodeOpsReconciler) dispatch(
 	switch ops.Spec.Action {
 	case utils.NodeActionRemove:
 		return r.runDrain(ctx, ops, sn, clusterUUID, apiClient)
+	case utils.NodeActionMigrate:
+		return r.runMigrate(ctx, ops, sn, sns, clusterUUID, apiClient)
 	case "shutdown", "restart", "suspend", "resume":
 		return r.runSimpleAction(ctx, ops, sn, sns, clusterUUID, apiClient)
 	default:
@@ -825,7 +836,11 @@ func (r *StorageNodeOpsReconciler) succeedOps(
 	if err := r.Status().Patch(ctx, ops, patch); err != nil {
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{}, r.releaseLock(ctx, sn, ops.Name)
+	// The origin StorageNode CR may already be gone (migrate deletes it) — tolerate NotFound.
+	if err := r.releaseLock(ctx, sn, ops.Name); err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
 }
 
 // failOps marks the ops as Failed with the given reason and releases the lock.
@@ -884,7 +899,10 @@ func (r *StorageNodeOpsReconciler) releaseLock(
 	}
 	patch := client.MergeFrom(sn.DeepCopy())
 	sn.Status.ActiveOpsRef = ""
-	return r.Status().Patch(ctx, sn, patch)
+	if err := r.Status().Patch(ctx, sn, patch); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
 }
 
 // resolveOpsSystemVolumeFilter compiles the system volume filter regex from the ops,

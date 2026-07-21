@@ -2049,6 +2049,7 @@ spec:
                 - suspend
                 - resume
                 - remove
+                - migrate
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -2069,10 +2070,18 @@ spec:
                 description: Force enables forced execution where the backend supports
                   it.
                 type: boolean
+              newSsdPcie:
+                description: |-
+                  NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
+                  during a migration. Passed through to the control-plane restart as
+                  new_ssd_pcie. Only applicable when action=migrate.
+                items:
+                  type: string
+                type: array
               reattachVolume:
                 description: |-
                   ReattachVolume reattaches volumes during restart.
-                  Only applicable when action=restart.
+                  Applicable when action=restart or action=migrate.
                 type: boolean
               storageNodeRef:
                 description: StorageNodeRef is the name of the target StorageNode.
@@ -2081,10 +2090,21 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              targetWorkerNode:
+                description: |-
+                  TargetWorkerNode is the Kubernetes worker hostname to relocate the storage
+                  node onto. Required when action=migrate; ignored otherwise. Immutable.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
             required:
             - action
             - storageNodeRef
             type: object
+            x-kubernetes-validations:
+            - message: field targetWorkerNode is immutable once set
+              rule: '!has(oldSelf.targetWorkerNode) || has(self.targetWorkerNode)'
           status:
             description: StorageNodeOpsStatus holds the observed state of a StorageNodeOps.
             properties:
@@ -2118,6 +2138,10 @@ spec:
                 - Migrating
                 - Verifying
                 - Removing
+                - Preparing
+                - Restarting
+                - Promoting
+                - Rebinding
                 type: string
               triggered:
                 description: |-
