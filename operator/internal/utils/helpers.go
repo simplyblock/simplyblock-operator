@@ -4,124 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/simplyblock/atlas/ptr"
 )
-
-// blockedIPNets contains IP ranges that must never be targeted by user-supplied URLs
-// (SSRF protection: RFC-1918, loopback, link-local, cloud IMDS, IPv6 equivalents).
-var blockedIPNets = func() []*net.IPNet {
-	cidrs := []string{
-		"127.0.0.0/8",
-		"169.254.0.0/16",
-		"0.0.0.0/8",
-		"::1/128",
-		"fe80::/10",
-	}
-	nets := make([]*net.IPNet, 0, len(cidrs))
-	for _, cidr := range cidrs {
-		_, n, _ := net.ParseCIDR(cidr)
-		nets = append(nets, n)
-	}
-	return nets
-}()
-
-func isBlockedIP(ip net.IP) bool {
-	for _, n := range blockedIPNets {
-		if n.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-// ValidateExternalURL rejects URLs that are unsafe to forward to the backend:
-// - scheme must be https
-// - host must not be a blocked IP literal (RFC-1918, loopback, link-local)
-// - hostname must resolve and all resolved IPs must not be blocked
-func ValidateExternalURL(rawURL string) error {
-	if rawURL == "" {
-		return nil
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("malformed URL: %w", err)
-	}
-	if u.Scheme != "https" {
-		return fmt.Errorf("URL scheme must be https, got %q", u.Scheme)
-	}
-	host := u.Hostname()
-	if host == "" {
-		return fmt.Errorf("URL must contain a hostname")
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if isBlockedIP(ip) {
-			return fmt.Errorf("URL targets a restricted IP address (%s)", host)
-		}
-		return nil
-	}
-	addrs, err := net.LookupHost(host)
-	if err != nil {
-		return fmt.Errorf("cannot resolve host %q: %w", host, err)
-	}
-	for _, addr := range addrs {
-		if ip := net.ParseIP(addr); ip != nil && isBlockedIP(ip) {
-			return fmt.Errorf("URL resolves to a restricted IP address (%s)", addr)
-		}
-	}
-	return nil
-}
 
 var exponentMultipliers = []string{"", "K", "M", "G", "T", "P", "E", "Z"}
 var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
-
-func IntPtrOrDefault(ptr *int32, defaultVal int32) int {
-	if ptr != nil {
-		return int(*ptr)
-	}
-	return int(defaultVal)
-}
-
-func Int64PtrOrDefault(ptr *int64, defaultVal int64) int64 {
-	if ptr != nil {
-		return *ptr
-	}
-	return defaultVal
-}
-
-func IntPtrOrZero(ptr *int32) int {
-	if ptr != nil {
-		return int(*ptr)
-	}
-	return 0
-}
-
-func IntToInt32Ptr(val int) *int32 {
-	v := int32(val)
-	return &v
-}
-
-func BoolPtrOrFalse(ptr *bool) bool {
-	if ptr != nil {
-		return *ptr
-	}
-	return false
-}
-
-func BoolPtrToString(ptr *bool) string {
-	return strconv.FormatBool(ptr != nil && *ptr)
-}
-
-func BoolToString(v bool) string {
-	return strconv.FormatBool(v)
-}
-
-func BoolPtr(v bool) *bool {
-	return &v
-}
 
 func ContainsString(slice []string, s string) bool {
 	for _, v := range slice {
@@ -147,25 +38,6 @@ func JoinList(list []string) string {
 		return ""
 	}
 	return strings.Join(list, ",")
-}
-
-func Int32PtrToString(ptr *int32) string {
-	if ptr == nil {
-		return ""
-	}
-	return strconv.FormatInt(int64(*ptr), 10)
-}
-
-func ToInt32Ptr(v int64) *int32 {
-	if v > math.MaxInt32 || v < math.MinInt32 {
-		return nil
-	}
-	val := int32(v)
-	return &val
-}
-
-func ToInt64Ptr(v int64) *int64 {
-	return &v
 }
 
 func parseUnit(unit string, mode string, strict bool) (int, int, error) {
@@ -234,26 +106,18 @@ func parseUnit(unit string, mode string, strict bool) (int, int, error) {
 	return base, exp, nil
 }
 
-func ParseSize(input string, mode string, assumeUnit string, strict bool) *int32 {
-	size := ParseSizeInt64(input, mode, assumeUnit, strict)
-	if size == nil {
-		return nil
-	}
-	return ToInt32Ptr(*size)
-}
-
-func ParseSizeInt64(input string, mode string, assumeUnit string, strict bool) *int64 {
+func ParseSize(input string, mode string, assumeUnit string, strict bool) *int64 {
 	input = strings.TrimSpace(input)
 
 	if n, err := strconv.ParseInt(input, 10, 64); err == nil {
 		if assumeUnit == "" {
-			return ToInt64Ptr(n)
+			return ptr.To(n)
 		}
 		base, exp, err := parseUnit(assumeUnit, mode, strict)
 		if err != nil {
 			return nil
 		}
-		return ToInt64Ptr(n * int64Pow(base, exp))
+		return ptr.To(n * int64Pow(base, exp))
 	}
 
 	re := regexp.MustCompile(`^(?P<size>[0-9]+)\s*(?P<unit>\w+)?$`)
@@ -273,7 +137,7 @@ func ParseSizeInt64(input string, mode string, assumeUnit string, strict bool) *
 		return nil
 	}
 
-	return ToInt64Ptr(sizeVal * int64Pow(base, exp))
+	return ptr.To(sizeVal * int64Pow(base, exp))
 }
 
 func ternary(cond bool, a, b string) string {

@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/simplyblock/atlas/ptr"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -283,8 +284,8 @@ func (r *PoolReconciler) handlePoolCreation(ctx context.Context, poolCR *simplyb
 	}
 	params := utils.PoolAddParams{
 		Name:          poolCR.Name,
-		PoolMax:       utils.Int64PtrOrDefault(utils.ParseSizeInt64(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
-		VolumeMaxSize: utils.Int64PtrOrDefault(utils.ParseSizeInt64(poolCR.Spec.LogicalVolumeMaxSize, "si/iec", "", false), 0),
+		PoolMax:       ptr.From(utils.ParseSize(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
+		VolumeMaxSize: ptr.From(utils.ParseSize(poolCR.Spec.LogicalVolumeMaxSize, "si/iec", "", false), 0),
 		MaxRwMB:       poolSpecQoSThroughputReadWrite(poolCR.Spec.QosSpec),
 		MaxRwIOPS:     poolSpecQoSIOPS(poolCR.Spec.QosSpec),
 		MaxRMB:        poolSpecQoSThroughputRead(poolCR.Spec.QosSpec),
@@ -312,11 +313,11 @@ func (r *PoolReconciler) handlePoolCreation(ctx context.Context, poolCR *simplyb
 	poolCR.Status.UUID = poolDTO.ID
 	poolCR.Status.Status = poolDTO.Status
 	poolCR.Status.QoS = &simplyblockv1alpha1.PoolQoSStatus{
-		IOPS: utils.ToInt32Ptr(poolDTO.MaxRwIOPS),
+		IOPS: ptr.To(int32(poolDTO.MaxRwIOPS)),
 		Throughput: &simplyblockv1alpha1.PoolQoSThroughputStatus{
-			Read:      utils.ToInt32Ptr(poolDTO.MaxRMbytes),
-			ReadWrite: utils.ToInt32Ptr(poolDTO.MaxRwMbytes),
-			Write:     utils.ToInt32Ptr(poolDTO.MaxWMbytes),
+			Read:      ptr.To(int32(poolDTO.MaxRMbytes)),
+			ReadWrite: ptr.To(int32(poolDTO.MaxRwMbytes)),
+			Write:     ptr.To(int32(poolDTO.MaxWMbytes)),
 		},
 	}
 	if err := r.Status().Update(ctx, poolCR); err != nil {
@@ -578,28 +579,28 @@ func poolSpecQoSIOPS(q *simplyblockv1alpha1.PoolQoSSpec) int {
 	if q == nil {
 		return 0
 	}
-	return utils.IntPtrOrDefault(q.IOPS, 0)
+	return ptr.IntFrom(q.IOPS, 0)
 }
 
 func poolSpecQoSThroughputRead(q *simplyblockv1alpha1.PoolQoSSpec) int {
 	if q == nil || q.Throughput == nil {
 		return 0
 	}
-	return utils.IntPtrOrDefault(q.Throughput.Read, 0)
+	return ptr.IntFrom(q.Throughput.Read, 0)
 }
 
 func poolSpecQoSThroughputReadWrite(q *simplyblockv1alpha1.PoolQoSSpec) int {
 	if q == nil || q.Throughput == nil {
 		return 0
 	}
-	return utils.IntPtrOrDefault(q.Throughput.ReadWrite, 0)
+	return ptr.IntFrom(q.Throughput.ReadWrite, 0)
 }
 
 func poolSpecQoSThroughputWrite(q *simplyblockv1alpha1.PoolQoSSpec) int {
 	if q == nil || q.Throughput == nil {
 		return 0
 	}
-	return utils.IntPtrOrDefault(q.Throughput.Write, 0)
+	return ptr.IntFrom(q.Throughput.Write, 0)
 }
 
 func (r *PoolReconciler) adoptExistingPool(
@@ -613,11 +614,11 @@ func (r *PoolReconciler) adoptExistingPool(
 	poolCR.Status.Status = existing.Status
 	poolCR.Status.QoS = &simplyblockv1alpha1.PoolQoSStatus{
 		Host: existing.QoSHost,
-		IOPS: utils.ToInt32Ptr(existing.MaxRwIOPS),
+		IOPS: ptr.To(int32(existing.MaxRwIOPS)),
 		Throughput: &simplyblockv1alpha1.PoolQoSThroughputStatus{
-			Read:      utils.ToInt32Ptr(existing.RLimit),
-			ReadWrite: utils.ToInt32Ptr(existing.RWLimit),
-			Write:     utils.ToInt32Ptr(existing.WLimit),
+			Read:      ptr.To(int32(existing.RLimit)),
+			ReadWrite: ptr.To(int32(existing.RWLimit)),
+			Write:     ptr.To(int32(existing.WLimit)),
 		},
 	}
 	if err := r.Status().Patch(ctx, poolCR, client.MergeFrom(orig)); err != nil {

@@ -46,6 +46,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/tlsutil"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -970,7 +972,7 @@ func (r *StorageNodeSetReconciler) reconcileRBAC(ctx context.Context, snCR *simp
 		return fmt.Errorf("failed to apply ServiceAccount: %w", err)
 	}
 
-	cr := utils.BuildStorageNodeSetClusterRole(utils.BoolPtrOrFalse(snCR.Spec.OpenShiftCluster))
+	cr := utils.BuildStorageNodeSetClusterRole(ptr.BoolFromOrFalse(snCR.Spec.OpenShiftCluster))
 	desiredCRRules := cr.Rules
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
 		cr.Rules = desiredCRRules
@@ -1308,12 +1310,12 @@ func onAllSocketNodesOnline(
 			Status:   res.Status,
 			MgmtIp:   res.IP,
 			Devices:  fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
-			CPU:      utils.IntToInt32Ptr(res.CPU),
+			CPU:      ptr.To(int32(res.CPU)),
 			Memory:   utils.HumanBytes(res.Memory, "iec"),
-			Volumes:  utils.IntToInt32Ptr(res.Volumes),
-			RpcPort:  utils.IntToInt32Ptr(res.RPC_PORT),
-			LvolPort: utils.IntToInt32Ptr(res.LVOL_PORT),
-			NvmfPort: utils.IntToInt32Ptr(res.NVMF_PORT),
+			Volumes:  ptr.To(int32(res.Volumes)),
+			RpcPort:  ptr.To(int32(res.RPC_PORT)),
+			LvolPort: ptr.To(int32(res.LVOL_PORT)),
+			NvmfPort: ptr.To(int32(res.NVMF_PORT)),
 		}
 
 		// Try to find existing entry by UUID first, then fall back to the
@@ -1424,12 +1426,12 @@ func (r *StorageNodeSetReconciler) syncTrackedNodesStatus(
 			Status:   res.Status,
 			MgmtIp:   res.IP,
 			Devices:  fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
-			CPU:      utils.IntToInt32Ptr(res.CPU),
+			CPU:      ptr.To(int32(res.CPU)),
 			Memory:   utils.HumanBytes(res.Memory, "iec"),
-			Volumes:  utils.IntToInt32Ptr(res.Volumes),
-			RpcPort:  utils.IntToInt32Ptr(res.RPC_PORT),
-			LvolPort: utils.IntToInt32Ptr(res.LVOL_PORT),
-			NvmfPort: utils.IntToInt32Ptr(res.NVMF_PORT),
+			Volumes:  ptr.To(int32(res.Volumes)),
+			RpcPort:  ptr.To(int32(res.RPC_PORT)),
+			LvolPort: ptr.To(int32(res.LVOL_PORT)),
+			NvmfPort: ptr.To(int32(res.NVMF_PORT)),
 			PostedAt: n.PostedAt,
 			Uptime:   n.Uptime,
 		}

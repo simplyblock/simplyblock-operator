@@ -32,6 +32,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -122,7 +124,7 @@ func (r *SnapshotReplicationReconciler) Reconcile(ctx context.Context, req ctrl.
 	}
 
 	r.setCondition(ctx, snapRepCR, simplyblockv1alpha1.ConditionTypeReady, metav1.ConditionTrue, "Replicating", "Replication is running")
-	return ctrl.Result{RequeueAfter: time.Duration(utils.IntPtrOrDefault(snapRepCR.Spec.Interval, 300)) * time.Second}, nil
+	return ctrl.Result{RequeueAfter: time.Duration(ptr.IntFrom(snapRepCR.Spec.Interval, 300)) * time.Second}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -289,7 +291,7 @@ func (r *SnapshotReplicationReconciler) reconcileNormalReplication(
 		return nil
 	}
 
-	interval := utils.IntPtrOrDefault(snapRepCR.Spec.Interval, 300)
+	interval := ptr.IntFrom(snapRepCR.Spec.Interval, 300)
 	now := time.Now().UTC()
 
 	orig := snapRepCR.DeepCopy()
@@ -424,7 +426,7 @@ func (r *SnapshotReplicationReconciler) ensureConfigured(
 
 	params := utils.ReplicationAddParams{
 		TargetCluster: targetClusterUUID,
-		Timeout:       utils.IntPtrOrDefault(snapRepCR.Spec.Timeout, 0),
+		Timeout:       ptr.IntFrom(snapRepCR.Spec.Timeout, 0),
 		TargetPool:    targetPoolUUID,
 	}
 

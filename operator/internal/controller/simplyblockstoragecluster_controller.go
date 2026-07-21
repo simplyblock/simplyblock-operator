@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/simplyblock/atlas/net"
+	"github.com/simplyblock/atlas/ptr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -217,8 +219,8 @@ func (r *StorageClusterReconciler) reconcileCreate(
 
 	params := utils.ClusterAddParams{
 		Name:             clusterCR.Name,
-		BlkSize:          utils.IntPtrOrDefault(clusterCR.Spec.BlockSize, 512),
-		PageSizeInBlocks: utils.IntPtrOrDefault(clusterCR.Spec.PageSizeInBlocks, 2097152),
+		BlkSize:          ptr.IntFrom(clusterCR.Spec.BlockSize, 512),
+		PageSizeInBlocks: ptr.IntFrom(clusterCR.Spec.PageSizeInBlocks, 2097152),
 		CapWarn:          capacityThreshold(clusterCR.Spec.WarningThresholdSpec),
 		CapCrit:          capacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
 		ProvCapWarn:      provisionedCapacityThreshold(clusterCR.Spec.WarningThresholdSpec),
@@ -230,25 +232,25 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		// FIXME: Remove distrChunkBs mapping after backend contract clarification.
 		DistrChunkBs:           4096,
 		HAType:                 clusterCR.Spec.HAType,
-		QpairCount:             utils.IntPtrOrDefault(clusterCR.Spec.QpairCount, 256),
-		ClientQpairCount:       utils.IntPtrOrDefault(clusterCR.Spec.ClientQpairCount, 3),
-		MaxQueueSize:           utils.IntPtrOrDefault(clusterCR.Spec.MaxQueueSize, 128),
-		InflightIOThreshold:    utils.IntPtrOrDefault(clusterCR.Spec.InflightIOThreshold, 4),
-		EnableNodeAffinity:     utils.BoolPtrOrFalse(clusterCR.Spec.EnableNodeAffinity),
-		StrictNodeAntiAffinity: utils.BoolPtrOrFalse(clusterCR.Spec.StrictNodeAntiAffinity),
-		IsSingleNode:           utils.BoolPtrOrFalse(clusterCR.Spec.IsSingleNode),
+		QpairCount:             ptr.IntFrom(clusterCR.Spec.QpairCount, 256),
+		ClientQpairCount:       ptr.IntFrom(clusterCR.Spec.ClientQpairCount, 3),
+		MaxQueueSize:           ptr.IntFrom(clusterCR.Spec.MaxQueueSize, 128),
+		InflightIOThreshold:    ptr.IntFrom(clusterCR.Spec.InflightIOThreshold, 4),
+		EnableNodeAffinity:     ptr.BoolFromOrFalse(clusterCR.Spec.EnableNodeAffinity),
+		StrictNodeAntiAffinity: ptr.BoolFromOrFalse(clusterCR.Spec.StrictNodeAntiAffinity),
+		IsSingleNode:           ptr.BoolFromOrFalse(clusterCR.Spec.IsSingleNode),
 		Fabric:                 clusterCR.Spec.FabricType,
 		CRName:                 clusterCR.Name,
 		CRNameSpace:            clusterCR.Namespace,
 		CRPlural:               "storageclusters",
 		ClientDataIfname:       clusterCR.Spec.ClientDataIfname,
-		MaxFaultTolerance:      utils.IntPtrOrDefault(clusterCR.Spec.MaxFaultTolerance, 1),
-		NvmfBasePort:           utils.IntPtrOrDefault(clusterCR.Spec.NvmfBasePort, 4420),
-		RpcBasePort:            utils.IntPtrOrDefault(clusterCR.Spec.RpcBasePort, 8080),
-		SnodeApiPort:           utils.IntPtrOrDefault(clusterCR.Spec.SnodeApiPort, 50001),
+		MaxFaultTolerance:      ptr.IntFrom(clusterCR.Spec.MaxFaultTolerance, 1),
+		NvmfBasePort:           ptr.IntFrom(clusterCR.Spec.NvmfBasePort, 4420),
+		RpcBasePort:            ptr.IntFrom(clusterCR.Spec.RpcBasePort, 8080),
+		SnodeApiPort:           ptr.IntFrom(clusterCR.Spec.SnodeApiPort, 50001),
 		BackupConfig:           backupConfig,
 		HashicorpVaultSettings: vaultConfig,
-		EnableFailureDomain:    utils.BoolPtrOrFalse(clusterCR.Spec.EnableFailureDomains),
+		EnableFailureDomain:    ptr.BoolFromOrFalse(clusterCR.Spec.EnableFailureDomains),
 	}
 
 	endpoint = "/api/v2/clusters/"
@@ -396,7 +398,7 @@ func (r *StorageClusterReconciler) buildBackupConfig(
 	}
 
 	if ep := clusterCR.Spec.Backup.LocalEndpoint; ep != "" {
-		if err := utils.ValidateExternalURL(ep); err != nil {
+		if err := net.ValidateExternalURL(ep); err != nil {
 			return nil, fmt.Errorf("backup.localEndpoint: %w", err)
 		}
 	}
@@ -416,7 +418,7 @@ func buildHashicorpVaultConfig(s *simplyblockv1alpha1.HashicorpVaultSettings) (*
 	if s == nil || s.BaseURL == "" {
 		return nil, nil
 	}
-	if err := utils.ValidateExternalURL(s.BaseURL); err != nil {
+	if err := net.ValidateExternalURL(s.BaseURL); err != nil {
 		return nil, fmt.Errorf("hashicorpVault.baseURL: %w", err)
 	}
 	return &utils.HashicorpVaultConfig{BaseURL: s.BaseURL}, nil
@@ -909,26 +911,26 @@ func capacityThreshold(t *simplyblockv1alpha1.CapacityThresholdSpec) int {
 	if t == nil {
 		return 0
 	}
-	return utils.IntPtrOrZero(t.Capacity)
+	return ptr.IntFromOrZero(t.Capacity)
 }
 
 func provisionedCapacityThreshold(t *simplyblockv1alpha1.CapacityThresholdSpec) int {
 	if t == nil {
 		return 0
 	}
-	return utils.IntPtrOrZero(t.ProvisionedCapacity)
+	return ptr.IntFromOrZero(t.ProvisionedCapacity)
 }
 
 func stripeDataChunks(s *simplyblockv1alpha1.StripeSpec) int {
 	if s == nil {
 		return 1
 	}
-	return utils.IntPtrOrDefault(s.DataChunks, 1)
+	return ptr.IntFrom(s.DataChunks, 1)
 }
 
 func stripeParityChunks(s *simplyblockv1alpha1.StripeSpec) int {
 	if s == nil {
 		return 1
 	}
-	return utils.IntPtrOrDefault(s.ParityChunks, 1)
+	return ptr.IntFrom(s.ParityChunks, 1)
 }

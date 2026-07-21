@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/simplyblock/atlas/ptr"
 	v1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -578,7 +579,7 @@ func (g *Guardian) listRunningPodsOnNode(ctx context.Context, nodeName string) (
 
 func controllerManaged(pod *v1.Pod) bool {
 	for _, r := range pod.OwnerReferences {
-		if r.Controller != nil && *r.Controller {
+		if ptr.BoolFromOrFalse(r.Controller) {
 			return true
 		}
 	}
@@ -759,10 +760,7 @@ func (g *Guardian) podUsesOptedInSimplyBlockStorageClass(ctx context.Context, po
 			continue
 		}
 
-		scName := ""
-		if pvc.Spec.StorageClassName != nil {
-			scName = strings.TrimSpace(*pvc.Spec.StorageClassName)
-		}
+		scName := ptr.From(pvc.Spec.StorageClassName, "")
 		if scName == "" {
 			scName = strings.TrimSpace(pvc.Annotations["volume.beta.kubernetes.io/storage-class"])
 		}
@@ -836,10 +834,7 @@ func (g *Guardian) podUsesNamespacedSubsystem(ctx context.Context, pod *v1.Pod) 
 			continue
 		}
 
-		scName := ""
-		if pvc.Spec.StorageClassName != nil {
-			scName = strings.TrimSpace(*pvc.Spec.StorageClassName)
-		}
+		scName := ptr.From(pvc.Spec.StorageClassName, "")
 		if scName == "" {
 			scName = strings.TrimSpace(pvc.Annotations["volume.beta.kubernetes.io/storage-class"])
 		}
