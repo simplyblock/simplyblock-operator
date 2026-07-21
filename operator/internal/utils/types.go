@@ -120,4 +120,6 @@ type StorageNodeSetAddParams struct {
 	// FailureDomain assigns this node to a failure-domain group (integer ≥ 1).
 	// Required when the cluster has EnableFailureDomain=true; omit (zero value) otherwise.
 	FailureDomain int `json:"failure_domain,omitempty"`
+	// Expand signals that this node is being added to expand an already-active cluster.
+	Expand bool `json:"expand,omitempty"`
 }

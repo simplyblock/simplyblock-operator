@@ -174,7 +174,7 @@ func CountOnlineHealthyNodes(
 ) int {
 	count := 0
 	for _, n := range nodes {
-		if n.Status == "online" && n.Health {
+		if n.Status == NodeStatusOnline && n.Health {
 			count++
 		}
 	}

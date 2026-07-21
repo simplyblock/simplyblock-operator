@@ -50,38 +50,43 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 	}
 
 	image := sn.Spec.ClusterImage
-	initCmd := []string{
-		"sudo", "-E",
-		"python3",
-		"simplyblock_web/node_configure.py",
-		"--max-lvol=" + Int32PtrToString(sn.Spec.MaxLogicalVolumeCount),
-		"--max-size=" + sn.Spec.MaxSize,
-	}
 
-	if len(sn.Spec.PcieAllowList) > 0 {
-		initCmd = append(initCmd, "--pci-allowed="+JoinList(sn.Spec.PcieAllowList))
-	}
-	if len(sn.Spec.PcieDenyList) > 0 {
-		initCmd = append(initCmd, "--pci-blocked="+JoinList(sn.Spec.PcieDenyList))
-	}
-	if len(sn.Spec.DeviceNames) > 0 {
-		initCmd = append(initCmd, "--nvme-devices="+JoinList(sn.Spec.DeviceNames))
-	}
+	// Build the fleet-level (non-overridable) args that are always appended.
+	// Per-node args (max-lvol, cores-percentage, pci-*, device-*, size-range)
+	// are read at runtime from the per-node ConfigMap via the init script.
+	fleetArgs := ""
 	if len(sn.Spec.SocketsToUse) > 0 {
-		initCmd = append(initCmd, "--sockets-to-use="+JoinList(sn.Spec.SocketsToUse))
+		fleetArgs += " --sockets-to-use=" + JoinList(sn.Spec.SocketsToUse)
 	}
 	if sn.Spec.NodesPerSocket != nil {
-		initCmd = append(initCmd, "--nodes-per-socket="+Int32PtrToString(sn.Spec.NodesPerSocket))
+		fleetArgs += " --nodes-per-socket=" + Int32PtrToString(sn.Spec.NodesPerSocket)
 	}
-	if sn.Spec.PcieModel != "" {
-		initCmd = append(initCmd, "--device-model="+sn.Spec.PcieModel)
-	}
-	if sn.Spec.DriveSizeRange != "" {
-		initCmd = append(initCmd, "--size-range="+sn.Spec.DriveSizeRange)
-	}
-	if sn.Spec.CorePercentage != nil {
-		initCmd = append(initCmd, "--cores-percentage="+Int32PtrToString(sn.Spec.CorePercentage))
-	}
+
+	// The init container sources the per-node env file (written by node-env-writer)
+	// so that node_configure.py receives per-node values for each pod.
+	initScript := `set -e
+[ -f /etc/node-env/env.sh ] && . /etc/node-env/env.sh
+ARGS="--max-lvol=${MAX_LVOL:-0} --max-size=${MAX_SIZE:-}"
+[ -n "${CORES_PERCENTAGE}" ] && ARGS="${ARGS} --cores-percentage=${CORES_PERCENTAGE}"
+[ -n "${PCI_ALLOWED}" ] && ARGS="${ARGS} --pci-allowed=${PCI_ALLOWED}"
+[ -n "${PCI_BLOCKED}" ] && ARGS="${ARGS} --pci-blocked=${PCI_BLOCKED}"
+[ -n "${NVME_DEVICES}" ] && ARGS="${ARGS} --nvme-devices=${NVME_DEVICES}"
+[ -n "${DEVICE_MODEL}" ] && ARGS="${ARGS} --device-model=${DEVICE_MODEL}"
+[ -n "${SIZE_RANGE}" ] && ARGS="${ARGS} --size-range=${SIZE_RANGE}"
+ARGS="${ARGS}` + fleetArgs + `"
+eval sudo -E python3 simplyblock_web/node_configure.py ${ARGS}
+`
+	initCmd := []string{"sh", "-c", initScript}
+
+	// nodeEnvWriterScript copies the per-node env file from the mounted ConfigMap
+	// (keyed by hostname) into the shared node-env emptyDir volume.
+	nodeEnvWriterScript := `mkdir -p /etc/node-env
+if [ -f /etc/per-node-config/${HOSTNAME} ]; then
+  cp /etc/per-node-config/${HOSTNAME} /etc/node-env/env.sh
+else
+  touch /etc/node-env/env.sh
+fi`
+	nodeEnvWriterCmd := []string{"sh", "-c", nodeEnvWriterScript}
 
 	imagePullPolicy := sn.Spec.ImagePullPolicy
 	if imagePullPolicy == "" {
@@ -91,21 +96,19 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 	mainEnv := []corev1.EnvVar{
 		{Name: "UBUNTU_HOST", Value: BoolPtrToString(sn.Spec.UbuntuHost)},
 		{Name: "OPENSHIFT_CLUSTER", Value: BoolPtrToString(sn.Spec.OpenShiftCluster)},
-		{Name: "CPU_TOPOLOGY_ENABLED", Value: BoolPtrToString(sn.Spec.EnableCpuTopology)},
 		{Name: "SKIP_KUBELET_CONFIGURATION", Value: BoolPtrToString(sn.Spec.SkipKubeletConfiguration)},
 		{Name: "SIMPLY_BLOCK_DOCKER_IMAGE", Value: image},
 		{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 		}},
 	}
+	// CPU_TOPOLOGY_ENABLED and RESERVED_SYSTEM_CPUS are now per-node: sourced
+	// from /etc/node-env/env.sh at container start via the command wrapper.
 	if sn.Spec.MaxParallelNodeAdds != nil {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *sn.Spec.MaxParallelNodeAdds)})
 	}
 	if sn.Spec.OpenShiftMachineConfigPool != "" {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "OPENSHIFT_MCP", Value: sn.Spec.OpenShiftMachineConfigPool})
-	}
-	if sn.Spec.ReservedSystemCPU != "" {
-		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: sn.Spec.ReservedSystemCPU})
 	}
 	if tlsMutualEnabled {
 		mainEnv = append(mainEnv,
@@ -123,7 +126,26 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 		)
 	}
 
+	perNodeConfigMapName := sn.Name + "-per-node-config"
+
 	volumes := []corev1.Volume{
+		// per-node-config: ConfigMap with one key per worker hostname.
+		// Written by reconcilePerNodeConfigMap; read by node-env-writer init container.
+		{
+			Name: "per-node-config",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: perNodeConfigMapName},
+					Optional:             BoolPtr(true),
+				},
+			},
+		},
+		// node-env: emptyDir shared between init containers and the main container.
+		// node-env-writer writes /etc/node-env/env.sh; others source it.
+		{
+			Name:         "node-env",
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		},
 		{
 			Name: "dev-vol",
 			VolumeSource: corev1.VolumeSource{
@@ -175,10 +197,13 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 		},
 	}
 
+	nodeEnvMount := corev1.VolumeMount{Name: "node-env", MountPath: "/etc/node-env"}
+
 	initMounts := []corev1.VolumeMount{
 		{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
 		{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
 		{Name: "host-mnt", MountPath: "/mnt"},
+		nodeEnvMount,
 	}
 
 	mainMounts := []corev1.VolumeMount{
@@ -186,6 +211,7 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 		{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
 		{Name: "host-sys", MountPath: "/sys"},
 		{Name: "var-run-simplyblock", MountPath: "/var/run/simplyblock"},
+		nodeEnvMount,
 	}
 
 	readinessProbe := &corev1.Probe{
@@ -263,6 +289,27 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 					Volumes: volumes,
 
 					InitContainers: []corev1.Container{
+						// node-env-writer: copies the per-node env file from the
+						// ConfigMap (keyed by hostname) into the shared node-env volume
+						// so both the config-generator and the main container can source it.
+						{
+							Name:            "node-env-writer",
+							Image:           image,
+							ImagePullPolicy: imagePullPolicy,
+							Command:         nodeEnvWriterCmd,
+							Env: []corev1.EnvVar{
+								{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+								}},
+							},
+							Resources: effectiveResources(sn.Spec.InitContainerResources, defaultInitContainerResources),
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "per-node-config", MountPath: "/etc/per-node-config", ReadOnly: true},
+								nodeEnvMount,
+							},
+						},
+						// s-node-api-config-generator: runs node_configure.py with
+						// per-node values sourced from /etc/node-env/env.sh.
 						{
 							Name:            "s-node-api-config-generator",
 							Image:           image,
@@ -284,8 +331,12 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 							Name:            "s-node-api-container",
 							Image:           image,
 							ImagePullPolicy: imagePullPolicy,
-							Command: []string{
-								"sudo", "-E", "python3", "simplyblock_web/node_webapp.py", "storage_node_k8s",
+							// Source the per-node env file so that CPU_TOPOLOGY_ENABLED
+							// and RESERVED_SYSTEM_CPUS pick up per-node values before
+							// the main process starts.
+							Command: []string{"sh", "-c",
+								`[ -f /etc/node-env/env.sh ] && . /etc/node-env/env.sh
+exec sudo -E python3 simplyblock_web/node_webapp.py storage_node_k8s`,
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
 							Resources:       effectiveResources(sn.Spec.ContainerResources, defaultContainerResources),

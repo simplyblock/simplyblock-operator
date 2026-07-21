@@ -321,7 +321,34 @@ rules:
   - patch
   - update
   - watch
-
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagenodes
+  - storagenodes/status
+  - storagenodes/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.simplyblock.io
+  resources:
+  - storagenodeops
+  - storagenodeops/status
+  - storagenodeops/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

@@ -11,6 +11,10 @@ resources:
 - bases/storage.simplyblock.io_snapshotreplications.yaml
 - bases/storage.simplyblock.io_backuppolicies.yaml
 - bases/storage.simplyblock.io_volumemigrations.yaml
+- bases/storage.simplyblock.io_storagenodes.yaml
+- bases/storage.simplyblock.io_storagenodeops.yaml
+- bases/storage.simplyblock.io_backupimports.yaml
+- bases/storage.simplyblock.io_controlplanes.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches: []

@@ -153,7 +153,7 @@ func (lvs *LogicalVolumeSelector) FilterEligibleVolumes(
 		if input.IsCoolingDown != nil && input.IsCoolingDown(vp.UUID) {
 			continue
 		}
-		if vp.Status != "online" {
+		if vp.Status != utils.NodeStatusOnline {
 			continue
 		}
 		if vp.Migrating {
