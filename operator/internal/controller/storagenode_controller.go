@@ -442,6 +442,7 @@ func (r *StorageNodeReconciler) countInFlightNodes(
 			continue
 		}
 		if sn.Status.PostedAt != nil &&
+			sn.Status.Status != utils.NodeStatusTimeout &&
 			(sn.Status.UUID == "" || sn.Status.Status == utils.NodeStatusInCreation) {
 			count++
 		}
