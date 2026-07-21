@@ -421,8 +421,10 @@ func (r *StorageNodeReconciler) isFDBWorkerBlocked(
 }
 
 // countInFlightNodes returns how many sibling StorageNode CRs in the same
-// StorageNodeSet have PostedAt set but no UUID yet (i.e. add is in progress).
-// The calling node is excluded from the count.
+// StorageNodeSet are still being provisioned. A node is considered in-flight
+// if PostedAt is set and either the UUID has not been assigned yet or the
+// backend status is still "in_creation" (UUID is assigned quickly but the node
+// takes longer to become online). The calling node is excluded from the count.
 func (r *StorageNodeReconciler) countInFlightNodes(
 	ctx context.Context,
 	namespace, snsRef, excludeName string,
@@ -439,7 +441,8 @@ func (r *StorageNodeReconciler) countInFlightNodes(
 		if sn.Name == excludeName {
 			continue
 		}
-		if sn.Status.PostedAt != nil && sn.Status.UUID == "" {
+		if sn.Status.PostedAt != nil &&
+			(sn.Status.UUID == "" || sn.Status.Status == utils.NodeStatusInCreation) {
 			count++
 		}
 	}

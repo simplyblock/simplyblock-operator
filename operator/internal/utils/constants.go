@@ -44,6 +44,7 @@ const (
 	NodeStatusOnline      = "online"
 	NodeStatusOffline     = "offline"
 	NodeStatusSuspended   = "suspended"
+	NodeStatusInCreation  = "in_creation"
 	NodeStatusInShutdown  = "in_shutdown"
 	NodeStatusInRestart   = "in_restart"
 	NodeStatusUnreachable = "unreachable"

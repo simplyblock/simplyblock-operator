@@ -100,7 +100,10 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 		if !fdbWorkers[sn.Spec.WorkerNode] {
 			continue
 		}
-		if sn.Status.UUID == "" {
+		// UUID is assigned quickly after the POST, but the node stays in
+		// "in_creation" until fully online. Treat both as in-flight so we
+		// don't create the next FDB CR before the current one is actually online.
+		if sn.Status.UUID == "" || sn.Status.Status == utils.NodeStatusInCreation {
 			fdbInFlight = true
 			break
 		}
