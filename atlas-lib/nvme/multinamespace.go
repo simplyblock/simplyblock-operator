@@ -10,10 +10,10 @@ import (
 // serve admin/IO commands (the only state we can Identify against).
 const controllerStateLive = "live"
 
-// identifyNN reads the Identify Controller NN field for the controller
+// identifyMNAN reads the Identify Controller MNAN field for the controller
 // character device at devicePath. It is a package variable so tests can
-// substitute the ioctl (identifyControllerNN is Linux-only).
-var identifyNN = identifyControllerNN
+// substitute the ioctl (identifyControllerMNAN is Linux-only).
+var identifyMNAN = identifyControllerMNAN
 
 // IsMultiNamespace reports whether this subsystem can host more than one
 // namespace. simplyblock's "namespaced" lvols share a single subsystem across
@@ -25,8 +25,9 @@ var identifyNN = identifyControllerNN
 // single-namespace-at-NSID-1 case is ambiguous: in sysfs it is byte-for-byte
 // identical to a plain single-namespace subsystem (same NQN shape, same model,
 // one namespace at nsid 1). There the method issues an NVMe Identify Controller
-// command against a live controller and reads NN — the maximum namespace count,
-// which SPDK sets to the subsystem's max_namespaces. NN > 1 ⇒ multi-namespace.
+// command against a live controller and reads MNAN — the maximum allowed
+// namespace count, which SPDK sets to the subsystem's max_namespaces.
+// MNAN > 1 ⇒ multi-namespace.
 //
 // The Identify fallback is Linux-only (returns errs.ErrUnsupported elsewhere)
 // and needs a live controller (returns errs.ErrNotConnected when the subsystem
@@ -72,12 +73,12 @@ func (s Subsystem) liveController() (Controller, bool) {
 }
 
 // MaxNamespaces returns the maximum number of namespaces the controller's
-// subsystem supports — the NN field of its Identify Controller data, which
+// subsystem may hold — the MNAN field of its Identify Controller data, which
 // SPDK sets to the subsystem's max_namespaces. It issues an NVMe Identify
 // Controller admin command against the controller character device, so the
 // controller must be live (errs.ErrNotConnected otherwise) and the platform
 // Linux (errs.ErrUnsupported otherwise). A subsystem whose controllers report
-// NN > 1 is multi-namespace; see Subsystem.IsMultiNamespace.
+// MNAN > 1 is multi-namespace; see Subsystem.IsMultiNamespace.
 func (c Controller) MaxNamespaces() (uint32, error) {
 	if c.State != controllerStateLive {
 		return 0, fmt.Errorf("controller %s state %q: %w", c.ID, c.State, errs.ErrNotConnected)
@@ -85,11 +86,11 @@ func (c Controller) MaxNamespaces() (uint32, error) {
 	if c.DevicePath == "" {
 		return 0, fmt.Errorf("controller %s: no device path: %w", c.ID, errs.ErrNotConnected)
 	}
-	nn, err := identifyNN(c.DevicePath)
+	mnan, err := identifyMNAN(c.DevicePath)
 	if err != nil {
 		return 0, fmt.Errorf("controller %s identify: %w", c.ID, err)
 	}
-	return nn, nil
+	return mnan, nil
 }
 
 // IsMultiNamespace reports whether this device's namespace belongs to a

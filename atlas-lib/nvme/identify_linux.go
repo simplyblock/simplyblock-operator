@@ -1,7 +1,6 @@
 package nvme
 
 import (
-	"encoding/binary"
 	"fmt"
 	"os"
 	"runtime"
@@ -16,15 +15,13 @@ import (
 const nvmeIoctlAdminCmd = 0xC0484E41
 
 const (
-	nvmeAdminIdentify    = 0x06 // Identify admin command opcode
-	nvmeIdentifyCNSCtrl  = 0x01 // CNS value: Identify Controller data structure
-	nvmeIdentifyDataLen  = 4096 // size of an Identify data structure
-	nvmeIdentifyNNOffset = 516  // byte offset of NN (uint32, little-endian)
+	nvmeAdminIdentify   = 0x06 // Identify admin command opcode
+	nvmeIdentifyCNSCtrl = 0x01 // CNS value: Identify Controller data structure
 )
 
 // nvmePassthruCmd mirrors the kernel's struct nvme_passthru_cmd from
 // include/uapi/linux/nvme_ioctl.h (72 bytes). Field order and widths must
-// match exactly; the ioctl copies this struct in and out.
+// match exactly; the ioctl copies this struct in and out
 type nvmePassthruCmd struct {
 	opcode      uint8
 	flags       uint8
@@ -46,22 +43,23 @@ type nvmePassthruCmd struct {
 	result      uint32
 }
 
-// identifyControllerNN issues an NVMe Identify Controller admin command on the
-// controller character device (e.g. "/dev/nvme0") and returns its NN field —
-// the maximum number of namespaces the controller's subsystem supports.
-func identifyControllerNN(devicePath string) (uint32, error) {
+// identifyControllerMNAN issues an NVMe Identify Controller admin command on
+// the controller character device (e.g. "/dev/nvme0") and returns its MNAN
+// field (Maximum Number of Allowed Namespaces) — the most namespaces the
+// controller's subsystem may hold.
+func identifyControllerMNAN(devicePath string) (uint32, error) {
 	f, err := os.OpenFile(devicePath, os.O_RDONLY, 0)
 	if err != nil {
 		return 0, fmt.Errorf("open %s: %w", devicePath, err)
 	}
 	defer func() { _ = f.Close() }()
 
-	buf := make([]byte, nvmeIdentifyDataLen)
+	buf := make([]byte, identifyControllerLen)
 	cmd := nvmePassthruCmd{
 		opcode:  nvmeAdminIdentify,
 		nsid:    0, // Identify Controller ignores NSID
 		addr:    uint64(uintptr(unsafe.Pointer(&buf[0]))),
-		dataLen: nvmeIdentifyDataLen,
+		dataLen: identifyControllerLen,
 		cdw10:   nvmeIdentifyCNSCtrl, // CNS in the low byte
 	}
 	_, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), nvmeIoctlAdminCmd, uintptr(unsafe.Pointer(&cmd)))
@@ -70,5 +68,5 @@ func identifyControllerNN(devicePath string) (uint32, error) {
 	if errno != 0 {
 		return 0, fmt.Errorf("ioctl NVME_ADMIN_CMD %s: %w", devicePath, errno)
 	}
-	return binary.LittleEndian.Uint32(buf[nvmeIdentifyNNOffset : nvmeIdentifyNNOffset+4]), nil
+	return mnanFromIdentify(buf), nil
 }

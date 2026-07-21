@@ -60,7 +60,7 @@
 // max_namespaces > 1). IsMultiNamespace answers from sysfs when it can — more
 // than one namespace, or any NSID > 1 — and only for the ambiguous
 // single-namespace-at-NSID-1 case issues an NVMe Identify Controller command
-// (Linux only) to read NN, the subsystem's maximum namespace count.
+// (Linux only) to read MNAN, the subsystem's maximum allowed namespace count.
 //
 //	multi, err := dev.IsMultiNamespace()
 //	if err != nil {
@@ -73,8 +73,8 @@
 //
 //	// The raw capacity is available per controller:
 //	if len(dev.Subsystem.Controllers) > 0 {
-//		nn, _ := dev.Subsystem.Controllers[0].MaxNamespaces() // NN from Identify
-//		fmt.Println("max namespaces:", nn)
+//		mnan, _ := dev.Subsystem.Controllers[0].MaxNamespaces() // MNAN from Identify
+//		fmt.Println("max namespaces:", mnan)
 //	}
 //
 // Subsystems can be resolved directly too:
