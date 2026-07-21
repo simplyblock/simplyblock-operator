@@ -41,6 +41,13 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
+// workerOrdinal uniquely identifies a backend storage node per worker host.
+// ordinal = socketPosition * nodesPerSocket + nodeIndex.
+type workerOrdinal struct {
+	worker  string
+	ordinal int
+}
+
 // reconcileStorageNodeCRs creates a StorageNode CR for every (worker, socket)
 // pair in the StorageNodeSet spec and deletes any owned StorageNode CRs that no
 // longer correspond to a configured worker/socket. Overrides are synced from
@@ -61,10 +68,6 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 	// Build the expected set of (worker, globalOrdinal) pairs.
 	// globalOrdinal = socketPosition * nodesPerSocket + nodeIndex
 	// This uniquely identifies each backend storage node per worker host.
-	type workerOrdinal struct {
-		worker  string
-		ordinal int
-	}
 	expected := make(map[workerOrdinal]struct{}, len(sns.Spec.WorkerNodes)*len(sockets)*nodesPerSocket)
 	for _, worker := range sns.Spec.WorkerNodes {
 		for si, socket := range sockets {
@@ -87,26 +90,7 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 
 	// Delete stale CRs (worker removed from spec.workerNodes, socket removed,
 	// or nodesPerSocket reduced). Manually created CRs (no OwnerReference) are kept.
-	for i := range owned.Items {
-		sn := &owned.Items[i]
-		ordinal := 0
-		if sn.Spec.SocketIndex != nil {
-			ordinal = int(*sn.Spec.SocketIndex)
-		}
-		if _, ok := expected[workerOrdinal{sn.Spec.WorkerNode, ordinal}]; ok {
-			continue
-		}
-		owner := metav1.GetControllerOf(sn)
-		if owner == nil || owner.Name != sns.Name {
-			continue // manually created — preserve
-		}
-		if err := r.Delete(ctx, sn); err != nil && !apierrors.IsNotFound(err) {
-			log.Error(err, "failed to delete stale StorageNode CR", "name", sn.Name)
-		} else {
-			log.Info("deleted stale StorageNode CR", "name", sn.Name,
-				"worker", sn.Spec.WorkerNode, "ordinal", ordinal)
-		}
-	}
+	r.deleteStaleStorageNodeCRs(ctx, sns, owned.Items, expected)
 
 	// Determine which workers host FDB pods — added sequentially.
 	fdbWorkers := r.fdbWorkerSet(ctx, sns)
@@ -135,43 +119,8 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 		for si, socket := range sockets {
 			for ni := 0; ni < nodesPerSocket; ni++ {
 				globalOrdinal := si*nodesPerSocket + ni
-
-				if fdbWorkers[worker] && fdbInFlight {
-					crName := storageNodeCRName(sns.Name, worker, socket, ni)
-					alreadyExists := false
-					for _, sn := range owned.Items {
-						if sn.Name == crName {
-							alreadyExists = true
-							break
-						}
-					}
-					if !alreadyExists {
-						log.Info("FDB worker: deferring StorageNode CR creation until previous FDB node is online",
-							"worker", worker, "socket", socket, "nodeIdx", ni)
-						continue
-					}
-				}
-
-				crName := storageNodeCRName(sns.Name, worker, socket, ni)
-				existedBefore := false
-				for _, sn := range owned.Items {
-					if sn.Name == crName {
-						existedBefore = true
-						break
-					}
-				}
-
-				if err := r.ensureStorageNodeCR(ctx, sns, worker, socket, ni, globalOrdinal); err != nil {
-					log.Error(err, "failed to ensure StorageNode CR",
-						"worker", worker, "socket", socket, "nodeIdx", ni)
-					continue
-				}
-
-				// If this was a brand-new FDB CR (didn't exist before this reconcile),
-				// mark fdbInFlight so the remaining FDB workers are deferred until the
-				// next reconcile — preventing multiple new CRs from being created and
-				// reconciled simultaneously by the StorageNode controller.
-				if fdbWorkers[worker] && !existedBefore {
+				advanced := r.reconcileOneStorageNodeCR(ctx, sns, worker, socket, ni, globalOrdinal, owned.Items, fdbWorkers, fdbInFlight)
+				if advanced {
 					fdbInFlight = true
 				}
 			}
@@ -184,6 +133,93 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 	}
 
 	return nil
+}
+
+// deleteStaleStorageNodeCRs deletes owned StorageNode CRs whose (worker, ordinal)
+// pair is not present in expected. Manually created CRs (no OwnerReference) are kept.
+func (r *StorageNodeSetReconciler) deleteStaleStorageNodeCRs(
+	ctx context.Context,
+	sns *simplyblockv1alpha1.StorageNodeSet,
+	items []simplyblockv1alpha1.StorageNode,
+	expected map[workerOrdinal]struct{},
+) {
+	log := logf.FromContext(ctx)
+	for i := range items {
+		sn := &items[i]
+		ordinal := 0
+		if sn.Spec.SocketIndex != nil {
+			ordinal = int(*sn.Spec.SocketIndex)
+		}
+		if _, ok := expected[workerOrdinal{sn.Spec.WorkerNode, ordinal}]; ok {
+			continue
+		}
+		owner := metav1.GetControllerOf(sn)
+		if owner == nil || owner.Name != sns.Name {
+			continue // manually created — preserve
+		}
+		if err := r.Delete(ctx, sn); err != nil && !apierrors.IsNotFound(err) {
+			log.Error(err, "failed to delete stale StorageNode CR", "name", sn.Name)
+		} else {
+			log.Info("deleted stale StorageNode CR", "name", sn.Name,
+				"worker", sn.Spec.WorkerNode, "ordinal", ordinal)
+		}
+	}
+}
+
+// reconcileOneStorageNodeCR handles the FDB gate check, existedBefore check, and
+// ensureStorageNodeCR call for a single (worker, socket, nodeIdx, globalOrdinal) tuple.
+// It returns true if a brand-new FDB CR was just created (so the caller can set
+// fdbInFlight=true to defer subsequent FDB workers).
+func (r *StorageNodeSetReconciler) reconcileOneStorageNodeCR(
+	ctx context.Context,
+	sns *simplyblockv1alpha1.StorageNodeSet,
+	worker, socket string,
+	nodeIdx, globalOrdinal int,
+	ownedItems []simplyblockv1alpha1.StorageNode,
+	fdbWorkers map[string]bool,
+	fdbInFlight bool,
+) (newFDBInFlight bool) {
+	log := logf.FromContext(ctx)
+
+	crName := storageNodeCRName(sns.Name, worker, socket, nodeIdx)
+
+	if fdbWorkers[worker] && fdbInFlight {
+		alreadyExists := false
+		for _, sn := range ownedItems {
+			if sn.Name == crName {
+				alreadyExists = true
+				break
+			}
+		}
+		if !alreadyExists {
+			log.Info("FDB worker: deferring StorageNode CR creation until previous FDB node is online",
+				"worker", worker, "socket", socket, "nodeIdx", nodeIdx)
+			return false
+		}
+	}
+
+	existedBefore := false
+	for _, sn := range ownedItems {
+		if sn.Name == crName {
+			existedBefore = true
+			break
+		}
+	}
+
+	if err := r.ensureStorageNodeCR(ctx, sns, worker, socket, nodeIdx, globalOrdinal); err != nil {
+		log.Error(err, "failed to ensure StorageNode CR",
+			"worker", worker, "socket", socket, "nodeIdx", nodeIdx)
+		return false
+	}
+
+	// If this was a brand-new FDB CR (didn't exist before this reconcile),
+	// mark fdbInFlight so the remaining FDB workers are deferred until the
+	// next reconcile — preventing multiple new CRs from being created and
+	// reconciled simultaneously by the StorageNode controller.
+	if fdbWorkers[worker] && !existedBefore {
+		return true
+	}
+	return false
 }
 
 // ensureStorageNodeCR creates or patches a StorageNode CR.
