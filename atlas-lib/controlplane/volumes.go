@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 
@@ -106,7 +107,10 @@ func (c *Client) ResizeVolume(ctx context.Context, h lvol.VolumeHandle, sizeByte
 	if err != nil {
 		return err
 	}
-	size := int(sizeBytes)
+	size, err := sizeToInt(sizeBytes)
+	if err != nil {
+		return fmt.Errorf("resize volume %s: %w", h, err)
+	}
 	resp, err := c.api.ClustersStoragePoolsVolumesUpdateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdPutWithResponse(
 		ctx, cluster, pool, volume, cpapi.UpdatableLVolParams{Size: &size})
 	if err != nil {
@@ -162,8 +166,8 @@ type CreateVolumeParams struct {
 	MaxWMbytes  int
 }
 
-func (p CreateVolumeParams) toUnderscore() cpapi.UnderscoreCreateParams {
-	u := cpapi.UnderscoreCreateParams{Name: p.Name, Size: int(p.SizeBytes)}
+func (p CreateVolumeParams) toUnderscore(size int) cpapi.UnderscoreCreateParams {
+	u := cpapi.UnderscoreCreateParams{Name: p.Name, Size: size}
 	if p.HAType != "" {
 		ha := cpapi.CreateParamsHaType(p.HAType)
 		u.HaType = &ha
@@ -216,8 +220,12 @@ func (c *Client) CreateVolume(ctx context.Context, clusterID, poolID string, par
 	if err != nil {
 		return "", err
 	}
+	size, err := sizeToInt(params.SizeBytes)
+	if err != nil {
+		return "", fmt.Errorf("create volume %q: %w", params.Name, err)
+	}
 	var body cpapi.ClustersStoragePoolsVolumesCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesPostJSONRequestBody
-	if err := body.FromUnderscoreCreateParams(params.toUnderscore()); err != nil {
+	if err := body.FromUnderscoreCreateParams(params.toUnderscore(size)); err != nil {
 		return "", fmt.Errorf("create volume %q: %w", params.Name, err)
 	}
 	resp, err := c.api.ClustersStoragePoolsVolumesCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesPostWithResponse(ctx, cluster, pool, nil, body)
@@ -252,7 +260,11 @@ func (c *Client) CloneVolume(ctx context.Context, clusterID, poolID string, para
 	}
 	clone := cpapi.UnderscoreCloneParams{Name: params.Name, SnapshotId: &params.SnapshotID}
 	if params.SizeBytes > 0 {
-		clone.Size = ptr(int(params.SizeBytes))
+		size, err := sizeToInt(params.SizeBytes)
+		if err != nil {
+			return "", fmt.Errorf("clone volume %q: %w", params.Name, err)
+		}
+		clone.Size = ptr(size)
 	}
 	if params.PVCName != "" {
 		clone.PvcName = ptr(params.PVCName)
@@ -297,6 +309,15 @@ func createdID(what string, resp *http.Response, body []byte) (string, error) {
 // ptr returns a pointer to v — for the many optional (pointer) fields the
 // generated request bodies use.
 func ptr[T any](v T) *T { return &v }
+
+// sizeToInt converts a byte size to the int the API expects, rejecting values
+// that would overflow int (i.e. on 32-bit builds, or absurd sizes).
+func sizeToInt(bytes uint64) (int, error) {
+	if bytes > math.MaxInt {
+		return 0, fmt.Errorf("size %d bytes exceeds the maximum supported (%d)", bytes, uint64(math.MaxInt))
+	}
+	return int(bytes), nil
+}
 
 // connectEndpoint is one element of the /connect response.
 type connectEndpoint struct {
