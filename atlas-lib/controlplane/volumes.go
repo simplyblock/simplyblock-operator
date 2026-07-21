@@ -11,6 +11,7 @@ import (
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/internal/cpapi"
 	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/atlas/ptr"
 )
 
 // Volume fetches the identity of a logical volume by handle.
@@ -173,43 +174,43 @@ func (p CreateVolumeParams) toUnderscore(size int) cpapi.UnderscoreCreateParams 
 		u.HaType = &ha
 	}
 	if p.Encrypt {
-		u.Encrypt = ptr(true)
+		u.Encrypt = ptr.To(true)
 	}
 	if p.Namespaced {
-		u.Namespaced = ptr(true)
+		u.Namespaced = ptr.To(true)
 	}
 	if p.MaxNamespacePerSubsys > 0 {
-		u.MaxNamespacePerSubsys = ptr(p.MaxNamespacePerSubsys)
+		u.MaxNamespacePerSubsys = ptr.To(p.MaxNamespacePerSubsys)
 	}
 	if p.NDCS > 0 {
-		u.Ndcs = ptr(p.NDCS)
+		u.Ndcs = ptr.To(p.NDCS)
 	}
 	if p.NPCS > 0 {
-		u.Npcs = ptr(p.NPCS)
+		u.Npcs = ptr.To(p.NPCS)
 	}
 	if p.Replicate {
-		u.DoReplicate = ptr(true)
+		u.DoReplicate = ptr.To(true)
 	}
 	if p.ReplicationClusterID != "" {
-		u.ReplicationClusterId = ptr(p.ReplicationClusterID)
+		u.ReplicationClusterId = ptr.To(p.ReplicationClusterID)
 	}
 	if p.HostID != "" {
-		u.HostId = ptr(p.HostID)
+		u.HostId = ptr.To(p.HostID)
 	}
 	if p.PVCName != "" {
-		u.PvcName = ptr(p.PVCName)
+		u.PvcName = ptr.To(p.PVCName)
 	}
 	if p.MaxRWIOPS > 0 {
-		u.MaxRwIops = ptr(p.MaxRWIOPS)
+		u.MaxRwIops = ptr.To(p.MaxRWIOPS)
 	}
 	if p.MaxRWMbytes > 0 {
-		u.MaxRwMbytes = ptr(p.MaxRWMbytes)
+		u.MaxRwMbytes = ptr.To(p.MaxRWMbytes)
 	}
 	if p.MaxRMbytes > 0 {
-		u.MaxRMbytes = ptr(p.MaxRMbytes)
+		u.MaxRMbytes = ptr.To(p.MaxRMbytes)
 	}
 	if p.MaxWMbytes > 0 {
-		u.MaxWMbytes = ptr(p.MaxWMbytes)
+		u.MaxWMbytes = ptr.To(p.MaxWMbytes)
 	}
 	return u
 }
@@ -264,16 +265,16 @@ func (c *Client) CloneVolume(ctx context.Context, clusterID, poolID string, para
 		if err != nil {
 			return "", fmt.Errorf("clone volume %q: %w", params.Name, err)
 		}
-		clone.Size = ptr(size)
+		clone.Size = ptr.To(size)
 	}
 	if params.PVCName != "" {
-		clone.PvcName = ptr(params.PVCName)
+		clone.PvcName = ptr.To(params.PVCName)
 	}
 	if params.PVCNamespace != "" {
-		clone.PvcNamespace = ptr(params.PVCNamespace)
+		clone.PvcNamespace = ptr.To(params.PVCNamespace)
 	}
 	if params.DeleteSnapshotOnDelete {
-		clone.DeleteSnapOnLvolDelete = ptr(true)
+		clone.DeleteSnapOnLvolDelete = ptr.To(true)
 	}
 	var body cpapi.ClustersStoragePoolsVolumesCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesPostJSONRequestBody
 	if err := body.FromUnderscoreCloneParams(clone); err != nil {
@@ -305,10 +306,6 @@ func createdID(what string, resp *http.Response, body []byte) (string, error) {
 	}
 	return loc, nil
 }
-
-// ptr returns a pointer to v — for the many optional (pointer) fields the
-// generated request bodies use.
-func ptr[T any](v T) *T { return &v }
 
 // sizeToInt converts a byte size to the int the API expects, rejecting values
 // that would overflow int (i.e. on 32-bit builds, or absurd sizes).

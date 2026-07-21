@@ -7,6 +7,7 @@ import (
 
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/internal/cpapi"
+	"github.com/simplyblock/atlas/ptr"
 )
 
 // StoragePool is a simplyblock storage pool within a cluster.
@@ -101,22 +102,22 @@ func (c *Client) CreateStoragePool(ctx context.Context, clusterID string, params
 	}
 	body := cpapi.StoragePoolParams{Name: params.Name}
 	if params.MaxSizeBytes > 0 {
-		body.PoolMax = ptr(int(params.MaxSizeBytes))
+		body.PoolMax = ptr.To(int(params.MaxSizeBytes))
 	}
 	if params.VolumeMaxSizeBytes > 0 {
-		body.VolumeMaxSize = ptr(int(params.VolumeMaxSizeBytes))
+		body.VolumeMaxSize = ptr.To(int(params.VolumeMaxSizeBytes))
 	}
 	if params.MaxRWIOPS > 0 {
-		body.MaxRwIops = ptr(params.MaxRWIOPS)
+		body.MaxRwIops = ptr.To(params.MaxRWIOPS)
 	}
 	if params.MaxRWMbytes > 0 {
-		body.MaxRwMbytes = ptr(params.MaxRWMbytes)
+		body.MaxRwMbytes = ptr.To(params.MaxRWMbytes)
 	}
 	if params.MaxRMbytes > 0 {
-		body.MaxRMbytes = ptr(params.MaxRMbytes)
+		body.MaxRMbytes = ptr.To(params.MaxRMbytes)
 	}
 	if params.MaxWMbytes > 0 {
-		body.MaxWMbytes = ptr(params.MaxWMbytes)
+		body.MaxWMbytes = ptr.To(params.MaxWMbytes)
 	}
 
 	resp, err := c.api.ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostWithResponse(ctx, cluster, nil, body)
