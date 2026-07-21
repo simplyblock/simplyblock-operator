@@ -408,20 +408,44 @@ func (r *StorageNodeSetReconciler) drainValidate(
 		return ctrl.Result{RequeueAfter: drainRequeueValidate}, nil
 	}
 
-	_, pinned, unmanaged, _, _, err := matchVolumesToPVs(ctx, r, volumes, sysFilter)
+	_, pinned, unmanaged, pvNameByVolume, pinnedTargets, _, err := matchVolumesToPVs(ctx, r, volumes, sysFilter)
 	if err != nil {
 		log.Error(err, "drain: matchVolumesToPVs failed")
 		return ctrl.Result{RequeueAfter: drainRequeueValidate}, nil
 	}
 
+	// Split pinned volumes: those with a valid target UUID (can migrate) vs those
+	// that block drain because the annotation is empty, not a UUID, or self-referencing.
+	var pinnedBlocked []string
+	for _, volUUID := range pinned {
+		target := pinnedTargets[volUUID]
+		if isValidUUID(target) && target != nodeUUID {
+			// Has a routable target — will be handled by createMissingVolumeMigrations.
+			continue
+		}
+		pvName := pvNameByVolume[volUUID]
+		switch target {
+		case "":
+			r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "PinnedVolumeBlocking",
+				"drain blocked: PV %s is pinned with no target node; set annotation %s to a valid storage-node UUID or remove it",
+				pvName, simplyblockv1alpha1.AnnotationPinnedVolume)
+		case nodeUUID:
+			r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "PinnedVolumeBlocking",
+				"drain blocked: PV %s is pinned to the node being drained (%s); re-pin to a different storage-node UUID",
+				pvName, nodeUUID)
+		default:
+			r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "PinnedVolumeBlocking",
+				"drain blocked: PV %s has invalid pin target %q; annotation %s must be a valid storage-node UUID",
+				pvName, target, simplyblockv1alpha1.AnnotationPinnedVolume)
+		}
+		pinnedBlocked = append(pinnedBlocked, pvName)
+	}
+
 	// Evaluate ALL blocking conditions before returning so the user sees every
 	// issue at once — not one per reconcile iteration.
 	var msgParts []string
-	if len(pinned) > 0 {
-		r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "PinnedVolumeBlocking",
-			"drain blocked: pinned volumes %s must be unpinned before drain",
-			strings.Join(pinned, ", "))
-		msgParts = append(msgParts, fmt.Sprintf("%d pinned volume(s): %s", len(pinned), strings.Join(pinned, ", ")))
+	if len(pinnedBlocked) > 0 {
+		msgParts = append(msgParts, fmt.Sprintf("%d pinned volume(s) with no valid target: %s", len(pinnedBlocked), strings.Join(pinnedBlocked, ", ")))
 	}
 	if len(unmanaged) > 0 {
 		r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "UnmanagedVolumeBlocking",
@@ -641,11 +665,22 @@ func (r *StorageNodeSetReconciler) hasMissingVolumeMigrations(
 	if err != nil {
 		return false
 	}
-	pvm, _, _, pvByVol, _, err := matchVolumesToPVs(ctx, r, vols, sf)
+	pvm, pinnedVols, _, pvByVol, pinnedTargets, _, err := matchVolumesToPVs(ctx, r, vols, sf)
 	if err != nil {
 		return false
 	}
 	for _, volUUID := range pvm {
+		if pvName, ok := pvByVol[volUUID]; ok {
+			if _, exists := existingVMNames[drainMigrationName(nodeUUID, pvName)]; !exists {
+				return true
+			}
+		}
+	}
+	for _, volUUID := range pinnedVols {
+		target := pinnedTargets[volUUID]
+		if !isValidUUID(target) || target == nodeUUID {
+			continue
+		}
 		if pvName, ok := pvByVol[volUUID]; ok {
 			if _, exists := existingVMNames[drainMigrationName(nodeUUID, pvName)]; !exists {
 				return true
@@ -681,7 +716,7 @@ func (r *StorageNodeSetReconciler) createMissingVolumeMigrations(
 		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 	}
 
-	pvManaged, _, _, pvNameByVolumeUUID, pvcFetchFailed, err := matchVolumesToPVs(ctx, r, volumes, sysFilter)
+	pvManaged, pinnedVols, _, pvNameByVolumeUUID, pinnedTargetsInMigrate, pvcFetchFailed, err := matchVolumesToPVs(ctx, r, volumes, sysFilter)
 	if err != nil {
 		log.Error(err, "drain: matchVolumesToPVs failed during migration creation")
 		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
@@ -694,7 +729,16 @@ func (r *StorageNodeSetReconciler) createMissingVolumeMigrations(
 		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
 	}
 
-	if len(pvManaged) == 0 && len(existingItems) == 0 {
+	// Collect pinned volumes that have a valid target different from the draining node.
+	var pinnedWithTarget []string
+	for _, volUUID := range pinnedVols {
+		target := pinnedTargetsInMigrate[volUUID]
+		if isValidUUID(target) && target != nodeUUID {
+			pinnedWithTarget = append(pinnedWithTarget, volUUID)
+		}
+	}
+
+	if len(pvManaged) == 0 && len(pinnedWithTarget) == 0 && len(existingItems) == 0 {
 		if err := advanceDrainSubPhase(ctx, r, snCR, drainSubPhaseVerifying); err != nil {
 			log.Error(err, "drain: failed to advance to Verifying (no migrations needed)")
 			return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
@@ -702,6 +746,7 @@ func (r *StorageNodeSetReconciler) createMissingVolumeMigrations(
 		return ctrl.Result{RequeueAfter: drainRequeueImmediate}, nil
 	}
 
+	// Determine which PV-managed volumes still need a VolumeMigration CR.
 	pvNames := make([]string, 0, len(pvManaged))
 	for _, volUUID := range pvManaged {
 		pvName, ok := pvNameByVolumeUUID[volUUID]
@@ -712,28 +757,25 @@ func (r *StorageNodeSetReconciler) createMissingVolumeMigrations(
 			pvNames = append(pvNames, pvName)
 		}
 	}
-	if len(pvNames) == 0 {
-		return ctrl.Result{RequeueAfter: drainRequeueMigrate}, nil
-	}
 
-	targetByPV, err := roundRobinTargetNodes(ctx, apiClient, clusterUUID, nodeUUID, pvNames)
-	if err != nil {
-		log.Error(err, "drain: no available target nodes for migration")
-		r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "DrainNoMigrationTarget",
-			"drain stalled: no online storage node available as migration target for node %s — will retry when a peer node is online",
-			nodeUUID)
-		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
+	// Assign round-robin targets only for the PV-managed (non-pinned) volumes.
+	targetByPV := map[string]string{}
+	if len(pvNames) > 0 {
+		targetByPV, err = roundRobinTargetNodes(ctx, apiClient, clusterUUID, nodeUUID, pvNames)
+		if err != nil {
+			log.Error(err, "drain: no available target nodes for migration")
+			r.Recorder.Eventf(snCR, corev1.EventTypeWarning, "DrainNoMigrationTarget",
+				"drain stalled: no online storage node available as migration target for node %s — will retry when a peer node is online",
+				nodeUUID)
+			return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
+		}
 	}
 
 	createdCount := 0
-	for _, volUUID := range pvManaged {
-		pvName, ok := pvNameByVolumeUUID[volUUID]
-		if !ok {
-			continue
-		}
+	createVM := func(pvName, targetNodeUUID string) {
 		migName := drainMigrationName(nodeUUID, pvName)
 		if _, exists := existingVMNames[migName]; exists {
-			continue
+			return
 		}
 		vmig := &simplyblockv1alpha1.VolumeMigration{
 			ObjectMeta: metav1.ObjectMeta{
@@ -743,20 +785,38 @@ func (r *StorageNodeSetReconciler) createMissingVolumeMigrations(
 			},
 			Spec: simplyblockv1alpha1.VolumeMigrationSpec{
 				PVName:         pvName,
-				TargetNodeUUID: targetByPV[pvName],
+				TargetNodeUUID: targetNodeUUID,
 			},
 		}
 		if err := controllerutil.SetControllerReference(snCR, vmig, r.Scheme); err != nil {
 			log.Error(err, "drain: failed to set controller reference on VolumeMigration", "name", migName)
-			continue
+			return
 		}
 		if err := r.Create(ctx, vmig); err != nil {
 			log.Error(err, "drain: failed to create VolumeMigration", "name", migName)
-			continue
+			return
 		}
 		r.Recorder.Eventf(snCR, corev1.EventTypeNormal, "MigrationCreated",
-			"created VolumeMigration %s for PV %s", migName, pvName)
+			"created VolumeMigration %s for PV %s → node %s", migName, pvName, targetNodeUUID)
 		createdCount++
+	}
+
+	// Create VMs for PV-managed volumes using round-robin targets.
+	for _, volUUID := range pvManaged {
+		pvName, ok := pvNameByVolumeUUID[volUUID]
+		if !ok {
+			continue
+		}
+		createVM(pvName, targetByPV[pvName])
+	}
+
+	// Create VMs for pinned volumes using their annotation-specified target.
+	for _, volUUID := range pinnedWithTarget {
+		pvName, ok := pvNameByVolumeUUID[volUUID]
+		if !ok {
+			continue
+		}
+		createVM(pvName, pinnedTargetsInMigrate[volUUID])
 	}
 
 	patch := client.MergeFrom(snCR.DeepCopy())
@@ -1036,20 +1096,25 @@ func listNodeVolumes(
 // pvcFetchFailed=true when at least one PV-backed volume could not be classified
 // because its PVC GET failed transiently. Callers in Migrating must requeue on
 // pvcFetchFailed to avoid silently skipping volumes that would stall Verifying.
+// matchVolumesToPVs classifies backend volumes. For pinned volumes, pinnedTargets
+// maps volumeUUID → annotation value, which must be the target storage-node UUID.
+// An empty or non-UUID annotation value means "no specific target" and the volume
+// will block drain until the user re-pins it to a valid target node.
 func matchVolumesToPVs(
 	ctx context.Context,
 	r *StorageNodeSetReconciler,
 	volumes []webapi.VolumeInfo,
 	sysFilter *regexp.Regexp,
-) (pvManaged, pinned, unmanaged []string, pvNameByVolumeUUID map[string]string, pvcFetchFailed bool, err error) {
+) (pvManaged, pinned, unmanaged []string, pvNameByVolumeUUID map[string]string, pinnedTargets map[string]string, pvcFetchFailed bool, err error) {
 	log := logf.FromContext(ctx)
 
 	pvNameByVolumeUUID = make(map[string]string)
+	pinnedTargets = make(map[string]string)
 
 	// Build a map: volumeUUID → pvName for all simplyblock PVs.
 	var pvList corev1.PersistentVolumeList
 	if err = r.List(ctx, &pvList); err != nil {
-		return nil, nil, nil, nil, false, fmt.Errorf("matchVolumesToPVs: list PVs: %w", err)
+		return nil, nil, nil, nil, nil, false, fmt.Errorf("matchVolumesToPVs: list PVs: %w", err)
 	}
 
 	// pvByVolumeUUID maps volume UUID → PV object for simplyblock PVs.
@@ -1102,16 +1167,17 @@ func matchVolumesToPVs(
 			continue
 		}
 
-		if _, isPinned := pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolume]; isPinned {
+		if annotVal, isPinned := pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolume]; isPinned {
 			pinned = append(pinned, vol.UUID)
 			pvNameByVolumeUUID[vol.UUID] = pv.Name
+			pinnedTargets[vol.UUID] = annotVal
 		} else {
 			pvManaged = append(pvManaged, vol.UUID)
 			pvNameByVolumeUUID[vol.UUID] = pv.Name
 		}
 	}
 
-	return pvManaged, pinned, unmanaged, pvNameByVolumeUUID, pvcFetchFailed, nil
+	return pvManaged, pinned, unmanaged, pvNameByVolumeUUID, pinnedTargets, pvcFetchFailed, nil
 }
 
 // getNodeBackendStatus fetches the current status string of a single storage
@@ -1208,6 +1274,12 @@ func drainMigrationName(nodeUUID, pvName string) string {
 }
 
 // fnv32Hash returns a non-cryptographic 32-bit FNV-1a hash of s, used as a
+// uuidRe matches a canonical UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// isValidUUID reports whether s is a well-formed lowercase UUID.
+func isValidUUID(s string) bool { return uuidRe.MatchString(s) }
+
 // short disambiguation suffix in drainMigrationName.
 func fnv32Hash(s string) uint32 {
 	const (
