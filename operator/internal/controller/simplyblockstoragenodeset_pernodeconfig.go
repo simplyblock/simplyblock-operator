@@ -193,8 +193,8 @@ func buildPerNodeEnvFile(sns *simplyblockv1alpha1.StorageNodeSet, worker string)
 	fmt.Fprintf(&b, "MAX_LVOL=%s\n", utils.Int32PtrToString(eff.MaxLogicalVolumeCount))
 	fmt.Fprintf(&b, "MAX_SIZE=%s\n", utils.ShellQuote(eff.MaxSize))
 	fmt.Fprintf(&b, "CORES_PERCENTAGE=%s\n", utils.Int32PtrToString(eff.CorePercentage))
-	fmt.Fprintf(&b, "RESERVED_SYSTEM_CPUS=%s\n", utils.ShellQuote(eff.ReservedSystemCPU))
-	fmt.Fprintf(&b, "CPU_TOPOLOGY_ENABLED=%s\n", utils.BoolPtrToString(eff.EnableCpuTopology))
+	// CPU_TOPOLOGY_ENABLED and RESERVED_SYSTEM_CPUS are set as real container env
+	// vars on the DaemonSet (kubernetes.py reads them via os.environ, not env.sh).
 	fmt.Fprintf(&b, "PCI_ALLOWED=%s\n", utils.ShellQuote(strings.Join(eff.PcieAllowList, ",")))
 	fmt.Fprintf(&b, "PCI_BLOCKED=%s\n", utils.ShellQuote(strings.Join(eff.PcieDenyList, ",")))
 	fmt.Fprintf(&b, "NVME_DEVICES=%s\n", utils.ShellQuote(strings.Join(eff.DeviceNames, ",")))
