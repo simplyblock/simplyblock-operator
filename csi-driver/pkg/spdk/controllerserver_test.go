@@ -140,3 +140,110 @@ func TestPaginateSnapshots_InvalidToken(t *testing.T) {
 		}
 	}
 }
+
+func topologyWithSegments(segments map[string]string) *csi.Topology {
+	return &csi.Topology{Segments: segments}
+}
+
+func TestCoLocatedHostID(t *testing.T) {
+	const clusterID = "cluster-a-uuid"
+	const uuid = "20686642-a53d-41e9-b1db-99c1e450bd31"
+
+	t.Run("nil requirements", func(t *testing.T) {
+		if got := coLocatedHostID(nil, clusterID); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+
+	t.Run("no matching segment", func(t *testing.T) {
+		req := &csi.TopologyRequirement{
+			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
+				topologyKeyZoneStable: "us-east-1a",
+			})},
+		}
+		if got := coLocatedHostID(req, clusterID); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+
+	t.Run("preferred segment matches", func(t *testing.T) {
+		req := &csi.TopologyRequirement{
+			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
+				topologyKeyZoneStable:                   "us-east-1a",
+				topologyKeyStorageNodeUUIDPrefix + uuid: clusterID + ".0",
+			})},
+		}
+		if got := coLocatedHostID(req, clusterID); got != uuid {
+			t.Errorf("got %q, want %q", got, uuid)
+		}
+	})
+
+	t.Run("falls back to requisite when preferred has no match", func(t *testing.T) {
+		req := &csi.TopologyRequirement{
+			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
+				topologyKeyZoneStable: "us-east-1a",
+			})},
+			Requisite: []*csi.Topology{topologyWithSegments(map[string]string{
+				topologyKeyStorageNodeUUIDPrefix + uuid: clusterID + ".0",
+			})},
+		}
+		if got := coLocatedHostID(req, clusterID); got != uuid {
+			t.Errorf("got %q, want %q", got, uuid)
+		}
+	})
+
+	t.Run("preferred takes precedence over requisite", func(t *testing.T) {
+		const otherUUID = "429448c5-83c0-447d-9546-dd40ac2b20c1"
+		req := &csi.TopologyRequirement{
+			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
+				topologyKeyStorageNodeUUIDPrefix + uuid: clusterID + ".0",
+			})},
+			Requisite: []*csi.Topology{topologyWithSegments(map[string]string{
+				topologyKeyStorageNodeUUIDPrefix + otherUUID: clusterID + ".0",
+			})},
+		}
+		if got := coLocatedHostID(req, clusterID); got != uuid {
+			t.Errorf("got %q, want %q (preferred should win)", got, uuid)
+		}
+	})
+
+	t.Run("segment from a different cluster is skipped", func(t *testing.T) {
+		req := &csi.TopologyRequirement{
+			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
+				topologyKeyStorageNodeUUIDPrefix + uuid: "some-other-cluster-uuid.0",
+			})},
+		}
+		if got := coLocatedHostID(req, clusterID); got != "" {
+			t.Errorf("got %q, want empty (cluster mismatch)", got)
+		}
+	})
+
+	t.Run("multiple sockets on one worker: lowest ordinal wins", func(t *testing.T) {
+		const socket0UUID = "11111111-1111-1111-1111-111111111111"
+		const socket1UUID = "22222222-2222-2222-2222-222222222222"
+		req := &csi.TopologyRequirement{
+			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
+				topologyKeyStorageNodeUUIDPrefix + socket1UUID: clusterID + ".1",
+				topologyKeyStorageNodeUUIDPrefix + socket0UUID: clusterID + ".0",
+			})},
+		}
+		// Run repeatedly — the original prototype picked via unordered map
+		// iteration, so a flaky result here would indicate a regression.
+		for i := 0; i < 20; i++ {
+			if got := coLocatedHostID(req, clusterID); got != socket0UUID {
+				t.Fatalf("got %q, want %q (lowest ordinal)", got, socket0UUID)
+			}
+		}
+	})
+
+	t.Run("malformed ordinal is ignored", func(t *testing.T) {
+		req := &csi.TopologyRequirement{
+			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
+				topologyKeyStorageNodeUUIDPrefix + uuid: clusterID + ".not-a-number",
+			})},
+		}
+		if got := coLocatedHostID(req, clusterID); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+}

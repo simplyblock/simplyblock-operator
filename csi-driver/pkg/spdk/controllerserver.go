@@ -68,6 +68,19 @@ const (
 	topologyKeyZoneStable   = "topology.kubernetes.io/zone"
 	topologyKeyZoneBeta     = "failure-domain.beta.kubernetes.io/zone"
 	topologyKeyRegionStable = "topology.kubernetes.io/region"
+
+	// topologyKeyStorageNodeUUIDPrefix mirrors the Kubernetes Node label the
+	// simplyblock-operator writes for every storage-node instance co-located on
+	// that worker (StorageNodeSetReconciler.labelWorkerNodes, keyed per-UUID since
+	// a worker can host more than one instance on NUMA/multi-socket hosts). The CSI
+	// node plugin forwards it into CSI topology (nodeserver.go buildAccessibleTopology)
+	// so createVolume can place a new volume on the storage node co-located with
+	// wherever the consuming Pod's Kubernetes node/pod affinity schedules it. The
+	// label value is "<clusterUUID>.<socketOrdinal>" — cluster-scoped so a worker
+	// hosting nodes from more than one SimplyBlock cluster can't leak a UUID across
+	// clusters, and ordinal-tagged so multiple instances on one worker resolve
+	// deterministically (lowest ordinal wins) instead of via unordered map iteration.
+	topologyKeyStorageNodeUUIDPrefix = "simplyblock.io/storage-node-uuid."
 )
 
 type controllerServer struct {
@@ -215,6 +228,55 @@ func nodeNameFromTopology(topos []*csi.Topology) string {
 		}
 	}
 	return "unknown"
+}
+
+// coLocatedHostID extracts the storage-node UUID co-located with the consuming
+// Pod's scheduled worker, scoped to clusterID, from CSI topology requirements —
+// i.e. a topologyKeyStorageNodeUUIDPrefix-prefixed segment written by the
+// simplyblock-operator onto the Kubernetes Node the Pod was scheduled to (see
+// StorageNodeSetReconciler.labelWorkerNodes) and advertised via
+// nodeserver.buildAccessibleTopology. Preferred segments are checked first, then
+// Requisite, matching nodeNameFromTopology's fallback order. When a worker hosts
+// more than one storage-node instance (NUMA sockets), the lowest ordinal wins —
+// a deterministic tie-break, not true socket-level affinity, which isn't
+// resolvable at CreateVolume time (kubelet's Topology Manager pins a Pod to a
+// NUMA socket only at container start). Returns "" if no segment matches.
+func coLocatedHostID(topoReq *csi.TopologyRequirement, clusterID string) string {
+	if topoReq == nil {
+		return ""
+	}
+	find := func(topologies []*csi.Topology) string {
+		bestUUID := ""
+		bestOrdinal := 0
+		found := false
+		for _, topo := range topologies {
+			for key, val := range topo.GetSegments() {
+				if !strings.HasPrefix(key, topologyKeyStorageNodeUUIDPrefix) {
+					continue
+				}
+				uuid := key[len(topologyKeyStorageNodeUUIDPrefix):]
+				if uuid == "" {
+					continue
+				}
+				labelCluster, ordinalStr, ok := strings.Cut(val, ".")
+				if !ok || labelCluster != clusterID {
+					continue
+				}
+				ordinal, err := strconv.Atoi(ordinalStr)
+				if err != nil {
+					continue
+				}
+				if !found || ordinal < bestOrdinal {
+					bestUUID, bestOrdinal, found = uuid, ordinal, true
+				}
+			}
+		}
+		return bestUUID
+	}
+	if uuid := find(topoReq.GetPreferred()); uuid != "" {
+		return uuid
+	}
+	return find(topoReq.GetRequisite())
 }
 
 func matchTopologyWithRegionMap(topo *csi.Topology, regionMap map[string]string) *clusterSelection {
@@ -816,6 +878,17 @@ func (cs *controllerServer) createVolume(
 	createVolReq, err := prepareCreateVolumeReq(ctx, req, capacityBytes)
 	if err != nil {
 		return nil, err
+	}
+
+	// Co-locate the volume's primary with the consuming Pod's scheduled worker
+	// (node-affinity placement) when no explicit host_id was already set from a
+	// PVC annotation — an explicit annotation is a deliberate override and wins.
+	if createVolReq.HostID == "" {
+		if coLocated := coLocatedHostID(req.GetAccessibilityRequirements(), sbclient.ClusterID()); coLocated != "" {
+			klog.Infof("createVolume: co-locating volume %s with storage node %s from pod scheduling topology",
+				req.GetName(), coLocated)
+			createVolReq.HostID = coLocated
+		}
 	}
 
 	// Store the effective QoS values into VolumeContext so the PV spec records

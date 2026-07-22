@@ -160,6 +160,9 @@ func (ns *nodeServer) buildAccessibleTopology(ctx context.Context) map[string]st
 		if strings.HasPrefix(key, "simplyblock.io/pool.") && val == "allowed" {
 			segments[key] = val
 		}
+		if strings.HasPrefix(key, topologyKeyStorageNodeUUIDPrefix) {
+			segments[key] = val
+		}
 	}
 
 	if len(segments) == 0 {

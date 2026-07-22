@@ -158,7 +158,7 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	apiClient := webapi.NewClient()
 
-	if err := r.labelWorkerNodes(ctx, snCR); err != nil {
+	if err := r.labelWorkerNodes(ctx, snCR, clusterUUID); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -432,13 +432,34 @@ func (r *StorageNodeSetReconciler) ensureFinalizer(
 	return true, r.Update(ctx, snCR)
 }
 
-func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *simplyblockv1alpha1.StorageNodeSet) error {
+// storageNodeUUIDLabelPrefix marks a worker Node with the SimplyBlock storage-node
+// UUID(s) co-located on it, one label per instance (a worker can host more than one
+// storage node — see StorageNodeSetSpec.NodesPerSocket/SocketsToUse). The label value
+// is "<clusterUUID>.<socketIndex>" (dot-separated — Kubernetes label values disallow
+// ":", and UUIDs never contain "." so parsing is unambiguous), cluster-scoping the
+// entry so a CSI controller resolving host_id from this topology never picks a
+// storage node belonging to a different SimplyBlock cluster co-located on the same
+// worker. Consumed by the CSI node plugin (csi-driver/pkg/spdk/nodeserver.go) to
+// advertise CSI topology, and by the CSI controller (createVolume) to co-locate a
+// new volume's primary with whichever worker the consuming Pod is scheduled to.
+// Keep this literal in sync with topologyKeyStorageNodeUUIDPrefix in csi-driver.
+const storageNodeUUIDLabelPrefix = "simplyblock.io/storage-node-uuid."
+
+func (r *StorageNodeSetReconciler) labelWorkerNodes(
+	ctx context.Context,
+	sn *simplyblockv1alpha1.StorageNodeSet,
+	clusterUUID string,
+) error {
 	// Collect all workers: spec.workerNodes plus any manually created StorageNode CRs
 	// that reference this StorageNodeSet but are not in spec.workerNodes.
 	workers := make(map[string]struct{}, len(sn.Spec.WorkerNodes))
 	for _, w := range sn.Spec.WorkerNodes {
 		workers[w] = struct{}{}
 	}
+
+	// uuidsByWorker maps worker -> storage-node UUID -> label value, built from every
+	// owned StorageNode CR that has come online at least once (Status.UUID set).
+	uuidsByWorker := make(map[string]map[string]string)
 
 	var snList simplyblockv1alpha1.StorageNodeList
 	if err := r.List(ctx, &snList,
@@ -447,6 +468,18 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *sim
 	); err == nil {
 		for _, snCR := range snList.Items {
 			workers[snCR.Spec.WorkerNode] = struct{}{}
+
+			if snCR.Status.UUID == "" {
+				continue
+			}
+			ordinal := int32(0)
+			if snCR.Spec.SocketIndex != nil {
+				ordinal = *snCR.Spec.SocketIndex
+			}
+			if uuidsByWorker[snCR.Spec.WorkerNode] == nil {
+				uuidsByWorker[snCR.Spec.WorkerNode] = map[string]string{}
+			}
+			uuidsByWorker[snCR.Spec.WorkerNode][snCR.Status.UUID] = fmt.Sprintf("%s.%d", clusterUUID, ordinal)
 		}
 	}
 
@@ -470,12 +503,38 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *sim
 			node.Labels = map[string]string{}
 		}
 
-		if node.Labels[key] == value && node.Labels[snsLabelKey] == snsLabelVal {
+		changed := false
+		if node.Labels[key] != value {
+			node.Labels[key] = value
+			changed = true
+		}
+		if node.Labels[snsLabelKey] != snsLabelVal {
+			node.Labels[snsLabelKey] = snsLabelVal
+			changed = true
+		}
+
+		desired := uuidsByWorker[nodeName]
+		for k, v := range node.Labels {
+			if !strings.HasPrefix(k, storageNodeUUIDLabelPrefix) {
+				continue
+			}
+			if desired[strings.TrimPrefix(k, storageNodeUUIDLabelPrefix)] != v {
+				delete(node.Labels, k)
+				changed = true
+			}
+		}
+		for uuid, v := range desired {
+			k := storageNodeUUIDLabelPrefix + uuid
+			if node.Labels[k] != v {
+				node.Labels[k] = v
+				changed = true
+			}
+		}
+
+		if !changed {
 			continue
 		}
 
-		node.Labels[key] = value
-		node.Labels[snsLabelKey] = snsLabelVal
 		if err := r.Update(ctx, &node); err != nil {
 			return err
 		}
