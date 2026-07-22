@@ -7,7 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
@@ -43,7 +43,7 @@ func newOpsReconciler(t *testing.T, objects ...client.Object) *StorageNodeOpsRec
 	return &StorageNodeOpsReconciler{
 		Client:   cl,
 		Scheme:   scheme,
-		Recorder: record.NewFakeRecorder(16),
+		Recorder: events.NewFakeRecorder(16),
 	}
 }
 

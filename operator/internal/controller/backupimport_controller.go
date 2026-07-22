@@ -29,7 +29,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -55,7 +55,7 @@ const (
 type BackupImportReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
+	Recorder  events.EventRecorder
 	APIClient *webapi.Client
 }
 
@@ -91,7 +91,7 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending, err.Error()); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
-		r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportSourceClusterLookupError,
+		r.Recorder.Eventf(importCR, nil, corev1.EventTypeWarning, eventReasonImportSourceClusterLookupError, eventReasonImportSourceClusterLookupError,
 			"Failed to resolve source cluster UUID: %v", err)
 		return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
 	}
@@ -101,7 +101,7 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending, err.Error()); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
-		r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportTargetClusterLookupError,
+		r.Recorder.Eventf(importCR, nil, corev1.EventTypeWarning, eventReasonImportTargetClusterLookupError, eventReasonImportTargetClusterLookupError,
 			"Failed to resolve target cluster UUID: %v", err)
 		return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
 	}
@@ -134,7 +134,7 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				fmt.Sprintf("Export failed: %v", err)); patchErr != nil {
 				return ctrl.Result{}, patchErr
 			}
-			r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportExportFailed,
+			r.Recorder.Eventf(importCR, nil, corev1.EventTypeWarning, eventReasonImportExportFailed, eventReasonImportExportFailed,
 				"Failed to export backup from source cluster: %v", err)
 			return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
 		}
@@ -151,7 +151,7 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				fmt.Sprintf("Import failed: %v", err)); patchErr != nil {
 				return ctrl.Result{}, patchErr
 			}
-			r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportFailed,
+			r.Recorder.Eventf(importCR, nil, corev1.EventTypeWarning, eventReasonImportFailed, eventReasonImportFailed,
 				"Failed to import backup into target cluster: %v", err)
 			return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
 		}
@@ -173,7 +173,7 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				fmt.Sprintf("Failed to create StorageBackup CR: %v", err)); patchErr != nil {
 				return ctrl.Result{}, patchErr
 			}
-			r.Recorder.Eventf(importCR, corev1.EventTypeWarning, eventReasonImportStorageBackupCreateFailed,
+			r.Recorder.Eventf(importCR, nil, corev1.EventTypeWarning, eventReasonImportStorageBackupCreateFailed, eventReasonImportStorageBackupCreateFailed,
 				"Failed to create StorageBackup CR: %v", err)
 			return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
 		}

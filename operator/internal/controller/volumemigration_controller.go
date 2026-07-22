@@ -19,7 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -40,7 +40,7 @@ import (
 type VolumeMigrationReconciler struct {
 	client.Client
 	Scheme     *runtime.Scheme
-	Recorder   record.EventRecorder
+	Recorder   events.EventRecorder
 	apiClient  *webapi.Client
 	coreClient corev1client.CoreV1Interface
 	// apiReader is an uncached reader (mgr.GetAPIReader) used for the
@@ -162,7 +162,7 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 		return ctrl.Result{}, fmt.Errorf("patch status Validating: %w", err)
 	}
 
-	r.Recorder.Eventf(vm, corev1.EventTypeNormal, "MigrationCreated",
+	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationCreated", "MigrationCreated",
 		"Migration %s created: validating %d connection(s) to node %s",
 		migration.ID, len(conns), vm.Spec.TargetNodeUUID)
 	return ctrl.Result{Requeue: true}, nil
@@ -200,7 +200,7 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 		// node once it is Running.
 		log.Info("Consumer pod not Running yet; waiting before NVMe path validation",
 			"pv", vm.Spec.PVName, "migration", vm.Status.MigrationUUID)
-		r.Recorder.Eventf(vm, corev1.EventTypeNormal, "WaitingForConsumer",
+		r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "WaitingForConsumer", "WaitingForConsumer",
 			"PV %s has a consumer pod that is not Running yet; waiting before validation", vm.Spec.PVName)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	case err != nil:
@@ -213,7 +213,7 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 		// Skip validation and continue the migration directly.
 		log.Info("No consumer for volume; skipping NVMe path validation",
 			"pv", vm.Spec.PVName, "migration", vm.Status.MigrationUUID)
-		r.Recorder.Eventf(vm, corev1.EventTypeNormal, "ValidationSkipped",
+		r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "ValidationSkipped", "ValidationSkipped",
 			"No consumer for PV %s; skipping NVMe path validation", vm.Spec.PVName)
 		return r.performMigration(ctx, vm)
 	}
@@ -356,7 +356,7 @@ func (r *VolumeMigrationReconciler) performMigration(
 		return ctrl.Result{}, fmt.Errorf("patch status Running: %w", err)
 	}
 
-	r.Recorder.Eventf(vm, corev1.EventTypeNormal, "MigrationStarted",
+	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationStarted", "MigrationStarted",
 		"Migration %s started: volume %s → node %s",
 		vm.Status.MigrationUUID, vm.Status.VolumeUUID, vm.Spec.TargetNodeUUID)
 	return ctrl.Result{RequeueAfter: vmigration.MigrationInitialDelay}, nil
@@ -619,7 +619,7 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 	}
 
 	if result.Stuck {
-		r.Recorder.Eventf(vm, corev1.EventTypeWarning, "MigrationStuck",
+		r.Recorder.Eventf(vm, nil, corev1.EventTypeWarning, "MigrationStuck", "MigrationStuck",
 			"Migration %s has not completed after 30 minutes (phase: %s, status: %s)",
 			vm.Status.MigrationUUID, result.Migration.Phase, result.Migration.Status)
 	}
@@ -638,7 +638,7 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 		if err := r.Status().Patch(ctx, vm, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch status Completed: %w", err)
 		}
-		r.Recorder.Eventf(vm, corev1.EventTypeNormal, "MigrationCompleted",
+		r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationCompleted", "MigrationCompleted",
 			"Migration %s completed successfully", vm.Status.MigrationUUID)
 	} else {
 		vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseFailed
@@ -646,7 +646,7 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 		if err := r.Status().Patch(ctx, vm, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch status Failed: %w", err)
 		}
-		r.Recorder.Eventf(vm, corev1.EventTypeWarning, "MigrationFailed",
+		r.Recorder.Eventf(vm, nil, corev1.EventTypeWarning, "MigrationFailed", "MigrationFailed",
 			"Migration %s failed: %s", vm.Status.MigrationUUID, result.Migration.ErrorMessage)
 	}
 	return ctrl.Result{}, nil
@@ -683,7 +683,7 @@ func (r *VolumeMigrationReconciler) reconcileAbort(
 	if err := r.Status().Patch(ctx, vm, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch status Aborted: %w", err)
 	}
-	r.Recorder.Eventf(vm, corev1.EventTypeNormal, "MigrationAborted",
+	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationAborted", "MigrationAborted",
 		"Migration %s cancelled", vm.Status.MigrationUUID)
 	return ctrl.Result{}, nil
 }
@@ -700,7 +700,7 @@ func (r *VolumeMigrationReconciler) setFailed(
 	if err := r.Status().Patch(ctx, vm, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch status Failed: %w", err)
 	}
-	r.Recorder.Event(vm, corev1.EventTypeWarning, "MigrationFailed", reason)
+	r.Recorder.Eventf(vm, nil, corev1.EventTypeWarning, "MigrationFailed", "MigrationFailed", "%s", reason)
 	return ctrl.Result{}, nil
 }
 

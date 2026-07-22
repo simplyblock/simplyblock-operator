@@ -28,7 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -66,7 +66,7 @@ const (
 type BackupPolicyReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
+	Recorder  events.EventRecorder
 	APIClient *webapi.Client
 }
 
@@ -125,7 +125,7 @@ func (r *BackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, policyCR.Namespace, policyCR.Spec.ClusterName)
 	if err != nil {
-		r.Recorder.Eventf(policyCR, corev1.EventTypeWarning, eventReasonPolicyClusterLookupError,
+		r.Recorder.Eventf(policyCR, nil, corev1.EventTypeWarning, eventReasonPolicyClusterLookupError, eventReasonPolicyClusterLookupError,
 			"Failed to resolve cluster UUID for %s: %v", policyCR.Spec.ClusterName, err)
 		if patchErr := r.patchStatus(ctx, policyCR, func(s *simplyblockv1alpha1.BackupPolicyStatus) {
 			s.Phase = simplyblockv1alpha1.BackupPolicyPhasePending
@@ -143,7 +143,7 @@ func (r *BackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	policyID, err := r.ensurePolicy(ctx, apiClient, clusterUUID, policyCR)
 	if err != nil {
 		log.Error(err, "Failed to ensure backup policy in backend")
-		r.Recorder.Eventf(policyCR, corev1.EventTypeWarning, eventReasonPolicyCreateFailed,
+		r.Recorder.Eventf(policyCR, nil, corev1.EventTypeWarning, eventReasonPolicyCreateFailed, eventReasonPolicyCreateFailed,
 			"Failed to create backup policy: %v", err)
 		if patchErr := r.patchStatus(ctx, policyCR, func(s *simplyblockv1alpha1.BackupPolicyStatus) {
 			s.Phase = simplyblockv1alpha1.BackupPolicyPhaseFailed
@@ -190,7 +190,7 @@ func (r *BackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	for _, a := range toAttach {
 		if attachErr := r.attachPolicy(ctx, apiClient, clusterUUID, policyID, a.LvolID); attachErr != nil {
 			log.Error(attachErr, "Failed to attach policy to lvol", "lvolID", a.LvolID, "pvc", a.PVCName)
-			r.Recorder.Eventf(policyCR, corev1.EventTypeWarning, eventReasonPolicyAttachFailed,
+			r.Recorder.Eventf(policyCR, nil, corev1.EventTypeWarning, eventReasonPolicyAttachFailed, eventReasonPolicyAttachFailed,
 				"Failed to attach policy to lvol %s (PVC %s/%s): %v", a.LvolID, a.PVCNamespace, a.PVCName, attachErr)
 			attachErrors = append(attachErrors, fmt.Sprintf("attach lvol %s: %v", a.LvolID, attachErr))
 		} else {
@@ -202,7 +202,7 @@ func (r *BackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	for _, d := range toDetach {
 		if detachErr := r.detachPolicy(ctx, apiClient, clusterUUID, policyID, d.LvolID); detachErr != nil {
 			log.Error(detachErr, "Failed to detach policy from lvol", "lvolID", d.LvolID, "pvc", d.PVCName)
-			r.Recorder.Eventf(policyCR, corev1.EventTypeWarning, eventReasonPolicyDetachFailed,
+			r.Recorder.Eventf(policyCR, nil, corev1.EventTypeWarning, eventReasonPolicyDetachFailed, eventReasonPolicyDetachFailed,
 				"Failed to detach policy from lvol %s (PVC %s/%s): %v", d.LvolID, d.PVCNamespace, d.PVCName, detachErr)
 			attachErrors = append(attachErrors, fmt.Sprintf("detach lvol %s: %v", d.LvolID, detachErr))
 		} else {
@@ -305,7 +305,7 @@ func (r *BackupPolicyReconciler) handleDeletion(
 			if err := r.detachPolicy(ctx, apiClient, clusterUUID, policyID, a.LvolID); err != nil {
 				log.Error(err, "Failed to detach policy from lvol during deletion",
 					"lvolID", a.LvolID, "pvc", a.PVCName)
-				r.Recorder.Eventf(policyCR, corev1.EventTypeWarning, eventReasonPolicyDetachFailed,
+				r.Recorder.Eventf(policyCR, nil, corev1.EventTypeWarning, eventReasonPolicyDetachFailed, eventReasonPolicyDetachFailed,
 					"Failed to detach policy from lvol %s during deletion: %v", a.LvolID, err)
 				return ctrl.Result{RequeueAfter: backupPolicyReconcileRequeue}, nil
 			}
@@ -316,13 +316,13 @@ func (r *BackupPolicyReconciler) handleDeletion(
 		body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 		if err != nil {
 			log.Error(err, "Failed to delete backup policy from backend")
-			r.Recorder.Eventf(policyCR, corev1.EventTypeWarning, eventReasonPolicyDeleteFailed,
+			r.Recorder.Eventf(policyCR, nil, corev1.EventTypeWarning, eventReasonPolicyDeleteFailed, eventReasonPolicyDeleteFailed,
 				"Failed to delete backup policy %s: %v", policyID, err)
 			return ctrl.Result{RequeueAfter: backupPolicyReconcileRequeue}, nil
 		}
 		if status >= 300 && status != http.StatusNotFound {
 			log.Info("Backup policy delete returned non-success status", "status", status, "body", string(body))
-			r.Recorder.Eventf(policyCR, corev1.EventTypeWarning, eventReasonPolicyDeleteFailed,
+			r.Recorder.Eventf(policyCR, nil, corev1.EventTypeWarning, eventReasonPolicyDeleteFailed, eventReasonPolicyDeleteFailed,
 				"Backup policy delete returned status %d: %s", status, string(body))
 			return ctrl.Result{RequeueAfter: backupPolicyReconcileRequeue}, nil
 		}

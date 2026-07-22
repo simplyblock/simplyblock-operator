@@ -29,7 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -53,7 +53,7 @@ const (
 type StorageNodeReconciler struct {
 	client.Client
 	Scheme           *runtime.Scheme
-	Recorder         record.EventRecorder
+	Recorder         events.EventRecorder
 	TLSEnabled       bool
 	TLSMutualEnabled bool
 }
@@ -321,7 +321,7 @@ func (r *StorageNodeReconciler) provisionNode(
 
 	// Guard: failure domain must be set if the feature is enabled.
 	if err := r.checkFailureDomain(ctx, sn, sns); err != nil {
-		r.Recorder.Event(sn, "Warning", "FailureDomainMissing", err.Error())
+		r.Recorder.Eventf(sn, nil, "Warning", "FailureDomainMissing", "FailureDomainMissing", "%s", err.Error())
 		log.Info("blocking node-add: "+err.Error(), "node", sn.Name)
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}

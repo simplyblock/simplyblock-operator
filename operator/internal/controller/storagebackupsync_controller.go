@@ -23,7 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -50,7 +50,7 @@ const (
 type StorageBackupSyncReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
+	Recorder  events.EventRecorder
 	APIClient *webapi.Client
 }
 
@@ -147,7 +147,7 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		if err := r.Create(ctx, imported); err != nil {
 			log.Error(err, "Failed to create StorageBackup CR for imported backup",
 				"backupID", bp.ID, "cluster", clusterCR.Name)
-			r.Recorder.Eventf(clusterCR, "Warning", "StorageBackupImportFailed",
+			r.Recorder.Eventf(clusterCR, nil, "Warning", "StorageBackupImportFailed", "StorageBackupImportFailed",
 				"Failed to import backend backup %q: %v", bp.ID, err)
 			continue
 		}
@@ -185,7 +185,7 @@ func (r *StorageBackupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		log.Info("Imported backend backup as StorageBackup CR",
 			"backupID", bp.ID, "pvc", pvcDescr, "cluster", clusterCR.Name)
-		r.Recorder.Eventf(clusterCR, "Normal", "StorageBackupImported",
+		r.Recorder.Eventf(clusterCR, nil, "Normal", "StorageBackupImported", "StorageBackupImported",
 			"Imported backend backup %q (PVC %s) as StorageBackup CR", bp.ID, pvcDescr)
 	}
 

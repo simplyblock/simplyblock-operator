@@ -27,7 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -68,7 +68,7 @@ const (
 type StorageClusterReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
+	Recorder  events.EventRecorder
 	Namespace string // operator namespace
 }
 
@@ -160,7 +160,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 			err = fmt.Errorf("unexpected status %d", status)
 		}
 		log.Error(err, "control plane not ready", "status", status, "response", string(body))
-		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonFDBNotReady, "Control plane readiness check failed (status=%d): %s", status, string(body))
+		r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeWarning, eventReasonFDBNotReady, eventReasonFDBNotReady, "Control plane readiness check failed (status=%d): %s", status, string(body))
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -204,14 +204,14 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	backupConfig, err := r.buildBackupConfig(ctx, clusterCR)
 	if err != nil {
 		log.Error(err, "Failed to resolve backup credentials", "secretName", clusterCR.Spec.Backup.CredentialsSecretRef.Name)
-		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonBackupCredentialsError, "Failed to resolve backup credentials: %v", err)
+		r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeWarning, eventReasonBackupCredentialsError, eventReasonBackupCredentialsError, "Failed to resolve backup credentials: %v", err)
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	}
 
 	vaultConfig, err := buildHashicorpVaultConfig(clusterCR.Spec.HashicorpVaultSettings)
 	if err != nil {
 		log.Error(err, "Invalid HashiCorp Vault configuration")
-		r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonInvalidConfig, "Invalid HashiCorp Vault configuration: %v", err)
+		r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeWarning, eventReasonInvalidConfig, eventReasonInvalidConfig, "Invalid HashiCorp Vault configuration: %v", err)
 		return ctrl.Result{}, err
 	}
 
@@ -260,7 +260,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		// Try to look it up by name and adopt it instead of failing.
 		existing, lookupErr := utils.GetClusterByName(ctx, apiClient, clusterCR.Name)
 		if lookupErr != nil || existing == nil {
-			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, eventReasonClusterCreationFailed, "Cluster creation failed (status=%d): %s", status, string(body))
+			r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeWarning, eventReasonClusterCreationFailed, eventReasonClusterCreationFailed, "Cluster creation failed (status=%d): %s", status, string(body))
 
 			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 		}

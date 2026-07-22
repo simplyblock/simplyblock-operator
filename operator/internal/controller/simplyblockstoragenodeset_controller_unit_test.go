@@ -21,7 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -131,7 +131,7 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 			t.Fatalf("expected labelWorkerNodes to return an error for a missing node")
 		}
 
-		recorder := r.Recorder.(*record.FakeRecorder)
+		recorder := r.Recorder.(*events.FakeRecorder)
 		select {
 		case event := <-recorder.Events:
 			if !strings.Contains(event, "WorkerNodeNotFound") || !strings.Contains(event, "vm12.simplyblock4.localdomain") {
@@ -1330,7 +1330,7 @@ func newStorageNodeSetStateTestReconciler(
 		Client:    cl,
 		Scheme:    scheme,
 		Namespace: testOperatorNamespace,
-		Recorder:  record.NewFakeRecorder(32),
+		Recorder:  events.NewFakeRecorder(32),
 	}
 }
 
