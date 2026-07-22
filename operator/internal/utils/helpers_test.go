@@ -172,6 +172,7 @@ func TestParseSizeAndHumanBytes(t *testing.T) {
 	got := ParseSizeInt64("20G", "si/iec", "", false)
 	if got == nil {
 		t.Fatalf("ParseSizeInt64 got nil want 20000000000")
+		return
 	}
 	if *got != 20_000_000_000 {
 		t.Fatalf("ParseSizeInt64 got %v want 20000000000", *got)
