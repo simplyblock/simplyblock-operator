@@ -93,17 +93,9 @@ spec:
                 description: Force enables forced execution where the backend supports
                   it.
                 type: boolean
-              newSsdPcie:
-                description: |-
-                  NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
-                  during a migration. Passed through to the control-plane restart as
-                  new_ssd_pcie. Only applicable when action=migrate.
-                items:
-                  type: string
-                type: array
               reattachVolume:
                 description: |-
-                  ReattachVolume reattaches volumes during restart.
+                  ReattachVolume reattaches volumes during the node restart.
                   Applicable when action=restart or action=migrate.
                 type: boolean
               storageNodeRef:
@@ -115,8 +107,11 @@ spec:
                   rule: self == oldSelf
               targetWorkerNode:
                 description: |-
-                  TargetWorkerNode is the Kubernetes worker hostname to relocate the storage
-                  node onto. Required when action=migrate; ignored otherwise. Immutable.
+                  TargetWorkerNode is the Kubernetes worker hostname the storage node is
+                  migrated onto. Required (and only used) when action=migrate. The source
+                  node is drained and removed exactly as for action=remove, then the owning
+                  StorageNodeSet is re-pointed from the current worker to this one so a fresh
+                  storage node is provisioned on the target host. Immutable.
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -161,10 +156,6 @@ spec:
                 - Migrating
                 - Verifying
                 - Removing
-                - Preparing
-                - Restarting
-                - Promoting
-                - Rebinding
                 type: string
               triggered:
                 description: |-

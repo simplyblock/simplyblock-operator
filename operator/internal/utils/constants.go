@@ -62,9 +62,10 @@ const (
 	// applied in config/default. The serving certificate is provisioned into
 	// WebhookCertDir at runtime — self-signed via open-policy-agent/cert-controller,
 	// or from the cert-manager-issued Secret when SB_TLS_PROVIDER=cert-manager.
-	WebhookServiceName       = "simplyblock-operator-webhook-service"
-	WebhookConfigurationName = "simplyblock-operator-mutating-webhook-configuration"
-	WebhookServerCertSecret  = "webhook-server-cert"
+	WebhookServiceName                 = "simplyblock-operator-webhook-service"
+	WebhookConfigurationName           = "simplyblock-operator-mutating-webhook-configuration"
+	WebhookValidatingConfigurationName = "simplyblock-operator-validating-webhook-configuration"
+	WebhookServerCertSecret            = "webhook-server-cert"
 
 	// WebhookCertDir is where the serving cert (tls.crt/tls.key) is written and
 	// watched. This is the default location controller-runtime's webhook server

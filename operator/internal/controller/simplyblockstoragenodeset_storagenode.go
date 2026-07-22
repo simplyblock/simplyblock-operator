@@ -32,11 +32,11 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -92,6 +92,19 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 	// or nodesPerSocket reduced). Manually created CRs (no OwnerReference) are kept.
 	r.deleteStaleStorageNodeCRs(ctx, sns, owned.Items, expected)
 
+	// Index owned CRs by (worker, ordinal). Since the CR name is now a random id
+	// (simplyblock-node-<id>) rather than derived from the worker/socket, a slot
+	// is identified by its spec fields, not by a computable name.
+	existingBySlot := make(map[workerOrdinal]*simplyblockv1alpha1.StorageNode, len(owned.Items))
+	for i := range owned.Items {
+		sn := &owned.Items[i]
+		ord := 0
+		if sn.Spec.SocketIndex != nil {
+			ord = int(*sn.Spec.SocketIndex)
+		}
+		existingBySlot[workerOrdinal{sn.Spec.WorkerNode, ord}] = sn
+	}
+
 	// Determine which workers host FDB pods — added sequentially.
 	fdbWorkers := r.fdbWorkerSet(ctx, sns)
 
@@ -125,7 +138,8 @@ func (r *StorageNodeSetReconciler) reconcileStorageNodeCRs(
 		for si, socket := range sockets {
 			for ni := 0; ni < nodesPerSocket; ni++ {
 				globalOrdinal := si*nodesPerSocket + ni
-				advanced := r.reconcileOneStorageNodeCR(ctx, sns, worker, socket, ni, globalOrdinal, owned.Items, fdbWorkers, fdbInFlight)
+				existing := existingBySlot[workerOrdinal{worker, globalOrdinal}]
+				advanced := r.reconcileOneStorageNodeCR(ctx, sns, existing, worker, socket, ni, globalOrdinal, fdbWorkers, fdbInFlight)
 				if advanced {
 					fdbInFlight = true
 				}
@@ -174,45 +188,31 @@ func (r *StorageNodeSetReconciler) deleteStaleStorageNodeCRs(
 
 // reconcileOneStorageNodeCR handles the FDB gate check, existedBefore check, and
 // ensureStorageNodeCR call for a single (worker, socket, nodeIdx, globalOrdinal) tuple.
+// existing is the CR already occupying this (worker, globalOrdinal) slot, or nil.
 // It returns true if a brand-new FDB CR was just created (so the caller can set
 // fdbInFlight=true to defer subsequent FDB workers).
 func (r *StorageNodeSetReconciler) reconcileOneStorageNodeCR(
 	ctx context.Context,
 	sns *simplyblockv1alpha1.StorageNodeSet,
+	existing *simplyblockv1alpha1.StorageNode,
 	worker, socket string,
 	nodeIdx, globalOrdinal int,
-	ownedItems []simplyblockv1alpha1.StorageNode,
 	fdbWorkers map[string]bool,
 	fdbInFlight bool,
 ) (newFDBInFlight bool) {
 	log := logf.FromContext(ctx)
 
-	crName := storageNodeCRName(sns.Name, worker, socket, nodeIdx)
-
-	if fdbWorkers[worker] && fdbInFlight {
-		alreadyExists := false
-		for _, sn := range ownedItems {
-			if sn.Name == crName {
-				alreadyExists = true
-				break
-			}
-		}
-		if !alreadyExists {
-			log.Info("FDB worker: deferring StorageNode CR creation until previous FDB node is online",
-				"worker", worker, "socket", socket, "nodeIdx", nodeIdx)
-			return false
-		}
+	// The CR name is a random id (simplyblock-node-<id>), so a slot is identified
+	// by its spec fields (worker, globalOrdinal) via existing, not by name.
+	if fdbWorkers[worker] && fdbInFlight && existing == nil {
+		log.Info("FDB worker: deferring StorageNode CR creation until previous FDB node is online",
+			"worker", worker, "socket", socket, "nodeIdx", nodeIdx)
+		return false
 	}
 
-	existedBefore := false
-	for _, sn := range ownedItems {
-		if sn.Name == crName {
-			existedBefore = true
-			break
-		}
-	}
+	existedBefore := existing != nil
 
-	if err := r.ensureStorageNodeCR(ctx, sns, worker, socket, nodeIdx, globalOrdinal); err != nil {
+	if err := r.ensureStorageNodeCR(ctx, sns, existing, worker, socket, nodeIdx, globalOrdinal); err != nil {
 		log.Error(err, "failed to ensure StorageNode CR",
 			"worker", worker, "socket", socket, "nodeIdx", nodeIdx)
 		return false
@@ -235,61 +235,12 @@ func (r *StorageNodeSetReconciler) reconcileOneStorageNodeCR(
 func (r *StorageNodeSetReconciler) ensureStorageNodeCR(
 	ctx context.Context,
 	sns *simplyblockv1alpha1.StorageNodeSet,
+	existing *simplyblockv1alpha1.StorageNode,
 	worker, socket string,
 	nodeIdx, globalOrdinal int,
 ) error {
-	log := logf.FromContext(ctx)
-	name := storageNodeCRName(sns.Name, worker, socket, nodeIdx)
-
-	var existing simplyblockv1alpha1.StorageNode
-	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: sns.Namespace}, &existing)
-
-	if apierrors.IsNotFound(err) {
-		// Create.
-		sn := buildStorageNodeCR(sns, name, worker, socket, nodeIdx, globalOrdinal)
-		if setErr := controllerutil.SetControllerReference(sns, sn, r.Scheme); setErr != nil {
-			return fmt.Errorf("setting owner reference on StorageNode %s: %w", name, setErr)
-		}
-		if createErr := r.Create(ctx, sn); createErr != nil {
-			return fmt.Errorf("creating StorageNode %s: %w", name, createErr)
-		}
-		log.Info("created StorageNode CR", "name", name, "worker", worker, "socket", socket, "nodeIdx", nodeIdx)
-
-		// Backward compatibility: pre-populate UUID and status from the legacy
-		// StorageNodeSet.status.nodes[] so nodes that were already provisioned
-		// before the three-tier model are adopted immediately (no re-POST).
-		for i := range sns.Status.Nodes {
-			ns := &sns.Status.Nodes[i]
-			if ns.Hostname != worker || ns.UUID == "" {
-				continue
-			}
-			patch := client.MergeFrom(sn.DeepCopy())
-			sn.Status.UUID = ns.UUID
-			sn.Status.Status = ns.Status
-			sn.Status.Health = ns.Health
-			sn.Status.Hostname = ns.Hostname
-			sn.Status.Resources = &simplyblockv1alpha1.StorageNodeResources{
-				CPU:     ns.CPU,
-				Volumes: ns.Volumes,
-			}
-			sn.Status.Ports = &simplyblockv1alpha1.StorageNodePorts{
-				Management: ns.MgmtIp,
-				Rpc:        ns.RpcPort,
-				Lvol:       ns.LvolPort,
-				NvmeOf:     ns.NvmfPort,
-			}
-			if patchErr := r.Status().Patch(ctx, sn, patch); patchErr != nil {
-				log.Error(patchErr, "failed to pre-populate StorageNode status", "name", name)
-			} else {
-				log.Info("pre-populated StorageNode status from legacy nodes[]",
-					"name", name, "uuid", ns.UUID, "status", ns.Status)
-			}
-			break
-		}
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("getting StorageNode %s: %w", name, err)
+	if existing == nil {
+		return r.createStorageNodeCR(ctx, sns, worker, socket, nodeIdx, globalOrdinal)
 	}
 
 	// Sync overrides from nodeConfigs — the StorageNodeSet is the source of truth.
@@ -301,8 +252,77 @@ func (r *StorageNodeSetReconciler) ensureStorageNodeCR(
 
 	patch := client.MergeFrom(existing.DeepCopy())
 	existing.Spec.Overrides = desired
-	if err := r.Patch(ctx, &existing, patch); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("patching StorageNode overrides %s: %w", name, err)
+	if err := r.Patch(ctx, existing, patch); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("patching StorageNode overrides %s: %w", existing.Name, err)
+	}
+	return nil
+}
+
+// createStorageNodeCR creates a new StorageNode CR with a random,
+// DNS-label-safe name (simplyblock-node-<id>). Because the name is random, a
+// collision with an existing object is possible; on AlreadyExists we regenerate
+// the id and retry.
+func (r *StorageNodeSetReconciler) createStorageNodeCR(
+	ctx context.Context,
+	sns *simplyblockv1alpha1.StorageNodeSet,
+	worker, socket string,
+	nodeIdx, globalOrdinal int,
+) error {
+	log := logf.FromContext(ctx)
+
+	const maxAttempts = 5
+	var sn *simplyblockv1alpha1.StorageNode
+	var createErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		name := storageNodeCRName(sns.Name)
+		sn = buildStorageNodeCR(sns, name, worker, socket, nodeIdx, globalOrdinal)
+		if err := controllerutil.SetControllerReference(sns, sn, r.Scheme); err != nil {
+			return fmt.Errorf("setting owner reference on StorageNode %s: %w", name, err)
+		}
+		createErr = r.Create(ctx, sn)
+		if createErr == nil {
+			log.Info("created StorageNode CR", "name", name, "worker", worker, "socket", socket, "nodeIdx", nodeIdx)
+			break
+		}
+		if !apierrors.IsAlreadyExists(createErr) {
+			return fmt.Errorf("creating StorageNode %s: %w", name, createErr)
+		}
+		log.Info("StorageNode CR name collision, regenerating id", "name", name)
+	}
+	if createErr != nil {
+		return fmt.Errorf("creating StorageNode for worker %s after %d attempts: %w", worker, maxAttempts, createErr)
+	}
+
+	// Backward compatibility: pre-populate UUID and status from the legacy
+	// StorageNodeSet.status.nodes[] so nodes that were already provisioned
+	// before the three-tier model are adopted immediately (no re-POST).
+	for i := range sns.Status.Nodes {
+		ns := &sns.Status.Nodes[i]
+		if ns.Hostname != worker || ns.UUID == "" {
+			continue
+		}
+		patch := client.MergeFrom(sn.DeepCopy())
+		sn.Status.UUID = ns.UUID
+		sn.Status.Status = ns.Status
+		sn.Status.Health = ns.Health
+		sn.Status.Hostname = ns.Hostname
+		sn.Status.Resources = &simplyblockv1alpha1.StorageNodeResources{
+			CPU:     ns.CPU,
+			Volumes: ns.Volumes,
+		}
+		sn.Status.Ports = &simplyblockv1alpha1.StorageNodePorts{
+			Management: ns.MgmtIp,
+			Rpc:        ns.RpcPort,
+			Lvol:       ns.LvolPort,
+			NvmeOf:     ns.NvmfPort,
+		}
+		if patchErr := r.Status().Patch(ctx, sn, patch); patchErr != nil {
+			log.Error(patchErr, "failed to pre-populate StorageNode status", "name", sn.Name)
+		} else {
+			log.Info("pre-populated StorageNode status from legacy nodes[]",
+				"name", sn.Name, "uuid", ns.UUID, "status", ns.Status)
+		}
+		break
 	}
 	return nil
 }
@@ -347,31 +367,13 @@ func (r *StorageNodeSetReconciler) aggregateStorageNodeStatus(
 	return r.Status().Patch(ctx, sns, patch)
 }
 
-// storageNodeCRName builds a deterministic, DNS-label-safe name for a StorageNode CR.
-// Pattern: {sns-name}-{sanitised-worker}-{socket}, truncated to 63 chars with
-// an FNV-32 suffix to prevent collisions on long names.
-// storageNodeCRName builds a deterministic, DNS-label-safe name for a StorageNode CR.
-// Pattern: {sns}-{worker}-s{socket}-n{nodeIdx}
-// Both the NUMA socket identifier and the per-socket node index are encoded in the
-// name so it is unambiguous across different socketsToUse × nodesPerSocket combinations.
-func storageNodeCRName(snsName, worker, socket string, nodeIdx int) string {
-	nodeIdxStr := fmt.Sprintf("%d", nodeIdx)
-	sanitised := sanitiseDNSLabel(worker)
-	raw := strings.ToLower(snsName + "-" + sanitised + "-s" + socket + "-n" + nodeIdxStr)
-
-	const maxLen = 63
-	if len(raw) <= maxLen {
-		return raw
-	}
-	// Append 7-char FNV-32 hash suffix before truncation to prevent collisions
-	// when two workers share a long common prefix.
-	h := fnv32Hash(worker + socket + nodeIdxStr)
-	suffix := fmt.Sprintf("-%06x", h)
-	keep := maxLen - len(suffix)
-	if keep < 1 {
-		keep = 1
-	}
-	return raw[:keep] + suffix
+// storageNodeCRName builds a DNS-label-safe name for a StorageNode CR:
+// "{sns}-{id}" where id is a random short id (atlas kube.NameWithID). The NUMA
+// socket and per-socket node index are NOT encoded in the name — they live in
+// the CR spec (SocketID/NodeIndex/SocketIndex) — so the name is stable when a
+// storage node migrates between workers. Callers create with retry-on-collision.
+func storageNodeCRName(snsName string) string {
+	return atlaskube.NameWithID(snsName)
 }
 
 // sanitiseDNSLabel replaces characters not valid in a DNS label with '-' and

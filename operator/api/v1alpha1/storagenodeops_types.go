@@ -31,10 +31,8 @@ const (
 	StorageNodeOpsPhaseFailed    StorageNodeOpsPhase = "Failed"
 )
 
-// StorageNodeOpsSubPhase is the active sub-phase during a multi-step action.
-// Validating..Removing apply to action=remove (drain); Preparing..Rebinding apply
-// to action=migrate (host migration).
-// +kubebuilder:validation:Enum=Validating;Suspending;Migrating;Verifying;Removing;Preparing;Restarting;Promoting;Rebinding
+// StorageNodeOpsSubPhase is the active drain sub-phase when action=remove.
+// +kubebuilder:validation:Enum=Validating;Suspending;Migrating;Verifying;Removing
 type StorageNodeOpsSubPhase string
 
 const (
@@ -43,31 +41,6 @@ const (
 	StorageNodeOpsSubPhaseMigrating  StorageNodeOpsSubPhase = "Migrating"
 	StorageNodeOpsSubPhaseVerifying  StorageNodeOpsSubPhase = "Verifying"
 	StorageNodeOpsSubPhaseRemoving   StorageNodeOpsSubPhase = "Removing"
-
-	// Host-migration sub-phases (action=migrate).
-	StorageNodeOpsSubPhasePreparing  StorageNodeOpsSubPhase = "Preparing"
-	StorageNodeOpsSubPhaseRestarting StorageNodeOpsSubPhase = "Restarting"
-	StorageNodeOpsSubPhasePromoting  StorageNodeOpsSubPhase = "Promoting"
-	StorageNodeOpsSubPhaseRebinding  StorageNodeOpsSubPhase = "Rebinding"
-)
-
-const (
-	// AnnotationAdoptUUID, when present on a freshly-created StorageNode CR, tells
-	// the StorageNodeReconciler to adopt the given backend UUID into status instead
-	// of POSTing a fresh node-add. Set by a migrate op on the target-host CR so the
-	// relocated backend node (same UUID) is picked up rather than duplicated.
-	AnnotationAdoptUUID = "storage.simplyblock.io/adopt-uuid"
-
-	// AnnotationMigrationPending, while present on a StorageNode CR, suppresses
-	// provisioning (node-add) and the stale-UUID 404 self-heal. Cleared by the
-	// migrate op once the backend node is confirmed relocated.
-	AnnotationMigrationPending = "storage.simplyblock.io/migration-pending"
-
-	// AnnotationMigratedAway, when present on a StorageNode CR, tells the
-	// StorageNodeReconciler's deletion handler to skip the drain-and-remove ops and
-	// just drop the finalizer: the backend node was relocated to another host, not
-	// removed. Set by a migrate op on the origin-host CR before it is garbage-collected.
-	AnnotationMigratedAway = "storage.simplyblock.io/migrated-away"
 )
 
 // DrainOpsSpec configures the drain workflow for action=remove.
@@ -93,11 +66,20 @@ type StorageNodeOpsSpec struct {
 	// +k8s:immutable
 	Action string `json:"action"`
 
+	// TargetWorkerNode is the Kubernetes worker hostname the storage node is
+	// migrated onto. Required (and only used) when action=migrate. The source
+	// node is drained and removed exactly as for action=remove, then the owning
+	// StorageNodeSet is re-pointed from the current worker to this one so a fresh
+	// storage node is provisioned on the target host. Immutable.
+	// +optional
+	// +k8s:immutable
+	TargetWorkerNode string `json:"targetWorkerNode,omitempty"`
+
 	// Force enables forced execution where the backend supports it.
 	// +optional
 	Force *bool `json:"force,omitempty"`
 
-	// ReattachVolume reattaches volumes during restart.
+	// ReattachVolume reattaches volumes during the node restart.
 	// Applicable when action=restart or action=migrate.
 	// +optional
 	ReattachVolume *bool `json:"reattachVolume,omitempty"`
@@ -105,18 +87,6 @@ type StorageNodeOpsSpec struct {
 	// Drain configures the drain workflow. Only applicable when action=remove.
 	// +optional
 	Drain *DrainOpsSpec `json:"drain,omitempty"`
-
-	// TargetWorkerNode is the Kubernetes worker hostname to relocate the storage
-	// node onto. Required when action=migrate; ignored otherwise. Immutable.
-	// +optional
-	// +k8s:immutable
-	TargetWorkerNode string `json:"targetWorkerNode,omitempty"`
-
-	// NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
-	// during a migration. Passed through to the control-plane restart as
-	// new_ssd_pcie. Only applicable when action=migrate.
-	// +optional
-	NewSsdPcie []string `json:"newSsdPcie,omitempty"`
 }
 
 // StorageNodeOpsStatus holds the observed state of a StorageNodeOps.

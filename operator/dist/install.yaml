@@ -2070,17 +2070,9 @@ spec:
                 description: Force enables forced execution where the backend supports
                   it.
                 type: boolean
-              newSsdPcie:
-                description: |-
-                  NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
-                  during a migration. Passed through to the control-plane restart as
-                  new_ssd_pcie. Only applicable when action=migrate.
-                items:
-                  type: string
-                type: array
               reattachVolume:
                 description: |-
-                  ReattachVolume reattaches volumes during restart.
+                  ReattachVolume reattaches volumes during the node restart.
                   Applicable when action=restart or action=migrate.
                 type: boolean
               storageNodeRef:
@@ -2092,8 +2084,11 @@ spec:
                   rule: self == oldSelf
               targetWorkerNode:
                 description: |-
-                  TargetWorkerNode is the Kubernetes worker hostname to relocate the storage
-                  node onto. Required when action=migrate; ignored otherwise. Immutable.
+                  TargetWorkerNode is the Kubernetes worker hostname the storage node is
+                  migrated onto. Required (and only used) when action=migrate. The source
+                  node is drained and removed exactly as for action=remove, then the owning
+                  StorageNodeSet is re-pointed from the current worker to this one so a fresh
+                  storage node is provisioned on the target host. Immutable.
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -2138,10 +2133,6 @@ spec:
                 - Migrating
                 - Verifying
                 - Removing
-                - Preparing
-                - Restarting
-                - Promoting
-                - Rebinding
                 type: string
               triggered:
                 description: |-
@@ -2369,12 +2360,12 @@ spec:
                 - message: field is immutable
                   rule: self == oldSelf
               workerNode:
-                description: WorkerNode is the Kubernetes node hostname this StorageNode
-                  runs on. Immutable.
+                description: |-
+                  WorkerNode is the Kubernetes node hostname this StorageNode runs on.
+                  Users may not change it directly — it is re-pointed only by the operator
+                  during a node migration (StorageNodeOps action=migrate). The
+                  StorageNode validating webhook rejects user-driven changes to this field.
                 type: string
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
             required:
             - storageNodeSetRef
             - workerNode
@@ -3675,6 +3666,7 @@ rules:
   - admissionregistration.k8s.io
   resources:
   - mutatingwebhookconfigurations
+  - validatingwebhookconfigurations
   verbs:
   - get
   - list
@@ -4289,4 +4281,29 @@ webhooks:
     - CREATE
     resources:
     - pods
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: simplyblock-operator-validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha1-storagenode
+  failurePolicy: Ignore
+  name: vstoragenode.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - UPDATE
+    resources:
+    - storagenodes
   sideEffects: None
