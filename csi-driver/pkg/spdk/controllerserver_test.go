@@ -148,6 +148,7 @@ func topologyWithSegments(segments map[string]string) *csi.Topology {
 func TestCoLocatedHostID(t *testing.T) {
 	const clusterID = "cluster-a-uuid"
 	const uuid = "20686642-a53d-41e9-b1db-99c1e450bd31"
+	const testZone = "us-east-1a"
 
 	t.Run("nil requirements", func(t *testing.T) {
 		if got := coLocatedHostID(nil, clusterID); got != "" {
@@ -158,7 +159,7 @@ func TestCoLocatedHostID(t *testing.T) {
 	t.Run("no matching segment", func(t *testing.T) {
 		req := &csi.TopologyRequirement{
 			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
-				topologyKeyZoneStable: "us-east-1a",
+				topologyKeyZoneStable: testZone,
 			})},
 		}
 		if got := coLocatedHostID(req, clusterID); got != "" {
@@ -169,7 +170,7 @@ func TestCoLocatedHostID(t *testing.T) {
 	t.Run("preferred segment matches", func(t *testing.T) {
 		req := &csi.TopologyRequirement{
 			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
-				topologyKeyZoneStable:                               "us-east-1a",
+				topologyKeyZoneStable:                               testZone,
 				topologyKeyStorageNodeUUIDPrefix + clusterID + ".0": uuid,
 			})},
 		}
@@ -181,7 +182,7 @@ func TestCoLocatedHostID(t *testing.T) {
 	t.Run("falls back to requisite when preferred has no match", func(t *testing.T) {
 		req := &csi.TopologyRequirement{
 			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
-				topologyKeyZoneStable: "us-east-1a",
+				topologyKeyZoneStable: testZone,
 			})},
 			Requisite: []*csi.Topology{topologyWithSegments(map[string]string{
 				topologyKeyStorageNodeUUIDPrefix + clusterID + ".0": uuid,
