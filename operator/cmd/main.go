@@ -373,8 +373,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageNodeReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
 		Recorder:         mgr.GetEventRecorderFor("storagenode-controller"),
 		TLSEnabled:       tlsEnabled,
 		TLSMutualEnabled: tlsMutualEnabled,
@@ -383,8 +384,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageNodeOpsReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
 		Recorder: mgr.GetEventRecorderFor("storagenodeops-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeOps")
