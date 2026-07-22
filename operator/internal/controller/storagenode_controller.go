@@ -295,14 +295,17 @@ func (r *StorageNodeReconciler) provisionNode(
 
 	// Respect MaxParallelNodeAdds: count sibling StorageNode CRs in this set
 	// that are in-flight (PostedAt set, UUID not yet assigned) and block if the
-	// limit is reached. This replicates the old PendingNodeAdds gate.
+	// limit is reached. Defaults to 1 (sequential) when not set, which is safe
+	// for FDB clusters where simultaneous node reboots reduce fault tolerance.
+	maxParallel := 1
 	if sns.Spec.MaxParallelNodeAdds != nil {
-		inFlight, err := r.countInFlightNodes(ctx, sn.Namespace, sn.Spec.StorageNodeSetRef, sn.Name)
-		if err == nil && inFlight >= int(*sns.Spec.MaxParallelNodeAdds) {
-			log.Info("parallel node add limit reached, requeuing",
-				"inFlight", inFlight, "max", *sns.Spec.MaxParallelNodeAdds)
-			return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
-		}
+		maxParallel = int(*sns.Spec.MaxParallelNodeAdds)
+	}
+	inFlight, err := r.countInFlightNodes(ctx, sn.Namespace, sn.Spec.StorageNodeSetRef, sn.Name)
+	if err == nil && inFlight >= maxParallel {
+		log.Info("parallel node add limit reached, requeuing",
+			"inFlight", inFlight, "max", maxParallel)
+		return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
 	}
 
 	// FDB workers must be added sequentially to avoid simultaneous reboots that
@@ -418,8 +421,10 @@ func (r *StorageNodeReconciler) isFDBWorkerBlocked(
 }
 
 // countInFlightNodes returns how many sibling StorageNode CRs in the same
-// StorageNodeSet have PostedAt set but no UUID yet (i.e. add is in progress).
-// The calling node is excluded from the count.
+// StorageNodeSet are still being provisioned. A node is considered in-flight
+// if PostedAt is set and either the UUID has not been assigned yet or the
+// backend status is still "in_creation" (UUID is assigned quickly but the node
+// takes longer to become online). The calling node is excluded from the count.
 func (r *StorageNodeReconciler) countInFlightNodes(
 	ctx context.Context,
 	namespace, snsRef, excludeName string,
@@ -436,7 +441,9 @@ func (r *StorageNodeReconciler) countInFlightNodes(
 		if sn.Name == excludeName {
 			continue
 		}
-		if sn.Status.PostedAt != nil && sn.Status.UUID == "" {
+		if sn.Status.PostedAt != nil &&
+			sn.Status.Status != utils.NodeStatusTimeout &&
+			(sn.Status.UUID == "" || sn.Status.Status == utils.NodeStatusInCreation) {
 			count++
 		}
 	}

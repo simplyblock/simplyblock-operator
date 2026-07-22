@@ -322,3 +322,10 @@ func HumanBytes(size int64, mode string) string {
 func IsUUID(s string) bool {
 	return uuidRegex.MatchString(s)
 }
+
+// ShellQuote wraps s in single quotes for use in a sourced shell env file.
+// Any single quotes within s are escaped using the '\” idiom so the value
+// is safe regardless of spaces or special characters.
+func ShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
