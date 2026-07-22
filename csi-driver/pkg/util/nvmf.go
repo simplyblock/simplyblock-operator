@@ -322,6 +322,41 @@ func (c *ClusterClient) DeleteSnapshot(ctx context.Context, snapshotID string) e
 	return nil
 }
 
+// CreateVolumeGroupSnapshot creates an atomic group snapshot for the given volumes.
+// volumeIDs are the backend lvol UUIDs (not CSI volume IDs).
+func (c *ClusterClient) CreateVolumeGroupSnapshot(ctx context.Context, volumeIDs []string, name string) (*GroupSnapshotResp, error) {
+	resp, err := c.API.createVolumeGroupSnapshot(ctx, volumeIDs, name)
+	if err != nil {
+		return nil, err
+	}
+	klog.V(5).Infof("volume group snapshot created: %s", resp.UUID)
+	return resp, nil
+}
+
+// GetVolumeGroupSnapshot retrieves a group snapshot by its backend UUID.
+func (c *ClusterClient) GetVolumeGroupSnapshot(ctx context.Context, groupSnapshotID string) (*GroupSnapshotResp, error) {
+	resp, err := c.API.getVolumeGroupSnapshot(ctx, groupSnapshotID)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// DeleteVolumeGroupSnapshot deletes a group snapshot and all its member snapshots.
+func (c *ClusterClient) DeleteVolumeGroupSnapshot(ctx context.Context, groupSnapshotID string) error {
+	err := c.API.deleteVolumeGroupSnapshot(ctx, groupSnapshotID)
+	if err != nil {
+		return err
+	}
+	klog.V(5).Infof("volume group snapshot deleted: %s", groupSnapshotID)
+	return nil
+}
+
+// ListVolumeGroupSnapshots returns all volume group snapshots in the cluster.
+func (c *ClusterClient) ListVolumeGroupSnapshots(ctx context.Context) ([]*GroupSnapshotResp, error) {
+	return c.API.listVolumeGroupSnapshots(ctx)
+}
+
 // PublishVolume exports a volume through NVMf target
 func (c *ClusterClient) PublishVolume(ctx context.Context, lvolID string) error {
 	if err := c.API.publishVolume(ctx, c.poolID, lvolID); err != nil {

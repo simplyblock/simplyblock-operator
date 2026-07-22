@@ -105,6 +105,12 @@ type ClusterAPI interface {
 	ListSnapshots(ctx context.Context) ([]*SnapshotResp, error)
 	DeleteSnapshot(ctx context.Context, snapshotID string) error
 	CloneSnapshot(ctx context.Context, snapshotID, cloneName, newSize, pvcName string) (string, error)
+
+	// Volume Group Snapshots
+	CreateVolumeGroupSnapshot(ctx context.Context, volumeIDs []string, name string) (*GroupSnapshotResp, error)
+	GetVolumeGroupSnapshot(ctx context.Context, groupSnapshotID string) (*GroupSnapshotResp, error)
+	DeleteVolumeGroupSnapshot(ctx context.Context, groupSnapshotID string) error
+	ListVolumeGroupSnapshots(ctx context.Context) ([]*GroupSnapshotResp, error)
 }
 
 // StoragePool represents a SimplyBlock storage pool returned by the cluster API.
@@ -169,6 +175,22 @@ type SnapshotResp struct {
 	CreatedAt string `json:"created_at"`
 	PoolID    string `json:"-"` // populated after fetch, not from JSON
 	ClusterID string `json:"-"` // populated after fetch, not from JSON
+}
+
+// GroupSnapshotMember is one (volume, snapshot) pair within a group snapshot.
+type GroupSnapshotMember struct {
+	VolumeID   string `json:"volume_id"`
+	SnapshotID string `json:"snapshot_id"`
+}
+
+// GroupSnapshotResp is the backend response for a volume group snapshot.
+type GroupSnapshotResp struct {
+	UUID      string                `json:"id"`
+	Name      string                `json:"name"`
+	Status    string                `json:"status"`
+	Members   []GroupSnapshotMember `json:"members"`
+	CreatedAt string                `json:"created_at"`
+	ClusterID string                `json:"-"`
 }
 
 // CreateVolResp is the response for volume create (legacy, kept for compat)
@@ -242,6 +264,14 @@ func (client APIClient) v2poolMasterLvols(poolID string) string {
 
 func (client APIClient) v2cluster() string {
 	return fmt.Sprintf("api/v2/clusters/%s/", client.ClusterID)
+}
+
+func (client APIClient) v2snapshotGroups() string {
+	return fmt.Sprintf("api/v2/clusters/%s/snapshot-groups/", client.ClusterID)
+}
+
+func (client APIClient) v2snapshotGroup(groupID string) string {
+	return fmt.Sprintf("api/v2/clusters/%s/snapshot-groups/%s/", client.ClusterID, groupID)
 }
 
 func (client APIClient) v2storageNode(nodeID string) string {
@@ -546,6 +576,71 @@ func (client APIClient) deleteSnapshotScanPools(ctx context.Context, snapshotID 
 		}
 	}
 	return ErrSnapshotNotFound
+}
+
+// --- Volume Group Snapshot API calls ---
+
+type createGroupSnapshotReq struct {
+	Name      string   `json:"name"`
+	VolumeIDs []string `json:"volume_ids"`
+}
+
+func (client APIClient) createVolumeGroupSnapshot(ctx context.Context, volumeIDs []string, name string) (*GroupSnapshotResp, error) {
+	raw, err := client.do(ctx, http.MethodPost, client.v2snapshotGroups(), createGroupSnapshotReq{
+		Name:      name,
+		VolumeIDs: volumeIDs,
+	})
+	if err != nil {
+		if isHTTPStatus(err, http.StatusConflict) {
+			return nil, ErrSnapshotExists
+		}
+		return nil, err
+	}
+	var resp GroupSnapshotResp
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal group snapshot response: %w", err)
+	}
+	resp.ClusterID = client.ClusterID
+	return &resp, nil
+}
+
+func (client APIClient) getVolumeGroupSnapshot(ctx context.Context, groupSnapshotID string) (*GroupSnapshotResp, error) {
+	raw, err := client.do(ctx, http.MethodGet, client.v2snapshotGroup(groupSnapshotID), nil)
+	if err != nil {
+		if isHTTPStatus(err, http.StatusNotFound) {
+			return nil, ErrSnapshotNotFound
+		}
+		return nil, err
+	}
+	var resp GroupSnapshotResp
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal group snapshot response: %w", err)
+	}
+	resp.ClusterID = client.ClusterID
+	return &resp, nil
+}
+
+func (client APIClient) deleteVolumeGroupSnapshot(ctx context.Context, groupSnapshotID string) error {
+	_, err := client.do(ctx, http.MethodDelete, client.v2snapshotGroup(groupSnapshotID), nil)
+	if err != nil && !isHTTPStatus(err, http.StatusNotFound) {
+		return err
+	}
+	return nil
+}
+
+func (client APIClient) listVolumeGroupSnapshots(ctx context.Context) ([]*GroupSnapshotResp, error) {
+	raw, err := client.do(ctx, http.MethodGet, client.v2snapshotGroups(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var result []*GroupSnapshotResp
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal group snapshots response: %w", err)
+	}
+	for _, g := range result {
+		g.ClusterID = client.ClusterID
+	}
+	return result, nil
 }
 
 // findPoolForVolume scans all storage pools to find which one contains the given
