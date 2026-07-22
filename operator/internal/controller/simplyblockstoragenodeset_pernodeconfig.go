@@ -29,8 +29,6 @@ package controller
 //	    MAX_LVOL=20
 //	    MAX_SIZE=
 //	    CORES_PERCENTAGE=50
-//	    RESERVED_SYSTEM_CPUS=0,1
-//	    CPU_TOPOLOGY_ENABLED=true
 //	    ...
 //	  vm03.example.com: |
 //	    MAX_LVOL=25

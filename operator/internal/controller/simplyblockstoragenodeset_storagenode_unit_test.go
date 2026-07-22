@@ -161,7 +161,6 @@ func TestBuildPerNodeEnvFile_ContainsAllRequiredKeys(t *testing.T) {
 	}
 	env := buildPerNodeEnvFile(sns, "any-worker")
 	required := []string{"MAX_LVOL=", "MAX_SIZE=", "CORES_PERCENTAGE=",
-		"RESERVED_SYSTEM_CPUS=", "CPU_TOPOLOGY_ENABLED=",
 		"PCI_ALLOWED=", "PCI_BLOCKED=", "NVME_DEVICES=",
 		"DEVICE_MODEL=", "SIZE_RANGE=", "JM_PERCENT=", "HA_JM_COUNT="}
 	for _, key := range required {
