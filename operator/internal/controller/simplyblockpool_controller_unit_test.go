@@ -239,7 +239,7 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 	const statusOnline = "online"
 	const clusterUUID = "cluster-uuid-pool-create"
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 
 	// Proactive adoption check: empty list means no existing pool → fall through to POST.
@@ -329,7 +329,7 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 func TestPoolReconcileCreatesPoolViaDTOFormat(t *testing.T) {
 	const clusterUUID = "cluster-uuid-pool-create-dto"
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 
 	mock.Register(
@@ -396,7 +396,7 @@ func TestPoolReconcileCreatesPoolViaDTOFormat(t *testing.T) {
 func TestPoolReconcileCreatePoolNon2xxRequeues(t *testing.T) {
 	const clusterUUID = "cluster-uuid-pool-create-fail"
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 
 	mock.Register(
@@ -450,7 +450,7 @@ func TestPoolReconcileDeleteNon2xxKeepsFinalizerAndRequeues(t *testing.T) {
 	const clusterUUID = "cluster-uuid-pool-delete-fail"
 	const poolUUID = "pool-uuid-delete-fail"
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 
 	mock.Register(
@@ -527,7 +527,7 @@ func TestPoolReconcileRejectsCrossNamespaceClusterReference(t *testing.T) {
 	const clusterNS = "tenant-b"
 	const clusterName = "shared-cluster"
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
@@ -587,7 +587,7 @@ func TestPoolReconcileDoesNotEmitEventWhenClusterUUIDNotReady(t *testing.T) {
 	const ns = "tenant-c"
 	const clusterName = "cluster-pending"
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 

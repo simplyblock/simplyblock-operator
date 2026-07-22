@@ -1,5 +1,6 @@
 // Package sysfs provides low-level access to the Linux NVMe sysfs
-// hierarchy: path-layout constants and attribute-reading helpers. It is
+// hierarchy: path-layout constants and (raw and typed) attribute-reading
+// helpers. It is
 // internal so these details stay out of the public nvme API and can change
 // freely. Package nvme builds the public Subsystem/Controller/Namespace
 // model on top of it.
@@ -28,6 +29,7 @@ package sysfs
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -70,4 +72,59 @@ func List(elem ...string) ([]string, error) {
 		names[i] = e.Name()
 	}
 	return names, nil
+}
+
+// --- typed attribute readers ---
+//
+// These wrap ReadAttr with the parsing sysfs values commonly need. A
+// missing or unparsable attribute falls back to the zero value (or the
+// supplied default), matching the kernel's own "absent means unset"
+// convention; callers that must distinguish absence use ReadAttr directly.
+
+// String reads a sysfs attribute and returns its trimmed contents, or the
+// empty string if the attribute is missing or unreadable.
+func String(elem ...string) string {
+	s, _ := ReadAttr(elem...)
+	return s
+}
+
+// Int reads a sysfs attribute as a base-10 integer, returning def if the
+// attribute is missing or unparsable (e.g. numa_node's "-1" sentinel).
+func Int(def int, elem ...string) int {
+	s := String(elem...)
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+// Uint16 reads a sysfs attribute as a base-10 unsigned 16-bit integer,
+// returning 0 if the attribute is missing or unparsable.
+func Uint16(elem ...string) uint16 {
+	n, _ := strconv.ParseUint(String(elem...), 10, 16)
+	return uint16(n)
+}
+
+// Uint32 reads a sysfs attribute as a base-10 unsigned 32-bit integer,
+// returning 0 if the attribute is missing or unparsable.
+func Uint32(elem ...string) uint32 {
+	n, _ := strconv.ParseUint(String(elem...), 10, 32)
+	return uint32(n)
+}
+
+// Uint64 reads a sysfs attribute as a base-10 unsigned 64-bit integer,
+// returning 0 if the attribute is missing or unparsable.
+func Uint64(elem ...string) uint64 {
+	n, _ := strconv.ParseUint(String(elem...), 10, 64)
+	return n
+}
+
+// Bool reads a sysfs boolean attribute, reporting true only for the
+// kernel's "1" (missing or any other value reads as false).
+func Bool(elem ...string) bool {
+	return String(elem...) == "1"
 }

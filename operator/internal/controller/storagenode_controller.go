@@ -37,6 +37,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -345,15 +347,15 @@ func (r *StorageNodeReconciler) provisionNode(
 		DataNics:         sns.Spec.DataIfname,
 		Namespace:        sn.Namespace,
 		JMPercent:        journalManagerPercentPerDeviceFromSpec(eff.JournalManagerSpec),
-		Partitions:       utils.IntPtrOrDefault(sns.Spec.Partitions, 1),
+		Partitions:       ptr.IntFrom(sns.Spec.Partitions, 1),
 		HaJMCount:        journalManagerCountFromSpec(eff.JournalManagerSpec),
 		CRName:           sns.Name,
 		CRNameSpace:      sns.Namespace,
 		CRPlural:         "storagenodesets",
-		Format4K:         utils.BoolPtrOrFalse(sns.Spec.ForceFormat4K),
+		Format4K:         ptr.BoolFromOrFalse(sns.Spec.ForceFormat4K),
 		SpdkSystemMemory: eff.SpdkSystemMemory,
 		FailureDomain:    effectiveFailureDomain(sn, sns),
-		Expand:           utils.BoolPtrOrFalse(eff.Expand),
+		Expand:           ptr.BoolFromOrFalse(eff.Expand),
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
@@ -456,7 +458,7 @@ func journalManagerPercentPerDeviceFromSpec(spec *simplyblockv1alpha1.JournalMan
 	if spec == nil {
 		return 3
 	}
-	return utils.IntPtrOrDefault(spec.PercentPerDevice, 3)
+	return ptr.IntFrom(spec.PercentPerDevice, 3)
 }
 
 // journalManagerCountFromSpec returns JM count from the effective
@@ -465,7 +467,7 @@ func journalManagerCountFromSpec(spec *simplyblockv1alpha1.JournalManagerSpec) i
 	if spec == nil {
 		return 3
 	}
-	return utils.IntPtrOrDefault(spec.Count, 3)
+	return ptr.IntFrom(spec.Count, 3)
 }
 
 // syncStatus fetches the current node status from the backend and updates StorageNode.status.

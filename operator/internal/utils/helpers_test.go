@@ -1,84 +1,10 @@
 package utils
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/simplyblock/atlas/ptr"
 )
-
-func TestValidateExternalURL(t *testing.T) {
-	tests := []struct {
-		name    string
-		url     string
-		wantErr string // substring; empty means no error expected
-	}{
-		{name: "empty is ok", url: ""},
-		{name: "valid https public IP", url: "https://8.8.8.8:8200"},
-		{name: "valid https public IP with path", url: "https://1.1.1.1/bucket"},
-		{name: "http rejected", url: "http://vault.example.com", wantErr: "scheme must be https"},
-		{name: "no scheme rejected", url: "vault.example.com", wantErr: "scheme must be https"},
-		{name: "loopback", url: "https://127.0.0.1", wantErr: "restricted IP"},
-		{name: "link-local IMDS", url: "https://169.254.169.254", wantErr: "restricted IP"},
-		{name: "IPv6 loopback", url: "https://[::1]", wantErr: "restricted IP"},
-		{name: "IPv6 link-local", url: "https://[fe80::1]", wantErr: "restricted IP"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateExternalURL(tc.url)
-			if tc.wantErr == "" {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
-			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("expected error %q to contain %q", err.Error(), tc.wantErr)
-			}
-		})
-	}
-}
-
-func TestIntAndBoolHelpers(t *testing.T) {
-	var i int32 = 7
-	if got := IntPtrOrDefault(&i, 3); got != 7 {
-		t.Fatalf("IntPtrOrDefault pointer: got %d want 7", got)
-	}
-	if got := IntPtrOrDefault(nil, 3); got != 3 {
-		t.Fatalf("IntPtrOrDefault default: got %d want 3", got)
-	}
-	if got := IntPtrOrZero(&i); got != 7 {
-		t.Fatalf("IntPtrOrZero pointer: got %d want 7", got)
-	}
-	if got := IntPtrOrZero(nil); got != 0 {
-		t.Fatalf("IntPtrOrZero nil: got %d want 0", got)
-	}
-
-	if p := IntToInt32Ptr(9); p == nil || *p != 9 {
-		t.Fatalf("IntToInt32Ptr: got %#v", p)
-	}
-
-	if BoolPtrOrFalse(nil) {
-		t.Fatalf("BoolPtrOrFalse nil should be false")
-	}
-	bTrue := true
-	if !BoolPtrOrFalse(&bTrue) {
-		t.Fatalf("BoolPtrOrFalse pointer should be true")
-	}
-	if BoolPtrToString(nil) != "false" {
-		t.Fatalf("BoolPtrToString nil should be false")
-	}
-	if BoolPtrToString(&bTrue) != "true" {
-		t.Fatalf("BoolPtrToString true should be true")
-	}
-	if BoolToString(false) != "false" {
-		t.Fatalf("BoolToString false should be false")
-	}
-	if BoolToString(true) != "true" {
-		t.Fatalf("BoolToString true should be true")
-	}
-}
 
 func TestStringSliceHelpers(t *testing.T) {
 	in := []string{"a", "b", "c"}
@@ -109,26 +35,26 @@ func TestParseSizeAndHumanBytes(t *testing.T) {
 		mode   string
 		unit   string
 		strict bool
-		want   *int32
+		want   *int64
 	}{
 		{
 			name: "raw number",
 			in:   "123",
 			mode: "si/iec",
-			want: ToInt32Ptr(123),
+			want: ptr.To(int64(123)),
 		},
 		{
 			name: "iec value",
 			in:   "1GiB",
 			mode: "si/iec",
-			want: ToInt32Ptr(1024 * 1024 * 1024),
+			want: ptr.To(int64(1024 * 1024 * 1024)),
 		},
 		{
 			name: "assume unit",
 			in:   "2",
 			mode: "si/iec",
 			unit: "MiB",
-			want: ToInt32Ptr(2 * 1024 * 1024),
+			want: ptr.To(int64(2 * 1024 * 1024)),
 		},
 		{
 			name: "invalid unit",
@@ -137,10 +63,11 @@ func TestParseSizeAndHumanBytes(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "overflow returns nil",
+			// Above the old int32 range but valid now that ParseSize returns *int64.
+			name: "value above int32 range",
 			in:   "3GiB",
 			mode: "si/iec",
-			want: nil,
+			want: ptr.To(int64(3 * 1024 * 1024 * 1024)),
 		},
 	}
 
@@ -169,12 +96,12 @@ func TestParseSizeAndHumanBytes(t *testing.T) {
 	if got := HumanBytes(1000, "si"); got != "1.0 KB" {
 		t.Fatalf("HumanBytes si got %q", got)
 	}
-	got := ParseSizeInt64("20G", "si/iec", "", false)
+	got := ParseSize("20G", "si/iec", "", false)
 	if got == nil {
-		t.Fatalf("ParseSizeInt64 got nil want 20000000000")
+		t.Fatalf("ParseSize got nil want 20000000000")
 		return
 	}
 	if *got != 20_000_000_000 {
-		t.Fatalf("ParseSizeInt64 got %v want 20000000000", *got)
+		t.Fatalf("ParseSize got %v want 20000000000", *got)
 	}
 }

@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,8 +47,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
-	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // PerNodeConfigMapName returns the name of the per-node ConfigMap for a StorageNodeSet.
@@ -188,17 +190,17 @@ func buildPerNodeEnvFile(sns *simplyblockv1alpha1.StorageNodeSet, worker string)
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "MAX_LVOL=%s\n", utils.Int32PtrToString(eff.MaxLogicalVolumeCount))
+	fmt.Fprintf(&b, "MAX_LVOL=%s\n", ptr.StringOrDefault(eff.MaxLogicalVolumeCount, ""))
 	fmt.Fprintf(&b, "MAX_SIZE=%s\n", utils.ShellQuote(eff.MaxSize))
-	fmt.Fprintf(&b, "CORES_PERCENTAGE=%s\n", utils.Int32PtrToString(eff.CorePercentage))
+	fmt.Fprintf(&b, "CORES_PERCENTAGE=%s\n", ptr.StringOrDefault(eff.CorePercentage, ""))
 	fmt.Fprintf(&b, "PCI_ALLOWED=%s\n", utils.ShellQuote(strings.Join(eff.PcieAllowList, ",")))
 	fmt.Fprintf(&b, "PCI_BLOCKED=%s\n", utils.ShellQuote(strings.Join(eff.PcieDenyList, ",")))
 	fmt.Fprintf(&b, "NVME_DEVICES=%s\n", utils.ShellQuote(strings.Join(eff.DeviceNames, ",")))
 	fmt.Fprintf(&b, "DEVICE_MODEL=%s\n", utils.ShellQuote(eff.PcieModel))
 	fmt.Fprintf(&b, "SIZE_RANGE=%s\n", utils.ShellQuote(eff.DriveSizeRange))
 	if eff.JournalManagerSpec != nil {
-		fmt.Fprintf(&b, "JM_PERCENT=%s\n", utils.Int32PtrToString(eff.JournalManagerSpec.PercentPerDevice))
-		fmt.Fprintf(&b, "HA_JM_COUNT=%s\n", utils.Int32PtrToString(eff.JournalManagerSpec.Count))
+		fmt.Fprintf(&b, "JM_PERCENT=%s\n", ptr.StringOrDefault(eff.JournalManagerSpec.PercentPerDevice, ""))
+		fmt.Fprintf(&b, "HA_JM_COUNT=%s\n", ptr.StringOrDefault(eff.JournalManagerSpec.Count, ""))
 	} else {
 		b.WriteString("JM_PERCENT=\n")
 		b.WriteString("HA_JM_COUNT=\n")

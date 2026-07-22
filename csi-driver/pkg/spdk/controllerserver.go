@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/simplyblock/atlas/kube"
 	"github.com/spdk/spdk-csi/pkg/kubernetes/volumehandle"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -648,22 +649,6 @@ func (cs *controllerServer) DeleteSnapshot(
 	return &csi.DeleteSnapshotResponse{}, nil
 }
 
-func getIntParameter(params map[string]string, key string, defaultValue int) (int, error) {
-	if valueStr, exists := params[key]; exists {
-		value, err := strconv.Atoi(valueStr)
-		if err != nil {
-			return 0, fmt.Errorf("error converting %s: %w", key, err)
-		}
-		return value, nil
-	}
-	return defaultValue, nil
-}
-
-func getBoolParameter(params map[string]string, key string) bool {
-	valueStr, exists := params[key]
-	return exists && (valueStr == "true" || valueStr == "True")
-}
-
 func prepareCreateVolumeReq(
 	ctx context.Context,
 	req *csi.CreateVolumeRequest,
@@ -671,19 +656,28 @@ func prepareCreateVolumeReq(
 ) (*util.CreateLVolData, error) {
 	params := req.GetParameters()
 
-	priorClass, err := getIntParameter(params, "lvol_priority_class", 0)
+	priorClass, err := kube.IntParam(params, "lvol_priority_class", 0)
 	if err != nil {
 		return nil, err
 	}
 
-	maxNamespace, err := getIntParameter(params, "max_namespace_per_subsys", 1)
+	maxNamespace, err := kube.IntParam(params, "max_namespace_per_subsys", 1)
 	if err != nil {
 		return nil, err
 	}
 
-	compression := getBoolParameter(params, "compression")
-	encryption := getBoolParameter(params, "encryption")
-	replicate := getBoolParameter(params, "replicate")
+	compression, err := kube.BoolParam(params, "compression", false)
+	if err != nil {
+		return nil, err
+	}
+	encryption, err := kube.BoolParam(params, "encryption", false)
+	if err != nil {
+		return nil, err
+	}
+	replicate, err := kube.BoolParam(params, "replicate", false)
+	if err != nil {
+		return nil, err
+	}
 
 	pvcName, pvcNameSelected := params[CSIStorageNameKey]
 	pvcNamespace, pvcNamespaceSelected := params[CSIStorageNamespaceKey]

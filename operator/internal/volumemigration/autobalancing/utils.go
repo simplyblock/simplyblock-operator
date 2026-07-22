@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 )
 
@@ -68,14 +69,14 @@ func ResolveRebalancingConfig(
 ) (RebalancingConfig, error) {
 	cfg := RebalancingConfig{
 		EvalInterval:            DefaultEvaluationInterval,
-		ImbalanceThreshold:      defaultImbalanceThresholdPct,
-		MinHotColdDifferencePct: defaultMinHotColdDifferencePct,
+		ImbalanceThreshold:      float64(ptr.From(spec.ImbalanceThreshold, defaultImbalanceThresholdPct)),
+		MinHotColdDifferencePct: float64(ptr.From(spec.MinHotColdDifferencePct, defaultMinHotColdDifferencePct)),
 		LatencyPercentile:       defaultLatencyPercentile,
-		MigrationEnabled:        true,
+		MigrationEnabled:        ptr.From(spec.MigrationEnabled, true),
 		IopsWeight:              defaultIOPSWeight,
 		ThroughputWeight:        defaultThroughputMBWeight,
 		MaxMigrations:           defaultMaxVolumeMigrationsPerCycle,
-		CoolDownSecs:            defaultCoolDownSeconds,
+		CoolDownSecs:            int64(ptr.From(spec.DefaultCoolDownSeconds, defaultCoolDownSeconds)),
 	}
 	if spec.EvaluationInterval != nil && spec.EvaluationInterval.Duration > 0 {
 		cfg.EvalInterval = spec.EvaluationInterval.Duration
@@ -84,26 +85,17 @@ func ResolveRebalancingConfig(
 		return cfg, fmt.Errorf("spec.volumeRebalancing.prometheusURL is required")
 	}
 	cfg.PrometheusURL = *spec.PrometheusURL
-	if spec.ImbalanceThreshold != nil {
-		cfg.ImbalanceThreshold = float64(*spec.ImbalanceThreshold)
+	iopsWeight := ptr.FromOrZero(spec.IOPSWeight)
+	if iopsWeight > 0 {
+		cfg.IopsWeight = iopsWeight
 	}
-	if spec.MinHotColdDifferencePct != nil {
-		cfg.MinHotColdDifferencePct = float64(*spec.MinHotColdDifferencePct)
+	throughputWeight := ptr.FromOrZero(spec.ThroughputWeight)
+	if throughputWeight > 0 {
+		cfg.ThroughputWeight = throughputWeight
 	}
-	if spec.MigrationEnabled != nil {
-		cfg.MigrationEnabled = *spec.MigrationEnabled
-	}
-	if spec.IOPSWeight != nil && *spec.IOPSWeight > 0 {
-		cfg.IopsWeight = *spec.IOPSWeight
-	}
-	if spec.ThroughputWeight != nil && *spec.ThroughputWeight > 0 {
-		cfg.ThroughputWeight = *spec.ThroughputWeight
-	}
-	if spec.MaxVolumeMigrationsPerCycle != nil && *spec.MaxVolumeMigrationsPerCycle > 0 {
-		cfg.MaxMigrations = int(*spec.MaxVolumeMigrationsPerCycle)
-	}
-	if spec.DefaultCoolDownSeconds != nil {
-		cfg.CoolDownSecs = int64(*spec.DefaultCoolDownSeconds)
+	maxMigrations := ptr.FromOrZero(spec.MaxVolumeMigrationsPerCycle)
+	if maxMigrations > 0 {
+		cfg.MaxMigrations = int(maxMigrations)
 	}
 	return cfg, nil
 }

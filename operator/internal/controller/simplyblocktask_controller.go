@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/ptr"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -169,7 +170,7 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			TaskStatus: tentry.Status,
 			TaskResult: tentry.Result,
 			Canceled:   tentry.Canceled,
-			Retried:    utils.IntToInt32Ptr(tentry.Retried),
+			Retried:    ptr.To(int32(tentry.Retried)),
 		})
 	}
 

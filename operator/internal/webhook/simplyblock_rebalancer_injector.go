@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	"github.com/simplyblock/atlas/ptr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -175,7 +176,7 @@ skipVolume:
 			"--config=/etc/simplyblock/simplyblock-rebalancer/$(HOSTNAME)",
 			"--metrics-addr=:9199",
 		},
-		SecurityContext: &corev1.SecurityContext{Privileged: boolPtr(true)},
+		SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("100m"),
@@ -199,10 +200,4 @@ skipVolume:
 			{Name: "dev-vol", MountPath: "/dev"},
 		},
 	})
-}
-
-func boolPtr(
-	b bool,
-) *bool {
-	return &b
 }

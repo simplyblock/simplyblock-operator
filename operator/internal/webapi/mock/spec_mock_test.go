@@ -6,7 +6,7 @@ import (
 )
 
 func TestSpecServerEnforcesSpecWhenStrict(t *testing.T) {
-	s := NewSpecServerFromFile(t, "../../../openapi.json", false)
+	s := NewSpecServerFromFile(t, "../../../../shared/openapi.json", false)
 	defer s.Close()
 
 	s.Register(http.MethodPost, "/api/v2/clusters/c1/storage-pools/", RouteResponse{Status: http.StatusOK, Body: `{}`})
@@ -25,7 +25,7 @@ func TestSpecServerEnforcesSpecWhenStrict(t *testing.T) {
 }
 
 func TestSpecServerRejectsUnknownPathWhenStrict(t *testing.T) {
-	s := NewSpecServerFromFile(t, "../../../openapi.json", false)
+	s := NewSpecServerFromFile(t, "../../../../shared/openapi.json", false)
 	defer s.Close()
 
 	resp, err := http.Get(s.URL() + "/api/v2/clusters/c1/nonexistent-endpoint/")

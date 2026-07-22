@@ -452,7 +452,7 @@ func TestClusterHandleDeletionPaths(t *testing.T) {
 
 	t.Run("successful API delete removes finalizer", func(t *testing.T) {
 		const clusterUUID = "cluster-uuid-delete-ok"
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 		defer mock.Close()
 		mock.Register(
 			http.MethodDelete,
@@ -569,7 +569,7 @@ func TestStorageClusterReconcileTopLevelPaths(t *testing.T) {
 func TestStorageClusterReconcileActivateViaMock(t *testing.T) {
 	const clusterUUID = "cluster-uuid-activate-mock"
 
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", false)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
 	defer mock.Close()
 	mock.Register(
 		http.MethodPost,
@@ -651,7 +651,7 @@ func TestStorageClusterReconcileExpandViaMock(t *testing.T) {
 	const clusterUUID = "cluster-uuid-expand-mock"
 
 	// expand endpoint is currently missing from openapi.json, so allow unknown paths.
-	mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 	defer mock.Close()
 	mock.Register(
 		http.MethodPost,
@@ -741,7 +741,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 	})
 
 	t.Run("health check failure requeues", func(t *testing.T) {
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
@@ -769,7 +769,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 	})
 
 	t.Run("cluster create api failure requeues", func(t *testing.T) {
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
@@ -802,7 +802,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 	})
 
 	t.Run("create payload parse failure requeues", func(t *testing.T) {
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
@@ -835,7 +835,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 	})
 
 	t.Run("create success populates status and secret", func(t *testing.T) {
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
@@ -888,7 +888,7 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 	})
 
 	t.Run("create populates erasure coding scheme", func(t *testing.T) {
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,

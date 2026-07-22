@@ -1,0 +1,23 @@
+overlay: 1.0.0
+info:
+  title: Fixups for the simplyblock control-plane OpenAPI export
+  version: 0.0.0
+actions:
+  # The volume-scoped migrations-list GET declares only cluster_id as a path
+  # parameter, but its URL has three ({cluster_id}/{pool_id}/{volume_id}), so
+  # oapi-codegen rejects it. Add the two missing path params (matching the
+  # well-formed sibling operations). This should be fixed upstream in FastAPI.
+  - target: "$.paths['/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/'].get.parameters"
+    update:
+      - name: pool_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: volume_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid

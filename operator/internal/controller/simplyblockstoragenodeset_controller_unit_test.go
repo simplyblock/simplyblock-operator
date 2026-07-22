@@ -969,7 +969,7 @@ func TestPollNodeOnlinePaths(t *testing.T) {
 		const clusterName = "cluster-a"
 		const clusterUUID = "cluster-uuid-online"
 
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
@@ -1039,7 +1039,7 @@ func TestPollNodeOnlinePaths(t *testing.T) {
 		const clusterName = "cluster-b"
 		const clusterUUID = "cluster-uuid-missing-status"
 
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
@@ -1102,7 +1102,7 @@ func TestPollNodeOnlinePaths(t *testing.T) {
 
 	t.Run("returns RequeueAfter when node not yet online and within timeout window", func(t *testing.T) {
 		const clusterUUID = "cluster-uuid-not-yet-online"
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
@@ -1148,7 +1148,7 @@ func TestPollNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 
 	t.Run("returns error on invalid storage-node payload", func(t *testing.T) {
 		const clusterUUID = "cluster-uuid-wfno-invalid-json"
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
@@ -1186,7 +1186,7 @@ func TestPollNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 
 	t.Run("returns cluster-not-found when activation precheck cannot resolve cluster CR", func(t *testing.T) {
 		const clusterUUID = "cluster-uuid-wfno-cluster-missing"
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
@@ -1237,7 +1237,7 @@ func TestPollNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 
 	t.Run("writes timeout node status when PostedAt is expired", func(t *testing.T) {
 		const clusterUUID = "cluster-uuid-wfno-timeout"
-		mock := webapimock.NewSpecServerFromFile(t, "../../openapi.json", true)
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
 		defer mock.Close()
 		mock.Register(
 			http.MethodGet,

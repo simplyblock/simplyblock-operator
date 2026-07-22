@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/ptr"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -419,8 +420,9 @@ func (r *StorageNodeLatencyReconciler) nodeDataAddr(ctx context.Context, cluster
 
 // logicalVolumeConnectionPort returns the NVMe/TCP connection port for a node, falling back to 4430 if not reported.
 func logicalVolumeConnectionPort(node simplyblockv1alpha1.NodeStatus) int32 {
-	if node.LvolPort != nil && *node.LvolPort > 0 {
-		return *node.LvolPort
+	port := ptr.IntFromOrZero(node.LvolPort)
+	if port > 0 {
+		return int32(port)
 	}
 	return 4430
 }

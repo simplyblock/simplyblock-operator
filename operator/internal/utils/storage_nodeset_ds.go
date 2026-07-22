@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -59,7 +61,7 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 		fleetArgs += " --sockets-to-use=" + JoinList(sn.Spec.SocketsToUse)
 	}
 	if sn.Spec.NodesPerSocket != nil {
-		fleetArgs += " --nodes-per-socket=" + Int32PtrToString(sn.Spec.NodesPerSocket)
+		fleetArgs += " --nodes-per-socket=" + ptr.StringOrDefault(sn.Spec.NodesPerSocket, "")
 	}
 
 	// The init container sources the per-node env file (written by node-env-writer)
@@ -94,14 +96,14 @@ fi`
 	}
 
 	mainEnv := []corev1.EnvVar{
-		{Name: "UBUNTU_HOST", Value: BoolPtrToString(sn.Spec.UbuntuHost)},
-		{Name: "OPENSHIFT_CLUSTER", Value: BoolPtrToString(sn.Spec.OpenShiftCluster)},
-		{Name: "SKIP_KUBELET_CONFIGURATION", Value: BoolPtrToString(sn.Spec.SkipKubeletConfiguration)},
+		{Name: "UBUNTU_HOST", Value: ptr.StringOrDefault(sn.Spec.UbuntuHost, "false")},
+		{Name: "OPENSHIFT_CLUSTER", Value: ptr.StringOrDefault(sn.Spec.OpenShiftCluster, "false")},
+		{Name: "SKIP_KUBELET_CONFIGURATION", Value: ptr.StringOrDefault(sn.Spec.SkipKubeletConfiguration, "false")},
 		{Name: "SIMPLY_BLOCK_DOCKER_IMAGE", Value: image},
 		{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 		}},
-		{Name: "CPU_TOPOLOGY_ENABLED", Value: BoolPtrToString(sn.Spec.EnableCpuTopology)},
+		{Name: "CPU_TOPOLOGY_ENABLED", Value: ptr.StringOrDefault(sn.Spec.EnableCpuTopology, "false")},
 	}
 	if sn.Spec.MaxParallelNodeAdds != nil {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *sn.Spec.MaxParallelNodeAdds)})
@@ -138,7 +140,7 @@ fi`
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{Name: perNodeConfigMapName},
-					Optional:             BoolPtr(true),
+					Optional:             ptr.To(true),
 				},
 			},
 		},
@@ -317,7 +319,7 @@ fi`
 							Image:           image,
 							ImagePullPolicy: imagePullPolicy,
 							Command:         initCmd,
-							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
+							SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},
 							VolumeMounts:    initMounts,
 							Resources:       effectiveResources(sn.Spec.InitContainerResources, defaultInitContainerResources),
 							Env: []corev1.EnvVar{
@@ -337,7 +339,7 @@ fi`
 								`[ -f /etc/node-env/env.sh ] && . /etc/node-env/env.sh
 exec sudo -E python3 simplyblock_web/node_webapp.py storage_node_k8s`,
 							},
-							SecurityContext: &corev1.SecurityContext{Privileged: BoolPtr(true)},
+							SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},
 							Resources:       effectiveResources(sn.Spec.ContainerResources, defaultContainerResources),
 							ReadinessProbe:  readinessProbe,
 							Env:             mainEnv,
