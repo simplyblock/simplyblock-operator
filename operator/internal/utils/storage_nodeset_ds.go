@@ -66,13 +66,13 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 	// so that node_configure.py receives per-node values for each pod.
 	initScript := `set -e
 [ -f /etc/node-env/env.sh ] && . /etc/node-env/env.sh
-ARGS="--max-lvol=${MAX_LVOL:-0} --max-size=${MAX_SIZE:-}"
-[ -n "${CORES_PERCENTAGE}" ] && ARGS="${ARGS} --cores-percentage=${CORES_PERCENTAGE}"
-[ -n "${PCI_ALLOWED}" ] && ARGS="${ARGS} --pci-allowed=${PCI_ALLOWED}"
-[ -n "${PCI_BLOCKED}" ] && ARGS="${ARGS} --pci-blocked=${PCI_BLOCKED}"
-[ -n "${NVME_DEVICES}" ] && ARGS="${ARGS} --nvme-devices=${NVME_DEVICES}"
-[ -n "${DEVICE_MODEL}" ] && ARGS="${ARGS} --device-model=${DEVICE_MODEL}"
-[ -n "${SIZE_RANGE}" ] && ARGS="${ARGS} --size-range=${SIZE_RANGE}"
+ARGS="--max-lvol=${MAX_LVOL:-0} --max-size=\"${MAX_SIZE:-}\""
+[ -n "${CORES_PERCENTAGE}" ] && ARGS="${ARGS} --cores-percentage=\"${CORES_PERCENTAGE}\""
+[ -n "${PCI_ALLOWED}" ] && ARGS="${ARGS} --pci-allowed=\"${PCI_ALLOWED}\""
+[ -n "${PCI_BLOCKED}" ] && ARGS="${ARGS} --pci-blocked=\"${PCI_BLOCKED}\""
+[ -n "${NVME_DEVICES}" ] && ARGS="${ARGS} --nvme-devices=\"${NVME_DEVICES}\""
+[ -n "${DEVICE_MODEL}" ] && ARGS="${ARGS} --device-model=\"${DEVICE_MODEL}\""
+[ -n "${SIZE_RANGE}" ] && ARGS="${ARGS} --size-range=\"${SIZE_RANGE}\""
 ARGS="${ARGS}` + fleetArgs + `"
 eval sudo -E python3 simplyblock_web/node_configure.py ${ARGS}
 `
