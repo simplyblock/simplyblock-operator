@@ -232,7 +232,10 @@ func sortStrings(s []string) {
 
 // buildGroupSnapshotResponse converts a backend GroupSnapshotResp into a CSI
 // CreateVolumeGroupSnapshotResponse. poolID may be empty for GET responses.
-func buildGroupSnapshotResponse(clusterID, poolID string, g *util.GroupSnapshotResp) *csi.CreateVolumeGroupSnapshotResponse {
+func buildGroupSnapshotResponse(
+	clusterID, poolID string,
+	g *util.GroupSnapshotResp,
+) *csi.CreateVolumeGroupSnapshotResponse {
 	groupCSIID := fmt.Sprintf("%s:%s", clusterID, g.UUID)
 
 	snapshots := make([]*csi.Snapshot, 0, len(g.Members))

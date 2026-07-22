@@ -29,7 +29,13 @@ import (
 )
 
 type NonBlockingGRPCServer interface {
-	Start(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer, gcs csi.GroupControllerServer)
+	Start(
+		endpoint string,
+		ids csi.IdentityServer,
+		cs csi.ControllerServer,
+		ns csi.NodeServer,
+		gcs csi.GroupControllerServer,
+	)
 	Wait()
 	Stop()
 	ForceStop()

@@ -585,7 +585,11 @@ type createGroupSnapshotReq struct {
 	VolumeIDs []string `json:"volume_ids"`
 }
 
-func (client APIClient) createVolumeGroupSnapshot(ctx context.Context, volumeIDs []string, name string) (*GroupSnapshotResp, error) {
+func (client APIClient) createVolumeGroupSnapshot(
+	ctx context.Context,
+	volumeIDs []string,
+	name string,
+) (*GroupSnapshotResp, error) {
 	raw, err := client.do(ctx, http.MethodPost, client.v2snapshotGroups(), createGroupSnapshotReq{
 		Name:      name,
 		VolumeIDs: volumeIDs,
@@ -604,7 +608,10 @@ func (client APIClient) createVolumeGroupSnapshot(ctx context.Context, volumeIDs
 	return &resp, nil
 }
 
-func (client APIClient) getVolumeGroupSnapshot(ctx context.Context, groupSnapshotID string) (*GroupSnapshotResp, error) {
+func (client APIClient) getVolumeGroupSnapshot(
+	ctx context.Context,
+	groupSnapshotID string,
+) (*GroupSnapshotResp, error) {
 	raw, err := client.do(ctx, http.MethodGet, client.v2snapshotGroup(groupSnapshotID), nil)
 	if err != nil {
 		if isHTTPStatus(err, http.StatusNotFound) {

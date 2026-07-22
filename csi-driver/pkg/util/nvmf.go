@@ -324,7 +324,11 @@ func (c *ClusterClient) DeleteSnapshot(ctx context.Context, snapshotID string) e
 
 // CreateVolumeGroupSnapshot creates an atomic group snapshot for the given volumes.
 // volumeIDs are the backend lvol UUIDs (not CSI volume IDs).
-func (c *ClusterClient) CreateVolumeGroupSnapshot(ctx context.Context, volumeIDs []string, name string) (*GroupSnapshotResp, error) {
+func (c *ClusterClient) CreateVolumeGroupSnapshot(
+	ctx context.Context,
+	volumeIDs []string,
+	name string,
+) (*GroupSnapshotResp, error) {
 	resp, err := c.API.createVolumeGroupSnapshot(ctx, volumeIDs, name)
 	if err != nil {
 		return nil, err
@@ -334,7 +338,10 @@ func (c *ClusterClient) CreateVolumeGroupSnapshot(ctx context.Context, volumeIDs
 }
 
 // GetVolumeGroupSnapshot retrieves a group snapshot by its backend UUID.
-func (c *ClusterClient) GetVolumeGroupSnapshot(ctx context.Context, groupSnapshotID string) (*GroupSnapshotResp, error) {
+func (c *ClusterClient) GetVolumeGroupSnapshot(
+	ctx context.Context,
+	groupSnapshotID string,
+) (*GroupSnapshotResp, error) {
 	resp, err := c.API.getVolumeGroupSnapshot(ctx, groupSnapshotID)
 	if err != nil {
 		return nil, err
