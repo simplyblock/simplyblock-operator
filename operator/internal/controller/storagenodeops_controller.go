@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -283,6 +284,18 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 			return r.failOps(ctx, ops, fmt.Sprintf("target worker node %q is not Ready", target))
 		}
 
+		// Clone the source worker's per-node config onto the target before the
+		// storage-node pod is scheduled there, so it boots with the same effective
+		// configuration as the node being migrated. Any additional NVMe devices
+		// requested via spec.newSsdPcie are merged into the cloned PCI_ALLOWED so
+		// the target host binds them on start. Done before labeling so the entry
+		// exists by the time the pod's init container sources it.
+		if err := r.ensureMigratedWorkerConfig(ctx, sns, sn.Spec.WorkerNode, target, ops.Spec.NewSsdPcie); err != nil {
+			log.Error(err, "migrate: failed to clone per-node config to target worker",
+				"source", sn.Spec.WorkerNode, "target", target)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
 		// The target worker is not part of the storage plane yet. Label it so the
 		// storage-node DaemonSet schedules a storage-node-api pod there; without
 		// that pod, node_address is unreachable and the restart cannot land.
@@ -386,7 +399,7 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 	// Promote has been issued. Re-point the Kubernetes topology: update this
 	// StorageNode's spec.workerNode and swap the owning StorageNodeSet's worker
 	// list from the source to the target worker.
-	if err := r.reconcileMigratedTopology(ctx, sn, sns, target); err != nil {
+	if err := r.reconcileMigratedTopology(ctx, sn, sns, target, ops.Spec.NewSsdPcie); err != nil {
 		log.Error(err, "migrate: failed to reconcile topology after migration", "target", target)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -402,12 +415,19 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 // target worker after the backend node has moved. It updates this StorageNode's
 // spec.workerNode in place (permitted for the operator service account; blocked
 // for users by the StorageNode validating webhook) and swaps the owning
-// StorageNodeSet.spec.workerNodes from the source worker to the target.
+// StorageNodeSet.spec.workerNodes from the source worker to the target. It also
+// migrates the per-node config source of truth: spec.nodeConfigs[source] is
+// cloned onto spec.nodeConfigs[target] with newSsdPcie merged into its
+// PcieAllowList, and the source entry is dropped. Persisting this keeps the
+// StorageNodeSet reconciler from rebuilding the target's ConfigMap entry back to
+// fleet defaults (which would drop the newly bound devices) and removes the
+// stale source-host config.
 func (r *StorageNodeOpsReconciler) reconcileMigratedTopology(
 	ctx context.Context,
 	sn *simplyblockv1alpha1.StorageNode,
 	sns *simplyblockv1alpha1.StorageNodeSet,
 	target string,
+	newSsdPcie []string,
 ) error {
 	source := sn.Spec.WorkerNode
 
@@ -427,18 +447,22 @@ func (r *StorageNodeOpsReconciler) reconcileMigratedTopology(
 		}
 	}
 
-	// 2. Reconcile the StorageNodeSet worker list: drop the source worker, add
-	//    the target. Re-fetch to patch against the latest version.
+	// 2. Reconcile the StorageNodeSet worker list and per-node config: drop the
+	//    source worker, add the target, and move nodeConfigs[source] to
+	//    nodeConfigs[target] (with newSsdPcie merged in). Re-fetch to patch
+	//    against the latest version.
 	var fresh simplyblockv1alpha1.StorageNodeSet
 	if err := r.Get(ctx, types.NamespacedName{Name: sns.Name, Namespace: sns.Namespace}, &fresh); err != nil {
 		return err
 	}
-	changed := false
+
+	// New worker list: source removed, target present.
 	workers := make([]string, 0, len(fresh.Spec.WorkerNodes)+1)
 	hasTarget := false
+	workersChanged := false
 	for _, w := range fresh.Spec.WorkerNodes {
 		if w == source {
-			changed = true
+			workersChanged = true
 			continue
 		}
 		if w == target {
@@ -448,16 +472,146 @@ func (r *StorageNodeOpsReconciler) reconcileMigratedTopology(
 	}
 	if !hasTarget {
 		workers = append(workers, target)
-		changed = true
+		workersChanged = true
 	}
-	if changed {
-		patch := client.MergeFrom(fresh.DeepCopy())
-		fresh.Spec.WorkerNodes = workers
-		if err := r.Patch(ctx, &fresh, patch); err != nil {
-			return fmt.Errorf("reconciling StorageNodeSet %s worker list: %w", fresh.Name, err)
+
+	// Migrated per-node config for the target. Prefer an existing target entry
+	// (idempotent re-runs), otherwise clone the source's overrides. The effective
+	// PcieAllowList is the entry's own list, or the fleet default when unset;
+	// newSsdPcie is merged into it so the added devices persist across rebuilds.
+	targetCfg, hadTargetCfg := fresh.Spec.NodeConfigs[target]
+	_, hadSourceCfg := fresh.Spec.NodeConfigs[source]
+	if !hadTargetCfg {
+		targetCfg = fresh.Spec.NodeConfigs[source] // zero value if source has none
+	}
+	if len(newSsdPcie) > 0 {
+		effPcie := targetCfg.PcieAllowList
+		if len(effPcie) == 0 {
+			effPcie = fresh.Spec.PcieAllowList
 		}
+		targetCfg.PcieAllowList = mergePcieList(effPcie, newSsdPcie)
+	}
+	setTarget := hadTargetCfg || hadSourceCfg || len(newSsdPcie) > 0
+
+	if !workersChanged && !hadSourceCfg && !setTarget {
+		return nil
+	}
+
+	patch := client.MergeFrom(fresh.DeepCopy())
+	fresh.Spec.WorkerNodes = workers
+	if hadSourceCfg {
+		delete(fresh.Spec.NodeConfigs, source)
+	}
+	if setTarget {
+		if fresh.Spec.NodeConfigs == nil {
+			fresh.Spec.NodeConfigs = map[string]simplyblockv1alpha1.StorageNodeOverrides{}
+		}
+		fresh.Spec.NodeConfigs[target] = targetCfg
+	}
+	if err := r.Patch(ctx, &fresh, patch); err != nil {
+		return fmt.Errorf("reconciling StorageNodeSet %s topology: %w", fresh.Name, err)
 	}
 	return nil
+}
+
+// ensureMigratedWorkerConfig clones the source worker's entry in the per-node
+// ConfigMap onto the target worker so the storage-node pod scheduled on the
+// target boots with the same effective configuration. When newSsdPcie is
+// non-empty those PCIe addresses are merged into the cloned entry's PCI_ALLOWED.
+//
+// It writes the ConfigMap directly because the target is not yet in
+// spec.workerNodes, so the StorageNodeSet reconciler would not build an entry
+// for it. reconcileMigratedTopology later persists the durable source of truth
+// into spec.nodeConfigs[target]. Idempotent: an existing target entry is left
+// untouched.
+func (r *StorageNodeOpsReconciler) ensureMigratedWorkerConfig(
+	ctx context.Context,
+	sns *simplyblockv1alpha1.StorageNodeSet,
+	source, target string,
+	newSsdPcie []string,
+) error {
+	name := PerNodeConfigMapName(sns.Name)
+	var cm corev1.ConfigMap
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: sns.Namespace}, &cm); err != nil {
+		return fmt.Errorf("getting per-node ConfigMap %s: %w", name, err)
+	}
+	if _, ok := cm.Data[target]; ok {
+		return nil // already cloned
+	}
+	srcEntry, ok := cm.Data[source]
+	if !ok {
+		return fmt.Errorf("per-node ConfigMap %s has no entry for source worker %q", name, source)
+	}
+
+	patch := client.MergeFrom(cm.DeepCopy())
+	if cm.Data == nil {
+		cm.Data = map[string]string{}
+	}
+	cm.Data[target] = mergePcieAllowedIntoEnvFile(srcEntry, newSsdPcie)
+	if err := r.Patch(ctx, &cm, patch); err != nil {
+		return fmt.Errorf("cloning per-node config %q -> %q: %w", source, target, err)
+	}
+	return nil
+}
+
+// mergePcieAllowedIntoEnvFile returns the per-node env-file text with extra PCIe
+// addresses merged into its PCI_ALLOWED= line (deduplicated, order preserved,
+// shell-quoted to match buildPerNodeEnvFile). The input is returned unchanged
+// when extra is empty. A PCI_ALLOWED line is appended if none is present.
+func mergePcieAllowedIntoEnvFile(envFile string, extra []string) string {
+	if len(extra) == 0 {
+		return envFile
+	}
+	const prefix = "PCI_ALLOWED="
+	lines := strings.Split(envFile, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		current := parseShellCSV(strings.TrimPrefix(line, prefix))
+		lines[i] = prefix + utils.ShellQuote(strings.Join(mergePcieList(current, extra), ","))
+		return strings.Join(lines, "\n")
+	}
+	// No PCI_ALLOWED line: append one, preserving a single trailing newline.
+	trimmed := strings.TrimRight(envFile, "\n")
+	return trimmed + "\n" + prefix + utils.ShellQuote(strings.Join(mergePcieList(nil, extra), ",")) + "\n"
+}
+
+// parseShellCSV parses a shell-quoted, comma-separated value (as produced by
+// utils.ShellQuote) into its elements, dropping empties.
+func parseShellCSV(v string) []string {
+	v = strings.TrimSpace(v)
+	if len(v) >= 2 && strings.HasPrefix(v, "'") && strings.HasSuffix(v, "'") {
+		v = v[1 : len(v)-1]
+		v = strings.ReplaceAll(v, `'\''`, "'") // undo ShellQuote escaping
+	}
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// mergePcieList concatenates base and extra, dropping empties and duplicates
+// while preserving first-seen order.
+func mergePcieList(base, extra []string) []string {
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, group := range [][]string{base, extra} {
+		for _, s := range group {
+			if s == "" {
+				continue
+			}
+			if _, ok := seen[s]; ok {
+				continue
+			}
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // ensureWorkerLabeled applies the storage-plane node label to a worker so the
