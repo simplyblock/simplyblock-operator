@@ -317,6 +317,9 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 		if ops.Spec.ReattachVolume != nil {
 			payload["reattach_volume"] = *ops.Spec.ReattachVolume
 		}
+		if len(ops.Spec.NewSsdPcie) > 0 {
+			payload["new_ssd_pcie"] = ops.Spec.NewSsdPcie
+		}
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
 		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, payload)
 		if err != nil || status >= 300 {

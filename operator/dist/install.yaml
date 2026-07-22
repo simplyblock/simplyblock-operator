@@ -2070,6 +2070,14 @@ spec:
                 description: Force enables forced execution where the backend supports
                   it.
                 type: boolean
+              newSsdPcie:
+                description: |-
+                  NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
+                  during a migration. Passed through to the control-plane restart as
+                  new_ssd_pcie. Only applicable when action=migrate.
+                items:
+                  type: string
+                type: array
               reattachVolume:
                 description: |-
                   ReattachVolume reattaches volumes during the node restart.

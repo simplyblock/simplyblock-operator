@@ -84,6 +84,12 @@ type StorageNodeOpsSpec struct {
 	// +optional
 	ReattachVolume *bool `json:"reattachVolume,omitempty"`
 
+	// NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
+	// during a migration. Passed through to the control-plane restart as
+	// new_ssd_pcie. Only applicable when action=migrate.
+	// +optional
+	NewSsdPcie []string `json:"newSsdPcie,omitempty"`
+
 	// Drain configures the drain workflow. Only applicable when action=remove.
 	// +optional
 	Drain *DrainOpsSpec `json:"drain,omitempty"`
