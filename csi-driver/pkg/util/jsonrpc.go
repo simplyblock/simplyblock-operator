@@ -39,6 +39,14 @@ var (
 	ErrSnapshotNotFound = errors.New("snapshot not found")
 	ErrSnapshotExists   = errors.New("snapshot already exists")
 
+	// ErrClusterNotFound means the clusterID referenced by a request is no longer
+	// present in the driver's secret configuration — i.e. the cluster has been
+	// removed from management. Any volume/snapshot on such a cluster is
+	// unmanageable and, from the CSI perspective, effectively gone. Callers should
+	// treat delete operations for these as idempotently successful rather than
+	// retrying forever.
+	ErrClusterNotFound = errors.New("cluster not found in secret configuration")
+
 	// internal errors
 	ErrVolumeUnpublished = errors.New("volume not published")
 )
