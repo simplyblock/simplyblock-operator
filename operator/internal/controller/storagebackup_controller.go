@@ -31,7 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -102,7 +102,7 @@ const (
 type StorageBackupReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
+	Recorder  events.EventRecorder
 	APIClient *webapi.Client
 }
 
@@ -239,7 +239,7 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 		}); patchErr != nil {
 			return nil, ctrl.Result{}, true, patchErr
 		}
-		r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupClusterLookupError, "Failed to resolve cluster UUID for %s: %v", backupCR.Spec.ClusterName, err)
+		r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupClusterLookupError, eventReasonBackupClusterLookupError, "Failed to resolve cluster UUID for %s: %v", backupCR.Spec.ClusterName, err)
 		return nil, ctrl.Result{RequeueAfter: backupReconcileRequeue}, true, nil
 	}
 
@@ -254,7 +254,7 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 		}); patchErr != nil {
 			return nil, ctrl.Result{}, true, patchErr
 		}
-		r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupSourceResolutionError, "Failed to resolve backup source: %v", err)
+		r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupSourceResolutionError, eventReasonBackupSourceResolutionError, "Failed to resolve backup source: %v", err)
 		return nil, ctrl.Result{RequeueAfter: backupReconcileRequeue}, true, nil
 	}
 
@@ -272,7 +272,7 @@ func (r *StorageBackupReconciler) prepareBackupContext(
 		}); patchErr != nil {
 			return nil, ctrl.Result{}, true, patchErr
 		}
-		r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupPoolLookupError, "Failed to look up pool UUID for %s: %v", source.PoolName, err)
+		r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupPoolLookupError, eventReasonBackupPoolLookupError, "Failed to look up pool UUID for %s: %v", source.PoolName, err)
 		return nil, ctrl.Result{RequeueAfter: backupReconcileRequeue}, true, nil
 	}
 
@@ -320,7 +320,7 @@ func (r *StorageBackupReconciler) ensureSnapshotAndBackup(
 		snapshotID, createErr := r.createSnapshot(ctx, bctx.apiClient, bctx.clusterUUID, bctx.poolUUID, bctx.source.LvolID, backupCR.Status.SnapshotName)
 		if createErr != nil {
 			log.Error(createErr, "Failed to create snapshot", "backup", backupCR.Name)
-			r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupSnapshotCreateFailed, "Failed to create snapshot: %v", createErr)
+			r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupSnapshotCreateFailed, eventReasonBackupSnapshotCreateFailed, "Failed to create snapshot: %v", createErr)
 			result, err := r.handleAPIError(ctx, backupCR, bctx.clusterUUID, createErr)
 			return result, true, err
 		}
@@ -337,7 +337,7 @@ func (r *StorageBackupReconciler) ensureSnapshotAndBackup(
 		backupID, createErr := r.createBackup(ctx, bctx.apiClient, bctx.clusterUUID, backupCR.Status.SnapshotID)
 		if createErr != nil {
 			log.Error(createErr, "Failed to create backup", "backup", backupCR.Name, "snapshotID", backupCR.Status.SnapshotID)
-			r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupCreateFailed, "Failed to create backup: %v", createErr)
+			r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupCreateFailed, eventReasonBackupCreateFailed, "Failed to create backup: %v", createErr)
 			result, err := r.handleAPIError(ctx, backupCR, bctx.clusterUUID, createErr)
 			return result, true, err
 		}
@@ -366,7 +366,7 @@ func (r *StorageBackupReconciler) syncBackupProgress(
 		}); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
-		r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupListFailed, "Failed to list backups from API: %v", err)
+		r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupListFailed, eventReasonBackupListFailed, "Failed to list backups from API: %v", err)
 		return ctrl.Result{RequeueAfter: backupReconcileRequeue}, nil
 	}
 
@@ -448,12 +448,12 @@ func (r *StorageBackupReconciler) handleDeletion(
 		body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 		if err != nil {
 			log.Error(err, "Failed to delete backup chain", "backup", backupCR.Name)
-			r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupDeleteFailed, "Failed to delete backup chain: %v", err)
+			r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupDeleteFailed, eventReasonBackupDeleteFailed, "Failed to delete backup chain: %v", err)
 			return ctrl.Result{RequeueAfter: backupDeletionRequeue}, nil
 		}
 		if status >= 300 && !strings.Contains(strings.ToLower(string(body)), "no backups found") {
 			log.Info("Backup delete returned non-success status", "status", status, "body", string(body))
-			r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupDeleteFailed, "Backup delete returned non-success status %d: %s", status, string(body))
+			r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupDeleteFailed, eventReasonBackupDeleteFailed, "Backup delete returned non-success status %d: %s", status, string(body))
 			return ctrl.Result{RequeueAfter: backupDeletionRequeue}, nil
 		}
 	}
@@ -468,12 +468,12 @@ func (r *StorageBackupReconciler) handleDeletion(
 		body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 		if err != nil {
 			log.Error(err, "Failed to delete internal snapshot", "backup", backupCR.Name, "snapshotID", backupCR.Status.SnapshotID)
-			r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupSnapshotDeleteFailed, "Failed to delete internal snapshot %s: %v", backupCR.Status.SnapshotID, err)
+			r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupSnapshotDeleteFailed, eventReasonBackupSnapshotDeleteFailed, "Failed to delete internal snapshot %s: %v", backupCR.Status.SnapshotID, err)
 			return ctrl.Result{RequeueAfter: backupDeletionRequeue}, nil
 		}
 		if status >= 300 && status != http.StatusNotFound {
 			log.Info("Snapshot delete returned non-success status", "status", status, "body", string(body))
-			r.Recorder.Eventf(backupCR, corev1.EventTypeWarning, eventReasonBackupSnapshotDeleteFailed, "Snapshot delete returned non-success status %d: %s", status, string(body))
+			r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupSnapshotDeleteFailed, eventReasonBackupSnapshotDeleteFailed, "Snapshot delete returned non-success status %d: %s", status, string(body))
 			return ctrl.Result{RequeueAfter: backupDeletionRequeue}, nil
 		}
 	}

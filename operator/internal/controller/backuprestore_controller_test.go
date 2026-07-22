@@ -11,7 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -199,7 +199,7 @@ func TestBackupRestoreFailsWhenBackupIsFailed(t *testing.T) {
 	r := &BackupRestoreReconciler{
 		Client:   k8sClient,
 		Scheme:   scheme,
-		Recorder: record.NewFakeRecorder(10),
+		Recorder: events.NewFakeRecorder(10),
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{

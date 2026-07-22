@@ -35,7 +35,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -60,7 +60,7 @@ type StorageNodeSetReconciler struct {
 	TLSEnabled       bool
 	TLSProvider      string
 	TLSMutualEnabled bool
-	Recorder         record.EventRecorder
+	Recorder         events.EventRecorder
 }
 
 type SNODEAPIResponse struct {
@@ -454,7 +454,7 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *sim
 	for nodeName := range workers {
 		var node corev1.Node
 		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
-			r.Recorder.Eventf(sn, corev1.EventTypeWarning, "WorkerNodeNotFound",
+			r.Recorder.Eventf(sn, nil, corev1.EventTypeWarning, "WorkerNodeNotFound", "WorkerNodeNotFound",
 				"worker node %q: %v", nodeName, err)
 			return err
 		}
@@ -863,7 +863,7 @@ func (r *StorageNodeSetReconciler) recordSpdkPodEvents(
 		return
 	}
 
-	r.Recorder.Eventf(snCR, corev1.EventTypeWarning, latest.Reason,
+	r.Recorder.Eventf(snCR, nil, corev1.EventTypeWarning, latest.Reason, latest.Reason,
 		"worker %s: %s", nodeName, latest.Message)
 	r.emitOnStorageNodeForWorker(ctx, snCR, nodeName, corev1.EventTypeWarning, latest.Reason, latest.Message)
 
@@ -1345,7 +1345,7 @@ func onAllSocketNodesOnline(
 	// Emit a recovery event only if the worker previously had a scheduling
 	// failure, then clear the flag.
 	if snCR.Status.SchedulingFailedWorkers[nodeName] {
-		r.Recorder.Eventf(snCR, corev1.EventTypeNormal, "NodeOnline",
+		r.Recorder.Eventf(snCR, nil, corev1.EventTypeNormal, "NodeOnline", "NodeOnline",
 			"worker %s: SPDK pod is now online after previous scheduling failure", nodeName)
 		r.emitOnStorageNodeForWorker(ctx, snCR, nodeName, corev1.EventTypeNormal, "NodeOnline",
 			fmt.Sprintf("SPDK pod is now online after previous scheduling failure on %s", nodeName))

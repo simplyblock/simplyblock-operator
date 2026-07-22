@@ -254,19 +254,17 @@ func main() {
 	}
 
 	if err := (&controller.ControlPlaneReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
-		Recorder: mgr.GetEventRecorderFor("controlplane-controller"),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("controlplane-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlane")
 		os.Exit(1)
 	}
 	if err := (&controller.StorageClusterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
-		Recorder:  mgr.GetEventRecorderFor("storagecluster-controller"),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorder("storagecluster-controller"),
 		Namespace: operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
@@ -279,17 +277,15 @@ func main() {
 		TLSEnabled:       tlsEnabled,
 		TLSProvider:      tlsProvider,
 		TLSMutualEnabled: tlsMutualEnabled,
-		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
-		Recorder: mgr.GetEventRecorderFor("storagenodeset-controller"),
+		Recorder:         mgr.GetEventRecorder("storagenodeset-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeSet")
 		os.Exit(1)
 	}
 	if err := (&controller.PoolReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
-		Recorder: mgr.GetEventRecorderFor("pool-controller"),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("pool-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Pool")
 		os.Exit(1)
@@ -319,64 +315,57 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageBackupReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
-		Recorder: mgr.GetEventRecorderFor("storagebackup-controller"),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagebackup-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackup")
 		os.Exit(1)
 	}
 	if err := (&controller.BackupRestoreReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
-		Recorder: mgr.GetEventRecorderFor("backuprestore-controller"),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("backuprestore-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupRestore")
 		os.Exit(1)
 	}
 	if err := (&controller.StorageBackupSyncReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
-		Recorder: mgr.GetEventRecorderFor("storagebackupsync-controller"),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagebackupsync-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageBackupSync")
 		os.Exit(1)
 	}
 	if err := (&controller.BackupPolicyReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
-		Recorder: mgr.GetEventRecorderFor("backuppolicy-controller"),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("backuppolicy-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupPolicy")
 		os.Exit(1)
 	}
 	if err := (&controller.BackupImportReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
-		Recorder: mgr.GetEventRecorderFor("backupimport-controller"),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("backupimport-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupImport")
 		os.Exit(1)
 	}
 	if err := (&controller.VolumeMigrationReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
-		Recorder: mgr.GetEventRecorderFor("volumemigration-controller"),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("volumemigration-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeMigration")
 		os.Exit(1)
 	}
 	if err := (&controller.StorageNodeReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
-		Recorder:         mgr.GetEventRecorderFor("storagenode-controller"),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorder("storagenode-controller"),
 		TLSEnabled:       tlsEnabled,
 		TLSMutualEnabled: tlsMutualEnabled,
 	}).SetupWithManager(mgr); err != nil {
@@ -384,19 +373,17 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageNodeOpsReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
-		Recorder: mgr.GetEventRecorderFor("storagenodeops-controller"),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagenodeops-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeOps")
 		os.Exit(1)
 	}
 	if err := (&controller.VolumeRebalancerReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		//nolint:staticcheck // SA1019: TODO migrate to GetEventRecorder (events/v1 API)
-		Recorder:          mgr.GetEventRecorderFor("volumerebalancer-controller"),
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorder("volumerebalancer-controller"),
 		LatencyPercentile: latencyPercentile,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeRebalancer")

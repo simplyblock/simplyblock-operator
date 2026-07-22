@@ -9,7 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
@@ -45,7 +45,7 @@ func newDrainReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetR
 		Client:    cl,
 		Scheme:    scheme,
 		Namespace: drainTestNS,
-		Recorder:  record.NewFakeRecorder(32),
+		Recorder:  events.NewFakeRecorder(32),
 	}
 }
 
