@@ -26,11 +26,8 @@ func assertPanics(t *testing.T, wantMsg string, fn func()) {
 
 func TestTo(t *testing.T) {
 	p := To(42)
-	if p == nil {
-		t.Fatalf("To returned nil")
-	}
-	if *p != 42 {
-		t.Fatalf("To: got %d want 42", *p)
+	if p == nil || *p != 42 {
+		t.Fatalf("To int: got %#v want 42", p)
 	}
 
 	s := To("hello")

@@ -31,8 +31,9 @@ const (
 	StorageNodeOpsPhaseFailed    StorageNodeOpsPhase = "Failed"
 )
 
-// StorageNodeOpsSubPhase is the active drain sub-phase when action=remove.
-// +kubebuilder:validation:Enum=Validating;Suspending;Migrating;Verifying;Removing
+// StorageNodeOpsSubPhase is the active sub-phase during a running op: the drain
+// steps when action=remove, and the Promoting hand-off step when action=migrate.
+// +kubebuilder:validation:Enum=Validating;Suspending;Migrating;Verifying;Removing;Promoting
 type StorageNodeOpsSubPhase string
 
 const (
@@ -41,6 +42,9 @@ const (
 	StorageNodeOpsSubPhaseMigrating  StorageNodeOpsSubPhase = "Migrating"
 	StorageNodeOpsSubPhaseVerifying  StorageNodeOpsSubPhase = "Verifying"
 	StorageNodeOpsSubPhaseRemoving   StorageNodeOpsSubPhase = "Removing"
+	// StorageNodeOpsSubPhasePromoting marks that a migrate op has issued the
+	// control-plane /promote for the relocated node (guards against re-promoting).
+	StorageNodeOpsSubPhasePromoting StorageNodeOpsSubPhase = "Promoting"
 )
 
 // DrainOpsSpec configures the drain workflow for action=remove.

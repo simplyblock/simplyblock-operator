@@ -2141,6 +2141,7 @@ spec:
                 - Migrating
                 - Verifying
                 - Removing
+                - Promoting
                 type: string
               triggered:
                 description: |-

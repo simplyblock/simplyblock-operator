@@ -290,7 +290,7 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 			log.Error(err, "migrate: failed to label target worker", "worker", target)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		} else if labeled {
-			r.Recorder.Eventf(ops, corev1.EventTypeNormal, "TargetWorkerLabeled",
+			r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "TargetWorkerLabeled", "TargetWorkerLabeled",
 				"labeled worker %s for storage plane of cluster %s", target, sns.Spec.ClusterName)
 			r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "TargetWorkerLabeled",
 				fmt.Sprintf("labeled worker %s for storage plane of cluster %s", target, sns.Spec.ClusterName))
@@ -335,7 +335,7 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 		if err := r.Status().Patch(ctx, ops, patch); err != nil {
 			return ctrl.Result{}, err
 		}
-		r.Recorder.Eventf(ops, corev1.EventTypeNormal, "MigrateStarted",
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigrateStarted", "MigrateStarted",
 			"restart with target worker %s issued for node %s", target, nodeUUID)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "MigrateStarted",
 			fmt.Sprintf("restart with target worker %s issued for node %s", target, nodeUUID))
@@ -354,15 +354,44 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	// Node is online on the target host. Re-point the Kubernetes topology: update
-	// this StorageNode's spec.workerNode and swap the owning StorageNodeSet's
-	// worker list from the source to the target worker.
+	// Node is online on the target host. Promote it before the Kubernetes handoff:
+	// /promote activates the new host's devices, fails and migrates the origin
+	// host's devices (starting a rebalance), sets the primary, and re-homes the
+	// logical volumes onto the relocated node. Issued exactly once, gated by the
+	// Promoting sub-phase so a crash after the POST does not re-promote.
+	if ops.Status.SubPhase != simplyblockv1alpha1.StorageNodeOpsSubPhasePromoting {
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/promote", clusterUUID, nodeUUID)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
+		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("status %d: %s", status, string(body))
+			}
+			log.Error(err, "migrate: promote POST failed", "nodeUUID", nodeUUID, "target", target)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		patch := client.MergeFrom(ops.DeepCopy())
+		ops.Status.SubPhase = simplyblockv1alpha1.StorageNodeOpsSubPhasePromoting
+		ops.Status.Message = fmt.Sprintf("promoted node %s on worker %s; rebalance started", nodeUUID, target)
+		if err := r.Status().Patch(ctx, ops, patch); err != nil {
+			return ctrl.Result{}, err
+		}
+		log.Info("migrate: promoted relocated node; rebalance started", "nodeUUID", nodeUUID, "target", target)
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigratePromoted", "MigratePromoted",
+			"promote issued for node %s on worker %s; rebalance started", nodeUUID, target)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "MigratePromoted",
+			fmt.Sprintf("promote issued for node %s on worker %s; rebalance started", nodeUUID, target))
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	// Promote has been issued. Re-point the Kubernetes topology: update this
+	// StorageNode's spec.workerNode and swap the owning StorageNodeSet's worker
+	// list from the source to the target worker.
 	if err := r.reconcileMigratedTopology(ctx, sn, sns, target); err != nil {
 		log.Error(err, "migrate: failed to reconcile topology after migration", "target", target)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	r.Recorder.Eventf(ops, corev1.EventTypeNormal, "MigrateCompleted",
+	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigrateCompleted", "MigrateCompleted",
 		"node %s is online on worker %s", nodeUUID, target)
 	r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "MigrateCompleted",
 		fmt.Sprintf("node %s is online on worker %s", nodeUUID, target))
