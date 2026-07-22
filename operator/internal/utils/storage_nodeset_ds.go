@@ -333,9 +333,6 @@ fi`
 							Name:            "s-node-api-container",
 							Image:           image,
 							ImagePullPolicy: imagePullPolicy,
-							// Source the per-node env file so that CPU_TOPOLOGY_ENABLED
-							// and RESERVED_SYSTEM_CPUS pick up per-node values before
-							// the main process starts.
 							Command: []string{"sh", "-c",
 								`[ -f /etc/node-env/env.sh ] && . /etc/node-env/env.sh
 exec sudo -E python3 simplyblock_web/node_webapp.py storage_node_k8s`,
