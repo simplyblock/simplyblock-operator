@@ -32,8 +32,9 @@ const (
 )
 
 // StorageNodeOpsSubPhase is the active sub-phase during a running op: the drain
-// steps when action=remove, and the Promoting hand-off step when action=migrate.
-// +kubebuilder:validation:Enum=Validating;Suspending;Migrating;Verifying;Removing;Promoting
+// steps when action=remove, and the Preparing → Migrating → Promoting steps when
+// action=migrate.
+// +kubebuilder:validation:Enum=Validating;Suspending;Migrating;Verifying;Removing;Preparing;Promoting
 type StorageNodeOpsSubPhase string
 
 const (
@@ -42,6 +43,12 @@ const (
 	StorageNodeOpsSubPhaseMigrating  StorageNodeOpsSubPhase = "Migrating"
 	StorageNodeOpsSubPhaseVerifying  StorageNodeOpsSubPhase = "Verifying"
 	StorageNodeOpsSubPhaseRemoving   StorageNodeOpsSubPhase = "Removing"
+	// StorageNodeOpsSubPhasePreparing marks that a migrate op is preparing the
+	// target worker: cloning per-node config, labeling it into the storage
+	// plane, and waiting until its storage-node-api pod is Ready and its per-pod
+	// DNS name is published in the EndpointSlice — the precondition for the
+	// control-plane restart to resolve node_address.
+	StorageNodeOpsSubPhasePreparing StorageNodeOpsSubPhase = "Preparing"
 	// StorageNodeOpsSubPhasePromoting marks that a migrate op has issued the
 	// control-plane /promote for the relocated node (guards against re-promoting).
 	StorageNodeOpsSubPhasePromoting StorageNodeOpsSubPhase = "Promoting"

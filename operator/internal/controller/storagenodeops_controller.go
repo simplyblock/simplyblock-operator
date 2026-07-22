@@ -26,6 +26,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -260,7 +261,6 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 	clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
 	nodeUUID := sn.Status.UUID
 	target := ops.Spec.TargetWorkerNode
 
@@ -272,64 +272,127 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 		return r.failOps(ctx, ops, fmt.Sprintf("targetWorkerNode %q is the node's current worker", target))
 	}
 
-	// POST the restart with the target host's API address if not yet triggered.
+	// runMigrate is a three-phase state machine tracked via ops.Status.SubPhase:
+	//
+	//	Preparing → Migrating → Promoting
+	//
+	// Each phase issues its one-shot control-plane call gated by
+	// ops.Status.Triggered, which advanceSubPhase resets to false on every
+	// transition, so a requeue within a phase never repeats the POST.
+	switch ops.Status.SubPhase {
+	case "":
+		// Enter the state machine. Persist Preparing first so the phase is
+		// observable before any preparation work begins.
+		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhasePreparing)
+	case simplyblockv1alpha1.StorageNodeOpsSubPhasePreparing:
+		return r.migratePrepare(ctx, ops, sn, sns, target)
+	case simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating:
+		return r.migrateRestart(ctx, ops, sn, target, clusterUUID, nodeUUID, apiClient)
+	case simplyblockv1alpha1.StorageNodeOpsSubPhasePromoting:
+		return r.migratePromote(ctx, ops, sn, sns, target, clusterUUID, nodeUUID, apiClient)
+	default:
+		return r.failOps(ctx, ops, fmt.Sprintf("migrate: unexpected sub-phase %q", ops.Status.SubPhase))
+	}
+}
+
+// migratePrepare runs the Preparing sub-phase: it clones the source worker's
+// per-node config onto the target, labels the target into the storage plane so
+// the DaemonSet schedules a storage-node-api pod there, then blocks until that
+// pod is Ready AND the target's per-pod DNS name is published in the
+// storage-node-api EndpointSlice. Only then can the control-plane restart
+// resolve node_address, so the phase does not advance to Migrating until the
+// DNS precondition holds — otherwise the restart fails name resolution and the
+// control plane resets the node to OFFLINE.
+func (r *StorageNodeOpsReconciler) migratePrepare(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.StorageNodeOps,
+	sn *simplyblockv1alpha1.StorageNode,
+	sns *simplyblockv1alpha1.StorageNodeSet,
+	target string,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	var node corev1.Node
+	if err := r.Get(ctx, types.NamespacedName{Name: target}, &node); err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.failOps(ctx, ops, fmt.Sprintf("target worker node %q not found in the cluster", target))
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	if !isNodeReady(&node) {
+		return r.failOps(ctx, ops, fmt.Sprintf("target worker node %q is not Ready", target))
+	}
+
+	// Clone the source worker's per-node config onto the target before the
+	// storage-node pod is scheduled there, so it boots with the same effective
+	// configuration as the node being migrated. Any additional NVMe devices
+	// requested via spec.newSsdPcie are merged into the cloned PCI_ALLOWED so the
+	// target host binds them on start. Done before labeling so the entry exists
+	// by the time the pod's init container sources it.
+	if err := r.ensureMigratedWorkerConfig(ctx, sns, sn.Spec.WorkerNode, target, ops.Spec.NewSsdPcie); err != nil {
+		log.Error(err, "migrate: failed to clone per-node config to target worker",
+			"source", sn.Spec.WorkerNode, "target", target)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	// Label the target so the storage-node DaemonSet schedules a storage-node-api
+	// pod there and the StorageNodeSet reconcile publishes its per-pod DNS name
+	// in the EndpointSlice.
+	if labeled, err := r.ensureWorkerLabeled(ctx, &node, sns.Spec.ClusterName); err != nil {
+		log.Error(err, "migrate: failed to label target worker", "worker", target)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	} else if labeled {
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "TargetWorkerLabeled", "TargetWorkerLabeled",
+			"labeled worker %s for storage plane of cluster %s", target, sns.Spec.ClusterName)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "TargetWorkerLabeled",
+			fmt.Sprintf("labeled worker %s for storage plane of cluster %s", target, sns.Spec.ClusterName))
+	}
+
+	// Wait for the storage-node-api pod to be Running+Ready on the target.
+	ready, err := r.storageNodePodReady(ctx, sns.Namespace, sns.Spec.ClusterName, target)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	if !ready {
+		return r.migrateWaiting(ctx, ops, fmt.Sprintf("waiting for storage-node pod on worker %s", target))
+	}
+
+	// Gate: the control plane resolves node_address via the target's per-pod
+	// headless DNS name, which only exists once the target is published in the
+	// storage-node-api EndpointSlice (built from labeled storage-plane nodes).
+	// Hold in Preparing until the entry appears so the restart can resolve it.
+	inSlice, err := r.endpointSliceHasWorker(ctx, sns.Namespace, target)
+	if err != nil {
+		log.Error(err, "migrate: failed to read storage-node-api EndpointSlice", "target", target)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	if !inSlice {
+		return r.migrateWaiting(ctx, ops,
+			fmt.Sprintf("waiting for worker %s DNS to be published before restart", target))
+	}
+
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating)
+}
+
+// migrateRestart runs the Migrating sub-phase: it issues the control-plane
+// restart pointed at the target worker's node_address (once, gated by
+// Triggered) and then polls until the relocated node reports online on the
+// target, at which point it advances to Promoting.
+func (r *StorageNodeOpsReconciler) migrateRestart(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.StorageNodeOps,
+	sn *simplyblockv1alpha1.StorageNode,
+	target, clusterUUID, nodeUUID string,
+	apiClient *webapi.Client,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
 	if !ops.Status.Triggered {
-		var node corev1.Node
-		if err := r.Get(ctx, types.NamespacedName{Name: target}, &node); err != nil {
-			if apierrors.IsNotFound(err) {
-				return r.failOps(ctx, ops, fmt.Sprintf("target worker node %q not found in the cluster", target))
-			}
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-		if !isNodeReady(&node) {
-			return r.failOps(ctx, ops, fmt.Sprintf("target worker node %q is not Ready", target))
-		}
-
-		// Clone the source worker's per-node config onto the target before the
-		// storage-node pod is scheduled there, so it boots with the same effective
-		// configuration as the node being migrated. Any additional NVMe devices
-		// requested via spec.newSsdPcie are merged into the cloned PCI_ALLOWED so
-		// the target host binds them on start. Done before labeling so the entry
-		// exists by the time the pod's init container sources it.
-		if err := r.ensureMigratedWorkerConfig(ctx, sns, sn.Spec.WorkerNode, target, ops.Spec.NewSsdPcie); err != nil {
-			log.Error(err, "migrate: failed to clone per-node config to target worker",
-				"source", sn.Spec.WorkerNode, "target", target)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
-		// The target worker is not part of the storage plane yet. Label it so the
-		// storage-node DaemonSet schedules a storage-node-api pod there; without
-		// that pod, node_address is unreachable and the restart cannot land.
-		if labeled, err := r.ensureWorkerLabeled(ctx, &node, sns.Spec.ClusterName); err != nil {
-			log.Error(err, "migrate: failed to label target worker", "worker", target)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		} else if labeled {
-			r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "TargetWorkerLabeled", "TargetWorkerLabeled",
-				"labeled worker %s for storage plane of cluster %s", target, sns.Spec.ClusterName)
-			r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "TargetWorkerLabeled",
-				fmt.Sprintf("labeled worker %s for storage plane of cluster %s", target, sns.Spec.ClusterName))
-		}
-
-		// Wait for the storage-node pod to be Running+Ready on the target before
-		// issuing the restart, so node_address resolves.
-		ready, err := r.storageNodePodReady(ctx, sns.Namespace, sns.Spec.ClusterName, target)
-		if err != nil {
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-		if !ready {
-			patch := client.MergeFrom(ops.DeepCopy())
-			ops.Status.Message = fmt.Sprintf("waiting for storage-node pod on worker %s before migrating", target)
-			_ = r.Status().Patch(ctx, ops, patch)
-			log.Info("migrate: waiting for storage-node pod on target worker", "worker", target)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
 		payload := map[string]any{
 			// Migration relocates a still-online node, so the control-plane
-			// restart must run with force=true — a non-forced restart is
-			// rejected unless the node is already OFFLINE ("Node must be
-			// offline"). Default to true and honor an explicit spec.force
-			// override only when the user sets it.
+			// restart must run with force=true — a non-forced restart is rejected
+			// unless the node is already OFFLINE ("Node must be offline"). Default
+			// to true and honor an explicit spec.force override only when set.
 			"force":        ops.Spec.Force == nil || *ops.Spec.Force,
 			"node_address": utils.StorageNodeSetAPIAddress(target, sn.Namespace),
 		}
@@ -340,10 +403,10 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 			payload["new_ssd_pcie"] = ops.Spec.NewSsdPcie
 		}
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
-		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, payload)
+		respBody, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, payload)
 		if err != nil || status >= 300 {
 			if err == nil {
-				err = fmt.Errorf("status %d: %s", status, string(body))
+				err = fmt.Errorf("status %d: %s", status, string(respBody))
 			}
 			log.Error(err, "migrate: restart POST failed", "nodeUUID", nodeUUID, "target", target)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -361,35 +424,47 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	// Poll until the node is back online on the target host.
 	currentStatus, err := getNodeBackendStatus(ctx, apiClient, clusterUUID, nodeUUID)
 	if err != nil {
 		log.Error(err, "migrate: failed to get node status during poll")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 	if currentStatus != utils.NodeStatusOnline {
-		log.Info("migrate: waiting for node to come online on target worker",
-			"current", currentStatus, "target", target, "nodeUUID", nodeUUID)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		return r.migrateWaiting(ctx, ops,
+			fmt.Sprintf("waiting for node %s to come online on worker %s (status %s)", nodeUUID, target, currentStatus))
 	}
 
-	// Node is online on the target host. Promote it before the Kubernetes handoff:
-	// /promote activates the new host's devices, fails and migrates the origin
-	// host's devices (starting a rebalance), sets the primary, and re-homes the
-	// logical volumes onto the relocated node. Issued exactly once, gated by the
-	// Promoting sub-phase so a crash after the POST does not re-promote.
-	if ops.Status.SubPhase != simplyblockv1alpha1.StorageNodeOpsSubPhasePromoting {
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhasePromoting)
+}
+
+// migratePromote runs the Promoting sub-phase: it issues the control-plane
+// /promote for the relocated node (once, gated by Triggered), then re-points the
+// Kubernetes topology onto the target worker and completes the op. /promote
+// activates the new host's devices, fails and migrates the origin host's devices
+// (starting a rebalance), sets the primary, and re-homes the logical volumes
+// onto the relocated node.
+func (r *StorageNodeOpsReconciler) migratePromote(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.StorageNodeOps,
+	sn *simplyblockv1alpha1.StorageNode,
+	sns *simplyblockv1alpha1.StorageNodeSet,
+	target, clusterUUID, nodeUUID string,
+	apiClient *webapi.Client,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if !ops.Status.Triggered {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/promote", clusterUUID, nodeUUID)
-		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
+		respBody, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
-				err = fmt.Errorf("status %d: %s", status, string(body))
+				err = fmt.Errorf("status %d: %s", status, string(respBody))
 			}
 			log.Error(err, "migrate: promote POST failed", "nodeUUID", nodeUUID, "target", target)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 		patch := client.MergeFrom(ops.DeepCopy())
-		ops.Status.SubPhase = simplyblockv1alpha1.StorageNodeOpsSubPhasePromoting
+		ops.Status.Triggered = true
 		ops.Status.Message = fmt.Sprintf("promoted node %s on worker %s; rebalance started", nodeUUID, target)
 		if err := r.Status().Patch(ctx, ops, patch); err != nil {
 			return ctrl.Result{}, err
@@ -402,9 +477,9 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	// Promote has been issued. Re-point the Kubernetes topology: update this
-	// StorageNode's spec.workerNode and swap the owning StorageNodeSet's worker
-	// list from the source to the target worker.
+	// Promote issued — re-point the Kubernetes topology: update this StorageNode's
+	// spec.workerNode and swap the owning StorageNodeSet's worker list (and status)
+	// from the source to the target worker.
 	if err := r.reconcileMigratedTopology(ctx, sn, sns, target, ops.Spec.NewSsdPcie); err != nil {
 		log.Error(err, "migrate: failed to reconcile topology after migration", "target", target)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -415,6 +490,47 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 	r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "MigrateCompleted",
 		fmt.Sprintf("node %s is online on worker %s", nodeUUID, target))
 	return r.succeedOps(ctx, ops, sn)
+}
+
+// migrateWaiting patches the op's status message and requeues without changing
+// the sub-phase — used while a Preparing/Migrating precondition is still pending.
+func (r *StorageNodeOpsReconciler) migrateWaiting(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.StorageNodeOps,
+	msg string,
+) (ctrl.Result, error) {
+	patch := client.MergeFrom(ops.DeepCopy())
+	ops.Status.Message = msg
+	_ = r.Status().Patch(ctx, ops, patch)
+	logf.FromContext(ctx).Info("migrate: " + msg)
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+// endpointSliceHasWorker reports whether the storage-node-api EndpointSlice
+// publishes the given worker's per-pod DNS hostname with at least one address —
+// i.e. whether <worker>.simplyblock-storage-node-api.<ns>.svc resolves.
+func (r *StorageNodeOpsReconciler) endpointSliceHasWorker(
+	ctx context.Context,
+	namespace, worker string,
+) (bool, error) {
+	var eps discoveryv1.EndpointSlice
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      "simplyblock-storage-node-api-endpoints",
+		Namespace: namespace,
+	}, &eps); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	want := utils.NodeHostnameLabel(worker)
+	for i := range eps.Endpoints {
+		e := eps.Endpoints[i]
+		if e.Hostname != nil && *e.Hostname == want && len(e.Addresses) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // reconcileMigratedTopology re-points the operator's Kubernetes topology at the
@@ -500,7 +616,9 @@ func (r *StorageNodeOpsReconciler) reconcileMigratedTopology(
 	setTarget := hadTargetCfg || hadSourceCfg || len(newSsdPcie) > 0
 
 	if !workersChanged && !hadSourceCfg && !setTarget {
-		return nil
+		// Spec already reconciled (idempotent re-run); still prune the stale
+		// source-host status entry left behind by the move.
+		return r.pruneMigratedSourceStatus(ctx, fresh.Name, fresh.Namespace, source, sn.Status.UUID)
 	}
 
 	patch := client.MergeFrom(fresh.DeepCopy())
@@ -516,6 +634,46 @@ func (r *StorageNodeOpsReconciler) reconcileMigratedTopology(
 	}
 	if err := r.Patch(ctx, &fresh, patch); err != nil {
 		return fmt.Errorf("reconciling StorageNodeSet %s topology: %w", fresh.Name, err)
+	}
+
+	// 3. Prune the stale source-host entry from status. The status sync keys
+	//    Status.Nodes by hostname, so once the migrated node reports from the
+	//    target it is appended as a new entry while the source entry (same
+	//    backend UUID) lingers. Drop it so the set reflects only live hosts.
+	return r.pruneMigratedSourceStatus(ctx, fresh.Name, fresh.Namespace, source, sn.Status.UUID)
+}
+
+// pruneMigratedSourceStatus removes the StorageNodeSet.Status.Nodes entry left
+// on the source host after a node migrated away — matched by the source
+// hostname and the migrated node's backend UUID so sibling nodes still on that
+// host (multi-socket) and unrelated in-flight (UUID=="") entries are untouched.
+func (r *StorageNodeOpsReconciler) pruneMigratedSourceStatus(
+	ctx context.Context,
+	name, namespace, source, uuid string,
+) error {
+	if uuid == "" {
+		return nil // cannot match safely without the migrated node's UUID
+	}
+	var sns simplyblockv1alpha1.StorageNodeSet
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &sns); err != nil {
+		return err
+	}
+	kept := make([]simplyblockv1alpha1.NodeStatus, 0, len(sns.Status.Nodes))
+	removed := false
+	for _, n := range sns.Status.Nodes {
+		if n.Hostname == source && n.UUID == uuid {
+			removed = true
+			continue
+		}
+		kept = append(kept, n)
+	}
+	if !removed {
+		return nil
+	}
+	patch := client.MergeFrom(sns.DeepCopy())
+	sns.Status.Nodes = kept
+	if err := r.Status().Patch(ctx, &sns, patch); err != nil {
+		return fmt.Errorf("pruning migrated source status entry for %s on %s: %w", uuid, source, err)
 	}
 	return nil
 }

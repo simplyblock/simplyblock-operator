@@ -164,6 +164,7 @@ spec:
                 - Migrating
                 - Verifying
                 - Removing
+                - Preparing
                 - Promoting
                 type: string
               triggered:
