@@ -8,9 +8,6 @@ import (
 )
 
 const (
-	// pinnedVolumeAnnotation is checked on the PVC; any non-empty value pins the volume.
-	pinnedVolumeAnnotation = "simplyblock.io/pinned-volume"
-
 	// DefaultEvaluationInterval is how often the rebalancer evaluates load when the spec
 	// does not override it. Exported so callers can fall back to it (e.g. for requeue
 	// timing) before a RebalancingConfig has been resolved.
