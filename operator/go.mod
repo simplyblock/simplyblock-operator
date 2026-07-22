@@ -9,6 +9,7 @@ require (
 	github.com/open-policy-agent/cert-controller v0.15.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/common v0.67.5
+	github.com/simplyblock/atlas v0.0.0-00010101000000-000000000000
 	gomodules.xyz/jsonpatch/v2 v2.4.0
 	k8s.io/api v0.36.2
 	k8s.io/apimachinery v0.36.2

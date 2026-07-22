@@ -20,6 +20,7 @@ import (
 // inject the CA bundle into the MutatingWebhookConfiguration.
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=mutatingwebhookconfigurations,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingwebhookconfigurations,verbs=get;list;watch;update;patch
 //
 // cert-manager mode: create a Certificate whose Secret cert-manager fills in.
 // (Also declared on the StorageNodeSet reconciler for storage-node TLS.)
@@ -40,8 +41,12 @@ import (
 func SetupWebhookCertificate(mgr ctrl.Manager, namespace, tlsProvider string) (chan struct{}, error) {
 	ready := make(chan struct{})
 
+	// Both configurations are served by the same webhook server (same DNS name),
+	// so they share one serving certificate and CA — only the CA-bundle injection
+	// targets differ.
 	webhooks := []rotator.WebhookInfo{
 		{Name: utils.WebhookConfigurationName, Type: rotator.Mutating},
+		{Name: utils.WebhookValidatingConfigurationName, Type: rotator.Validating},
 	}
 	dnsName := fmt.Sprintf("%s.%s.svc", utils.WebhookServiceName, namespace)
 

@@ -61,17 +61,26 @@ type StorageNodeOpsSpec struct {
 	StorageNodeRef string `json:"storageNodeRef"`
 
 	// Action is the operation to perform. Immutable.
-	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume;remove
+	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume;remove;migrate
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
 	Action string `json:"action"`
+
+	// TargetWorkerNode is the Kubernetes worker hostname the storage node is
+	// migrated onto. Required (and only used) when action=migrate. The source
+	// node is drained and removed exactly as for action=remove, then the owning
+	// StorageNodeSet is re-pointed from the current worker to this one so a fresh
+	// storage node is provisioned on the target host. Immutable.
+	// +optional
+	// +k8s:immutable
+	TargetWorkerNode string `json:"targetWorkerNode,omitempty"`
 
 	// Force enables forced execution where the backend supports it.
 	// +optional
 	Force *bool `json:"force,omitempty"`
 
-	// ReattachVolume reattaches volumes during restart.
-	// Only applicable when action=restart.
+	// ReattachVolume reattaches volumes during the node restart.
+	// Applicable when action=restart or action=migrate.
 	// +optional
 	ReattachVolume *bool `json:"reattachVolume,omitempty"`
 
