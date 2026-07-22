@@ -11,7 +11,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -518,7 +518,7 @@ func newPoolStateTestReconciler(t *testing.T, objects ...client.Object) *PoolRec
 	return &PoolReconciler{
 		Client:   cl,
 		Scheme:   scheme,
-		Recorder: record.NewFakeRecorder(10),
+		Recorder: events.NewFakeRecorder(10),
 	}
 }
 
@@ -565,9 +565,9 @@ func TestPoolReconcileRejectsCrossNamespaceClusterReference(t *testing.T) {
 		t.Fatalf("pool status.Status = %q, want %q", current.Status.Status, poolStatusInvalidClusterReference)
 	}
 
-	rec, ok := r.Recorder.(*record.FakeRecorder)
+	rec, ok := r.Recorder.(*events.FakeRecorder)
 	if !ok {
-		t.Fatalf("expected *record.FakeRecorder, got %T", r.Recorder)
+		t.Fatalf("expected *events.FakeRecorder, got %T", r.Recorder)
 	}
 	select {
 	case ev := <-rec.Events:
@@ -625,7 +625,7 @@ func TestPoolReconcileDoesNotEmitEventWhenClusterUUIDNotReady(t *testing.T) {
 		t.Fatalf("pool status.Status must not be %q while cluster UUID is merely pending", poolStatusInvalidClusterReference)
 	}
 
-	rec := r.Recorder.(*record.FakeRecorder)
+	rec := r.Recorder.(*events.FakeRecorder)
 	select {
 	case ev := <-rec.Events:
 		t.Fatalf("did not expect an event, got %q", ev)

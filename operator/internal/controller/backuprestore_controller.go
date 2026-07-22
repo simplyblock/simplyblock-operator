@@ -30,7 +30,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -64,7 +64,7 @@ const (
 type BackupRestoreReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
+	Recorder  events.EventRecorder
 	APIClient *webapi.Client
 }
 
@@ -183,7 +183,7 @@ func (r *BackupRestoreReconciler) resolveClusterUUID(
 		}); patchErr != nil {
 			return "", ctrl.Result{}, true, patchErr
 		}
-		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreClusterLookupError,
+		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreClusterLookupError, eventReasonRestoreClusterLookupError,
 			"Failed to resolve cluster UUID for %s: %v", restoreCR.Spec.ClusterName, err)
 		return "", ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
 	}
@@ -209,7 +209,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
 		}
-		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreBackupNotFound, "%s", msg)
+		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreBackupNotFound, eventReasonRestoreBackupNotFound, "%s", msg)
 		return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
 	}
 
@@ -223,7 +223,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
 		}
-		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreBackupFailed, "%s", msg)
+		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreBackupFailed, eventReasonRestoreBackupFailed, "%s", msg)
 		return ctrl.Result{}, true, nil
 	}
 
@@ -235,7 +235,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
 		}
-		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreBackupNotReady, "%s", msg)
+		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreBackupNotReady, eventReasonRestoreBackupNotReady, "%s", msg)
 		return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
 	}
 
@@ -260,7 +260,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 			}); patchErr != nil {
 				return ctrl.Result{}, true, patchErr
 			}
-			r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreInvalidSpec, "%s", specErr)
+			r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreInvalidSpec, eventReasonRestoreInvalidSpec, "%s", specErr)
 			return ctrl.Result{}, true, nil
 		}
 	}
@@ -289,7 +289,7 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
 		}
-		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestorePoolLookupError,
+		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestorePoolLookupError, eventReasonRestorePoolLookupError,
 			"Failed to resolve pool: %v", err)
 		return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
 	}
@@ -319,7 +319,7 @@ func (r *BackupRestoreReconciler) reconcileRestoreTask(
 		restoreCR.Status.BackupID, lvolName, restoreCR.Status.PoolName, restoreCR.Spec.TargetNode)
 	if err != nil {
 		log.Error(err, "Restore API call failed", "restore", restoreCR.Name)
-		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreAPIFailed,
+		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, eventReasonRestoreAPIFailed,
 			"Restore API call failed: %v", err)
 		res, err := r.handleRestoreAPIError(ctx, restoreCR, err)
 		return res, true, err
@@ -352,7 +352,7 @@ func (r *BackupRestoreReconciler) reconcileInProgress(
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
 		}
-		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreLvolPollFailed,
+		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreLvolPollFailed, eventReasonRestoreLvolPollFailed,
 			"Failed to poll lvol status: %v", err)
 		return ctrl.Result{RequeueAfter: restoreProgressRequeue}, true, nil
 	}
@@ -400,7 +400,7 @@ func (r *BackupRestoreReconciler) reconcilePVCBinding(
 	if restoreCR.Status.PVName == "" {
 		pvName := fmt.Sprintf("restore-%s", restoreCR.UID)
 		if err := r.ensurePV(ctx, restoreCR, pvName, pvcName, pvcNamespace, clusterUUID); err != nil {
-			r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestorePVCreateFailed,
+			r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestorePVCreateFailed, eventReasonRestorePVCreateFailed,
 				"Failed to create PV: %v", err)
 			if isNonRetryableCreateError(err) {
 				if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
@@ -427,7 +427,7 @@ func (r *BackupRestoreReconciler) reconcilePVCBinding(
 
 	if restoreCR.Status.PVCName == "" {
 		if err := r.ensurePVC(ctx, restoreCR, pvcName, pvcNamespace); err != nil {
-			r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestorePVCCreateFailed,
+			r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestorePVCCreateFailed, eventReasonRestorePVCCreateFailed,
 				"Failed to create PVC: %v", err)
 			if isNonRetryableCreateError(err) {
 				if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
@@ -499,7 +499,7 @@ func (r *BackupRestoreReconciler) reconcileSourceSwitch(
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
 		}
-		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, "%s", msg)
+		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, eventReasonRestoreAPIFailed, "%s", msg)
 		return ctrl.Result{}, true, nil
 	}
 
@@ -519,7 +519,7 @@ func (r *BackupRestoreReconciler) reconcileSourceSwitch(
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
 		}
-		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, "%s", msg)
+		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, eventReasonRestoreAPIFailed, "%s", msg)
 		return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
 	}
 
@@ -556,7 +556,7 @@ func (r *BackupRestoreReconciler) reconcileSourceSwitchLocal(
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
 		}
-		r.Recorder.Eventf(restoreCR, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, "%s", msg)
+		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, eventReasonRestoreAPIFailed, "%s", msg)
 		return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
 	}
 

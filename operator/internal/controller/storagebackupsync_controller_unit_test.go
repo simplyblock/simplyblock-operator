@@ -9,7 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -107,7 +107,7 @@ func newSyncTestReconciler(t *testing.T, apiURL string, objects ...client.Object
 	return &StorageBackupSyncReconciler{
 		Client:    cl,
 		Scheme:    scheme,
-		Recorder:  record.NewFakeRecorder(32),
+		Recorder:  events.NewFakeRecorder(32),
 		APIClient: webapi.NewClient(apiURL),
 	}
 }

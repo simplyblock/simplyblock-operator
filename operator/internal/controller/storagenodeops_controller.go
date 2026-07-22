@@ -29,7 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -48,7 +48,7 @@ import (
 type StorageNodeOpsReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodeops,verbs=get;list;watch;create;update;patch;delete
@@ -293,7 +293,7 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 	}
 
 	if len(pinned) > 0 {
-		r.Recorder.Eventf(ops, corev1.EventTypeWarning, "PinnedVolumeBlocking",
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "PinnedVolumeBlocking", "PinnedVolumeBlocking",
 			"drain blocked: %d pinned volume(s) on node %s — remove the %s annotation to proceed",
 			len(pinned), nodeUUID, simplyblockv1alpha1.AnnotationPinnedVolume)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "PinnedVolumeBlocking", fmt.Sprintf("drain blocked: %d pinned volume(s) on node %s — remove the %s annotation to proceed", len(pinned), nodeUUID, simplyblockv1alpha1.AnnotationPinnedVolume))
@@ -304,7 +304,7 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 	}
 
 	if len(unmanaged) > 0 {
-		r.Recorder.Eventf(ops, corev1.EventTypeWarning, "UnmanagedVolumeBlocking",
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "UnmanagedVolumeBlocking", "UnmanagedVolumeBlocking",
 			"drain blocked: %d unmanaged volume(s) on node %s — remove them manually",
 			len(unmanaged), nodeUUID)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "UnmanagedVolumeBlocking", fmt.Sprintf("drain blocked: %d unmanaged volume(s) on node %s — remove them manually", len(unmanaged), nodeUUID))
@@ -374,7 +374,7 @@ func (r *StorageNodeOpsReconciler) drainSuspend(
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
 	if nodeResp.Status != utils.NodeStatusSuspended {
-		r.Recorder.Eventf(ops, corev1.EventTypeWarning, "DrainSuspendPending",
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainSuspendPending", "DrainSuspendPending",
 			"waiting for node %s to suspend (current status: %s)", nodeUUID, nodeResp.Status)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainSuspendPending", fmt.Sprintf("waiting for node %s to suspend (current status: %s)", nodeUUID, nodeResp.Status))
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
@@ -436,7 +436,7 @@ func (r *StorageNodeOpsReconciler) drainMigrate(
 				log.Error(err, "drain: failed to delete completed VolumeMigration", "name", vm.Name)
 			}
 		}
-		r.Recorder.Eventf(ops, corev1.EventTypeNormal, "MigrationCompleted",
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigrationCompleted", "MigrationCompleted",
 			"all %d volume migrations completed", completed)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "MigrationCompleted", fmt.Sprintf("all %d volume migrations completed", completed))
 		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseVerifying)
@@ -484,7 +484,7 @@ func (r *StorageNodeOpsReconciler) handleFailedVolumeMigrations(
 			log.Error(err, "drain: failed to delete failed VolumeMigration", "name", vm.Name)
 			continue
 		}
-		r.Recorder.Eventf(ops, corev1.EventTypeWarning, "MigrationRetry",
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "MigrationRetry", "MigrationRetry",
 			"VolumeMigration %s failed, deleted and will retry with new target", vm.Name)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "MigrationRetry", fmt.Sprintf("VolumeMigration %s failed, deleted and will retry with new target", vm.Name))
 	}
@@ -574,7 +574,7 @@ func (r *StorageNodeOpsReconciler) createMissingVolumeMigrationsOps(
 	targetByPV, err := roundRobinTargetNodes(ctx, apiClient, clusterUUID, nodeUUID, pvNames)
 	if err != nil {
 		log.Error(err, "drain: no available target nodes for migration")
-		r.Recorder.Eventf(ops, corev1.EventTypeWarning, "DrainNoMigrationTarget",
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainNoMigrationTarget", "DrainNoMigrationTarget",
 			"drain stalled: no online storage node available as migration target for node %s", nodeUUID)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainNoMigrationTarget", fmt.Sprintf("drain stalled: no online storage node available as migration target for node %s", nodeUUID))
 		return ctrl.Result{RequeueAfter: drainRequeueMigrateNew}, nil
@@ -651,7 +651,7 @@ func (r *StorageNodeOpsReconciler) drainVerify(
 	}
 
 	if len(nonSystem) > 0 {
-		r.Recorder.Eventf(ops, corev1.EventTypeWarning, "DrainVerifyPending",
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainVerifyPending", "DrainVerifyPending",
 			"node %s still has %d non-system volume(s) after migration; waiting for backend to confirm empty",
 			nodeUUID, len(nonSystem))
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainVerifyPending", fmt.Sprintf("node %s still has %d non-system volume(s) after migration; waiting for backend to confirm empty", nodeUUID, len(nonSystem)))
@@ -709,7 +709,7 @@ func (r *StorageNodeOpsReconciler) drainRemove(
 	_, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 
 	if err == nil && (status == http.StatusOK || status == http.StatusNoContent || status == http.StatusNotFound) {
-		r.Recorder.Eventf(ops, corev1.EventTypeNormal, "NodeRemoved",
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "NodeRemoved", "NodeRemoved",
 			"storage node %s removed successfully", nodeUUID)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "NodeRemoved", fmt.Sprintf("storage node %s removed successfully", nodeUUID))
 		return r.succeedOps(ctx, ops, sn)
@@ -744,7 +744,7 @@ func (r *StorageNodeOpsReconciler) resumeAndFail(
 		_ = r.Status().Patch(ctx, ops, patch)
 		return ctrl.Result{RequeueAfter: drainRequeueSuspend}, nil
 	}
-	r.Recorder.Eventf(ops, corev1.EventTypeWarning, "NodeResumed",
+	r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "NodeResumed", "NodeResumed",
 		"drain failed, attempted resume of node %s: %s", nodeUUID, reason)
 	r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "NodeResumed", fmt.Sprintf("drain failed, attempted resume of node %s: %s", nodeUUID, reason))
 	return r.failOps(ctx, ops, reason)
@@ -788,7 +788,7 @@ func (r *StorageNodeOpsReconciler) clusterPauseCheck(
 	patch := client.MergeFrom(ops.DeepCopy())
 	ops.Status.Message = "drain paused: " + reason
 	_ = r.Status().Patch(ctx, ops, patch)
-	r.Recorder.Eventf(ops, corev1.EventTypeWarning, "DrainPaused",
+	r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "DrainPaused", "DrainPaused",
 		"drain paused: %s — will resume when cluster is active", reason)
 	r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "DrainPaused", fmt.Sprintf("drain paused: %s — will resume when cluster is active", reason))
 	log.Info("drain: pausing — cluster not ready", "reason", reason)
@@ -836,7 +836,7 @@ func (r *StorageNodeOpsReconciler) failOps(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	log.Error(nil, "ops failed", "ops", ops.Name, "reason", reason)
-	r.Recorder.Event(ops, "Warning", "OpsFailed", reason)
+	r.Recorder.Eventf(ops, nil, "Warning", "OpsFailed", "OpsFailed", "%s", reason)
 	r.emitOnStorageNode(ctx, ops, "Warning", "OpsFailed", reason)
 
 	now := metav1.Now()
@@ -870,7 +870,7 @@ func (r *StorageNodeOpsReconciler) emitOnStorageNode(
 	if err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.StorageNodeRef, Namespace: ops.Namespace}, &sn); err != nil {
 		return
 	}
-	r.Recorder.Event(&sn, eventType, reason, message)
+	r.Recorder.Eventf(&sn, nil, eventType, reason, reason, "%s", message)
 }
 
 // releaseLock clears StorageNode.status.activeOpsRef if it still points to opsName.

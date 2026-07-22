@@ -12,7 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -46,7 +46,7 @@ func rebalanceMigrationName(volumeUUID string) string {
 type VolumeRebalancerReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
+	Recorder  events.EventRecorder
 	apiClient *webapi.Client
 
 	// LatencyPercentile is the operator-wide fio write-latency percentile ("p50" or
@@ -226,7 +226,7 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 	migratedCount := 0
 	for _, mc := range toMigrate {
 		if time.Now().After(cycleDeadline) {
-			r.Recorder.Eventf(clusterCR, corev1.EventTypeNormal, "VolumeRebalancingDeferred",
+			r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeNormal, "VolumeRebalancingDeferred", "VolumeRebalancingDeferred",
 				"Cycle deadline reached; %d migration candidate(s) deferred to next cycle",
 				len(toMigrate)-migratedCount)
 			break
@@ -245,12 +245,12 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 			log.Info("VolumeMigration CR already exists; tracking existing", "name", name, "volume", mc.Volume.UUID)
 		case err != nil:
 			log.Error(err, "Failed to create VolumeMigration CR", "volume", mc.Volume.UUID, "target", mc.TargetNodeUUID)
-			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingFailed",
+			r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeWarning, "VolumeRebalancingFailed", "VolumeRebalancingFailed",
 				"Creating VolumeMigration for volume %s to node %s failed: %v", mc.Volume.UUID, mc.TargetNodeUUID, err)
 			continue
 		}
 		r.migrationState.PushMigration(mc.ClusterUUID, mc.Volume.PoolUUID, mc.Volume.UUID, name, clusterCR.Namespace, coolDownSecs)
-		r.Recorder.Eventf(clusterCR, corev1.EventTypeNormal, "VolumeRebalancingStarted",
+		r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeNormal, "VolumeRebalancingStarted", "VolumeRebalancingStarted",
 			"Created VolumeMigration %s for volume %s from node %s to %s",
 			name, mc.Volume.UUID, mc.SourceNodeUUID, mc.TargetNodeUUID)
 		rebalancerMigrationsTotal.WithLabelValues(clusterCR.Name, mc.SourceNodeUUID, mc.TargetNodeUUID).Inc()
@@ -301,7 +301,7 @@ func (r *VolumeRebalancerReconciler) processPendingMigrations(
 			if time.Since(pm.MigrationStart) > volumemigration.MigrationStuckWarningTimeout && !pm.StuckWarned {
 				log.Error(nil, "Volume migration has not completed within 30 minutes",
 					"volume", volumeUUID, "migration", pm.CRName, "phase", phase)
-				r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingStuck",
+				r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeWarning, "VolumeRebalancingStuck", "VolumeRebalancingStuck",
 					"Migration %s of volume %s has not completed after 30 minutes (phase: %s)",
 					pm.CRName, volumeUUID, phase)
 				r.migrationState.MarkMigrationStuck(clusterUUID, volumeUUID)
@@ -313,12 +313,12 @@ func (r *VolumeRebalancerReconciler) processPendingMigrations(
 		r.migrationState.DeletePendingMigration(clusterUUID, volumeUUID)
 		if phase == simplyblockv1alpha1.VolumeMigrationPhaseCompleted {
 			log.Info("Volume migration complete", "volume", volumeUUID, "migration", pm.CRName)
-			r.Recorder.Eventf(clusterCR, corev1.EventTypeNormal, "VolumeRebalancingComplete",
+			r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeNormal, "VolumeRebalancingComplete", "VolumeRebalancingComplete",
 				"Migration %s of volume %s completed successfully", pm.CRName, volumeUUID)
 		} else {
 			log.Error(nil, "Volume migration ended without success",
 				"volume", volumeUUID, "migration", pm.CRName, "phase", phase, "error", vm.Status.ErrorMessage)
-			r.Recorder.Eventf(clusterCR, corev1.EventTypeWarning, "VolumeRebalancingFailed",
+			r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeWarning, "VolumeRebalancingFailed", "VolumeRebalancingFailed",
 				"Migration %s of volume %s ended in phase %s: %s",
 				pm.CRName, volumeUUID, phase, vm.Status.ErrorMessage)
 		}

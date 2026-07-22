@@ -13,7 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -52,7 +52,7 @@ func newVMReconciler(t *testing.T, apiURL string, objs ...client.Object) (*Volum
 	r := &VolumeMigrationReconciler{
 		Client:     cl,
 		Scheme:     scheme,
-		Recorder:   record.NewFakeRecorder(64),
+		Recorder:   events.NewFakeRecorder(64),
 		apiClient:  webapi.NewClient(apiURL),
 		coreClient: k8sfake.NewSimpleClientset().CoreV1(),
 		// The fake client serves both cached and uncached reads in tests.

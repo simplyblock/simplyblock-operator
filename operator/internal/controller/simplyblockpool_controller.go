@@ -29,7 +29,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -49,7 +49,7 @@ const (
 type PoolReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // StoragePoolDTO mirrors the new API's storage pool response format.
@@ -166,7 +166,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			"cluster", poolCR.Spec.ClusterName,
 		)
 		if r.Recorder != nil {
-			r.Recorder.Eventf(poolCR, corev1.EventTypeWarning, poolEventInvalidClusterReference,
+			r.Recorder.Eventf(poolCR, nil, corev1.EventTypeWarning, poolEventInvalidClusterReference, poolEventInvalidClusterReference,
 				"StorageCluster %q not found in namespace %q; Pools must reside in the same namespace as their StorageCluster",
 				poolCR.Spec.ClusterName, poolCR.Namespace)
 		}

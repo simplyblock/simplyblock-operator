@@ -440,7 +440,7 @@ func (r *StorageNodeSetReconciler) emitOnStorageNodeForWorker(
 	}
 	for i := range snList.Items {
 		if snList.Items[i].Spec.StorageNodeSetRef == sns.Name {
-			r.Recorder.Event(&snList.Items[i], eventType, reason, message)
+			r.Recorder.Eventf(&snList.Items[i], nil, eventType, reason, reason, "%s", message)
 			return
 		}
 	}

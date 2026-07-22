@@ -7,7 +7,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -38,7 +38,7 @@ func newSNSReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetRec
 	return &StorageNodeSetReconciler{
 		Client:   cl,
 		Scheme:   scheme,
-		Recorder: record.NewFakeRecorder(16),
+		Recorder: events.NewFakeRecorder(16),
 	}
 }
 
