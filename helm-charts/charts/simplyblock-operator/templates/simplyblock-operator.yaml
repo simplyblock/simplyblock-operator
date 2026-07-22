@@ -94,8 +94,21 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
       volumes:
+        # Self-signed mode (cert-controller) only writes the serving cert to the
+        # webhook-server-cert Secret, so that Secret must be mounted here for the
+        # cert to reach CertDir (/tmp/k8s-webhook-server/serving-certs); otherwise
+        # the rotator times out with "could not mount certs" and the manager exits.
+        # optional:true lets the pod start before the operator creates/populates it.
+        # In cert-manager mode the operator writes the issued cert to disk itself,
+        # so a writable emptyDir is required there instead.
         - name: webhook-certs
+          {{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") }}
           emptyDir: {}
+          {{- else }}
+          secret:
+            secretName: webhook-server-cert
+            optional: true
+          {{- end }}
         {{- if .Values.tls.enabled }}
         {{- include "simplyblock.clientTlsVolume" (dict "ctx" . "clientSecret" "simplyblock-operator-client-tls") | nindent 8 }}
         {{- end }}
