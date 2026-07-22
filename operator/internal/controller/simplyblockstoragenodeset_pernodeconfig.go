@@ -16,6 +16,7 @@ limitations under the License.
 
 package controller
 
+
 // reconcilePerNodeConfigMap creates or updates a single ConfigMap that holds
 // per-worker-node effective configuration values. The DaemonSet init container
 // mounts this ConfigMap and sources the file matching its hostname so that
@@ -189,24 +190,17 @@ func buildPerNodeEnvFile(sns *simplyblockv1alpha1.StorageNodeSet, worker string)
 		}
 	}
 
-	// sq wraps a value in single quotes so spaces in user-supplied fields
-	// (e.g. pcieModel "SAMSUNG MZQLB1T9HAJR-00007") don't break the shell
-	// assignment when env.sh is sourced by the init container.
-	sq := func(s string) string {
-		return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
-	}
-
 	var b strings.Builder
 	fmt.Fprintf(&b, "MAX_LVOL=%s\n", utils.Int32PtrToString(eff.MaxLogicalVolumeCount))
-	fmt.Fprintf(&b, "MAX_SIZE=%s\n", sq(eff.MaxSize))
+	fmt.Fprintf(&b, "MAX_SIZE=%s\n", utils.ShellQuote(eff.MaxSize))
 	fmt.Fprintf(&b, "CORES_PERCENTAGE=%s\n", utils.Int32PtrToString(eff.CorePercentage))
-	fmt.Fprintf(&b, "RESERVED_SYSTEM_CPUS=%s\n", sq(eff.ReservedSystemCPU))
+	fmt.Fprintf(&b, "RESERVED_SYSTEM_CPUS=%s\n", utils.ShellQuote(eff.ReservedSystemCPU))
 	fmt.Fprintf(&b, "CPU_TOPOLOGY_ENABLED=%s\n", utils.BoolPtrToString(eff.EnableCpuTopology))
-	fmt.Fprintf(&b, "PCI_ALLOWED=%s\n", sq(strings.Join(eff.PcieAllowList, ",")))
-	fmt.Fprintf(&b, "PCI_BLOCKED=%s\n", sq(strings.Join(eff.PcieDenyList, ",")))
-	fmt.Fprintf(&b, "NVME_DEVICES=%s\n", sq(strings.Join(eff.DeviceNames, ",")))
-	fmt.Fprintf(&b, "DEVICE_MODEL=%s\n", sq(eff.PcieModel))
-	fmt.Fprintf(&b, "SIZE_RANGE=%s\n", sq(eff.DriveSizeRange))
+	fmt.Fprintf(&b, "PCI_ALLOWED=%s\n", utils.ShellQuote(strings.Join(eff.PcieAllowList, ",")))
+	fmt.Fprintf(&b, "PCI_BLOCKED=%s\n", utils.ShellQuote(strings.Join(eff.PcieDenyList, ",")))
+	fmt.Fprintf(&b, "NVME_DEVICES=%s\n", utils.ShellQuote(strings.Join(eff.DeviceNames, ",")))
+	fmt.Fprintf(&b, "DEVICE_MODEL=%s\n", utils.ShellQuote(eff.PcieModel))
+	fmt.Fprintf(&b, "SIZE_RANGE=%s\n", utils.ShellQuote(eff.DriveSizeRange))
 	if eff.JournalManagerSpec != nil {
 		fmt.Fprintf(&b, "JM_PERCENT=%s\n", utils.Int32PtrToString(eff.JournalManagerSpec.PercentPerDevice))
 		fmt.Fprintf(&b, "HA_JM_COUNT=%s\n", utils.Int32PtrToString(eff.JournalManagerSpec.Count))
