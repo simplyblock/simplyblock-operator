@@ -2142,6 +2142,7 @@ spec:
                 - Verifying
                 - Removing
                 - Preparing
+                - Restarting
                 - Promoting
                 type: string
               triggered:

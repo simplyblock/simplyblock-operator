@@ -288,6 +288,8 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 		return r.migratePrepare(ctx, ops, sn, sns, target)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating:
 		return r.migrateRestart(ctx, ops, sn, target, clusterUUID, nodeUUID, apiClient)
+	case simplyblockv1alpha1.StorageNodeOpsSubPhaseRestarting:
+		return r.migrateAwaitOnline(ctx, ops, target, clusterUUID, nodeUUID, apiClient)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhasePromoting:
 		return r.migratePromote(ctx, ops, sn, sns, target, clusterUUID, nodeUUID, apiClient)
 	default:
@@ -376,8 +378,12 @@ func (r *StorageNodeOpsReconciler) migratePrepare(
 
 // migrateRestart runs the Migrating sub-phase: it issues the control-plane
 // restart pointed at the target worker's node_address (once, gated by
-// Triggered) and then polls until the relocated node reports online on the
-// target, at which point it advances to Promoting.
+// Triggered), then waits until the node is observed to LEAVE online (enter
+// in_restart). Because /restart is asynchronous — the POST returns immediately
+// while the old primary keeps reporting online — a plain "status == online"
+// check would pass on the pre-restart status and let /promote fire into the
+// in-flight restart. Confirming the node entered in_restart here means the
+// Restarting phase's later "back to online" is the genuine post-restart state.
 func (r *StorageNodeOpsReconciler) migrateRestart(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.StorageNodeOps,
@@ -413,7 +419,7 @@ func (r *StorageNodeOpsReconciler) migrateRestart(
 		}
 		patch := client.MergeFrom(ops.DeepCopy())
 		ops.Status.Triggered = true
-		ops.Status.Message = fmt.Sprintf("migrating node %s to worker %s, waiting for online", nodeUUID, target)
+		ops.Status.Message = fmt.Sprintf("migrating node %s to worker %s, waiting for restart to begin", nodeUUID, target)
 		if err := r.Status().Patch(ctx, ops, patch); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -421,12 +427,43 @@ func (r *StorageNodeOpsReconciler) migrateRestart(
 			"restart with target worker %s issued for node %s", target, nodeUUID)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "MigrateStarted",
 			fmt.Sprintf("restart with target worker %s issued for node %s", target, nodeUUID))
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		// Poll quickly so the (typically tens-of-seconds) in_restart window is
+		// reliably observed before the node returns online.
+		return ctrl.Result{RequeueAfter: migrateRestartPoll}, nil
 	}
 
 	currentStatus, err := getNodeBackendStatus(ctx, apiClient, clusterUUID, nodeUUID)
 	if err != nil {
-		log.Error(err, "migrate: failed to get node status during poll")
+		log.Error(err, "migrate: failed to get node status during restart-start poll")
+		return ctrl.Result{RequeueAfter: migrateRestartPoll}, nil
+	}
+	if currentStatus == utils.NodeStatusOnline {
+		// Still the pre-restart online — the async restart has not taken the
+		// node down yet. Keep waiting; do NOT advance, or /promote would race
+		// the in-flight restart.
+		return r.migrateWaitingAfter(ctx, ops, migrateRestartPoll,
+			fmt.Sprintf("waiting for restart of node %s to begin on worker %s", nodeUUID, target))
+	}
+
+	// Node has left online (in_restart / offline) — the restart is underway.
+	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseRestarting)
+}
+
+// migrateAwaitOnline runs the Restarting sub-phase: the restart is confirmed
+// in-flight (the node left online in Migrating), so it waits for the node to
+// return to online on the target host — the genuine post-restart state — and
+// only then advances to Promoting.
+func (r *StorageNodeOpsReconciler) migrateAwaitOnline(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.StorageNodeOps,
+	target, clusterUUID, nodeUUID string,
+	apiClient *webapi.Client,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	currentStatus, err := getNodeBackendStatus(ctx, apiClient, clusterUUID, nodeUUID)
+	if err != nil {
+		log.Error(err, "migrate: failed to get node status during online poll")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 	if currentStatus != utils.NodeStatusOnline {
@@ -492,18 +529,34 @@ func (r *StorageNodeOpsReconciler) migratePromote(
 	return r.succeedOps(ctx, ops, sn)
 }
 
-// migrateWaiting patches the op's status message and requeues without changing
-// the sub-phase — used while a Preparing/Migrating precondition is still pending.
+// migrateRestartPoll is the requeue interval while waiting for the asynchronous
+// restart to be observed entering in_restart. It is short so the (typically
+// tens-of-seconds) in_restart window is reliably caught before the node returns
+// online — otherwise the op could miss it and stall in Migrating.
+const migrateRestartPoll = 3 * time.Second
+
+// migrateWaiting patches the op's status message and requeues (after 10s)
+// without changing the sub-phase — used while a migrate precondition is pending.
 func (r *StorageNodeOpsReconciler) migrateWaiting(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.StorageNodeOps,
+	msg string,
+) (ctrl.Result, error) {
+	return r.migrateWaitingAfter(ctx, ops, 10*time.Second, msg)
+}
+
+// migrateWaitingAfter is migrateWaiting with a caller-chosen requeue interval.
+func (r *StorageNodeOpsReconciler) migrateWaitingAfter(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.StorageNodeOps,
+	after time.Duration,
 	msg string,
 ) (ctrl.Result, error) {
 	patch := client.MergeFrom(ops.DeepCopy())
 	ops.Status.Message = msg
 	_ = r.Status().Patch(ctx, ops, patch)
 	logf.FromContext(ctx).Info("migrate: " + msg)
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: after}, nil
 }
 
 // endpointSliceHasWorker reports whether the storage-node-api EndpointSlice
