@@ -169,8 +169,8 @@ func TestCoLocatedHostID(t *testing.T) {
 	t.Run("preferred segment matches", func(t *testing.T) {
 		req := &csi.TopologyRequirement{
 			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
-				topologyKeyZoneStable:                   "us-east-1a",
-				topologyKeyStorageNodeUUIDPrefix + uuid: clusterID + ".0",
+				topologyKeyZoneStable:                               "us-east-1a",
+				topologyKeyStorageNodeUUIDPrefix + clusterID + ".0": uuid,
 			})},
 		}
 		if got := coLocatedHostID(req, clusterID); got != uuid {
@@ -184,7 +184,7 @@ func TestCoLocatedHostID(t *testing.T) {
 				topologyKeyZoneStable: "us-east-1a",
 			})},
 			Requisite: []*csi.Topology{topologyWithSegments(map[string]string{
-				topologyKeyStorageNodeUUIDPrefix + uuid: clusterID + ".0",
+				topologyKeyStorageNodeUUIDPrefix + clusterID + ".0": uuid,
 			})},
 		}
 		if got := coLocatedHostID(req, clusterID); got != uuid {
@@ -196,10 +196,10 @@ func TestCoLocatedHostID(t *testing.T) {
 		const otherUUID = "429448c5-83c0-447d-9546-dd40ac2b20c1"
 		req := &csi.TopologyRequirement{
 			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
-				topologyKeyStorageNodeUUIDPrefix + uuid: clusterID + ".0",
+				topologyKeyStorageNodeUUIDPrefix + clusterID + ".0": uuid,
 			})},
 			Requisite: []*csi.Topology{topologyWithSegments(map[string]string{
-				topologyKeyStorageNodeUUIDPrefix + otherUUID: clusterID + ".0",
+				topologyKeyStorageNodeUUIDPrefix + clusterID + ".0": otherUUID,
 			})},
 		}
 		if got := coLocatedHostID(req, clusterID); got != uuid {
@@ -210,7 +210,7 @@ func TestCoLocatedHostID(t *testing.T) {
 	t.Run("segment from a different cluster is skipped", func(t *testing.T) {
 		req := &csi.TopologyRequirement{
 			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
-				topologyKeyStorageNodeUUIDPrefix + uuid: "some-other-cluster-uuid.0",
+				topologyKeyStorageNodeUUIDPrefix + "some-other-cluster-uuid.0": uuid,
 			})},
 		}
 		if got := coLocatedHostID(req, clusterID); got != "" {
@@ -223,8 +223,8 @@ func TestCoLocatedHostID(t *testing.T) {
 		const socket1UUID = "22222222-2222-2222-2222-222222222222"
 		req := &csi.TopologyRequirement{
 			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
-				topologyKeyStorageNodeUUIDPrefix + socket1UUID: clusterID + ".1",
-				topologyKeyStorageNodeUUIDPrefix + socket0UUID: clusterID + ".0",
+				topologyKeyStorageNodeUUIDPrefix + clusterID + ".1": socket1UUID,
+				topologyKeyStorageNodeUUIDPrefix + clusterID + ".0": socket0UUID,
 			})},
 		}
 		// Run repeatedly — the original prototype picked via unordered map
@@ -239,11 +239,27 @@ func TestCoLocatedHostID(t *testing.T) {
 	t.Run("malformed ordinal is ignored", func(t *testing.T) {
 		req := &csi.TopologyRequirement{
 			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
-				topologyKeyStorageNodeUUIDPrefix + uuid: clusterID + ".not-a-number",
+				topologyKeyStorageNodeUUIDPrefix + clusterID + ".not-a-number": uuid,
 			})},
 		}
 		if got := coLocatedHostID(req, clusterID); got != "" {
 			t.Errorf("got %q, want empty", got)
+		}
+	})
+
+	t.Run("UUID value changes without the key changing (replacement scenario)", func(t *testing.T) {
+		// The whole point of keying by slot (cluster+ordinal) instead of by UUID:
+		// the key that CSINode has cached stays valid even after the storage
+		// node behind it is replaced — only the value differs.
+		const newUUID = "33333333-3333-3333-3333-333333333333"
+		slotKey := topologyKeyStorageNodeUUIDPrefix + clusterID + ".0"
+		req := &csi.TopologyRequirement{
+			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
+				slotKey: newUUID,
+			})},
+		}
+		if got := coLocatedHostID(req, clusterID); got != newUUID {
+			t.Errorf("got %q, want %q", got, newUUID)
 		}
 	})
 }

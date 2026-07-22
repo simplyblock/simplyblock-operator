@@ -172,8 +172,8 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 		if err := r.Get(context.Background(), client.ObjectKey{Name: "node-a"}, &n); err != nil {
 			t.Fatalf("failed to fetch node: %v", err)
 		}
-		got := n.Labels[storageNodeUUIDLabelPrefix+"uuid-1"]
-		want := "cluster-a-uuid.0"
+		got := n.Labels[storageNodeUUIDLabelPrefix+"cluster-a-uuid.0"]
+		want := "uuid-1"
 		if got != want {
 			t.Fatalf("storage-node-uuid label mismatch: got %q want %q", got, want)
 		}
@@ -217,15 +217,60 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 		if err := r.Get(context.Background(), client.ObjectKey{Name: "node-a"}, &n); err != nil {
 			t.Fatalf("failed to fetch node: %v", err)
 		}
-		if got, want := n.Labels[storageNodeUUIDLabelPrefix+"uuid-socket-0"], "cluster-a-uuid.0"; got != want {
+		if got, want := n.Labels[storageNodeUUIDLabelPrefix+"cluster-a-uuid.0"], "uuid-socket-0"; got != want {
 			t.Fatalf("socket-0 label mismatch: got %q want %q", got, want)
 		}
-		if got, want := n.Labels[storageNodeUUIDLabelPrefix+"uuid-socket-1"], "cluster-a-uuid.1"; got != want {
+		if got, want := n.Labels[storageNodeUUIDLabelPrefix+"cluster-a-uuid.1"], "uuid-socket-1"; got != want {
 			t.Fatalf("socket-1 label mismatch: got %q want %q", got, want)
 		}
 	})
 
-	t.Run("labelWorkerNodes removes a stale storage-node-uuid label", func(t *testing.T) {
+	t.Run("labelWorkerNodes updates the UUID value in place when a slot's storage node is replaced", func(t *testing.T) {
+		// The label KEY ("<prefix><clusterUUID>.<socketIndex>") must stay stable
+		// across a UUID replacement — Kubernetes' external-provisioner caches the
+		// set of topology KEYS in CSINode and hard-errors CreateVolume if a live
+		// Node's label keys ever diverge from that cached set. Only the UUID
+		// value is expected to churn.
+		sn := &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-label-replace", Namespace: "default"},
+			Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+				ClusterName: "cluster-a",
+				WorkerNodes: []string{"node-a"},
+			},
+		}
+		socketIndex := int32(0)
+		storageNode := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-label-replace-0", Namespace: "default"},
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
+				StorageNodeSetRef: "sn-label-replace",
+				WorkerNode:        "node-a",
+				SocketIndex:       &socketIndex,
+			},
+			Status: simplyblockv1alpha1.StorageNodeStatus{UUID: "uuid-new"},
+		}
+		slotKey := storageNodeUUIDLabelPrefix + "cluster-a-uuid.0"
+		nodeA := &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "node-a",
+				Labels: map[string]string{slotKey: "uuid-old"},
+			},
+		}
+		r := newStorageNodeUUIDLabelTestReconciler(t, sn, storageNode, nodeA)
+
+		if err := r.labelWorkerNodes(context.Background(), sn, "cluster-a-uuid"); err != nil {
+			t.Fatalf("labelWorkerNodes returned error: %v", err)
+		}
+
+		var n corev1.Node
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "node-a"}, &n); err != nil {
+			t.Fatalf("failed to fetch node: %v", err)
+		}
+		if got, want := n.Labels[slotKey], "uuid-new"; got != want {
+			t.Fatalf("slot label value mismatch: got %q want %q", got, want)
+		}
+	})
+
+	t.Run("labelWorkerNodes removes a slot label when its StorageNode CR no longer exists", func(t *testing.T) {
 		sn := &simplyblockv1alpha1.StorageNodeSet{
 			ObjectMeta: metav1.ObjectMeta{Name: "sn-label-stale", Namespace: "default"},
 			Spec: simplyblockv1alpha1.StorageNodeSetSpec{
@@ -233,13 +278,14 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 				WorkerNodes: []string{"node-a"},
 			},
 		}
-		// node-a still carries a label for a storage node that no longer exists
-		// (replaced/removed) — it must be cleaned up, not just left to accumulate.
+		// node-a still carries a slot label for a storage node that no longer
+		// exists (removed, not replaced) — it must be cleaned up, not just left
+		// to accumulate.
 		nodeA := &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "node-a",
 				Labels: map[string]string{
-					storageNodeUUIDLabelPrefix + "uuid-old": "cluster-a-uuid.0",
+					storageNodeUUIDLabelPrefix + "cluster-a-uuid.0": "uuid-old",
 				},
 			},
 		}
@@ -253,7 +299,7 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 		if err := r.Get(context.Background(), client.ObjectKey{Name: "node-a"}, &n); err != nil {
 			t.Fatalf("failed to fetch node: %v", err)
 		}
-		if _, ok := n.Labels[storageNodeUUIDLabelPrefix+"uuid-old"]; ok {
+		if _, ok := n.Labels[storageNodeUUIDLabelPrefix+"cluster-a-uuid.0"]; ok {
 			t.Fatalf("expected stale storage-node-uuid label to be removed, got labels: %v", n.Labels)
 		}
 	})

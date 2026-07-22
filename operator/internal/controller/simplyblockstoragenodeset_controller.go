@@ -433,16 +433,20 @@ func (r *StorageNodeSetReconciler) ensureFinalizer(
 }
 
 // storageNodeUUIDLabelPrefix marks a worker Node with the SimplyBlock storage-node
-// UUID(s) co-located on it, one label per instance (a worker can host more than one
-// storage node — see StorageNodeSetSpec.NodesPerSocket/SocketsToUse). The label value
-// is "<clusterUUID>.<socketIndex>" (dot-separated — Kubernetes label values disallow
-// ":", and UUIDs never contain "." so parsing is unambiguous), cluster-scoping the
-// entry so a CSI controller resolving host_id from this topology never picks a
-// storage node belonging to a different SimplyBlock cluster co-located on the same
-// worker. Consumed by the CSI node plugin (csi-driver/pkg/spdk/nodeserver.go) to
-// advertise CSI topology, and by the CSI controller (createVolume) to co-locate a
-// new volume's primary with whichever worker the consuming Pod is scheduled to.
-// Keep this literal in sync with topologyKeyStorageNodeUUIDPrefix in csi-driver.
+// instance(s) co-located on it. The label KEY is "<prefix><clusterUUID>.<socketIndex>"
+// and must stay stable for the Node's lifetime — Kubernetes' external-provisioner
+// caches the *set* of topology keys in the CSINode object at node-plugin
+// registration time and only refreshes it when the node-driver pod restarts, then
+// hard-errors CreateVolume if a live Node's topology-label keys don't match that
+// cached set. The label VALUE is the storage-node UUID, which changes freely (e.g.
+// when a node is replaced) since values are always read fresh — only the key must
+// never depend on anything that can change post-registration. Cluster-scoping the
+// key (not just the value) also stops a worker hosting instances from more than one
+// SimplyBlock cluster from having one cluster's slot collide with another's.
+// Consumed by the CSI node plugin (csi-driver/pkg/spdk/nodeserver.go) to advertise
+// CSI topology, and by the CSI controller (createVolume) to co-locate a new volume's
+// primary with whichever worker the consuming Pod is scheduled to. Keep this literal
+// in sync with topologyKeyStorageNodeUUIDPrefix in csi-driver.
 const storageNodeUUIDLabelPrefix = "simplyblock.io/storage-node-uuid."
 
 func (r *StorageNodeSetReconciler) labelWorkerNodes(
@@ -457,9 +461,10 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(
 		workers[w] = struct{}{}
 	}
 
-	// uuidsByWorker maps worker -> storage-node UUID -> label value, built from every
-	// owned StorageNode CR that has come online at least once (Status.UUID set).
-	uuidsByWorker := make(map[string]map[string]string)
+	// slotsByWorker maps worker -> "<clusterUUID>.<socketIndex>" -> storage-node UUID,
+	// built from every owned StorageNode CR that has come online at least once
+	// (Status.UUID set). The slot key is stable; only the UUID value churns.
+	slotsByWorker := make(map[string]map[string]string)
 
 	var snList simplyblockv1alpha1.StorageNodeList
 	if err := r.List(ctx, &snList,
@@ -476,10 +481,11 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(
 			if snCR.Spec.SocketIndex != nil {
 				ordinal = *snCR.Spec.SocketIndex
 			}
-			if uuidsByWorker[snCR.Spec.WorkerNode] == nil {
-				uuidsByWorker[snCR.Spec.WorkerNode] = map[string]string{}
+			if slotsByWorker[snCR.Spec.WorkerNode] == nil {
+				slotsByWorker[snCR.Spec.WorkerNode] = map[string]string{}
 			}
-			uuidsByWorker[snCR.Spec.WorkerNode][snCR.Status.UUID] = fmt.Sprintf("%s.%d", clusterUUID, ordinal)
+			slotKey := fmt.Sprintf("%s.%d", clusterUUID, ordinal)
+			slotsByWorker[snCR.Spec.WorkerNode][slotKey] = snCR.Status.UUID
 		}
 	}
 
@@ -513,20 +519,21 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(
 			changed = true
 		}
 
-		desired := uuidsByWorker[nodeName]
+		desired := slotsByWorker[nodeName]
 		for k, v := range node.Labels {
 			if !strings.HasPrefix(k, storageNodeUUIDLabelPrefix) {
 				continue
 			}
-			if desired[strings.TrimPrefix(k, storageNodeUUIDLabelPrefix)] != v {
+			slot := strings.TrimPrefix(k, storageNodeUUIDLabelPrefix)
+			if desired[slot] != v {
 				delete(node.Labels, k)
 				changed = true
 			}
 		}
-		for uuid, v := range desired {
-			k := storageNodeUUIDLabelPrefix + uuid
-			if node.Labels[k] != v {
-				node.Labels[k] = v
+		for slot, uuid := range desired {
+			k := storageNodeUUIDLabelPrefix + slot
+			if node.Labels[k] != uuid {
+				node.Labels[k] = uuid
 				changed = true
 			}
 		}

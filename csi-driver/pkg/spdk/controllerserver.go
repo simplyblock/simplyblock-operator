@@ -71,15 +71,21 @@ const (
 
 	// topologyKeyStorageNodeUUIDPrefix mirrors the Kubernetes Node label the
 	// simplyblock-operator writes for every storage-node instance co-located on
-	// that worker (StorageNodeSetReconciler.labelWorkerNodes, keyed per-UUID since
-	// a worker can host more than one instance on NUMA/multi-socket hosts). The CSI
-	// node plugin forwards it into CSI topology (nodeserver.go buildAccessibleTopology)
-	// so createVolume can place a new volume on the storage node co-located with
-	// wherever the consuming Pod's Kubernetes node/pod affinity schedules it. The
-	// label value is "<clusterUUID>.<socketOrdinal>" — cluster-scoped so a worker
-	// hosting nodes from more than one SimplyBlock cluster can't leak a UUID across
-	// clusters, and ordinal-tagged so multiple instances on one worker resolve
-	// deterministically (lowest ordinal wins) instead of via unordered map iteration.
+	// that worker (StorageNodeSetReconciler.labelWorkerNodes). The full label KEY
+	// is "<prefix><clusterUUID>.<socketOrdinal>" and the VALUE is the storage-node
+	// UUID. The key deliberately excludes the UUID: external-provisioner caches
+	// the set of topology KEYS in the CSINode object at node-plugin registration
+	// time and hard-errors CreateVolume if a live Node's label keys ever diverge
+	// from that cached set, so the key must stay stable across UUID churn (e.g. a
+	// storage node getting replaced) — only the value is expected to change. The
+	// key is cluster-scoped so a worker hosting instances from more than one
+	// SimplyBlock cluster can't have one cluster's socket slot collide with
+	// another's, and ordinal-tagged so multiple instances on one worker resolve
+	// deterministically (lowest ordinal wins) instead of via unordered map
+	// iteration. The CSI node plugin forwards it into CSI topology (nodeserver.go
+	// buildAccessibleTopology) so createVolume can place a new volume on the
+	// storage node co-located with wherever the consuming Pod's Kubernetes
+	// node/pod affinity schedules it.
 	topologyKeyStorageNodeUUIDPrefix = "simplyblock.io/storage-node-uuid."
 )
 
@@ -235,12 +241,14 @@ func nodeNameFromTopology(topos []*csi.Topology) string {
 // i.e. a topologyKeyStorageNodeUUIDPrefix-prefixed segment written by the
 // simplyblock-operator onto the Kubernetes Node the Pod was scheduled to (see
 // StorageNodeSetReconciler.labelWorkerNodes) and advertised via
-// nodeserver.buildAccessibleTopology. Preferred segments are checked first, then
-// Requisite, matching nodeNameFromTopology's fallback order. When a worker hosts
-// more than one storage-node instance (NUMA sockets), the lowest ordinal wins —
-// a deterministic tie-break, not true socket-level affinity, which isn't
-// resolvable at CreateVolume time (kubelet's Topology Manager pins a Pod to a
-// NUMA socket only at container start). Returns "" if no segment matches.
+// nodeserver.buildAccessibleTopology. The segment KEY is
+// "<prefix><clusterUUID>.<socketOrdinal>" and the VALUE is the storage-node UUID.
+// Preferred segments are checked first, then Requisite, matching
+// nodeNameFromTopology's fallback order. When a worker hosts more than one
+// storage-node instance (NUMA sockets), the lowest ordinal wins — a deterministic
+// tie-break, not true socket-level affinity, which isn't resolvable at
+// CreateVolume time (kubelet's Topology Manager pins a Pod to a NUMA socket only
+// at container start). Returns "" if no segment matches.
 func coLocatedHostID(topoReq *csi.TopologyRequirement, clusterID string) string {
 	if topoReq == nil {
 		return ""
@@ -250,16 +258,20 @@ func coLocatedHostID(topoReq *csi.TopologyRequirement, clusterID string) string 
 		bestOrdinal := 0
 		found := false
 		for _, topo := range topologies {
-			for key, val := range topo.GetSegments() {
+			for key, uuid := range topo.GetSegments() {
 				if !strings.HasPrefix(key, topologyKeyStorageNodeUUIDPrefix) {
 					continue
 				}
-				uuid := key[len(topologyKeyStorageNodeUUIDPrefix):]
 				if uuid == "" {
 					continue
 				}
-				labelCluster, ordinalStr, ok := strings.Cut(val, ".")
-				if !ok || labelCluster != clusterID {
+				slot := key[len(topologyKeyStorageNodeUUIDPrefix):]
+				sep := strings.LastIndex(slot, ".")
+				if sep < 0 {
+					continue
+				}
+				labelCluster, ordinalStr := slot[:sep], slot[sep+1:]
+				if labelCluster != clusterID {
 					continue
 				}
 				ordinal, err := strconv.Atoi(ordinalStr)
