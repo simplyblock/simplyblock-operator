@@ -68,6 +68,7 @@ func TestBuildBackupConfig(t *testing.T) {
 
 	if backupConfig == nil {
 		t.Fatal("expected backup config, got nil")
+		return
 	}
 	if backupConfig.AccessKeyID != "username" {
 		t.Fatalf("unexpected access_key_id: %#v", backupConfig.AccessKeyID)

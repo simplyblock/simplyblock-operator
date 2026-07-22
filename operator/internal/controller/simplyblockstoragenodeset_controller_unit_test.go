@@ -372,6 +372,7 @@ func TestStorageNodeSetDaemonSetReconcileTLSCertManagerProvider(t *testing.T) {
 	}
 	if tlsVol == nil {
 		t.Fatalf("expected tls volume, got none")
+		return
 	}
 	if tlsVol.Projected != nil {
 		t.Fatalf("expected plain Secret volume for cert-manager provider, got projected: %#v", tlsVol.Projected)
