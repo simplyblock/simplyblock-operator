@@ -101,14 +101,16 @@ fi`
 		{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
 		}},
+		{Name: "CPU_TOPOLOGY_ENABLED", Value: BoolPtrToString(sn.Spec.EnableCpuTopology)},
 	}
-	// CPU_TOPOLOGY_ENABLED and RESERVED_SYSTEM_CPUS are now per-node: sourced
-	// from /etc/node-env/env.sh at container start via the command wrapper.
 	if sn.Spec.MaxParallelNodeAdds != nil {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *sn.Spec.MaxParallelNodeAdds)})
 	}
 	if sn.Spec.OpenShiftMachineConfigPool != "" {
 		mainEnv = append(mainEnv, corev1.EnvVar{Name: "OPENSHIFT_MCP", Value: sn.Spec.OpenShiftMachineConfigPool})
+	}
+	if sn.Spec.ReservedSystemCPU != "" {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: sn.Spec.ReservedSystemCPU})
 	}
 	if tlsMutualEnabled {
 		mainEnv = append(mainEnv,
