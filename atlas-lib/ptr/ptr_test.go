@@ -28,6 +28,7 @@ func TestTo(t *testing.T) {
 	p := To(42)
 	if p == nil {
 		t.Fatalf("To returned nil")
+		return
 	}
 	if *p != 42 {
 		t.Fatalf("To: got %d want 42", *p)
