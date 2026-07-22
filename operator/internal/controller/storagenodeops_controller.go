@@ -325,7 +325,12 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 		}
 
 		payload := map[string]any{
-			"force":        ops.Spec.Force != nil && *ops.Spec.Force,
+			// Migration relocates a still-online node, so the control-plane
+			// restart must run with force=true — a non-forced restart is
+			// rejected unless the node is already OFFLINE ("Node must be
+			// offline"). Default to true and honor an explicit spec.force
+			// override only when the user sets it.
+			"force":        ops.Spec.Force == nil || *ops.Spec.Force,
 			"node_address": utils.StorageNodeSetAPIAddress(target, sn.Namespace),
 		}
 		if ops.Spec.ReattachVolume != nil {
