@@ -29,7 +29,13 @@ import (
 )
 
 type NonBlockingGRPCServer interface {
-	Start(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer)
+	Start(
+		endpoint string,
+		ids csi.IdentityServer,
+		cs csi.ControllerServer,
+		ns csi.NodeServer,
+		gcs csi.GroupControllerServer,
+	)
 	Wait()
 	Stop()
 	ForceStop()
@@ -49,10 +55,11 @@ func (s *nonBlockingGRPCServer) Start(
 	ids csi.IdentityServer,
 	cs csi.ControllerServer,
 	ns csi.NodeServer,
+	gcs csi.GroupControllerServer,
 ) {
 	s.wg.Add(1)
 
-	go s.serve(endpoint, ids, cs, ns)
+	go s.serve(endpoint, ids, cs, ns, gcs)
 }
 
 func (s *nonBlockingGRPCServer) Wait() {
@@ -72,6 +79,7 @@ func (s *nonBlockingGRPCServer) serve(
 	ids csi.IdentityServer,
 	cs csi.ControllerServer,
 	ns csi.NodeServer,
+	gcs csi.GroupControllerServer,
 ) {
 	var err error
 
@@ -122,6 +130,9 @@ func (s *nonBlockingGRPCServer) serve(
 	}
 	if ns != nil {
 		csi.RegisterNodeServer(server, ns)
+	}
+	if gcs != nil {
+		csi.RegisterGroupControllerServer(server, gcs)
 	}
 
 	klog.Infof("Listening for connections on address: %#v", listener.Addr())
