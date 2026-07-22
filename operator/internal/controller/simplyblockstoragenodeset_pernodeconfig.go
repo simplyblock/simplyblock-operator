@@ -16,7 +16,6 @@ limitations under the License.
 
 package controller
 
-
 // reconcilePerNodeConfigMap creates or updates a single ConfigMap that holds
 // per-worker-node effective configuration values. The DaemonSet init container
 // mounts this ConfigMap and sources the file matching its hostname so that
