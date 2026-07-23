@@ -51,3 +51,20 @@ jobs:
       - name: Validate rendered manifests
         run: |
           kubeconform -strict -summary -skip CustomResourceDefinition,Certificate,ClusterIssuer dist/install.yaml
+
+  helm-sync:
+    name: Check Helm chart is in sync with operator
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: operator/go.mod
+
+      - name: Check Helm chart CRDs, RBAC and webhook manifests are up to date
+        run: |
+          make helm-sync
+          git diff --exit-code -- helm-charts || (echo "Helm chart is out of date. Run 'make helm-sync' from the repo root and commit the result." && exit 1)
