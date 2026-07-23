@@ -13,12 +13,22 @@ CRD_SRC="$OPERATOR_DIR/config/crd/bases"
 CRD_DST="$HELM_CHARTS_DIR/charts/simplyblock-operator/crds"
 RBAC_SRC="$OPERATOR_DIR/config/rbac"
 ROLES_DST="$HELM_CHARTS_DIR/charts/simplyblock-operator/templates/roles"
+WEBHOOK_SRC="$OPERATOR_DIR/config/webhook"
+WEBHOOK_DST="$HELM_CHARTS_DIR/charts/simplyblock-operator/templates/webhook.yaml"
 
 echo "Syncing from: $OPERATOR_DIR"
 echo ""
 
 # ── CRDs ──────────────────────────────────────────────────────────────────────
 echo "==> Syncing CRDs..."
+
+# Clear stale CRDs not present in the source (e.g. a CRD type was removed).
+for dst in "$CRD_DST"/storage.simplyblock.io_*.yaml; do
+  [ -f "$dst" ] || continue
+  name=$(basename "$dst")
+  [ -f "$CRD_SRC/$name" ] || { rm "$dst"; echo "  removed (no longer in source): $name"; }
+done
+
 for src in "$CRD_SRC"/storage.simplyblock.io_*.yaml; do
   name=$(basename "$src")
   cp "$src" "$CRD_DST/$name"
@@ -67,4 +77,33 @@ sed \
   -e 's|name: manager-role|name: simplyblock-operator-manager-role|g' \
   "$RBAC_SRC/role.yaml" > "$ROLES_DST/manager_role.yaml"
 echo "  copied: manager_role.yaml (from role.yaml)"
+
+# ── Webhook ────────────────────────────────────────────────────────────────────
+# config/webhook/{service.yaml,manifests.yaml} back the mutating webhook that the
+# operator registers and CA-bundle-patches at runtime (see internal/webhook and
+# utils.WebhookServiceName / utils.WebhookConfigurationName). Renamed here to match
+# those constants (the kustomize namePrefix equivalent), namespaced via
+# .Release.Namespace, and re-selectored to match this chart's actual pod labels
+# (control-plane/app), since the Helm deployment doesn't use kustomize's
+# control-plane: controller-manager / app.kubernetes.io/name labels.
+echo ""
+echo "==> Syncing webhook manifests..."
+{
+  echo "{{- if .Values.operator.enabled }}"
+  sed \
+    -e 's|name: webhook-service|name: simplyblock-operator-webhook-service|' \
+    -e 's|namespace: system|namespace: {{ .Release.Namespace }}|' \
+    -e 's|control-plane: controller-manager|control-plane: simplyblock-operator|' \
+    -e 's|app.kubernetes.io/name: simplyblock-operator|app: simplyblock-operator|' \
+    "$WEBHOOK_SRC/service.yaml"
+  printf '\n---\n'
+  # manifests.yaml already opens with its own "---"; drop it since we just printed ours.
+  tail -n +2 "$WEBHOOK_SRC/manifests.yaml" | sed \
+    -e 's|name: mutating-webhook-configuration|name: simplyblock-operator-mutating-webhook-configuration|' \
+    -e 's|name: validating-webhook-configuration|name: simplyblock-operator-validating-webhook-configuration|' \
+    -e 's|name: webhook-service|name: simplyblock-operator-webhook-service|' \
+    -e 's|namespace: system|namespace: {{ .Release.Namespace }}|'
+  echo "{{- end }}"
+} > "$WEBHOOK_DST"
+echo "  copied: webhook.yaml (from config/webhook/service.yaml + manifests.yaml)"
 

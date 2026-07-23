@@ -31,8 +31,10 @@ const (
 	StorageNodeOpsPhaseFailed    StorageNodeOpsPhase = "Failed"
 )
 
-// StorageNodeOpsSubPhase is the active drain sub-phase when action=remove.
-// +kubebuilder:validation:Enum=Validating;Suspending;Migrating;Verifying;Removing
+// StorageNodeOpsSubPhase is the active sub-phase during a running op: the drain
+// steps when action=remove, and the Preparing → Migrating → Promoting steps when
+// action=migrate.
+// +kubebuilder:validation:Enum=Validating;Suspending;Migrating;Verifying;Removing;Preparing;Restarting;Promoting
 type StorageNodeOpsSubPhase string
 
 const (
@@ -41,6 +43,23 @@ const (
 	StorageNodeOpsSubPhaseMigrating  StorageNodeOpsSubPhase = "Migrating"
 	StorageNodeOpsSubPhaseVerifying  StorageNodeOpsSubPhase = "Verifying"
 	StorageNodeOpsSubPhaseRemoving   StorageNodeOpsSubPhase = "Removing"
+	// StorageNodeOpsSubPhasePreparing marks that a migrate op is preparing the
+	// target worker: cloning per-node config, labeling it into the storage
+	// plane, and waiting until its storage-node-api pod is Ready and its per-pod
+	// DNS name is published in the EndpointSlice — the precondition for the
+	// control-plane restart to resolve node_address.
+	StorageNodeOpsSubPhasePreparing StorageNodeOpsSubPhase = "Preparing"
+	// StorageNodeOpsSubPhaseRestarting marks that a migrate op has issued the
+	// control-plane restart and confirmed the node entered in_restart; it is
+	// now waiting for the node to come back online on the target host. The
+	// restart is asynchronous, so the op only advances to Promoting after the
+	// node has left online (restart started) and returned to online (restart
+	// finished) — issuing /promote earlier races the in-flight restart's node
+	// writes and leaves the relocated devices stuck in "new".
+	StorageNodeOpsSubPhaseRestarting StorageNodeOpsSubPhase = "Restarting"
+	// StorageNodeOpsSubPhasePromoting marks that a migrate op has issued the
+	// control-plane /promote for the relocated node (guards against re-promoting).
+	StorageNodeOpsSubPhasePromoting StorageNodeOpsSubPhase = "Promoting"
 )
 
 // DrainOpsSpec configures the drain workflow for action=remove.
@@ -61,19 +80,40 @@ type StorageNodeOpsSpec struct {
 	StorageNodeRef string `json:"storageNodeRef"`
 
 	// Action is the operation to perform. Immutable.
-	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume;remove
+	// +kubebuilder:validation:Enum=shutdown;restart;suspend;resume;remove;migrate
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
 	Action string `json:"action"`
+
+	// TargetWorkerNode is the Kubernetes worker hostname the storage node is
+	// relocated onto. Required (and only used) when action=migrate.
+	//
+	// A migration is NOT a drain/remove: the storage node keeps its backend UUID
+	// and its partition / logical-volume assignments follow it. The operator
+	// issues a control-plane restart pointed at the target host's
+	// storage-node-api (node_address), waits for the node to come back online
+	// there, then /promotes it (starting a rebalance) and re-points the
+	// StorageNode's spec.workerNode and the owning StorageNodeSet.workerNodes
+	// from the source worker to this one. No fresh storage node is provisioned
+	// and no VolumeMigration CRs are created. Immutable.
+	// +optional
+	// +k8s:immutable
+	TargetWorkerNode string `json:"targetWorkerNode,omitempty"`
 
 	// Force enables forced execution where the backend supports it.
 	// +optional
 	Force *bool `json:"force,omitempty"`
 
-	// ReattachVolume reattaches volumes during restart.
-	// Only applicable when action=restart.
+	// ReattachVolume reattaches volumes during the node restart.
+	// Applicable when action=restart or action=migrate.
 	// +optional
 	ReattachVolume *bool `json:"reattachVolume,omitempty"`
+
+	// NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
+	// during a migration. Passed through to the control-plane restart as
+	// new_ssd_pcie. Only applicable when action=migrate.
+	// +optional
+	NewSsdPcie []string `json:"newSsdPcie,omitempty"`
 
 	// Drain configures the drain workflow. Only applicable when action=remove.
 	// +optional

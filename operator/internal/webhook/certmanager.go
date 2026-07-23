@@ -155,29 +155,51 @@ func (p *certManagerProvisioner) writeCert(crt, key []byte) error {
 	return nil
 }
 
-// injectCABundle sets clientConfig.caBundle on every webhook of the mutating
-// configuration when it changes, so the API server trusts the serving cert.
+// injectCABundle sets clientConfig.caBundle on every webhook of both the mutating
+// and validating configurations when it changes, so the API server trusts the
+// serving cert. Both configurations are served by the same webhook server and
+// therefore share one CA.
 func (p *certManagerProvisioner) injectCABundle(ctx context.Context, ca []byte) error {
 	if bytes.Equal(ca, p.lastCA) {
 		return nil
 	}
-	var whc admissionregistrationv1.MutatingWebhookConfiguration
-	if err := p.apiReader.Get(ctx, types.NamespacedName{Name: utils.WebhookConfigurationName}, &whc); err != nil {
-		return fmt.Errorf("get webhook configuration: %w", err)
+
+	var mwc admissionregistrationv1.MutatingWebhookConfiguration
+	if err := p.apiReader.Get(ctx, types.NamespacedName{Name: utils.WebhookConfigurationName}, &mwc); err != nil {
+		return fmt.Errorf("get mutating webhook configuration: %w", err)
 	}
-	patch := client.MergeFrom(whc.DeepCopy())
-	changed := false
-	for i := range whc.Webhooks {
-		if !bytes.Equal(whc.Webhooks[i].ClientConfig.CABundle, ca) {
-			whc.Webhooks[i].ClientConfig.CABundle = ca
-			changed = true
+	mPatch := client.MergeFrom(mwc.DeepCopy())
+	mChanged := false
+	for i := range mwc.Webhooks {
+		if !bytes.Equal(mwc.Webhooks[i].ClientConfig.CABundle, ca) {
+			mwc.Webhooks[i].ClientConfig.CABundle = ca
+			mChanged = true
 		}
 	}
-	if changed {
-		if err := p.client.Patch(ctx, &whc, patch); err != nil {
-			return fmt.Errorf("patch webhook caBundle: %w", err)
+	if mChanged {
+		if err := p.client.Patch(ctx, &mwc, mPatch); err != nil {
+			return fmt.Errorf("patch mutating webhook caBundle: %w", err)
 		}
 	}
+
+	var vwc admissionregistrationv1.ValidatingWebhookConfiguration
+	if err := p.apiReader.Get(ctx, types.NamespacedName{Name: utils.WebhookValidatingConfigurationName}, &vwc); err != nil {
+		return fmt.Errorf("get validating webhook configuration: %w", err)
+	}
+	vPatch := client.MergeFrom(vwc.DeepCopy())
+	vChanged := false
+	for i := range vwc.Webhooks {
+		if !bytes.Equal(vwc.Webhooks[i].ClientConfig.CABundle, ca) {
+			vwc.Webhooks[i].ClientConfig.CABundle = ca
+			vChanged = true
+		}
+	}
+	if vChanged {
+		if err := p.client.Patch(ctx, &vwc, vPatch); err != nil {
+			return fmt.Errorf("patch validating webhook caBundle: %w", err)
+		}
+	}
+
 	p.lastCA = ca
 	return nil
 }

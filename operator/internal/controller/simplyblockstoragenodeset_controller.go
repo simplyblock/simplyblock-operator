@@ -653,6 +653,37 @@ func (r *StorageNodeSetReconciler) reconcileEndpointSlice(
 		}
 	}
 
+	// Also include every node currently labeled into this cluster's storage
+	// plane. A StorageNodeOps migrate labels the target worker (so the
+	// storage-node DaemonSet schedules a pod there) before the backend
+	// restart, but the target is not yet in spec.workerNodes or any
+	// StorageNode CR — those are only updated by reconcileMigratedTopology
+	// AFTER the node comes online on the target. Without publishing the
+	// target's per-pod DNS name here, the control plane cannot resolve
+	// node_address, the restart fails, the node never comes online, and the
+	// topology swap never runs: a deadlock. Keying off the label breaks it —
+	// the target's DNS entry appears as soon as it is labeled. (This mirrored
+	// behavior was lost in the StorageNodeSet/StorageNode split.)
+	var nodeList corev1.NodeList
+	if err := r.List(ctx, &nodeList, client.MatchingLabels{
+		"io.simplyblock.node-type": "simplyblock-storage-plane-" + snCR.Spec.ClusterName,
+	}); err == nil {
+		for i := range nodeList.Items {
+			nodeName := nodeList.Items[i].Name
+			if _, ok := nodeIPs[nodeName]; ok {
+				continue // already covered
+			}
+			ip, err := getNodeInternalIP(ctx, r.Client, nodeName)
+			if err != nil {
+				log.Error(err, "failed to get IP for storage-plane-labeled node, skipping", "worker", nodeName)
+				continue
+			}
+			nodeIPs[nodeName] = ip
+		}
+	} else {
+		log.Error(err, "failed to list storage-plane-labeled nodes for EndpointSlice")
+	}
+
 	return r.applyStorageNodeSetEndpointSlice(ctx, snCR, nodeIPs)
 }
 

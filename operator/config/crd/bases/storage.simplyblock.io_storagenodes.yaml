@@ -205,12 +205,12 @@ spec:
                 - message: field is immutable
                   rule: self == oldSelf
               workerNode:
-                description: WorkerNode is the Kubernetes node hostname this StorageNode
-                  runs on. Immutable.
+                description: |-
+                  WorkerNode is the Kubernetes node hostname this StorageNode runs on.
+                  Users may not change it directly — it is re-pointed only by the operator
+                  during a node migration (StorageNodeOps action=migrate). The
+                  StorageNode validating webhook rejects user-driven changes to this field.
                 type: string
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
             required:
             - storageNodeSetRef
             - workerNode

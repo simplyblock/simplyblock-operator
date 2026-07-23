@@ -425,6 +425,10 @@ func main() {
 		mgr.GetWebhookServer().Register("/mutate-v1-pod-simplyblock-rebalancer",
 			&webhook.Admission{Handler: &internalwebhook.SimplyblockRebalancerInjector{Client: mgr.GetClient()}})
 		setupLog.Info("registered simplyblock-rebalancer mutating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-storagenode",
+			&webhook.Admission{Handler: &internalwebhook.StorageNodeValidator{OperatorNamespace: operatorNamespace}})
+		setupLog.Info("registered storagenode validating webhook")
 	}()
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

@@ -1708,6 +1708,11 @@ func (in *StorageNodeOpsSpec) DeepCopyInto(out *StorageNodeOpsSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.NewSsdPcie != nil {
+		in, out := &in.NewSsdPcie, &out.NewSsdPcie
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Drain != nil {
 		in, out := &in.Drain, &out.Drain
 		*out = new(DrainOpsSpec)
