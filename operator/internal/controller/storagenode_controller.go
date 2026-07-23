@@ -295,6 +295,21 @@ func (r *StorageNodeReconciler) provisionNode(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	// One POST per worker: the backend add_node handles all sockets internally.
+	// If any sibling CR for the same worker already has PostedAt, skip the POST
+	// and mark ourselves so pollUUIDFromBackend can pick up our UUID.
+	if r.workerAlreadyPosted(ctx, sn) {
+		log.Info("worker already posted by sibling socket — skipping POST, polling for UUID",
+			"worker", sn.Spec.WorkerNode)
+		now := metav1.Now()
+		patch := client.MergeFrom(sn.DeepCopy())
+		sn.Status.PostedAt = &now
+		if err := r.Status().Patch(ctx, sn, patch); err != nil {
+			log.Error(err, "failed to patch PostedAt for non-primary socket")
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	// Respect MaxParallelNodeAdds: count sibling StorageNode CRs in this set
 	// that are in-flight (PostedAt set, UUID not yet assigned) and block if the
 	// limit is reached. Defaults to 1 (sequential) when not set, which is safe
@@ -450,6 +465,29 @@ func (r *StorageNodeReconciler) countInFlightNodes(
 		}
 	}
 	return count, nil
+}
+
+// workerAlreadyPosted returns true if any sibling StorageNode in the same
+// StorageNodeSet, for the same worker, already has PostedAt set. Used to
+// enforce one POST per worker: the backend add_node handles all sockets from
+// a single call, so only one CR per worker should trigger the POST.
+func (r *StorageNodeReconciler) workerAlreadyPosted(ctx context.Context, sn *simplyblockv1alpha1.StorageNode) bool {
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList,
+		client.InNamespace(sn.Namespace),
+		client.MatchingFields{"spec.storageNodeSetRef": sn.Spec.StorageNodeSetRef},
+	); err != nil {
+		return false
+	}
+	for _, sibling := range snList.Items {
+		if sibling.Name == sn.Name || sibling.Spec.WorkerNode != sn.Spec.WorkerNode {
+			continue
+		}
+		if sibling.Status.PostedAt != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // journalManagerPercentPerDeviceFromSpec returns JM percent from the effective
