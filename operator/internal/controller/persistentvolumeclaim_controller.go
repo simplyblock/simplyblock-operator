@@ -170,7 +170,12 @@ func (r *PersistentVolumeClaimReconciler) createMigration(
 			TargetNodeUUID: target,
 		},
 	}
-	if err := controllerutil.SetControllerReference(pvc, vm, r.Scheme); err != nil {
+	// A plain owner reference (not a controller reference) is enough to garbage
+	// collect the VolumeMigration when the PVC is deleted. SetControllerReference
+	// would additionally set blockOwnerDeletion=true, which the API server only
+	// permits when the operator can update persistentvolumeclaims/finalizers —
+	// a privilege it neither has nor needs here.
+	if err := controllerutil.SetOwnerReference(pvc, vm, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference on VolumeMigration: %w", err)
 	}
 	if err := r.Create(ctx, vm); err != nil && !apierrors.IsAlreadyExists(err) {
