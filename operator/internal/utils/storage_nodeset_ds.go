@@ -47,9 +47,9 @@ var defaultContainerResources = corev1.ResourceRequirements{
 func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
 
 	labels := map[string]string{
-		"app":                            "storage-node",
-		"simplyblock-cluster":            sn.Spec.ClusterName,
-		"io.simplyblock.storagenodeset":  sn.Name,
+		"app":                           "storage-node",
+		"simplyblock-cluster":           sn.Spec.ClusterName,
+		"io.simplyblock.storagenodeset": sn.Name,
 	}
 
 	image := sn.Spec.ClusterImage
