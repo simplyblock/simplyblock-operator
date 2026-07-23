@@ -116,10 +116,16 @@ spec:
               targetWorkerNode:
                 description: |-
                   TargetWorkerNode is the Kubernetes worker hostname the storage node is
-                  migrated onto. Required (and only used) when action=migrate. The source
-                  node is drained and removed exactly as for action=remove, then the owning
-                  StorageNodeSet is re-pointed from the current worker to this one so a fresh
-                  storage node is provisioned on the target host. Immutable.
+                  relocated onto. Required (and only used) when action=migrate.
+
+                  A migration is NOT a drain/remove: the storage node keeps its backend UUID
+                  and its partition / logical-volume assignments follow it. The operator
+                  issues a control-plane restart pointed at the target host's
+                  storage-node-api (node_address), waits for the node to come back online
+                  there, then /promotes it (starting a rebalance) and re-points the
+                  StorageNode's spec.workerNode and the owning StorageNodeSet.workerNodes
+                  from the source worker to this one. No fresh storage node is provisioned
+                  and no VolumeMigration CRs are created. Immutable.
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable

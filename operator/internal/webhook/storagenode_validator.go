@@ -13,7 +13,7 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 )
 
-// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha1-storagenode,mutating=false,failurePolicy=ignore,sideEffects=None,groups=storage.simplyblock.io,resources=storagenodes,verbs=update,versions=v1alpha1,name=vstoragenode.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha1-storagenode,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=storagenodes,verbs=update,versions=v1alpha1,name=vstoragenode.simplyblock.io,admissionReviewVersions=v1
 
 // StorageNodeValidator is a validating admission webhook that enforces
 // spec.workerNode is only ever re-pointed by the operator itself. A StorageNode
@@ -22,8 +22,16 @@ import (
 // which the operator executes (drain-free restart onto the target host) before
 // re-pointing spec.workerNode under its own service account.
 //
-// failurePolicy=Ignore mirrors the rebalancer injector: webhook unavailability
-// must not block reconciliation.
+// failurePolicy=Fail: the StorageNode CRD does not enforce spec.workerNode
+// immutability (the operator must be able to re-point it), so this webhook is
+// the sole guard against user-driven repoints. It must fail closed — rejecting
+// edits while unavailable is preferable to silently letting a repoint through.
+// This does not risk deadlocking the operator's own repoints: the webhook
+// server runs inside the operator pod, so its availability tracks the
+// operator's — when the operator is up the webhook is up and admits its own
+// service-account UPDATE, and when the operator is down nothing reconciles
+// anyway. (The rebalancer injector stays failurePolicy=Ignore because it
+// gates pod creation, which must not block on webhook availability.)
 type StorageNodeValidator struct {
 	// OperatorNamespace is the namespace the operator runs in. Any service
 	// account in this namespace (i.e. the operator itself) is permitted to change

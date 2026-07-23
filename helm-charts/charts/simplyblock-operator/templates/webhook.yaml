@@ -50,7 +50,7 @@ webhooks:
       name: simplyblock-operator-webhook-service
       namespace: {{ .Release.Namespace }}
       path: /validate-storage-simplyblock-io-v1alpha1-storagenode
-  failurePolicy: Ignore
+  failurePolicy: Fail
   name: vstoragenode.simplyblock.io
   rules:
   - apiGroups:

@@ -36,7 +36,7 @@ webhooks:
       name: webhook-service
       namespace: system
       path: /validate-storage-simplyblock-io-v1alpha1-storagenode
-  failurePolicy: Ignore
+  failurePolicy: Fail
   name: vstoragenode.simplyblock.io
   rules:
   - apiGroups:

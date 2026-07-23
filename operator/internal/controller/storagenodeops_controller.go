@@ -272,10 +272,13 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 		return r.failOps(ctx, ops, fmt.Sprintf("targetWorkerNode %q is the node's current worker", target))
 	}
 
-	// runMigrate is a three-phase state machine tracked via ops.Status.SubPhase:
+	// runMigrate is a four-phase state machine tracked via ops.Status.SubPhase:
 	//
-	//	Preparing → Migrating → Promoting
+	//	Preparing → Migrating → Restarting → Promoting
 	//
+	// Preparing readies the target (config, label, pod, DNS); Migrating issues
+	// the restart and waits for the node to enter in_restart; Restarting waits
+	// for it to return online; Promoting issues /promote and re-points topology.
 	// Each phase issues its one-shot control-plane call gated by
 	// ops.Status.Triggered, which advanceSubPhase resets to false on every
 	// transition, so a requeue within a phase never repeats the POST.
@@ -552,10 +555,14 @@ func (r *StorageNodeOpsReconciler) migrateWaitingAfter(
 	after time.Duration,
 	msg string,
 ) (ctrl.Result, error) {
+	logf.FromContext(ctx).Info("migrate: " + msg)
 	patch := client.MergeFrom(ops.DeepCopy())
 	ops.Status.Message = msg
-	_ = r.Status().Patch(ctx, ops, patch)
-	logf.FromContext(ctx).Info("migrate: " + msg)
+	if err := r.Status().Patch(ctx, ops, patch); err != nil {
+		// Surface the failure so the reconciler backs off and retries rather
+		// than silently spinning with a stale status message.
+		return ctrl.Result{}, fmt.Errorf("migrate: updating status message %q: %w", msg, err)
+	}
 	return ctrl.Result{RequeueAfter: after}, nil
 }
 
