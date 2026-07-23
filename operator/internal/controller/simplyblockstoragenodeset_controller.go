@@ -452,6 +452,11 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *sim
 
 	key := "io.simplyblock.node-type"
 	value := "simplyblock-storage-plane-" + sn.Spec.ClusterName
+	// Per-StorageNodeSet label: used as the DaemonSet node selector so that
+	// each StorageNodeSet owns its own DaemonSet and per-node ConfigMap,
+	// enabling multiple StorageNodeSets per cluster for node grouping.
+	snsLabelKey := "io.simplyblock.storagenodeset"
+	snsLabelVal := sn.Name
 
 	for nodeName := range workers {
 		var node corev1.Node
@@ -465,11 +470,12 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *sim
 			node.Labels = map[string]string{}
 		}
 
-		if node.Labels[key] == value {
+		if node.Labels[key] == value && node.Labels[snsLabelKey] == snsLabelVal {
 			continue
 		}
 
 		node.Labels[key] = value
+		node.Labels[snsLabelKey] = snsLabelVal
 		if err := r.Update(ctx, &node); err != nil {
 			return err
 		}

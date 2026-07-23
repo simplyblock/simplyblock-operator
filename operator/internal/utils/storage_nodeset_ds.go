@@ -47,8 +47,9 @@ var defaultContainerResources = corev1.ResourceRequirements{
 func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
 
 	labels := map[string]string{
-		"app":                 "storage-node",
-		"simplyblock-cluster": sn.Spec.ClusterName,
+		"app":                           "storage-node",
+		"simplyblock-cluster":           sn.Spec.ClusterName,
+		"io.simplyblock.storagenodeset": sn.Name,
 	}
 
 	image := sn.Spec.ClusterImage
@@ -258,9 +259,13 @@ fi`
 		}
 	}
 
+	// The DaemonSet is named and selected per-StorageNodeSet so that multiple
+	// StorageNodeSets can coexist in the same cluster without sharing a
+	// DaemonSet or ConfigMap. Each StorageNodeSet owns its own DaemonSet and
+	// targets only the workers it enrolled (via the io.simplyblock.storagenodeset label).
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-storage-node-ds-" + sn.Spec.ClusterName,
+			Name:      "simplyblock-storage-node-ds-" + sn.Name,
 			Namespace: sn.Namespace,
 			Labels:    labels,
 		},
@@ -287,7 +292,7 @@ fi`
 					HostNetwork:        true,
 					Tolerations:        sn.Spec.Tolerations,
 					NodeSelector: map[string]string{
-						"io.simplyblock.node-type": "simplyblock-storage-plane-" + sn.Spec.ClusterName,
+						"io.simplyblock.storagenodeset": sn.Name,
 					},
 
 					Volumes: volumes,
@@ -498,7 +503,9 @@ func BuildStorageNodeSetEndpointSlice(sn *simplyblockv1alpha1.StorageNodeSet, no
 
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-storage-node-api-endpoints",
+			// Named per-StorageNodeSet so multiple StorageNodeSets can each own
+			// their own slice while all contributing to the same Service.
+			Name:      sn.Name + "-storage-node-api-endpoints",
 			Namespace: sn.Namespace,
 			Labels: map[string]string{
 				"kubernetes.io/service-name": "simplyblock-storage-node-api",

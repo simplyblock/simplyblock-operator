@@ -160,7 +160,7 @@ func TestStorageNodeSetDaemonSetReconcileCreatesWhenMissing(t *testing.T) {
 	}
 
 	var ds appsv1.DaemonSet
-	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-ds-create", Namespace: "default"}, &ds); err != nil {
 		t.Fatalf("daemonset should be created: %v", err)
 	}
 	if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
@@ -179,7 +179,7 @@ func TestStorageNodeSetDaemonSetReconcileUpdatesExisting(t *testing.T) {
 	}
 	existing := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-storage-node-ds-cluster-a",
+			Name:      "simplyblock-storage-node-ds-sn-ds-update",
 			Namespace: "default",
 		},
 	}
@@ -190,7 +190,7 @@ func TestStorageNodeSetDaemonSetReconcileUpdatesExisting(t *testing.T) {
 	}
 
 	var ds appsv1.DaemonSet
-	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-ds-update", Namespace: "default"}, &ds); err != nil {
 		t.Fatalf("failed to fetch daemonset: %v", err)
 	}
 	if len(ds.OwnerReferences) == 0 || ds.OwnerReferences[0].Name != sn.Name {
@@ -211,7 +211,7 @@ func TestStorageNodeSetDaemonSetReconcileTLSDisabled(t *testing.T) {
 	}
 
 	var ds appsv1.DaemonSet
-	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-ds-tls-off", Namespace: "default"}, &ds); err != nil {
 		t.Fatalf("failed to fetch daemonset: %v", err)
 	}
 	for _, v := range ds.Spec.Template.Spec.Volumes {
@@ -287,7 +287,7 @@ func TestStorageNodeSetDaemonSetReconcileTLSEnabled(t *testing.T) {
 	}
 
 	var ds appsv1.DaemonSet
-	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-ds-tls-on", Namespace: "default"}, &ds); err != nil {
 		t.Fatalf("failed to fetch daemonset: %v", err)
 	}
 
@@ -356,7 +356,7 @@ func TestStorageNodeSetDaemonSetReconcileTLSCertManagerProvider(t *testing.T) {
 	}
 
 	var ds appsv1.DaemonSet
-	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-ds-tls-cert-manager", Namespace: "default"}, &ds); err != nil {
 		t.Fatalf("failed to fetch daemonset: %v", err)
 	}
 
@@ -1851,7 +1851,7 @@ func TestStorageNodeSetDaemonSetTLSSecretRevisionAnnotation(t *testing.T) {
 	const (
 		ns          = "default"
 		clusterName = "cluster-a"
-		dsName      = "simplyblock-storage-node-ds-cluster-a"
+		dsName      = "simplyblock-storage-node-ds-sn-ds-rv"
 	)
 
 	cases := []struct {
@@ -1948,7 +1948,7 @@ func TestStorageNodeSetDaemonSetReconcileRollsOnTLSSecretRevisionChange(t *testi
 		t.Fatalf("first reconcileDaemonSet: %v", err)
 	}
 
-	dsKey := client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: ns}
+	dsKey := client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-ds-roll", Namespace: ns}
 	var first appsv1.DaemonSet
 	if err := r.Get(context.Background(), dsKey, &first); err != nil {
 		t.Fatalf("fetch first daemonset: %v", err)
@@ -2033,7 +2033,7 @@ func TestStorageNodeSetDaemonSetSBTLSServeEnv(t *testing.T) {
 			}
 
 			var ds appsv1.DaemonSet
-			if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-cluster-a", Namespace: "default"}, &ds); err != nil {
+			if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-env", Namespace: "default"}, &ds); err != nil {
 				t.Fatalf("failed to fetch daemonset: %v", err)
 			}
 			if len(ds.Spec.Template.Spec.Containers) != 1 {
