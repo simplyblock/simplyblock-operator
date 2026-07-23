@@ -439,7 +439,10 @@ func main() {
 		setupLog.Info("registered storagenode validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-pinned-volume",
-			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeClaimValidator{Client: mgr.GetClient(), APIClient: webapi.NewClient()}})
+			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeClaimValidator{
+				Client:    mgr.GetClient(),
+				APIClient: webapi.NewClient(),
+			}})
 		setupLog.Info("registered pinned-volume validating webhook")
 	}()
 
