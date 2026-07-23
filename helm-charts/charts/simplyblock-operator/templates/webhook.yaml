@@ -62,4 +62,30 @@ webhooks:
     resources:
     - storagenodes
   sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-v1-pvc-pinned-volume
+  # failurePolicy: Fail guarantees an unknown storage node is rejected. The
+  # matchConditions below scope the webhook to PVCs that actually carry the
+  # pinned-volume annotation, so a webhook outage never blocks unrelated PVCs.
+  failurePolicy: Fail
+  matchConditions:
+  - name: has-pinned-volume-annotation
+    expression: "has(object.metadata.annotations) && 'simplyblock.io/pinned-volume' in object.metadata.annotations"
+  name: pinned-volume-validator.simplyblock.io
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - persistentvolumeclaims
+  sideEffects: None
 {{- end }}

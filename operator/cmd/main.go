@@ -362,6 +362,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "VolumeMigration")
 		os.Exit(1)
 	}
+	if err := (&controller.PersistentVolumeClaimReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("pinnedvolume-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeClaim")
+		os.Exit(1)
+	}
 	if err := (&controller.StorageNodeReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
@@ -429,6 +437,10 @@ func main() {
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-storagenode",
 			&webhook.Admission{Handler: &internalwebhook.StorageNodeValidator{OperatorNamespace: operatorNamespace}})
 		setupLog.Info("registered storagenode validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-v1-pvc-pinned-volume",
+			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeClaimValidator{Client: mgr.GetClient(), APIClient: webapi.NewClient()}})
+		setupLog.Info("registered pinned-volume validating webhook")
 	}()
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

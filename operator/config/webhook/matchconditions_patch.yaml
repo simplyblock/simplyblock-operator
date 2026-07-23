@@ -1,0 +1,12 @@
+# kubebuilder webhook markers cannot express matchConditions, so scope the
+# pinned-volume validator (failurePolicy=Fail) to PVCs carrying the annotation
+# here. This keeps a webhook outage from blocking unrelated PVC writes.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook-configuration
+webhooks:
+- name: pinned-volume-validator.simplyblock.io
+  matchConditions:
+  - name: has-pinned-volume-annotation
+    expression: "has(object.metadata.annotations) && 'simplyblock.io/pinned-volume' in object.metadata.annotations"

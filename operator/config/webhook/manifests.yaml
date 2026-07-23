@@ -35,6 +35,26 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /validate-v1-pvc-pinned-volume
+  failurePolicy: Fail
+  name: pinned-volume-validator.simplyblock.io
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - persistentvolumeclaims
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /validate-storage-simplyblock-io-v1alpha1-storagenode
   failurePolicy: Fail
   name: vstoragenode.simplyblock.io

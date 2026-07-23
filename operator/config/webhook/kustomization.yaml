@@ -1,3 +1,11 @@
 resources:
 - manifests.yaml
 - service.yaml
+
+patches:
+- path: matchconditions_patch.yaml
+  target:
+    group: admissionregistration.k8s.io
+    version: v1
+    kind: ValidatingWebhookConfiguration
+    name: validating-webhook-configuration

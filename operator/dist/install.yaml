@@ -4318,6 +4318,30 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: simplyblock-operator-system
+      path: /validate-v1-pvc-pinned-volume
+  failurePolicy: Fail
+  matchConditions:
+  - expression: has(object.metadata.annotations) && 'simplyblock.io/pinned-volume'
+      in object.metadata.annotations
+    name: has-pinned-volume-annotation
+  name: pinned-volume-validator.simplyblock.io
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - persistentvolumeclaims
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
       path: /validate-storage-simplyblock-io-v1alpha1-storagenode
   failurePolicy: Fail
   name: vstoragenode.simplyblock.io
