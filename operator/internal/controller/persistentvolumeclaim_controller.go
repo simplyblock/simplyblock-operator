@@ -132,9 +132,25 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 		return r.setApplied(ctx, pvc, desired)
 	}
 
+	// The VolumeMigration must be created in the StorageCluster CR's namespace:
+	// the VolumeMigration reconciler resolves the cluster's migration settings
+	// (rebalancer image, enabled flag) within the migration's own namespace, and
+	// PVCs may live in a different namespace than the cluster.
+	cluster, err := r.resolveClusterCR(ctx, clusterUUID)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
+		log.Info("No StorageCluster resource manages this cluster; cannot migrate",
+			"cluster", clusterUUID, "pv", pv.Name)
+		r.Recorder.Eventf(pvc, nil, corev1.EventTypeWarning, "NoStorageCluster", "NoStorageCluster",
+			"no StorageCluster resource manages cluster %q; cannot migrate PV %q", clusterUUID, pv.Name)
+		return ctrl.Result{RequeueAfter: pvcPinRequeueUnbound}, nil
+	}
+
 	// Serialize per PV: wait for any in-flight pin migration to finish before
 	// requesting another (e.g. when the target changed while one was running).
-	active, err := r.hasActiveMigration(ctx, pvc.Namespace, pv.Name)
+	active, err := r.hasActiveMigration(ctx, cluster.Namespace, pv.Name)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -143,7 +159,7 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 		return ctrl.Result{RequeueAfter: pvcPinRequeueMigrating}, nil
 	}
 
-	if err := r.createMigration(ctx, pvc, pv.Name, desired); err != nil {
+	if err := r.createMigration(ctx, cluster, pv.Name, desired); err != nil {
 		return ctrl.Result{}, err
 	}
 	r.Recorder.Eventf(pvc, nil, corev1.EventTypeNormal, "MigrationRequested", "MigrationRequested",
@@ -151,18 +167,18 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 	return r.setApplied(ctx, pvc, desired)
 }
 
-// createMigration creates a VolumeMigration for the PV/target, owned by the PVC
-// so it is garbage-collected with the claim. The name is deterministic in
-// (pv, target) so a retried reconcile is idempotent (AlreadyExists is tolerated).
+// createMigration creates a VolumeMigration for the PV/target in the owning
+// StorageCluster's namespace. The name is deterministic in (pv, target) so a
+// retried reconcile is idempotent (AlreadyExists is tolerated).
 func (r *PersistentVolumeClaimReconciler) createMigration(
 	ctx context.Context,
-	pvc *corev1.PersistentVolumeClaim,
+	cluster *simplyblockv1alpha1.StorageCluster,
 	pvName, target string,
 ) error {
 	vm := &simplyblockv1alpha1.VolumeMigration{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pinMigrationName(pvName, target),
-			Namespace: pvc.Namespace,
+			Namespace: cluster.Namespace,
 			Labels:    map[string]string{labelPinnedVolumePV: pvName},
 		},
 		Spec: simplyblockv1alpha1.VolumeMigrationSpec{
@@ -170,12 +186,12 @@ func (r *PersistentVolumeClaimReconciler) createMigration(
 			TargetNodeUUID: target,
 		},
 	}
-	// A plain owner reference (not a controller reference) is enough to garbage
-	// collect the VolumeMigration when the PVC is deleted. SetControllerReference
-	// would additionally set blockOwnerDeletion=true, which the API server only
-	// permits when the operator can update persistentvolumeclaims/finalizers —
-	// a privilege it neither has nor needs here.
-	if err := controllerutil.SetOwnerReference(pvc, vm, r.Scheme); err != nil {
+	// Own by the StorageCluster (same namespace) so the migration is garbage-
+	// collected with the cluster. The PVC cannot be the owner: it may live in a
+	// different namespace, and a cross-namespace owner reference is invalid. A
+	// plain owner reference (not a controller reference) avoids setting
+	// blockOwnerDeletion, which would require storageclusters/finalizers access.
+	if err := controllerutil.SetOwnerReference(cluster, vm, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference on VolumeMigration: %w", err)
 	}
 	if err := r.Create(ctx, vm); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -203,6 +219,26 @@ func (r *PersistentVolumeClaimReconciler) hasActiveMigration(
 		}
 	}
 	return false, nil
+}
+
+// resolveClusterCR returns the StorageCluster whose reported UUID matches
+// clusterUUID, searching all namespaces. The VolumeMigration must be created in
+// this CR's namespace, since the VolumeMigration reconciler resolves the
+// cluster's migration settings there. Returns (nil, nil) when no CR matches.
+func (r *PersistentVolumeClaimReconciler) resolveClusterCR(
+	ctx context.Context,
+	clusterUUID string,
+) (*simplyblockv1alpha1.StorageCluster, error) {
+	var clusters simplyblockv1alpha1.StorageClusterList
+	if err := r.List(ctx, &clusters); err != nil {
+		return nil, fmt.Errorf("list StorageClusters: %w", err)
+	}
+	for i := range clusters.Items {
+		if clusters.Items[i].Status.UUID == clusterUUID {
+			return &clusters.Items[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // rejectTarget records a Warning for an unknown storage node and remembers the

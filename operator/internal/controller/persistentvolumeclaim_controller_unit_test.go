@@ -18,15 +18,27 @@ import (
 )
 
 const (
-	pinNamespace = "sb"
-	pinPVCName   = "data-pvc"
-	pinPVName    = "pv-data"
-	pinCluster   = "cluster-uuid"
-	pinPool      = "pool-uuid"
-	pinVolume    = "vol-uuid"
-	pinNodeA     = "node-a"
-	pinNodeB     = "node-b"
+	pinNamespace   = "sb"
+	pinClusterNS   = "sb-system" // StorageCluster CR namespace (deliberately != PVC namespace)
+	pinClusterName = "sb-cluster"
+	pinPVCName     = "data-pvc"
+	pinPVName      = "pv-data"
+	pinCluster     = "cluster-uuid"
+	pinPool        = "pool-uuid"
+	pinVolume      = "vol-uuid"
+	pinNodeA       = "node-a"
+	pinNodeB       = "node-b"
 )
+
+// pinClusterCR is the StorageCluster CR whose reported UUID matches the PV's
+// cluster. It lives in pinClusterNS, distinct from the PVC namespace, to prove
+// the migration is created alongside the cluster CR rather than the PVC.
+func pinClusterCR() *simplyblockv1alpha1.StorageCluster {
+	return &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: pinClusterName, Namespace: pinClusterNS},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: pinCluster},
+	}
+}
 
 // pinAPIServer serves the two control-plane endpoints the PVC controller uses:
 // the storage-node list (for target validation) and a single volume (for current
@@ -114,7 +126,7 @@ func getPinPVC(t *testing.T, cl client.Client) *corev1.PersistentVolumeClaim {
 func listPinMigrations(t *testing.T, cl client.Client) []simplyblockv1alpha1.VolumeMigration {
 	t.Helper()
 	var list simplyblockv1alpha1.VolumeMigrationList
-	if err := cl.List(context.Background(), &list, client.InNamespace(pinNamespace)); err != nil {
+	if err := cl.List(context.Background(), &list); err != nil {
 		t.Fatalf("list VolumeMigrations: %v", err)
 	}
 	return list.Items
@@ -200,7 +212,7 @@ func TestPVCReconcile_AlreadyOnTarget(t *testing.T) {
 func TestPVCReconcile_ValidChangeCreatesMigration(t *testing.T) {
 	// Volume on node-a, pin to node-b → create migration + record applied.
 	api := pinAPIServer(t, []string{pinNodeA, pinNodeB}, pinNodeA)
-	r, cl := newPVCReconciler(t, api, pinPVC(pinNodeB, ""), pinPV())
+	r, cl := newPVCReconciler(t, api, pinPVC(pinNodeB, ""), pinPV(), pinClusterCR())
 	if _, err := r.Reconcile(context.Background(), pinRequest()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -212,14 +224,39 @@ func TestPVCReconcile_ValidChangeCreatesMigration(t *testing.T) {
 	if m.Spec.PVName != pinPVName || m.Spec.TargetNodeUUID != pinNodeB {
 		t.Fatalf("unexpected migration spec: %+v", m.Spec)
 	}
+	// The migration must be created in the StorageCluster's namespace, not the PVC's.
+	if m.Namespace != pinClusterNS {
+		t.Fatalf("expected migration in cluster namespace %q, got %q", pinClusterNS, m.Namespace)
+	}
 	if m.Labels[labelPinnedVolumePV] != pinPVName {
 		t.Fatalf("expected PV label %q, got %q", pinPVName, m.Labels[labelPinnedVolumePV])
 	}
-	if len(m.OwnerReferences) != 1 || m.OwnerReferences[0].Name != pinPVCName {
-		t.Fatalf("expected owner reference to PVC, got %+v", m.OwnerReferences)
+	if len(m.OwnerReferences) != 1 || m.OwnerReferences[0].Name != pinClusterName ||
+		m.OwnerReferences[0].Kind != "StorageCluster" {
+		t.Fatalf("expected owner reference to StorageCluster, got %+v", m.OwnerReferences)
 	}
 	if getPinPVC(t, cl).Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeApplied] != pinNodeB {
 		t.Fatalf("expected applied = %s after creating migration", pinNodeB)
+	}
+}
+
+func TestPVCReconcile_NoStorageCluster(t *testing.T) {
+	// Valid target and a volume that needs moving, but no StorageCluster CR
+	// manages the cluster → no migration, requeue, applied left unset.
+	api := pinAPIServer(t, []string{pinNodeA, pinNodeB}, pinNodeA)
+	r, cl := newPVCReconciler(t, api, pinPVC(pinNodeB, ""), pinPV())
+	res, err := r.Reconcile(context.Background(), pinRequest())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected requeue when no StorageCluster manages the cluster")
+	}
+	if got := len(listPinMigrations(t, cl)); got != 0 {
+		t.Fatalf("expected no migrations, got %d", got)
+	}
+	if _, ok := getPinPVC(t, cl).Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeApplied]; ok {
+		t.Fatalf("applied must not be set when the migration could not be created")
 	}
 }
 
@@ -228,14 +265,14 @@ func TestPVCReconcile_ActiveMigrationWaits(t *testing.T) {
 	existing := &simplyblockv1alpha1.VolumeMigration{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "existing-mig",
-			Namespace: pinNamespace,
+			Namespace: pinClusterNS,
 			Labels:    map[string]string{labelPinnedVolumePV: pinPVName},
 		},
 		Spec:   simplyblockv1alpha1.VolumeMigrationSpec{PVName: pinPVName, TargetNodeUUID: pinNodeA},
 		Status: simplyblockv1alpha1.VolumeMigrationStatus{Phase: simplyblockv1alpha1.VolumeMigrationPhaseRunning},
 	}
 	api := pinAPIServer(t, []string{pinNodeA, pinNodeB}, pinNodeA)
-	r, cl := newPVCReconciler(t, api, pinPVC(pinNodeB, ""), pinPV(), existing)
+	r, cl := newPVCReconciler(t, api, pinPVC(pinNodeB, ""), pinPV(), pinClusterCR(), existing)
 	res, err := r.Reconcile(context.Background(), pinRequest())
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
