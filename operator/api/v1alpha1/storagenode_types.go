@@ -119,9 +119,11 @@ type StorageNodeSpec struct {
 	// +k8s:immutable
 	StorageNodeSetRef string `json:"storageNodeSetRef"`
 
-	// WorkerNode is the Kubernetes node hostname this StorageNode runs on. Immutable.
+	// WorkerNode is the Kubernetes node hostname this StorageNode runs on.
+	// Users may not change it directly — it is re-pointed only by the operator
+	// during a node migration (StorageNodeOps action=migrate). The
+	// StorageNode validating webhook rejects user-driven changes to this field.
 	// +kubebuilder:validation:Required
-	// +k8s:immutable
 	WorkerNode string `json:"workerNode"`
 
 	// SocketID is the NUMA socket identifier from spec.socketsToUse (e.g. "0", "1"). Immutable.

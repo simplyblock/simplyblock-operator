@@ -100,6 +100,7 @@ echo "==> Syncing webhook manifests..."
   # manifests.yaml already opens with its own "---"; drop it since we just printed ours.
   tail -n +2 "$WEBHOOK_SRC/manifests.yaml" | sed \
     -e 's|name: mutating-webhook-configuration|name: simplyblock-operator-mutating-webhook-configuration|' \
+    -e 's|name: validating-webhook-configuration|name: simplyblock-operator-validating-webhook-configuration|' \
     -e 's|name: webhook-service|name: simplyblock-operator-webhook-service|' \
     -e 's|namespace: system|namespace: {{ .Release.Namespace }}|'
   echo "{{- end }}"

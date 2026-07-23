@@ -49,8 +49,17 @@ func webhookConfig() *admissionregistrationv1.MutatingWebhookConfiguration {
 	}
 }
 
+func validatingWebhookConfig() *admissionregistrationv1.ValidatingWebhookConfiguration {
+	return &admissionregistrationv1.ValidatingWebhookConfiguration{
+		ObjectMeta: metav1.ObjectMeta{Name: utils.WebhookValidatingConfigurationName},
+		Webhooks: []admissionregistrationv1.ValidatingWebhook{
+			{Name: "vstoragenode.simplyblock.io"},
+		},
+	}
+}
+
 func TestReconcileCertWritesFilesAndInjectsCA(t *testing.T) {
-	p := newProvisioner(t, servingSecret("CA-DATA", "CRT-DATA", "KEY-DATA"), webhookConfig())
+	p := newProvisioner(t, servingSecret("CA-DATA", "CRT-DATA", "KEY-DATA"), webhookConfig(), validatingWebhookConfig())
 
 	if err := p.reconcileCert(context.Background()); err != nil {
 		t.Fatalf("reconcileCert: %v", err)
@@ -75,6 +84,15 @@ func TestReconcileCertWritesFilesAndInjectsCA(t *testing.T) {
 		t.Fatalf("caBundle = %q, want %q", got, "CA-DATA")
 	}
 
+	// caBundle also injected into the validating configuration.
+	var vwhc admissionregistrationv1.ValidatingWebhookConfiguration
+	if err := p.client.Get(context.Background(), types.NamespacedName{Name: utils.WebhookValidatingConfigurationName}, &vwhc); err != nil {
+		t.Fatalf("get validating webhook config: %v", err)
+	}
+	if got := string(vwhc.Webhooks[0].ClientConfig.CABundle); got != "CA-DATA" {
+		t.Fatalf("validating caBundle = %q, want %q", got, "CA-DATA")
+	}
+
 	// readiness signalled.
 	select {
 	case <-p.ready:
@@ -84,7 +102,7 @@ func TestReconcileCertWritesFilesAndInjectsCA(t *testing.T) {
 }
 
 func TestReconcileCertFallsBackToLeafWhenNoCA(t *testing.T) {
-	p := newProvisioner(t, servingSecret("", "LEAF-CRT", "KEY"), webhookConfig())
+	p := newProvisioner(t, servingSecret("", "LEAF-CRT", "KEY"), webhookConfig(), validatingWebhookConfig())
 
 	if err := p.reconcileCert(context.Background()); err != nil {
 		t.Fatalf("reconcileCert: %v", err)
@@ -111,7 +129,7 @@ func TestReconcileCertErrorsWhenSecretMissing(t *testing.T) {
 }
 
 func TestReconcileCertIsIdempotent(t *testing.T) {
-	p := newProvisioner(t, servingSecret("CA", "CRT", "KEY"), webhookConfig())
+	p := newProvisioner(t, servingSecret("CA", "CRT", "KEY"), webhookConfig(), validatingWebhookConfig())
 	for i := 0; i < 3; i++ {
 		if err := p.reconcileCert(context.Background()); err != nil {
 			t.Fatalf("reconcileCert iteration %d: %v", i, err)

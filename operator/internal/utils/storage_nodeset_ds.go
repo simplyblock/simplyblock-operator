@@ -459,7 +459,7 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 // the cluster control-plane uses to reach a storage-node-api pod backing the
 // given worker node.
 func StorageNodeSetAPIAddress(workerNode, namespace string) string {
-	return fmt.Sprintf("%s.simplyblock-storage-node-api.%s.svc.cluster.local:5000", nodeHostnameLabel(workerNode), namespace)
+	return fmt.Sprintf("%s.simplyblock-storage-node-api.%s.svc.cluster.local:5000", NodeHostnameLabel(workerNode), namespace)
 }
 
 func BuildStorageNodeSetService(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabled bool, tlsProvider string) *corev1.Service {
@@ -489,7 +489,7 @@ func BuildStorageNodeSetEndpointSlice(sn *simplyblockv1alpha1.StorageNodeSet, no
 
 	endpoints := make([]discoveryv1.Endpoint, 0, len(nodeIPs))
 	for nodeName, ip := range nodeIPs {
-		hostname := nodeHostnameLabel(nodeName)
+		hostname := NodeHostnameLabel(nodeName)
 		endpoints = append(endpoints, discoveryv1.Endpoint{
 			Addresses: []string{ip},
 			Hostname:  &hostname,
@@ -555,7 +555,7 @@ func BuildSpdkProxyEndpointSlice(
 	eps := make([]discoveryv1.Endpoint, 0, len(endpoints))
 	seen := make(map[string]string, len(endpoints))
 	for _, e := range endpoints {
-		label := nodeHostnameLabel(e.NodeName)
+		label := NodeHostnameLabel(e.NodeName)
 		if prev, ok := seen[label]; ok && prev != e.NodeName {
 			return nil, fmt.Errorf("spdk-proxy endpoint hostname collision on label %q (nodes %q and %q): node names share the same first DNS segment", label, prev, e.NodeName)
 		}
@@ -589,7 +589,12 @@ func BuildSpdkProxyEndpointSlice(
 	}, nil
 }
 
-func nodeHostnameLabel(nodeName string) string {
+// NodeHostnameLabel returns the DNS-label form of a node name: the segment
+// before the first dot, so FQDN-style node names stay within the 63-char DNS
+// label limit. It matches the Hostname stored in the storage-node-api
+// EndpointSlice, so callers can check whether a worker's per-pod DNS name is
+// published.
+func NodeHostnameLabel(nodeName string) string {
 	label, _, _ := strings.Cut(nodeName, ".")
 	return label
 }

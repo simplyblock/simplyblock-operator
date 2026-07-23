@@ -2049,6 +2049,7 @@ spec:
                 - suspend
                 - resume
                 - remove
+                - migrate
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -2069,10 +2070,18 @@ spec:
                 description: Force enables forced execution where the backend supports
                   it.
                 type: boolean
+              newSsdPcie:
+                description: |-
+                  NewSsdPcie lists additional NVMe PCIe addresses to bind on the target host
+                  during a migration. Passed through to the control-plane restart as
+                  new_ssd_pcie. Only applicable when action=migrate.
+                items:
+                  type: string
+                type: array
               reattachVolume:
                 description: |-
-                  ReattachVolume reattaches volumes during restart.
-                  Only applicable when action=restart.
+                  ReattachVolume reattaches volumes during the node restart.
+                  Applicable when action=restart or action=migrate.
                 type: boolean
               storageNodeRef:
                 description: StorageNodeRef is the name of the target StorageNode.
@@ -2081,10 +2090,30 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
+              targetWorkerNode:
+                description: |-
+                  TargetWorkerNode is the Kubernetes worker hostname the storage node is
+                  relocated onto. Required (and only used) when action=migrate.
+
+                  A migration is NOT a drain/remove: the storage node keeps its backend UUID
+                  and its partition / logical-volume assignments follow it. The operator
+                  issues a control-plane restart pointed at the target host's
+                  storage-node-api (node_address), waits for the node to come back online
+                  there, then /promotes it (starting a rebalance) and re-points the
+                  StorageNode's spec.workerNode and the owning StorageNodeSet.workerNodes
+                  from the source worker to this one. No fresh storage node is provisioned
+                  and no VolumeMigration CRs are created. Immutable.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
             required:
             - action
             - storageNodeRef
             type: object
+            x-kubernetes-validations:
+            - message: field targetWorkerNode is immutable once set
+              rule: '!has(oldSelf.targetWorkerNode) || has(self.targetWorkerNode)'
           status:
             description: StorageNodeOpsStatus holds the observed state of a StorageNodeOps.
             properties:
@@ -2118,6 +2147,9 @@ spec:
                 - Migrating
                 - Verifying
                 - Removing
+                - Preparing
+                - Restarting
+                - Promoting
                 type: string
               triggered:
                 description: |-
@@ -2345,12 +2377,12 @@ spec:
                 - message: field is immutable
                   rule: self == oldSelf
               workerNode:
-                description: WorkerNode is the Kubernetes node hostname this StorageNode
-                  runs on. Immutable.
+                description: |-
+                  WorkerNode is the Kubernetes node hostname this StorageNode runs on.
+                  Users may not change it directly — it is re-pointed only by the operator
+                  during a node migration (StorageNodeOps action=migrate). The
+                  StorageNode validating webhook rejects user-driven changes to this field.
                 type: string
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
             required:
             - storageNodeSetRef
             - workerNode
@@ -3651,6 +3683,7 @@ rules:
   - admissionregistration.k8s.io
   resources:
   - mutatingwebhookconfigurations
+  - validatingwebhookconfigurations
   verbs:
   - get
   - list
@@ -3703,6 +3736,13 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - apiGroups:
   - policy
   resources:
@@ -4265,4 +4305,29 @@ webhooks:
     - CREATE
     resources:
     - pods
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: simplyblock-operator-validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha1-storagenode
+  failurePolicy: Fail
+  name: vstoragenode.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - UPDATE
+    resources:
+    - storagenodes
   sideEffects: None
