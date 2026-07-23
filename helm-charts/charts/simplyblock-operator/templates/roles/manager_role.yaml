@@ -187,6 +187,8 @@ rules:
   - snapshotreplications
   - storagebackups
   - storageclusters
+  - storagenodeops
+  - storagenodes
   - storagenodesets
   - tasks
   - volumemigrations
@@ -208,6 +210,8 @@ rules:
   - snapshotreplications/finalizers
   - storagebackups/finalizers
   - storageclusters/finalizers
+  - storagenodeops/finalizers
+  - storagenodes/finalizers
   - storagenodesets/finalizers
   - tasks/finalizers
   - volumemigrations/finalizers
@@ -224,6 +228,8 @@ rules:
   - snapshotreplications/status
   - storagebackups/status
   - storageclusters/status
+  - storagenodeops/status
+  - storagenodes/status
   - storagenodesets/status
   - tasks/status
   - volumemigrations/status
