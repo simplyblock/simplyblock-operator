@@ -228,8 +228,8 @@ func TestPVCReconcile_ValidChangeCreatesMigration(t *testing.T) {
 	if m.Namespace != pinClusterNS {
 		t.Fatalf("expected migration in cluster namespace %q, got %q", pinClusterNS, m.Namespace)
 	}
-	if m.Labels[labelPinnedVolumePV] != pinPVName {
-		t.Fatalf("expected PV label %q, got %q", pinPVName, m.Labels[labelPinnedVolumePV])
+	if m.Labels[labelPinnedVolumePV] != pinPVLabelValue(pinPVName) {
+		t.Fatalf("expected PV label %q, got %q", pinPVLabelValue(pinPVName), m.Labels[labelPinnedVolumePV])
 	}
 	if len(m.OwnerReferences) != 1 || m.OwnerReferences[0].Name != pinClusterName ||
 		m.OwnerReferences[0].Kind != "StorageCluster" {
@@ -266,7 +266,7 @@ func TestPVCReconcile_ActiveMigrationWaits(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "existing-mig",
 			Namespace: pinClusterNS,
-			Labels:    map[string]string{labelPinnedVolumePV: pinPVName},
+			Labels:    map[string]string{labelPinnedVolumePV: pinPVLabelValue(pinPVName)},
 		},
 		Spec:   simplyblockv1alpha1.VolumeMigrationSpec{PVName: pinPVName, TargetNodeUUID: pinNodeA},
 		Status: simplyblockv1alpha1.VolumeMigrationStatus{Phase: simplyblockv1alpha1.VolumeMigrationPhaseRunning},

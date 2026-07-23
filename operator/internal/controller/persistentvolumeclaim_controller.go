@@ -32,9 +32,11 @@ import (
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations,verbs=get;list;watch;create
 
 const (
-	// labelPinnedVolumePV labels a controller-created VolumeMigration with the PV
-	// name it targets, so all pin-driven migrations for a PV can be found without
-	// knowing the (target-dependent) object name.
+	// labelPinnedVolumePV labels a controller-created VolumeMigration with a
+	// hash of the PV name (see pinPVLabelValue), so all pin-driven migrations for
+	// a PV can be found without knowing the (target-dependent) object name. The
+	// value is hashed because PV names can exceed the 63-char label-value limit;
+	// the full PV name is preserved in VolumeMigration.spec.pvName.
 	labelPinnedVolumePV = "storage.simplyblock.io/pinned-volume-pv"
 
 	// pvcPinRequeueUnbound is how long to wait before rechecking a PVC whose
@@ -179,7 +181,7 @@ func (r *PersistentVolumeClaimReconciler) createMigration(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pinMigrationName(pvName, target),
 			Namespace: cluster.Namespace,
-			Labels:    map[string]string{labelPinnedVolumePV: pvName},
+			Labels:    map[string]string{labelPinnedVolumePV: pinPVLabelValue(pvName)},
 		},
 		Spec: simplyblockv1alpha1.VolumeMigrationSpec{
 			PVName:         pvName,
@@ -209,7 +211,7 @@ func (r *PersistentVolumeClaimReconciler) hasActiveMigration(
 	var list simplyblockv1alpha1.VolumeMigrationList
 	if err := r.List(ctx, &list,
 		client.InNamespace(namespace),
-		client.MatchingLabels{labelPinnedVolumePV: pvName},
+		client.MatchingLabels{labelPinnedVolumePV: pinPVLabelValue(pvName)},
 	); err != nil {
 		return false, fmt.Errorf("list VolumeMigrations for PV %q: %w", pvName, err)
 	}
@@ -329,6 +331,15 @@ func isTerminalMigrationPhase(phase simplyblockv1alpha1.VolumeMigrationPhase) bo
 func pinMigrationName(pvName, target string) string {
 	sum := sha256.Sum256([]byte(pvName + "\x00" + target))
 	return "pvc-pin-" + hex.EncodeToString(sum[:])[:16]
+}
+
+// pinPVLabelValue derives a label-safe value from a PV name for labelPinnedVolumePV.
+// PV names can exceed the 63-character label-value limit, so the name is hashed to
+// a fixed-length hex string; the full PV name remains in VolumeMigration.spec.pvName.
+// createMigration and hasActiveMigration must use this same derivation.
+func pinPVLabelValue(pvName string) string {
+	sum := sha256.Sum256([]byte(pvName))
+	return hex.EncodeToString(sum[:])[:32]
 }
 
 // pinnedVolumeChanged returns true only when the pinned-volume annotation is
