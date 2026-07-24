@@ -1,4 +1,4 @@
-package autobalancing
+package autoplacement
 
 import (
 	"context"

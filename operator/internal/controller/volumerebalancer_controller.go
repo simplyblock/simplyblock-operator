@@ -7,8 +7,8 @@ import (
 
 	atlaskube "github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
-	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -66,14 +66,14 @@ type VolumeRebalancerReconciler struct {
 	LatencyPercentile string
 
 	migrationState *volumemigration.MigrationState
-	rebalancer     *autobalancing.Rebalancer
+	rebalancer     *autoplacement.Rebalancer
 }
 
 func (r *VolumeRebalancerReconciler) init(scResolver atlaskube.Resolver) {
 	r.migrationState = volumemigration.NewMigrationState()
-	r.rebalancer = autobalancing.NewRebalancer(
-		autobalancing.NewStorageNodeSelector(r.Client),
-		autobalancing.NewLogicalVolumeSelector(r.apiClient, r.Client, scResolver),
+	r.rebalancer = autoplacement.NewRebalancer(
+		autoplacement.NewStorageNodeSelector(r.Client),
+		autoplacement.NewLogicalVolumeSelector(r.apiClient, r.Client, scResolver),
 	)
 }
 
@@ -113,16 +113,16 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 
 	// Auto-rebalancing is opt-in: run only when explicitly enabled (Enabled=true).
 	// An unset flag means off, so realignment still gets its requeue.
-	spec := ptr.From(clusterCR.Spec.AutoRebalancing, simplyblockv1alpha1.VolumeRebalancingSettings{})
+	spec := ptr.From(clusterCR.Spec.VolumeAutoPlacement, simplyblockv1alpha1.VolumeAutoPlacementSettings{})
 	if !ptr.BoolFromOrFalse(spec.Enabled) {
 		return ctrl.Result{RequeueAfter: realignRequeue}, nil
 	}
 
-	cfg, err := autobalancing.ResolveRebalancingConfig(spec)
+	cfg, err := autoplacement.ResolveAutoPlacementConfig(spec)
 	if err != nil {
 		log.Error(err, "Invalid rebalancing configuration; skipping cycle")
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		return ctrl.Result{RequeueAfter: autobalancing.DefaultEvaluationInterval}, nil
+		return ctrl.Result{RequeueAfter: autoplacement.DefaultEvaluationInterval}, nil
 	}
 
 	// Apply the operator-wide latency-percentile flag (general, not per cluster).
@@ -171,7 +171,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	}
 
 	toMigrate, pinnedBlocked, err := r.rebalancer.SelectMigrations(ctx, cfg, isCoolingDown,
-		autobalancing.StorageNodeSelectorInput{
+		autoplacement.StorageNodeSelectorInput{
 			Namespace:    clusterCR.Namespace,
 			StorageNodes: storageNodes,
 		})
@@ -214,7 +214,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	migratedCount := r.executeMigrations(ctx, clusterCR, toMigrate, cfg.CoolDownSecs, cycleStart.Add(cfg.EvalInterval))
 
 	activeCooldowns := r.migrationState.GetCooldownCountByCluster(clusterUUID, time.Now())
-	autobalancing.SetCooldownVolumes(clusterUUID, float64(activeCooldowns))
+	autoplacement.SetCooldownVolumes(clusterUUID, float64(activeCooldowns))
 
 	if migratedCount > 0 {
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "migrated").Inc()
@@ -233,7 +233,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 func (r *VolumeRebalancerReconciler) executeMigrations(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
-	toMigrate []autobalancing.MigrationCandidate,
+	toMigrate []autoplacement.MigrationCandidate,
 	coolDownSecs int64,
 	cycleDeadline time.Time,
 ) int {
@@ -538,7 +538,7 @@ func (r *VolumeRebalancerReconciler) SetupWithManager(
 	// Index PersistentVolumes by CSI driver so BuildCSIManagedSet can filter to
 	// simplyblock CSI volumes through the cache instead of listing every PV.
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.PersistentVolume{},
-		autobalancing.PVCSIDriverIndexField, func(o client.Object) []string {
+		autoplacement.PVCSIDriverIndexField, func(o client.Object) []string {
 			pv, ok := o.(*corev1.PersistentVolume)
 			if !ok || pv.Spec.CSI == nil {
 				return nil

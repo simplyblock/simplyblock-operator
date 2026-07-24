@@ -31,7 +31,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/simplyblock/simplyblock-operator/internal/rebalancer"
+	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 )
 
 // ── connection config ──────────────────────────────────────────────────────────
@@ -120,7 +120,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("invalid --port %q: %v", *port, err)
 			}
-			probeNodes([]rebalancer.NodeConfig{{
+			probeNodes([]autoplacement.NodeConfig{{
 				NQN: *nqn, Addr: *addr, Port: int32(portNum),
 				NodeUUID: *nodeUUID, ClusterUUID: *clusterUUID,
 			}}, *metricsAddr, *interval)
@@ -133,12 +133,12 @@ func main() {
 
 // readConfig reads the JSON array from path. Returns nil when the file does not
 // exist yet or is empty — callers should retry rather than treat this as fatal.
-func readConfig(path string) []rebalancer.NodeConfig {
+func readConfig(path string) []autoplacement.NodeConfig {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
-	var nodes []rebalancer.NodeConfig
+	var nodes []autoplacement.NodeConfig
 	if err := json.Unmarshal(data, &nodes); err != nil {
 		log.Printf("parse config %s: %v", path, err)
 		return nil
@@ -181,7 +181,7 @@ func baseline(conn connConfig, terminationLog string, samples int, interval time
 		log.Fatalf("fio: all %d baseline samples failed", samples)
 	}
 
-	result := &rebalancer.LatencyResult{P50NS: trimmedMean(p50s), P99NS: trimmedMean(p99s)}
+	result := &autoplacement.LatencyResult{P50NS: trimmedMean(p50s), P99NS: trimmedMean(p99s)}
 	out, _ := json.Marshal(result)
 	if err := os.WriteFile(terminationLog, out, 0o644); err != nil {
 		log.Fatalf("write termination log: %v", err)
@@ -267,7 +267,7 @@ func probe(configFile, metricsAddr string, interval time.Duration) {
 			running[n.NodeUUID] = nodeCancel
 			log.Printf("baseline complete for node %s — starting probe", n.NodeUUID)
 			wg.Add(1)
-			go func(n rebalancer.NodeConfig) {
+			go func(n autoplacement.NodeConfig) {
 				defer wg.Done()
 				probeNode(nodeCtx, n, p50, p99, interval)
 			}(n)
@@ -299,7 +299,7 @@ func probe(configFile, metricsAddr string, interval time.Duration) {
 
 // probeNodes starts one goroutine per node immediately (used when connection
 // params are supplied directly via flags rather than a config file).
-func probeNodes(nodes []rebalancer.NodeConfig, metricsAddr string, interval time.Duration) {
+func probeNodes(nodes []autoplacement.NodeConfig, metricsAddr string, interval time.Duration) {
 	p50, p99, srv := newPrometheusServer(metricsAddr)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -308,7 +308,7 @@ func probeNodes(nodes []rebalancer.NodeConfig, metricsAddr string, interval time
 	var wg sync.WaitGroup
 	for _, n := range nodes {
 		wg.Add(1)
-		go func(n rebalancer.NodeConfig) {
+		go func(n autoplacement.NodeConfig) {
 			defer wg.Done()
 			probeNode(ctx, n, p50, p99, interval)
 		}(n)
@@ -322,7 +322,7 @@ func probeNodes(nodes []rebalancer.NodeConfig, metricsAddr string, interval time
 }
 
 // probeNode runs the measurement loop for a single storage node.
-func probeNode(ctx context.Context, n rebalancer.NodeConfig, p50, p99 *prometheus.GaugeVec, interval time.Duration) {
+func probeNode(ctx context.Context, n autoplacement.NodeConfig, p50, p99 *prometheus.GaugeVec, interval time.Duration) {
 	conn := connConfig{Addr: n.Addr, Port: fmt.Sprintf("%d", n.Port), NQN: n.NQN}
 	log.Printf("probe node=%s cluster=%s interval=%s", n.NodeUUID, n.ClusterUUID, interval)
 
@@ -469,7 +469,7 @@ func findDevice(ctx context.Context, nqn string) (string, error) {
 
 // ── fio ────────────────────────────────────────────────────────────────────────
 
-func measure(ctx context.Context, device string) (*rebalancer.LatencyResult, error) {
+func measure(ctx context.Context, device string) (*autoplacement.LatencyResult, error) {
 	out, err := exec.CommandContext(ctx,
 		"sudo", "fio",
 		"--allow_file_create=0",
@@ -502,7 +502,7 @@ func measure(ctx context.Context, device string) (*rebalancer.LatencyResult, err
 	}
 
 	pct := fio.Jobs[0].Write.ClatNS.Percentile
-	return &rebalancer.LatencyResult{
+	return &autoplacement.LatencyResult{
 		P50NS: pct["50.000000"],
 		P99NS: pct["99.000000"],
 	}, nil

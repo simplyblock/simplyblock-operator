@@ -112,7 +112,7 @@ func (h *SimplyblockRebalancerInjector) resolveConfig(
 			log.V(1).Info("Skipping: cluster UUID prefix mismatch", "cluster", cr.Name, "clusterUUID", cr.Status.UUID, "podPrefix", uuidPrefix)
 			continue
 		}
-		rb := ptr.From(cr.Spec.AutoRebalancing, simplyblockv1alpha1.VolumeRebalancingSettings{})
+		rb := ptr.From(cr.Spec.VolumeAutoPlacement, simplyblockv1alpha1.VolumeAutoPlacementSettings{})
 		if !ptr.BoolFromOrFalse(rb.LatencyBenchmarkEnabled) {
 			log.Info("Skipping: latency benchmark not enabled", "cluster", cr.Name)
 			return "", "", false

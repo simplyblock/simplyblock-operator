@@ -212,36 +212,34 @@ func TestReconcileDataRealignment_DisabledSkips(t *testing.T) {
 }
 
 // TestReconcile_RealignmentRunsWhenAutoRebalancingDisabled locks in that data
-// realignment is driven by the full Reconcile independently of auto-rebalancing:
-// whether auto-rebalancing is unset, explicitly disabled, or the cluster has no
-// VolumeMigrationSettings at all, a due (here: forced) realignment still fires
-// and the returned requeue keeps it on schedule.
+// realignment is driven by the full Reconcile independently of auto-rebalancing.
+// Auto-rebalancing is configured separately via Spec.VolumeAutoPlacement; whether
+// that is unset or explicitly disabled, a due (here: forced) realignment still
+// fires and the returned requeue keeps it on schedule. Realignment itself is
+// enabled by default (nil VolumeMigrationSettings).
 func TestReconcile_RealignmentRunsWhenAutoRebalancingDisabled(t *testing.T) {
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: realignNamespace, Name: realignClusterName}}
 
 	cases := []struct {
-		name string
-		vms  *simplyblockv1alpha1.VolumeMigrationSettings
+		name          string
+		autoPlacement *simplyblockv1alpha1.VolumeAutoPlacementSettings
 	}{
 		{
-			name: "no volume-migration settings",
-			vms:  nil,
+			name:          "auto-placement unset",
+			autoPlacement: nil,
 		},
 		{
-			name: "auto-rebalancing unset",
-			vms:  &simplyblockv1alpha1.VolumeMigrationSettings{},
-		},
-		{
-			name: "auto-rebalancing explicitly disabled",
-			vms: &simplyblockv1alpha1.VolumeMigrationSettings{
-				AutoRebalancing: &simplyblockv1alpha1.VolumeRebalancingSettings{Enabled: ptr.To(false)},
-			},
+			name:          "auto-rebalancing explicitly disabled",
+			autoPlacement: &simplyblockv1alpha1.VolumeAutoPlacementSettings{Enabled: ptr.To(false)},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// annotate=true forces an immediate realignment regardless of interval.
-			f := newRealignFixture(t, http.StatusOK, realignTestCluster(ptr.To(true), nil, true, tc.vms))
+			// annotate=true forces an immediate realignment regardless of interval;
+			// nil VolumeMigrationSettings leaves realignment enabled by default.
+			cr := realignTestCluster(ptr.To(true), nil, true, nil)
+			cr.Spec.VolumeAutoPlacement = tc.autoPlacement
+			f := newRealignFixture(t, http.StatusOK, cr)
 
 			res, err := f.r.Reconcile(context.Background(), req)
 			if err != nil {

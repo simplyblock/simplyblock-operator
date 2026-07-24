@@ -59,7 +59,7 @@ type NodeRecycleStatus struct {
 
 // VolumeMigrationSettings carries cluster-level settings for volume migration.
 // Automatic load-based rebalancing is configured separately via
-// StorageClusterSpec.AutoRebalancing, keeping the manual-migration controls
+// StorageClusterSpec.VolumeAutoPlacement, keeping the manual-migration controls
 // separate from the rebalancing policy.
 type VolumeMigrationSettings struct {
 	// Enabled turns on volume migration for this cluster. When false, the operator
@@ -111,9 +111,9 @@ const (
 	MetricsBackendUniform MetricsBackend = "uniform"
 )
 
-// VolumeRebalancingSettings controls the automatic, latency-driven volume rebalancing
-// behaviour. It is configured under StorageClusterSpec.AutoRebalancing.
-type VolumeRebalancingSettings struct {
+// VolumeAutoPlacementSettings controls the automatic, latency-driven volume rebalancing
+// behaviour. It is configured under StorageClusterSpec.VolumeAutoPlacement.
+type VolumeAutoPlacementSettings struct {
 	// Enabled activates automatic rebalancing for this cluster. Defaults to true.
 	// +optional
 	Enabled *bool `json:"enabled,omitempty"`
@@ -311,10 +311,10 @@ type StorageClusterSpec struct {
 	// +optional
 	VolumeMigrationSettings *VolumeMigrationSettings `json:"volumeMigrationSettings,omitempty"`
 
-	// AutoRebalancing configures automatic, latency-driven volume rebalancing. When
+	// VolumeAutoPlacement configures automatic, latency-driven volume rebalancing. When
 	// nil/disabled the operator performs only manually-triggered VolumeMigrations.
 	// +optional
-	AutoRebalancing *VolumeRebalancingSettings `json:"autoRebalancing,omitempty"`
+	VolumeAutoPlacement *VolumeAutoPlacementSettings `json:"volumeAutoPlacement,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Failure Domains"
 	// EnableFailureDomains opts the cluster into failure-domain mode. When enabled, every
