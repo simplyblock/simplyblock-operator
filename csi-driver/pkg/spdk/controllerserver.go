@@ -21,7 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"time"
@@ -285,7 +285,7 @@ func coLocatedHostID(topoReq *csi.TopologyRequirement, clusterID string) string 
 		if len(candidates) == 0 {
 			return ""
 		}
-		return candidates[rand.Intn(len(candidates))]
+		return candidates[rand.IntN(len(candidates))]
 	}
 	if uuid := find(topoReq.GetPreferred()); uuid != "" {
 		return uuid

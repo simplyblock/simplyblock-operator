@@ -525,6 +525,13 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(
 				continue
 			}
 			slot := strings.TrimPrefix(k, storageNodeUUIDLabelPrefix)
+			sep := strings.LastIndex(slot, ".")
+			if sep < 0 || slot[:sep] != clusterUUID {
+				// Slot belongs to a different SimplyBlock cluster (a worker can host
+				// storage-node instances from more than one) or is malformed — leave
+				// it untouched; this reconcile only owns clusterUUID's slots.
+				continue
+			}
 			if desired[slot] != v {
 				delete(node.Labels, k)
 				changed = true
