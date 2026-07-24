@@ -119,17 +119,17 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	// delay until the next realignment check (0 when realignment is disabled).
 	realignRequeue := r.reconcileDataRealignment(ctx, clusterCR, realignClusterUUID)
 
-	if clusterCR.Spec.AutoRebalancing == nil {
-		return ctrl.Result{}, nil
-	}
-	spec := clusterCR.Spec.AutoRebalancing
+	spec := ptr.From(clusterCR.Spec.AutoRebalancing, simplyblockv1alpha1.VolumeRebalancingSettings{})
 	if !ptr.BoolFromOrTrue(spec.Enabled) {
 		return ctrl.Result{}, nil
 	}
 	if clusterCR.Status.UUID == "" {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
-	if spec.Enabled != nil && !*spec.Enabled {
+
+	// Auto-rebalancing is opt-in: run only when explicitly enabled (Enabled=true).
+	// An unset flag means off, so realignment still gets its requeue.
+	if !ptr.BoolFromOrFalse(spec.Enabled) {
 		return ctrl.Result{RequeueAfter: realignRequeue}, nil
 	}
 
@@ -139,6 +139,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
 		return ctrl.Result{RequeueAfter: autobalancing.DefaultEvaluationInterval}, nil
 	}
+
 	// Apply the operator-wide latency-percentile flag (general, not per cluster).
 	if r.LatencyPercentile != "" {
 		cfg.LatencyPercentile = r.LatencyPercentile
@@ -266,11 +267,13 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 				len(toMigrate)-migratedCount)
 			break
 		}
+
 		name := rebalanceMigrationName(mc.Volume.UUID)
 		labels := map[string]string{
 			rebalancerLabel:        "true",
 			rebalancerClusterLabel: clusterCR.Name,
 		}
+
 		err := volumemigration.StartMigration(ctx, r.Client, mc.Volume.UUID, mc.TargetNodeUUID,
 			name, clusterCR.Namespace, ownerRefs, labels)
 		switch {
@@ -284,6 +287,7 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 				"Creating VolumeMigration for volume %s to node %s failed: %v", mc.Volume.UUID, mc.TargetNodeUUID, err)
 			continue
 		}
+
 		r.migrationState.PushMigration(mc.ClusterUUID, mc.Volume.PoolUUID, mc.Volume.UUID, name, clusterCR.Namespace, coolDownSecs)
 		r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeNormal, "VolumeRebalancingStarted", "VolumeRebalancingStarted",
 			"Created VolumeMigration %s for volume %s from node %s to %s",
