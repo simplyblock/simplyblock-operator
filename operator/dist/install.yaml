@@ -786,7 +786,23 @@ spec:
     singular: pool
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - description: Backend pool status
+      jsonPath: .status.status
+      name: Status
+      type: string
+    - description: Backend pool UUID
+      jsonPath: .status.uuid
+      name: UUID
+      type: string
+    - description: Configured capacity limit
+      jsonPath: .spec.capacityLimit
+      name: Capacity
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Pool is the Schema for the pools API
