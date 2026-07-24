@@ -1502,6 +1502,11 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		*out = new(VolumeMigrationSettings)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.AutoRebalancing != nil {
+		in, out := &in.AutoRebalancing, &out.AutoRebalancing
+		*out = new(VolumeRebalancingSettings)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.EnableFailureDomains != nil {
 		in, out := &in.EnableFailureDomains, &out.EnableFailureDomains
 		*out = new(bool)
@@ -2395,11 +2400,6 @@ func (in *VolumeMigrationSettings) DeepCopyInto(out *VolumeMigrationSettings) {
 		in, out := &in.RebalancerImage, &out.RebalancerImage
 		*out = new(string)
 		**out = **in
-	}
-	if in.AutoRebalancing != nil {
-		in, out := &in.AutoRebalancing, &out.AutoRebalancing
-		*out = new(VolumeRebalancingSettings)
-		(*in).DeepCopyInto(*out)
 	}
 }
 

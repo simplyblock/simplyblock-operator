@@ -151,8 +151,7 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 		return "", false
 	}
 
-	vms := ptr.From(cr.Spec.VolumeMigrationSettings, simplyblockv1alpha1.VolumeMigrationSettings{})
-	spec := ptr.From(vms.AutoRebalancing, simplyblockv1alpha1.VolumeRebalancingSettings{})
+	spec := ptr.From(cr.Spec.AutoRebalancing, simplyblockv1alpha1.VolumeRebalancingSettings{})
 	if !ptr.BoolFromOrTrue(spec.Enabled) {
 		log.V(1).Info("Skipping: auto-rebalancing disabled", "cluster", cr.Name)
 		return "", false

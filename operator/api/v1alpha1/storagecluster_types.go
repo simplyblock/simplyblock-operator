@@ -58,8 +58,9 @@ type NodeRecycleStatus struct {
 }
 
 // VolumeMigrationSettings carries cluster-level settings for volume migration.
-// Automatic load-based rebalancing is configured under the nested AutoRebalancing
-// field, keeping the manual-migration controls separate from the rebalancing policy.
+// Automatic load-based rebalancing is configured separately via
+// StorageClusterSpec.AutoRebalancing, keeping the manual-migration controls
+// separate from the rebalancing policy.
 type VolumeMigrationSettings struct {
 	// Enabled turns on volume migration for this cluster. When false, the operator
 	// will not act on VolumeMigration resources for this cluster. Defaults to true.
@@ -70,10 +71,6 @@ type VolumeMigrationSettings struct {
 	// nvme-cli (and, for rebalancing, fio + jq).
 	// +optional
 	RebalancerImage *string `json:"rebalancerImage,omitempty"`
-	// AutoRebalancing configures automatic, latency-driven volume rebalancing. When
-	// nil/disabled the operator performs only manually-triggered VolumeMigrations.
-	// +optional
-	AutoRebalancing *VolumeRebalancingSettings `json:"autoRebalancing,omitempty"`
 }
 
 // MetricsBackend selects the NodeMetricsProvider implementation.
@@ -89,7 +86,7 @@ const (
 )
 
 // VolumeRebalancingSettings controls the automatic, latency-driven volume rebalancing
-// behaviour. It is nested under VolumeMigrationSettings.AutoRebalancing.
+// behaviour. It is configured under StorageClusterSpec.AutoRebalancing.
 type VolumeRebalancingSettings struct {
 	// Enabled activates automatic rebalancing for this cluster. Defaults to true.
 	// +optional
@@ -287,6 +284,11 @@ type StorageClusterSpec struct {
 	// VolumeMigrationSettings controls volume migration for this cluster.
 	// +optional
 	VolumeMigrationSettings *VolumeMigrationSettings `json:"volumeMigrationSettings,omitempty"`
+
+	// AutoRebalancing configures automatic, latency-driven volume rebalancing. When
+	// nil/disabled the operator performs only manually-triggered VolumeMigrations.
+	// +optional
+	AutoRebalancing *VolumeRebalancingSettings `json:"autoRebalancing,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Failure Domains"
 	// EnableFailureDomains opts the cluster into failure-domain mode. When enabled, every

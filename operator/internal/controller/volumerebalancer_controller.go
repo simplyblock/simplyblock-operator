@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
 	corev1 "k8s.io/api/core/v1"
@@ -86,12 +87,11 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	vms := clusterCR.Spec.VolumeMigrationSettings
-	if vms == nil || vms.AutoRebalancing == nil {
+	if clusterCR.Spec.AutoRebalancing == nil {
 		return ctrl.Result{}, nil
 	}
-	spec := vms.AutoRebalancing
-	if spec.Enabled != nil && !*spec.Enabled {
+	spec := clusterCR.Spec.AutoRebalancing
+	if !ptr.BoolFromOrTrue(spec.Enabled) {
 		return ctrl.Result{}, nil
 	}
 	if clusterCR.Status.UUID == "" {

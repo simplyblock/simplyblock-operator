@@ -56,13 +56,9 @@ func makePlacementStorageClass(provisioner string, params map[string]string) *st
 }
 
 func makePlacementCluster(autoRebalancing *simplyblockv1alpha1.VolumeRebalancingSettings) *simplyblockv1alpha1.StorageCluster {
-	var vms *simplyblockv1alpha1.VolumeMigrationSettings
-	if autoRebalancing != nil {
-		vms = &simplyblockv1alpha1.VolumeMigrationSettings{AutoRebalancing: autoRebalancing}
-	}
 	return &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster1", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{VolumeMigrationSettings: vms},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{AutoRebalancing: autoRebalancing},
 	}
 }
 
