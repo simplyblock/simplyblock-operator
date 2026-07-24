@@ -112,17 +112,13 @@ func (h *SimplyblockRebalancerInjector) resolveConfig(
 			log.V(1).Info("Skipping: cluster UUID prefix mismatch", "cluster", cr.Name, "clusterUUID", cr.Status.UUID, "podPrefix", uuidPrefix)
 			continue
 		}
-		vms := cr.Spec.VolumeMigrationSettings
-		if vms == nil {
-			log.Info("Skipping: volume migration settings not configured", "cluster", cr.Name)
-			return "", "", false
-		}
-		rb := vms.AutoRebalancing
+		rb := cr.Spec.AutoRebalancing
 		if rb == nil || rb.LatencyBenchmarkEnabled == nil || !*rb.LatencyBenchmarkEnabled {
 			log.Info("Skipping: latency benchmark not enabled", "cluster", cr.Name)
 			return "", "", false
 		}
-		if vms.RebalancerImage == nil || *vms.RebalancerImage == "" {
+		vms := cr.Spec.VolumeMigrationSettings
+		if vms == nil || vms.RebalancerImage == nil || *vms.RebalancerImage == "" {
 			log.Info("Skipping: rebalancerImage not configured", "cluster", cr.Name)
 			return "", "", false
 		}

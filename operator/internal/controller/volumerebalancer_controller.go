@@ -86,11 +86,10 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	vms := clusterCR.Spec.VolumeMigrationSettings
-	if vms == nil || vms.AutoRebalancing == nil {
+	if clusterCR.Spec.AutoRebalancing == nil {
 		return ctrl.Result{}, nil
 	}
-	spec := vms.AutoRebalancing
+	spec := clusterCR.Spec.AutoRebalancing
 	if spec.Enabled != nil && !*spec.Enabled {
 		return ctrl.Result{}, nil
 	}

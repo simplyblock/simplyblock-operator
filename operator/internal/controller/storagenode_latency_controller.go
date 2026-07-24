@@ -100,16 +100,16 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	vms := clusterCR.Spec.VolumeMigrationSettings
-	if vms == nil || vms.AutoRebalancing == nil {
+	if clusterCR.Spec.AutoRebalancing == nil {
 		return ctrl.Result{}, nil
 	}
-	spec := vms.AutoRebalancing
+	spec := clusterCR.Spec.AutoRebalancing
 	if spec.LatencyBenchmarkEnabled == nil || !*spec.LatencyBenchmarkEnabled {
 		return ctrl.Result{}, nil
 	}
 	// The latency/baseline Jobs reuse the existing top-level rebalancer image
 	// (VolumeMigrationSettings.RebalancerImage); there is no separate image.
-	if vms.RebalancerImage == nil || *vms.RebalancerImage == "" {
+	if vms == nil || vms.RebalancerImage == nil || *vms.RebalancerImage == "" {
 		log.Info("RebalancerImage not configured; latency benchmark disabled")
 		return ctrl.Result{}, nil
 	}
