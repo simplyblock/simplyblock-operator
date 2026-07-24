@@ -953,7 +953,7 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 			len(pinned), nodeUUID, kube.AnnoSelectedStorageNode)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "PinnedVolumeBlocking", fmt.Sprintf("drain blocked: %d pinned volume(s) on node %s — remove the %s annotation to proceed", len(pinned), nodeUUID, kube.AnnoSelectedStorageNode))
 		patch := client.MergeFrom(ops.DeepCopy())
-		ops.Status.Message = fmt.Sprintf("blocked: %d pinned volume(s) — remove simplyblock.io/pinned-volume annotation", len(pinned))
+		ops.Status.Message = fmt.Sprintf("blocked: %d pinned volume(s) — remove %s annotation", len(pinned), kube.AnnoSelectedStorageNode)
 		_ = r.Status().Patch(ctx, ops, patch)
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
