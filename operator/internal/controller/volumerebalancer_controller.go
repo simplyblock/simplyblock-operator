@@ -83,7 +83,7 @@ func (r *VolumeRebalancerReconciler) init() {
 	)
 }
 
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations/status,verbs=get
