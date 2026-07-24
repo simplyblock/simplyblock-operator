@@ -48,13 +48,13 @@ const (
 	CSIStorageNameKey      = CSIStorageBaseKey + "/name"
 	CSIStorageNamespaceKey = CSIStorageBaseKey + "/namespace"
 
-	annotationNvmfModelID   = "simplyblock.io/nvmf-model-id"
-	annotationLvolID        = "simplyblock.io/lvol-id"
-	annotationQoSRWIOPS     = "simplyblock.io/qos-rw-iops"
-	annotationQoSRWMBps     = "simplyblock.io/qos-rw-mbps"
-	annotationQoSRMBps      = "simplyblock.io/qos-r-mbps"
-	annotationQoSWMBps      = "simplyblock.io/qos-w-mbps"
-	annotationPodAffinitive = "simplyblock.io/pod-affinitive"
+	annotationNvmfModelID = "simplyblock.io/nvmf-model-id"
+	annotationLvolID      = "simplyblock.io/lvol-id"
+	annotationQoSRWIOPS   = "simplyblock.io/qos-rw-iops"
+	annotationQoSRWMBps   = "simplyblock.io/qos-rw-mbps"
+	annotationQoSRMBps    = "simplyblock.io/qos-r-mbps"
+	annotationQoSWMBps    = "simplyblock.io/qos-w-mbps"
+	annotationPodAffinity = "simplyblock.io/pod-affinity"
 
 	// Deprecated annotation keys — still supported for backward compatibility.
 	deprecatedAnnotationNvmfModelID = "simplybk/nvmf-model-id"
@@ -771,7 +771,7 @@ func prepareCreateVolumeReq(
 
 	hostID := pvcAnnotation(pvcAnns, kube.AnnoHostID, kube.DeprecatedAnnoHostID)
 	lvolID := pvcAnnotation(pvcAnns, annotationLvolID, deprecatedAnnotationLvolID)
-	podAffinitive := pvcAnns[annotationPodAffinitive] == "true"
+	podAffinitive, _ := strconv.ParseBool(pvcAnns[annotationPodAffinity])
 
 	// QoS from StorageClass, overridable per-PVC via annotations.
 	maxRWIOPS := params["qos_rw_iops"]
@@ -898,7 +898,7 @@ func (cs *controllerServer) createVolume(
 	// Co-locate the volume's primary with the consuming Pod's scheduled worker
 	// (node-affinity placement) when no explicit host_id was already set from a
 	// PVC annotation — an explicit annotation is a deliberate override and wins
-	// — and only when the PVC opted in via simplyblock.io/pod-affinitive: "true".
+	// — and only when the PVC opted in via simplyblock.io/pod-affinity: "true".
 	// Without that annotation, Tier 1 is skipped for this PVC even if the Pod's
 	// resolved node hosts a co-located storage node.
 	if podAffinitive && createVolReq.HostID == "" {

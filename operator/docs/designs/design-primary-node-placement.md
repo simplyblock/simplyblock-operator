@@ -30,7 +30,7 @@
     - [Multi-instance tie-break](#multi-instance-tie-break)
     - [Works with nodeSelector, nodeAffinity, and podAffinity — not with `spec.nodeName`](#works-with-nodeselector-nodeaffinity-and-podaffinity--not-with-specnodename)
     - [Reusing `EnableNodeAffinity` as Tier 1's gate](#reusing-enablenodeaffinity-as-tier-1s-gate)
-    - [Per-PVC `pod-affinitive` annotation](#per-pvc-pod-affinitive-annotation)
+    - [Per-PVC `pod-affinity` annotation](#per-pvc-pod-affinity-annotation)
   - [5. Tier 2: Load-Aware Placement](#5-tier-2-load-aware-placement)
     - [5.1 Architecture Overview](#51-architecture-overview)
     - [5.2 Clones and Snapshot Restores Are Unaffected](#52-clones-and-snapshot-restores-are-unaffected)
@@ -94,7 +94,7 @@ pin is never silently overridden.
   **node-affinity** feature (`StorageCluster.Spec.EnableNodeAffinity`,
   `--enable-node-affinity` at cluster creation — the same flag that makes the
   SPDK data plane keep a volume's data local to its primary node), *and* the
-  PVC's own `simplyblock.io/pod-affinitive: "true"` annotation (§4). The
+  PVC's own `simplyblock.io/pod-affinity: "true"` annotation (§4). The
   cluster flag makes co-location possible at all; the per-PVC annotation is
   what a specific workload uses to actually request it — without it, that
   PVC doesn't get Tier 1 treatment even on a node-affinity-enabled cluster.
@@ -216,7 +216,7 @@ Tier 2 — Load-aware placement    (Resolved earlier than Tier 1, chronologicall
 Tier 1 — Node/Pod affinity       Resolved inside spdk-csi's CreateVolume, once
                                   the consuming Pod's node is known. Only
                                   evaluated if the PVC has
-                                  simplyblock.io/pod-affinitive: "true" (§4).
+                                  simplyblock.io/pod-affinity: "true" (§4).
                                   If so, and the host-id annotation is STILL
                                   empty at this point (no Tier 0 pin, and
                                   Tier 2 didn't fire or isn't enabled) and the
@@ -231,7 +231,7 @@ Tier 3 — Control-plane default   Annotation still empty after all of the above
 ```
 
 Tier 1 is gated by `StorageCluster.Spec.EnableNodeAffinity` **and** the PVC's
-own `simplyblock.io/pod-affinitive` annotation — both required (§4, §7); Tier
+own `simplyblock.io/pod-affinity` annotation — both required (§4, §7); Tier
 2 is gated independently by `autoRebalancing`. When Tier 1's gate is off
 (either half of it), evaluation falls straight through to Tier 2 or Tier 3;
 when Tier 2's gate is off, straight through to Tier 1 or Tier 3. Tier 0 (an
@@ -323,7 +323,7 @@ as `accessibility_requirements` on `CreateVolumeRequest`. `spdk-csi`'s
 
 3. **Resolve it in `createVolume`, gated on the PVC's own opt-in.**
    `createVolume` only calls `coLocatedHostID` at all when the PVC carries
-   `simplyblock.io/pod-affinitive: "true"` (see below) — without it, Tier 1 is
+   `simplyblock.io/pod-affinity: "true"` (see below) — without it, Tier 1 is
    skipped for that PVC regardless of what the cluster's topology labels say.
    When it does run, `coLocatedHostID` scans `accessibility_requirements`
    (`Preferred` first, then `Requisite` — `Preferred[0]` is the actual
@@ -397,14 +397,14 @@ This is a cluster-wide precondition, not per-volume control — it decides
 whether co-location is possible on this cluster *at all*, not which specific
 PVCs should actually get it. That's what the next annotation is for.
 
-### Per-PVC `pod-affinitive` annotation
+### Per-PVC `pod-affinity` annotation
 
 `EnableNodeAffinity` alone would make Tier 1 apply to *every* PVC on a
 node-affinity-enabled cluster, whether or not that specific workload actually
 wants its volume kept local. A PVC opts in explicitly instead:
 
 ```
-simplyblock.io/pod-affinitive: "true"
+simplyblock.io/pod-affinity: "true"
 ```
 
 **Set by the workload's author** (or their Helm chart/deployment tooling) on
@@ -414,7 +414,7 @@ fire on a given PVC:
 - The cluster has `StorageCluster.Spec.EnableNodeAffinity` set (§7) — gates
   whether the operator's `labelWorkerNodes` emits `storage-node-uuid` labels
   at all, on the *labeling* side.
-- The PVC carries `simplyblock.io/pod-affinitive: "true"` — gates whether
+- The PVC carries `simplyblock.io/pod-affinity: "true"` — gates whether
   `createVolume` actually calls `coLocatedHostID` for *this* PVC, on the
   *resolution* side, inside `spdk-csi` (§4 Mechanism, step 3).
 
@@ -711,7 +711,7 @@ always-honored regardless of `EnableNodeAffinity`, since a manual pin already
 implies the operator knows what they're doing.
 
 This cluster-wide flag is only half of Tier 1's gate — the other half is the
-per-PVC `simplyblock.io/pod-affinitive` annotation (§4), which controls
+per-PVC `simplyblock.io/pod-affinity` annotation (§4), which controls
 whether an individual PVC actually gets Tier 1 treatment even when this flag
 is on.
 
@@ -787,7 +787,7 @@ every co-located storage-node instance — reconciling additions, value updates
   the existing zone/region/`pool.<name>` handling.
 - `createVolume` (`pkg/spdk/controllerserver.go`) calls `coLocatedHostID` on
   `accessibility_requirements` **only when the PVC carries
-  `simplyblock.io/pod-affinitive: "true"`** (§4), and uses the result as
+  `simplyblock.io/pod-affinity: "true"`** (§4), and uses the result as
   `host_id` **only when the annotation-derived value is empty** (§3) — i.e. an
   explicit pin or Tier 2's computed pick always takes precedence. Reads the
   new annotation via the same PVC annotation fetch already used for
@@ -808,7 +808,7 @@ Tier 1 reads one CRD field for its gate, `Spec.EnableNodeAffinity` (§7).
 |---|---|
 | `simplyblock.io/host-id` already set on the PVC (Tier 0) | Skip Tier 2 and Tier 1 — explicit pin always wins (§3) |
 | `StorageCluster.Spec.EnableNodeAffinity` is false or unset (§7) | Skip Tier 1 — operator never emits `storage-node-uuid` labels for that cluster's workers, so Tier 1 has nothing to match; falls through to whatever's in `host-id` (Tier 0/2) or Tier 3 |
-| PVC lacks `simplyblock.io/pod-affinitive: "true"` (§4) | Skip Tier 1 for this PVC specifically — `createVolume` never calls `coLocatedHostID`, even if the cluster has `EnableNodeAffinity` on and the Pod's worker hosts a co-located storage node; falls through to Tier 2/Tier 3 |
+| PVC lacks `simplyblock.io/pod-affinity: "true"` (§4) | Skip Tier 1 for this PVC specifically — `createVolume` never calls `coLocatedHostID`, even if the cluster has `EnableNodeAffinity` on and the Pod's worker hosts a co-located storage node; falls through to Tier 2/Tier 3 |
 | StorageClass isn't simplyblock-provisioned, or has no `cluster_id` | Skip Tier 2 |
 | `StorageCluster` not found for `cluster_id` | Skip Tier 2 (log) |
 | `AutoRebalancing` nil/disabled or `PrometheusURL` unset for the cluster | Skip Tier 2 — cluster hasn't opted into the load signal |
@@ -874,8 +874,8 @@ Mirroring `simplyblock_rebalancer_injector_test.go`, with a fake
   worker resolve to one of the valid co-located candidates — asserted over
   many trials to also confirm it isn't always the same candidate.
 - `csi-driver`: `createVolume`/`prepareCreateVolumeReq` gating on
-  `pod-affinitive` — a matching topology segment is ignored and `host_id` is
-  left as-is when the PVC lacks `simplyblock.io/pod-affinitive: "true"`; the
+  `pod-affinity` — a matching topology segment is ignored and `host_id` is
+  left as-is when the PVC lacks `simplyblock.io/pod-affinity: "true"`; the
   same segment is resolved normally when the annotation is present.
 
 ### Regression
@@ -904,12 +904,12 @@ set (`enabled: true`, `prometheusURL` pointing at the cluster's Prometheus):
 On a multi-node cluster (operator + `spdk-csi`) with `EnableNodeAffinity` set
 on the `StorageCluster` and at least one worker co-located with a storage
 node. Unless noted otherwise, every PVC below also carries
-`simplyblock.io/pod-affinitive: "true"` — without it, Tier 1 does not
+`simplyblock.io/pod-affinity: "true"` — without it, Tier 1 does not
 evaluate at all regardless of the scheduling outcome:
 
-- **`pod-affinitive` gate:** create two otherwise-identical PVCs, each with a
+- **`pod-affinity` gate:** create two otherwise-identical PVCs, each with a
   Pod pinned via `nodeSelector` to the same storage-plane worker — one PVC
-  with `simplyblock.io/pod-affinitive: "true"`, one without. Confirm the
+  with `simplyblock.io/pod-affinity: "true"`, one without. Confirm the
   annotated PVC's `host_id` resolves to that worker's co-located storage-node
   UUID, and the unannotated one's does not, despite identical topology.
 - **No affinity signal:** schedule an unconstrained Pod so it lands on a
