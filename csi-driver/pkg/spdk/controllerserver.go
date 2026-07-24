@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +54,7 @@ const (
 	annotationQoSRWMBps   = "simplyblock.io/qos-rw-mbps"
 	annotationQoSRMBps    = "simplyblock.io/qos-r-mbps"
 	annotationQoSWMBps    = "simplyblock.io/qos-w-mbps"
+	annotationPodAffinity = "simplyblock.io/pod-affinity"
 
 	// Deprecated annotation keys — still supported for backward compatibility.
 	deprecatedAnnotationNvmfModelID = "simplybk/nvmf-model-id"
@@ -68,6 +70,25 @@ const (
 	topologyKeyZoneStable   = "topology.kubernetes.io/zone"
 	topologyKeyZoneBeta     = "failure-domain.beta.kubernetes.io/zone"
 	topologyKeyRegionStable = "topology.kubernetes.io/region"
+
+	// topologyKeyStorageNodeUUIDPrefix mirrors the Kubernetes Node label the
+	// simplyblock-operator writes for every storage-node instance co-located on
+	// that worker (StorageNodeSetReconciler.labelWorkerNodes). The full label KEY
+	// is "<prefix><clusterUUID>.<socketOrdinal>" and the VALUE is the storage-node
+	// UUID. The key deliberately excludes the UUID: external-provisioner caches
+	// the set of topology KEYS in the CSINode object at node-plugin registration
+	// time and hard-errors CreateVolume if a live Node's label keys ever diverge
+	// from that cached set, so the key must stay stable across UUID churn (e.g. a
+	// storage node getting replaced) — only the value is expected to change. The
+	// key is cluster-scoped so a worker hosting instances from more than one
+	// SimplyBlock cluster can't have one cluster's socket slot collide with
+	// another's. The ordinal only matters for keeping the key stable across
+	// UUID churn — coLocatedHostID picks uniformly at random among whichever
+	// instances match, it does not rank by ordinal. The CSI node plugin forwards
+	// the label into CSI topology (nodeserver.go buildAccessibleTopology) so
+	// createVolume can place a new volume on the storage node co-located with
+	// wherever the consuming Pod's Kubernetes node/pod affinity schedules it.
+	topologyKeyStorageNodeUUIDPrefix = "simplyblock.io/storage-node-uuid."
 )
 
 type controllerServer struct {
@@ -215,6 +236,61 @@ func nodeNameFromTopology(topos []*csi.Topology) string {
 		}
 	}
 	return "unknown"
+}
+
+// coLocatedHostID extracts the storage-node UUID co-located with the consuming
+// Pod's scheduled worker, scoped to clusterID, from CSI topology requirements —
+// i.e. a topologyKeyStorageNodeUUIDPrefix-prefixed segment written by the
+// simplyblock-operator onto the Kubernetes Node the Pod was scheduled to (see
+// StorageNodeSetReconciler.labelWorkerNodes) and advertised via
+// nodeserver.buildAccessibleTopology. The segment KEY is
+// "<prefix><clusterUUID>.<socketOrdinal>" and the VALUE is the storage-node UUID.
+// Preferred segments are checked first, then Requisite, matching
+// nodeNameFromTopology's fallback order. When a worker hosts more than one
+// storage-node instance (NUMA sockets), one of the matching instances is picked
+// uniformly at random, so volumes routed here via Tier 1 spread across every
+// co-located instance instead of piling onto one — this is a host-level
+// guarantee only, not true socket-level affinity, which isn't resolvable at
+// CreateVolume time (kubelet's Topology Manager pins a Pod to a NUMA socket only
+// at container start). Returns "" if no segment matches.
+func coLocatedHostID(topoReq *csi.TopologyRequirement, clusterID string) string {
+	if topoReq == nil {
+		return ""
+	}
+	find := func(topologies []*csi.Topology) string {
+		var candidates []string
+		for _, topo := range topologies {
+			for key, uuid := range topo.GetSegments() {
+				if !strings.HasPrefix(key, topologyKeyStorageNodeUUIDPrefix) {
+					continue
+				}
+				if uuid == "" {
+					continue
+				}
+				slot := key[len(topologyKeyStorageNodeUUIDPrefix):]
+				sep := strings.LastIndex(slot, ".")
+				if sep < 0 {
+					continue
+				}
+				labelCluster, ordinalStr := slot[:sep], slot[sep+1:]
+				if labelCluster != clusterID {
+					continue
+				}
+				if _, err := strconv.Atoi(ordinalStr); err != nil {
+					continue
+				}
+				candidates = append(candidates, uuid)
+			}
+		}
+		if len(candidates) == 0 {
+			return ""
+		}
+		return candidates[rand.IntN(len(candidates))]
+	}
+	if uuid := find(topoReq.GetPreferred()); uuid != "" {
+		return uuid
+	}
+	return find(topoReq.GetRequisite())
 }
 
 func matchTopologyWithRegionMap(topo *csi.Topology, regionMap map[string]string) *clusterSelection {
@@ -651,30 +727,30 @@ func prepareCreateVolumeReq(
 	ctx context.Context,
 	req *csi.CreateVolumeRequest,
 	capacityBytes int64,
-) (*util.CreateLVolData, error) {
+) (*util.CreateLVolData, bool, error) {
 	params := req.GetParameters()
 
 	priorClass, err := kube.IntParam(params, "lvol_priority_class", 0)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	maxNamespace, err := kube.IntParam(params, "max_namespace_per_subsys", 1)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	compression, err := kube.BoolParam(params, "compression", false)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	encryption, err := kube.BoolParam(params, "encryption", false)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	replicate, err := kube.BoolParam(params, "replicate", false)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	pvcName, pvcNameSelected := params[CSIStorageNameKey]
@@ -689,12 +765,13 @@ func prepareCreateVolumeReq(
 	if pvcNameSelected && pvcNamespaceSelected {
 		pvcAnns, err = fetchPVCAnnotations(ctx, pvcName, pvcNamespace)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 
 	hostID := pvcAnnotation(pvcAnns, kube.AnnoHostID, kube.DeprecatedAnnoHostID)
 	lvolID := pvcAnnotation(pvcAnns, annotationLvolID, deprecatedAnnotationLvolID)
+	podAffinitive, _ := strconv.ParseBool(pvcAnns[annotationPodAffinity])
 
 	// QoS from StorageClass, overridable per-PVC via annotations.
 	maxRWIOPS := params["qos_rw_iops"]
@@ -736,7 +813,7 @@ func prepareCreateVolumeReq(
 		Namespaced:   maxNamespace > 1,
 		PvcName:      pvcFullName,
 	}
-	return &createVolReq, nil
+	return &createVolReq, podAffinitive, nil
 }
 
 // reconcileExistingVolume handles a 409 (name already exists) on a volume create
@@ -813,9 +890,23 @@ func (cs *controllerServer) createVolume(
 		}
 	}
 
-	createVolReq, err := prepareCreateVolumeReq(ctx, req, capacityBytes)
+	createVolReq, podAffinitive, err := prepareCreateVolumeReq(ctx, req, capacityBytes)
 	if err != nil {
 		return nil, err
+	}
+
+	// Co-locate the volume's primary with the consuming Pod's scheduled worker
+	// (node-affinity placement) when no explicit host_id was already set from a
+	// PVC annotation — an explicit annotation is a deliberate override and wins
+	// — and only when the PVC opted in via simplyblock.io/pod-affinity: "true".
+	// Without that annotation, Tier 1 is skipped for this PVC even if the Pod's
+	// resolved node hosts a co-located storage node.
+	if podAffinitive && createVolReq.HostID == "" {
+		if coLocated := coLocatedHostID(req.GetAccessibilityRequirements(), sbclient.ClusterID()); coLocated != "" {
+			klog.Infof("createVolume: co-locating volume %s with storage node %s from pod scheduling topology",
+				req.GetName(), coLocated)
+			createVolReq.HostID = coLocated
+		}
 	}
 
 	// Store the effective QoS values into VolumeContext so the PV spec records

@@ -158,7 +158,7 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	apiClient := webapi.NewClient()
 
-	if err := r.labelWorkerNodes(ctx, snCR); err != nil {
+	if err := r.labelWorkerNodes(ctx, snCR, clusterUUID); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -432,13 +432,39 @@ func (r *StorageNodeSetReconciler) ensureFinalizer(
 	return true, r.Update(ctx, snCR)
 }
 
-func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *simplyblockv1alpha1.StorageNodeSet) error {
+// storageNodeUUIDLabelPrefix marks a worker Node with the SimplyBlock storage-node
+// instance(s) co-located on it. The label KEY is "<prefix><clusterUUID>.<socketIndex>"
+// and must stay stable for the Node's lifetime — Kubernetes' external-provisioner
+// caches the *set* of topology keys in the CSINode object at node-plugin
+// registration time and only refreshes it when the node-driver pod restarts, then
+// hard-errors CreateVolume if a live Node's topology-label keys don't match that
+// cached set. The label VALUE is the storage-node UUID, which changes freely (e.g.
+// when a node is replaced) since values are always read fresh — only the key must
+// never depend on anything that can change post-registration. Cluster-scoping the
+// key (not just the value) also stops a worker hosting instances from more than one
+// SimplyBlock cluster from having one cluster's slot collide with another's.
+// Consumed by the CSI node plugin (csi-driver/pkg/spdk/nodeserver.go) to advertise
+// CSI topology, and by the CSI controller (createVolume) to co-locate a new volume's
+// primary with whichever worker the consuming Pod is scheduled to. Keep this literal
+// in sync with topologyKeyStorageNodeUUIDPrefix in csi-driver.
+const storageNodeUUIDLabelPrefix = "simplyblock.io/storage-node-uuid."
+
+func (r *StorageNodeSetReconciler) labelWorkerNodes(
+	ctx context.Context,
+	sn *simplyblockv1alpha1.StorageNodeSet,
+	clusterUUID string,
+) error {
 	// Collect all workers: spec.workerNodes plus any manually created StorageNode CRs
 	// that reference this StorageNodeSet but are not in spec.workerNodes.
 	workers := make(map[string]struct{}, len(sn.Spec.WorkerNodes))
 	for _, w := range sn.Spec.WorkerNodes {
 		workers[w] = struct{}{}
 	}
+
+	// slotsByWorker maps worker -> "<clusterUUID>.<socketIndex>" -> storage-node UUID,
+	// built from every owned StorageNode CR that has come online at least once
+	// (Status.UUID set). The slot key is stable; only the UUID value churns.
+	slotsByWorker := make(map[string]map[string]string)
 
 	var snList simplyblockv1alpha1.StorageNodeList
 	if err := r.List(ctx, &snList,
@@ -447,6 +473,19 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *sim
 	); err == nil {
 		for _, snCR := range snList.Items {
 			workers[snCR.Spec.WorkerNode] = struct{}{}
+
+			if snCR.Status.UUID == "" {
+				continue
+			}
+			ordinal := int32(0)
+			if snCR.Spec.SocketIndex != nil {
+				ordinal = *snCR.Spec.SocketIndex
+			}
+			if slotsByWorker[snCR.Spec.WorkerNode] == nil {
+				slotsByWorker[snCR.Spec.WorkerNode] = map[string]string{}
+			}
+			slotKey := fmt.Sprintf("%s.%d", clusterUUID, ordinal)
+			slotsByWorker[snCR.Spec.WorkerNode][slotKey] = snCR.Status.UUID
 		}
 	}
 
@@ -470,12 +509,46 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(ctx context.Context, sn *sim
 			node.Labels = map[string]string{}
 		}
 
-		if node.Labels[key] == value && node.Labels[snsLabelKey] == snsLabelVal {
+		changed := false
+		if node.Labels[key] != value {
+			node.Labels[key] = value
+			changed = true
+		}
+		if node.Labels[snsLabelKey] != snsLabelVal {
+			node.Labels[snsLabelKey] = snsLabelVal
+			changed = true
+		}
+
+		desired := slotsByWorker[nodeName]
+		for k, v := range node.Labels {
+			if !strings.HasPrefix(k, storageNodeUUIDLabelPrefix) {
+				continue
+			}
+			slot := strings.TrimPrefix(k, storageNodeUUIDLabelPrefix)
+			sep := strings.LastIndex(slot, ".")
+			if sep < 0 || slot[:sep] != clusterUUID {
+				// Slot belongs to a different SimplyBlock cluster (a worker can host
+				// storage-node instances from more than one) or is malformed — leave
+				// it untouched; this reconcile only owns clusterUUID's slots.
+				continue
+			}
+			if desired[slot] != v {
+				delete(node.Labels, k)
+				changed = true
+			}
+		}
+		for slot, uuid := range desired {
+			k := storageNodeUUIDLabelPrefix + slot
+			if node.Labels[k] != uuid {
+				node.Labels[k] = uuid
+				changed = true
+			}
+		}
+
+		if !changed {
 			continue
 		}
 
-		node.Labels[key] = value
-		node.Labels[snsLabelKey] = snsLabelVal
 		if err := r.Update(ctx, &node); err != nil {
 			return err
 		}

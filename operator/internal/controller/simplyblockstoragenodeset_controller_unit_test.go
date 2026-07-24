@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 const (
@@ -97,7 +98,7 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 		nodeB := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-b"}}
 		r := newStorageNodeSetStateTestReconciler(t, sn, nodeA, nodeB)
 
-		if err := r.labelWorkerNodes(context.Background(), sn); err != nil {
+		if err := r.labelWorkerNodes(context.Background(), sn, testClusterUUID); err != nil {
 			t.Fatalf("labelWorkerNodes returned error: %v", err)
 		}
 
@@ -127,7 +128,7 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 		}
 		r := newStorageNodeSetStateTestReconciler(t, sn)
 
-		if err := r.labelWorkerNodes(context.Background(), sn); err == nil {
+		if err := r.labelWorkerNodes(context.Background(), sn, testClusterUUID); err == nil {
 			t.Fatalf("expected labelWorkerNodes to return an error for a missing node")
 		}
 
@@ -142,6 +143,192 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("labelWorkerNodes labels a single co-located storage-node UUID", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-label-uuid", Namespace: "default"},
+			Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+				ClusterName: "cluster-a",
+				WorkerNodes: []string{"node-a"},
+			},
+		}
+		socketIndex := int32(0)
+		storageNode := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-label-uuid-0", Namespace: "default"},
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
+				StorageNodeSetRef: "sn-label-uuid",
+				WorkerNode:        "node-a",
+				SocketIndex:       &socketIndex,
+			},
+			Status: simplyblockv1alpha1.StorageNodeStatus{UUID: "sock0-storage-node-uuid"},
+		}
+		nodeA := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
+		r := newStorageNodeUUIDLabelTestReconciler(t, sn, storageNode, nodeA)
+
+		if err := r.labelWorkerNodes(context.Background(), sn, testClusterUUID); err != nil {
+			t.Fatalf("labelWorkerNodes returned error: %v", err)
+		}
+
+		var n corev1.Node
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "node-a"}, &n); err != nil {
+			t.Fatalf("failed to fetch node: %v", err)
+		}
+		got := n.Labels[storageNodeUUIDLabelPrefix+testClusterUUID+".0"]
+		want := "sock0-storage-node-uuid"
+		if got != want {
+			t.Fatalf("storage-node-uuid label mismatch: got %q want %q", got, want)
+		}
+	})
+
+	t.Run("labelWorkerNodes labels every socket instance on a multi-socket worker", func(t *testing.T) {
+		const snsName = "sn-label-multi"
+		sn := &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{Name: snsName, Namespace: "default"},
+			Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+				ClusterName: "cluster-a",
+				WorkerNodes: []string{"node-a"},
+			},
+		}
+		socket0, socket1 := int32(0), int32(1)
+		snSocket0 := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: snsName + "-0", Namespace: "default"},
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
+				StorageNodeSetRef: snsName,
+				WorkerNode:        "node-a",
+				SocketIndex:       &socket0,
+			},
+			Status: simplyblockv1alpha1.StorageNodeStatus{UUID: "uuid-socket-0"},
+		}
+		snSocket1 := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: snsName + "-1", Namespace: "default"},
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
+				StorageNodeSetRef: snsName,
+				WorkerNode:        "node-a",
+				SocketIndex:       &socket1,
+			},
+			Status: simplyblockv1alpha1.StorageNodeStatus{UUID: "uuid-socket-1"},
+		}
+		nodeA := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
+		r := newStorageNodeUUIDLabelTestReconciler(t, sn, snSocket0, snSocket1, nodeA)
+
+		if err := r.labelWorkerNodes(context.Background(), sn, testClusterUUID); err != nil {
+			t.Fatalf("labelWorkerNodes returned error: %v", err)
+		}
+
+		var n corev1.Node
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "node-a"}, &n); err != nil {
+			t.Fatalf("failed to fetch node: %v", err)
+		}
+		if got, want := n.Labels[storageNodeUUIDLabelPrefix+testClusterUUID+".0"], "uuid-socket-0"; got != want {
+			t.Fatalf("socket-0 label mismatch: got %q want %q", got, want)
+		}
+		if got, want := n.Labels[storageNodeUUIDLabelPrefix+testClusterUUID+".1"], "uuid-socket-1"; got != want {
+			t.Fatalf("socket-1 label mismatch: got %q want %q", got, want)
+		}
+	})
+
+	t.Run("labelWorkerNodes updates the UUID value in place when a slot's storage node is replaced", func(t *testing.T) {
+		// The label KEY ("<prefix><clusterUUID>.<socketIndex>") must stay stable
+		// across a UUID replacement — Kubernetes' external-provisioner caches the
+		// set of topology KEYS in CSINode and hard-errors CreateVolume if a live
+		// Node's label keys ever diverge from that cached set. Only the UUID
+		// value is expected to churn.
+		sn := &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-label-replace", Namespace: "default"},
+			Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+				ClusterName: "cluster-a",
+				WorkerNodes: []string{"node-a"},
+			},
+		}
+		socketIndex := int32(0)
+		storageNode := &simplyblockv1alpha1.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-label-replace-0", Namespace: "default"},
+			Spec: simplyblockv1alpha1.StorageNodeSpec{
+				StorageNodeSetRef: "sn-label-replace",
+				WorkerNode:        "node-a",
+				SocketIndex:       &socketIndex,
+			},
+			Status: simplyblockv1alpha1.StorageNodeStatus{UUID: "uuid-new"},
+		}
+		slotKey := storageNodeUUIDLabelPrefix + testClusterUUID + ".0"
+		nodeA := &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "node-a",
+				Labels: map[string]string{slotKey: "uuid-old"},
+			},
+		}
+		r := newStorageNodeUUIDLabelTestReconciler(t, sn, storageNode, nodeA)
+
+		if err := r.labelWorkerNodes(context.Background(), sn, testClusterUUID); err != nil {
+			t.Fatalf("labelWorkerNodes returned error: %v", err)
+		}
+
+		var n corev1.Node
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "node-a"}, &n); err != nil {
+			t.Fatalf("failed to fetch node: %v", err)
+		}
+		if got, want := n.Labels[slotKey], "uuid-new"; got != want {
+			t.Fatalf("slot label value mismatch: got %q want %q", got, want)
+		}
+	})
+
+	t.Run("labelWorkerNodes removes a slot label when its StorageNode CR no longer exists", func(t *testing.T) {
+		sn := &simplyblockv1alpha1.StorageNodeSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "sn-label-stale", Namespace: "default"},
+			Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+				ClusterName: "cluster-a",
+				WorkerNodes: []string{"node-a"},
+			},
+		}
+		// node-a still carries a slot label for a storage node that no longer
+		// exists (removed, not replaced) — it must be cleaned up, not just left
+		// to accumulate.
+		nodeA := &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "node-a",
+				Labels: map[string]string{
+					storageNodeUUIDLabelPrefix + testClusterUUID + ".0": "uuid-old",
+				},
+			},
+		}
+		r := newStorageNodeUUIDLabelTestReconciler(t, sn, nodeA)
+
+		if err := r.labelWorkerNodes(context.Background(), sn, testClusterUUID); err != nil {
+			t.Fatalf("labelWorkerNodes returned error: %v", err)
+		}
+
+		var n corev1.Node
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "node-a"}, &n); err != nil {
+			t.Fatalf("failed to fetch node: %v", err)
+		}
+		if _, ok := n.Labels[storageNodeUUIDLabelPrefix+testClusterUUID+".0"]; ok {
+			t.Fatalf("expected stale storage-node-uuid label to be removed, got labels: %v", n.Labels)
+		}
+	})
+}
+
+// newStorageNodeUUIDLabelTestReconciler builds a fake-client-backed reconciler
+// with the "spec.storageNodeSetRef" index registered, needed by labelWorkerNodes'
+// StorageNode list (unlike newStorageNodeSetStateTestReconciler, which doesn't
+// register it — a List against an unindexed field errors, and labelWorkerNodes
+// silently ignores that error, so tests exercising the storage-node-uuid path
+// need this index to actually see StorageNode objects).
+func newStorageNodeUUIDLabelTestReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetReconciler {
+	t.Helper()
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&simplyblockv1alpha1.StorageNode{}, &simplyblockv1alpha1.StorageNodeSet{}).
+		WithObjects(objects...).
+		WithIndex(&simplyblockv1alpha1.StorageNode{}, "spec.storageNodeSetRef", func(obj client.Object) []string {
+			sn := obj.(*simplyblockv1alpha1.StorageNode)
+			return []string{sn.Spec.StorageNodeSetRef}
+		}).
+		Build()
+	return &StorageNodeSetReconciler{
+		Client:   cl,
+		Scheme:   scheme,
+		Recorder: events.NewFakeRecorder(16),
+	}
 }
 
 func TestStorageNodeSetDaemonSetReconcileCreatesWhenMissing(t *testing.T) {
