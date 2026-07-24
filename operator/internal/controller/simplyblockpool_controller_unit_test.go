@@ -50,16 +50,21 @@ func TestPoolReconcileAddsFinalizer(t *testing.T) {
 	}
 }
 
-func TestPoolReconcileDeletionWithoutUUIDDoesNotProgress(t *testing.T) {
+// TestPoolReconcileDeletionWithoutUUIDRemovesFinalizer verifies that deleting a
+// Pool CR whose Status.UUID is empty (backend pool never created, or status
+// patch failed after creation) immediately removes the finalizer rather than
+// leaving the object stuck in Terminating forever (#155).
+func TestPoolReconcileDeletionWithoutUUIDRemovesFinalizer(t *testing.T) {
 	pool := &simplyblockv1alpha1.Pool{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       "pool-b",
+			Name:       "pool-no-uuid",
 			Namespace:  "default",
 			Finalizers: []string{utils.FinalizerPool},
 		},
 		Spec: simplyblockv1alpha1.PoolSpec{
 			ClusterName: "cluster-a",
 		},
+		// Status.UUID intentionally empty — pool was never created on the backend.
 	}
 
 	r := newPoolStateTestReconciler(t,
@@ -75,15 +80,17 @@ func TestPoolReconcileDeletionWithoutUUIDDoesNotProgress(t *testing.T) {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
+	// The finalizer must be gone — the object should either be fully deleted
+	// or have an empty finalizer list.
 	current := &simplyblockv1alpha1.Pool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		if apierrors.IsNotFound(err) {
-			return
+			return // object fully deleted — correct
 		}
 		t.Fatalf("failed to get pool: %v", err)
 	}
-	if !contains(current.Finalizers, utils.FinalizerPool) {
-		t.Fatalf("expected finalizer to remain because deletion requires status.uuid")
+	if contains(current.Finalizers, utils.FinalizerPool) {
+		t.Fatal("finalizer was not removed for pool with empty Status.UUID — object would be stuck in Terminating")
 	}
 }
 

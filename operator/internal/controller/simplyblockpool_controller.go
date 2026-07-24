@@ -247,31 +247,39 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 func (r *PoolReconciler) handlePoolDeletion(ctx context.Context, poolCR *simplyblockv1alpha1.Pool, apiClient *webapi.Client, clusterUUID string) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	if utils.ContainsString(poolCR.Finalizers, utils.FinalizerPool) && poolCR.Status.UUID != "" {
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
-		body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
-		if err != nil || status >= 300 {
-			if err == nil {
-				err = fmt.Errorf("unexpected status %d", status)
+	if utils.ContainsString(poolCR.Finalizers, utils.FinalizerPool) {
+		if poolCR.Status.UUID != "" {
+			// Backend pool exists — delete it first.
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
+			body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
+			if err != nil || status >= 300 {
+				if err == nil {
+					err = fmt.Errorf("unexpected status %d", status)
+				}
+				log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
+				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 			}
-			log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
-			return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
-		}
-		if err := r.deleteStorageClass(ctx, poolCR); err != nil {
-			log.Error(err, "Failed to delete StorageClass for pool")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-		poolCR.Spec.AllowedNodes = nil
-		if err := r.syncNodeLabels(ctx, poolCR); err != nil {
-			log.Error(err, "Failed to clear node labels on pool deletion")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			if err := r.deleteStorageClass(ctx, poolCR); err != nil {
+				log.Error(err, "Failed to delete StorageClass for pool")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+			poolCR.Spec.AllowedNodes = nil
+			if err := r.syncNodeLabels(ctx, poolCR); err != nil {
+				log.Error(err, "Failed to clear node labels on pool deletion")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+			log.Info("Pool deleted successfully", "name", poolCR.Name)
+		} else {
+			// No backend pool was ever created (creation API never completed or
+			// status patch failed). Nothing to clean up on the backend — remove
+			// the finalizer immediately so the object is not stuck in Terminating.
+			log.Info("Pool has no backend UUID; removing finalizer without backend call", "name", poolCR.Name)
 		}
 		poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, utils.FinalizerPool)
 		if err := r.Update(ctx, poolCR); err != nil {
 			log.Error(err, "Failed to remove finalizer")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
-		log.Info("Pool deleted successfully", "name", poolCR.Name)
 	}
 	return ctrl.Result{}, nil
 }
