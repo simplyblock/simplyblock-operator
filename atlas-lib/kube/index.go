@@ -12,6 +12,7 @@ import (
 const (
 	IndexPVByVolumeHandle = "atlas.simplyblock.io/pv-by-volume-handle"
 	IndexVAByPV           = "atlas.simplyblock.io/va-by-pv"
+	IndexSCByName         = "atlas.simplyblock.io/sc-by-name"
 )
 
 // VolumeHandleKeys returns the index keys for a PV: its CSI volume handle
@@ -32,4 +33,17 @@ func AttachmentPVKeys(va *storagev1.VolumeAttachment) []string {
 		return []string{name}
 	}
 	return nil
+}
+
+// StorageClassNameKeys returns the index keys for a StorageClass: its name if
+// the class is provisioned by this driver, otherwise none. Foreign classes get
+// no key, so an informer resolver using this index never resolves them — only
+// simplyblock-managed StorageClasses are surfaced. It is the pure key function
+// shared by the client-go indexer and any controller-runtime FieldIndexer
+// registration.
+func StorageClassNameKeys(sc *storagev1.StorageClass) []string {
+	if sc == nil || sc.Provisioner != DriverName {
+		return nil
+	}
+	return []string{sc.Name}
 }

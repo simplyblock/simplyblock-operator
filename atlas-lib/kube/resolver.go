@@ -12,17 +12,28 @@ import (
 	"github.com/simplyblock/atlas/lvol"
 )
 
-// Resolver performs the live Kubernetes lookups needed to correlate a
-// logical volume with its PV/PVC/VolumeAttachment. A consumer implements
-// it with a client-go lister or a controller-runtime client; this package
-// supplies the pure extraction/aggregation logic on top.
+// Resolver performs the live Kubernetes lookups needed to correlate a logical
+// volume with its PV/PVC/VolumeAttachment/StorageClass. A consumer implements it
+// with a client-go lister or a controller-runtime client; this package supplies
+// the pure extraction/aggregation logic on top and ships two implementations
+// (LiveResolver, InformerResolver).
+//
+// A consumer that needs only a subset (e.g. only StorageClassByName) should
+// declare its own narrow interface at the point of use rather than expect this
+// package to pre-split — both shipped implementations provide every method.
 type Resolver interface {
 	// PVByVolumeHandle finds the PV whose CSI volume handle equals h.
 	PVByVolumeHandle(ctx context.Context, h lvol.VolumeHandle) (*corev1.PersistentVolume, error)
 	// PVForClaim returns the PV bound to the given PVC.
 	PVForClaim(ctx context.Context, claim types.NamespacedName) (*corev1.PersistentVolume, error)
-	// AttachmentsForPV lists VolumeAttachments referencing the PV name.
+	// AttachmentsForPV lists VolumeAttachments referencing the PV name. It may
+	// return errs.ErrUnsupported when the implementation has no VolumeAttachment
+	// source configured (see InformerResolver).
 	AttachmentsForPV(ctx context.Context, pvName string) ([]storagev1.VolumeAttachment, error)
+	// StorageClassByName returns the cluster-scoped StorageClass named name, or
+	// errs.ErrNotFound if none exists. It may return errs.ErrUnsupported when the
+	// implementation has no StorageClass source configured (see InformerResolver).
+	StorageClassByName(ctx context.Context, name string) (*storagev1.StorageClass, error)
 }
 
 // ResolveBinding assembles the full Binding for a logical volume from the

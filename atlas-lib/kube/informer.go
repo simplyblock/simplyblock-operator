@@ -29,6 +29,10 @@ type ResolverConfig struct {
 	// rather than via VolumeAttachment). When nil, AttachmentsForPV
 	// returns errs.ErrUnsupported and ResolveBinding omits Node/Attached.
 	VolumeAttachments cache.SharedIndexInformer
+	// StorageClasses is the shared informer for StorageClasses. Optional:
+	// leave nil if the consumer does not resolve provisioning Properties.
+	// When nil, StorageClassByName returns errs.ErrUnsupported.
+	StorageClasses cache.SharedIndexInformer
 }
 
 // InformerResolver implements Resolver against client-go shared informers.
@@ -40,6 +44,7 @@ type InformerResolver struct {
 	pv  cache.SharedIndexInformer
 	pvc cache.SharedIndexInformer
 	va  cache.SharedIndexInformer
+	sc  cache.SharedIndexInformer
 }
 
 var _ Resolver = (*InformerResolver)(nil)
@@ -63,10 +68,18 @@ func NewResolver(cfg ResolverConfig) (*InformerResolver, error) {
 			return nil, fmt.Errorf("kube: add VolumeAttachment PV indexer: %w", err)
 		}
 	}
+	if cfg.StorageClasses != nil {
+		if err := cfg.StorageClasses.AddIndexers(cache.Indexers{
+			IndexSCByName: indexSCByName,
+		}); err != nil {
+			return nil, fmt.Errorf("kube: add StorageClass name indexer: %w", err)
+		}
+	}
 	return &InformerResolver{
 		pv:  cfg.PersistentVolumes,
 		pvc: cfg.PersistentVolumeClaims,
 		va:  cfg.VolumeAttachments,
+		sc:  cfg.StorageClasses,
 	}, nil
 }
 
@@ -77,6 +90,7 @@ func NewResolverFromFactory(f informers.SharedInformerFactory) (*InformerResolve
 		PersistentVolumes:      f.Core().V1().PersistentVolumes().Informer(),
 		PersistentVolumeClaims: f.Core().V1().PersistentVolumeClaims().Informer(),
 		VolumeAttachments:      f.Storage().V1().VolumeAttachments().Informer(),
+		StorageClasses:         f.Storage().V1().StorageClasses().Informer(),
 	})
 }
 
@@ -130,6 +144,27 @@ func (r *InformerResolver) AttachmentsForPV(ctx context.Context, pvName string) 
 	return out, nil
 }
 
+// StorageClassByName returns the StorageClass named name from the cache. Only
+// simplyblock-provisioned classes are indexed (see StorageClassNameKeys), so a
+// foreign class — even if present in the informer store — resolves to
+// errs.ErrNotFound. It returns errs.ErrUnsupported if the resolver was built
+// without a StorageClass informer.
+func (r *InformerResolver) StorageClassByName(ctx context.Context, name string) (*storagev1.StorageClass, error) {
+	if r.sc == nil {
+		return nil, fmt.Errorf("kube: StorageClass informer not configured: %w", errs.ErrUnsupported)
+	}
+	objs, err := r.sc.GetIndexer().ByIndex(IndexSCByName, name)
+	if err != nil {
+		return nil, err
+	}
+	for _, obj := range objs {
+		if sc, ok := obj.(*storagev1.StorageClass); ok {
+			return sc, nil
+		}
+	}
+	return nil, fmt.Errorf("storageclass %q: %w", name, errs.ErrNotFound)
+}
+
 func (r *InformerResolver) pvByName(name string) (*corev1.PersistentVolume, error) {
 	obj, exists, err := r.pv.GetIndexer().GetByKey(name)
 	if err != nil {
@@ -161,4 +196,12 @@ func indexVAByPV(obj interface{}) ([]string, error) {
 		return nil, nil
 	}
 	return AttachmentPVKeys(va), nil
+}
+
+func indexSCByName(obj interface{}) ([]string, error) {
+	sc, ok := obj.(*storagev1.StorageClass)
+	if !ok {
+		return nil, nil
+	}
+	return StorageClassNameKeys(sc), nil
 }

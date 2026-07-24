@@ -12,7 +12,10 @@
 // This package centralizes those correlations and the string keys
 // (parameters, volume context, publish context, labels, annotations,
 // finalizers) so the operator and CSI driver agree on them. It depends on
-// k8s.io/api directly; the live lookups are expressed as the Resolver
-// interface, which a consumer implements with its own client-go or
-// controller-runtime client.
+// k8s.io/api directly; the live lookups are expressed as the Resolver and
+// StorageClassResolver interfaces. The package ships two implementations:
+// LiveResolver (direct, uncached reads via a client-go clientset) and
+// InformerResolver (cached reads via client-go shared informers, e.g. a
+// controller-runtime manager cache). A consumer may also implement the
+// interfaces with its own client — e.g. a controller-runtime client.Client.
 package kube

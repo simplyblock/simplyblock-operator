@@ -4,13 +4,26 @@ package kube
 // Spec.CSI.Driver equals this value are managed by this stack.
 const DriverName = "csi.simplyblock.io"
 
-// StorageClass parameter keys. These are the operator/CSI-controller
-// inputs that describe how to provision a logical volume.
+// StorageClass parameter keys. These are the operator/CSI-controller inputs
+// that describe how to provision a logical volume; the CSI controller reads
+// them at CreateVolume (see PropertiesFromStorageClass, which parses them into
+// a typed Properties). The values match the wire keys the CSI driver uses.
 const (
-	ParamPool       = "pool"
-	ParamQoS        = "qos"
-	ParamReplicas   = "replicaCount"
-	ParamEncryption = "encryption"
+	ParamPool                  = "pool_name"
+	ParamFabric                = "fabric"
+	ParamClusterID             = "cluster_id"
+	ParamMaxSize               = "max_size"
+	ParamLvolPriorityClass     = "lvol_priority_class"
+	ParamMaxNamespacePerSubsys = "max_namespace_per_subsys"
+	ParamCompression           = "compression"
+	ParamEncryption            = "encryption"
+	ParamReplicate             = "replicate"
+
+	// QoS limits. Empty/absent means unset (0).
+	ParamQoSRWIOPS   = "qos_rw_iops"
+	ParamQoSRWMBytes = "qos_rw_mbytes"
+	ParamQoSRMBytes  = "qos_r_mbytes"
+	ParamQoSWMBytes  = "qos_w_mbytes"
 )
 
 // VolumeContext keys. The CSI controller sets these in
