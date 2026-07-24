@@ -16,6 +16,10 @@ type StorageNodeInfo struct {
 	Status     string `json:"status"`
 	Healthy    bool   `json:"health_check"`
 	TotalBytes int64  `json:"total_capacity_bytes"`
+	// Lvols and LvolsMax are the current and maximum lvol-subsystem counts for the
+	// node, used to filter out at-capacity nodes during primary node placement.
+	Lvols    int `json:"lvols"`
+	LvolsMax int `json:"lvols_max"`
 }
 
 // CapacityStat holds the capacity sub-object present on VolumeDTO.

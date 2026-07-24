@@ -49,7 +49,6 @@ const (
 
 	annotationNvmfModelID = "simplyblock.io/nvmf-model-id"
 	annotationLvolID      = "simplyblock.io/lvol-id"
-	annotationHostID      = "simplyblock.io/host-id"
 	annotationQoSRWIOPS   = "simplyblock.io/qos-rw-iops"
 	annotationQoSRWMBps   = "simplyblock.io/qos-rw-mbps"
 	annotationQoSRMBps    = "simplyblock.io/qos-r-mbps"
@@ -58,7 +57,6 @@ const (
 	// Deprecated annotation keys — still supported for backward compatibility.
 	deprecatedAnnotationNvmfModelID = "simplybk/nvmf-model-id"
 	deprecatedAnnotationLvolID      = "simplybk/lvol-id"
-	deprecatedAnnotationHostID      = "simplybk/host-id"
 	deprecatedAnnotationQoSRWIOPS   = "simplybk/qos-rw-iops"
 	deprecatedAnnotationQoSRWMBps   = "simplybk/qos-rw-mbytes"
 	deprecatedAnnotationQoSRMBps    = "simplybk/qos-r-mbytes"
@@ -695,7 +693,7 @@ func prepareCreateVolumeReq(
 		}
 	}
 
-	hostID := pvcAnnotation(pvcAnns, annotationHostID, deprecatedAnnotationHostID)
+	hostID := pvcAnnotation(pvcAnns, kube.AnnoHostID, kube.DeprecatedAnnoHostID)
 	lvolID := pvcAnnotation(pvcAnns, annotationLvolID, deprecatedAnnotationLvolID)
 
 	// QoS from StorageClass, overridable per-PVC via annotations.
