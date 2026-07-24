@@ -28,8 +28,24 @@ func notFound() (nvme.Subsystem, error) {
 	return nvme.Subsystem{}, fmt.Errorf("subsystem: %w", errs.ErrNotFound)
 }
 
+// liveSub is a healthy subsystem: a live controller exporting one namespace
+// block device.
 func liveSub(nqn string) (nvme.Subsystem, error) {
-	return nvme.Subsystem{NQN: nqn, Controllers: []nvme.Controller{{ID: "nvme0", State: "live"}}}, nil
+	return nvme.Subsystem{
+		NQN:         nqn,
+		Controllers: []nvme.Controller{{ID: "nvme0", State: "live"}},
+		Namespaces:  []nvme.Namespace{{ID: 1, Name: "nvme0n1", DevicePath: "/dev/nvme0n1"}},
+	}, nil
+}
+
+// staleSub is a stale subsystem: a live controller that exports no namespace
+// device. sysfsPath, when set, is the controller's sysfs dir so Disconnect can
+// write its delete_controller attribute.
+func staleSub(nqn, sysfsPath string) (nvme.Subsystem, error) {
+	return nvme.Subsystem{
+		NQN:         nqn,
+		Controllers: []nvme.Controller{{ID: "nvme0", State: "live", SysfsPath: sysfsPath}},
+	}, nil
 }
 
 func TestOptions(t *testing.T) {
@@ -113,6 +129,77 @@ func TestConnect_WriteErrorPropagates(t *testing.T) {
 	err := c.Connect(context.Background(), Target{NQN: "nqn.x", Address: "a"})
 	if err == nil || !strings.Contains(err.Error(), "connection refused") {
 		t.Errorf("err = %v, want to wrap the write error", err)
+	}
+}
+
+func TestConnect_ReconnectsStaleControllerWithoutNamespace(t *testing.T) {
+	// The controller's sysfs dir with a delete_controller attribute, so
+	// Disconnect can tear it down exactly as it would in the kernel.
+	dir := t.TempDir()
+	ctrlDir := filepath.Join(dir, "nvme0")
+	if err := os.MkdirAll(ctrlDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deletePath := filepath.Join(ctrlDir, deleteControllerAttr)
+	if err := os.WriteFile(deletePath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reconnected := false
+	c := &FabricsConnector{
+		poll: time.Millisecond, timeout: 2 * time.Second,
+		subs: fakeSubs{byNQN: func(_ context.Context, nqn string) (nvme.Subsystem, error) {
+			switch {
+			case reconnected:
+				// After the fresh reconnect the subsystem is healthy.
+				return liveSub(nqn)
+			case tornDown(deletePath):
+				// Disconnect wrote delete_controller: the subsystem is gone
+				// until it is reconnected.
+				return notFound()
+			default:
+				// Pre-existing stale controller: live, zero namespaces.
+				return staleSub(nqn, ctrlDir)
+			}
+		}},
+		connect: func(context.Context, string) (string, error) {
+			reconnected = true
+			return "instance=0,cntlid=1", nil
+		},
+	}
+
+	if err := c.Connect(context.Background(), Target{NQN: "nqn.x", Address: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if !reconnected {
+		t.Error("Connect did not reconnect after tearing down the stale controller")
+	}
+}
+
+// tornDown reports whether the delete_controller attribute at path has been
+// written with "1".
+func tornDown(path string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(b)) == "1"
+}
+
+func TestConnect_NoNamespaceDeviceTimesOut(t *testing.T) {
+	c := &FabricsConnector{
+		poll: time.Millisecond, timeout: 50 * time.Millisecond,
+		// A live controller that never exports a namespace device. SysfsPath is
+		// empty so the stale-recovery Disconnect is a harmless no-op.
+		subs: fakeSubs{byNQN: func(_ context.Context, nqn string) (nvme.Subsystem, error) {
+			return staleSub(nqn, "")
+		}},
+		connect: func(context.Context, string) (string, error) { return "", nil },
+	}
+
+	err := c.Connect(context.Background(), Target{NQN: "nqn.x", Address: "a"})
+	if err == nil || !strings.Contains(err.Error(), "namespace device") {
+		t.Errorf("err = %v, want a namespace-device timeout error", err)
 	}
 }
 
