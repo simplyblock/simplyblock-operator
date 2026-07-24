@@ -56,6 +56,13 @@ const (
 	// DeprecatedAnnoHostID is the pre-rename form of AnnoHostID, still
 	// honored for backward compatibility.
 	DeprecatedAnnoHostID = "simplybk/host-id"
+	// AnnoDisableSmartPlacement opts a single PVC out of both the load-aware
+	// (volume-placement webhook) and node/pod-affinity (CSI controller)
+	// automatic placement tiers, regardless of cluster-wide configuration —
+	// the volume falls straight through to the backend's own default
+	// placement. Distinct from AnnoHostID: that pins an exact node, this
+	// annotation names none and just disables the automatic guesses.
+	AnnoDisableSmartPlacement = "simplyblock.io/disable-smart-placement"
 	// Finalizer guards a PV/PVC from deletion until the backing logical
 	// volume is released.
 	Finalizer = "simplyblock.io/lvol-protection"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -69,6 +70,11 @@ func (h *SimplyblockVolumePlacementInjector) Handle(
 	if pvc.Annotations[kube.AnnoHostID] != "" || pvc.Annotations[kube.DeprecatedAnnoHostID] != "" {
 		log.V(1).Info("Skipping: host-id already set")
 		return admission.Allowed("host-id already set")
+	}
+
+	if disabled, _ := strconv.ParseBool(pvc.Annotations[kube.AnnoDisableSmartPlacement]); disabled {
+		log.V(1).Info("Skipping: smart placement disabled for this PVC")
+		return admission.Allowed("smart placement disabled for this PVC")
 	}
 
 	clusterUUID, ok := h.resolveClusterID(ctx, pvc, log)

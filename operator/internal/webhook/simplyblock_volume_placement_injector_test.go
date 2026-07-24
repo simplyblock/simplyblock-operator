@@ -179,6 +179,13 @@ func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) 
 			cluster: makePlacementCluster(enabledRebalancing),
 		},
 		{
+			name: "disable-smart-placement annotation set — skipped",
+			pvc: makePlacementPVC(strRef(placementStorageClassName),
+				map[string]string{kube.AnnoDisableSmartPlacement: "true"}),
+			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
+			cluster: makePlacementCluster(enabledRebalancing),
+		},
+		{
 			name:    "no StorageClassName set — skipped",
 			pvc:     makePlacementPVC(nil, nil),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),

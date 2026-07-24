@@ -772,6 +772,10 @@ func prepareCreateVolumeReq(
 	hostID := pvcAnnotation(pvcAnns, kube.AnnoHostID, kube.DeprecatedAnnoHostID)
 	lvolID := pvcAnnotation(pvcAnns, annotationLvolID, deprecatedAnnotationLvolID)
 	podAffinitive, _ := strconv.ParseBool(pvcAnns[annotationPodAffinity])
+	disableSmartPlacement, _ := strconv.ParseBool(pvcAnns[kube.AnnoDisableSmartPlacement])
+	// simplyblock.io/disable-smart-placement opts this PVC out of Tier 1
+	// regardless of pod-affinity, leaving host_id exactly as found above.
+	coLocateEligible := podAffinitive && !disableSmartPlacement
 
 	// QoS from StorageClass, overridable per-PVC via annotations.
 	maxRWIOPS := params["qos_rw_iops"]
@@ -813,7 +817,7 @@ func prepareCreateVolumeReq(
 		Namespaced:   maxNamespace > 1,
 		PvcName:      pvcFullName,
 	}
-	return &createVolReq, podAffinitive, nil
+	return &createVolReq, coLocateEligible, nil
 }
 
 // reconcileExistingVolume handles a 409 (name already exists) on a volume create
@@ -890,7 +894,7 @@ func (cs *controllerServer) createVolume(
 		}
 	}
 
-	createVolReq, podAffinitive, err := prepareCreateVolumeReq(ctx, req, capacityBytes)
+	createVolReq, coLocateEligible, err := prepareCreateVolumeReq(ctx, req, capacityBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -898,10 +902,11 @@ func (cs *controllerServer) createVolume(
 	// Co-locate the volume's primary with the consuming Pod's scheduled worker
 	// (node-affinity placement) when no explicit host_id was already set from a
 	// PVC annotation — an explicit annotation is a deliberate override and wins
-	// — and only when the PVC opted in via simplyblock.io/pod-affinity: "true".
-	// Without that annotation, Tier 1 is skipped for this PVC even if the Pod's
+	// — and only when the PVC opted in via simplyblock.io/pod-affinity: "true"
+	// and hasn't opted out via simplyblock.io/disable-smart-placement: "true".
+	// Without pod-affinity, Tier 1 is skipped for this PVC even if the Pod's
 	// resolved node hosts a co-located storage node.
-	if podAffinitive && createVolReq.HostID == "" {
+	if coLocateEligible && createVolReq.HostID == "" {
 		if coLocated := coLocatedHostID(req.GetAccessibilityRequirements(), sbclient.ClusterID()); coLocated != "" {
 			klog.Infof("createVolume: co-locating volume %s with storage node %s from pod scheduling topology",
 				req.GetName(), coLocated)
