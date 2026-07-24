@@ -15,7 +15,7 @@ import (
 	"github.com/simplyblock/atlas/lvol"
 )
 
-// LiveResolver implements Resolver and StorageClassResolver with direct,
+// LiveResolver implements Resolver with direct,
 // uncached reads against the API server via a client-go clientset. It is the
 // counterpart to InformerResolver for consumers that have no shared-informer
 // cache — one-shot CLIs, tests, or paths where a stale cache is unacceptable.
