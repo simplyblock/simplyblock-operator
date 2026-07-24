@@ -330,13 +330,14 @@ func TestReconcileDataRealignment_ForcedFailureKeepsAnnotation(t *testing.T) {
 
 func assertEvent(t *testing.T, rec *events.FakeRecorder, reason string) {
 	t.Helper()
+	timeout := time.After(2 * time.Second)
 	for {
 		select {
 		case e := <-rec.Events:
 			if strings.Contains(e, reason) {
 				return
 			}
-		default:
+		case <-timeout:
 			t.Fatalf("expected event containing %q", reason)
 		}
 	}
