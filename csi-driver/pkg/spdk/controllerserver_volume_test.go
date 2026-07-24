@@ -49,7 +49,7 @@ func newTestControllerServer(t *testing.T, mock *mockSBCLI) *controllerServer {
 		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 	})
 
-	cs, err := newControllerServer(cd)
+	cs, err := newControllerServer(cd, nil)
 	if err != nil {
 		t.Fatalf("newControllerServer: %v", err)
 	}
