@@ -17,6 +17,11 @@ import (
 // under-specified selector rather than a duplicate the kernel still has to reap.
 var errAmbiguousSelector = errors.New("selector matches several namespaces of the same subsystem")
 
+// deviceTimeout bounds the first wait for a namespace device in
+// ConnectDevice/ConnectMultipathDevice, after which a subsystem exporting none
+// is treated as stale. A variable so tests need not sit out the real bound.
+var deviceTimeout = defaultDeviceTimeout
+
 // ConnectDevice attaches t through c and returns the local namespace device
 // that came up for it, which is what a CSI NodeStage actually needs: Connect
 // alone only guarantees a live controller, not that the block device is already
@@ -24,7 +29,9 @@ var errAmbiguousSelector = errors.New("selector matches several namespaces of th
 // "the subsystem's only namespace".
 //
 // It is idempotent to the same degree Connect is: an already-attached target
-// short-circuits to the device lookup.
+// short-circuits to the device lookup. A subsystem attached without any
+// namespace device is reconciled rather than waited out — see
+// waitForDeviceReconciling.
 func ConnectDevice(
 	ctx context.Context,
 	c Connector,
@@ -35,7 +42,58 @@ func ConnectDevice(
 	if err := c.Connect(ctx, t); err != nil {
 		return nvme.Device{}, err
 	}
-	return WaitForDevice(ctx, devs, nvme.DeviceSelector{NQN: t.NQN, NSID: nsid})
+	return waitForDeviceReconciling(ctx, c, devs, nvme.DeviceSelector{NQN: t.NQN, NSID: nsid},
+		func(ctx context.Context) error { return c.Connect(ctx, t) })
+}
+
+// waitForDeviceReconciling waits for the namespace device a connect should have
+// produced and, if none appears, reconciles the subsystem once before waiting
+// again.
+//
+// The reconcile is there for a state no amount of patience resolves: a
+// subsystem attached with live controllers that exports no namespace at all,
+// the leftover of a half-completed or broken connection. Connect is satisfied
+// by it — the controllers really are live — and every retry then short-circuits
+// on "already attached" and waits for a device that will never appear, which is
+// how a CSI NodeStage ends up retried by kubelet for hours. Tearing the
+// subsystem down and connecting again makes the kernel re-enumerate namespaces,
+// which is what actually recovers it.
+//
+// It happens at most once, and only when the bounded wait is what ran out: a
+// caller whose own deadline expired gets its error unchanged, and so does a
+// match set no reconnect would fix (an under-specified selector). A freshly
+// reconnected subsystem that still exports no device is a target-side problem,
+// and churning the fabric over it would only pile up controllers.
+func waitForDeviceReconciling(
+	ctx context.Context,
+	c Connector,
+	devs nvme.DeviceResolver,
+	sel nvme.DeviceSelector,
+	reconnect func(context.Context) error,
+) (nvme.Device, error) {
+	dev, err := waitBounded(ctx, devs, sel)
+	if err == nil {
+		return dev, nil
+	}
+	if ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded) {
+		return nvme.Device{}, err
+	}
+
+	if derr := c.Disconnect(ctx, sel.NQN); derr != nil {
+		return nvme.Device{}, fmt.Errorf("disconnect stale subsystem %s: %w", sel.NQN, derr)
+	}
+	if rerr := reconnect(ctx); rerr != nil {
+		return nvme.Device{}, rerr
+	}
+	return waitBounded(ctx, devs, sel)
+}
+
+// waitBounded waits for sel's device under the earlier of the caller's deadline
+// and deviceTimeout.
+func waitBounded(ctx context.Context, devs nvme.DeviceResolver, sel nvme.DeviceSelector) (nvme.Device, error) {
+	ctx, cancel := context.WithTimeout(ctx, deviceTimeout)
+	defer cancel()
+	return WaitForDevice(ctx, devs, sel)
 }
 
 // ConnectMultipathDevice attaches a volume over all of its fabric paths and
@@ -67,7 +125,17 @@ func ConnectMultipathDevice(
 	if err != nil {
 		return nvme.Device{}, results, err
 	}
-	dev, err := WaitForDevice(ctx, devs, nvme.DeviceSelector{NQN: targets[0].NQN, NSID: nsid})
+	dev, err := waitForDeviceReconciling(ctx, c, devs, nvme.DeviceSelector{NQN: targets[0].NQN, NSID: nsid},
+		func(ctx context.Context) error {
+			// A reconcile re-attaches every path, so the results it produces —
+			// not the ones from before the teardown — describe the fabric the
+			// caller is left with.
+			retried, err := c.ConnectPaths(ctx, targets)
+			if len(retried) > 0 {
+				results = retried
+			}
+			return err
+		})
 	if err != nil {
 		return nvme.Device{}, results, err
 	}
