@@ -189,6 +189,15 @@ type StorageNodeSetSpec struct {
 const (
 	// AnnotationPinnedVolume is the PVC annotation that marks a volume as pinned to its current node.
 	AnnotationPinnedVolume = "simplyblock.io/pinned-volume"
+	// AnnotationPinnedVolumeApplied records the pinned-volume target UUID the
+	// PVC controller has already acted on. It is the strict change-diff marker:
+	// the controller only requests a migration when AnnotationPinnedVolume differs
+	// from this value, so its own writes do not re-trigger a migration.
+	AnnotationPinnedVolumeApplied = "simplyblock.io/pinned-volume-applied"
+	// AnnotationPinnedVolumeRejected records the last pinned-volume value the PVC
+	// controller's backstop validation rejected as an unknown storage node. It
+	// suppresses duplicate warning events while the invalid value remains in place.
+	AnnotationPinnedVolumeRejected = "simplyblock.io/pinned-volume-rejected"
 	// DefaultSystemVolumeFilterRegex is the default pattern for system/benchmark volumes.
 	DefaultSystemVolumeFilterRegex = "^sb-fio-baseline-.*"
 	// DrainPhaseDetected means the node is cordoned and waiting for a drain slot.

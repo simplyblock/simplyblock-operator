@@ -88,22 +88,23 @@ echo "  copied: manager_role.yaml (from role.yaml)"
 # control-plane: controller-manager / app.kubernetes.io/name labels.
 echo ""
 echo "==> Syncing webhook manifests..."
+# Build with kustomize (not a raw read of manifests.yaml) so kustomize-only
+# additions are included — notably the matchConditions patch that scopes the
+# pinned-volume validator to annotated PVCs, which controller-gen markers cannot
+# express. Names/namespace/labels are normalized to the Helm equivalents of the
+# kustomize namePrefix (see utils.WebhookServiceName / *ConfigurationName).
+KUSTOMIZE_BIN="${KUSTOMIZE:-$HELM_CHARTS_DIR/../.bin/kustomize}"
+command -v "$KUSTOMIZE_BIN" >/dev/null 2>&1 || KUSTOMIZE_BIN="kustomize"
 {
   echo "{{- if .Values.operator.enabled }}"
-  sed \
+  "$KUSTOMIZE_BIN" build "$WEBHOOK_SRC" | sed \
     -e 's|name: webhook-service|name: simplyblock-operator-webhook-service|' \
-    -e 's|namespace: system|namespace: {{ .Release.Namespace }}|' \
-    -e 's|control-plane: controller-manager|control-plane: simplyblock-operator|' \
-    -e 's|app.kubernetes.io/name: simplyblock-operator|app: simplyblock-operator|' \
-    "$WEBHOOK_SRC/service.yaml"
-  printf '\n---\n'
-  # manifests.yaml already opens with its own "---"; drop it since we just printed ours.
-  tail -n +2 "$WEBHOOK_SRC/manifests.yaml" | sed \
     -e 's|name: mutating-webhook-configuration|name: simplyblock-operator-mutating-webhook-configuration|' \
     -e 's|name: validating-webhook-configuration|name: simplyblock-operator-validating-webhook-configuration|' \
-    -e 's|name: webhook-service|name: simplyblock-operator-webhook-service|' \
-    -e 's|namespace: system|namespace: {{ .Release.Namespace }}|'
+    -e 's|namespace: system|namespace: {{ .Release.Namespace }}|' \
+    -e 's|control-plane: controller-manager|control-plane: simplyblock-operator|' \
+    -e 's|app.kubernetes.io/name: simplyblock-operator|app: simplyblock-operator|'
   echo "{{- end }}"
 } > "$WEBHOOK_DST"
-echo "  copied: webhook.yaml (from config/webhook/service.yaml + manifests.yaml)"
+echo "  copied: webhook.yaml (from kustomize build config/webhook)"
 

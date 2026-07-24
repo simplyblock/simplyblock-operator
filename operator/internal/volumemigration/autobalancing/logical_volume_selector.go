@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -253,7 +254,7 @@ func (lvs *LogicalVolumeSelector) BuildPinnedSet(ctx context.Context, clusterUUI
 		}, pvc); err != nil {
 			continue
 		}
-		if pvc.Annotations[pinnedVolumeAnnotation] != "" {
+		if pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolume] != "" {
 			pinned[lvolID] = true
 		}
 	}
