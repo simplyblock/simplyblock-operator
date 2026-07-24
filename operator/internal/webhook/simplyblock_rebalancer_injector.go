@@ -112,17 +112,18 @@ func (h *SimplyblockRebalancerInjector) resolveConfig(
 			log.V(1).Info("Skipping: cluster UUID prefix mismatch", "cluster", cr.Name, "clusterUUID", cr.Status.UUID, "podPrefix", uuidPrefix)
 			continue
 		}
-		rb := cr.Spec.AutoRebalancing
-		if rb == nil || rb.LatencyBenchmarkEnabled == nil || !*rb.LatencyBenchmarkEnabled {
+		rb := ptr.From(cr.Spec.AutoRebalancing, simplyblockv1alpha1.VolumeRebalancingSettings{})
+		if !ptr.BoolFromOrFalse(rb.LatencyBenchmarkEnabled) {
 			log.Info("Skipping: latency benchmark not enabled", "cluster", cr.Name)
 			return "", "", false
 		}
-		vms := cr.Spec.VolumeMigrationSettings
-		if vms == nil || vms.RebalancerImage == nil || *vms.RebalancerImage == "" {
+		vms := ptr.From(cr.Spec.VolumeMigrationSettings, simplyblockv1alpha1.VolumeMigrationSettings{})
+		rebalancerImage := ptr.From(vms.RebalancerImage, "")
+		if rebalancerImage == "" {
 			log.Info("Skipping: rebalancerImage not configured", "cluster", cr.Name)
 			return "", "", false
 		}
-		return *vms.RebalancerImage, utils.SimplyblockRebalancerConfigMapName(cr.Name), true
+		return rebalancerImage, utils.SimplyblockRebalancerConfigMapName(cr.Name), true
 	}
 	log.Info("Skipping: no matching StorageCluster found", "podPrefix", uuidPrefix)
 	return "", "", false

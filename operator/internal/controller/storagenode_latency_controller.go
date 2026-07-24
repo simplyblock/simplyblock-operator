@@ -99,24 +99,22 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, err
 	}
 
-	vms := clusterCR.Spec.VolumeMigrationSettings
-	if clusterCR.Spec.AutoRebalancing == nil {
-		return ctrl.Result{}, nil
-	}
-	spec := clusterCR.Spec.AutoRebalancing
-	if spec.LatencyBenchmarkEnabled == nil || !*spec.LatencyBenchmarkEnabled {
+	spec := ptr.From(clusterCR.Spec.AutoRebalancing, simplyblockv1alpha1.VolumeRebalancingSettings{})
+	if !ptr.BoolFromOrFalse(spec.LatencyBenchmarkEnabled) {
 		return ctrl.Result{}, nil
 	}
 	// The latency/baseline Jobs reuse the existing top-level rebalancer image
 	// (VolumeMigrationSettings.RebalancerImage); there is no separate image.
-	if vms == nil || vms.RebalancerImage == nil || *vms.RebalancerImage == "" {
+	vms := ptr.From(clusterCR.Spec.VolumeMigrationSettings, simplyblockv1alpha1.VolumeMigrationSettings{})
+	rebalancerImage := ptr.From(vms.RebalancerImage, "")
+	if rebalancerImage == "" {
 		log.Info("RebalancerImage not configured; latency benchmark disabled")
 		return ctrl.Result{}, nil
 	}
 
 	benchInterval := defaultLatencyBenchmarkInterval
-	if spec.LatencyBenchmarkInterval != nil && spec.LatencyBenchmarkInterval.Duration > 0 {
-		benchInterval = spec.LatencyBenchmarkInterval.Duration
+	if d := ptr.From(spec.LatencyBenchmarkInterval, metav1.Duration{}); d.Duration > 0 {
+		benchInterval = d.Duration
 	}
 
 	if clusterCR.Status.UUID == "" || clusterCR.Status.NQN == "" {
@@ -158,7 +156,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	changed := false
 
 	for _, node := range nodesByUUID {
-		nodeChanged := r.processNodeBaseline(ctx, snode, clusterCR, poolUUID, node, *vms.RebalancerImage, &latencyMetrics, hostConfigs)
+		nodeChanged := r.processNodeBaseline(ctx, snode, clusterCR, poolUUID, node, rebalancerImage, &latencyMetrics, hostConfigs)
 		if nodeChanged {
 			changed = true
 		}
