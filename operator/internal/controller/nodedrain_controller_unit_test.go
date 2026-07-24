@@ -5,16 +5,20 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 // ---- pure helpers ----
@@ -859,6 +863,124 @@ func TestHandleRestartCalledCompletesWhenNotRebalancing(t *testing.T) {
 	}
 	if requeue != 0 {
 		t.Fatalf("expected zero requeue on completion, got %v", requeue)
+	}
+}
+
+// ---- 409 conflict retry test ----
+
+// TestNodeDrainStatusPatch409RetryPreservesDrainState verifies that a 409
+// Conflict on the final Status().Patch() does NOT discard the drain phase
+// transitions computed during the reconcile. Without RetryOnConflict the
+// controller would silently revert to the pre-reconcile state.
+//
+// Setup: one worker already in DrainPhaseComplete (no backend HTTP calls
+// needed) so processWorker is a pure no-op. The interesting behaviour is in
+// the final patch: the interceptor returns 409 on the first attempt and
+// succeeds on the second, verifying that RetryOnConflict re-reads and retries
+// rather than logging and returning the 5-second requeue.
+func TestNodeDrainStatusPatch409RetryPreservesDrainState(t *testing.T) {
+	const (
+		ns          = "default"
+		clusterName = "cluster-drain-409"
+		clusterUUID = "uuid-drain-409"
+		workerName  = "worker-409.example.com"
+		snsName     = "sn-drain-409"
+	)
+
+	clusterCR := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+		Status: simplyblockv1alpha1.StorageClusterStatus{
+			Status: utils.ClusterStatusActive,
+			UUID:   clusterUUID,
+		},
+	}
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: snsName, Namespace: ns},
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			ClusterName: clusterName,
+			WorkerNodes: []string{workerName},
+		},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: workerName, Status: utils.NodeStatusOnline, UUID: "backend-uuid-409"},
+			},
+			// DrainPhaseComplete → processWorker is a pure no-op (no backend calls).
+			// The patch carries this state; the interceptor will conflict on the
+			// first attempt and succeed on the second.
+			DrainCoordination: []simplyblockv1alpha1.NodeDrainState{
+				{
+					Hostname: workerName,
+					Phase:    simplyblockv1alpha1.DrainPhaseComplete,
+				},
+			},
+		},
+	}
+
+	scheme := newTestScheme(
+		t,
+		simplyblockv1alpha1.AddToScheme,
+		corev1.AddToScheme,
+		policyv1.AddToScheme,
+	)
+
+	patchCalls := 0
+	conflictErr := apierrors.NewConflict(
+		simplyblockv1alpha1.GroupVersion.WithResource("storagenodesets").GroupResource(),
+		snsName, nil,
+	)
+
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&simplyblockv1alpha1.StorageNodeSet{}, &simplyblockv1alpha1.StorageCluster{}).
+		WithObjects(clusterCR, snCR).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(
+				ctx context.Context,
+				c client.Client,
+				subResourceName string,
+				obj client.Object,
+				patch client.Patch,
+				opts ...client.SubResourcePatchOption,
+			) error {
+				if subResourceName == "status" {
+					patchCalls++
+					if patchCalls == 1 {
+						return conflictErr
+					}
+				}
+				return c.Status().Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+
+	r := &NodeDrainCoordinatorReconciler{Client: cl, Scheme: scheme}
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKey{Name: snsName, Namespace: ns},
+	})
+
+	if err != nil {
+		t.Fatalf("expected no error despite initial 409, got: %v", err)
+	}
+	// RetryOnConflict should succeed — must NOT return the 5-second requeue
+	// that the old bare-patch code returned on any error.
+	if res.RequeueAfter == 5*time.Second {
+		t.Fatal("reconcile returned the 5s conflict requeue — RetryOnConflict did not succeed")
+	}
+	if patchCalls < 2 {
+		t.Fatalf("expected ≥2 Status.Patch calls (conflict + retry), got %d", patchCalls)
+	}
+
+	// Drain state must be persisted after the conflict retry.
+	var updated simplyblockv1alpha1.StorageNodeSet
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: snsName, Namespace: ns}, &updated); err != nil {
+		t.Fatalf("failed to get updated CR: %v", err)
+	}
+	state := getDrainState(&updated, workerName)
+	if state == nil {
+		t.Fatal("drain state was lost after 409 — RetryOnConflict did not preserve the phase")
+	}
+	if state.Phase != simplyblockv1alpha1.DrainPhaseComplete {
+		t.Fatalf("expected DrainPhaseComplete after retry, got %q", state.Phase)
 	}
 }
 
