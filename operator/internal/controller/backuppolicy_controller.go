@@ -65,11 +65,14 @@ const (
 )
 
 // schedulePattern matches a space-separated list of interval,keep_count pairs
-// (e.g. "15m,4 60m,11 24h,7"). Supported interval units: m, h, d, w.
-var schedulePattern = regexp.MustCompile(`^(\d+[mhdw],\d+)(\s+\d+[mhdw],\d+)*$`)
+// (e.g. "15m,4 60m,11 24h,7"). Supported interval units: m, h, d, w. Pairs are
+// separated by literal spaces only (not the \s class) so a tab/newline can't
+// be smuggled in as a separator.
+var schedulePattern = regexp.MustCompile(`^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$`)
 
-// maxAgePattern matches a positive integer followed by a unit suffix (m, h, d, w).
-var maxAgePattern = regexp.MustCompile(`^\d+[mhdw]$`)
+// maxAgePattern matches a positive integer (no leading zero digit alone, e.g.
+// "0d" is rejected) followed by a unit suffix (m, h, d, w).
+var maxAgePattern = regexp.MustCompile(`^[1-9]\d*[mhdw]$`)
 
 // BackupPolicyReconciler reconciles a BackupPolicy object.
 type BackupPolicyReconciler struct {

@@ -622,6 +622,14 @@ func TestValidateBackupPolicySpec(t *testing.T) {
 		{name: "maxAge shell injection", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "7d; rm -rf /"}, wantErr: true},
 		{name: "maxAge no leading digit", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "d"}, wantErr: true},
 		{name: "maxAge empty string unit only", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "h"}, wantErr: true},
+		// zero is not a positive duration/interval
+		{name: "maxAge zero", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "0d"}, wantErr: true},
+		{name: "maxAge zero-prefixed", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "07d"}, wantErr: true},
+		// tab/newline must not be accepted as a pair separator or trailing character
+		{name: "schedule tab separator", spec: simplyblockv1alpha1.BackupPolicySpec{Schedule: "15m,4\t60m,11"}, wantErr: true},
+		{name: "schedule newline separator", spec: simplyblockv1alpha1.BackupPolicySpec{Schedule: "15m,4\n60m,11"}, wantErr: true},
+		{name: "schedule trailing newline", spec: simplyblockv1alpha1.BackupPolicySpec{Schedule: "15m,4\n"}, wantErr: true},
+		{name: "maxAge trailing newline", spec: simplyblockv1alpha1.BackupPolicySpec{MaxAge: "7d\n"}, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
