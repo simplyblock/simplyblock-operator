@@ -144,6 +144,11 @@ type backupAPIResponse struct {
 	CompletedAt  int64               `json:"completed_at"`
 }
 
+type snapshotAPIResponse struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagebackups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagebackups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagebackups/finalizers,verbs=update
@@ -317,13 +322,28 @@ func (r *StorageBackupReconciler) ensureSnapshotAndBackup(
 	}
 
 	if backupCR.Status.SnapshotID == "" {
-		snapshotID, createErr := r.createSnapshot(ctx, bctx.apiClient, bctx.clusterUUID, bctx.poolUUID, bctx.source.LvolID, backupCR.Status.SnapshotName)
+		// Create is attempted directly (no pre-creation lookup): the common case is a
+		// fresh create, and a lookup on every reconcile would cost a network call for
+		// no benefit. If the operator restarted between a prior POST succeeding and the
+		// status write, the backend rejects the retried POST as a duplicate name (409);
+		// recover the existing snapshot's ID with a single lookup in that case only.
+		snapshotID, createErr := r.createSnapshot(ctx, bctx.apiClient,
+			bctx.clusterUUID, bctx.poolUUID, bctx.source.LvolID, backupCR.Status.SnapshotName)
 		if createErr != nil {
-			log.Error(createErr, "Failed to create snapshot", "backup", backupCR.Name)
-			r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupSnapshotCreateFailed, eventReasonBackupSnapshotCreateFailed, "Failed to create snapshot: %v", createErr)
-			result, err := r.handleAPIError(ctx, backupCR, bctx.clusterUUID, createErr)
-			return result, true, err
+			if isDuplicateNameError(createErr) {
+				if recovered, recoverErr := r.findSnapshotByName(ctx, bctx.apiClient,
+					bctx.clusterUUID, bctx.poolUUID, bctx.source.LvolID, backupCR.Status.SnapshotName); recoverErr == nil && recovered != "" {
+					snapshotID = recovered
+				}
+			}
+			if snapshotID == "" {
+				log.Error(createErr, "Failed to create snapshot", "backup", backupCR.Name)
+				r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupSnapshotCreateFailed, eventReasonBackupSnapshotCreateFailed, "Failed to create snapshot: %v", createErr)
+				result, handleErr := r.handleAPIError(ctx, backupCR, bctx.clusterUUID, createErr)
+				return result, true, handleErr
+			}
 		}
+
 		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
 			status.SnapshotID = snapshotID
 			status.Message = "Snapshot created; submitting backup request"
@@ -334,13 +354,26 @@ func (r *StorageBackupReconciler) ensureSnapshotAndBackup(
 	}
 
 	if backupCR.Status.BackupID == "" {
-		backupID, createErr := r.createBackup(ctx, bctx.apiClient, bctx.clusterUUID, backupCR.Status.SnapshotID)
+		// Same reasoning as above: attempt create directly. The backend signals "this
+		// snapshot already has a backup" with 400 rather than a name conflict (backups
+		// aren't named), so recovery keys off that condition instead of a 409.
+		backupID, createErr := r.createBackup(ctx, bctx.apiClient,
+			bctx.clusterUUID, backupCR.Status.SnapshotID)
 		if createErr != nil {
-			log.Error(createErr, "Failed to create backup", "backup", backupCR.Name, "snapshotID", backupCR.Status.SnapshotID)
-			r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupCreateFailed, eventReasonBackupCreateFailed, "Failed to create backup: %v", createErr)
-			result, err := r.handleAPIError(ctx, backupCR, bctx.clusterUUID, createErr)
-			return result, true, err
+			if isDuplicateBackupError(createErr) {
+				if recovered, recoverErr := r.findBackupBySnapshotID(ctx, bctx.apiClient,
+					bctx.clusterUUID, backupCR.Status.SnapshotID); recoverErr == nil && recovered != "" {
+					backupID = recovered
+				}
+			}
+			if backupID == "" {
+				log.Error(createErr, "Failed to create backup", "backup", backupCR.Name, "snapshotID", backupCR.Status.SnapshotID)
+				r.Recorder.Eventf(backupCR, nil, corev1.EventTypeWarning, eventReasonBackupCreateFailed, eventReasonBackupCreateFailed, "Failed to create backup: %v", createErr)
+				result, handleErr := r.handleAPIError(ctx, backupCR, bctx.clusterUUID, createErr)
+				return result, true, handleErr
+			}
 		}
+
 		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
 			status.BackupID = backupID
 			status.Message = backupPendingMessage
@@ -672,6 +705,91 @@ func (r *StorageBackupReconciler) listBackups(
 	return backups, nil
 }
 
+func (r *StorageBackupReconciler) listSnapshotsForVolume(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID string,
+	poolUUID string,
+	lvolID string,
+) ([]snapshotAPIResponse, error) {
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/snapshots",
+		clusterUUID, poolUUID, lvolID,
+	)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status >= 300 {
+		return nil, fmt.Errorf("list snapshots failed: status=%d body=%s", status, string(body))
+	}
+	var snapshots []snapshotAPIResponse
+	if err := json.Unmarshal(body, &snapshots); err != nil {
+		return nil, fmt.Errorf("unmarshal snapshots: %w", err)
+	}
+	return snapshots, nil
+}
+
+// findSnapshotByName returns the ID of the snapshot with the given name on the
+// specified volume, or "" if no such snapshot exists. A non-nil error indicates
+// a transient failure; the caller should treat it as "not found" and proceed.
+func (r *StorageBackupReconciler) findSnapshotByName(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID string,
+	poolUUID string,
+	lvolID string,
+	name string,
+) (string, error) {
+	snapshots, err := r.listSnapshotsForVolume(ctx, apiClient, clusterUUID, poolUUID, lvolID)
+	if err != nil {
+		return "", err
+	}
+	for _, s := range snapshots {
+		if s.Name == name {
+			return s.ID, nil
+		}
+	}
+	return "", nil
+}
+
+// findBackupBySnapshotID returns the ID of an existing backup whose snapshot
+// matches snapshotID, or "" if none is found.
+func (r *StorageBackupReconciler) findBackupBySnapshotID(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID string,
+	snapshotID string,
+) (string, error) {
+	backups, err := r.listBackups(ctx, apiClient, clusterUUID)
+	if err != nil {
+		return "", err
+	}
+	for _, b := range backups {
+		if b.SnapshotID == snapshotID {
+			return b.ID, nil
+		}
+	}
+	return "", nil
+}
+
+// isDuplicateNameError returns true when err is an HTTP 409 Conflict, which the
+// backend's v2 API returns when a snapshot name is already taken.
+func isDuplicateNameError(err error) bool {
+	var apiErr apiError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict
+}
+
+// isDuplicateBackupError returns true when err indicates the target snapshot
+// already has a backup. Backups aren't named, so the backend signals this with
+// HTTP 400 rather than the 409 used for snapshot name conflicts.
+func isDuplicateBackupError(err error) bool {
+	var apiErr apiError
+	return errors.As(err, &apiErr) &&
+		apiErr.StatusCode == http.StatusBadRequest &&
+		strings.Contains(apiErr.Message, "already has a backup")
+}
+
 func (r *StorageBackupReconciler) handleAPIError(
 	ctx context.Context,
 	backupCR *simplyblockv1alpha1.StorageBackup,
@@ -680,6 +798,20 @@ func (r *StorageBackupReconciler) handleAPIError(
 ) (ctrl.Result, error) {
 	var apiErr apiError
 	if errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 {
+		// Duplicate errors are recoverable: the resource already exists in the backend
+		// but our status write failed, most likely because the recovery lookup that
+		// runs inline on a duplicate hadn't caught up yet. Mark pending and requeue so
+		// the next reconcile's recovery lookup gets another chance.
+		if isDuplicateNameError(err) || isDuplicateBackupError(err) {
+			if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
+				status.ClusterUUID = clusterUUID
+				status.Phase = simplyblockv1alpha1.BackupPhasePending
+				status.Message = apiErr.Message
+			}); patchErr != nil {
+				return ctrl.Result{}, patchErr
+			}
+			return ctrl.Result{RequeueAfter: backupReconcileRequeue}, nil
+		}
 		if patchErr := r.patchStatus(ctx, backupCR, func(status *simplyblockv1alpha1.StorageBackupStatus) {
 			status.ClusterUUID = clusterUUID
 			status.Phase = simplyblockv1alpha1.BackupPhaseFailed

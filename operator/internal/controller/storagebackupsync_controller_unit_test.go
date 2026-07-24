@@ -254,6 +254,115 @@ func TestStorageBackupSyncSkipsAlreadyTracked(t *testing.T) {
 	}
 }
 
+// TestStorageBackupSyncRetriesStatusPatchForOrphanedCR verifies that when a
+// StorageBackup CR was created in a previous sync cycle (imported label set) but
+// its status write failed (BackupID still empty), the reconciler retries the
+// status patch on the next run rather than attempting to re-create the CR.
+func TestStorageBackupSyncRetriesStatusPatchForOrphanedCR(t *testing.T) {
+	srv := syncTestBackupServer(t)
+	defer srv.Close()
+
+	// An imported CR whose status patch previously failed — BackupID is empty.
+	orphaned := &simplyblockv1alpha1.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      syncTestBackupID, // Name == backend backup ID (by convention)
+			Namespace: syncTestNamespace,
+			Labels:    map[string]string{backupSyncImportedLabel: "true"},
+		},
+		Spec: simplyblockv1alpha1.StorageBackupSpec{
+			ClusterName: syncTestClusterName,
+			PVCRef: &simplyblockv1alpha1.PersistentVolumeClaimRef{
+				Name:      syncTestPVCName,
+				Namespace: syncTestNamespace,
+			},
+		},
+	}
+
+	pv, pvc := syncTestPVAndPVC()
+	r := newSyncTestReconciler(t, srv.URL,
+		syncTestCluster(),
+		pv, pvc,
+		orphaned,
+	)
+
+	res, err := r.Reconcile(context.Background(), syncReconcileRequest())
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected periodic requeue, got zero RequeueAfter")
+	}
+
+	// Status should now be populated via the retry path.
+	updated := &simplyblockv1alpha1.StorageBackup{}
+	if err := r.Get(context.Background(), client.ObjectKey{
+		Name:      syncTestBackupID,
+		Namespace: syncTestNamespace,
+	}, updated); err != nil {
+		t.Fatalf("get updated CR: %v", err)
+	}
+	if updated.Status.BackupID != syncTestBackupID {
+		t.Errorf("expected Status.BackupID=%q after retry, got %q", syncTestBackupID, updated.Status.BackupID)
+	}
+	if updated.Status.SnapshotID != syncTestSnapshotID {
+		t.Errorf("expected Status.SnapshotID=%q after retry, got %q", syncTestSnapshotID, updated.Status.SnapshotID)
+	}
+
+	// Exactly one CR must exist — no duplicate was created.
+	list := &simplyblockv1alpha1.StorageBackupList{}
+	if err := r.List(context.Background(), list, client.InNamespace(syncTestNamespace)); err != nil {
+		t.Fatalf("List StorageBackups: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Errorf("expected exactly 1 StorageBackup CR, found %d", len(list.Items))
+	}
+}
+
+// TestStorageBackupSyncRetriesStatusPatchForOrphanedCRWithoutPVCRef verifies that
+// the retry path does not panic when the orphaned CR was originally imported
+// without a PVCRef (best-effort import with no matching PVC).
+func TestStorageBackupSyncRetriesStatusPatchForOrphanedCRWithoutPVCRef(t *testing.T) {
+	srv := syncTestBackupServer(t)
+	defer srv.Close()
+
+	// An imported CR whose status patch previously failed and which has no
+	// PVCRef at all (the originating lvol had no matching PVC at import time).
+	orphaned := &simplyblockv1alpha1.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      syncTestBackupID,
+			Namespace: syncTestNamespace,
+			Labels:    map[string]string{backupSyncImportedLabel: "true"},
+		},
+		Spec: simplyblockv1alpha1.StorageBackupSpec{
+			ClusterName: syncTestClusterName,
+		},
+	}
+
+	r := newSyncTestReconciler(t, srv.URL,
+		syncTestCluster(),
+		orphaned,
+	)
+
+	res, err := r.Reconcile(context.Background(), syncReconcileRequest())
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected periodic requeue, got zero RequeueAfter")
+	}
+
+	updated := &simplyblockv1alpha1.StorageBackup{}
+	if err := r.Get(context.Background(), client.ObjectKey{
+		Name:      syncTestBackupID,
+		Namespace: syncTestNamespace,
+	}, updated); err != nil {
+		t.Fatalf("get updated CR: %v", err)
+	}
+	if updated.Status.BackupID != syncTestBackupID {
+		t.Errorf("expected Status.BackupID=%q after retry, got %q", syncTestBackupID, updated.Status.BackupID)
+	}
+}
+
 // TestStorageBackupSyncImportsWithoutPVCRefOnAnnotationMismatch verifies that
 // a PVC whose lvol annotation disagrees with its PV's volume handle is
 // treated as "no match" (never used as a possibly-wrong PVCRef), but the
