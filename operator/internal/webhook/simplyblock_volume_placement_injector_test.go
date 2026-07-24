@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
@@ -170,14 +171,14 @@ func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) 
 		{
 			name: "host-id annotation already set — skipped",
 			pvc: makePlacementPVC(strRef(placementStorageClassName),
-				map[string]string{annotationHostID: "some-node"}),
+				map[string]string{kube.AnnoHostID: "some-node"}),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
 			cluster: makePlacementCluster(enabledRebalancing),
 		},
 		{
 			name: "deprecated host-id annotation already set — skipped",
 			pvc: makePlacementPVC(strRef(placementStorageClassName),
-				map[string]string{deprecatedAnnotationHostID: "some-node"}),
+				map[string]string{kube.DeprecatedAnnoHostID: "some-node"}),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
 			cluster: makePlacementCluster(enabledRebalancing),
 		},
@@ -326,7 +327,7 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 	}
 
 	patched := applyPVCPatches(t, pvc, resp.Patches)
-	if got := patched.Annotations[annotationHostID]; got != "cool" {
+	if got := patched.Annotations[kube.AnnoHostID]; got != "cool" {
 		t.Errorf("host-id = %q, want %q", got, "cool")
 	}
 }

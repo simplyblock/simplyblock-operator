@@ -12,6 +12,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
@@ -20,12 +21,6 @@ import (
 )
 
 const (
-	// annotationHostID and deprecatedAnnotationHostID must match the annotation names
-	// spdk-csi reads in prepareCreateVolumeReq (pkg/spdk/controllerserver.go) — this
-	// webhook and spdk-csi share the contract but not any code.
-	annotationHostID           = "simplyblock.io/host-id"
-	deprecatedAnnotationHostID = "simplybk/host-id"
-
 	// clusterIDParam is the StorageClass parameter key holding the target cluster's
 	// backend UUID (see upsertStorageClass in simplyblockpool_controller.go).
 	clusterIDParam = "cluster_id"
@@ -77,7 +72,7 @@ func (h *SimplyblockVolumePlacementInjector) Handle(
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
-	if pvc.Annotations[annotationHostID] != "" || pvc.Annotations[deprecatedAnnotationHostID] != "" {
+	if pvc.Annotations[kube.AnnoHostID] != "" || pvc.Annotations[kube.DeprecatedAnnoHostID] != "" {
 		log.V(1).Info("Skipping: host-id already set")
 		return admission.Allowed("host-id already set")
 	}
@@ -96,7 +91,7 @@ func (h *SimplyblockVolumePlacementInjector) Handle(
 	if patched.Annotations == nil {
 		patched.Annotations = make(map[string]string)
 	}
-	patched.Annotations[annotationHostID] = nodeUUID
+	patched.Annotations[kube.AnnoHostID] = nodeUUID
 
 	original, err := json.Marshal(pvc)
 	if err != nil {

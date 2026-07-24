@@ -49,6 +49,13 @@ const (
 	LabelVolumeHandle = "simplyblock.io/volume-handle"
 	// AnnoPool records the source pool on the PV for observability.
 	AnnoPool = "simplyblock.io/pool"
+	// AnnoHostID pins a PVC's logical volume to a specific storage node.
+	// The volume-placement webhook stamps it on PVCs it schedules; the CSI
+	// controller reads it in CreateVolume and forwards it as host_id.
+	AnnoHostID = "simplyblock.io/host-id"
+	// DeprecatedAnnoHostID is the pre-rename form of AnnoHostID, still
+	// honored for backward compatibility.
+	DeprecatedAnnoHostID = "simplybk/host-id"
 	// Finalizer guards a PV/PVC from deletion until the backing logical
 	// volume is released.
 	Finalizer = "simplyblock.io/lvol-protection"
