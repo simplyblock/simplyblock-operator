@@ -178,7 +178,7 @@ already relies on, always setting `HostID` explicitly.
 - Per-block-size or per-volume-QoS-aware scoring (Phase 2 of Issue #130, not
   needed here).
 - Changing rebalancing/migration behavior (Issue #130) or pinning semantics
-  (`simplyblock.io/pinned-volume`) — this document is scoped to the
+  (`simplyblock.io/selected-storage-node`) — this document is scoped to the
   **creation-time** decision only. In particular, Tier 1 does **not** keep a
   volume co-located if its consumer Pod is later rescheduled elsewhere:
   neither `VolumeMigration` (a manual CR requiring an explicit target node)

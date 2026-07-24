@@ -49,10 +49,10 @@ const (
 	pvcPinRequeueMigrating = 30 * time.Second
 )
 
-// PersistentVolumeClaimReconciler watches PVCs for changes to the
-// simplyblock.io/pinned-volume annotation and, when the pinned storage node
-// changes, requests a VolumeMigration to move the volume's backing logical
-// volume onto that node.
+// PersistentVolumeClaimReconciler watches PVCs for changes to the pin annotation
+// (kube.PinnedNode: the canonical simplyblock.io/selected-storage-node, or a
+// legacy host-id fallback) and, when the pinned storage node changes, requests a
+// VolumeMigration to move the volume's backing logical volume onto that node.
 //
 // Change detection is a strict diff: the controller only acts when the
 // pinned-volume value differs from the AnnotationPinnedVolumeApplied marker it

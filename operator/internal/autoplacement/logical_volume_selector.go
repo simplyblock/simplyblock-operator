@@ -46,7 +46,7 @@ type LogicalVolumeSelectorInput struct {
 	// post-migration cool-down window and must not be migrated again yet.
 	IsCoolingDown func(volumeUUID string) bool
 	// Pinned is the set of volume UUIDs excluded from migration regardless of
-	// load (set via the simplyblock.io/pinned-volume PVC annotation).
+	// load (PVC carries a pin annotation; see kube.IsPinnedVolume).
 	Pinned map[string]bool
 	// Namespaced is the set of volume UUIDs that belong to a multi-namespace NVMe
 	// subsystem (StorageClass max_namespace_per_subsys > 1). Such volumes share a
@@ -148,7 +148,7 @@ func (lvs *LogicalVolumeSelector) CollectVolumes(
 
 // FilterEligibleVolumes returns the subset of vols that are candidates for
 // migration. A volume is excluded when any of the following is true:
-//   - it appears in input.Pinned (simplyblock.io/pinned-volume annotation)
+//   - it appears in input.Pinned (PVC carries a pin annotation; see kube.IsPinnedVolume)
 //   - it appears in input.Namespaced (multi-namespace subsystem; shares a
 //     subsystem with siblings and cannot be migrated independently)
 //   - input.IsCoolingDown returns true for it (post-migration cool-down)
@@ -235,8 +235,8 @@ func (lvs *LogicalVolumeSelector) selectMigrationSet(ranked []RankedCandidate, m
 	return out
 }
 
-// BuildPinnedSet returns the set of volume UUIDs whose bound PVC carries the
-// simplyblock.io/pinned-volume annotation. It scans all PersistentVolumes and
+// BuildPinnedSet returns the set of volume UUIDs whose bound PVC carries a pin
+// annotation (see kube.IsPinnedVolume). It scans all PersistentVolumes and
 // resolves the volume UUID from the CSI volume handle
 // ("<clusterUUID>:<poolName>:<volumeUUID>"). Pass an empty clusterUUID to include
 // volumes from all clusters.

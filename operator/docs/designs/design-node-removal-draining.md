@@ -118,7 +118,7 @@ volumes on the target node and classifies each into one of four buckets:
 | Bucket | Criteria | Action |
 |---|---|---|
 | **PV-managed** | Backend volume UUID matches a Kubernetes PV in the cluster | Create `VolumeMigration` CR |
-| **Pinned** | Corresponding PVC carries `simplyblock.io/pinned-volume` annotation | Block; optionally un-pin if `spec.unpinBeforeDrain=true` |
+| **Pinned** | Corresponding PVC carries a pin annotation (`simplyblock.io/selected-storage-node`, or legacy `host-id`) | Block; optionally un-pin if `spec.unpinBeforeDrain=true` |
 | **System / benchmark** | Volume name matches `spec.systemVolumeFilterRegex` | Skip (do not migrate, do not block) |
 | **Unmanaged** | No matching Kubernetes PV found | Block; requires manual resolution |
 
@@ -138,8 +138,9 @@ to cover other system-managed volumes.
 ### Pinned Volume Handling
 
 Pinned volumes are an **operator-only concept** — the control plane has no
-awareness of the `simplyblock.io/pinned-volume` annotation. The operator checks
-PVC annotations directly.
+awareness of the pin annotation (`simplyblock.io/selected-storage-node`, or the
+legacy `simplyblock.io/host-id` / `simplybk/host-id`). The operator checks PVC
+annotations directly (see `kube.IsPinnedVolume`).
 
 Two options for the operator user:
 
