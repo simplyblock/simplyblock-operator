@@ -106,7 +106,7 @@ func (h *SimplyblockVolumePlacementInjector) resolveClusterID(
 	pvc *corev1.PersistentVolumeClaim,
 	log logr.Logger,
 ) (clusterUUID string, ok bool) {
-	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName == "" {
+	if ptr.IsEmptyString(pvc.Spec.StorageClassName) {
 		return "", false
 	}
 
@@ -157,7 +157,7 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 		return "", false
 	}
 
-	cfg, err := autobalancing.ResolveRebalancingConfig(&spec)
+	cfg, err := autobalancing.ResolveRebalancingConfig(spec)
 	if err != nil {
 		log.V(1).Info("Skipping: invalid rebalancing configuration", "cluster", cr.Name, "error", err.Error())
 		return "", false
