@@ -126,7 +126,7 @@ func (r *BackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Schedule and MaxAge are immutable, so a bad value is a terminal condition —
 	// the CR must be deleted and recreated; we do not requeue.
 	if msg := validateBackupPolicySpec(policyCR.Spec); msg != "" {
-		r.Recorder.Event(policyCR, corev1.EventTypeWarning, eventReasonPolicySpecInvalid, msg)
+		r.Recorder.Eventf(policyCR, nil, corev1.EventTypeWarning, eventReasonPolicySpecInvalid, eventReasonPolicySpecInvalid, msg)
 		if patchErr := r.patchStatus(ctx, policyCR, func(s *simplyblockv1alpha1.BackupPolicyStatus) {
 			s.Phase = simplyblockv1alpha1.BackupPolicyPhaseFailed
 			s.Message = msg
