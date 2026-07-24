@@ -37,7 +37,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 
 	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
 	"github.com/spdk/spdk-csi/pkg/util"
@@ -95,6 +94,11 @@ const (
 type controllerServer struct {
 	*csicommon.DefaultControllerServer
 	volumeLocks *util.VolumeLocks
+	// kubeClient reads/patches PVC annotations (host_id resolution, placement-hint
+	// cleanup). Built once at construction and reused; nil when no in-cluster
+	// config is available (e.g. unit tests), in which case the annotation helpers
+	// are no-ops.
+	kubeClient kubernetes.Interface
 }
 
 type spdkVolume struct {
@@ -477,7 +481,7 @@ func (cs *controllerServer) CreateVolume(
 	params := req.GetParameters()
 	pvcName, pvcNamespace := params[CSIStorageNameKey], params[CSIStorageNamespaceKey]
 	if pvcName != "" && pvcNamespace != "" {
-		if rerr := removePVCAnnotations(ctx, pvcName, pvcNamespace, kube.AnnoPlacementHint); rerr != nil {
+		if rerr := cs.removePVCAnnotations(ctx, pvcName, pvcNamespace, kube.AnnoPlacementHint); rerr != nil {
 			klog.Warningf("createVolume: could not clear placement-hint on PVC %s/%s: %v", pvcNamespace, pvcName, rerr)
 		}
 	}
@@ -739,7 +743,7 @@ func (cs *controllerServer) DeleteSnapshot(
 	return &csi.DeleteSnapshotResponse{}, nil
 }
 
-func prepareCreateVolumeReq(
+func (cs *controllerServer) prepareCreateVolumeReq(
 	ctx context.Context,
 	req *csi.CreateVolumeRequest,
 	capacityBytes int64,
@@ -779,7 +783,7 @@ func prepareCreateVolumeReq(
 
 	var pvcAnns map[string]string
 	if pvcNameSelected && pvcNamespaceSelected {
-		pvcAnns, err = fetchPVCAnnotations(ctx, pvcName, pvcNamespace)
+		pvcAnns, err = cs.fetchPVCAnnotations(ctx, pvcName, pvcNamespace)
 		if err != nil {
 			return nil, false, err
 		}
@@ -910,7 +914,7 @@ func (cs *controllerServer) createVolume(
 		}
 	}
 
-	createVolReq, podAffinitive, err := prepareCreateVolumeReq(ctx, req, capacityBytes)
+	createVolReq, podAffinitive, err := cs.prepareCreateVolumeReq(ctx, req, capacityBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -1294,10 +1298,11 @@ func (cs *controllerServer) ControllerGetVolume(
 }
 
 //nolint:unparam // error return kept for constructor symmetry / future use
-func newControllerServer(d *csicommon.CSIDriver) (*controllerServer, error) {
+func newControllerServer(d *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*controllerServer, error) {
 	server := controllerServer{
 		DefaultControllerServer: csicommon.NewDefaultControllerServer(d),
 		volumeLocks:             util.NewVolumeLocks(),
+		kubeClient:              kubeClient,
 	}
 	return &server, nil
 }
@@ -1450,20 +1455,14 @@ func (cs *controllerServer) handleVolumeSource(
 	return vol, nil
 }
 
-func fetchPVCAnnotations(ctx context.Context, pvcName, pvcNamespace string) (map[string]string, error) {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		klog.Errorf("failed to get in-cluster config: %v", err)
-		return nil, fmt.Errorf("could not get in-cluster config: %w", err)
+func (cs *controllerServer) fetchPVCAnnotations(
+	ctx context.Context,
+	pvcName, pvcNamespace string,
+) (map[string]string, error) {
+	if cs.kubeClient == nil {
+		return nil, fmt.Errorf("kubernetes client not configured (no in-cluster config)")
 	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		klog.Errorf("failed to create clientset: %v", err)
-		return nil, fmt.Errorf("could not create clientset: %w", err)
-	}
-
-	pvc, err := clientset.CoreV1().PersistentVolumeClaims(pvcNamespace).Get(ctx, pvcName, metav1.GetOptions{})
+	pvc, err := cs.kubeClient.CoreV1().PersistentVolumeClaims(pvcNamespace).Get(ctx, pvcName, metav1.GetOptions{})
 	if err != nil {
 		klog.Errorf("failed to get PVC %s in namespace %s: %v", pvcName, pvcNamespace, err)
 		return nil, fmt.Errorf("could not get PVC %s in namespace %s: %w", pvcName, pvcNamespace, err)
@@ -1475,14 +1474,13 @@ func fetchPVCAnnotations(ctx context.Context, pvcName, pvcNamespace string) (map
 // removePVCAnnotations deletes the given annotation keys from a PVC via a JSON
 // merge patch: a null value removes the key, and is a no-op when the key is
 // already absent, so this is safe to call on CreateVolume retries.
-func removePVCAnnotations(ctx context.Context, pvcName, pvcNamespace string, keys ...string) error {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		return fmt.Errorf("could not get in-cluster config: %w", err)
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return fmt.Errorf("could not create clientset: %w", err)
+func (cs *controllerServer) removePVCAnnotations(
+	ctx context.Context,
+	pvcName, pvcNamespace string,
+	keys ...string,
+) error {
+	if cs.kubeClient == nil {
+		return fmt.Errorf("kubernetes client not configured (no in-cluster config)")
 	}
 
 	annotations := make(map[string]interface{}, len(keys))
@@ -1496,14 +1494,13 @@ func removePVCAnnotations(ctx context.Context, pvcName, pvcNamespace string, key
 		return fmt.Errorf("marshal annotation patch: %w", err)
 	}
 
-	if _, err := clientset.CoreV1().PersistentVolumeClaims(pvcNamespace).Patch(
+	if _, err := cs.kubeClient.CoreV1().PersistentVolumeClaims(pvcNamespace).Patch(
 		ctx, pvcName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("patch PVC %s/%s: %w", pvcNamespace, pvcName, err)
 	}
 	return nil
 }
 
-// pvcAnnotation returns the value for newKey, falling back to deprecatedKey for backward compat.
 // pvcAnnotation returns the first non-empty value among keys, in priority order.
 // It lets a value be sourced from a primary annotation with one or more
 // fallbacks (e.g. selected-storage-node, then the legacy host-id forms).
