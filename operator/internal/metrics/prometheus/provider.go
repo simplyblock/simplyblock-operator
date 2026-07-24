@@ -108,6 +108,59 @@ func (p *Provider) GetClustersCurrentLatency(
 	return out, nil
 }
 
+// GetClustersWindowedLatency returns every write-latency sample (at the given percentile)
+// in the [now-window, now] range per node for all given clusters, keyed by
+// [clusterUUID][nodeUUID]. It underpins the rolling-window baseline strategy: the caller
+// reduces each per-node sample slice to a single robust baseline. step should match the
+// cadence at which the probe sidecar publishes samples (LatencyBenchmarkInterval).
+// Clusters or nodes with no samples in the window are omitted. Returns ErrLatencyDataNotReady
+// (wrapped) on client-level connectivity errors.
+func (p *Provider) GetClustersWindowedLatency(
+	ctx context.Context,
+	clusterUUIDs []string,
+	percentile string,
+	window, step time.Duration,
+) (map[string]map[string][]float64, error) {
+	if len(clusterUUIDs) == 0 {
+		return map[string]map[string][]float64{}, nil
+	}
+
+	metric := latencyMetricName(percentile)
+	var query string
+	if len(clusterUUIDs) == 1 {
+		query = fmt.Sprintf(`%s{cluster=%q}`, metric, clusterUUIDs[0])
+	} else {
+		query = fmt.Sprintf(`%s{cluster=~%q}`, metric, strings.Join(clusterUUIDs, "|"))
+	}
+
+	matrix, err := p.queryMatrix(ctx, query, window, step)
+	if err != nil {
+		var apiErr *promv1.Error
+		if errors.As(err, &apiErr) && apiErr.Type == promv1.ErrClient {
+			return nil, fmt.Errorf("%w: %w", ErrLatencyDataNotReady, err)
+		}
+		return nil, err
+	}
+
+	out := make(map[string]map[string][]float64)
+	for _, series := range matrix {
+		clusterUUID := string(series.Metric["cluster"])
+		nodeUUID := string(series.Metric["node"])
+		if clusterUUID == "" || nodeUUID == "" {
+			continue
+		}
+		if out[clusterUUID] == nil {
+			out[clusterUUID] = make(map[string][]float64)
+		}
+		samples := make([]float64, 0, len(series.Values))
+		for _, pair := range series.Values {
+			samples = append(samples, float64(pair.Value))
+		}
+		out[clusterUUID][nodeUUID] = append(out[clusterUUID][nodeUUID], samples...)
+	}
+	return out, nil
+}
+
 // ---------------------------------------------------------------------------
 // Volume IO metrics (Phase 1) — per-volume IOPS + throughput from control plane
 // ---------------------------------------------------------------------------
@@ -207,4 +260,22 @@ func (p *Provider) queryVector(
 		return nil, fmt.Errorf("prometheus query %q: unexpected result type %T", query, val)
 	}
 	return vec, nil
+}
+
+func (p *Provider) queryMatrix(
+	ctx context.Context,
+	query string,
+	window, step time.Duration,
+) (model.Matrix, error) {
+	now := time.Now()
+	r := promv1.Range{Start: now.Add(-window), End: now, Step: step}
+	val, _, err := p.api.QueryRange(ctx, query, r)
+	if err != nil {
+		return nil, fmt.Errorf("prometheus range query %q: %w", query, err)
+	}
+	matrix, ok := val.(model.Matrix)
+	if !ok {
+		return nil, fmt.Errorf("prometheus range query %q: unexpected result type %T", query, val)
+	}
+	return matrix, nil
 }
