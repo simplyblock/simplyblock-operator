@@ -313,7 +313,7 @@ as `accessibility_requirements` on `CreateVolumeRequest`. `spdk-csi`'s
    UUID goes in the **value**, which is read fresh on every request and can
    churn freely (e.g. when a storage node is replaced). This also
    cluster-scopes the key, so a worker hosting storage nodes from two
-   different SimplyBlock clusters can't have one cluster's socket slot
+   different Simplyblock clusters can't have one cluster's socket slot
    collide with another's.
 
 2. **Advertise the new label as a topology segment.** `buildAccessibleTopology`
@@ -431,7 +431,7 @@ PVC created (user)
 └───────────────────────────────┬──────────────────────────────────────────┘
                                  │ HTTP
 ┌───────────────────────────────▼──────────────────────────────────────────┐
-│  SimplyBlock Backend: add_lvol_ha(host_id_or_name=<uuid>)                │
+│  Simplyblock Backend: add_lvol_ha(host_id_or_name=<uuid>)                │
 │  host_node set → _get_next_3_nodes() is NEVER called                    │
 │  _resolve_lvol_subsystem() still enforces max_lvol as a hard backstop   │
 └────────────────────────────────────────────────────────────────────────┘
