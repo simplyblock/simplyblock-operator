@@ -35,6 +35,7 @@ import (
 	"k8s.io/klog"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -466,6 +467,20 @@ func (cs *controllerServer) CreateVolume(
 		}
 	}
 
+	// placement-hint is a one-shot creation-time hint. Now that the volume is fully
+	// created and published on the requested node, clear it so it does not linger
+	// or get mistaken for a hard pin. selected-storage-node (a persistent pin) and
+	// the legacy host-id (owned by pre-existing PVCs) are deliberately left
+	// untouched. Best-effort: a failure to clear the hint must never fail
+	// provisioning (and, since this runs only on the success path, a retried
+	// CreateVolume still sees the hint if publish failed).
+	params := req.GetParameters()
+	if pvcName, pvcNamespace := params[CSIStorageNameKey], params[CSIStorageNamespaceKey]; pvcName != "" && pvcNamespace != "" {
+		if rerr := removePVCAnnotations(ctx, pvcName, pvcNamespace, kube.AnnoPlacementHint); rerr != nil {
+			klog.Warningf("createVolume: could not clear placement-hint on PVC %s/%s: %v", pvcNamespace, pvcName, rerr)
+		}
+	}
+
 	return &csi.CreateVolumeResponse{Volume: csiVolume}, nil
 }
 
@@ -769,7 +784,10 @@ func prepareCreateVolumeReq(
 		}
 	}
 
-	hostID := pvcAnnotation(pvcAnns, kube.AnnoHostID, kube.DeprecatedAnnoHostID)
+	// host_id priority: selected-storage-node (hard pin) → placement-hint (one-shot
+	// hint from the placement webhook) → host-id and its deprecated form (legacy
+	// fallback for pre-existing PVCs).
+	hostID := pvcAnnotation(pvcAnns, kube.AnnoSelectedStorageNode, kube.AnnoPlacementHint, kube.AnnoHostID, kube.DeprecatedAnnoHostID)
 	lvolID := pvcAnnotation(pvcAnns, annotationLvolID, deprecatedAnnotationLvolID)
 	podAffinitive, _ := strconv.ParseBool(pvcAnns[annotationPodAffinity])
 
@@ -1452,10 +1470,46 @@ func fetchPVCAnnotations(ctx context.Context, pvcName, pvcNamespace string) (map
 	return pvc.Annotations, nil
 }
 
-// pvcAnnotation returns the value for newKey, falling back to deprecatedKey for backward compat.
-func pvcAnnotation(annotations map[string]string, newKey, deprecatedKey string) string {
-	if v, ok := annotations[newKey]; ok {
-		return v
+// removePVCAnnotations deletes the given annotation keys from a PVC via a JSON
+// merge patch: a null value removes the key, and is a no-op when the key is
+// already absent, so this is safe to call on CreateVolume retries.
+func removePVCAnnotations(ctx context.Context, pvcName, pvcNamespace string, keys ...string) error {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return fmt.Errorf("could not get in-cluster config: %w", err)
 	}
-	return annotations[deprecatedKey]
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("could not create clientset: %w", err)
+	}
+
+	annotations := make(map[string]interface{}, len(keys))
+	for _, k := range keys {
+		annotations[k] = nil
+	}
+	patch, err := json.Marshal(map[string]interface{}{
+		"metadata": map[string]interface{}{"annotations": annotations},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal annotation patch: %w", err)
+	}
+
+	if _, err := clientset.CoreV1().PersistentVolumeClaims(pvcNamespace).Patch(
+		ctx, pvcName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("patch PVC %s/%s: %w", pvcNamespace, pvcName, err)
+	}
+	return nil
+}
+
+// pvcAnnotation returns the value for newKey, falling back to deprecatedKey for backward compat.
+// pvcAnnotation returns the first non-empty value among keys, in priority order.
+// It lets a value be sourced from a primary annotation with one or more
+// fallbacks (e.g. selected-storage-node, then the legacy host-id forms).
+func pvcAnnotation(annotations map[string]string, keys ...string) string {
+	for _, k := range keys {
+		if v := annotations[k]; v != "" {
+			return v
+		}
+	}
+	return ""
 }

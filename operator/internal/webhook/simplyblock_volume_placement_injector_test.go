@@ -165,16 +165,9 @@ func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) 
 		cluster *simplyblockv1alpha1.StorageCluster
 	}{
 		{
-			name: "host-id annotation already set — skipped",
+			name: "selected-storage-node already set — skipped",
 			pvc: makePlacementPVC(strRef(placementStorageClassName),
-				map[string]string{kube.AnnoHostID: "some-node"}),
-			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
-			cluster: makePlacementCluster(enabledRebalancing),
-		},
-		{
-			name: "deprecated host-id annotation already set — skipped",
-			pvc: makePlacementPVC(strRef(placementStorageClassName),
-				map[string]string{kube.DeprecatedAnnoHostID: "some-node"}),
+				map[string]string{kube.AnnoSelectedStorageNode: "some-node"}),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
 			cluster: makePlacementCluster(enabledRebalancing),
 		},
@@ -255,6 +248,66 @@ func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) 
 	}
 }
 
+// ── Handle: legacy host-id is exchanged for selected-storage-node ──
+
+func TestSimplyblockVolumePlacementInjector_Handle_ExchangesHostID(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		anno string
+	}{
+		{"host-id", kube.AnnoHostID},
+		{"deprecated host-id", kube.DeprecatedAnnoHostID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The exchange short-circuits before any cluster/StorageClass lookup, so
+			// no client is needed.
+			pvc := makePlacementPVC(nil, map[string]string{tc.anno: "pinned-node"})
+			h := &SimplyblockVolumePlacementInjector{}
+
+			resp := h.Handle(context.Background(), pvcAdmissionRequest(t, pvc))
+			if !resp.Allowed {
+				t.Fatalf("Allowed = false, want true")
+			}
+			if len(resp.Patches) == 0 {
+				t.Fatalf("expected an exchange patch, got none")
+			}
+
+			patched := applyPVCPatches(t, pvc, resp.Patches)
+			if got := patched.Annotations[kube.AnnoSelectedStorageNode]; got != "pinned-node" {
+				t.Errorf("selected-storage-node = %q, want pinned-node", got)
+			}
+			if _, ok := patched.Annotations[kube.AnnoHostID]; ok {
+				t.Error("host-id should have been removed")
+			}
+			if _, ok := patched.Annotations[kube.DeprecatedAnnoHostID]; ok {
+				t.Error("deprecated host-id should have been removed")
+			}
+		})
+	}
+}
+
+// An existing selected-storage-node pin is not overwritten by a stray host-id;
+// the host-id is still dropped.
+func TestSimplyblockVolumePlacementInjector_Handle_ExchangeKeepsExistingPin(t *testing.T) {
+	pvc := makePlacementPVC(nil, map[string]string{
+		kube.AnnoHostID:              "from-host-id",
+		kube.AnnoSelectedStorageNode: "already-pinned",
+	})
+	h := &SimplyblockVolumePlacementInjector{}
+
+	resp := h.Handle(context.Background(), pvcAdmissionRequest(t, pvc))
+	if !resp.Allowed {
+		t.Fatalf("Allowed = false, want true")
+	}
+	patched := applyPVCPatches(t, pvc, resp.Patches)
+	if got := patched.Annotations[kube.AnnoSelectedStorageNode]; got != "already-pinned" {
+		t.Errorf("selected-storage-node = %q, want already-pinned (must not be clobbered)", got)
+	}
+	if _, ok := patched.Annotations[kube.AnnoHostID]; ok {
+		t.Error("host-id should have been removed")
+	}
+}
+
 // ── Handle: full selection path — eligibility filtering + coolest-node ranking ──
 
 func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t *testing.T) {
@@ -323,8 +376,8 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 	}
 
 	patched := applyPVCPatches(t, pvc, resp.Patches)
-	if got := patched.Annotations[kube.AnnoHostID]; got != "cool" {
-		t.Errorf("host-id = %q, want %q", got, "cool")
+	if got := patched.Annotations[kube.AnnoPlacementHint]; got != "cool" {
+		t.Errorf("placement-hint = %q, want %q", got, "cool")
 	}
 }
 
