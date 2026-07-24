@@ -139,7 +139,7 @@ func TestSanity(t *testing.T) {
 	})
 
 	ids := newIdentityServer(cd)
-	cs, err := newControllerServer(cd)
+	cs, err := newControllerServer(cd, nil)
 	if err != nil {
 		t.Fatalf("newControllerServer: %v", err)
 	}
