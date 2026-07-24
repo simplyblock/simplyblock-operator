@@ -15,6 +15,29 @@ func IsManaged(pv *corev1.PersistentVolume) bool {
 	return pv != nil && pv.Spec.CSI != nil && pv.Spec.CSI.Driver == DriverName
 }
 
+// PinnedNode returns the storage node a volume is pinned to, or "" if it is not
+// pinned. The canonical AnnoSelectedStorageNode wins; for backward compatibility
+// with PVCs created before it existed, the legacy AnnoHostID / DeprecatedAnnoHostID
+// (whose original meaning was a hard placement) are honored as fallbacks. The
+// one-shot AnnoPlacementHint is deliberately NOT a pin: hinted volumes stay
+// eligible for rebalancing.
+func PinnedNode(annotations map[string]string) string {
+	if v := annotations[AnnoSelectedStorageNode]; v != "" {
+		return v
+	}
+	if v := annotations[AnnoHostID]; v != "" {
+		return v
+	}
+	return annotations[DeprecatedAnnoHostID]
+}
+
+// IsPinnedVolume reports whether the given (PVC) annotations pin a volume to a
+// specific storage node — i.e. it must not be moved by auto-rebalancing and
+// blocks a node drain. See PinnedNode for which annotations count.
+func IsPinnedVolume(annotations map[string]string) bool {
+	return PinnedNode(annotations) != ""
+}
+
 // VolumeHandleFromPV extracts the simplyblock logical-volume handle from a
 // PV. It returns errs.ErrUnsupported if the PV is not a CSI volume owned by
 // this driver.

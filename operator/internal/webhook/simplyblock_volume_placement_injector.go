@@ -66,9 +66,35 @@ func (h *SimplyblockVolumePlacementInjector) Handle(
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
-	if pvc.Annotations[kube.AnnoHostID] != "" || pvc.Annotations[kube.DeprecatedAnnoHostID] != "" {
-		log.V(1).Info("Skipping: host-id already set")
-		return admission.Allowed("host-id already set")
+	// A user-supplied host-id is an explicit manual pin. Normalize it to the
+	// canonical selected-storage-node annotation — which the operator's pin
+	// controller, drain, and rebalancer recognize, and which the CSI driver reads
+	// as the primary host_id source at CreateVolume — and drop the legacy host-id
+	// forms. The user's choice wins, so we do not run load-based placement.
+	hostID := pvc.Annotations[kube.AnnoHostID]
+	if hostID == "" {
+		hostID = pvc.Annotations[kube.DeprecatedAnnoHostID]
+	}
+	if hostID != "" {
+		patched := pvc.DeepCopy()
+		if patched.Annotations == nil {
+			patched.Annotations = make(map[string]string)
+		}
+		// Do not clobber an existing explicit selected-storage-node pin.
+		if patched.Annotations[kube.AnnoSelectedStorageNode] == "" {
+			patched.Annotations[kube.AnnoSelectedStorageNode] = hostID
+		}
+		delete(patched.Annotations, kube.AnnoHostID)
+		delete(patched.Annotations, kube.DeprecatedAnnoHostID)
+		log.Info("Exchanged legacy host-id for selected-storage-node", "node", hostID)
+		return patchResponse(pvc, patched)
+	}
+
+	// An explicit selected-storage-node pin is honored as-is; never override it
+	// with a load-based pick.
+	if pvc.Annotations[kube.AnnoSelectedStorageNode] != "" {
+		log.V(1).Info("Skipping: selected-storage-node already set")
+		return admission.Allowed("selected-storage-node already set")
 	}
 
 	clusterUUID, ok := h.resolveClusterID(ctx, pvc, log)
@@ -81,13 +107,24 @@ func (h *SimplyblockVolumePlacementInjector) Handle(
 		return admission.Allowed("no load-based placement decision available")
 	}
 
+	// Load-based initial placement is a rebalanceable hint, not a pin, so it is
+	// written as the dedicated placement-hint annotation (which the CSI driver
+	// consumes at CreateVolume and then clears) rather than selected-storage-node
+	// (a permanent pin that would exclude the volume from rebalancing) or the
+	// legacy host-id (reserved for backward compatibility with pre-existing PVCs).
 	patched := pvc.DeepCopy()
 	if patched.Annotations == nil {
 		patched.Annotations = make(map[string]string)
 	}
-	patched.Annotations[kube.AnnoHostID] = nodeUUID
+	patched.Annotations[kube.AnnoPlacementHint] = nodeUUID
+	log.Info("Selected primary node for new volume", "nodeUUID", nodeUUID, "clusterUUID", clusterUUID)
+	return patchResponse(pvc, patched)
+}
 
-	original, err := json.Marshal(pvc)
+// patchResponse builds a JSON-patch admission response mutating original into
+// patched, or an errored response if either fails to marshal.
+func patchResponse(original, patched *corev1.PersistentVolumeClaim) admission.Response {
+	originalRaw, err := json.Marshal(original)
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
@@ -95,8 +132,7 @@ func (h *SimplyblockVolumePlacementInjector) Handle(
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
-	log.Info("Selected primary node for new volume", "nodeUUID", nodeUUID, "clusterUUID", clusterUUID)
-	return admission.PatchResponseFromRaw(original, patchedRaw)
+	return admission.PatchResponseFromRaw(originalRaw, patchedRaw)
 }
 
 // resolveClusterID resolves the PVC's StorageClass to a simplyblock cluster UUID. ok=false

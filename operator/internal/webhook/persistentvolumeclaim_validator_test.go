@@ -14,6 +14,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/simplyblock/atlas/kube"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -48,7 +50,7 @@ func pvcRaw(t *testing.T, pinned string, bound bool) runtime.RawExtension {
 	t.Helper()
 	ann := map[string]string{}
 	if pinned != "" {
-		ann[simplyblockv1alpha1.AnnotationSelectedStorageNode] = pinned
+		ann[kube.AnnoSelectedStorageNode] = pinned
 	}
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: "data-pvc", Namespace: "sb", Annotations: ann},
