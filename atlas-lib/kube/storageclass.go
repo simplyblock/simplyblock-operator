@@ -169,5 +169,9 @@ func ResolvePropertiesForPV(ctx context.Context, r Resolver, pv *corev1.Persiste
 	if err != nil {
 		return Properties{}, fmt.Errorf("pv %q: storage class %q: %w", pvName(pv), name, err)
 	}
-	return PropertiesFromStorageClass(sc)
+	props, err := PropertiesFromStorageClass(sc)
+	if err != nil {
+		return Properties{}, fmt.Errorf("pv %q: storage class %q: %w", pvName(pv), name, err)
+	}
+	return props, nil
 }
