@@ -76,6 +76,14 @@ func BoolFromOrFalse(ptr *bool) bool {
 	return *ptr
 }
 
+// BoolFromOrTrue returns the value ptr points to, or true when ptr is nil.
+func BoolFromOrTrue(ptr *bool) bool {
+	if ptr == nil {
+		return true
+	}
+	return *ptr
+}
+
 // StringOrDefault renders val as a string, returning def when val is nil or a
 // nil pointer. It accepts either a value or a pointer to one, so optional
 // fields (which are pointers) and plain values can be formatted the same way.

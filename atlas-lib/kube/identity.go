@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/simplyblock/atlas/errs"
@@ -43,29 +42,6 @@ func ClaimRefFromPV(pv *corev1.PersistentVolume) (types.NamespacedName, bool) {
 	}
 	ref := pv.Spec.ClaimRef
 	return types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, true
-}
-
-// Params are the provisioning parameters parsed from a StorageClass.
-type Params struct {
-	Pool       string
-	QoS        string
-	Replicas   string
-	Encryption string
-}
-
-// ParamsFromStorageClass reads the atlas-recognized parameters from sc.
-// It returns errs.ErrUnsupported if sc is not provisioned by this driver.
-func ParamsFromStorageClass(sc *storagev1.StorageClass) (Params, error) {
-	if sc == nil || sc.Provisioner != DriverName {
-		return Params{}, fmt.Errorf("storageclass: %w", errs.ErrUnsupported)
-	}
-	p := sc.Parameters
-	return Params{
-		Pool:       p[ParamPool],
-		QoS:        p[ParamQoS],
-		Replicas:   p[ParamReplicas],
-		Encryption: p[ParamEncryption],
-	}, nil
 }
 
 func pvName(pv *corev1.PersistentVolume) string {
