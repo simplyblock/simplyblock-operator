@@ -2,7 +2,7 @@ name: "CSI: Docker Base Image"
 
 on:
   schedule:
-    - cron: '0 5 * * SUN'  # Sundays at 5am
+    - cron: '0 5 * * *'  # Daily at 5am
   workflow_dispatch:
 
 jobs:
@@ -45,9 +45,9 @@ jobs:
         docker buildx ls
         docker buildx create --name mybuilder --bootstrap --use
         docker buildx build --platform linux/amd64,linux/arm64 \
-        -t simplyblock/spdkcsi:base_image_e2fsprogs \
-        -t public.ecr.aws/simply-block/spdkcsi:base_image_e2fsprogs \
+        -t simplyblock/spdkcsi:base_image \
+        -t public.ecr.aws/simply-block/spdkcsi:base_image \
         -f deploy/image/Dockerfile_base .. --push
-        echo "::notice title=Docker.com::simplyblock/spdkcsi:base_image_e2fsprogs
-        echo "::notice title=AWS-ECR::public.ecr.aws/simply-block/spdkcsi:base_image_e2fsprogs
+        echo "::notice title=Docker.com::simplyblock/spdkcsi:base_image
+        echo "::notice title=AWS-ECR::public.ecr.aws/simply-block/spdkcsi:base_image
         
