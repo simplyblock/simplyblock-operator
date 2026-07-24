@@ -111,16 +111,9 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	// delay until the next realignment check (0 when realignment is disabled).
 	realignRequeue := r.reconcileDataRealignment(ctx, clusterCR, realignClusterUUID)
 
-	spec := ptr.From(clusterCR.Spec.AutoRebalancing, simplyblockv1alpha1.VolumeRebalancingSettings{})
-	if !ptr.BoolFromOrTrue(spec.Enabled) {
-		return ctrl.Result{}, nil
-	}
-	if clusterCR.Status.UUID == "" {
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
-
 	// Auto-rebalancing is opt-in: run only when explicitly enabled (Enabled=true).
 	// An unset flag means off, so realignment still gets its requeue.
+	spec := ptr.From(clusterCR.Spec.AutoRebalancing, simplyblockv1alpha1.VolumeRebalancingSettings{})
 	if !ptr.BoolFromOrFalse(spec.Enabled) {
 		return ctrl.Result{RequeueAfter: realignRequeue}, nil
 	}
