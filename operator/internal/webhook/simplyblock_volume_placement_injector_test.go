@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	jsonpatchapply "github.com/evanphx/json-patch/v5"
+	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	jsonpatch "gomodules.xyz/jsonpatch/v2"
 	admissionv1 "k8s.io/api/admission/v1"
@@ -153,9 +154,11 @@ func fakePrometheusServer(t *testing.T, samples []promSample) *httptest.Server {
 // ── Handle: skip conditions (all resolvable without any network call) ───────────
 
 func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) {
+	// Auto-placement is gated on LatencyBenchmarkEnabled (its real dependency),
+	// independent of the rebalancing Enabled flag.
 	enabledRebalancing := &simplyblockv1alpha1.VolumeAutoPlacementSettings{
-		Enabled:       boolRef(true),
-		PrometheusURL: strRef("http://unused:9090"),
+		LatencyBenchmarkEnabled: ptr.To(true),
+		PrometheusURL:           ptr.To("http://unused:9090"),
 	}
 
 	cases := []struct {
@@ -166,7 +169,7 @@ func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) 
 	}{
 		{
 			name: "selected-storage-node already set — skipped",
-			pvc: makePlacementPVC(strRef(placementStorageClassName),
+			pvc: makePlacementPVC(ptr.To(placementStorageClassName),
 				map[string]string{kube.AnnoSelectedStorageNode: "some-node"}),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
 			cluster: makePlacementCluster(enabledRebalancing),
@@ -179,45 +182,53 @@ func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) 
 		},
 		{
 			name:    "StorageClass not found — skipped",
-			pvc:     makePlacementPVC(strRef("does-not-exist"), nil),
+			pvc:     makePlacementPVC(ptr.To("does-not-exist"), nil),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
 			cluster: makePlacementCluster(enabledRebalancing),
 		},
 		{
 			name:    "StorageClass not simplyblock-provisioned — skipped",
-			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
+			pvc:     makePlacementPVC(ptr.To(placementStorageClassName), nil),
 			sc:      makePlacementStorageClass("some-other-provisioner", map[string]string{"cluster_id": testClusterUUID}),
 			cluster: makePlacementCluster(enabledRebalancing),
 		},
 		{
 			name:    "StorageClass missing cluster_id param — skipped",
-			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
+			pvc:     makePlacementPVC(ptr.To(placementStorageClassName), nil),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"pool_name": "pool1"}),
 			cluster: makePlacementCluster(enabledRebalancing),
 		},
 		{
 			name:    "no matching StorageCluster — skipped",
-			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
+			pvc:     makePlacementPVC(ptr.To(placementStorageClassName), nil),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": "00000000-0000-0000-0000-000000000000"}),
 			cluster: makePlacementCluster(enabledRebalancing),
 		},
 		{
 			name:    "VolumeMigrationSettings not configured — skipped",
-			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
+			pvc:     makePlacementPVC(ptr.To(placementStorageClassName), nil),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
 			cluster: makePlacementCluster(nil),
 		},
 		{
-			name:    "AutoRebalancing disabled — skipped",
-			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
-			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
-			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{Enabled: boolRef(false)}),
+			// Rebalancing enabled but latency benchmarking off → auto-placement is
+			// skipped, proving placement is gated on latency measurement, not on the
+			// rebalancing Enabled flag.
+			name: "latency benchmarking disabled — skipped",
+			pvc:  makePlacementPVC(ptr.To(placementStorageClassName), nil),
+			sc:   makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
+			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
+				Enabled:                 ptr.To(true),
+				LatencyBenchmarkEnabled: ptr.To(false),
+			}),
 		},
 		{
-			name:    "invalid rebalancing config (missing prometheusURL) — skipped",
-			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
-			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
-			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{Enabled: boolRef(true)}),
+			name: "invalid config (missing prometheusURL) — skipped",
+			pvc:  makePlacementPVC(ptr.To(placementStorageClassName), nil),
+			sc:   makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
+			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
+				LatencyBenchmarkEnabled: ptr.To(true),
+			}),
 		},
 	}
 
@@ -330,11 +341,11 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 	})
 
 	cluster := makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
-		Enabled:       boolRef(true),
-		PrometheusURL: strRef(promSrv.URL),
+		LatencyBenchmarkEnabled: ptr.To(true),
+		PrometheusURL:           ptr.To(promSrv.URL),
 	})
 	sc := makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID})
-	pvc := makePlacementPVC(strRef(placementStorageClassName), nil)
+	pvc := makePlacementPVC(ptr.To(placementStorageClassName), nil)
 
 	baseline := func(uuid string) simplyblockv1alpha1.NodeLatencyMetrics {
 		return simplyblockv1alpha1.NodeLatencyMetrics{NodeUUID: uuid, BaselineP50NS: baselineNS}
@@ -391,11 +402,11 @@ func TestSimplyblockVolumePlacementInjector_Handle_NoEligibleNode(t *testing.T) 
 	})
 
 	cluster := makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
-		Enabled:       boolRef(true),
-		PrometheusURL: strRef(promSrv.URL),
+		LatencyBenchmarkEnabled: ptr.To(true),
+		PrometheusURL:           ptr.To(promSrv.URL),
 	})
 	sc := makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID})
-	pvc := makePlacementPVC(strRef(placementStorageClassName), nil)
+	pvc := makePlacementPVC(ptr.To(placementStorageClassName), nil)
 
 	scheme := newScheme(t)
 	c := fake.NewClientBuilder().
