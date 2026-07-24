@@ -219,21 +219,29 @@ func TestCoLocatedHostID(t *testing.T) {
 		}
 	})
 
-	t.Run("multiple sockets on one worker: lowest ordinal wins", func(t *testing.T) {
+	t.Run("multiple sockets on one worker: resolves to one of the co-located candidates", func(t *testing.T) {
 		const socket0UUID = "11111111-1111-1111-1111-111111111111"
 		const socket1UUID = "22222222-2222-2222-2222-222222222222"
+		valid := map[string]bool{socket0UUID: true, socket1UUID: true}
 		req := &csi.TopologyRequirement{
 			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
 				topologyKeyStorageNodeUUIDPrefix + clusterID + ".1": socket1UUID,
 				topologyKeyStorageNodeUUIDPrefix + clusterID + ".0": socket0UUID,
 			})},
 		}
-		// Run repeatedly — the original prototype picked via unordered map
-		// iteration, so a flaky result here would indicate a regression.
-		for i := 0; i < 20; i++ {
-			if got := coLocatedHostID(req, clusterID); got != socket0UUID {
-				t.Fatalf("got %q, want %q (lowest ordinal)", got, socket0UUID)
+		// Run repeatedly to also confirm it isn't always the same candidate —
+		// the tie-break spreads placement across every co-located instance
+		// instead of concentrating on one.
+		seen := map[string]bool{}
+		for i := 0; i < 100; i++ {
+			got := coLocatedHostID(req, clusterID)
+			if !valid[got] {
+				t.Fatalf("got %q, want one of %v", got, valid)
 			}
+			seen[got] = true
+		}
+		if len(seen) != 2 {
+			t.Fatalf("expected both candidates to be picked across trials, only saw %v", seen)
 		}
 	})
 
