@@ -13,6 +13,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/simplyblock/atlas/kube"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -40,7 +42,7 @@ func (v *PersistentVolumeClaimValidator) Handle(ctx context.Context, req admissi
 	if err := json.Unmarshal(req.Object.Raw, pvc); err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}
-	desired := pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNode]
+	desired := pvc.Annotations[kube.AnnoSelectedStorageNode]
 
 	// Clearing/omitting the annotation (unpin) is always allowed.
 	if desired == "" {
@@ -55,7 +57,7 @@ func (v *PersistentVolumeClaimValidator) Handle(ctx context.Context, req admissi
 		if err := json.Unmarshal(req.OldObject.Raw, oldPVC); err != nil {
 			return admission.Errored(http.StatusBadRequest, err)
 		}
-		if oldPVC.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNode] == desired {
+		if oldPVC.Annotations[kube.AnnoSelectedStorageNode] == desired {
 			return admission.Allowed("pinned-volume annotation unchanged")
 		}
 	}

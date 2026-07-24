@@ -22,6 +22,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
+	"github.com/simplyblock/atlas/kube"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -76,8 +78,12 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	desired := pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNode]
-	applied := pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeApplied]
+	// desired is the pin target, honoring the canonical selected-storage-node and,
+	// for pre-existing PVCs, the legacy host-id annotations (see kube.PinnedNode).
+	// setApplied normalizes those legacy annotations into selected-storage-node
+	// when it records the applied target, so the annotation state converges.
+	desired := kube.PinnedNode(pvc.Annotations)
+	applied := pvc.Annotations[kube.AnnoSelectedStorageNodeApplied]
 
 	// Strict change-diff gate: nothing to do unless the pinned target changed.
 	if desired == applied {
@@ -251,7 +257,7 @@ func (r *PersistentVolumeClaimReconciler) rejectTarget(
 	pvc *corev1.PersistentVolumeClaim,
 	target string,
 ) (ctrl.Result, error) {
-	if pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeRejected] == target {
+	if pvc.Annotations[kube.AnnoSelectedStorageNodeRejected] == target {
 		return ctrl.Result{}, nil
 	}
 	r.Recorder.Eventf(pvc, nil, corev1.EventTypeWarning, "InvalidPinTarget", "InvalidPinTarget",
@@ -260,7 +266,7 @@ func (r *PersistentVolumeClaimReconciler) rejectTarget(
 	if pvc.Annotations == nil {
 		pvc.Annotations = map[string]string{}
 	}
-	pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeRejected] = target
+	pvc.Annotations[kube.AnnoSelectedStorageNodeRejected] = target
 	if err := r.Patch(ctx, pvc, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("record rejected pin target: %w", err)
 	}
@@ -279,11 +285,18 @@ func (r *PersistentVolumeClaimReconciler) setApplied(
 		pvc.Annotations = map[string]string{}
 	}
 	if value == "" {
-		delete(pvc.Annotations, simplyblockv1alpha1.AnnotationSelectedStorageNodeApplied)
+		delete(pvc.Annotations, kube.AnnoSelectedStorageNodeApplied)
 	} else {
-		pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeApplied] = value
+		pvc.Annotations[kube.AnnoSelectedStorageNodeApplied] = value
+		// Normalize legacy pin annotations into the canonical one so the state
+		// converges: a pre-existing host-id pin (which drove this reconcile via
+		// kube.PinnedNode) is rewritten to selected-storage-node and the legacy
+		// forms are dropped.
+		pvc.Annotations[kube.AnnoSelectedStorageNode] = value
+		delete(pvc.Annotations, kube.AnnoHostID)
+		delete(pvc.Annotations, kube.DeprecatedAnnoHostID)
 	}
-	delete(pvc.Annotations, simplyblockv1alpha1.AnnotationSelectedStorageNodeRejected)
+	delete(pvc.Annotations, kube.AnnoSelectedStorageNodeRejected)
 	if err := r.Patch(ctx, pvc, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("record applied pin target: %w", err)
 	}
@@ -347,11 +360,14 @@ func pinPVLabelValue(pvName string) string {
 // woken by unrelated PVC edits (including its own applied/rejected writes).
 var pinnedVolumeChanged = predicate.Funcs{
 	CreateFunc: func(e event.CreateEvent) bool {
-		return e.Object.GetAnnotations()[simplyblockv1alpha1.AnnotationSelectedStorageNode] != ""
+		return kube.IsPinnedVolume(e.Object.GetAnnotations())
 	},
 	UpdateFunc: func(e event.UpdateEvent) bool {
-		return e.ObjectOld.GetAnnotations()[simplyblockv1alpha1.AnnotationSelectedStorageNode] !=
-			e.ObjectNew.GetAnnotations()[simplyblockv1alpha1.AnnotationSelectedStorageNode]
+		// Compare the effective pin target (canonical or legacy) so pre-existing
+		// host-id PVCs wake the controller, while its own normalization writes —
+		// which keep the pin target unchanged — do not.
+		return kube.PinnedNode(e.ObjectOld.GetAnnotations()) !=
+			kube.PinnedNode(e.ObjectNew.GetAnnotations())
 	},
 	DeleteFunc:  func(event.DeleteEvent) bool { return false },
 	GenericFunc: func(event.GenericEvent) bool { return false },

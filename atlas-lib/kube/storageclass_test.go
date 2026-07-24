@@ -100,6 +100,28 @@ func TestPropertiesFromStorageClass_MalformedInt(t *testing.T) {
 	}
 }
 
+func TestIsPinnedVolume(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		anns map[string]string
+		want bool
+	}{
+		{"nil", nil, false},
+		{"empty", map[string]string{}, false},
+		{"selected-storage-node", map[string]string{AnnoSelectedStorageNode: "n1"}, true},
+		{"host-id", map[string]string{AnnoHostID: "n1"}, true},
+		{"deprecated host-id", map[string]string{DeprecatedAnnoHostID: "n1"}, true},
+		{"placement-hint only is NOT a pin", map[string]string{AnnoPlacementHint: "n1"}, false},
+		{"empty values are not pins", map[string]string{AnnoSelectedStorageNode: "", AnnoHostID: ""}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsPinnedVolume(tc.anns); got != tc.want {
+				t.Errorf("IsPinnedVolume(%v) = %v, want %v", tc.anns, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestStorageClassNameFromPV(t *testing.T) {
 	pv := &corev1.PersistentVolume{Spec: corev1.PersistentVolumeSpec{StorageClassName: "sc-a"}}
 	if name, ok := StorageClassNameFromPV(pv); !ok || name != "sc-a" {
