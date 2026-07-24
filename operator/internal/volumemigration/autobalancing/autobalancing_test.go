@@ -158,6 +158,17 @@ func TestFilterEligibleVolumes_Pinned(t *testing.T) {
 	}
 }
 
+func TestFilterEligibleVolumes_Namespaced(t *testing.T) {
+	lvs := &LogicalVolumeSelector{}
+	got := lvs.FilterEligibleVolumes(
+		LogicalVolumeSelectorInput{Namespaced: map[string]bool{"v1": true}},
+		[]VolumePlacement{makeVP("v1", "n1", "p1", "online", false, 0), makeVP("v2", "n1", "p1", "online", false, 0)},
+	)
+	if len(got) != 1 || got[0].UUID != "v2" {
+		t.Errorf("expected only v2 (v1 is multi-namespace), got %v", got)
+	}
+}
+
 func TestFilterEligibleVolumes_CoolingDown(t *testing.T) {
 	lvs := &LogicalVolumeSelector{}
 	got := lvs.FilterEligibleVolumes(

@@ -101,10 +101,16 @@ func (rb *Rebalancer) SelectMigrations(
 			return nil, false, fmt.Errorf("cluster %s: build pinned set: %w", clusterUUID, err)
 		}
 
+		namespaced, err := rb.volumeSelector.BuildNamespacedSet(ctx, clusterUUID)
+		if err != nil {
+			return nil, false, fmt.Errorf("cluster %s: build namespaced set: %w", clusterUUID, err)
+		}
+
 		lvInput := LogicalVolumeSelectorInput{
 			ClusterUUID:   clusterUUID,
 			PrometheusURL: cfg.PrometheusURL,
 			Pinned:        pinned,
+			Namespaced:    namespaced,
 		}
 		if isCoolingDown != nil {
 			// Force capture clusterUUID for the closure.

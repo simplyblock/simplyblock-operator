@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
@@ -13,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -75,11 +77,11 @@ type VolumeRebalancerReconciler struct {
 	rebalancer     *autobalancing.Rebalancer
 }
 
-func (r *VolumeRebalancerReconciler) init() {
+func (r *VolumeRebalancerReconciler) init(scResolver atlaskube.Resolver) {
 	r.migrationState = volumemigration.NewMigrationState()
 	r.rebalancer = autobalancing.NewRebalancer(
 		autobalancing.NewStorageNodeSelector(r.Client),
-		autobalancing.NewLogicalVolumeSelector(r.apiClient, r.Client),
+		autobalancing.NewLogicalVolumeSelector(r.apiClient, r.Client, scResolver),
 	)
 }
 
@@ -91,6 +93,7 @@ func (r *VolumeRebalancerReconciler) init() {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get
 
 func (r *VolumeRebalancerReconciler) Reconcile(
 	ctx context.Context,
@@ -528,10 +531,20 @@ func (r *VolumeRebalancerReconciler) SetupWithManager(
 	mgr ctrl.Manager,
 ) error {
 	r.apiClient = webapi.NewClient()
+
+	// A client-go clientset backs the kube.LiveResolver used to read the
+	// StorageClass of each candidate volume (see BuildNamespacedSet). StorageClass
+	// reads are rare and off the hot path, so direct API reads are preferable to
+	// making the manager cache watch every StorageClass in the cluster.
+	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		return fmt.Errorf("build clientset for StorageClass resolver: %w", err)
+	}
+
 	// Initialize in-memory migration state and the rebalancer once, here.
 	// Re-initializing in Reconcile would wipe coolDownMap/pendingMigrations,
 	// defeating cool-down and pending-migration tracking.
-	r.init()
+	r.init(atlaskube.NewLiveResolver(clientset))
 
 	// Index PersistentVolumes by CSI driver so BuildCSIManagedSet can filter to
 	// simplyblock CSI volumes through the cache instead of listing every PV.
