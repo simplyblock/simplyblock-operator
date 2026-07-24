@@ -114,7 +114,7 @@ const (
 // VolumeAutoPlacementSettings controls the automatic, latency-driven volume rebalancing
 // behaviour. It is configured under StorageClusterSpec.VolumeAutoPlacement.
 type VolumeAutoPlacementSettings struct {
-	// Enabled activates automatic rebalancing for this cluster. Defaults to true.
+	// Enabled activates automatic rebalancing for this cluster. Defaults to false.
 	// +optional
 	Enabled *bool `json:"enabled,omitempty"`
 	// MigrationEnabled controls whether the rebalancer actually creates VolumeMigration

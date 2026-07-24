@@ -187,9 +187,14 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 		return "", false
 	}
 
+	// Auto-placement is independent of auto-rebalancing (spec.Enabled): a cluster
+	// may want load-aware initial placement without ongoing migrations, or vice
+	// versa. What placement does require is latency measurement — it ranks nodes by
+	// the same latency-deviation signal — so it is gated on LatencyBenchmarkEnabled
+	// (opt-in, default false), not on the rebalancing Enabled flag.
 	spec := ptr.From(cr.Spec.VolumeAutoPlacement, simplyblockv1alpha1.VolumeAutoPlacementSettings{})
-	if !ptr.BoolFromOrTrue(spec.Enabled) {
-		log.V(1).Info("Skipping: auto-rebalancing disabled", "cluster", cr.Name)
+	if !ptr.BoolFromOrFalse(spec.LatencyBenchmarkEnabled) {
+		log.V(1).Info("Skipping: latency benchmarking not enabled (auto-placement requires it)", "cluster", cr.Name)
 		return "", false
 	}
 
