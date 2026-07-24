@@ -30,6 +30,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/simplyblock/atlas/kube"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -182,7 +184,7 @@ func matchVolumesToPVs(
 			continue
 		}
 
-		if _, isPinned := pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolume]; isPinned {
+		if kube.IsPinnedVolume(pvc.Annotations) {
 			pinned = append(pinned, vol.UUID)
 			pvNameByVolumeUUID[vol.UUID] = pv.Name
 		} else {

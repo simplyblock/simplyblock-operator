@@ -5,14 +5,16 @@ import (
 	"fmt"
 	"time"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
-	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -31,6 +33,14 @@ const (
 	rebalancerLabel = "storage.simplyblock.io/rebalancer"
 	// rebalancerClusterLabel records the owning StorageCluster name.
 	rebalancerClusterLabel = "storage.simplyblock.io/cluster"
+
+	// defaultDataRealignmentInterval is the spacing between control-plane data
+	// realignments when DataRealignment.Interval is unset.
+	defaultDataRealignmentInterval = 10 * time.Minute
+
+	// realignmentRetryDelay is how soon to retry after a failed realignment call,
+	// rather than waiting a full interval.
+	realignmentRetryDelay = 30 * time.Second
 )
 
 // rebalanceMigrationName is the deterministic VolumeMigration CR name for a volume.
@@ -56,18 +66,18 @@ type VolumeRebalancerReconciler struct {
 	LatencyPercentile string
 
 	migrationState *volumemigration.MigrationState
-	rebalancer     *autobalancing.Rebalancer
+	rebalancer     *autoplacement.Rebalancer
 }
 
-func (r *VolumeRebalancerReconciler) init() {
+func (r *VolumeRebalancerReconciler) init(scResolver atlaskube.Resolver) {
 	r.migrationState = volumemigration.NewMigrationState()
-	r.rebalancer = autobalancing.NewRebalancer(
-		autobalancing.NewStorageNodeSelector(r.Client),
-		autobalancing.NewLogicalVolumeSelector(r.apiClient, r.Client),
+	r.rebalancer = autoplacement.NewRebalancer(
+		autoplacement.NewStorageNodeSelector(r.Client),
+		autoplacement.NewLogicalVolumeSelector(r.apiClient, r.Client, scResolver),
 	)
 }
 
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations/status,verbs=get
@@ -75,6 +85,7 @@ func (r *VolumeRebalancerReconciler) init() {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get
 
 func (r *VolumeRebalancerReconciler) Reconcile(
 	ctx context.Context,
@@ -87,23 +98,33 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if clusterCR.Spec.AutoRebalancing == nil {
-		return ctrl.Result{}, nil
-	}
-	spec := clusterCR.Spec.AutoRebalancing
-	if !ptr.BoolFromOrTrue(spec.Enabled) {
-		return ctrl.Result{}, nil
-	}
 	if clusterCR.Status.UUID == "" {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
+	// utils.ResolveClusterUUID returns clusterCR.Status.UUID for this cluster; use it
+	// directly for the realignment call, which needs no other lookup.
+	realignClusterUUID := clusterCR.Status.UUID
 
-	cfg, err := autobalancing.ResolveRebalancingConfig(spec)
+	// Post-migration control-plane data realignment. This runs for every cluster with
+	// volume migration enabled, independent of auto-rebalancing, so it also covers
+	// manual VolumeMigrations and drain/removal-triggered moves. realignRequeue is the
+	// delay until the next realignment check (0 when realignment is disabled).
+	realignRequeue := r.reconcileDataRealignment(ctx, clusterCR, realignClusterUUID)
+
+	// Auto-rebalancing is opt-in: run only when explicitly enabled (Enabled=true).
+	// An unset flag means off, so realignment still gets its requeue.
+	spec := ptr.From(clusterCR.Spec.VolumeAutoPlacement, simplyblockv1alpha1.VolumeAutoPlacementSettings{})
+	if !ptr.BoolFromOrFalse(spec.Enabled) {
+		return ctrl.Result{RequeueAfter: realignRequeue}, nil
+	}
+
+	cfg, err := autoplacement.ResolveAutoPlacementConfig(spec)
 	if err != nil {
 		log.Error(err, "Invalid rebalancing configuration; skipping cycle")
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		return ctrl.Result{RequeueAfter: autobalancing.DefaultEvaluationInterval}, nil
+		return ctrl.Result{RequeueAfter: autoplacement.DefaultEvaluationInterval}, nil
 	}
+
 	// Apply the operator-wide latency-percentile flag (general, not per cluster).
 	if r.LatencyPercentile != "" {
 		cfg.LatencyPercentile = r.LatencyPercentile
@@ -132,13 +153,13 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	if hasOfflineNode(nodeMap) {
 		log.Info("Cluster has offline node(s); skipping rebalancing cycle")
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
+		return ctrl.Result{RequeueAfter: nextRequeue(cycleStart, cfg.EvalInterval, realignRequeue)}, nil
 	}
 
 	if r.migrationState.HasPendingMigrationForCluster(clusterUUID) {
 		log.V(1).Info("Pending migrations exist; deferring new migrations to next cycle")
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
+		return ctrl.Result{RequeueAfter: nextRequeue(cycleStart, cfg.EvalInterval, realignRequeue)}, nil
 	}
 
 	storageNodes := make([]volumemigration.StorageNode, 0, len(nodeMap))
@@ -150,7 +171,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	}
 
 	toMigrate, pinnedBlocked, err := r.rebalancer.SelectMigrations(ctx, cfg, isCoolingDown,
-		autobalancing.StorageNodeSelectorInput{
+		autoplacement.StorageNodeSelectorInput{
 			Namespace:    clusterCR.Namespace,
 			StorageNodes: storageNodes,
 		})
@@ -166,7 +187,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	}
 	if len(toMigrate) == 0 {
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
+		return ctrl.Result{RequeueAfter: nextRequeue(cycleStart, cfg.EvalInterval, realignRequeue)}, nil
 	}
 
 	// Dry-run: when migration creation is disabled the rebalancer still evaluated load and
@@ -178,7 +199,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 				"volume", mc.Volume.UUID, "source", mc.SourceNodeUUID, "target", mc.TargetNodeUUID)
 		}
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "dry_run").Inc()
-		return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
+		return ctrl.Result{RequeueAfter: nextRequeue(cycleStart, cfg.EvalInterval, realignRequeue)}, nil
 	}
 
 	if err := r.setRebalancing(ctx, clusterCR, true); err != nil {
@@ -193,7 +214,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	migratedCount := r.executeMigrations(ctx, clusterCR, toMigrate, cfg.CoolDownSecs, cycleStart.Add(cfg.EvalInterval))
 
 	activeCooldowns := r.migrationState.GetCooldownCountByCluster(clusterUUID, time.Now())
-	autobalancing.SetCooldownVolumes(clusterUUID, float64(activeCooldowns))
+	autoplacement.SetCooldownVolumes(clusterUUID, float64(activeCooldowns))
 
 	if migratedCount > 0 {
 		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "migrated").Inc()
@@ -212,7 +233,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 func (r *VolumeRebalancerReconciler) executeMigrations(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
-	toMigrate []autobalancing.MigrationCandidate,
+	toMigrate []autoplacement.MigrationCandidate,
 	coolDownSecs int64,
 	cycleDeadline time.Time,
 ) int {
@@ -231,11 +252,13 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 				len(toMigrate)-migratedCount)
 			break
 		}
+
 		name := rebalanceMigrationName(mc.Volume.UUID)
 		labels := map[string]string{
 			rebalancerLabel:        "true",
 			rebalancerClusterLabel: clusterCR.Name,
 		}
+
 		err := volumemigration.StartMigration(ctx, r.Client, mc.Volume.UUID, mc.TargetNodeUUID,
 			name, clusterCR.Namespace, ownerRefs, labels)
 		switch {
@@ -249,6 +272,7 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 				"Creating VolumeMigration for volume %s to node %s failed: %v", mc.Volume.UUID, mc.TargetNodeUUID, err)
 			continue
 		}
+
 		r.migrationState.PushMigration(mc.ClusterUUID, mc.Volume.PoolUUID, mc.Volume.UUID, name, clusterCR.Namespace, coolDownSecs)
 		r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeNormal, "VolumeRebalancingStarted", "VolumeRebalancingStarted",
 			"Created VolumeMigration %s for volume %s from node %s to %s",
@@ -364,19 +388,157 @@ func requeueAfter(
 	return remaining
 }
 
+// nextRequeue returns the auto-rebalancing requeue delay, shortened to the
+// data-realignment interval when the latter is sooner. This keeps realignment on
+// schedule even if the rebalancing evaluation interval is configured longer than the
+// realignment interval. A realignRequeue of 0 (realignment disabled) is ignored.
+func nextRequeue(
+	cycleStart time.Time,
+	evalInterval, realignRequeue time.Duration,
+) time.Duration {
+	d := requeueAfter(cycleStart, evalInterval)
+	if realignRequeue > 0 && realignRequeue < d {
+		return realignRequeue
+	}
+	return d
+}
+
+// reconcileDataRealignment triggers a control-plane data realignment when one is due
+// and returns the delay until the next realignment check (0 when realignment is
+// disabled for the cluster).
+//
+// A realignment runs when either:
+//   - the TriggerRealignmentAnnotation is set to a non-empty value (explicit,
+//     immediate trigger — e.g. after a storage node drain and removal), which
+//     bypasses interval spacing; or
+//   - status.pendingDataRealignment is set (at least one volume moved) AND at least
+//     Interval has elapsed since the last successful realignment.
+//
+// On success the pending flag is cleared and lastDataRealignmentAt is recorded, so
+// the next interval window starts fresh — the counter/flag is reset so a realignment
+// never runs at the end of the window with nothing to align.
+func (r *VolumeRebalancerReconciler) reconcileDataRealignment(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+	clusterUUID string,
+) time.Duration {
+	log := logf.FromContext(ctx)
+
+	enabled, interval := resolveDataRealignmentConfig(clusterCR)
+	if !enabled {
+		return 0
+	}
+
+	// Any non-empty annotation value forces an immediate run; an empty value (or an
+	// absent annotation) does not.
+	forced := clusterCR.Annotations[simplyblockv1alpha1.TriggerRealignmentAnnotation] != ""
+	pending := ptr.BoolFromOrFalse(clusterCR.Status.PendingDataRealignment)
+
+	if !forced && !pending {
+		// Nothing moved since the last realignment — re-check at the interval boundary.
+		return interval
+	}
+
+	// Honor interval spacing for the periodic (non-forced) path. Explicit triggers
+	// run immediately regardless of when the last realignment happened.
+	if !forced && clusterCR.Status.LastDataRealignmentAt != nil {
+		if elapsed := time.Since(clusterCR.Status.LastDataRealignmentAt.Time); elapsed < interval {
+			return interval - elapsed
+		}
+	}
+
+	if err := r.apiClient.TriggerDataRealignment(ctx, clusterUUID); err != nil {
+		log.Error(err, "Control-plane data realignment failed; will retry", "cluster", clusterCR.Name)
+		r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeWarning, "DataRealignmentFailed", "DataRealignmentFailed",
+			"Control-plane data realignment failed: %v", err)
+		return realignmentRetryDelay
+	}
+
+	// Success — reset the pending flag and stamp the time so the interval restarts.
+	now := metav1.Now()
+	patch := client.MergeFrom(clusterCR.DeepCopy())
+	clusterCR.Status.PendingDataRealignment = ptr.To(false)
+	clusterCR.Status.LastDataRealignmentAt = &now
+	if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
+		// The realignment happened; failing to clear the flag only risks one extra
+		// (idempotent) realignment next cycle. Log and continue.
+		log.Error(err, "Realignment triggered but clearing pending flag failed", "cluster", clusterCR.Name)
+	}
+
+	if forced {
+		if err := r.removeTriggerAnnotation(ctx, clusterCR); err != nil {
+			log.Error(err, "Cannot remove realignment trigger annotation", "cluster", clusterCR.Name)
+		}
+	}
+
+	log.Info("Control-plane data realignment triggered", "cluster", clusterCR.Name, "forced", forced)
+	r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeNormal, "DataRealignmentTriggered", "DataRealignmentTriggered",
+		"Control-plane data realignment triggered to re-align data structures to current volume placement")
+	return interval
+}
+
+// removeTriggerAnnotation deletes the explicit-trigger annotation from the cluster,
+// so a one-shot force is consumed exactly once.
+func (r *VolumeRebalancerReconciler) removeTriggerAnnotation(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+) error {
+	if _, ok := clusterCR.Annotations[simplyblockv1alpha1.TriggerRealignmentAnnotation]; !ok {
+		return nil
+	}
+	patch := client.MergeFrom(clusterCR.DeepCopy())
+	delete(clusterCR.Annotations, simplyblockv1alpha1.TriggerRealignmentAnnotation)
+	return r.Patch(ctx, clusterCR, patch)
+}
+
+// resolveDataRealignmentConfig reports whether post-migration data realignment is
+// enabled for the cluster and the interval between realignments. Realignment is on by
+// default and is only meaningful while volume migration itself is enabled.
+func resolveDataRealignmentConfig(
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+) (enabled bool, interval time.Duration) {
+	interval = defaultDataRealignmentInterval
+	vms := clusterCR.Spec.VolumeMigrationSettings
+	if vms != nil && !ptr.BoolFromOrTrue(vms.Enabled) {
+		// Volume migration disabled — nothing ever moves, so nothing to realign.
+		return false, interval
+	}
+	if vms == nil || vms.DataRealignment == nil {
+		return true, interval
+	}
+	dr := vms.DataRealignment
+	if !ptr.BoolFromOrTrue(dr.Enabled) {
+		return false, interval
+	}
+	if dr.Interval != nil && dr.Interval.Duration > 0 {
+		interval = dr.Interval.Duration
+	}
+	return true, interval
+}
+
 func (r *VolumeRebalancerReconciler) SetupWithManager(
 	mgr ctrl.Manager,
 ) error {
 	r.apiClient = webapi.NewClient()
+
+	// A client-go clientset backs the kube.LiveResolver used to read the
+	// StorageClass of each candidate volume (see BuildNamespacedSet). StorageClass
+	// reads are rare and off the hot path, so direct API reads are preferable to
+	// making the manager cache watch every StorageClass in the cluster.
+	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		return fmt.Errorf("build clientset for StorageClass resolver: %w", err)
+	}
+
 	// Initialize in-memory migration state and the rebalancer once, here.
 	// Re-initializing in Reconcile would wipe coolDownMap/pendingMigrations,
 	// defeating cool-down and pending-migration tracking.
-	r.init()
+	r.init(atlaskube.NewLiveResolver(clientset))
 
 	// Index PersistentVolumes by CSI driver so BuildCSIManagedSet can filter to
 	// simplyblock CSI volumes through the cache instead of listing every PV.
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.PersistentVolume{},
-		autobalancing.PVCSIDriverIndexField, func(o client.Object) []string {
+		autoplacement.PVCSIDriverIndexField, func(o client.Object) []string {
 			pv, ok := o.(*corev1.PersistentVolume)
 			if !ok || pv.Spec.CSI == nil {
 				return nil
@@ -388,7 +550,13 @@ func (r *VolumeRebalancerReconciler) SetupWithManager(
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageCluster{},
-			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+			// React to spec changes (generation) and to annotation changes so an
+			// explicit realignment trigger (TriggerRealignmentAnnotation) reconciles
+			// the cluster immediately rather than waiting for the next interval tick.
+			builder.WithPredicates(predicate.Or(
+				predicate.GenerationChangedPredicate{},
+				predicate.AnnotationChangedPredicate{},
+			))).
 		Owns(&simplyblockv1alpha1.VolumeMigration{}).
 		Named("volumerebalancer").
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).

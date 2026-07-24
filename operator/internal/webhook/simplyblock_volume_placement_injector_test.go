@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	jsonpatchapply "github.com/evanphx/json-patch/v5"
+	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	jsonpatch "gomodules.xyz/jsonpatch/v2"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -21,7 +23,6 @@ import (
 	"github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -55,10 +56,10 @@ func makePlacementStorageClass(provisioner string, params map[string]string) *st
 	}
 }
 
-func makePlacementCluster(autoRebalancing *simplyblockv1alpha1.VolumeRebalancingSettings) *simplyblockv1alpha1.StorageCluster {
+func makePlacementCluster(autoRebalancing *simplyblockv1alpha1.VolumeAutoPlacementSettings) *simplyblockv1alpha1.StorageCluster {
 	return &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster1", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{AutoRebalancing: autoRebalancing},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{VolumeAutoPlacement: autoRebalancing},
 	}
 }
 
@@ -153,9 +154,11 @@ func fakePrometheusServer(t *testing.T, samples []promSample) *httptest.Server {
 // ── Handle: skip conditions (all resolvable without any network call) ───────────
 
 func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) {
-	enabledRebalancing := &simplyblockv1alpha1.VolumeRebalancingSettings{
-		Enabled:       boolRef(true),
-		PrometheusURL: strRef("http://unused:9090"),
+	// Auto-placement is gated on LatencyBenchmarkEnabled (its real dependency),
+	// independent of the rebalancing Enabled flag.
+	enabledRebalancing := &simplyblockv1alpha1.VolumeAutoPlacementSettings{
+		LatencyBenchmarkEnabled: ptr.To(true),
+		PrometheusURL:           ptr.To("http://unused:9090"),
 	}
 
 	cases := []struct {
@@ -165,16 +168,9 @@ func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) 
 		cluster *simplyblockv1alpha1.StorageCluster
 	}{
 		{
-			name: "host-id annotation already set — skipped",
-			pvc: makePlacementPVC(strRef(placementStorageClassName),
-				map[string]string{kube.AnnoHostID: "some-node"}),
-			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
-			cluster: makePlacementCluster(enabledRebalancing),
-		},
-		{
-			name: "deprecated host-id annotation already set — skipped",
-			pvc: makePlacementPVC(strRef(placementStorageClassName),
-				map[string]string{kube.DeprecatedAnnoHostID: "some-node"}),
+			name: "selected-storage-node already set — skipped",
+			pvc: makePlacementPVC(ptr.To(placementStorageClassName),
+				map[string]string{kube.AnnoSelectedStorageNode: "some-node"}),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
 			cluster: makePlacementCluster(enabledRebalancing),
 		},
@@ -186,45 +182,53 @@ func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) 
 		},
 		{
 			name:    "StorageClass not found — skipped",
-			pvc:     makePlacementPVC(strRef("does-not-exist"), nil),
+			pvc:     makePlacementPVC(ptr.To("does-not-exist"), nil),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
 			cluster: makePlacementCluster(enabledRebalancing),
 		},
 		{
 			name:    "StorageClass not simplyblock-provisioned — skipped",
-			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
+			pvc:     makePlacementPVC(ptr.To(placementStorageClassName), nil),
 			sc:      makePlacementStorageClass("some-other-provisioner", map[string]string{"cluster_id": testClusterUUID}),
 			cluster: makePlacementCluster(enabledRebalancing),
 		},
 		{
 			name:    "StorageClass missing cluster_id param — skipped",
-			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
+			pvc:     makePlacementPVC(ptr.To(placementStorageClassName), nil),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"pool_name": "pool1"}),
 			cluster: makePlacementCluster(enabledRebalancing),
 		},
 		{
 			name:    "no matching StorageCluster — skipped",
-			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
+			pvc:     makePlacementPVC(ptr.To(placementStorageClassName), nil),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": "00000000-0000-0000-0000-000000000000"}),
 			cluster: makePlacementCluster(enabledRebalancing),
 		},
 		{
 			name:    "VolumeMigrationSettings not configured — skipped",
-			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
+			pvc:     makePlacementPVC(ptr.To(placementStorageClassName), nil),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
 			cluster: makePlacementCluster(nil),
 		},
 		{
-			name:    "AutoRebalancing disabled — skipped",
-			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
-			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
-			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeRebalancingSettings{Enabled: boolRef(false)}),
+			// Rebalancing enabled but latency benchmarking off → auto-placement is
+			// skipped, proving placement is gated on latency measurement, not on the
+			// rebalancing Enabled flag.
+			name: "latency benchmarking disabled — skipped",
+			pvc:  makePlacementPVC(ptr.To(placementStorageClassName), nil),
+			sc:   makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
+			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
+				Enabled:                 ptr.To(true),
+				LatencyBenchmarkEnabled: ptr.To(false),
+			}),
 		},
 		{
-			name:    "invalid rebalancing config (missing prometheusURL) — skipped",
-			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
-			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
-			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeRebalancingSettings{Enabled: boolRef(true)}),
+			name: "invalid config (missing prometheusURL) — skipped",
+			pvc:  makePlacementPVC(ptr.To(placementStorageClassName), nil),
+			sc:   makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
+			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
+				LatencyBenchmarkEnabled: ptr.To(true),
+			}),
 		},
 	}
 
@@ -255,6 +259,66 @@ func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) 
 	}
 }
 
+// ── Handle: legacy host-id is exchanged for selected-storage-node ──
+
+func TestSimplyblockVolumePlacementInjector_Handle_ExchangesHostID(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		anno string
+	}{
+		{"host-id", kube.AnnoHostID},
+		{"deprecated host-id", kube.DeprecatedAnnoHostID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The exchange short-circuits before any cluster/StorageClass lookup, so
+			// no client is needed.
+			pvc := makePlacementPVC(nil, map[string]string{tc.anno: "pinned-node"})
+			h := &SimplyblockVolumePlacementInjector{}
+
+			resp := h.Handle(context.Background(), pvcAdmissionRequest(t, pvc))
+			if !resp.Allowed {
+				t.Fatalf("Allowed = false, want true")
+			}
+			if len(resp.Patches) == 0 {
+				t.Fatalf("expected an exchange patch, got none")
+			}
+
+			patched := applyPVCPatches(t, pvc, resp.Patches)
+			if got := patched.Annotations[kube.AnnoSelectedStorageNode]; got != "pinned-node" {
+				t.Errorf("selected-storage-node = %q, want pinned-node", got)
+			}
+			if _, ok := patched.Annotations[kube.AnnoHostID]; ok {
+				t.Error("host-id should have been removed")
+			}
+			if _, ok := patched.Annotations[kube.DeprecatedAnnoHostID]; ok {
+				t.Error("deprecated host-id should have been removed")
+			}
+		})
+	}
+}
+
+// An existing selected-storage-node pin is not overwritten by a stray host-id;
+// the host-id is still dropped.
+func TestSimplyblockVolumePlacementInjector_Handle_ExchangeKeepsExistingPin(t *testing.T) {
+	pvc := makePlacementPVC(nil, map[string]string{
+		kube.AnnoHostID:              "from-host-id",
+		kube.AnnoSelectedStorageNode: "already-pinned",
+	})
+	h := &SimplyblockVolumePlacementInjector{}
+
+	resp := h.Handle(context.Background(), pvcAdmissionRequest(t, pvc))
+	if !resp.Allowed {
+		t.Fatalf("Allowed = false, want true")
+	}
+	patched := applyPVCPatches(t, pvc, resp.Patches)
+	if got := patched.Annotations[kube.AnnoSelectedStorageNode]; got != "already-pinned" {
+		t.Errorf("selected-storage-node = %q, want already-pinned (must not be clobbered)", got)
+	}
+	if _, ok := patched.Annotations[kube.AnnoHostID]; ok {
+		t.Error("host-id should have been removed")
+	}
+}
+
 // ── Handle: full selection path — eligibility filtering + coolest-node ranking ──
 
 func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t *testing.T) {
@@ -276,12 +340,12 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 		{UUID: "atcapacity", Status: "online", Healthy: true, Lvols: 10, LvolsMax: 10},
 	})
 
-	cluster := makePlacementCluster(&simplyblockv1alpha1.VolumeRebalancingSettings{
-		Enabled:       boolRef(true),
-		PrometheusURL: strRef(promSrv.URL),
+	cluster := makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
+		LatencyBenchmarkEnabled: ptr.To(true),
+		PrometheusURL:           ptr.To(promSrv.URL),
 	})
 	sc := makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID})
-	pvc := makePlacementPVC(strRef(placementStorageClassName), nil)
+	pvc := makePlacementPVC(ptr.To(placementStorageClassName), nil)
 
 	baseline := func(uuid string) simplyblockv1alpha1.NodeLatencyMetrics {
 		return simplyblockv1alpha1.NodeLatencyMetrics{NodeUUID: uuid, BaselineP50NS: baselineNS}
@@ -311,7 +375,7 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 	h := &SimplyblockVolumePlacementInjector{
 		Client:       c,
 		APIClient:    webapi.NewClient(webSrv.URL),
-		NodeSelector: autobalancing.NewStorageNodeSelector(c),
+		NodeSelector: autoplacement.NewStorageNodeSelector(c),
 	}
 
 	resp := h.Handle(context.Background(), pvcAdmissionRequest(t, pvc))
@@ -323,8 +387,8 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 	}
 
 	patched := applyPVCPatches(t, pvc, resp.Patches)
-	if got := patched.Annotations[kube.AnnoHostID]; got != "cool" {
-		t.Errorf("host-id = %q, want %q", got, "cool")
+	if got := patched.Annotations[kube.AnnoPlacementHint]; got != "cool" {
+		t.Errorf("placement-hint = %q, want %q", got, "cool")
 	}
 }
 
@@ -337,12 +401,12 @@ func TestSimplyblockVolumePlacementInjector_Handle_NoEligibleNode(t *testing.T) 
 		{UUID: "unhealthy", Status: "online", Healthy: false, Lvols: 1, LvolsMax: 10},
 	})
 
-	cluster := makePlacementCluster(&simplyblockv1alpha1.VolumeRebalancingSettings{
-		Enabled:       boolRef(true),
-		PrometheusURL: strRef(promSrv.URL),
+	cluster := makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
+		LatencyBenchmarkEnabled: ptr.To(true),
+		PrometheusURL:           ptr.To(promSrv.URL),
 	})
 	sc := makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID})
-	pvc := makePlacementPVC(strRef(placementStorageClassName), nil)
+	pvc := makePlacementPVC(ptr.To(placementStorageClassName), nil)
 
 	scheme := newScheme(t)
 	c := fake.NewClientBuilder().
@@ -359,7 +423,7 @@ func TestSimplyblockVolumePlacementInjector_Handle_NoEligibleNode(t *testing.T) 
 	h := &SimplyblockVolumePlacementInjector{
 		Client:       c,
 		APIClient:    webapi.NewClient(webSrv.URL),
-		NodeSelector: autobalancing.NewStorageNodeSelector(c),
+		NodeSelector: autoplacement.NewStorageNodeSelector(c),
 	}
 
 	resp := h.Handle(context.Background(), pvcAdmissionRequest(t, pvc))

@@ -41,7 +41,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 
 	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
 	sbkube "github.com/spdk/spdk-csi/pkg/kubernetes"
@@ -57,23 +56,12 @@ type nodeServer struct {
 }
 
 //nolint:unparam // error return kept for constructor symmetry / future use
-func newNodeServer(d *csicommon.CSIDriver) (*nodeServer, error) {
+func newNodeServer(d *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*nodeServer, error) {
 	ns := &nodeServer{
 		DefaultNodeServer: csicommon.NewDefaultNodeServer(d),
 		mounter:           mount.New(""),
 		volumeLocks:       util.NewVolumeLocks(),
-	}
-
-	k8sConfig, err := rest.InClusterConfig()
-	if err != nil {
-		klog.Warningf("failed to get in-cluster config for node topology discovery: %v", err)
-	} else {
-		clientset, clientErr := kubernetes.NewForConfig(k8sConfig)
-		if clientErr != nil {
-			klog.Warningf("failed to create kubernetes client for node topology discovery: %v", clientErr)
-		} else {
-			ns.kubeClient = clientset
-		}
+		kubeClient:        kubeClient,
 	}
 
 	// Build one Kubernetes cache manager and share it across the node plugin:

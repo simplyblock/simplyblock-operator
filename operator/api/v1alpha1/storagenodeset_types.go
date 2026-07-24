@@ -187,17 +187,6 @@ type StorageNodeSetSpec struct {
 
 // Drain coordination phases for a worker node undergoing a rolling upgrade drain.
 const (
-	// AnnotationPinnedVolume is the PVC annotation that marks a volume as pinned to its current node.
-	AnnotationPinnedVolume = "simplyblock.io/pinned-volume"
-	// AnnotationPinnedVolumeApplied records the pinned-volume target UUID the
-	// PVC controller has already acted on. It is the strict change-diff marker:
-	// the controller only requests a migration when AnnotationPinnedVolume differs
-	// from this value, so its own writes do not re-trigger a migration.
-	AnnotationPinnedVolumeApplied = "simplyblock.io/pinned-volume-applied"
-	// AnnotationPinnedVolumeRejected records the last pinned-volume value the PVC
-	// controller's backstop validation rejected as an unknown storage node. It
-	// suppresses duplicate warning events while the invalid value remains in place.
-	AnnotationPinnedVolumeRejected = "simplyblock.io/pinned-volume-rejected"
 	// DefaultSystemVolumeFilterRegex is the default pattern for system/benchmark volumes.
 	DefaultSystemVolumeFilterRegex = "^sb-fio-baseline-.*"
 	// DrainPhaseDetected means the node is cordoned and waiting for a drain slot.
@@ -212,6 +201,13 @@ const (
 	DrainPhaseComplete = "complete"
 	// DrainPhaseFailed means an unrecoverable error occurred during drain coordination.
 	DrainPhaseFailed = "failed"
+	// TriggerRealignmentAnnotation, when set to any non-empty value on a StorageCluster,
+	// forces an immediate control-plane data realignment on the next reconcile,
+	// bypassing the DataRealignment.Interval spacing. The operator removes the
+	// annotation once the realignment has been triggered. It is the mechanism for
+	// explicit, out-of-band triggers — a human running `kubectl annotate`, or another
+	// controller after a storage node drain and removal (see TriggerDataRealignment).
+	TriggerRealignmentAnnotation = "simplyblock.io/trigger-realignment"
 )
 
 // NodeDrainState tracks the upgrade-drain coordination state for a single worker node.

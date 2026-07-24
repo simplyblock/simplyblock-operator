@@ -1,4 +1,4 @@
-package autobalancing
+package autoplacement
 
 import (
 	"fmt"
@@ -59,10 +59,10 @@ type RebalancingConfig struct {
 	CoolDownSecs     int64
 }
 
-// ResolveRebalancingConfig applies defaults and validates the spec. It returns an error
+// ResolveAutoPlacementConfig applies defaults and validates the spec. It returns an error
 // when prometheusURL is missing, which is the only hard requirement.
-func ResolveRebalancingConfig(
-	spec *simplyblockv1alpha1.VolumeRebalancingSettings,
+func ResolveAutoPlacementConfig(
+	spec simplyblockv1alpha1.VolumeAutoPlacementSettings,
 ) (RebalancingConfig, error) {
 	cfg := RebalancingConfig{
 		EvalInterval:            DefaultEvaluationInterval,
@@ -75,21 +75,26 @@ func ResolveRebalancingConfig(
 		MaxMigrations:           defaultMaxVolumeMigrationsPerCycle,
 		CoolDownSecs:            int64(ptr.From(spec.DefaultCoolDownSeconds, defaultCoolDownSeconds)),
 	}
+
 	if spec.EvaluationInterval != nil && spec.EvaluationInterval.Duration > 0 {
 		cfg.EvalInterval = spec.EvaluationInterval.Duration
 	}
+
 	if spec.PrometheusURL == nil || *spec.PrometheusURL == "" {
 		return cfg, fmt.Errorf("spec.volumeRebalancing.prometheusURL is required")
 	}
 	cfg.PrometheusURL = *spec.PrometheusURL
+
 	iopsWeight := ptr.FromOrZero(spec.IOPSWeight)
 	if iopsWeight > 0 {
 		cfg.IopsWeight = iopsWeight
 	}
+
 	throughputWeight := ptr.FromOrZero(spec.ThroughputWeight)
 	if throughputWeight > 0 {
 		cfg.ThroughputWeight = throughputWeight
 	}
+
 	maxMigrations := ptr.FromOrZero(spec.MaxVolumeMigrationsPerCycle)
 	if maxMigrations > 0 {
 		cfg.MaxMigrations = int(maxMigrations)

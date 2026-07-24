@@ -12,6 +12,8 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/kube"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -156,7 +158,7 @@ func newPVC(name string, pinned bool) *corev1.PersistentVolumeClaim {
 	}
 	if pinned {
 		pvc.Annotations = map[string]string{
-			simplyblockv1alpha1.AnnotationPinnedVolume: "true",
+			kube.AnnoSelectedStorageNode: "true",
 		}
 	}
 	return pvc

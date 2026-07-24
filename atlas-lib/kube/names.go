@@ -49,9 +49,31 @@ const (
 	LabelVolumeHandle = "simplyblock.io/volume-handle"
 	// AnnoPool records the source pool on the PV for observability.
 	AnnoPool = "simplyblock.io/pool"
-	// AnnoHostID pins a PVC's logical volume to a specific storage node.
-	// The volume-placement webhook stamps it on PVCs it schedules; the CSI
-	// controller reads it in CreateVolume and forwards it as host_id.
+	// AnnoSelectedStorageNode pins a PVC's logical volume to a specific storage
+	// node. It is the canonical placement/pin annotation: the operator's pin
+	// controller, drain, and rebalancer key off it, and the CSI controller reads
+	// it in CreateVolume as the primary host_id source.
+	AnnoSelectedStorageNode = "simplyblock.io/selected-storage-node"
+	// AnnoSelectedStorageNodeApplied records the pinned-volume target the PVC
+	// controller has already acted on. It is the strict change-diff marker: the
+	// controller only requests a migration when AnnoSelectedStorageNode differs
+	// from this value, so its own writes do not re-trigger a migration.
+	AnnoSelectedStorageNodeApplied = "simplyblock.io/selected-storage-node-applied"
+	// AnnoSelectedStorageNodeRejected records the last pinned-volume value the PVC
+	// controller's backstop validation rejected as an unknown storage node. It
+	// suppresses duplicate warning events while the invalid value remains in place.
+	AnnoSelectedStorageNodeRejected = "simplyblock.io/selected-storage-node-rejected"
+	// AnnoPlacementHint is a one-shot creation-time placement hint: the volume-
+	// placement webhook writes it with the least-loaded node it picked, the CSI
+	// controller sends it as host_id at CreateVolume, and then removes it once the
+	// volume exists. Unlike AnnoSelectedStorageNode it is not a pin — the volume
+	// stays eligible for rebalancing.
+	AnnoPlacementHint = "simplyblock.io/placement-hint"
+	// AnnoHostID is the legacy per-PVC placement annotation. It is honored by the
+	// CSI controller as a lowest-priority host_id fallback for pre-existing PVCs,
+	// but is never rewritten or removed by the provisioner. The volume-placement
+	// webhook rewrites a user-supplied host-id into AnnoSelectedStorageNode (a pin,
+	// matching its pre-migration behavior) on new PVCs.
 	AnnoHostID = "simplyblock.io/host-id"
 	// DeprecatedAnnoHostID is the pre-rename form of AnnoHostID, still
 	// honored for backward compatibility.

@@ -1,4 +1,4 @@
-package autobalancing
+package autoplacement
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	atlaskube "github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -48,6 +48,11 @@ type LogicalVolumeSelectorInput struct {
 	// Pinned is the set of volume UUIDs excluded from migration regardless of
 	// load (set via the simplyblock.io/pinned-volume PVC annotation).
 	Pinned map[string]bool
+	// Namespaced is the set of volume UUIDs that belong to a multi-namespace NVMe
+	// subsystem (StorageClass max_namespace_per_subsys > 1). Such volumes share a
+	// subsystem with sibling volumes and cannot be migrated independently, so they
+	// are never rebalancing candidates. Built by BuildNamespacedSet.
+	Namespaced map[string]bool
 }
 
 // LogicalVolumeSelector collects volumes from the storage API, enriches them
@@ -58,15 +63,21 @@ type LogicalVolumeSelector struct {
 	apiClient *webapi.Client
 	// k8sClient is used by BuildPinnedSet to read PVC annotations.
 	k8sClient client.Client
+	// resolver looks up StorageClasses so BuildNamespacedSet can read each
+	// volume's provisioning Properties. In the operator it is a kube.LiveResolver
+	// over a client-go clientset: StorageClasses are read rarely and off the hot
+	// path, so a direct API read is fine and avoids caching every cluster class.
+	resolver atlaskube.Resolver
 }
 
 // NewLogicalVolumeSelector creates a LogicalVolumeSelector backed by the given
-// storage API client and Kubernetes client.
+// storage API client, Kubernetes client, and StorageClass resolver.
 func NewLogicalVolumeSelector(
 	apiClient *webapi.Client,
 	k8sClient client.Client,
+	resolver atlaskube.Resolver,
 ) *LogicalVolumeSelector {
-	return &LogicalVolumeSelector{apiClient: apiClient, k8sClient: k8sClient}
+	return &LogicalVolumeSelector{apiClient: apiClient, k8sClient: k8sClient, resolver: resolver}
 }
 
 // SelectVolumesForMigration is the main selection entry point. Given the list of
@@ -138,6 +149,8 @@ func (lvs *LogicalVolumeSelector) CollectVolumes(
 // FilterEligibleVolumes returns the subset of vols that are candidates for
 // migration. A volume is excluded when any of the following is true:
 //   - it appears in input.Pinned (simplyblock.io/pinned-volume annotation)
+//   - it appears in input.Namespaced (multi-namespace subsystem; shares a
+//     subsystem with siblings and cannot be migrated independently)
 //   - input.IsCoolingDown returns true for it (post-migration cool-down)
 //   - its Status is not "online"
 //   - its Migrating flag is set (guards against re-migration after operator restart
@@ -149,6 +162,9 @@ func (lvs *LogicalVolumeSelector) FilterEligibleVolumes(
 	out := vols[:0:0]
 	for _, vp := range vols {
 		if input.Pinned[vp.UUID] {
+			continue
+		}
+		if input.Namespaced[vp.UUID] {
 			continue
 		}
 		if input.IsCoolingDown != nil && input.IsCoolingDown(vp.UUID) {
@@ -254,7 +270,7 @@ func (lvs *LogicalVolumeSelector) BuildPinnedSet(ctx context.Context, clusterUUI
 		}, pvc); err != nil {
 			continue
 		}
-		if pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolume] != "" {
+		if atlaskube.IsPinnedVolume(pvc.Annotations) {
 			pinned[lvolID] = true
 		}
 	}
@@ -307,6 +323,53 @@ func (lvs *LogicalVolumeSelector) BuildCSIManagedVolumes(ctx context.Context, cl
 		managed = append(managed, managedVolume{PoolUUID: parts[1], VolumeUUID: parts[2]})
 	}
 	return managed, nil
+}
+
+// storageClassResolver adapts the controller-runtime client to
+// kube.StorageClassResolver, so the rebalancer resolves provisioning Properties
+// through the shared kube package rather than reimplementing the parsing. Gets
+// BuildNamespacedSet returns the set of simplyblock CSI-managed volume UUIDs in
+// the cluster whose StorageClass provisions a multi-namespace NVMe subsystem
+// (max_namespace_per_subsys > 1). Such volumes share a subsystem with sibling
+// volumes and must never be migrated on their own, so the rebalancer excludes
+// them. Pass an empty clusterUUID to include all clusters.
+//
+// A volume whose StorageClass cannot be resolved is treated as non-namespaced
+// (not excluded) and logged — the same fail-open stance the rest of collection
+// takes, so one unreadable class never stalls a cycle.
+func (lvs *LogicalVolumeSelector) BuildNamespacedSet(ctx context.Context, clusterUUID string) (map[string]bool, error) {
+	log := logf.FromContext(ctx)
+
+	var pvList corev1.PersistentVolumeList
+	if err := lvs.k8sClient.List(ctx, &pvList,
+		client.MatchingFields{PVCSIDriverIndexField: utils.CSIProvisioner}); err != nil {
+		return nil, fmt.Errorf("list simplyblock CSI PersistentVolumes: %w", err)
+	}
+
+	namespaced := make(map[string]bool)
+	for i := range pvList.Items {
+		pv := &pvList.Items[i]
+		if pv.Spec.CSI == nil {
+			continue
+		}
+		// Handle format: "<clusterUUID>:<poolUUID>:<volumeUUID>"
+		parts := strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)
+		if len(parts) != 3 || parts[2] == "" {
+			continue
+		}
+		if clusterUUID != "" && parts[0] != "" && parts[0] != clusterUUID {
+			continue
+		}
+		props, err := atlaskube.ResolvePropertiesForPV(ctx, lvs.resolver, pv)
+		if err != nil {
+			log.Error(err, "cannot resolve StorageClass; not excluding volume from rebalancing", "volume", parts[2])
+			continue
+		}
+		if props.IsMultiNamespace() {
+			namespaced[parts[2]] = true
+		}
+	}
+	return namespaced, nil
 }
 
 // overrideVolumeIO replaces the IOPS and ThroughputBytesPerSec fields on each
