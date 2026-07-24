@@ -166,6 +166,22 @@ func TestBoolFromOrFalse(t *testing.T) {
 	}
 }
 
+func TestBoolFromOrTrue(t *testing.T) {
+	if !BoolFromOrTrue(nil) {
+		t.Fatalf("BoolFromOrTrue nil: got false want true")
+	}
+
+	tr := true
+	if !BoolFromOrTrue(&tr) {
+		t.Fatalf("BoolFromOrTrue true pointer: got false want true")
+	}
+
+	fa := false
+	if BoolFromOrTrue(&fa) {
+		t.Fatalf("BoolFromOrTrue false pointer: got true want false")
+	}
+}
+
 func TestClampToInt(t *testing.T) {
 	// In-range positive and negative pass through unchanged.
 	if got := ClampToInt(42, false); got != 42 {
