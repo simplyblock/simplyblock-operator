@@ -47,7 +47,7 @@ func makeCluster(benchmarkEnabled bool, image string) *simplyblockv1alpha1.Stora
 			VolumeMigrationSettings: &simplyblockv1alpha1.VolumeMigrationSettings{
 				RebalancerImage: strRef(image),
 			},
-			AutoRebalancing: &simplyblockv1alpha1.VolumeRebalancingSettings{
+			VolumeAutoPlacement: &simplyblockv1alpha1.VolumeAutoPlacementSettings{
 				LatencyBenchmarkEnabled: boolRef(benchmarkEnabled),
 			},
 		},

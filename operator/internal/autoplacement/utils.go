@@ -1,4 +1,4 @@
-package autobalancing
+package autoplacement
 
 import (
 	"fmt"
@@ -59,10 +59,10 @@ type RebalancingConfig struct {
 	CoolDownSecs     int64
 }
 
-// ResolveRebalancingConfig applies defaults and validates the spec. It returns an error
+// ResolveAutoPlacementConfig applies defaults and validates the spec. It returns an error
 // when prometheusURL is missing, which is the only hard requirement.
-func ResolveRebalancingConfig(
-	spec simplyblockv1alpha1.VolumeRebalancingSettings,
+func ResolveAutoPlacementConfig(
+	spec simplyblockv1alpha1.VolumeAutoPlacementSettings,
 ) (RebalancingConfig, error) {
 	cfg := RebalancingConfig{
 		EvalInterval:            DefaultEvaluationInterval,

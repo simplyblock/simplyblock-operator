@@ -1,4 +1,4 @@
-package autobalancing
+package autoplacement
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
