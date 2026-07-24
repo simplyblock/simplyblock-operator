@@ -343,6 +343,10 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 	cluster := makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
 		LatencyBenchmarkEnabled: ptr.To(true),
 		PrometheusURL:           ptr.To(promSrv.URL),
+		// This case seeds fixed per-node baselines on the CR status and varies only the
+		// current (instant) Prometheus reading to produce known deviations — that is the
+		// "benchmark" baseline model, so pin the strategy to it.
+		BaselineStrategy: ptr.To(simplyblockv1alpha1.BaselineStrategyBenchmark),
 	})
 	sc := makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID})
 	pvc := makePlacementPVC(ptr.To(placementStorageClassName), nil)

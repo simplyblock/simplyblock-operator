@@ -2426,6 +2426,31 @@ func (in *VolumeAutoPlacementSettings) DeepCopyInto(out *VolumeAutoPlacementSett
 		*out = new(v1.Duration)
 		**out = **in
 	}
+	if in.BaselineStrategy != nil {
+		in, out := &in.BaselineStrategy, &out.BaselineStrategy
+		*out = new(BaselineStrategy)
+		**out = **in
+	}
+	if in.BaselineWindow != nil {
+		in, out := &in.BaselineWindow, &out.BaselineWindow
+		*out = new(v1.Duration)
+		**out = **in
+	}
+	if in.BaselineColdStart != nil {
+		in, out := &in.BaselineColdStart, &out.BaselineColdStart
+		*out = new(BaselineColdStartPolicy)
+		**out = **in
+	}
+	if in.BaselineMinSamples != nil {
+		in, out := &in.BaselineMinSamples, &out.BaselineMinSamples
+		*out = new(int32)
+		**out = **in
+	}
+	if in.BaselineOutlierK != nil {
+		in, out := &in.BaselineOutlierK, &out.BaselineOutlierK
+		*out = new(float64)
+		**out = **in
+	}
 	if in.IOPSWeight != nil {
 		in, out := &in.IOPSWeight, &out.IOPSWeight
 		*out = new(float64)

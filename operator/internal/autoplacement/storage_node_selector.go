@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	promlatency "github.com/simplyblock/simplyblock-operator/internal/metrics/prometheus"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -44,9 +43,10 @@ type nodeLatencyData struct {
 	// clusterUUID identifies which cluster this node belongs to, used to group
 	// nodes when computing per-cluster deviation statistics.
 	clusterUUID string
-	// baselineNS is the one-time fio write latency (ns) at the configured percentile,
-	// recorded by the baseline Job and stored in StorageNode.status.latencyMetrics.
-	// Zero until the baseline Job has completed for this node.
+	// baselineNS is the write latency (ns) at the configured percentile that the current
+	// reading is compared against, resolved by the configured BaselineProvider (either the
+	// frozen one-shot fio benchmark or a robust rolling-window estimate). Zero until a
+	// baseline is available for this node.
 	baselineNS int64
 	// currentNS is the most recent fio write latency (ns) at the configured percentile,
 	// scraped from Prometheus via the rebalancer probe sidecar.
@@ -114,7 +114,7 @@ func (sns *StorageNodeSelector) SelectStorageNodes(
 ) ([]NodeMigrationPair, error) {
 	// computeLatencyDeviations also emits the per-node / max deviation gauges as a side
 	// effect; the per-cluster stats it returns are not needed for pairing here.
-	deviations, err := sns.computeLatencyDeviations(ctx, cfg.PrometheusURL, cfg.LatencyPercentile, inputs...)
+	deviations, err := sns.computeLatencyDeviations(ctx, cfg, inputs...)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +170,7 @@ func (sns *StorageNodeSelector) SelectBestNode(
 	eligible map[string]bool,
 	inputs ...StorageNodeSelectorInput,
 ) (nodeUUID string, ok bool, err error) {
-	deviations, err := sns.computeLatencyDeviations(ctx, cfg.PrometheusURL, cfg.LatencyPercentile, inputs...)
+	deviations, err := sns.computeLatencyDeviations(ctx, cfg, inputs...)
 	if err != nil {
 		return "", false, err
 	}
@@ -231,11 +231,10 @@ func isMigrationTargetEligible(src, cand nodeRef, _ RebalancingConfig) bool {
 // no caller currently needs the per-cluster stats beyond the gauge they're emitted into.
 func (sns *StorageNodeSelector) computeLatencyDeviations(
 	ctx context.Context,
-	prometheusURL string,
-	percentile string,
+	cfg RebalancingConfig,
 	inputs ...StorageNodeSelectorInput,
 ) (deviations map[string]float64, err error) {
-	latencyByNode, err := sns.collectLatencyState(ctx, prometheusURL, percentile, inputs...)
+	latencyByNode, err := sns.collectLatencyState(ctx, cfg, inputs...)
 	if err != nil {
 		return nil, err
 	}
@@ -255,24 +254,25 @@ func (sns *StorageNodeSelector) computeLatencyDeviations(
 // collectLatencyState builds a nodeUUID → nodeLatencyData map by combining:
 //   - current write latency (at the configured percentile) queried from Prometheus
 //     (written by the rebalancer probe sidecar)
-//   - baseline write latency read from StorageNodeSet CR status (set once by the baseline Job)
+//   - baseline write latency from the strategy-selected BaselineProvider (frozen one-shot
+//     fio benchmark, or a robust rolling-window estimate)
 func (sns *StorageNodeSelector) collectLatencyState(
 	ctx context.Context,
-	prometheusURL string,
-	percentile string,
+	cfg RebalancingConfig,
 	inputs ...StorageNodeSelectorInput,
 ) (map[string]nodeLatencyData, error) {
-	currentByNodeByCluster, err := sns.collectCurrentLatency(ctx, prometheusURL, percentile, inputs...)
+	currentByNodeByCluster, err := sns.collectCurrentLatency(ctx, cfg.PrometheusURL, cfg.LatencyPercentile, inputs...)
 	if err != nil {
 		return nil, err
 	}
 
-	// Collect baselines from all distinct namespaces present in the inputs.
-	baselineByNode := make(map[string]int64)
-	for _, input := range inputs {
-		for nodeUUID, baseline := range sns.readBaselineFromCRs(ctx, input.Namespace, percentile) {
-			baselineByNode[nodeUUID] = baseline
-		}
+	baselineProvider, err := newBaselineProvider(sns.Client, cfg)
+	if err != nil {
+		return nil, err
+	}
+	baselineByNode, err := baselineProvider.BaselineNS(ctx, inputs...)
+	if err != nil {
+		return nil, err
 	}
 
 	// Flatten [clusterUUID][nodeUUID] → int64 into nodeUUID → nodeLatencyData.
@@ -280,7 +280,7 @@ func (sns *StorageNodeSelector) collectLatencyState(
 	for clusterUUID, byNode := range currentByNodeByCluster {
 		for nodeUUID, curr := range byNode {
 			result[nodeUUID] = nodeLatencyData{
-				baselineNS:  baselineByNode[nodeUUID], // 0 until baseline Job completes
+				baselineNS:  baselineByNode[nodeUUID], // 0 when no baseline is available yet
 				currentNS:   curr,
 				clusterUUID: clusterUUID,
 			}
@@ -305,33 +305,6 @@ func (sns *StorageNodeSelector) collectCurrentLatency(
 
 	clusterIds := distinctClusterUUIDs(inputs)
 	return provider.GetClustersCurrentLatency(ctx, clusterIds, percentile)
-}
-
-// readBaselineFromCRs returns a nodeUUID → baseline-latency map (at the configured
-// percentile) from all StorageNode CRs in the given namespace. The baseline is set
-// exactly once by the one-shot baseline Job.
-func (sns *StorageNodeSelector) readBaselineFromCRs(
-	ctx context.Context,
-	namespace string,
-	percentile string,
-) map[string]int64 {
-	result := make(map[string]int64)
-	var snodeList simplyblockv1alpha1.StorageNodeSetList
-	if err := sns.List(ctx, &snodeList, client.InNamespace(namespace)); err != nil {
-		return result
-	}
-	for _, snode := range snodeList.Items {
-		for _, lm := range snode.Status.LatencyMetrics {
-			baseline := lm.BaselineP50NS
-			if percentile == promlatency.PercentileP99 {
-				baseline = lm.BaselineP99NS
-			}
-			if baseline > 0 {
-				result[lm.NodeUUID] = baseline
-			}
-		}
-	}
-	return result
 }
 
 // distinctClusterUUIDs returns the set of unique ClusterUUIDs present across

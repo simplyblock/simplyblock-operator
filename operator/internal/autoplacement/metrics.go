@@ -29,6 +29,30 @@ var (
 		},
 		[]string{"cluster"},
 	)
+
+	rebalancerBaselineNS = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "simplyblock_rebalancer_baseline_ns",
+			Help: "Per-node write latency baseline (ns) used as the deviation denominator, as resolved by the configured baseline strategy (at the operator-configured percentile, p50 or p99).",
+		},
+		[]string{"cluster", "node"},
+	)
+
+	rebalancerBaselineSamplesTotal = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "simplyblock_rebalancer_baseline_samples_total",
+			Help: "Number of latency samples in the rolling window from which the per-node baseline was computed (rollingWindow strategy only).",
+		},
+		[]string{"cluster", "node"},
+	)
+
+	rebalancerBaselineSamplesRejected = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "simplyblock_rebalancer_baseline_samples_rejected",
+			Help: "Number of rolling-window latency samples rejected as outliers by the Hampel identifier when computing the per-node baseline (rollingWindow strategy only).",
+		},
+		[]string{"cluster", "node"},
+	)
 )
 
 func init() {
@@ -36,7 +60,19 @@ func init() {
 		rebalancerMaxLatencyDeviationPct,
 		rebalancerNodeLatencyDeviationPct,
 		rebalancerCooldownVolumes,
+		rebalancerBaselineNS,
+		rebalancerBaselineSamplesTotal,
+		rebalancerBaselineSamplesRejected,
 	)
+}
+
+// setBaselineGauges records the computed per-node baseline and its rolling-window sample
+// diagnostics (total considered / rejected as outliers). Called by the rolling-window
+// baseline provider for each node it resolves.
+func setBaselineGauges(clusterUUID, nodeUUID string, baselineNS int64, samplesTotal, samplesRejected int) {
+	rebalancerBaselineNS.WithLabelValues(clusterUUID, nodeUUID).Set(float64(baselineNS))
+	rebalancerBaselineSamplesTotal.WithLabelValues(clusterUUID, nodeUUID).Set(float64(samplesTotal))
+	rebalancerBaselineSamplesRejected.WithLabelValues(clusterUUID, nodeUUID).Set(float64(samplesRejected))
 }
 
 // SetCooldownVolumes updates the per-cluster cooldown-volume gauge.

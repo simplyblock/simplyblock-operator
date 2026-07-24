@@ -111,6 +111,40 @@ const (
 	MetricsBackendUniform MetricsBackend = "uniform"
 )
 
+// BaselineStrategy selects how the per-node latency baseline (the denominator of the
+// rebalancing deviation signal) is derived.
+// +kubebuilder:validation:Enum=benchmark;rollingWindow
+type BaselineStrategy string
+
+const (
+	// BaselineStrategyBenchmark uses the one-shot fio measurement taken by the baseline
+	// Job on a fresh cluster and frozen on the StorageNode CR status. Simple but tends to
+	// read too low, because an idle cluster is far faster than a loaded one — every loaded
+	// node then shows a large deviation.
+	BaselineStrategyBenchmark BaselineStrategy = "benchmark"
+	// BaselineStrategyRollingWindow derives the baseline from a rolling window of the
+	// probe-sidecar latency series in Prometheus, using a robust outlier-rejecting
+	// estimator. Reflects each node's actual recent operating latency rather than an idle
+	// measurement. This is the default.
+	BaselineStrategyRollingWindow BaselineStrategy = "rollingWindow"
+)
+
+// BaselineColdStartPolicy selects what happens for a node that has fewer than
+// BaselineMinSamples samples in the rolling window (e.g. a freshly onboarded node, or
+// shortly after the probe sidecar starts).
+// +kubebuilder:validation:Enum=defer;partialWindow
+type BaselineColdStartPolicy string
+
+const (
+	// BaselineColdStartDefer omits an under-sampled node from the evaluation cycle: it is
+	// neither a migration source nor a target until it has accumulated BaselineMinSamples
+	// samples. Avoids acting on a noisy baseline.
+	BaselineColdStartDefer BaselineColdStartPolicy = "defer"
+	// BaselineColdStartPartialWindow computes the baseline from whatever samples exist,
+	// accepting a noisier baseline early on so rebalancing engages sooner. This is the default.
+	BaselineColdStartPartialWindow BaselineColdStartPolicy = "partialWindow"
+)
+
 // VolumeAutoPlacementSettings controls the automatic, latency-driven volume rebalancing
 // behaviour. It is configured under StorageClusterSpec.VolumeAutoPlacement.
 type VolumeAutoPlacementSettings struct {
@@ -157,9 +191,32 @@ type VolumeAutoPlacementSettings struct {
 	// +optional
 	LatencyBenchmarkEnabled *bool `json:"latencyBenchmarkEnabled,omitempty"`
 	// LatencyBenchmarkInterval is how often fio benchmark Jobs run against each storage node.
-	// Defaults to 5m.
+	// It also sets the step of the rolling-window baseline query (the cadence at which the
+	// probe sidecar publishes latency samples). Defaults to 5m.
 	// +optional
 	LatencyBenchmarkInterval *metav1.Duration `json:"latencyBenchmarkInterval,omitempty"`
+	// BaselineStrategy selects how the per-node latency baseline is derived. Defaults to
+	// "rollingWindow" (robust estimate over BaselineWindow of the Prometheus latency series);
+	// "benchmark" uses the frozen one-shot fio measurement instead.
+	// +optional
+	BaselineStrategy *BaselineStrategy `json:"baselineStrategy,omitempty"`
+	// BaselineWindow is the look-back window used by the "rollingWindow" strategy. Defaults to 6h.
+	// +optional
+	BaselineWindow *metav1.Duration `json:"baselineWindow,omitempty"`
+	// BaselineColdStart selects what happens for a node with fewer than BaselineMinSamples
+	// samples in the window. Defaults to "partialWindow" (compute from available samples);
+	// "defer" skips the node until enough samples exist.
+	// +optional
+	BaselineColdStart *BaselineColdStartPolicy `json:"baselineColdStart,omitempty"`
+	// BaselineMinSamples is the number of samples below which a node is considered
+	// under-sampled (see BaselineColdStart). Defaults to 6.
+	// +optional
+	BaselineMinSamples *int32 `json:"baselineMinSamples,omitempty"`
+	// BaselineOutlierK is the Hampel-identifier threshold: a sample is rejected as an outlier
+	// when it lies more than k·1.4826·MAD from the window median. Lower is more aggressive.
+	// Defaults to 3.0.
+	// +optional
+	BaselineOutlierK *float64 `json:"baselineOutlierK,omitempty"`
 	// IOPSWeight is the weight applied to per-volume IOPS in the volume IO score. Defaults to 1.0.
 	// +optional
 	IOPSWeight *float64 `json:"iopsWeight,omitempty"`

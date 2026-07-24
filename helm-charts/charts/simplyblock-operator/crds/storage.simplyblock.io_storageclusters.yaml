@@ -220,6 +220,40 @@ spec:
                   VolumeAutoPlacement configures automatic, latency-driven volume rebalancing. When
                   nil/disabled the operator performs only manually-triggered VolumeMigrations.
                 properties:
+                  baselineColdStart:
+                    description: |-
+                      BaselineColdStart selects what happens for a node with fewer than BaselineMinSamples
+                      samples in the window. Defaults to "partialWindow" (compute from available samples);
+                      "defer" skips the node until enough samples exist.
+                    enum:
+                    - defer
+                    - partialWindow
+                    type: string
+                  baselineMinSamples:
+                    description: |-
+                      BaselineMinSamples is the number of samples below which a node is considered
+                      under-sampled (see BaselineColdStart). Defaults to 6.
+                    format: int32
+                    type: integer
+                  baselineOutlierK:
+                    description: |-
+                      BaselineOutlierK is the Hampel-identifier threshold: a sample is rejected as an outlier
+                      when it lies more than k·1.4826·MAD from the window median. Lower is more aggressive.
+                      Defaults to 3.0.
+                    type: number
+                  baselineStrategy:
+                    description: |-
+                      BaselineStrategy selects how the per-node latency baseline is derived. Defaults to
+                      "rollingWindow" (robust estimate over BaselineWindow of the Prometheus latency series);
+                      "benchmark" uses the frozen one-shot fio measurement instead.
+                    enum:
+                    - benchmark
+                    - rollingWindow
+                    type: string
+                  baselineWindow:
+                    description: BaselineWindow is the look-back window used by the
+                      "rollingWindow" strategy. Defaults to 6h.
+                    type: string
                   defaultCoolDownSeconds:
                     description: |-
                       DefaultCoolDownSeconds is the cool-down period (seconds) applied to a volume after
@@ -252,7 +286,8 @@ spec:
                   latencyBenchmarkInterval:
                     description: |-
                       LatencyBenchmarkInterval is how often fio benchmark Jobs run against each storage node.
-                      Defaults to 5m.
+                      It also sets the step of the rolling-window baseline query (the cadence at which the
+                      probe sidecar publishes latency samples). Defaults to 5m.
                     type: string
                   maxVolumeMigrationsPerCycle:
                     description: MaxVolumeMigrationsPerCycle is the maximum number
