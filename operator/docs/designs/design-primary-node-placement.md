@@ -99,9 +99,8 @@ pin is never silently overridden.
   what a specific workload uses to actually request it — without it, that
   PVC doesn't get Tier 1 treatment even on a node-affinity-enabled cluster.
 - **Tier 2** is gated by the cluster's **auto-rebalancing** feature
-  (`autoRebalancing` in `StorageCluster.Spec.VolumeMigrationSettings`) — it
-  activates whenever a cluster has that configured, independent of node
-  affinity.
+  (`StorageCluster.Spec.AutoRebalancing`) — it activates whenever a cluster
+  has that configured, independent of node affinity.
 
 A single volume can also opt out of both tiers on its own, regardless of
 cluster-wide gating, via `simplyblock.io/disable-smart-placement: "true"`
@@ -156,8 +155,8 @@ already relies on, always setting `HostID` explicitly.
   SPDK data plane actually honor locality (§4, §7). No new flag is introduced
   for this.
 - Tier 2 is gated by the cluster's existing auto-rebalancing feature
-  (`autoRebalancing` in `StorageCluster.Spec.VolumeMigrationSettings`),
-  independent of Tier 1/node affinity.
+  (`StorageCluster.Spec.AutoRebalancing`), independent of Tier 1/node
+  affinity.
 - Every configuration knob in this design — the per-tier gates, the load
   threshold — is a `StorageCluster` CR spec field, reconciled live. None of
   it is a command-line flag or environment variable that requires an
@@ -602,9 +601,9 @@ type SimplyblockVolumePlacementInjector struct {
      `parameters["cluster_id"]` is empty.
 2. Resolve the `StorageCluster` CR whose `Status.UUID == cluster_id` — same
    lookup pattern as `SimplyblockRebalancerInjector.resolveConfig`. Allow
-   unmodified if not found, or if `Spec.VolumeMigrationSettings.AutoRebalancing`
-   is nil/disabled, or `PrometheusURL` is unset — this is Tier 2's gate
-   (§7), nothing more is needed.
+   unmodified if not found, or if `Spec.AutoRebalancing` is nil/disabled, or
+   `PrometheusURL` is unset — this is Tier 2's gate (§7), nothing more is
+   needed.
 3. Build `autobalancing.RebalancingConfig` via the existing
    `autobalancing.ResolveRebalancingConfig(spec)`.
 4. `APIClient.GetStorageNodes(ctx, clusterUUID)` — same call
@@ -678,18 +677,21 @@ caching, on every single PVC admission request.
 
 ```yaml
 spec:
-  volumeMigrationSettings:
-    autoRebalancing:
-      enabled: true
-      latencyBenchmarkEnabled: true
-      prometheusURL: "http://prometheus.monitoring:9090"
+  autoRebalancing:
+    enabled: true
+    latencyBenchmarkEnabled: true
+    prometheusURL: "http://prometheus.monitoring:9090"
 ```
 
-These are the same fields Issue #130 introduced for the rebalancer. Tier 2
-activates whenever a cluster has them set — there is no dedicated flag for
-creation-time placement, distinct from the rebalancer's own
-migration-enablement flag. A cluster may want migration-based rebalancing
-without opting into creation-time placement override, or vice versa.
+`Spec.AutoRebalancing` is the same top-level field Issue #130 introduced for
+the rebalancer. Tier 2 activates whenever a cluster has `enabled: true` here
+— there is no separate flag for creation-time placement, distinct from the
+rebalancer's own activation flag: both `SimplyblockVolumePlacementInjector`
+and `VolumeRebalancerReconciler` gate on this exact same `Spec.AutoRebalancing.Enabled`
+field, so a cluster can't opt into one without the other via this flag alone.
+The distinct `MigrationEnabled` sub-field only controls whether the
+rebalancer's periodic evaluation actually creates `VolumeMigration` CRs once
+triggered (dry-run vs. not) — it has no effect on Tier 2.
 
 ### Tier 1's gate
 
@@ -763,8 +765,8 @@ because the rebalancer never needed them.
 
 ### 8.2 `StorageCluster` CRD — one field addition (§6's load threshold)
 
-- `Spec.VolumeMigrationSettings.AutoRebalancing.MinImbalancePct *int32` (name/
-  semantics TBD, §6) — the only new CRD field in this design.
+- `Spec.AutoRebalancing.MinImbalancePct *int32` (name/semantics TBD, §6) — the
+  only new CRD field in this design.
 
 Tier 1's gate (§7) needs **no CRD change at all**: it reuses the existing
 `Spec.EnableNodeAffinity` field; `labelWorkerNodes` checks that field before
@@ -796,7 +798,7 @@ every co-located storage-node instance — reconciling additions, value updates
 
 ### 8.5 No other CRD changes
 
-Tier 2 reads existing fields only: `StorageCluster.Spec.VolumeMigrationSettings.AutoRebalancing`
+Tier 2 reads existing fields only: `StorageCluster.Spec.AutoRebalancing`
 (Issue #130 §4.1) and `StorageNodeSet.Status.LatencyMetrics` (Issue #130 §4.3).
 Tier 1 reads one CRD field for its gate, `Spec.EnableNodeAffinity` (§7).
 
@@ -886,8 +888,8 @@ Mirroring `simplyblock_rebalancer_injector_test.go`, with a fake
 
 ### Manual / E2E (Tier 2)
 
-On a cluster (3+ nodes) with `spec.volumeMigrationSettings.autoRebalancing`
-set (`enabled: true`, `prometheusURL` pointing at the cluster's Prometheus):
+On a cluster (3+ nodes) with `spec.autoRebalancing` set (`enabled: true`,
+`prometheusURL` pointing at the cluster's Prometheus):
 
 - Create a plain PVC against the pool's StorageClass, with no consuming Pod
   yet. Confirm `simplyblock.io/host-id` is stamped on the PVC at admission,
