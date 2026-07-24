@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
@@ -150,18 +151,14 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 		return "", false
 	}
 
-	vms := cr.Spec.VolumeMigrationSettings
-	if vms == nil || vms.AutoRebalancing == nil {
-		log.V(1).Info("Skipping: auto-rebalancing not configured", "cluster", cr.Name)
-		return "", false
-	}
-	spec := vms.AutoRebalancing
-	if spec.Enabled != nil && !*spec.Enabled {
+	vms := ptr.From(cr.Spec.VolumeMigrationSettings, simplyblockv1alpha1.VolumeMigrationSettings{})
+	spec := ptr.From(vms.AutoRebalancing, simplyblockv1alpha1.VolumeRebalancingSettings{})
+	if !ptr.BoolFromOrTrue(spec.Enabled) {
 		log.V(1).Info("Skipping: auto-rebalancing disabled", "cluster", cr.Name)
 		return "", false
 	}
 
-	cfg, err := autobalancing.ResolveRebalancingConfig(spec)
+	cfg, err := autobalancing.ResolveRebalancingConfig(&spec)
 	if err != nil {
 		log.V(1).Info("Skipping: invalid rebalancing configuration", "cluster", cr.Name, "error", err.Error())
 		return "", false
