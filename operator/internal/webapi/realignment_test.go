@@ -26,8 +26,9 @@ func TestTriggerDataRealignment(t *testing.T) {
 		if gotMethod != http.MethodPost {
 			t.Errorf("method = %q, want POST", gotMethod)
 		}
-		if !strings.Contains(gotPath, clusterUUID) {
-			t.Errorf("path %q does not contain cluster UUID %q", gotPath, clusterUUID)
+		wantPath := "/api/v2/clusters/" + clusterUUID + "/rebalance"
+		if gotPath != wantPath {
+			t.Errorf("path = %q, want %q", gotPath, wantPath)
 		}
 	})
 
