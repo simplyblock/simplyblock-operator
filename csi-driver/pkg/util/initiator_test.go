@@ -62,6 +62,54 @@ func runExecWithTimeout(cmdLine []string, timeout int) (int, error) {
 	return elapsed, err
 }
 
+// TestConnectTimeoutDefault verifies Connect falls back to defaultConnectTimeout
+// when SPDKCSI_NVME_CONNECT_TIMEOUT is unset.
+func TestConnectTimeoutDefault(t *testing.T) {
+	t.Setenv("SPDKCSI_NVME_CONNECT_TIMEOUT", "")
+	if got := connectTimeout(); got != defaultConnectTimeout {
+		t.Errorf("connectTimeout() = %s, want default %s", got, defaultConnectTimeout)
+	}
+}
+
+// TestConnectTimeoutOverride verifies a valid duration in
+// SPDKCSI_NVME_CONNECT_TIMEOUT overrides the default.
+func TestConnectTimeoutOverride(t *testing.T) {
+	t.Setenv("SPDKCSI_NVME_CONNECT_TIMEOUT", "45s")
+	if got := connectTimeout(); got != 45*time.Second {
+		t.Errorf("connectTimeout() = %s, want 45s", got)
+	}
+}
+
+// TestConnectTimeoutInvalidFallsBack verifies an unparseable value falls back to
+// the default rather than yielding a zero (unbounded) timeout.
+func TestConnectTimeoutInvalidFallsBack(t *testing.T) {
+	t.Setenv("SPDKCSI_NVME_CONNECT_TIMEOUT", "not-a-duration")
+	if got := connectTimeout(); got != defaultConnectTimeout {
+		t.Errorf("connectTimeout() = %s, want default %s on invalid input", got, defaultConnectTimeout)
+	}
+}
+
+// TestWaitCtxCanceled verifies waitCtx returns the context error promptly when
+// the context is already done, rather than sleeping for the full duration.
+func TestWaitCtxCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := waitCtx(ctx, time.Hour); err == nil {
+		t.Error("waitCtx returned nil for a canceled context, want ctx.Err()")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("waitCtx slept %s despite canceled context", elapsed)
+	}
+}
+
+// TestWaitCtxElapsed verifies waitCtx returns nil once the duration elapses.
+func TestWaitCtxElapsed(t *testing.T) {
+	if err := waitCtx(context.Background(), 10*time.Millisecond); err != nil {
+		t.Errorf("waitCtx = %v, want nil after the duration elapsed", err)
+	}
+}
+
 // writeTempFile creates a temp file with the given content and registers cleanup.
 func writeTempFile(t *testing.T, content string) string {
 	t.Helper()

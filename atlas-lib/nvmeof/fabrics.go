@@ -25,6 +25,15 @@ const (
 
 	defaultTrSvcID = 4420
 	defaultPoll    = 100 * time.Millisecond
+
+	// defaultConnectTimeout bounds a full Connect. A subsystem that never
+	// exports a namespace device (stale controllers that came up "live" but
+	// attached zero namespaces) would otherwise make Connect block forever;
+	// with the timeout it fails with an explicit error instead. It is a
+	// backstop for callers whose context carries no deadline of its own — a
+	// caller with a shorter deadline (e.g. kubelet's CSI operation timeout)
+	// still wins, since context.WithTimeout takes the earlier deadline.
+	defaultConnectTimeout = 2 * time.Minute
 )
 
 // FabricsConnector establishes and tears down NVMe-oF connections by talking
@@ -41,6 +50,7 @@ type FabricsConnector struct {
 	hostNQN string
 	hostID  string
 	poll    time.Duration
+	timeout time.Duration
 
 	// connect writes an options line to the fabrics device and returns the
 	// kernel's reply. A field so tests can stub the device write.
@@ -61,26 +71,84 @@ func NewFabricsConnector(subs nvme.SubsystemResolver) *FabricsConnector {
 		hostNQN: readTrim("/etc/nvme/hostnqn"),
 		hostID:  readTrim("/etc/nvme/hostid"),
 		poll:    defaultPoll,
+		timeout: defaultConnectTimeout,
 		connect: writeFabricsDevice,
 	}
 }
 
-// Connect attaches the target subsystem and returns once a controller for it
-// is live. It is idempotent: if a live controller already exists it does
-// nothing.
+// Connect attaches the target subsystem and returns once it has a live
+// controller exporting at least one namespace device. It is idempotent: if the
+// subsystem is already healthy it does nothing.
+//
+// A subsystem can be present with a live controller yet export no namespace
+// device — stale controllers left by a half-completed or broken connection.
+// Reusing that connection never yields a device, so Connect detects the
+// condition, tears the stale controllers down, and reconnects fresh so the
+// kernel re-enumerates namespaces. The whole operation is bounded by the
+// connector's timeout so a subsystem that never produces a device fails with an
+// explicit error instead of blocking forever.
 func (c *FabricsConnector) Connect(ctx context.Context, t Target) error {
 	if t.NQN == "" {
 		return fmt.Errorf("connect: empty NQN")
 	}
-	if ok, err := c.IsConnected(ctx, t.NQN); err != nil {
-		return err
-	} else if ok {
-		return nil
+
+	timeout := c.timeout
+	if timeout <= 0 {
+		timeout = defaultConnectTimeout
 	}
-	if _, err := c.connect(ctx, c.options(t)); err != nil {
-		return fmt.Errorf("connect %s: %w", t.NQN, err)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	poll := c.poll
+	if poll <= 0 {
+		poll = defaultPoll
 	}
-	return c.waitLive(ctx, t.NQN)
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+
+	disconnectedStale := false
+	for {
+		s, err := c.subs.ByNQN(ctx, t.NQN)
+		switch {
+		case errors.Is(err, errs.ErrNotFound):
+			// Not connected — establish a fresh connection.
+			if _, err := c.connect(ctx, c.options(t)); err != nil {
+				return fmt.Errorf("connect %s: %w", t.NQN, err)
+			}
+		case err != nil:
+			return err
+		case hasLiveController(s) && len(s.Namespaces) > 0:
+			// Live controller exporting a namespace device: usable.
+			return nil
+		case hasLiveController(s) && !disconnectedStale:
+			// Live controller but no namespace device: stale. Tear it down so
+			// the next iteration reconnects fresh. Do this at most once; a
+			// freshly reconnected subsystem that still exports no device is
+			// reported via the timeout below rather than churned repeatedly.
+			if err := c.Disconnect(ctx, t.NQN); err != nil {
+				return fmt.Errorf("disconnect stale subsystem %s: %w", t.NQN, err)
+			}
+			disconnectedStale = true
+			continue
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for %s to export a namespace device: %w", t.NQN, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+// hasLiveController reports whether any controller fronting the subsystem is in
+// the kernel "live" state.
+func hasLiveController(s nvme.Subsystem) bool {
+	for _, ctrl := range s.Controllers {
+		if ctrl.IsLive() {
+			return true
+		}
+	}
+	return false
 }
 
 // Disconnect removes every controller fronting nqn by writing its
@@ -163,30 +231,6 @@ func (c *FabricsConnector) options(t Target) string {
 		fmt.Fprintf(&b, ",ctrl_loss_tmo=%d", *t.CtrlLossTMOSec)
 	}
 	return b.String()
-}
-
-// waitLive polls until a controller for nqn is live or ctx is done.
-func (c *FabricsConnector) waitLive(ctx context.Context, nqn string) error {
-	poll := c.poll
-	if poll <= 0 {
-		poll = defaultPoll
-	}
-	ticker := time.NewTicker(poll)
-	defer ticker.Stop()
-	for {
-		ok, err := c.IsConnected(ctx, nqn)
-		if err != nil {
-			return err
-		}
-		if ok {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("waiting for %s to become live: %w", nqn, ctx.Err())
-		case <-ticker.C:
-		}
-	}
 }
 
 // writeFabricsDevice opens /dev/nvme-fabrics, writes the connect options, and

@@ -342,7 +342,7 @@ func parseDurationFromEnv(key string, def time.Duration) time.Duration {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
 		}
-		klog.Warningf("Guardian: invalid duration %s=%q, using default %s", key, v, def)
+		klog.Warningf("invalid duration %s=%q, using default %s", key, v, def)
 	}
 	return def
 }

@@ -282,89 +282,200 @@ func execWithTimeoutRetry(ctx context.Context, cmdLine []string, timeout, retry 
 	return err
 }
 
+const (
+	// defaultConnectTimeout bounds a full Connect. A subsystem whose NQN is
+	// present but that exports no namespace device (stale controllers) would
+	// otherwise make every NodeStageVolume attempt skip the connect and time
+	// out on device discovery, and kubelet retries that forever — the direct
+	// cause of the observed multi-hour FIO pod hang. This is a backstop: the
+	// context kubelet passes to NodeStageVolume already carries its own CSI
+	// operation deadline, and context.WithTimeout takes the earlier one, so a
+	// shorter kubelet deadline still wins. Overridable via
+	// SPDKCSI_NVME_CONNECT_TIMEOUT (a Go duration, e.g. "2m", "300s").
+	defaultConnectTimeout = 2 * time.Minute
+
+	// connectRetryInterval is the pause between connect/device-check attempts.
+	connectRetryInterval = 2 * time.Second
+
+	// deviceWaitSeconds is how long each device-symlink glob is polled for a
+	// namespace block device to appear before falling through to the next glob
+	// (and ultimately to a stale-controller reconnect).
+	deviceWaitSeconds = 10
+)
+
+// connectTimeout returns the overall Connect deadline, overridable via
+// SPDKCSI_NVME_CONNECT_TIMEOUT.
+func connectTimeout() time.Duration {
+	return parseDurationFromEnv("SPDKCSI_NVME_CONNECT_TIMEOUT", defaultConnectTimeout)
+}
+
+// Connect attaches the volume's NVMe-oF subsystem and returns the local block
+// device path, ensuring the connection actually produced at least one namespace
+// device attached to the subsystem. It is idempotent.
+//
+// A subsystem can be "connected" (its NQN present in `nvme list-subsys`) yet
+// export no namespace device — stale controllers left by a half-completed or
+// broken connection. Reusing that connection never yields a device, so Connect
+// detects the condition, disconnects the stale controllers by NQN, and
+// reconnects fresh. The whole operation is bounded by connectTimeout so a
+// subsystem that never produces a device fails with an explicit error instead
+// of hanging (and wedging kubelet in an endless NodeStageVolume retry loop).
 func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
-	alreadyConnected, err := isNqnConnected(ctx, nvmf.nqn)
-	if err != nil {
-		klog.Errorf("Failed to check existing connections: %v", err)
-		return "", err
-	}
+	timeout := connectTimeout()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-	if !alreadyConnected {
-		clusterID, _ := getLvolIDFromNQN(nvmf.nqn)
-		// the lvolID from NQN gives the master LvolID of the subsystem
-		// Although the connection string is same for all the lvols in the subsystem,
-		// volume/<lvol-id>/connect/ connect API return 404 if master lvol is deleted
-		// so using the actual lvolID instead instead of master lvol ID
-		lvolID := nvmf.lvolID
-		sbcClient, err := NewsimplyBlockClient(ctx, clusterID, nvmf.poolID)
+	disconnectedStale := false
+	for {
+		connected, err := isNqnConnected(ctx, nvmf.nqn)
 		if err != nil {
-			klog.Errorf("failed to create SPDK client: %v", err)
-			return "", err
-		}
-		connections, err := fetchLvolConnection(ctx, sbcClient, lvolID, nvmf.hostNQN)
-		if err != nil {
-			klog.Errorf("Failed to get lvol connection: %v", err)
+			klog.Errorf("Failed to check existing connections: %v", err)
 			return "", err
 		}
 
-		ctrlLossTmo := DefaultCtrlLossTmo
-
-		connected := 0
-		var lastErr error
-
-		for _, conn := range connections {
-			err := connectViaNVMe(ctx, conn, ctrlLossTmo, len(connections))
-			if err != nil {
-				klog.Errorf("nvme connect failed for %s:%d: %v", conn.IP, conn.Port, err)
-				lastErr = err
+		if !connected {
+			if err := nvmf.establishConnection(ctx); err != nil {
+				klog.Errorf("nvme connect for NQN %s failed: %v", nvmf.nqn, err)
+				if werr := waitCtx(ctx, connectRetryInterval); werr != nil {
+					return "", fmt.Errorf("connect NQN %s: %w", nvmf.nqn, err)
+				}
 				continue
 			}
-			connected++
 		}
-		if connected == 0 {
+
+		// The connection must yield a namespace block device; a connected
+		// subsystem exporting zero namespaces is not usable.
+		devicePath, err := nvmf.waitForDevice(ctx)
+		if err == nil {
+			nvmf.registerDevicePresence(devicePath)
+			return devicePath, nil
+		}
+		klog.Warningf("no namespace device for NQN %s yet: %v", nvmf.nqn, err)
+
+		// Connected but no device: the controllers are stale (0 namespaces
+		// attached). Disconnect by NQN — which works even with no namespace
+		// device, unlike the symlink-based Disconnect — and reconnect fresh on
+		// the next iteration so the kernel re-enumerates namespaces. Do this at
+		// most once; if a freshly reconnected subsystem still exports no device,
+		// keep waiting until the timeout and then report explicitly instead of
+		// looping.
+		if connected && !disconnectedStale {
+			klog.Warningf(
+				"NVMe-oF subsystem %s is connected but exports no namespace device; disconnecting stale controllers and reconnecting", //nolint:lll // unwrappable string/log/signature
+				nvmf.nqn,
+			)
+			if derr := disconnectByNQN(ctx, nvmf.nqn); derr != nil {
+				klog.Errorf("failed to disconnect stale subsystem %s: %v", nvmf.nqn, derr)
+			}
+			disconnectedStale = true
+			continue
+		}
+
+		if werr := waitCtx(ctx, connectRetryInterval); werr != nil {
 			return "", fmt.Errorf(
-				"failed to connect to any NVMe path for NQN %s: error: %v",
-				nvmf.nqn, lastErr,
+				"NVMe-oF subsystem %s produced no namespace device within %s: %w",
+				nvmf.nqn, timeout, werr,
 			)
 		}
 	}
+}
 
+// establishConnection fetches the volume's connection endpoints from the
+// control plane and issues an `nvme connect` for each, returning an error only
+// if none succeeded.
+func (nvmf *initiatorNVMf) establishConnection(ctx context.Context) error {
+	clusterID, _ := getLvolIDFromNQN(nvmf.nqn)
+	// the lvolID from NQN gives the master LvolID of the subsystem
+	// Although the connection string is same for all the lvols in the subsystem,
+	// volume/<lvol-id>/connect/ connect API return 404 if master lvol is deleted
+	// so using the actual lvolID instead instead of master lvol ID
+	lvolID := nvmf.lvolID
+	sbcClient, err := NewsimplyBlockClient(ctx, clusterID, nvmf.poolID)
+	if err != nil {
+		klog.Errorf("failed to create SPDK client: %v", err)
+		return err
+	}
+	connections, err := fetchLvolConnection(ctx, sbcClient, lvolID, nvmf.hostNQN)
+	if err != nil {
+		klog.Errorf("Failed to get lvol connection: %v", err)
+		return err
+	}
+
+	ctrlLossTmo := DefaultCtrlLossTmo
+
+	connected := 0
+	var lastErr error
+	for _, conn := range connections {
+		if err := connectViaNVMe(ctx, conn, ctrlLossTmo, len(connections)); err != nil {
+			klog.Errorf("nvme connect failed for %s:%d: %v", conn.IP, conn.Port, err)
+			lastErr = err
+			continue
+		}
+		connected++
+	}
+	if connected == 0 {
+		return fmt.Errorf("failed to connect to any NVMe path for NQN %s: error: %v", nvmf.nqn, lastErr)
+	}
+	return nil
+}
+
+// waitForDevice polls for the namespace block-device symlink created for this
+// volume, trying the current, legacy, and fallback /dev/disk/by-id naming
+// formats in turn. It returns the first match, or an error if none appeared —
+// which the caller treats as "the subsystem exported no namespace device".
+func (nvmf *initiatorNVMf) waitForDevice(ctx context.Context) (string, error) {
 	deviceGlob := fmt.Sprintf(DevDiskByID, fmt.Sprintf("%s*_%s", nvmf.model, nvmf.nsId))
-
 	deviceGlobOld := fmt.Sprintf(DevDiskByID, nvmf.model)
-
 	deviceGlobFallback := fmt.Sprintf(DevDiskByID, fmt.Sprintf("%s*_%s", nvmf.lvolID, nvmf.nsId))
 
-	devicePath, err := waitForDeviceReady(ctx, deviceGlob, 10)
-	if err != nil {
-		klog.Warningf("New device symlink not found (%s). Retrying legacy format: %s", deviceGlob, deviceGlobOld)
-		devicePath, err = waitForDeviceReady(ctx, deviceGlobOld, 10)
-		if err != nil {
-			klog.Warningf("Legacy format not found (%s). Retrying with fallback: %s", deviceGlobOld, deviceGlobFallback)
-			devicePath, err = waitForDeviceReady(ctx, deviceGlobFallback, 10)
-			if err != nil {
-				return "", fmt.Errorf("device not found in both new (%s), old (%s), and fallback (%s) formats: %w",
-					deviceGlob, deviceGlobOld, deviceGlobFallback, err)
-			}
+	for _, g := range []string{deviceGlob, deviceGlobOld, deviceGlobFallback} {
+		if devicePath, err := waitForDeviceReady(ctx, g, deviceWaitSeconds); err == nil {
+			return devicePath, nil
 		}
 	}
+	return "", fmt.Errorf(
+		"no namespace device for NQN %s in new (%s), legacy (%s), or fallback (%s) formats",
+		nvmf.nqn, deviceGlob, deviceGlobOld, deviceGlobFallback,
+	)
+}
 
-	// Register presence synchronously instead of waiting for the next
-	// MonitorConnection poll to discover it. Without this, a device that
-	// connects and then loses all paths faster than one poll interval
-	// (~3s+jitter) is never seen as "present", so the guardian's gone-device
-	// detection in reconnectSubsystems has nothing to diff against and can
-	// silently miss the loss forever.
-	if realPath, err := filepath.EvalSymlinks(devicePath); err == nil {
-		mu.Lock()
-		devicePresentMap[realPath] = true
-		deviceToLvolIDMap[realPath] = nvmf.lvolID
-		mu.Unlock()
-	} else {
+// registerDevicePresence records a freshly connected device in the shared
+// presence maps so the connection monitor's gone-device detection has a
+// baseline immediately, without waiting for its next poll. Without this, a
+// device that connects and then loses all paths faster than one poll interval
+// (~3s+jitter) is never seen as "present", so reconnectSubsystems has nothing
+// to diff against and can silently miss the loss forever.
+func (nvmf *initiatorNVMf) registerDevicePresence(devicePath string) {
+	realPath, err := filepath.EvalSymlinks(devicePath)
+	if err != nil {
 		klog.Warningf("Connect: failed to resolve device path %s for lvol %s: %v", devicePath, nvmf.lvolID, err)
+		return
 	}
+	mu.Lock()
+	devicePresentMap[realPath] = true
+	deviceToLvolIDMap[realPath] = nvmf.lvolID
+	mu.Unlock()
+}
 
-	return devicePath, nil
+// disconnectByNQN tears down every controller fronting nqn via
+// `nvme disconnect -n`. Unlike (*initiatorNVMf).Disconnect, which locates
+// controllers through the namespace block-device symlink, this works even for a
+// stale subsystem that exports no namespace device — the case that must be
+// cleared before a fresh reconnect can re-enumerate namespaces.
+func disconnectByNQN(ctx context.Context, nqn string) error {
+	cmd := []string{"nvme", "disconnect", "-n", nqn}
+	return execWithTimeoutRetry(ctx, cmd, 40, 1)
+}
+
+// waitCtx sleeps for d unless ctx is done first, in which case it returns the
+// context error.
+func waitCtx(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
 }
 
 func (nvmf *initiatorNVMf) Disconnect(ctx context.Context) error {
