@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/ptr"
@@ -207,6 +208,52 @@ func TestReconcileDataRealignment_DisabledSkips(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(f.calls); n != 0 {
 		t.Fatalf("API called %d times, want 0 when disabled", n)
+	}
+}
+
+// TestReconcile_RealignmentRunsWhenAutoRebalancingDisabled locks in that data
+// realignment is driven by the full Reconcile independently of auto-rebalancing:
+// whether auto-rebalancing is unset, explicitly disabled, or the cluster has no
+// VolumeMigrationSettings at all, a due (here: forced) realignment still fires
+// and the returned requeue keeps it on schedule.
+func TestReconcile_RealignmentRunsWhenAutoRebalancingDisabled(t *testing.T) {
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: realignNamespace, Name: realignClusterName}}
+
+	cases := []struct {
+		name string
+		vms  *simplyblockv1alpha1.VolumeMigrationSettings
+	}{
+		{
+			name: "no volume-migration settings",
+			vms:  nil,
+		},
+		{
+			name: "auto-rebalancing unset",
+			vms:  &simplyblockv1alpha1.VolumeMigrationSettings{},
+		},
+		{
+			name: "auto-rebalancing explicitly disabled",
+			vms: &simplyblockv1alpha1.VolumeMigrationSettings{
+				AutoRebalancing: &simplyblockv1alpha1.VolumeRebalancingSettings{Enabled: ptr.To(false)},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// annotate=true forces an immediate realignment regardless of interval.
+			f := newRealignFixture(t, http.StatusOK, realignTestCluster(ptr.To(true), nil, true, tc.vms))
+
+			res, err := f.r.Reconcile(context.Background(), req)
+			if err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if n := atomic.LoadInt32(f.calls); n != 1 {
+				t.Fatalf("realignment API calls = %d, want 1 (realignment must run with auto-rebalancing off)", n)
+			}
+			if res.RequeueAfter != defaultDataRealignmentInterval {
+				t.Fatalf("RequeueAfter = %v, want %v (realignment cadence preserved)", res.RequeueAfter, defaultDataRealignmentInterval)
+			}
+		})
 	}
 }
 
