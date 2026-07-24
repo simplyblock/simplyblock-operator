@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	jsonpatchapply "github.com/evanphx/json-patch/v5"
+	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	jsonpatch "gomodules.xyz/jsonpatch/v2"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -21,7 +22,6 @@ import (
 	"github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -55,10 +55,10 @@ func makePlacementStorageClass(provisioner string, params map[string]string) *st
 	}
 }
 
-func makePlacementCluster(autoRebalancing *simplyblockv1alpha1.VolumeRebalancingSettings) *simplyblockv1alpha1.StorageCluster {
+func makePlacementCluster(autoRebalancing *simplyblockv1alpha1.VolumeAutoPlacementSettings) *simplyblockv1alpha1.StorageCluster {
 	return &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster1", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{AutoRebalancing: autoRebalancing},
+		Spec:       simplyblockv1alpha1.StorageClusterSpec{VolumeAutoPlacement: autoRebalancing},
 	}
 }
 
@@ -153,7 +153,7 @@ func fakePrometheusServer(t *testing.T, samples []promSample) *httptest.Server {
 // ── Handle: skip conditions (all resolvable without any network call) ───────────
 
 func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) {
-	enabledRebalancing := &simplyblockv1alpha1.VolumeRebalancingSettings{
+	enabledRebalancing := &simplyblockv1alpha1.VolumeAutoPlacementSettings{
 		Enabled:       boolRef(true),
 		PrometheusURL: strRef("http://unused:9090"),
 	}
@@ -218,13 +218,13 @@ func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) 
 			name:    "AutoRebalancing disabled — skipped",
 			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
-			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeRebalancingSettings{Enabled: boolRef(false)}),
+			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{Enabled: boolRef(false)}),
 		},
 		{
 			name:    "invalid rebalancing config (missing prometheusURL) — skipped",
 			pvc:     makePlacementPVC(strRef(placementStorageClassName), nil),
 			sc:      makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
-			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeRebalancingSettings{Enabled: boolRef(true)}),
+			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{Enabled: boolRef(true)}),
 		},
 	}
 
@@ -276,7 +276,7 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 		{UUID: "atcapacity", Status: "online", Healthy: true, Lvols: 10, LvolsMax: 10},
 	})
 
-	cluster := makePlacementCluster(&simplyblockv1alpha1.VolumeRebalancingSettings{
+	cluster := makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
 		Enabled:       boolRef(true),
 		PrometheusURL: strRef(promSrv.URL),
 	})
@@ -311,7 +311,7 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 	h := &SimplyblockVolumePlacementInjector{
 		Client:       c,
 		APIClient:    webapi.NewClient(webSrv.URL),
-		NodeSelector: autobalancing.NewStorageNodeSelector(c),
+		NodeSelector: autoplacement.NewStorageNodeSelector(c),
 	}
 
 	resp := h.Handle(context.Background(), pvcAdmissionRequest(t, pvc))
@@ -337,7 +337,7 @@ func TestSimplyblockVolumePlacementInjector_Handle_NoEligibleNode(t *testing.T) 
 		{UUID: "unhealthy", Status: "online", Healthy: false, Lvols: 1, LvolsMax: 10},
 	})
 
-	cluster := makePlacementCluster(&simplyblockv1alpha1.VolumeRebalancingSettings{
+	cluster := makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
 		Enabled:       boolRef(true),
 		PrometheusURL: strRef(promSrv.URL),
 	})
@@ -359,7 +359,7 @@ func TestSimplyblockVolumePlacementInjector_Handle_NoEligibleNode(t *testing.T) 
 	h := &SimplyblockVolumePlacementInjector{
 		Client:       c,
 		APIClient:    webapi.NewClient(webSrv.URL),
-		NodeSelector: autobalancing.NewStorageNodeSelector(c),
+		NodeSelector: autoplacement.NewStorageNodeSelector(c),
 	}
 
 	resp := h.Handle(context.Background(), pvcAdmissionRequest(t, pvc))

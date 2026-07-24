@@ -15,8 +15,8 @@ import (
 	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
-	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -36,9 +36,9 @@ type storageNodeLister interface {
 type primaryNodeSelector interface {
 	SelectBestNode(
 		ctx context.Context,
-		cfg autobalancing.RebalancingConfig,
+		cfg autoplacement.RebalancingConfig,
 		eligible map[string]bool,
-		inputs ...autobalancing.StorageNodeSelectorInput,
+		inputs ...autoplacement.StorageNodeSelectorInput,
 	) (nodeUUID string, ok bool, err error)
 }
 
@@ -151,13 +151,13 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 		return "", false
 	}
 
-	spec := ptr.From(cr.Spec.AutoRebalancing, simplyblockv1alpha1.VolumeRebalancingSettings{})
+	spec := ptr.From(cr.Spec.VolumeAutoPlacement, simplyblockv1alpha1.VolumeAutoPlacementSettings{})
 	if !ptr.BoolFromOrTrue(spec.Enabled) {
 		log.V(1).Info("Skipping: auto-rebalancing disabled", "cluster", cr.Name)
 		return "", false
 	}
 
-	cfg, err := autobalancing.ResolveRebalancingConfig(spec)
+	cfg, err := autoplacement.ResolveAutoPlacementConfig(spec)
 	if err != nil {
 		log.V(1).Info("Skipping: invalid rebalancing configuration", "cluster", cr.Name, "error", err.Error())
 		return "", false
@@ -176,7 +176,7 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 		eligible[n.UUID] = n.Status == "online" && n.Healthy && n.Lvols < n.LvolsMax
 	}
 
-	nodeUUID, ok, err = h.NodeSelector.SelectBestNode(ctx, cfg, eligible, autobalancing.StorageNodeSelectorInput{
+	nodeUUID, ok, err = h.NodeSelector.SelectBestNode(ctx, cfg, eligible, autoplacement.StorageNodeSelectorInput{
 		Namespace:    cr.Namespace,
 		StorageNodes: storageNodes,
 	})
