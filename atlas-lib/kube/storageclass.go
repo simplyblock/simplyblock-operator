@@ -155,8 +155,8 @@ func StorageClassNameFromPV(pv *corev1.PersistentVolume) (string, bool) {
 // ResolvePropertiesForPV resolves the StorageClass that provisioned pv via r and
 // returns its parsed Properties. It returns errs.ErrUnsupported if pv is not a
 // volume managed by this driver, and errs.ErrNotFound if pv names no
-// StorageClass. Only Resolver.StorageClassByName is used, so a consumer with a
-// narrower need can pass any type implementing that method.
+// StorageClass.
+// Only StorageClassByName is used, so r can be any type implementing that method.
 func ResolvePropertiesForPV(ctx context.Context, r Resolver, pv *corev1.PersistentVolume) (Properties, error) {
 	if !IsManaged(pv) {
 		return Properties{}, fmt.Errorf("pv %q: %w", pvName(pv), errs.ErrUnsupported)
