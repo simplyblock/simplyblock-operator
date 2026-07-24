@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -148,7 +149,6 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	apiClient := webapi.NewClient()
-	patch := client.MergeFrom(snCR.DeepCopy())
 	nextRequeue := time.Duration(0)
 
 	// Pre-create blocking PDBs for worker nodes that are already online in the
@@ -194,8 +194,26 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 	}
 
-	if err := r.Status().Patch(ctx, snCR, patch); err != nil {
-		log.Error(err, "Failed to patch drain coordination status")
+	// Persist the computed drain state. Use RetryOnConflict so that a 409
+	// (another actor updated the CR between our snapshot and now) does not
+	// silently discard the phase transitions computed above — which would
+	// cause processWorker to re-run from the previous phase and call backend
+	// shutdown/restart APIs a second time.
+	//
+	// On each conflict attempt: re-read the latest CR, overlay only the drain
+	// coordination changes (preserving any concurrent updates to other fields),
+	// and retry the patch.
+	computedCoordination := snCR.Status.DrainCoordination
+	if retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var latest simplyblockv1alpha1.StorageNodeSet
+		if err := r.Get(ctx, req.NamespacedName, &latest); err != nil {
+			return err
+		}
+		latestPatch := client.MergeFrom(latest.DeepCopy())
+		latest.Status.DrainCoordination = computedCoordination
+		return r.Status().Patch(ctx, &latest, latestPatch)
+	}); retryErr != nil {
+		log.Error(retryErr, "Failed to patch drain coordination status after retries")
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
