@@ -58,7 +58,7 @@ func NewRebalancer(nodeSelector *StorageNodeSelector, volumeSelector *LogicalVol
 // window. The first argument is the cluster UUID, the second the volume UUID.
 // Pass nil to skip the cool-down check.
 // The returned pinnedBlocked is true when at least one hot node could not be
-// rebalanced because every volume it hosts is pinned (simplyblock.io/pinned-volume).
+// rebalanced because every volume it hosts is pinned (see kube.IsPinnedVolume).
 // This is a distinct, legitimate outcome from "no hot nodes" or "cooling down" and
 // callers surface it via the rebalancer_pinned_blocked metric.
 func (rb *Rebalancer) SelectMigrations(

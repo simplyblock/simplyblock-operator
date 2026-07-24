@@ -54,7 +54,7 @@ The operator has existing primitives for drain-based rebalancing (triggered duri
 - Continuously monitor per-node latency degradation relative to each node's own baseline.
 - Proactively migrate volumes from degraded nodes to healthy nodes when a deviation threshold is exceeded.
 - Prioritise volumes contributing the most I/O load (highest combined IOPS + throughput) for migration.
-- Respect per-volume pinning: volumes whose PVC carries the `simplyblock.io/pinned-volume` annotation are never migrated.
+- Respect per-volume pinning: volumes whose PVC carries a pin annotation (`simplyblock.io/selected-storage-node`, or legacy `host-id`) are never migrated.
 - Apply a configurable cool-down period after each migration to prevent oscillation.
 - Emit warnings when the only candidates are pinned or cooling-down volumes.
 - Expose Prometheus metrics for deviation, migration events, and per-node scores.
@@ -435,7 +435,7 @@ Nodes above the threshold are sorted by `latencyDeviationPct` descending (worst 
 
 - Volume `status == "online"`
 - Volume `migrating == false` (guards against operator-restart edge case where cool-down map is empty)
-- Not in the PVC-annotation pinned set (`simplyblock.io/pinned-volume`)
+- Not in the PVC-annotation pinned set (`simplyblock.io/selected-storage-node`, or legacy `host-id`)
 - Not in the in-memory cool-down map with a non-expired expiry
 
 If no node has any eligible volume, emit `VolumeRebalancingBlocked` Warning and skip.
@@ -953,7 +953,7 @@ The per-node, per-blocksize I/O metric endpoint described in earlier drafts is d
 | Annotation                                    | Description                                                                    |
 |-----------------------------------------------|--------------------------------------------------------------------------------|
 | `simplyblock.io/rebalancing-cooldown-seconds` | Per-volume cool-down override (set on the PVC)                                 |
-| `simplyblock.io/pinned-volume`                | Excludes the volume from rebalancing; any non-empty value is treated as `true` |
+| `simplyblock.io/selected-storage-node`        | Pins the volume to the named storage-node UUID; a pinned volume is excluded from rebalancing (legacy `host-id` also honored) |
 
 ---
 
@@ -1098,7 +1098,7 @@ Run the full controller reconciliation loop against a mock backend HTTP server a
 | I-03 | Migration API returns 500 → error event emitted, next candidate attempted                           | Negative |
 | I-04 | Migration completes → cool-down entry created, `VolumeRebalancingComplete` event emitted            | Positive |
 | I-05 | `status.rebalancing = true` during active cycle blocks concurrent node drain                        | Positive |
-| I-06 | PVC with `simplyblock.io/pinned-volume` → volume never passed to migration API                      | Positive |
+| I-06 | PVC with `simplyblock.io/selected-storage-node` → volume never passed to migration API                      | Positive |
 | I-07 | All hot volumes pinned → `VolumeRebalancingBlocked` warning                                         | Negative |
 | I-08 | Volume with `Migrating == true` excluded after operator restart (no cool-down state)                | Negative |
 | I-09 | `spec.volumeRebalancing.enabled = false` → loop stops within one cycle                              | Positive |
@@ -1132,7 +1132,7 @@ Run against a real SimplyBlock cluster with real fio latency measurements.
 | 1 | ~~**IOPS/throughput per volume from REST API**~~ **Resolved.** Per-volume IOPS and throughput are read directly from Prometheus. REST API values are the fallback.                                                                                                                                                                                                                      | Resolved          |
 | 2 | **Phase 2 SPDK Prometheus metric schema:** Exact metric names and label keys for per-node, per-blocksize IOPS series must be agreed with the SPDK team.                                                                                                                                                                                                                                 | SPDK/Backend team |
 | 3 | ~~**Helm/OLM RBAC sync**~~ **Resolved.** The Helm chart now includes hand-written RBAC for the new controllers and the VolumeMigration CRD.                                                                                                                                                                                                                                             | Resolved          |
-| 4 | **`simplyblock.io/pinned-volume` — backend hard-pin:** Does the backend also enforce a hard-pin? Currently only the PVC annotation is checked.                                                                                                                                                                                                                                          | Backend team      |
+| 4 | **`simplyblock.io/selected-storage-node` — backend hard-pin:** Does the backend also enforce a hard-pin? Currently only the PVC annotation is checked.                                                                                                                                                                                                                                          | Backend team      |
 | 5 | **Sidecar ConfigMap injection latency:** Race condition possible if a pod is scheduled before `StorageNodeLatencyReconciler` has written the ConfigMap entry.                                                                                                                                                                                                                           | —                 |
 | 6 | **Per-volume replica placement for scoring (Phase 2):** Secondary/tertiary LVS placement data not available from current API.                                                                                                                                                                                                                                                           | SPDK/Backend team |
 | 7 | **ANA state field name in nvme-cli JSON:** The validation Job checks `sub.get('ANA_State', '')` against `"inaccessible"`. The exact JSON field name produced by `nvme list --verbose --output-format=json` must be confirmed against the nvme-cli version shipped in the fio-bench image.                                                                                               | —                 |

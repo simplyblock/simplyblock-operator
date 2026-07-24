@@ -22,10 +22,11 @@ import (
 // +kubebuilder:webhook:path=/validate-v1-pvc-pinned-volume,mutating=false,failurePolicy=fail,sideEffects=None,groups="",resources=persistentvolumeclaims,verbs=create;update,versions=v1,name=pinned-volume-validator.simplyblock.io,admissionReviewVersions=v1
 
 // PersistentVolumeClaimValidator is a validating admission webhook that rejects a
-// change to the simplyblock.io/pinned-volume annotation whose new value is not a
-// known storage-node UUID. The annotation pins a volume's backing logical volume
-// to a specific storage node; an unknown UUID would otherwise be accepted and
-// only surface later as a failed migration, so it is rejected at write time.
+// change to a PVC's pin annotation whose new value is not a known storage-node
+// UUID. The pin (kube.PinnedNode: canonical AnnoSelectedStorageNode, or legacy
+// AnnoHostID / DeprecatedAnnoHostID) binds a volume's backing logical volume to a
+// specific storage node; an unknown UUID would otherwise be accepted and only
+// surface later as a failed migration, so it is rejected at write time.
 //
 // The webhook is scoped (via matchConditions in the WebhookConfiguration) to only
 // fire for PVCs that carry the annotation, so failurePolicy=Fail cannot block
@@ -42,7 +43,10 @@ func (v *PersistentVolumeClaimValidator) Handle(ctx context.Context, req admissi
 	if err := json.Unmarshal(req.Object.Raw, pvc); err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}
-	desired := pvc.Annotations[kube.AnnoSelectedStorageNode]
+	// Validate the effective pin target — the canonical AnnoSelectedStorageNode or
+	// a legacy host-id fallback — so a pin set via any of them is checked and stays
+	// consistent with the PVC controller (which keys off kube.PinnedNode too).
+	desired := kube.PinnedNode(pvc.Annotations)
 
 	// Clearing/omitting the annotation (unpin) is always allowed.
 	if desired == "" {
@@ -57,7 +61,7 @@ func (v *PersistentVolumeClaimValidator) Handle(ctx context.Context, req admissi
 		if err := json.Unmarshal(req.OldObject.Raw, oldPVC); err != nil {
 			return admission.Errored(http.StatusBadRequest, err)
 		}
-		if oldPVC.Annotations[kube.AnnoSelectedStorageNode] == desired {
+		if kube.PinnedNode(oldPVC.Annotations) == desired {
 			return admission.Allowed("pinned-volume annotation unchanged")
 		}
 	}
