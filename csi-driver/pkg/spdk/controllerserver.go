@@ -475,7 +475,8 @@ func (cs *controllerServer) CreateVolume(
 	// provisioning (and, since this runs only on the success path, a retried
 	// CreateVolume still sees the hint if publish failed).
 	params := req.GetParameters()
-	if pvcName, pvcNamespace := params[CSIStorageNameKey], params[CSIStorageNamespaceKey]; pvcName != "" && pvcNamespace != "" {
+	pvcName, pvcNamespace := params[CSIStorageNameKey], params[CSIStorageNamespaceKey]
+	if pvcName != "" && pvcNamespace != "" {
 		if rerr := removePVCAnnotations(ctx, pvcName, pvcNamespace, kube.AnnoPlacementHint); rerr != nil {
 			klog.Warningf("createVolume: could not clear placement-hint on PVC %s/%s: %v", pvcNamespace, pvcName, rerr)
 		}
@@ -787,7 +788,8 @@ func prepareCreateVolumeReq(
 	// host_id priority: selected-storage-node (hard pin) → placement-hint (one-shot
 	// hint from the placement webhook) → host-id and its deprecated form (legacy
 	// fallback for pre-existing PVCs).
-	hostID := pvcAnnotation(pvcAnns, kube.AnnoSelectedStorageNode, kube.AnnoPlacementHint, kube.AnnoHostID, kube.DeprecatedAnnoHostID)
+	hostID := pvcAnnotation(pvcAnns,
+		kube.AnnoSelectedStorageNode, kube.AnnoPlacementHint, kube.AnnoHostID, kube.DeprecatedAnnoHostID)
 	lvolID := pvcAnnotation(pvcAnns, annotationLvolID, deprecatedAnnotationLvolID)
 	podAffinitive, _ := strconv.ParseBool(pvcAnns[annotationPodAffinity])
 

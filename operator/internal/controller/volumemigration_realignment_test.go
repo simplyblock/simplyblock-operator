@@ -23,11 +23,12 @@ func newVMReconcilerForRealign(t *testing.T, objs ...client.Object) (*VolumeMigr
 	return &VolumeMigrationReconciler{Client: cl, Scheme: scheme, Recorder: events.NewFakeRecorder(16)}, cl
 }
 
-func getClusterByName(t *testing.T, cl client.Client, name string) *simplyblockv1alpha1.StorageCluster {
+func getClusterByName(t *testing.T, cl client.Client) *simplyblockv1alpha1.StorageCluster {
 	t.Helper()
 	cr := &simplyblockv1alpha1.StorageCluster{}
-	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: realignNamespace, Name: name}, cr); err != nil {
-		t.Fatalf("get cluster %q: %v", name, err)
+	key := types.NamespacedName{Namespace: realignNamespace, Name: realignClusterName}
+	if err := cl.Get(context.Background(), key, cr); err != nil {
+		t.Fatalf("get cluster %q: %v", realignClusterName, err)
 	}
 	return cr
 }
@@ -38,7 +39,7 @@ func TestMarkClusterPendingRealignment_SetsFlag(t *testing.T) {
 
 	r.markClusterPendingRealignment(context.Background(), realignNamespace, realignClusterUUID)
 
-	got := getClusterByName(t, cl, realignClusterName)
+	got := getClusterByName(t, cl)
 	if got.Status.PendingDataRealignment == nil || !*got.Status.PendingDataRealignment {
 		t.Fatalf("pending flag = %v, want true", got.Status.PendingDataRealignment)
 	}
@@ -51,7 +52,7 @@ func TestMarkClusterPendingRealignment_AlreadyFlaggedIsIdempotent(t *testing.T) 
 
 	r.markClusterPendingRealignment(context.Background(), realignNamespace, realignClusterUUID)
 
-	got := getClusterByName(t, cl, realignClusterName)
+	got := getClusterByName(t, cl)
 	if got.Status.PendingDataRealignment == nil || !*got.Status.PendingDataRealignment {
 		t.Fatalf("pending flag = %v, want true", got.Status.PendingDataRealignment)
 	}
@@ -64,7 +65,7 @@ func TestMarkClusterPendingRealignment_NoMatchingClusterLeavesOthersAlone(t *tes
 
 	r.markClusterPendingRealignment(context.Background(), realignNamespace, realignClusterUUID)
 
-	got := getClusterByName(t, cl, realignClusterName)
+	got := getClusterByName(t, cl)
 	if got.Status.PendingDataRealignment != nil {
 		t.Fatalf("unrelated cluster flagged: %v", *got.Status.PendingDataRealignment)
 	}
@@ -78,7 +79,7 @@ func TestMarkClusterPendingRealignment_EmptyUUIDIsNoOp(t *testing.T) {
 	// resolved cluster UUID.
 	r.markClusterPendingRealignment(context.Background(), realignNamespace, "")
 
-	got := getClusterByName(t, cl, realignClusterName)
+	got := getClusterByName(t, cl)
 	if got.Status.PendingDataRealignment != nil {
 		t.Fatalf("cluster flagged for empty UUID: %v", *got.Status.PendingDataRealignment)
 	}
