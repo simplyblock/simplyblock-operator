@@ -40,7 +40,7 @@ func (v *PersistentVolumeClaimValidator) Handle(ctx context.Context, req admissi
 	if err := json.Unmarshal(req.Object.Raw, pvc); err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}
-	desired := pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolume]
+	desired := pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNode]
 
 	// Clearing/omitting the annotation (unpin) is always allowed.
 	if desired == "" {
@@ -55,7 +55,7 @@ func (v *PersistentVolumeClaimValidator) Handle(ctx context.Context, req admissi
 		if err := json.Unmarshal(req.OldObject.Raw, oldPVC); err != nil {
 			return admission.Errored(http.StatusBadRequest, err)
 		}
-		if oldPVC.Annotations[simplyblockv1alpha1.AnnotationPinnedVolume] == desired {
+		if oldPVC.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNode] == desired {
 			return admission.Allowed("pinned-volume annotation unchanged")
 		}
 	}

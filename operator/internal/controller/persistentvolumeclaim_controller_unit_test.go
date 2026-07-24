@@ -99,10 +99,10 @@ func pinPV() *corev1.PersistentVolume {
 func pinPVC(pinned, applied string) *corev1.PersistentVolumeClaim {
 	ann := map[string]string{}
 	if pinned != "" {
-		ann[simplyblockv1alpha1.AnnotationPinnedVolume] = pinned
+		ann[simplyblockv1alpha1.AnnotationSelectedStorageNode] = pinned
 	}
 	if applied != "" {
-		ann[simplyblockv1alpha1.AnnotationPinnedVolumeApplied] = applied
+		ann[simplyblockv1alpha1.AnnotationSelectedStorageNodeApplied] = applied
 	}
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: pinPVCName, Namespace: pinNamespace, Annotations: ann},
@@ -150,7 +150,7 @@ func TestPVCReconcile_Unpin(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	pvc := getPinPVC(t, cl)
-	if _, ok := pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeApplied]; ok {
+	if _, ok := pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeApplied]; ok {
 		t.Fatalf("expected applied annotation cleared, still present")
 	}
 	if got := len(listPinMigrations(t, cl)); got != 0 {
@@ -185,11 +185,11 @@ func TestPVCReconcile_InvalidTarget(t *testing.T) {
 		t.Fatalf("expected no migrations for invalid target, got %d", got)
 	}
 	pvc := getPinPVC(t, cl)
-	if pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeRejected] != "ghost-node" {
+	if pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeRejected] != "ghost-node" {
 		t.Fatalf("expected rejected annotation = ghost-node, got %q",
-			pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeRejected])
+			pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeRejected])
 	}
-	if _, ok := pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeApplied]; ok {
+	if _, ok := pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeApplied]; ok {
 		t.Fatalf("applied must not be set for a rejected target")
 	}
 }
@@ -204,7 +204,7 @@ func TestPVCReconcile_AlreadyOnTarget(t *testing.T) {
 	if got := len(listPinMigrations(t, cl)); got != 0 {
 		t.Fatalf("expected no migrations, got %d", got)
 	}
-	if getPinPVC(t, cl).Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeApplied] != pinNodeB {
+	if getPinPVC(t, cl).Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeApplied] != pinNodeB {
 		t.Fatalf("expected applied = %s", pinNodeB)
 	}
 }
@@ -235,7 +235,7 @@ func TestPVCReconcile_ValidChangeCreatesMigration(t *testing.T) {
 		m.OwnerReferences[0].Kind != "StorageCluster" {
 		t.Fatalf("expected owner reference to StorageCluster, got %+v", m.OwnerReferences)
 	}
-	if getPinPVC(t, cl).Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeApplied] != pinNodeB {
+	if getPinPVC(t, cl).Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeApplied] != pinNodeB {
 		t.Fatalf("expected applied = %s after creating migration", pinNodeB)
 	}
 }
@@ -255,7 +255,7 @@ func TestPVCReconcile_NoStorageCluster(t *testing.T) {
 	if got := len(listPinMigrations(t, cl)); got != 0 {
 		t.Fatalf("expected no migrations, got %d", got)
 	}
-	if _, ok := getPinPVC(t, cl).Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeApplied]; ok {
+	if _, ok := getPinPVC(t, cl).Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeApplied]; ok {
 		t.Fatalf("applied must not be set when the migration could not be created")
 	}
 }
@@ -283,7 +283,7 @@ func TestPVCReconcile_ActiveMigrationWaits(t *testing.T) {
 	if got := len(listPinMigrations(t, cl)); got != 1 {
 		t.Fatalf("expected only the pre-existing migration, got %d", got)
 	}
-	if _, ok := getPinPVC(t, cl).Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeApplied]; ok {
+	if _, ok := getPinPVC(t, cl).Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeApplied]; ok {
 		t.Fatalf("applied must not be set while waiting for an in-flight migration")
 	}
 }

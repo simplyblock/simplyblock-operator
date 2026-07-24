@@ -156,7 +156,7 @@ func newPVC(name string, pinned bool) *corev1.PersistentVolumeClaim {
 	}
 	if pinned {
 		pvc.Annotations = map[string]string{
-			simplyblockv1alpha1.AnnotationPinnedVolume: "true",
+			simplyblockv1alpha1.AnnotationSelectedStorageNode: "true",
 		}
 	}
 	return pvc

@@ -48,7 +48,7 @@ func pvcRaw(t *testing.T, pinned string, bound bool) runtime.RawExtension {
 	t.Helper()
 	ann := map[string]string{}
 	if pinned != "" {
-		ann[simplyblockv1alpha1.AnnotationPinnedVolume] = pinned
+		ann[simplyblockv1alpha1.AnnotationSelectedStorageNode] = pinned
 	}
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: "data-pvc", Namespace: "sb", Annotations: ann},

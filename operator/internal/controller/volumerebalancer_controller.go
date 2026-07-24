@@ -34,14 +34,6 @@ const (
 	// rebalancerClusterLabel records the owning StorageCluster name.
 	rebalancerClusterLabel = "storage.simplyblock.io/cluster"
 
-	// TriggerRealignmentAnnotation, when set to any non-empty value on a StorageCluster,
-	// forces an immediate control-plane data realignment on the next reconcile,
-	// bypassing the DataRealignment.Interval spacing. The operator removes the
-	// annotation once the realignment has been triggered. It is the mechanism for
-	// explicit, out-of-band triggers — a human running `kubectl annotate`, or another
-	// controller after a storage node drain and removal (see TriggerDataRealignment).
-	TriggerRealignmentAnnotation = "simplyblock.io/trigger-realignment"
-
 	// defaultDataRealignmentInterval is the spacing between control-plane data
 	// realignments when DataRealignment.Interval is unset.
 	defaultDataRealignmentInterval = 10 * time.Minute
@@ -446,7 +438,7 @@ func (r *VolumeRebalancerReconciler) reconcileDataRealignment(
 
 	// Any non-empty annotation value forces an immediate run; an empty value (or an
 	// absent annotation) does not.
-	forced := clusterCR.Annotations[TriggerRealignmentAnnotation] != ""
+	forced := clusterCR.Annotations[simplyblockv1alpha1.TriggerRealignmentAnnotation] != ""
 	pending := ptr.BoolFromOrFalse(clusterCR.Status.PendingDataRealignment)
 
 	if !forced && !pending {
@@ -498,11 +490,11 @@ func (r *VolumeRebalancerReconciler) removeTriggerAnnotation(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 ) error {
-	if _, ok := clusterCR.Annotations[TriggerRealignmentAnnotation]; !ok {
+	if _, ok := clusterCR.Annotations[simplyblockv1alpha1.TriggerRealignmentAnnotation]; !ok {
 		return nil
 	}
 	patch := client.MergeFrom(clusterCR.DeepCopy())
-	delete(clusterCR.Annotations, TriggerRealignmentAnnotation)
+	delete(clusterCR.Annotations, simplyblockv1alpha1.TriggerRealignmentAnnotation)
 	return r.Patch(ctx, clusterCR, patch)
 }
 
