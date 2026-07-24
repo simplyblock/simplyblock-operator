@@ -440,7 +440,7 @@ func (r *VolumeRebalancerReconciler) reconcileDataRealignment(
 	// Any non-empty annotation value forces an immediate run; an empty value (or an
 	// absent annotation) does not.
 	forced := clusterCR.Annotations[TriggerRealignmentAnnotation] != ""
-	pending := clusterCR.Status.PendingDataRealignment != nil && *clusterCR.Status.PendingDataRealignment
+	pending := ptr.BoolFromOrFalse(clusterCR.Status.PendingDataRealignment)
 
 	if !forced && !pending {
 		// Nothing moved since the last realignment — re-check at the interval boundary.
@@ -465,8 +465,7 @@ func (r *VolumeRebalancerReconciler) reconcileDataRealignment(
 	// Success — reset the pending flag and stamp the time so the interval restarts.
 	now := metav1.Now()
 	patch := client.MergeFrom(clusterCR.DeepCopy())
-	pendingFalse := false
-	clusterCR.Status.PendingDataRealignment = &pendingFalse
+	clusterCR.Status.PendingDataRealignment = ptr.To(false)
 	clusterCR.Status.LastDataRealignmentAt = &now
 	if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
 		// The realignment happened; failing to clear the flag only risks one extra
@@ -508,7 +507,7 @@ func resolveDataRealignmentConfig(
 ) (enabled bool, interval time.Duration) {
 	interval = defaultDataRealignmentInterval
 	vms := clusterCR.Spec.VolumeMigrationSettings
-	if vms != nil && vms.Enabled != nil && !*vms.Enabled {
+	if vms != nil && !ptr.BoolFromOrTrue(vms.Enabled) {
 		// Volume migration disabled — nothing ever moves, so nothing to realign.
 		return false, interval
 	}
@@ -516,7 +515,7 @@ func resolveDataRealignmentConfig(
 		return true, interval
 	}
 	dr := vms.DataRealignment
-	if dr.Enabled != nil && !*dr.Enabled {
+	if !ptr.BoolFromOrTrue(dr.Enabled) {
 		return false, interval
 	}
 	if dr.Interval != nil && dr.Interval.Duration > 0 {

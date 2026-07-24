@@ -14,6 +14,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -23,8 +24,6 @@ const (
 	realignClusterName = "cluster-a"
 	realignClusterUUID = "cluster-uuid-a"
 )
-
-func boolPtr(b bool) *bool { return &b }
 
 // ---------------------------------------------------------------------------
 // resolveDataRealignmentConfig — pure decision table.
@@ -53,13 +52,13 @@ func TestResolveDataRealignmentConfig(t *testing.T) {
 		},
 		{
 			name:        "volume migration disabled → realignment disabled",
-			vms:         &simplyblockv1alpha1.VolumeMigrationSettings{Enabled: boolPtr(false)},
+			vms:         &simplyblockv1alpha1.VolumeMigrationSettings{Enabled: ptr.To(false)},
 			wantEnabled: false,
 		},
 		{
 			name: "DataRealignment explicitly disabled",
 			vms: &simplyblockv1alpha1.VolumeMigrationSettings{
-				DataRealignment: &simplyblockv1alpha1.DataRealignmentSettings{Enabled: boolPtr(false)},
+				DataRealignment: &simplyblockv1alpha1.DataRealignmentSettings{Enabled: ptr.To(false)},
 			},
 			wantEnabled: false,
 		},
@@ -199,9 +198,9 @@ func realignTestCluster(pending *bool, lastAt *metav1.Time, annotate bool, vms *
 
 func TestReconcileDataRealignment_DisabledSkips(t *testing.T) {
 	vms := &simplyblockv1alpha1.VolumeMigrationSettings{
-		DataRealignment: &simplyblockv1alpha1.DataRealignmentSettings{Enabled: boolPtr(false)},
+		DataRealignment: &simplyblockv1alpha1.DataRealignmentSettings{Enabled: ptr.To(false)},
 	}
-	f := newRealignFixture(t, http.StatusOK, realignTestCluster(boolPtr(true), nil, true, vms))
+	f := newRealignFixture(t, http.StatusOK, realignTestCluster(ptr.To(true), nil, true, vms))
 
 	if got := f.r.reconcileDataRealignment(context.Background(), f.getCluster(t), realignClusterUUID); got != 0 {
 		t.Fatalf("requeue = %v, want 0 (disabled)", got)
@@ -225,7 +224,7 @@ func TestReconcileDataRealignment_NothingPendingSkips(t *testing.T) {
 
 func TestReconcileDataRealignment_PendingWithinIntervalWaits(t *testing.T) {
 	recent := metav1.NewTime(time.Now().Add(-time.Minute))
-	f := newRealignFixture(t, http.StatusOK, realignTestCluster(boolPtr(true), &recent, false, nil))
+	f := newRealignFixture(t, http.StatusOK, realignTestCluster(ptr.To(true), &recent, false, nil))
 
 	got := f.r.reconcileDataRealignment(context.Background(), f.getCluster(t), realignClusterUUID)
 	if got <= 0 || got > defaultDataRealignmentInterval {
@@ -241,7 +240,7 @@ func TestReconcileDataRealignment_PendingWithinIntervalWaits(t *testing.T) {
 }
 
 func TestReconcileDataRealignment_PendingNeverRealignedTriggers(t *testing.T) {
-	f := newRealignFixture(t, http.StatusOK, realignTestCluster(boolPtr(true), nil, false, nil))
+	f := newRealignFixture(t, http.StatusOK, realignTestCluster(ptr.To(true), nil, false, nil))
 
 	got := f.r.reconcileDataRealignment(context.Background(), f.getCluster(t), realignClusterUUID)
 	if got != defaultDataRealignmentInterval {
@@ -261,7 +260,7 @@ func TestReconcileDataRealignment_PendingNeverRealignedTriggers(t *testing.T) {
 
 func TestReconcileDataRealignment_PendingIntervalElapsedTriggers(t *testing.T) {
 	old := metav1.NewTime(time.Now().Add(-2 * defaultDataRealignmentInterval))
-	f := newRealignFixture(t, http.StatusOK, realignTestCluster(boolPtr(true), &old, false, nil))
+	f := newRealignFixture(t, http.StatusOK, realignTestCluster(ptr.To(true), &old, false, nil))
 
 	f.r.reconcileDataRealignment(context.Background(), f.getCluster(t), realignClusterUUID)
 	if n := atomic.LoadInt32(f.calls); n != 1 {
@@ -272,7 +271,7 @@ func TestReconcileDataRealignment_PendingIntervalElapsedTriggers(t *testing.T) {
 func TestReconcileDataRealignment_ForcedBypassesInterval(t *testing.T) {
 	// Recently realigned AND not pending, but the trigger annotation forces it now.
 	recent := metav1.NewTime(time.Now().Add(-time.Second))
-	f := newRealignFixture(t, http.StatusOK, realignTestCluster(boolPtr(false), &recent, true, nil))
+	f := newRealignFixture(t, http.StatusOK, realignTestCluster(ptr.To(false), &recent, true, nil))
 
 	f.r.reconcileDataRealignment(context.Background(), f.getCluster(t), realignClusterUUID)
 	if n := atomic.LoadInt32(f.calls); n != 1 {
@@ -301,7 +300,7 @@ func TestReconcileDataRealignment_EmptyAnnotationDoesNotForce(t *testing.T) {
 }
 
 func TestReconcileDataRealignment_APIFailureRetainsFlag(t *testing.T) {
-	f := newRealignFixture(t, http.StatusInternalServerError, realignTestCluster(boolPtr(true), nil, false, nil))
+	f := newRealignFixture(t, http.StatusInternalServerError, realignTestCluster(ptr.To(true), nil, false, nil))
 
 	got := f.r.reconcileDataRealignment(context.Background(), f.getCluster(t), realignClusterUUID)
 	if got != realignmentRetryDelay {
@@ -319,7 +318,7 @@ func TestReconcileDataRealignment_APIFailureRetainsFlag(t *testing.T) {
 }
 
 func TestReconcileDataRealignment_ForcedFailureKeepsAnnotation(t *testing.T) {
-	f := newRealignFixture(t, http.StatusBadGateway, realignTestCluster(boolPtr(false), nil, true, nil))
+	f := newRealignFixture(t, http.StatusBadGateway, realignTestCluster(ptr.To(false), nil, true, nil))
 
 	f.r.reconcileDataRealignment(context.Background(), f.getCluster(t), realignClusterUUID)
 	// A failed forced run must keep the annotation so the trigger is retried.

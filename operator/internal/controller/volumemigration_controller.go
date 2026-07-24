@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/ptr"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -688,12 +689,11 @@ func (r *VolumeMigrationReconciler) markClusterPendingRealignment(
 		if cr.Status.UUID != clusterUUID {
 			continue
 		}
-		if cr.Status.PendingDataRealignment != nil && *cr.Status.PendingDataRealignment {
+		if ptr.BoolFromOrFalse(cr.Status.PendingDataRealignment) {
 			return // already flagged; nothing to do
 		}
 		patch := client.MergeFrom(cr.DeepCopy())
-		pending := true
-		cr.Status.PendingDataRealignment = &pending
+		cr.Status.PendingDataRealignment = ptr.To(true)
 		if err := r.Status().Patch(ctx, cr, patch); err != nil {
 			log.Error(err, "Cannot flag StorageCluster pending realignment", "cluster", cr.Name)
 		}

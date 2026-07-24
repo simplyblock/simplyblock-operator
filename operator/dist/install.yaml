@@ -1777,6 +1777,29 @@ spec:
                           10m.
                         type: string
                     type: object
+                  dataRealignment:
+                    description: |-
+                      DataRealignment configures the periodic control-plane data realignment that
+                      runs after volumes have been moved. Realignment re-aligns the cluster's internal
+                      data structures to the current volume placement so fault-tolerance (FTT) and
+                      node-affinity guarantees are preserved. It applies to *all* volume moves —
+                      auto-rebalancing, manual VolumeMigrations, and drain/removal-triggered moves —
+                      so it lives here rather than under AutoRebalancing. Enabled by default.
+                    properties:
+                      enabled:
+                        description: |-
+                          Enabled activates automatic post-migration data realignment for this cluster.
+                          Defaults to true.
+                        type: boolean
+                      interval:
+                        description: |-
+                          Interval is how often the operator checks whether a realignment is pending
+                          (i.e. at least one volume has moved since the last successful realignment) and,
+                          if so, triggers it. Explicit triggers (see the
+                          simplyblock.io/trigger-realignment annotation) bypass this spacing. Defaults to
+                          10m.
+                        type: string
+                    type: object
                   enabled:
                     description: |-
                       Enabled turns on volume migration for this cluster. When false, the operator

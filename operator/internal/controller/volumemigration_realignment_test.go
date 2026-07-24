@@ -9,6 +9,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 )
 
@@ -45,7 +46,7 @@ func TestMarkClusterPendingRealignment_SetsFlag(t *testing.T) {
 
 func TestMarkClusterPendingRealignment_AlreadyFlaggedIsIdempotent(t *testing.T) {
 	cr := testCluster(realignNamespace, realignClusterName, realignClusterUUID)
-	cr.Status.PendingDataRealignment = boolPtr(true)
+	cr.Status.PendingDataRealignment = ptr.To(true)
 	r, cl := newVMReconcilerForRealign(t, cr)
 
 	r.markClusterPendingRealignment(context.Background(), realignNamespace, realignClusterUUID)
