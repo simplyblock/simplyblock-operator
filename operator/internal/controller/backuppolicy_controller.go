@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
 
@@ -55,12 +56,23 @@ const (
 
 // Event reason constants for BackupPolicy reconciliation.
 const (
+	eventReasonPolicySpecInvalid        = "PolicySpecInvalid"
 	eventReasonPolicyClusterLookupError = "PolicyClusterLookupError"
 	eventReasonPolicyCreateFailed       = "PolicyCreateFailed"
 	eventReasonPolicyDeleteFailed       = "PolicyDeleteFailed"
 	eventReasonPolicyAttachFailed       = "PolicyAttachFailed"
 	eventReasonPolicyDetachFailed       = "PolicyDetachFailed"
 )
+
+// schedulePattern matches a space-separated list of interval,keep_count pairs
+// (e.g. "15m,4 60m,11 24h,7"). Supported interval units: m, h, d, w. Pairs are
+// separated by literal spaces only (not the \s class) so a tab/newline can't
+// be smuggled in as a separator.
+var schedulePattern = regexp.MustCompile(`^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$`)
+
+// maxAgePattern matches a positive integer (no leading zero digit alone, e.g.
+// "0d" is rejected) followed by a unit suffix (m, h, d, w).
+var maxAgePattern = regexp.MustCompile(`^[1-9]\d*[mhdw]$`)
 
 // BackupPolicyReconciler reconciles a BackupPolicy object.
 type BackupPolicyReconciler struct {
@@ -111,6 +123,20 @@ func (r *BackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	if !policyCR.DeletionTimestamp.IsZero() {
 		return r.handleDeletion(ctx, policyCR)
+	}
+
+	// Validate user-supplied string fields before any mutation or backend call.
+	// Schedule and MaxAge are immutable, so a bad value is a terminal condition —
+	// the CR must be deleted and recreated; we do not requeue.
+	if msg := validateBackupPolicySpec(policyCR.Spec); msg != "" {
+		r.Recorder.Eventf(policyCR, nil, corev1.EventTypeWarning, eventReasonPolicySpecInvalid, eventReasonPolicySpecInvalid, msg)
+		if patchErr := r.patchStatus(ctx, policyCR, func(s *simplyblockv1alpha1.BackupPolicyStatus) {
+			s.Phase = simplyblockv1alpha1.BackupPolicyPhaseFailed
+			s.Message = msg
+		}); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, nil
 	}
 
 	if !controllerutil.ContainsFinalizer(policyCR, backupPolicyFinalizer) {
@@ -659,4 +685,31 @@ func removeAttachment(slice []simplyblockv1alpha1.AttachedLvol, remove simplyblo
 
 func attachmentKey(a simplyblockv1alpha1.AttachedLvol) string {
 	return a.PVCNamespace + "/" + a.PVCName + "/" + a.LvolID
+}
+
+// validateBackupPolicySpec checks the format of user-supplied string fields
+// that are forwarded to the backend API without further escaping. It returns a
+// non-empty human-readable message when a field value is present but does not
+// match the expected format, and an empty string when the spec is valid.
+//
+// The kubebuilder Pattern markers on the CRD provide admission-time enforcement,
+// but this runtime check is the last line of defense against malformed or
+// injected values reaching the backend (e.g. clusters upgraded before the new
+// CRD schema was applied, or direct etcd writes).
+func validateBackupPolicySpec(spec simplyblockv1alpha1.BackupPolicySpec) string {
+	if spec.Schedule != "" && !schedulePattern.MatchString(spec.Schedule) {
+		return fmt.Sprintf(
+			"invalid schedule %q: expected space-separated interval,keep_count pairs "+
+				"(e.g. \"15m,4 60m,11 24h,7\"); supported units: m, h, d, w",
+			spec.Schedule,
+		)
+	}
+	if spec.MaxAge != "" && !maxAgePattern.MatchString(spec.MaxAge) {
+		return fmt.Sprintf(
+			"invalid maxAge %q: expected a positive integer with a unit suffix "+
+				"(e.g. \"7d\"); supported units: m, h, d, w",
+			spec.MaxAge,
+		)
+	}
+	return ""
 }

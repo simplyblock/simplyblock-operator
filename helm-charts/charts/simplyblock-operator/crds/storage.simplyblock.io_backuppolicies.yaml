@@ -73,6 +73,7 @@ spec:
                 description: |-
                   MaxAge is the maximum age of backups to retain (e.g. "7d", "12h", "30m").
                   Backups older than this are merged. Accepts m, h, d, w suffixes.
+                pattern: ^[1-9]\d*[mhdw]$
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -90,6 +91,7 @@ spec:
                   Schedule defines the tiered backup schedule as a space-separated list of
                   interval,keep_count pairs (e.g. "15m,4 60m,11 24h,7").
                   Intervals must be strictly increasing. Supported units: m, h, d, w.
+                pattern: ^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable

@@ -43,6 +43,7 @@ type BackupPolicySpec struct {
 	// MaxAge is the maximum age of backups to retain (e.g. "7d", "12h", "30m").
 	// Backups older than this are merged. Accepts m, h, d, w suffixes.
 	// +optional
+	// +kubebuilder:validation:Pattern=`^[1-9]\d*[mhdw]$`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Age"
 	// +k8s:immutable
 	MaxAge string `json:"maxAge,omitempty"`
@@ -51,6 +52,7 @@ type BackupPolicySpec struct {
 	// interval,keep_count pairs (e.g. "15m,4 60m,11 24h,7").
 	// Intervals must be strictly increasing. Supported units: m, h, d, w.
 	// +optional
+	// +kubebuilder:validation:Pattern=`^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Schedule"
 	// +k8s:immutable
 	Schedule string `json:"schedule,omitempty"`
