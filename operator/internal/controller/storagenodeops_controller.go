@@ -948,8 +948,8 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 	if len(pinned) > 0 {
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "PinnedVolumeBlocking", "PinnedVolumeBlocking",
 			"drain blocked: %d pinned volume(s) on node %s — remove the %s annotation to proceed",
-			len(pinned), nodeUUID, simplyblockv1alpha1.AnnotationPinnedVolume)
-		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "PinnedVolumeBlocking", fmt.Sprintf("drain blocked: %d pinned volume(s) on node %s — remove the %s annotation to proceed", len(pinned), nodeUUID, simplyblockv1alpha1.AnnotationPinnedVolume))
+			len(pinned), nodeUUID, simplyblockv1alpha1.AnnotationSelectedStorageNode)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "PinnedVolumeBlocking", fmt.Sprintf("drain blocked: %d pinned volume(s) on node %s — remove the %s annotation to proceed", len(pinned), nodeUUID, simplyblockv1alpha1.AnnotationSelectedStorageNode))
 		patch := client.MergeFrom(ops.DeepCopy())
 		ops.Status.Message = fmt.Sprintf("blocked: %d pinned volume(s) — remove simplyblock.io/pinned-volume annotation", len(pinned))
 		_ = r.Status().Patch(ctx, ops, patch)

@@ -76,8 +76,8 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	desired := pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolume]
-	applied := pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeApplied]
+	desired := pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNode]
+	applied := pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeApplied]
 
 	// Strict change-diff gate: nothing to do unless the pinned target changed.
 	if desired == applied {
@@ -251,7 +251,7 @@ func (r *PersistentVolumeClaimReconciler) rejectTarget(
 	pvc *corev1.PersistentVolumeClaim,
 	target string,
 ) (ctrl.Result, error) {
-	if pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeRejected] == target {
+	if pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeRejected] == target {
 		return ctrl.Result{}, nil
 	}
 	r.Recorder.Eventf(pvc, nil, corev1.EventTypeWarning, "InvalidPinTarget", "InvalidPinTarget",
@@ -260,7 +260,7 @@ func (r *PersistentVolumeClaimReconciler) rejectTarget(
 	if pvc.Annotations == nil {
 		pvc.Annotations = map[string]string{}
 	}
-	pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeRejected] = target
+	pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeRejected] = target
 	if err := r.Patch(ctx, pvc, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("record rejected pin target: %w", err)
 	}
@@ -279,11 +279,11 @@ func (r *PersistentVolumeClaimReconciler) setApplied(
 		pvc.Annotations = map[string]string{}
 	}
 	if value == "" {
-		delete(pvc.Annotations, simplyblockv1alpha1.AnnotationPinnedVolumeApplied)
+		delete(pvc.Annotations, simplyblockv1alpha1.AnnotationSelectedStorageNodeApplied)
 	} else {
-		pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolumeApplied] = value
+		pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNodeApplied] = value
 	}
-	delete(pvc.Annotations, simplyblockv1alpha1.AnnotationPinnedVolumeRejected)
+	delete(pvc.Annotations, simplyblockv1alpha1.AnnotationSelectedStorageNodeRejected)
 	if err := r.Patch(ctx, pvc, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("record applied pin target: %w", err)
 	}
@@ -347,11 +347,11 @@ func pinPVLabelValue(pvName string) string {
 // woken by unrelated PVC edits (including its own applied/rejected writes).
 var pinnedVolumeChanged = predicate.Funcs{
 	CreateFunc: func(e event.CreateEvent) bool {
-		return e.Object.GetAnnotations()[simplyblockv1alpha1.AnnotationPinnedVolume] != ""
+		return e.Object.GetAnnotations()[simplyblockv1alpha1.AnnotationSelectedStorageNode] != ""
 	},
 	UpdateFunc: func(e event.UpdateEvent) bool {
-		return e.ObjectOld.GetAnnotations()[simplyblockv1alpha1.AnnotationPinnedVolume] !=
-			e.ObjectNew.GetAnnotations()[simplyblockv1alpha1.AnnotationPinnedVolume]
+		return e.ObjectOld.GetAnnotations()[simplyblockv1alpha1.AnnotationSelectedStorageNode] !=
+			e.ObjectNew.GetAnnotations()[simplyblockv1alpha1.AnnotationSelectedStorageNode]
 	},
 	DeleteFunc:  func(event.DeleteEvent) bool { return false },
 	GenericFunc: func(event.GenericEvent) bool { return false },

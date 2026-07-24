@@ -271,7 +271,7 @@ func (lvs *LogicalVolumeSelector) BuildPinnedSet(ctx context.Context, clusterUUI
 		}, pvc); err != nil {
 			continue
 		}
-		if pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolume] != "" {
+		if pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNode] != "" {
 			pinned[lvolID] = true
 		}
 	}

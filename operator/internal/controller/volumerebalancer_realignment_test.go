@@ -191,7 +191,7 @@ func realignTestCluster(pending *bool, lastAt *metav1.Time, annotate bool, vms *
 		},
 	}
 	if annotate {
-		cr.Annotations = map[string]string{TriggerRealignmentAnnotation: "1"}
+		cr.Annotations = map[string]string{simplyblockv1alpha1.TriggerRealignmentAnnotation: "1"}
 	}
 	return cr
 }
@@ -278,7 +278,7 @@ func TestReconcileDataRealignment_ForcedBypassesInterval(t *testing.T) {
 		t.Fatalf("API called %d times, want 1 (forced)", n)
 	}
 	// The one-shot trigger annotation must be consumed.
-	if cr := f.getCluster(t); cr.Annotations[TriggerRealignmentAnnotation] != "" {
+	if cr := f.getCluster(t); cr.Annotations[simplyblockv1alpha1.TriggerRealignmentAnnotation] != "" {
 		t.Fatalf("trigger annotation not removed after forced realignment")
 	}
 }
@@ -287,7 +287,7 @@ func TestReconcileDataRealignment_EmptyAnnotationDoesNotForce(t *testing.T) {
 	// An empty-string annotation value is not a trigger: with nothing pending it
 	// must behave like no annotation at all (no realignment).
 	cr := realignTestCluster(nil, nil, false, nil)
-	cr.Annotations = map[string]string{TriggerRealignmentAnnotation: ""}
+	cr.Annotations = map[string]string{simplyblockv1alpha1.TriggerRealignmentAnnotation: ""}
 	f := newRealignFixture(t, http.StatusOK, cr)
 
 	got := f.r.reconcileDataRealignment(context.Background(), f.getCluster(t), realignClusterUUID)
@@ -322,7 +322,7 @@ func TestReconcileDataRealignment_ForcedFailureKeepsAnnotation(t *testing.T) {
 
 	f.r.reconcileDataRealignment(context.Background(), f.getCluster(t), realignClusterUUID)
 	// A failed forced run must keep the annotation so the trigger is retried.
-	if cr := f.getCluster(t); cr.Annotations[TriggerRealignmentAnnotation] == "" {
+	if cr := f.getCluster(t); cr.Annotations[simplyblockv1alpha1.TriggerRealignmentAnnotation] == "" {
 		t.Fatalf("trigger annotation removed despite failed forced realignment")
 	}
 }

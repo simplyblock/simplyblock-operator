@@ -182,7 +182,7 @@ func matchVolumesToPVs(
 			continue
 		}
 
-		if _, isPinned := pvc.Annotations[simplyblockv1alpha1.AnnotationPinnedVolume]; isPinned {
+		if _, isPinned := pvc.Annotations[simplyblockv1alpha1.AnnotationSelectedStorageNode]; isPinned {
 			pinned = append(pinned, vol.UUID)
 			pvNameByVolumeUUID[vol.UUID] = pv.Name
 		} else {
