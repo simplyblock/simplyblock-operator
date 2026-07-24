@@ -14,16 +14,9 @@ import (
 
 	"github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
-	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
-)
-
-const (
-	// clusterIDParam is the StorageClass parameter key holding the target cluster's
-	// backend UUID (see upsertStorageClass in simplyblockpool_controller.go).
-	clusterIDParam = "cluster_id"
 )
 
 // +kubebuilder:webhook:path=/mutate-v1-pvc-simplyblock-placement,mutating=true,failurePolicy=ignore,sideEffects=None,groups="",resources=persistentvolumeclaims,verbs=create,versions=v1,name=simplyblock-volume-placement-injector.simplyblock.io,admissionReviewVersions=v1
@@ -121,11 +114,12 @@ func (h *SimplyblockVolumePlacementInjector) resolveClusterID(
 		log.V(1).Info("Skipping: cannot get StorageClass", "storageClass", *pvc.Spec.StorageClassName, "error", err.Error())
 		return "", false
 	}
-	if sc.Provisioner != utils.CSIProvisioner {
+	props, err := kube.PropertiesFromStorageClass(sc)
+	if err != nil {
+		log.V(1).Info("Skipping: not a simplyblock StorageClass", "storageClass", sc.Name, "error", err.Error())
 		return "", false
 	}
-	clusterUUID = sc.Parameters[clusterIDParam]
-	return clusterUUID, clusterUUID != ""
+	return props.ClusterID, props.ClusterID != ""
 }
 
 // selectPrimaryNode resolves the StorageCluster owning clusterUUID, checks that it has
