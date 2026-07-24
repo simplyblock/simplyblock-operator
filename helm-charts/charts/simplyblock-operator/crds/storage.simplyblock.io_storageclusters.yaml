@@ -228,7 +228,7 @@ spec:
                     type: integer
                   enabled:
                     description: Enabled activates automatic rebalancing for this
-                      cluster. Defaults to true.
+                      cluster. Defaults to false.
                     type: boolean
                   evaluationInterval:
                     description: EvaluationInterval is how often the rebalancer evaluates
