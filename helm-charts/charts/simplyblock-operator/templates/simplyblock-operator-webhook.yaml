@@ -1,6 +1,7 @@
 {{- if .Values.operator.enabled }}
-# Webhook Service + MutatingWebhookConfiguration for the operator's admission
-# webhooks (simplyblock-rebalancer-injector, simplyblock-volume-placement-injector).
+# Webhook Service + Mutating/ValidatingWebhookConfiguration for the operator's
+# admission webhooks (simplyblock-rebalancer-injector,
+# simplyblock-volume-placement-injector, pinned-volume-validator, vstoragenode).
 #
 # Names must exactly match internal/utils/constants.go (WebhookServiceName,
 # WebhookConfigurationName) — the operator looks these up by hardcoded name to
@@ -63,5 +64,54 @@ webhooks:
     - CREATE
     resources:
     - persistentvolumeclaims
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: simplyblock-operator-validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-v1-pvc-pinned-volume
+  failurePolicy: Fail
+  matchConditions:
+  - expression: has(object.metadata.annotations) && 'simplyblock.io/pinned-volume'
+      in object.metadata.annotations
+    name: has-pinned-volume-annotation
+  name: pinned-volume-validator.simplyblock.io
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - persistentvolumeclaims
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-storage-simplyblock-io-v1alpha1-storagenode
+  failurePolicy: Fail
+  name: vstoragenode.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - UPDATE
+    resources:
+    - storagenodes
   sideEffects: None
 {{- end }}
