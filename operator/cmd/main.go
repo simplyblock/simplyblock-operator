@@ -23,6 +23,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -42,7 +43,6 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
-	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	internalwebhook "github.com/simplyblock/simplyblock-operator/internal/webhook"
 	// +kubebuilder:scaffold:imports
@@ -450,7 +450,7 @@ func main() {
 			&webhook.Admission{Handler: &internalwebhook.SimplyblockVolumePlacementInjector{
 				Client:       mgr.GetClient(),
 				APIClient:    webapi.NewClient(),
-				NodeSelector: autobalancing.NewStorageNodeSelector(mgr.GetClient()),
+				NodeSelector: autoplacement.NewStorageNodeSelector(mgr.GetClient()),
 			}})
 		setupLog.Info("registered simplyblock-volume-placement mutating webhook")
 	}()

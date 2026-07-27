@@ -18,6 +18,8 @@ package spdk
 
 import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog"
 
 	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
@@ -57,9 +59,22 @@ func Run(conf *util.Config) {
 
 	ids = newIdentityServer(cd)
 
+	// Build one Kubernetes client shared by the node and controller servers
+	// (PV/PVC/topology reads, PVC-annotation patches) instead of each constructing
+	// its own in-cluster config + clientset. A missing in-cluster config is
+	// non-fatal — the features that need it degrade to no-ops.
+	var kubeClient kubernetes.Interface
+	if k8sConfig, err := rest.InClusterConfig(); err != nil {
+		klog.Warningf("no in-cluster config; Kubernetes API features disabled: %v", err)
+	} else if clientset, err := kubernetes.NewForConfig(k8sConfig); err != nil {
+		klog.Warningf("failed to create kubernetes client; Kubernetes API features disabled: %v", err)
+	} else {
+		kubeClient = clientset
+	}
+
 	if conf.IsNodeServer {
 		var err error
-		ns, err = newNodeServer(cd)
+		ns, err = newNodeServer(cd, kubeClient)
 		if err != nil {
 			klog.Fatalf("failed to create node server: %s", err)
 		}
@@ -67,7 +82,7 @@ func Run(conf *util.Config) {
 
 	if conf.IsControllerServer {
 		var err error
-		cs, err = newControllerServer(cd)
+		cs, err = newControllerServer(cd, kubeClient)
 		if err != nil {
 			klog.Fatalf("failed to create controller server: %s", err)
 		}

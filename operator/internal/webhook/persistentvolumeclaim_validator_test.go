@@ -14,6 +14,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/simplyblock/atlas/kube"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -46,9 +48,14 @@ func vpvcAPIServer(t *testing.T, nodes []string) string {
 
 func pvcRaw(t *testing.T, pinned string, bound bool) runtime.RawExtension {
 	t.Helper()
+	return pvcRawAnno(t, kube.AnnoSelectedStorageNode, pinned, bound)
+}
+
+func pvcRawAnno(t *testing.T, key, pinned string, bound bool) runtime.RawExtension {
+	t.Helper()
 	ann := map[string]string{}
 	if pinned != "" {
-		ann[simplyblockv1alpha1.AnnotationPinnedVolume] = pinned
+		ann[key] = pinned
 	}
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: "data-pvc", Namespace: "sb", Annotations: ann},
@@ -114,6 +121,37 @@ func TestPVCValidator(t *testing.T) {
 			if tc.oldPin != "" {
 				req.OldObject = pvcRaw(t, tc.oldPin, tc.bound)
 			}
+			resp := v.Handle(context.Background(), req)
+			if resp.Allowed != tc.allowed {
+				t.Fatalf("Allowed = %v, want %v (msg: %s)", resp.Allowed, tc.allowed, resp.Result.Message)
+			}
+		})
+	}
+}
+
+// TestPVCValidatorLegacyPinAnnotations verifies the validator checks the effective
+// pin target (kube.PinnedNode), so a pin set via a legacy host-id annotation is
+// validated just like the canonical one.
+func TestPVCValidatorLegacyPinAnnotations(t *testing.T) {
+	api := vpvcAPIServer(t, []string{vpvcNodeA})
+
+	tests := []struct {
+		name    string
+		key     string
+		pin     string
+		allowed bool
+	}{
+		{"legacy host-id valid allowed", kube.AnnoHostID, vpvcNodeA, true},
+		{"legacy host-id invalid denied", kube.AnnoHostID, "ghost", false},
+		{"deprecated host-id valid allowed", kube.DeprecatedAnnoHostID, vpvcNodeA, true},
+		{"deprecated host-id invalid denied", kube.DeprecatedAnnoHostID, "ghost", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v := newPVCValidator(t, api)
+			req := admission.Request{}
+			req.Object = pvcRawAnno(t, tc.key, tc.pin, true)
 			resp := v.Handle(context.Background(), req)
 			if resp.Allowed != tc.allowed {
 				t.Fatalf("Allowed = %v, want %v (msg: %s)", resp.Allowed, tc.allowed, resp.Result.Message)

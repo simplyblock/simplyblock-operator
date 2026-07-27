@@ -36,7 +36,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
-	"github.com/simplyblock/simplyblock-operator/internal/rebalancer"
+	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -99,7 +99,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, err
 	}
 
-	spec := ptr.From(clusterCR.Spec.AutoRebalancing, simplyblockv1alpha1.VolumeRebalancingSettings{})
+	spec := ptr.From(clusterCR.Spec.VolumeAutoPlacement, simplyblockv1alpha1.VolumeAutoPlacementSettings{})
 	if !ptr.BoolFromOrFalse(spec.LatencyBenchmarkEnabled) {
 		return ctrl.Result{}, nil
 	}
@@ -152,7 +152,7 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 	latencyMetrics := r.copyLatencyMetrics(snode.Status.LatencyMetrics)
 	// hostConfigs accumulates per-node configs keyed by k8s hostname so the sidecar
 	// (one pod per host) receives a JSON array covering all NUMA nodes on its host.
-	hostConfigs := map[string][]rebalancer.NodeConfig{}
+	hostConfigs := map[string][]autoplacement.NodeConfig{}
 	changed := false
 
 	for _, node := range nodesByUUID {
@@ -198,7 +198,7 @@ func (r *StorageNodeLatencyReconciler) processNodeBaseline(
 	node simplyblockv1alpha1.NodeStatus,
 	image string,
 	latencyMetrics *[]simplyblockv1alpha1.NodeLatencyMetrics,
-	hostConfigs map[string][]rebalancer.NodeConfig,
+	hostConfigs map[string][]autoplacement.NodeConfig,
 ) bool {
 	log := logf.FromContext(ctx)
 
@@ -253,7 +253,7 @@ func (r *StorageNodeLatencyReconciler) processNodeBaseline(
 	// with the one-shot baseline Job — both would write to the same NVMe device
 	// and corrupt each other's measurements.
 	if m.BaselineP99NS > 0 {
-		hostConfigs[node.Hostname] = append(hostConfigs[node.Hostname], rebalancer.NodeConfig{
+		hostConfigs[node.Hostname] = append(hostConfigs[node.Hostname], autoplacement.NodeConfig{
 			NQN:         conn.NQN,
 			Addr:        conn.Addr,
 			Port:        conn.Port,
@@ -283,7 +283,7 @@ func (r *StorageNodeLatencyReconciler) reconcileBaselineJob(
 	node simplyblockv1alpha1.NodeStatus,
 	conn benchmarkConnInfo,
 	image string,
-) (*rebalancer.LatencyResult, bool, error) {
+) (*autoplacement.LatencyResult, bool, error) {
 	jobName := baselineJobNamePrefix + safeNodeID(node.UUID)
 	job := &batchv1.Job{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: snode.Namespace, Name: jobName}, job)
@@ -426,7 +426,7 @@ func logicalVolumeConnectionPort(node simplyblockv1alpha1.NodeStatus) int32 {
 }
 
 // readJobResult reads the fio result from the baseline container's termination message.
-func (r *StorageNodeLatencyReconciler) readJobResult(ctx context.Context, job *batchv1.Job) (*rebalancer.LatencyResult, error) {
+func (r *StorageNodeLatencyReconciler) readJobResult(ctx context.Context, job *batchv1.Job) (*autoplacement.LatencyResult, error) {
 	podList := &corev1.PodList{}
 	if err := r.List(ctx, podList,
 		client.InNamespace(job.Namespace),
@@ -442,7 +442,7 @@ func (r *StorageNodeLatencyReconciler) readJobResult(ctx context.Context, job *b
 		if cs.Name != "simplyblock-rebalancer-baseline" || cs.State.Terminated == nil {
 			continue
 		}
-		var result rebalancer.LatencyResult
+		var result autoplacement.LatencyResult
 		if err := json.Unmarshal([]byte(cs.State.Terminated.Message), &result); err != nil {
 			return nil, fmt.Errorf("parse termination message: %w", err)
 		}
