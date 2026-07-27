@@ -167,6 +167,43 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 2b. Unlabel worker nodes
+# ---------------------------------------------------------------------------
+section "Removing simplyblock labels from worker nodes"
+
+# Find all Kubernetes nodes that carry a simplyblock StorageNodeSet label
+# and strip it along with the node-type and storage-node-uuid topology labels.
+LABELED_NODES=$($KUBECTL get nodes \
+    -l 'io.simplyblock.storagenodeset' \
+    -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)
+
+if [[ -z "$LABELED_NODES" ]]; then
+    info "No labeled worker nodes found."
+else
+    for node in $LABELED_NODES; do
+        info "Unlabeling node $node..."
+        $KUBECTL label node "$node" \
+            io.simplyblock.storagenodeset- \
+            io.simplyblock.node-type- \
+            2>/dev/null || warn "Could not remove base labels from $node"
+
+        UUID_LABELS=$($KUBECTL get node "$node" \
+            -o jsonpath='{.metadata.labels}' 2>/dev/null \
+            | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(' '.join(k + '-' for k in d if k.startswith('simplyblock.io/storage-node-uuid.')))
+" 2>/dev/null || true)
+
+        if [[ -n "$UUID_LABELS" ]]; then
+            # shellcheck disable=SC2086
+            $KUBECTL label node "$node" $UUID_LABELS 2>/dev/null || true
+        fi
+    done
+    info "Worker node labels removed."
+fi
+
+# ---------------------------------------------------------------------------
 # 3. Remove remaining workloads
 # ---------------------------------------------------------------------------
 section "Removing remaining workloads in namespace '$NAMESPACE'"
