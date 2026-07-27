@@ -416,6 +416,12 @@ func nodeRecycleFirstPhase(_ *simplyblockv1alpha1.StorageCluster) string {
 
 // nodeRecycleSnodeRefresh deletes the storage-node DaemonSet pod so the
 // DaemonSet restarts it with the image already cached on the node.
+//
+// Write-ahead pattern: the phase is advanced to snode-refresh-wait and
+// persisted BEFORE the pod is deleted. If the operator restarts after the
+// delete but before the old code's Status().Update, the next reconcile enters
+// snode-refresh-wait (not snode-refresh) and will not delete the replacement
+// pod a second time — preventing the infinite restart loop described in #153.
 func (r *StorageClusterReconciler) nodeRecycleSnodeRefresh(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
@@ -425,9 +431,19 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefresh(
 	log := logf.FromContext(ctx)
 	nrs := clusterCR.Status.NodeRecycleStatus
 
+	// Persist the phase transition BEFORE the irreversible pod deletion so that
+	// an operator crash between delete and update cannot re-enter this branch.
+	nrs.NodePhase = utils.NodeRecyclePhaseSnodeRefreshWait
+	nrs.PhaseTriggered = false
+	if err := r.Status().Update(ctx, clusterCR); err != nil {
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	found, err := r.deleteStorageNodeSetPod(ctx, clusterCR, apiClient, clusterUUID, nodeUUID)
 	if err != nil {
 		log.Error(err, "Failed to delete storage node pod for refresh", "nodeUUID", nodeUUID)
+		// Phase is already snode-refresh-wait; nodeRecycleSnodeRefreshWait will
+		// wait for the pod to become ready before advancing to Restarting.
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -442,11 +458,6 @@ func (r *StorageClusterReconciler) nodeRecycleSnodeRefresh(
 	}
 
 	log.Info("Storage node pod deleted for refresh, waiting for restart", "nodeUUID", nodeUUID)
-	nrs.NodePhase = utils.NodeRecyclePhaseSnodeRefreshWait
-	nrs.PhaseTriggered = false
-	if err := r.Status().Update(ctx, clusterCR); err != nil {
-		return ctrl.Result{Requeue: true}, nil
-	}
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 

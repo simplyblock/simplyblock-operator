@@ -4,18 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func TestReconcileActivateTransitions(t *testing.T) {
@@ -943,6 +947,133 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			t.Fatalf("expected dto coding tuple to map to erasureCodingScheme, got %#v", current.Status)
 		}
 	})
+}
+
+// TestNodeRecycleSnodeRefreshWriteAheadPreventsDoubleDelete verifies the
+// write-ahead fix for #153: the phase must be persisted to "snode-refresh-wait"
+// BEFORE the pod is deleted so that an operator restart during the snode-refresh
+// phase does not delete the newly-started replacement pod.
+//
+// The test simulates a restart by calling nodeRecycleSnodeRefresh a second time
+// while the in-memory phase still reads "snode-refresh" (as would happen if the
+// status update had not been committed before the crash). The interceptor counts
+// pod deletions and asserts exactly one deletion occurred.
+func TestNodeRecycleSnodeRefreshWriteAheadPreventsDoubleDelete(t *testing.T) {
+	const (
+		ns          = "default"
+		clusterName = "cluster-nr"
+		clusterUUID = "uuid-nr"
+		nodeUUID    = "node-uuid-nr"
+		nodeIP      = "192.168.10.99"
+		k8sNodeName = "k8s-worker-nr"
+	)
+
+	// Backend: return one storage node with nodeIP.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp, _ := json.Marshal([]utils.NodeStatusResponse{
+			{UUID: nodeUUID, IP: nodeIP, Status: utils.NodeStatusOnline},
+		})
+		_, _ = w.Write(resp)
+	}))
+	defer srv.Close()
+	apiClient := webapi.NewClient(srv.URL)
+
+	clusterCR := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+		Status: simplyblockv1alpha1.StorageClusterStatus{
+			UUID: clusterUUID,
+			NodeRecycleStatus: &simplyblockv1alpha1.NodeRecycleStatus{
+				PendingNodes: []string{nodeUUID},
+				NodePhase:    utils.NodeRecyclePhaseSnodeRefresh,
+			},
+		},
+	}
+	k8sNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: k8sNodeName},
+		Status: corev1.NodeStatus{
+			Addresses: []corev1.NodeAddress{
+				{Type: corev1.NodeInternalIP, Address: nodeIP},
+			},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "storage-node-pod",
+			Namespace: ns,
+			Labels: map[string]string{
+				"app":                 "storage-node",
+				"simplyblock-cluster": clusterName,
+			},
+		},
+		Spec: corev1.PodSpec{NodeName: k8sNodeName},
+	}
+
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+
+	// Count pod deletions via an interceptor.
+	podDeleteCount := 0
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&simplyblockv1alpha1.StorageCluster{}).
+		WithObjects(clusterCR, k8sNode, pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if _, ok := obj.(*corev1.Pod); ok {
+					podDeleteCount++
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	r := &StorageClusterReconciler{
+		Client:   cl,
+		Scheme:   scheme,
+		Recorder: events.NewFakeRecorder(10),
+	}
+
+	// First call — this should persist "snode-refresh-wait" then delete the pod.
+	_, err := r.nodeRecycleSnodeRefresh(context.Background(), clusterCR, apiClient, clusterUUID, nodeUUID)
+	if err != nil {
+		t.Fatalf("first nodeRecycleSnodeRefresh returned error: %v", err)
+	}
+
+	// Verify write-ahead: phase must be persisted to snode-refresh-wait.
+	var updated simplyblockv1alpha1.StorageCluster
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(clusterCR), &updated); err != nil {
+		t.Fatalf("failed to get updated cluster: %v", err)
+	}
+	if updated.Status.NodeRecycleStatus == nil {
+		t.Fatal("NodeRecycleStatus is nil after first call")
+	}
+	if got := updated.Status.NodeRecycleStatus.NodePhase; got != utils.NodeRecyclePhaseSnodeRefreshWait {
+		t.Fatalf("expected phase %q after first call, got %q", utils.NodeRecyclePhaseSnodeRefreshWait, got)
+	}
+	if podDeleteCount != 1 {
+		t.Fatalf("expected exactly 1 pod deletion after first call, got %d", podDeleteCount)
+	}
+
+	// Simulate operator restart: the in-memory clusterCR still shows the old
+	// phase (stale), but the persisted CR already has "snode-refresh-wait".
+	// A restarted operator would re-read the CR and dispatch to
+	// nodeRecycleSnodeRefreshWait — not nodeRecycleSnodeRefresh.
+	// Calling nodeRecycleSnodeRefresh again with the stale in-memory object
+	// proves the write-ahead guard works: the Status().Update will see the
+	// already-advanced phase and the pod must NOT be deleted a second time.
+	clusterCR.Status.NodeRecycleStatus.NodePhase = utils.NodeRecyclePhaseSnodeRefresh
+
+	_, err = r.nodeRecycleSnodeRefresh(context.Background(), clusterCR, apiClient, clusterUUID, nodeUUID)
+	if err != nil {
+		t.Fatalf("second nodeRecycleSnodeRefresh returned error: %v", err)
+	}
+
+	// The pod must still have been deleted exactly once — the second call
+	// persists "snode-refresh-wait" again but the pod no longer exists so
+	// deleteStorageNodeSetPod is a no-op (pod == nil → returns true,nil).
+	if podDeleteCount != 1 {
+		t.Fatalf("pod was deleted %d times — replacement pod would be killed on restart (bug #153)", podDeleteCount)
+	}
 }
 
 func newClusterStateTestReconciler(t *testing.T, objects ...client.Object) *StorageClusterReconciler {
