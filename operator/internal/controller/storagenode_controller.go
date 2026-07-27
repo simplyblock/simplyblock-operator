@@ -727,63 +727,7 @@ func (r *StorageNodeReconciler) handleDeletion(
 	}
 
 	controllerutil.RemoveFinalizer(sn, storageNodeFinalizer)
-	if err := r.Update(ctx, sn); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Unlabel the Kubernetes worker node when this is the last StorageNode CR
-	// for that worker in this StorageNodeSet. With multiple NUMA sockets
-	// (socketsToUse) or nodesPerSocket>1, several CRs share the same worker;
-	// only remove the labels once every one of them is gone.
-	if err := r.maybeUnlabelWorker(ctx, sn); err != nil {
-		log.Error(err, "failed to unlabel worker node after StorageNode deletion",
-			"worker", sn.Spec.WorkerNode)
-		// Non-fatal: the label is cosmetic at this point; log and continue.
-	}
-
-	return ctrl.Result{}, nil
-}
-
-// maybeUnlabelWorker removes the io.simplyblock.storagenodeset and
-// io.simplyblock.node-type labels from the Kubernetes worker node when
-// no other StorageNode CRs for the same worker remain in this StorageNodeSet.
-func (r *StorageNodeReconciler) maybeUnlabelWorker(
-	ctx context.Context,
-	sn *simplyblockv1alpha1.StorageNode,
-) error {
-	var snList simplyblockv1alpha1.StorageNodeList
-	if err := r.List(ctx, &snList,
-		client.InNamespace(sn.Namespace),
-		client.MatchingFields{"spec.storageNodeSetRef": sn.Spec.StorageNodeSetRef},
-	); err != nil {
-		return err
-	}
-
-	// Check whether any sibling CRs for the same worker still exist
-	// (excluding the one being deleted, which may still appear in the cache).
-	for _, sibling := range snList.Items {
-		if sibling.Name == sn.Name {
-			continue
-		}
-		if sibling.Spec.WorkerNode == sn.Spec.WorkerNode &&
-			sibling.DeletionTimestamp.IsZero() {
-			// Another CR for this worker is still alive — keep the labels.
-			return nil
-		}
-	}
-
-	// Last CR for this worker: remove both labels.
-	var node corev1.Node
-	if err := r.Get(ctx, client.ObjectKey{Name: sn.Spec.WorkerNode}, &node); err != nil {
-		return client.IgnoreNotFound(err)
-	}
-	if _, hasSNS := node.Labels["io.simplyblock.storagenodeset"]; !hasSNS {
-		return nil // already clean
-	}
-	patch := client.MergeFrom(node.DeepCopy())
-	delete(node.Labels, "io.simplyblock.storagenodeset")
-	delete(node.Labels, "io.simplyblock.node-type")
-	return r.Patch(ctx, &node, patch)
+	return ctrl.Result{}, r.Update(ctx, sn)
 }
 
 // ensureRemoveOps creates a StorageNodeOps(action=remove) for this StorageNode
