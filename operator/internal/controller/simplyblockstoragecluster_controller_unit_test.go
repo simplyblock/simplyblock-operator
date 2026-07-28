@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1074,6 +1075,113 @@ func TestNodeRecycleSnodeRefreshWriteAheadPreventsDoubleDelete(t *testing.T) {
 	if podDeleteCount != 1 {
 		t.Fatalf("pod was deleted %d times — replacement pod would be killed on restart (bug #153)", podDeleteCount)
 	}
+}
+
+// TestReconcileCreateOptimisticLockPreventsRace covers the TOCTOU fix for
+// INCIDENT-027: a concurrent reconciler that loses the optimistic-lock patch
+// on Status.Phase backs off without making any backend API calls, and
+// Status.Phase is cleared to "" once creation succeeds.
+func TestReconcileCreateOptimisticLockPreventsRace(t *testing.T) {
+	t.Run("concurrent reconciler backs off on lock conflict", func(t *testing.T) {
+		cluster := &simplyblockv1alpha1.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "cluster-lock-backoff",
+				Namespace:  "default",
+				Finalizers: []string{utils.FinalizerStorageCluster},
+			},
+			Spec:   simplyblockv1alpha1.StorageClusterSpec{},
+			Status: simplyblockv1alpha1.StorageClusterStatus{},
+		}
+
+		scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+
+		patchCount := 0
+		cl := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithStatusSubresource(&simplyblockv1alpha1.StorageCluster{}).
+			WithObjects(cluster).
+			WithInterceptorFuncs(interceptor.Funcs{
+				SubResourcePatch: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+					patchCount++
+					return fmt.Errorf("409 Conflict: the object has been modified; please apply your changes to the latest version")
+				},
+			}).
+			Build()
+
+		r := &StorageClusterReconciler{
+			Client:   cl,
+			Scheme:   scheme,
+			Recorder: events.NewFakeRecorder(10),
+		}
+
+		res, err := r.reconcileCreate(context.Background(), cluster)
+		if err != nil {
+			t.Fatalf("reconcileCreate returned error: %v", err)
+		}
+		if res.RequeueAfter == 0 {
+			t.Fatalf("expected back-off requeue after lock conflict, got RequeueAfter=0")
+		}
+		if patchCount != 1 {
+			t.Fatalf("expected exactly one status patch attempt (the lock claim), got %d", patchCount)
+		}
+	})
+
+	t.Run("phase is cleared after successful creation", func(t *testing.T) {
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
+		defer mock.Close()
+		mock.Register(
+			http.MethodGet,
+			"/api/v2/_meta/ready",
+			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+		)
+		mock.Register(
+			http.MethodPost,
+			"/api/v2/clusters/",
+			webapimock.RouteResponse{
+				Status: http.StatusOK,
+				Body: `{
+					"id":"cluster-phase-ok-uuid",
+					"secret":"phase-secret",
+					"nqn":"nqn.test:cluster-phase-ok",
+					"distr_ndcs":2,
+					"distr_npcs":1,
+					"is_re_balancing":false,
+					"status":"online"
+				}`,
+				Headers: map[string]string{"Content-Type": "application/json"},
+			},
+		)
+		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+		cluster := &simplyblockv1alpha1.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "cluster-phase-ok",
+				Namespace:  "default",
+				Finalizers: []string{utils.FinalizerStorageCluster},
+			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
+		}
+		r := newClusterStateTestReconciler(t, cluster)
+
+		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)})
+		if err != nil {
+			t.Fatalf("Reconcile returned error: %v", err)
+		}
+		if res.RequeueAfter != 0 {
+			t.Fatalf("expected terminal result after successful create, got %+v", res)
+		}
+
+		current := &simplyblockv1alpha1.StorageCluster{}
+		if err := r.Get(context.Background(), client.ObjectKeyFromObject(cluster), current); err != nil {
+			t.Fatalf("failed to fetch cluster: %v", err)
+		}
+		if current.Status.Phase != "" {
+			t.Fatalf("expected Status.Phase cleared after creation, got %q", current.Status.Phase)
+		}
+		if current.Status.UUID != "cluster-phase-ok-uuid" {
+			t.Fatalf("expected UUID populated after creation, got %q", current.Status.UUID)
+		}
+	})
 }
 
 func newClusterStateTestReconciler(t *testing.T, objects ...client.Object) *StorageClusterReconciler {
