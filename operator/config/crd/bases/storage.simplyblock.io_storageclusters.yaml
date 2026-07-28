@@ -464,6 +464,12 @@ spec:
               nqn:
                 description: NQN is the cluster NVM subsystem qualified name.
                 type: string
+              phase:
+                description: |-
+                  Phase tracks the cluster creation lifecycle to prevent concurrent reconcilers
+                  from creating duplicate clusters. Set to "creating" while a creation is in
+                  progress and cleared once the cluster UUID is persisted.
+                type: string
               rebalancing:
                 description: Rebalancing indicates whether cluster rebalancing is
                   currently active.

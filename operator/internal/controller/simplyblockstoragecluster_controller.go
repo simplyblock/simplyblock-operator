@@ -64,6 +64,12 @@ const (
 	// code and the full response body so the root cause is visible without
 	// consulting controller logs.
 	eventReasonClusterCreationFailed = "ClusterCreationFailed"
+
+	// clusterPhaseCreating is written to Status.Phase before making the backend
+	// cluster creation call. The optimistic-lock patch that sets this value acts
+	// as a distributed mutex: a concurrent reconciler that also sees UUID="" will
+	// receive a 409 Conflict and back off, preventing duplicate cluster creation.
+	clusterPhaseCreating = "creating"
 )
 
 // StorageClusterReconciler reconciles a StorageCluster object
@@ -152,6 +158,17 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	clusterCR *simplyblockv1alpha1.StorageCluster,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+
+	/* -------------------- Claim creation slot -------------------- */
+	// Use an optimistic-lock patch to atomically set Phase="creating".
+	// If a concurrent reconciler already patched this version, the Kubernetes
+	// API server returns 409 and we back off — preventing duplicate cluster creation.
+	base := clusterCR.DeepCopy()
+	clusterCR.Status.Phase = clusterPhaseCreating
+	if patchErr := r.Status().Patch(ctx, clusterCR, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
+		log.Info("Creation already claimed by another reconciler, backing off", "name", clusterCR.Name)
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
 
 	apiClient := webapi.NewClient()
 	/* -------------------- Readiness Check -------------------- */
@@ -296,6 +313,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	}
 
 	clusterCR.Status.UUID = apiResp.UUID
+	clusterCR.Status.Phase = ""
 	clusterCR.Status.Rebalancing = &apiResp.Rebalancing
 	clusterCR.Status.Status = apiResp.Status
 	clusterCR.Status.NQN = apiResp.NQN
@@ -354,6 +372,7 @@ func (r *StorageClusterReconciler) adoptExistingCluster(
 
 	orig := clusterCR.DeepCopy()
 	clusterCR.Status.UUID = existing.UUID
+	clusterCR.Status.Phase = ""
 	clusterCR.Status.NQN = existing.NQN
 	clusterCR.Status.Status = existing.Status
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", existing.NDCS, existing.NPCS)
