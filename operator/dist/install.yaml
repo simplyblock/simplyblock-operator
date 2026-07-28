@@ -1920,7 +1920,7 @@ spec:
               phase:
                 description: |-
                   Phase tracks the cluster creation lifecycle to prevent concurrent reconcilers
-                  from creating duplicate clusters. Set to "creating" while a creation is in
+                  from creating duplicate clusters. Set to "creation" while a creation is in
                   progress and cleared once the cluster UUID is persisted.
                 type: string
               rebalancing:
@@ -1988,6 +1988,11 @@ spec:
                   FIXME: Unused for now (API update required?)
                 format: int32
                 type: integer
+              subPhase:
+                description: |-
+                  SubPhase tracks the step within the current Phase. Reserved for future
+                  sub-state machine expansion; currently only "creating" is used.
+                type: string
               uuid:
                 description: UUID is the backend cluster UUID.
                 type: string

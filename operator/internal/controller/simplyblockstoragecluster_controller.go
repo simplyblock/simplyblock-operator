@@ -65,11 +65,16 @@ const (
 	// consulting controller logs.
 	eventReasonClusterCreationFailed = "ClusterCreationFailed"
 
-	// clusterPhaseCreating is written to Status.Phase before making the backend
+	// clusterPhaseCreation is written to Status.Phase before making the backend
 	// cluster creation call. The optimistic-lock patch that sets this value acts
 	// as a distributed mutex: a concurrent reconciler that also sees UUID="" will
 	// receive a 409 Conflict and back off, preventing duplicate cluster creation.
-	clusterPhaseCreating = "creating"
+	clusterPhaseCreation = "creation"
+
+	// clusterSubPhaseCreating is the only Status.SubPhase value used during
+	// cluster creation today. It is a placeholder for future sub-state machine
+	// expansion (e.g. "preparing", "waitingForReachable").
+	clusterSubPhaseCreating = "creating"
 )
 
 // StorageClusterReconciler reconciles a StorageCluster object
@@ -160,11 +165,12 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	log := logf.FromContext(ctx)
 
 	/* -------------------- Claim creation slot -------------------- */
-	// Use an optimistic-lock patch to atomically set Phase="creating".
+	// Use an optimistic-lock patch to atomically set Phase="creation".
 	// If a concurrent reconciler already patched this version, the Kubernetes
 	// API server returns 409 and we back off — preventing duplicate cluster creation.
 	base := clusterCR.DeepCopy()
-	clusterCR.Status.Phase = clusterPhaseCreating
+	clusterCR.Status.Phase = clusterPhaseCreation
+	clusterCR.Status.SubPhase = clusterSubPhaseCreating
 	if patchErr := r.Status().Patch(ctx, clusterCR, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); patchErr != nil {
 		log.Info("Creation already claimed by another reconciler, backing off", "name", clusterCR.Name)
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -314,6 +320,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 
 	clusterCR.Status.UUID = apiResp.UUID
 	clusterCR.Status.Phase = ""
+	clusterCR.Status.SubPhase = ""
 	clusterCR.Status.Rebalancing = &apiResp.Rebalancing
 	clusterCR.Status.Status = apiResp.Status
 	clusterCR.Status.NQN = apiResp.NQN
@@ -373,6 +380,7 @@ func (r *StorageClusterReconciler) adoptExistingCluster(
 	orig := clusterCR.DeepCopy()
 	clusterCR.Status.UUID = existing.UUID
 	clusterCR.Status.Phase = ""
+	clusterCR.Status.SubPhase = ""
 	clusterCR.Status.NQN = existing.NQN
 	clusterCR.Status.Status = existing.Status
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", existing.NDCS, existing.NPCS)

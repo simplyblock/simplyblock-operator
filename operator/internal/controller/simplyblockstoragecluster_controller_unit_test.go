@@ -1178,6 +1178,9 @@ func TestReconcileCreateOptimisticLockPreventsRace(t *testing.T) {
 		if current.Status.Phase != "" {
 			t.Fatalf("expected Status.Phase cleared after creation, got %q", current.Status.Phase)
 		}
+		if current.Status.SubPhase != "" {
+			t.Fatalf("expected Status.SubPhase cleared after creation, got %q", current.Status.SubPhase)
+		}
 		if current.Status.UUID != "cluster-phase-ok-uuid" {
 			t.Fatalf("expected UUID populated after creation, got %q", current.Status.UUID)
 		}

@@ -306,9 +306,12 @@ type StorageClusterStatus struct {
 	// UUID is the backend cluster UUID.
 	UUID string `json:"uuid,omitempty"`
 	// Phase tracks the cluster creation lifecycle to prevent concurrent reconcilers
-	// from creating duplicate clusters. Set to "creating" while a creation is in
+	// from creating duplicate clusters. Set to "creation" while a creation is in
 	// progress and cleared once the cluster UUID is persisted.
 	Phase string `json:"phase,omitempty"`
+	// SubPhase tracks the step within the current Phase. Reserved for future
+	// sub-state machine expansion; currently only "creating" is used.
+	SubPhase string `json:"subPhase,omitempty"`
 	// ClusterName is the resolved backend cluster name.
 	ClusterName string `json:"clusterName,omitempty"`
 	// MgmtNodes is the number of management nodes.
