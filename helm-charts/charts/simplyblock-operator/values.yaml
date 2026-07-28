@@ -355,6 +355,7 @@ controlplane:
 
 operator:
   enabled: true
+  openShiftCluster: true
 
 mongodb-kubernetes:
   name: "simplyblock-mongodb"

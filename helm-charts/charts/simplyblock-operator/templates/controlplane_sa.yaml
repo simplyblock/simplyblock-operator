@@ -19,6 +19,11 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch", "patch", "update"]
+  {{- if .Values.operator.openShiftCluster }}
+  - apiGroups: ["machineconfiguration.openshift.io"]
+    resources: ["machineconfigpools"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  {{- end }}
   - apiGroups: ["mongodbcommunity.mongodb.com"]
     resources: ["mongodbcommunity"]
     verbs: ["get", "list", "watch", "patch", "update"]
