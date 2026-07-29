@@ -241,23 +241,15 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	}
 
 	params := utils.ClusterAddParams{
-		Name:             clusterCR.Name,
-		BlkSize:          ptr.IntFrom(clusterCR.Spec.BlockSize, 512),
-		PageSizeInBlocks: ptr.IntFrom(clusterCR.Spec.PageSizeInBlocks, 2097152),
-		CapWarn:          capacityThreshold(clusterCR.Spec.WarningThresholdSpec),
-		CapCrit:          capacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
-		ProvCapWarn:      provisionedCapacityThreshold(clusterCR.Spec.WarningThresholdSpec),
-		ProvCapCrit:      provisionedCapacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
-		DistrNdcs:        stripeDataChunks(clusterCR.Spec.StripeSpec),
-		DistrNpcs:        stripeParityChunks(clusterCR.Spec.StripeSpec),
-		// DistrBs/DistrChunkBs configure the internal erasure-coding distribution
-		// bdev, which is independent of Spec.BlockSize (the client-facing NVMe-oF
-		// logical block size mapped to BlkSize above). The backend itself treats
-		// these as private/advanced parameters (see sbcli's `--distr-bs` /
-		// `--distr-chunk-bs`), so they are intentionally fixed here rather than
-		// sourced from the CRD spec.
-		DistrBs:                4096,
-		DistrChunkBs:           4096,
+		Name:                   clusterCR.Name,
+		BlkSize:                ptr.IntFrom(clusterCR.Spec.BlockSize, 512),
+		PageSizeInBlocks:       ptr.IntFrom(clusterCR.Spec.PageSizeInBlocks, 2097152),
+		CapWarn:                capacityThreshold(clusterCR.Spec.WarningThresholdSpec),
+		CapCrit:                capacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
+		ProvCapWarn:            provisionedCapacityThreshold(clusterCR.Spec.WarningThresholdSpec),
+		ProvCapCrit:            provisionedCapacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
+		DistrNdcs:              stripeDataChunks(clusterCR.Spec.StripeSpec),
+		DistrNpcs:              stripeParityChunks(clusterCR.Spec.StripeSpec),
 		HAType:                 clusterCR.Spec.HAType,
 		QpairCount:             ptr.IntFrom(clusterCR.Spec.QpairCount, 256),
 		ClientQpairCount:       ptr.IntFrom(clusterCR.Spec.ClientQpairCount, 3),
