@@ -150,7 +150,7 @@ func TestSanity(t *testing.T) {
 	endpoint := "unix://" + filepath.Join(sockDir, "csi.sock")
 
 	grpcSrv := csicommon.NewNonBlockingGRPCServer()
-	grpcSrv.Start(endpoint, ids, cs, ns)
+	grpcSrv.Start(endpoint, ids, cs, ns, nil)
 	defer grpcSrv.ForceStop()
 
 	// Run the CSI sanity suite.

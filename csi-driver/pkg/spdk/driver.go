@@ -65,15 +65,17 @@ func Run(conf *util.Config) {
 		}
 	}
 
+	var gcs *groupControllerServer
 	if conf.IsControllerServer {
 		var err error
 		cs, err = newControllerServer(cd)
 		if err != nil {
 			klog.Fatalf("failed to create controller server: %s", err)
 		}
+		gcs = newGroupControllerServer()
 	}
 
 	s := csicommon.NewNonBlockingGRPCServer()
-	s.Start(conf.Endpoint, ids, cs, ns)
+	s.Start(conf.Endpoint, ids, cs, ns, gcs)
 	s.Wait()
 }

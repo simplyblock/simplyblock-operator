@@ -49,7 +49,7 @@ func startCSIController(t *testing.T, mock *mockSBCLI) csi.ControllerClient {
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 	endpoint := "unix://" + filepath.Join(sockDir, "c.sock")
 	grpcSrv := csicommon.NewNonBlockingGRPCServer()
-	grpcSrv.Start(endpoint, ids, cs, ns)
+	grpcSrv.Start(endpoint, ids, cs, ns, nil)
 	t.Cleanup(grpcSrv.ForceStop)
 
 	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
