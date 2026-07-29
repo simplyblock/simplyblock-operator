@@ -112,7 +112,7 @@ spec:
         {{- if .Values.tls.enabled }}
         {{- include "simplyblock.clientTlsVolume" (dict "ctx" . "clientSecret" "simplyblock-operator-client-tls") | nindent 8 }}
         {{- end }}
-      terminationGracePeriodSeconds: 150
+      terminationGracePeriodSeconds: 10
 
 ################# ROLE AND ROLE BINDING ##############################
 ---
