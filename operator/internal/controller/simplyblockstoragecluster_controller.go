@@ -250,9 +250,13 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		ProvCapCrit:      provisionedCapacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
 		DistrNdcs:        stripeDataChunks(clusterCR.Spec.StripeSpec),
 		DistrNpcs:        stripeParityChunks(clusterCR.Spec.StripeSpec),
-		// FIXME: Remove distrBs mapping after backend contract clarification.
-		DistrBs: 4096,
-		// FIXME: Remove distrChunkBs mapping after backend contract clarification.
+		// DistrBs/DistrChunkBs configure the internal erasure-coding distribution
+		// bdev, which is independent of Spec.BlockSize (the client-facing NVMe-oF
+		// logical block size mapped to BlkSize above). The backend itself treats
+		// these as private/advanced parameters (see sbcli's `--distr-bs` /
+		// `--distr-chunk-bs`), so they are intentionally fixed here rather than
+		// sourced from the CRD spec.
+		DistrBs:                4096,
 		DistrChunkBs:           4096,
 		HAType:                 clusterCR.Spec.HAType,
 		QpairCount:             ptr.IntFrom(clusterCR.Spec.QpairCount, 256),
