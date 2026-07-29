@@ -34,7 +34,7 @@ func IsBlockedIP(ip net.IP) bool {
 }
 
 // ValidateExternalURL rejects URLs that are unsafe to forward to the backend:
-// - scheme must be https
+// - scheme must be http or https
 // - host must not be a blocked IP literal (RFC-1918, loopback, link-local)
 // - hostname must resolve and all resolved IPs must not be blocked
 func ValidateExternalURL(rawURL string) error {
@@ -45,8 +45,8 @@ func ValidateExternalURL(rawURL string) error {
 	if err != nil {
 		return fmt.Errorf("malformed URL: %w", err)
 	}
-	if u.Scheme != "https" {
-		return fmt.Errorf("URL scheme must be https, got %q", u.Scheme)
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return fmt.Errorf("URL scheme must be http or https, got %q", u.Scheme)
 	}
 	host := u.Hostname()
 	if host == "" {
