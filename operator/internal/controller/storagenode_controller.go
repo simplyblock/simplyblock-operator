@@ -373,6 +373,16 @@ func (r *StorageNodeReconciler) provisionNode(
 		Expand:           ptr.BoolFromOrFalse(eff.Expand),
 	}
 
+	// Re-read the in-flight count immediately before the POST to narrow the
+	// check-then-act race window. The first check (above) filters the common
+	// case; this final re-check reduces the window to the round-trip of a
+	// single List call, making concurrent overshoot extremely unlikely.
+	if recheck, recheckErr := r.countInFlightNodes(ctx, sn.Namespace, sn.Spec.StorageNodeSetRef, sn.Spec.WorkerNode); recheckErr == nil && recheck >= maxParallel {
+		log.Info("parallel node add limit reached on re-check, requeuing",
+			"inFlight", recheck, "max", maxParallel)
+		return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
+	}
+
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
 	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, params)
 	if err != nil || status >= 300 {
