@@ -50,6 +50,9 @@ helm upgrade --install openbao openbao/openbao \
   -f "$SCRIPT_DIR/openbao-values.yaml" \
   --set server.dataStorage.storageClass="$STORAGE_CLASS"
 
+info "Waiting for $POD to exist..."
+kubectl -n "$NAMESPACE" wait --for=create pod/"$POD" --timeout=120s
+
 info "Waiting for $POD to be running..."
 kubectl -n "$NAMESPACE" wait pod/"$POD" \
   --for=jsonpath='{.status.phase}'=Running --timeout=120s
