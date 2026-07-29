@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -309,4 +310,70 @@ func TestHandleDeletion_RemovesFinalizerWhenNeverProvisioned(t *testing.T) {
 			t.Error("finalizer should have been removed for unprovisioned node")
 		}
 	}
+}
+
+// TestCountInFlightNodes_DeduplicatesByWorker verifies that countInFlightNodes
+// counts distinct physical hosts (WorkerNode), not individual StorageNode CRs.
+// With nodesPerSocket=2 each host has two CRs; both get PostedAt stamped
+// (primary posts, secondary copies via workerAlreadyPosted fast-path). Without
+// deduplication each host would consume 2 slots instead of 1, causing
+// maxParallelNodeAdds=6 to allow only ~3 hosts concurrently.
+func TestCountInFlightNodes_DeduplicatesByWorker(t *testing.T) {
+	const (
+		ns     = snTestNS
+		snsRef = "sns-dedup"
+	)
+
+	now := metav1.Now()
+	postedAt := &now
+
+	makeNode := func(name, worker, uuid, status string, posted *metav1.Time) *simplyblockv1alpha1.StorageNode {
+		sn := newStorageNode(name, ns, snsRef, worker)
+		sn.Status.PostedAt = posted
+		sn.Status.UUID = uuid
+		sn.Status.Status = status
+		return sn
+	}
+
+	// Two sockets on worker-A: both in-flight (PostedAt set, no UUID yet).
+	snA1 := makeNode("sn-a1", "worker-a", "", "", postedAt)
+	snA2 := makeNode("sn-a2", "worker-a", "", "", postedAt)
+
+	// Two sockets on worker-B: both in-flight.
+	snB1 := makeNode("sn-b1", "worker-b", "", "", postedAt)
+	snB2 := makeNode("sn-b2", "worker-b", "", "", postedAt)
+
+	// worker-C: one socket done (UUID assigned), one still in_creation.
+	snC1 := makeNode("sn-c1", "worker-c", "uuid-c", utils.NodeStatusInCreation, postedAt)
+	snC2 := makeNode("sn-c2", "worker-c", "uuid-c", utils.NodeStatusInCreation, postedAt)
+
+	// worker-D: timed out — should NOT count.
+	snD1 := makeNode("sn-d1", "worker-d", "", utils.NodeStatusTimeout, postedAt)
+
+	// worker-E: no PostedAt — not yet started, should NOT count.
+	snE1 := makeNode("sn-e1", "worker-e", "", "", nil)
+
+	r := newSNReconciler(t, snA1, snA2, snB1, snB2, snC1, snC2, snD1, snE1)
+
+	t.Run("counts distinct in-flight workers, not CRs", func(t *testing.T) {
+		// Exclude worker-a (the calling node's worker). Expect worker-b and worker-c = 2.
+		count, err := r.countInFlightNodes(context.Background(), ns, snsRef, "worker-a")
+		if err != nil {
+			t.Fatalf("countInFlightNodes returned error: %v", err)
+		}
+		if count != 2 {
+			t.Fatalf("expected 2 distinct in-flight workers (b, c), got %d", count)
+		}
+	})
+
+	t.Run("excludes the calling node's own worker", func(t *testing.T) {
+		// Exclude worker-b. Expect worker-a and worker-c = 2.
+		count, err := r.countInFlightNodes(context.Background(), ns, snsRef, "worker-b")
+		if err != nil {
+			t.Fatalf("countInFlightNodes returned error: %v", err)
+		}
+		if count != 2 {
+			t.Fatalf("expected 2 distinct in-flight workers (a, c), got %d", count)
+		}
+	})
 }

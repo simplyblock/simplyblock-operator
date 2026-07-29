@@ -182,7 +182,7 @@ func TestCountInFlightNodes_ZeroWhenNonePosted(t *testing.T) {
 	sn2 := newStorageNode("sn-2", snsTestNS, "sns", "worker-2.example.com")
 	r := newSNReconciler(t, sn1, sn2)
 
-	count, err := r.countInFlightNodes(context.Background(), snsTestNS, "sns", "sn-1")
+	count, err := r.countInFlightNodes(context.Background(), snsTestNS, "sns", "worker-1.example.com")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestCountInFlightNodes_CountsSiblingsWithPostedAtAndNoUUID(t *testing.T) {
 	sn3.Status.UUID = "already-online-uuid" // sn-3 is done
 	r := newSNReconciler(t, sn1, sn2, sn3)
 
-	count, err := r.countInFlightNodes(context.Background(), snsTestNS, "sns", "sn-1")
+	count, err := r.countInFlightNodes(context.Background(), snsTestNS, "sns", "worker-1.example.com")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestCountInFlightNodes_ExcludesSelf(t *testing.T) {
 	sn1.Status.PostedAt = &now // self is in-flight
 	r := newSNReconciler(t, sn1)
 
-	count, err := r.countInFlightNodes(context.Background(), snsTestNS, "sns", "sn-1")
+	count, err := r.countInFlightNodes(context.Background(), snsTestNS, "sns", "worker-1.example.com")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -318,7 +318,7 @@ func (r *StorageNodeReconciler) provisionNode(
 	if sns.Spec.MaxParallelNodeAdds != nil {
 		maxParallel = int(*sns.Spec.MaxParallelNodeAdds)
 	}
-	inFlight, err := r.countInFlightNodes(ctx, sn.Namespace, sn.Spec.StorageNodeSetRef, sn.Name)
+	inFlight, err := r.countInFlightNodes(ctx, sn.Namespace, sn.Spec.StorageNodeSetRef, sn.Spec.WorkerNode)
 	if err == nil && inFlight >= maxParallel {
 		log.Info("parallel node add limit reached, requeuing",
 			"inFlight", inFlight, "max", maxParallel)
@@ -371,6 +371,16 @@ func (r *StorageNodeReconciler) provisionNode(
 		SpdkSystemMemory: eff.SpdkSystemMemory,
 		FailureDomain:    effectiveFailureDomain(sn, sns),
 		Expand:           ptr.BoolFromOrFalse(eff.Expand),
+	}
+
+	// Re-read the in-flight count immediately before the POST to narrow the
+	// check-then-act race window. The first check (above) filters the common
+	// case; this final re-check reduces the window to the round-trip of a
+	// single List call, making concurrent overshoot extremely unlikely.
+	if recheck, recheckErr := r.countInFlightNodes(ctx, sn.Namespace, sn.Spec.StorageNodeSetRef, sn.Spec.WorkerNode); recheckErr == nil && recheck >= maxParallel {
+		log.Info("parallel node add limit reached on re-check, requeuing",
+			"inFlight", recheck, "max", maxParallel)
+		return ctrl.Result{RequeueAfter: waitForNodeOnlineWaitInterval}, nil
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes", clusterUUID)
@@ -437,14 +447,16 @@ func (r *StorageNodeReconciler) isFDBWorkerBlocked(
 	return false, nil
 }
 
-// countInFlightNodes returns how many sibling StorageNode CRs in the same
-// StorageNodeSet are still being provisioned. A node is considered in-flight
-// if PostedAt is set and either the UUID has not been assigned yet or the
-// backend status is still "in_creation" (UUID is assigned quickly but the node
-// takes longer to become online). The calling node is excluded from the count.
+// countInFlightNodes returns how many distinct workers (physical hosts) in the
+// same StorageNodeSet are still being provisioned, excluding the calling node's
+// own worker. A worker is considered in-flight if any of its StorageNode CRs
+// has PostedAt set and either has no UUID yet or is still "in_creation".
+// Counting distinct workers (not individual CRs) ensures maxParallelNodeAdds
+// matches its documented meaning regardless of nodesPerSocket — without this,
+// each in-flight host would consume nodesPerSocket slots instead of one.
 func (r *StorageNodeReconciler) countInFlightNodes(
 	ctx context.Context,
-	namespace, snsRef, excludeName string,
+	namespace, snsRef, excludeWorker string,
 ) (int, error) {
 	var snList simplyblockv1alpha1.StorageNodeList
 	if err := r.List(ctx, &snList,
@@ -453,18 +465,18 @@ func (r *StorageNodeReconciler) countInFlightNodes(
 	); err != nil {
 		return 0, err
 	}
-	count := 0
+	inFlightWorkers := make(map[string]struct{})
 	for _, sn := range snList.Items {
-		if sn.Name == excludeName {
+		if sn.Spec.WorkerNode == excludeWorker {
 			continue
 		}
 		if sn.Status.PostedAt != nil &&
 			sn.Status.Status != utils.NodeStatusTimeout &&
 			(sn.Status.UUID == "" || sn.Status.Status == utils.NodeStatusInCreation) {
-			count++
+			inFlightWorkers[sn.Spec.WorkerNode] = struct{}{}
 		}
 	}
-	return count, nil
+	return len(inFlightWorkers), nil
 }
 
 // workerAlreadyPosted returns true if any sibling StorageNode in the same
