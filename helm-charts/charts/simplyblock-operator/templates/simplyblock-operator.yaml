@@ -60,6 +60,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: SIMPLYBLOCK_REBALANCER_IMAGE
+              value: "{{ .Values.image.rebalancer.repository }}:{{ .Values.image.rebalancer.tag | default .Values.image.operator.tag }}"
             {{- include "simplyblock.tlsEnv" . | nindent 12 }}
           resources:
             limits:

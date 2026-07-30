@@ -113,7 +113,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 
 	// Auto-rebalancing is opt-in: run only when explicitly enabled (Enabled=true).
 	// An unset flag means off, so realignment still gets its requeue.
-	spec := ptr.From(clusterCR.Spec.VolumeAutoPlacement, simplyblockv1alpha1.VolumeAutoPlacementSettings{})
+	spec := autoplacement.GetConfig(clusterCR.Spec.VolumeAutoPlacement)
 	if !ptr.BoolFromOrFalse(spec.Enabled) {
 		return ctrl.Result{RequeueAfter: realignRequeue}, nil
 	}

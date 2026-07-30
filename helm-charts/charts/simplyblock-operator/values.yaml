@@ -49,6 +49,11 @@ image:
     repository: quay.io/simplyblock-io/simplyblock-operator
     tag: v26.2.6
     pullPolicy: Always
+  rebalancer:
+    repository: quay.io/simplyblock-io/simplyblock-rebalancer
+    # tag defaults to the operator tag so the rebalancer stays in lockstep with
+    # the operator; set explicitly to pin a different rebalancer image tag.
+    tag: ""
   numaResource:
     repository: quay.io/simplyblock-io/numa-resource-plugin
     tag: latest
