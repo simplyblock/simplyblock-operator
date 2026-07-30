@@ -241,19 +241,15 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	}
 
 	params := utils.ClusterAddParams{
-		Name:             clusterCR.Name,
-		BlkSize:          ptr.IntFrom(clusterCR.Spec.BlockSize, 512),
-		PageSizeInBlocks: ptr.IntFrom(clusterCR.Spec.PageSizeInBlocks, 2097152),
-		CapWarn:          capacityThreshold(clusterCR.Spec.WarningThresholdSpec),
-		CapCrit:          capacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
-		ProvCapWarn:      provisionedCapacityThreshold(clusterCR.Spec.WarningThresholdSpec),
-		ProvCapCrit:      provisionedCapacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
-		DistrNdcs:        stripeDataChunks(clusterCR.Spec.StripeSpec),
-		DistrNpcs:        stripeParityChunks(clusterCR.Spec.StripeSpec),
-		// FIXME: Remove distrBs mapping after backend contract clarification.
-		DistrBs: 4096,
-		// FIXME: Remove distrChunkBs mapping after backend contract clarification.
-		DistrChunkBs:           4096,
+		Name:                   clusterCR.Name,
+		BlkSize:                ptr.IntFrom(clusterCR.Spec.BlockSize, 512),
+		PageSizeInBlocks:       ptr.IntFrom(clusterCR.Spec.PageSizeInBlocks, 2097152),
+		CapWarn:                capacityThreshold(clusterCR.Spec.WarningThresholdSpec),
+		CapCrit:                capacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
+		ProvCapWarn:            provisionedCapacityThreshold(clusterCR.Spec.WarningThresholdSpec),
+		ProvCapCrit:            provisionedCapacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
+		DistrNdcs:              stripeDataChunks(clusterCR.Spec.StripeSpec),
+		DistrNpcs:              stripeParityChunks(clusterCR.Spec.StripeSpec),
 		HAType:                 clusterCR.Spec.HAType,
 		QpairCount:             ptr.IntFrom(clusterCR.Spec.QpairCount, 256),
 		ClientQpairCount:       ptr.IntFrom(clusterCR.Spec.ClientQpairCount, 3),
