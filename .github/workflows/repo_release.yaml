@@ -62,7 +62,7 @@ jobs:
   build-csi:
     name: Build csi
     needs: [setup, build-atlas]
-    uses: ./.github/workflows/csi_linux.yaml
+    uses: ./.github/workflows/csi_build.yaml
     with:
       version: ${{ needs.setup.outputs.version }}
     secrets: inherit
