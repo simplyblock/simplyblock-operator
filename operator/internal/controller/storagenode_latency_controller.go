@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -99,13 +100,13 @@ func (r *StorageNodeLatencyReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, err
 	}
 
-	spec := ptr.From(clusterCR.Spec.VolumeAutoPlacement, simplyblockv1alpha1.VolumeAutoPlacementSettings{})
+	spec := autoplacement.GetConfig(clusterCR.Spec.VolumeAutoPlacement)
 	if !ptr.BoolFromOrFalse(spec.LatencyBenchmarkEnabled) {
 		return ctrl.Result{}, nil
 	}
 	// The latency/baseline Jobs reuse the existing top-level rebalancer image
 	// (VolumeMigrationSettings.RebalancerImage); there is no separate image.
-	vms := ptr.From(clusterCR.Spec.VolumeMigrationSettings, simplyblockv1alpha1.VolumeMigrationSettings{})
+	vms := volumemigration.GetConfig(clusterCR.Spec.VolumeMigrationSettings)
 	rebalancerImage := ptr.From(vms.RebalancerImage, "")
 	if rebalancerImage == "" {
 		log.Info("RebalancerImage not configured; latency benchmark disabled")

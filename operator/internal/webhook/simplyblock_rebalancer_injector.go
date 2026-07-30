@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
+	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -112,12 +114,12 @@ func (h *SimplyblockRebalancerInjector) resolveConfig(
 			log.V(1).Info("Skipping: cluster UUID prefix mismatch", "cluster", cr.Name, "clusterUUID", cr.Status.UUID, "podPrefix", uuidPrefix)
 			continue
 		}
-		rb := ptr.From(cr.Spec.VolumeAutoPlacement, simplyblockv1alpha1.VolumeAutoPlacementSettings{})
+		rb := autoplacement.GetConfig(cr.Spec.VolumeAutoPlacement)
 		if !ptr.BoolFromOrFalse(rb.LatencyBenchmarkEnabled) {
 			log.Info("Skipping: latency benchmark not enabled", "cluster", cr.Name)
 			return "", "", false
 		}
-		vms := ptr.From(cr.Spec.VolumeMigrationSettings, simplyblockv1alpha1.VolumeMigrationSettings{})
+		vms := volumemigration.GetConfig(cr.Spec.VolumeMigrationSettings)
 		rebalancerImage := ptr.From(vms.RebalancerImage, "")
 		if rebalancerImage == "" {
 			log.Info("Skipping: rebalancerImage not configured", "cluster", cr.Name)

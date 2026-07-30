@@ -192,7 +192,7 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 	// versa. What placement does require is latency measurement — it ranks nodes by
 	// the same latency-deviation signal — so it is gated on LatencyBenchmarkEnabled
 	// (opt-in, default false), not on the rebalancing Enabled flag.
-	spec := ptr.From(cr.Spec.VolumeAutoPlacement, simplyblockv1alpha1.VolumeAutoPlacementSettings{})
+	spec := autoplacement.GetConfig(cr.Spec.VolumeAutoPlacement)
 	if !ptr.BoolFromOrFalse(spec.LatencyBenchmarkEnabled) {
 		log.V(1).Info("Skipping: latency benchmarking not enabled (auto-placement requires it)", "cluster", cr.Name)
 		return "", false
