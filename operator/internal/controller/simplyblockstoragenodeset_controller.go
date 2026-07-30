@@ -89,7 +89,14 @@ var (
 	waitForNodeOnlineRetries         = 60
 	waitForNodeOnlineWaitInterval    = 10 * time.Second
 	waitForNodeOnlineActivationDelay = 120 * time.Second
-	waitForNodeOnlineSleepFn         = time.Sleep
+	waitForNodeOnlineSleepFn         = func(ctx context.Context, d time.Duration) error {
+		select {
+		case <-time.After(d):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 
 	syncNodeStatusInterval = 30 * time.Second
 
@@ -1600,7 +1607,9 @@ func maybeActivateCluster(
 	}
 
 	if utils.ShouldActivateCluster(requiredEc, onlineHealthy, snCR) {
-		waitForNodeOnlineSleepFn(waitForNodeOnlineActivationDelay)
+		if err := waitForNodeOnlineSleepFn(ctx, waitForNodeOnlineActivationDelay); err != nil {
+			return err
+		}
 		log.Info("Activation conditions met — activating cluster")
 		if err := utils.ActivateClusterAndWait(ctx, apiClient, clusterUUID); err != nil {
 			log.Error(err, "Cluster activation did not complete")

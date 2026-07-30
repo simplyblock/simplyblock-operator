@@ -1150,7 +1150,7 @@ func TestPollNodeOnlinePaths(t *testing.T) {
 		waitForNodeOnlineSleepFn = origSleepFn
 	})
 	waitForNodeOnlineActivationDelay = 0
-	waitForNodeOnlineSleepFn = func(time.Duration) {}
+	waitForNodeOnlineSleepFn = func(context.Context, time.Duration) error { return nil }
 
 	t.Run("updates node status and returns done when cluster already active", func(t *testing.T) {
 		const clusterName = "cluster-a"
@@ -1331,7 +1331,7 @@ func TestPollNodeOnlineErrorAndTimeoutPaths(t *testing.T) {
 		waitForNodeOnlineSleepFn = origSleepFn
 	})
 	waitForNodeOnlineActivationDelay = 0
-	waitForNodeOnlineSleepFn = func(time.Duration) {}
+	waitForNodeOnlineSleepFn = func(context.Context, time.Duration) error { return nil }
 
 	t.Run("returns error on invalid storage-node payload", func(t *testing.T) {
 		const clusterUUID = "cluster-uuid-wfno-invalid-json"
