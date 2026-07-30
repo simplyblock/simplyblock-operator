@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/simplyblock/atlas/ptr"
 	jsonpatch "gomodules.xyz/jsonpatch/v2"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -35,9 +36,6 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-func boolRef(b bool) *bool    { return &b }
-func strRef(s string) *string { return &s }
-
 const testClusterUUID = "c03e1571-75e8-46d6-b76f-d08a4e2abe2f"
 
 func makeCluster(benchmarkEnabled bool, image string) *simplyblockv1alpha1.StorageCluster {
@@ -45,10 +43,10 @@ func makeCluster(benchmarkEnabled bool, image string) *simplyblockv1alpha1.Stora
 		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster", Namespace: "default"},
 		Spec: simplyblockv1alpha1.StorageClusterSpec{
 			VolumeMigrationSettings: &simplyblockv1alpha1.VolumeMigrationSettings{
-				RebalancerImage: strRef(image),
+				RebalancerImage: ptr.To(image),
 			},
-			AutoRebalancing: &simplyblockv1alpha1.VolumeRebalancingSettings{
-				LatencyBenchmarkEnabled: boolRef(benchmarkEnabled),
+			VolumeAutoPlacement: &simplyblockv1alpha1.VolumeAutoPlacementSettings{
+				LatencyBenchmarkEnabled: ptr.To(benchmarkEnabled),
 			},
 		},
 		Status: simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterUUID},

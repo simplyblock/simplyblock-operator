@@ -237,6 +237,39 @@ func TestClampToIntPanic(t *testing.T) {
 	// is unreachable. We keep the check but do not exercise it here.
 }
 
+func TestIsEmptyString(t *testing.T) {
+	// Plain string values.
+	if !IsEmptyString("") {
+		t.Error(`IsEmptyString(""): got false want true`)
+	}
+	if !IsEmptyString("   \t\n") {
+		t.Error("IsEmptyString(whitespace): got false want true")
+	}
+	if IsEmptyString("x") {
+		t.Error(`IsEmptyString("x"): got true want false`)
+	}
+	if IsEmptyString("  padded  ") {
+		t.Error("IsEmptyString(padded content): got true want false")
+	}
+
+	// *string values, including nil.
+	if !IsEmptyString[*string](nil) {
+		t.Error("IsEmptyString(nil *string): got false want true")
+	}
+	empty := ""
+	if !IsEmptyString(&empty) {
+		t.Error("IsEmptyString(&\"\"): got false want true")
+	}
+	blank := "  "
+	if !IsEmptyString(&blank) {
+		t.Error("IsEmptyString(&whitespace): got false want true")
+	}
+	set := "value"
+	if IsEmptyString(&set) {
+		t.Error("IsEmptyString(&\"value\"): got true want false")
+	}
+}
+
 func TestStringOrDefault(t *testing.T) {
 	// nil interface, and typed nil pointers, both yield the default.
 	if got := StringOrDefault(nil, "def"); got != "def" {

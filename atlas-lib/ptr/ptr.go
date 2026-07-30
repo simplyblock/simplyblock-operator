@@ -84,6 +84,26 @@ func BoolFromOrTrue(ptr *bool) bool {
 	return *ptr
 }
 
+// IsEmptyString reports whether val is empty or contains only whitespace. It
+// accepts either a string or a *string, so optional fields (pointers) and plain
+// string values can be checked uniformly; a nil *string is treated as empty.
+func IsEmptyString[T string | *string](val T) bool {
+	isEmpty := func(str string) bool {
+		return strings.TrimSpace(str) == ""
+	}
+
+	// val is a type parameter, so it must be boxed to an interface before a type
+	// switch; a *string case also covers the nil-pointer input.
+	switch str := any(val).(type) {
+	case string:
+		return isEmpty(str)
+	case *string:
+		return str == nil || isEmpty(*str)
+	default:
+		return false
+	}
+}
+
 // StringOrDefault renders val as a string, returning def when val is nil or a
 // nil pointer. It accepts either a value or a pointer to one, so optional
 // fields (which are pointers) and plain values can be formatted the same way.

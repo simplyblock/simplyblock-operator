@@ -15,8 +15,8 @@ import (
 	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
-	"github.com/simplyblock/simplyblock-operator/internal/volumemigration/autobalancing"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -36,9 +36,9 @@ type storageNodeLister interface {
 type primaryNodeSelector interface {
 	SelectBestNode(
 		ctx context.Context,
-		cfg autobalancing.RebalancingConfig,
+		cfg autoplacement.RebalancingConfig,
 		eligible map[string]bool,
-		inputs ...autobalancing.StorageNodeSelectorInput,
+		inputs ...autoplacement.StorageNodeSelectorInput,
 	) (nodeUUID string, ok bool, err error)
 }
 
@@ -66,9 +66,35 @@ func (h *SimplyblockVolumePlacementInjector) Handle(
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
-	if pvc.Annotations[kube.AnnoHostID] != "" || pvc.Annotations[kube.DeprecatedAnnoHostID] != "" {
-		log.V(1).Info("Skipping: host-id already set")
-		return admission.Allowed("host-id already set")
+	// A user-supplied host-id is an explicit manual pin. Normalize it to the
+	// canonical selected-storage-node annotation — which the operator's pin
+	// controller, drain, and rebalancer recognize, and which the CSI driver reads
+	// as the primary host_id source at CreateVolume — and drop the legacy host-id
+	// forms. The user's choice wins, so we do not run load-based placement.
+	hostID := pvc.Annotations[kube.AnnoHostID]
+	if hostID == "" {
+		hostID = pvc.Annotations[kube.DeprecatedAnnoHostID]
+	}
+	if hostID != "" {
+		patched := pvc.DeepCopy()
+		if patched.Annotations == nil {
+			patched.Annotations = make(map[string]string)
+		}
+		// Do not clobber an existing explicit selected-storage-node pin.
+		if patched.Annotations[kube.AnnoSelectedStorageNode] == "" {
+			patched.Annotations[kube.AnnoSelectedStorageNode] = hostID
+		}
+		delete(patched.Annotations, kube.AnnoHostID)
+		delete(patched.Annotations, kube.DeprecatedAnnoHostID)
+		log.Info("Exchanged legacy host-id for selected-storage-node", "node", hostID)
+		return patchResponse(pvc, patched)
+	}
+
+	// An explicit selected-storage-node pin is honored as-is; never override it
+	// with a load-based pick.
+	if pvc.Annotations[kube.AnnoSelectedStorageNode] != "" {
+		log.V(1).Info("Skipping: selected-storage-node already set")
+		return admission.Allowed("selected-storage-node already set")
 	}
 
 	clusterUUID, ok := h.resolveClusterID(ctx, pvc, log)
@@ -81,13 +107,24 @@ func (h *SimplyblockVolumePlacementInjector) Handle(
 		return admission.Allowed("no load-based placement decision available")
 	}
 
+	// Load-based initial placement is a rebalanceable hint, not a pin, so it is
+	// written as the dedicated placement-hint annotation (which the CSI driver
+	// consumes at CreateVolume and then clears) rather than selected-storage-node
+	// (a permanent pin that would exclude the volume from rebalancing) or the
+	// legacy host-id (reserved for backward compatibility with pre-existing PVCs).
 	patched := pvc.DeepCopy()
 	if patched.Annotations == nil {
 		patched.Annotations = make(map[string]string)
 	}
-	patched.Annotations[kube.AnnoHostID] = nodeUUID
+	patched.Annotations[kube.AnnoPlacementHint] = nodeUUID
+	log.Info("Selected primary node for new volume", "nodeUUID", nodeUUID, "clusterUUID", clusterUUID)
+	return patchResponse(pvc, patched)
+}
 
-	original, err := json.Marshal(pvc)
+// patchResponse builds a JSON-patch admission response mutating original into
+// patched, or an errored response if either fails to marshal.
+func patchResponse(original, patched *corev1.PersistentVolumeClaim) admission.Response {
+	originalRaw, err := json.Marshal(original)
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
@@ -95,8 +132,7 @@ func (h *SimplyblockVolumePlacementInjector) Handle(
 	if err != nil {
 		return admission.Errored(http.StatusInternalServerError, err)
 	}
-	log.Info("Selected primary node for new volume", "nodeUUID", nodeUUID, "clusterUUID", clusterUUID)
-	return admission.PatchResponseFromRaw(original, patchedRaw)
+	return admission.PatchResponseFromRaw(originalRaw, patchedRaw)
 }
 
 // resolveClusterID resolves the PVC's StorageClass to a simplyblock cluster UUID. ok=false
@@ -106,7 +142,7 @@ func (h *SimplyblockVolumePlacementInjector) resolveClusterID(
 	pvc *corev1.PersistentVolumeClaim,
 	log logr.Logger,
 ) (clusterUUID string, ok bool) {
-	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName == "" {
+	if ptr.IsEmptyString(pvc.Spec.StorageClassName) {
 		return "", false
 	}
 
@@ -151,13 +187,18 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 		return "", false
 	}
 
-	spec := ptr.From(cr.Spec.AutoRebalancing, simplyblockv1alpha1.VolumeRebalancingSettings{})
-	if !ptr.BoolFromOrTrue(spec.Enabled) {
-		log.V(1).Info("Skipping: auto-rebalancing disabled", "cluster", cr.Name)
+	// Auto-placement is independent of auto-rebalancing (spec.Enabled): a cluster
+	// may want load-aware initial placement without ongoing migrations, or vice
+	// versa. What placement does require is latency measurement — it ranks nodes by
+	// the same latency-deviation signal — so it is gated on LatencyBenchmarkEnabled
+	// (opt-in, default false), not on the rebalancing Enabled flag.
+	spec := ptr.From(cr.Spec.VolumeAutoPlacement, simplyblockv1alpha1.VolumeAutoPlacementSettings{})
+	if !ptr.BoolFromOrFalse(spec.LatencyBenchmarkEnabled) {
+		log.V(1).Info("Skipping: latency benchmarking not enabled (auto-placement requires it)", "cluster", cr.Name)
 		return "", false
 	}
 
-	cfg, err := autobalancing.ResolveRebalancingConfig(&spec)
+	cfg, err := autoplacement.ResolveAutoPlacementConfig(spec)
 	if err != nil {
 		log.V(1).Info("Skipping: invalid rebalancing configuration", "cluster", cr.Name, "error", err.Error())
 		return "", false
@@ -176,7 +217,7 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 		eligible[n.UUID] = n.Status == "online" && n.Healthy && n.Lvols < n.LvolsMax
 	}
 
-	nodeUUID, ok, err = h.NodeSelector.SelectBestNode(ctx, cfg, eligible, autobalancing.StorageNodeSelectorInput{
+	nodeUUID, ok, err = h.NodeSelector.SelectBestNode(ctx, cfg, eligible, autoplacement.StorageNodeSelectorInput{
 		Namespace:    cr.Namespace,
 		StorageNodes: storageNodes,
 	})
