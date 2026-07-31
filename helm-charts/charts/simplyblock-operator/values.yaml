@@ -38,16 +38,16 @@ image:
     tag: v8.2.0
     pullPolicy: Always
   simplyblock:
-    repository: quay.io/simplyblock-io/simplyblock
-    tag: "26.2.6-PRE"
+    repository: docker.io/simplyblock/simplyblock
+    tag: main
     pullPolicy: Always
   storageNode:
     repository: quay.io/simplyblock-io/storage-node-handler
     tag: v0.1.9
     pullPolicy: Always
   operator:
-    repository: quay.io/simplyblock-io/simplyblock-operator
-    tag: v26.2.6
+    repository: docker.io/simplyblock/simplyblock-operator
+    tag: add_failure_domain_status
     pullPolicy: Always
   rebalancer:
     repository: quay.io/simplyblock-io/simplyblock-rebalancer
