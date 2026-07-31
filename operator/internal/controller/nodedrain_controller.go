@@ -148,6 +148,12 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 		maxFaultTolerance = int(*clusterCR.Status.MaxConcurrentWorkerRestarts)
 	}
 
+	// Failure-domain mode changes what MaxFaultTolerance counts against: with FD
+	// enabled, placement guarantees at most one erasure-coding chunk per domain,
+	// so the tolerable unit of loss is a whole domain, not an individual node
+	// (see handleDetected/activeDrainDomains).
+	fdEnabled := clusterCR.Spec.EnableFailureDomains != nil && *clusterCR.Spec.EnableFailureDomains
+
 	apiClient := webapi.NewClient()
 	nextRequeue := time.Duration(0)
 
@@ -184,7 +190,7 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 
 	for _, workerName := range snCR.Spec.WorkerNodes {
 		requeue, shouldBreak := r.processWorker(
-			ctx, snCR, workerName, apiClient, clusterUUID, maxFaultTolerance,
+			ctx, snCR, workerName, apiClient, clusterUUID, maxFaultTolerance, fdEnabled,
 		)
 		if requeue > 0 && (nextRequeue == 0 || requeue < nextRequeue) {
 			nextRequeue = requeue
@@ -233,6 +239,7 @@ func (r *NodeDrainCoordinatorReconciler) processWorker(
 	apiClient *webapi.Client,
 	clusterUUID string,
 	maxFaultTolerance int,
+	fdEnabled bool,
 ) (requeue time.Duration, shouldBreak bool) {
 	log := logf.FromContext(ctx)
 
@@ -279,7 +286,7 @@ func (r *NodeDrainCoordinatorReconciler) processWorker(
 
 	prevPhase := state.Phase
 	advRequeue, advErr := r.advanceStateMachine(
-		ctx, snCR, state, apiClient, clusterUUID, maxFaultTolerance,
+		ctx, snCR, state, apiClient, clusterUUID, maxFaultTolerance, fdEnabled,
 	)
 	if advErr != nil {
 		log.Error(advErr, "Drain state machine error", "node", workerName, "phase", state.Phase)
@@ -385,10 +392,11 @@ func (r *NodeDrainCoordinatorReconciler) advanceStateMachine(
 	apiClient *webapi.Client,
 	clusterUUID string,
 	maxFaultTolerance int,
+	fdEnabled bool,
 ) (time.Duration, error) {
 	switch state.Phase {
 	case simplyblockv1alpha1.DrainPhaseDetected:
-		return r.handleDetected(ctx, snCR, state, apiClient, clusterUUID, maxFaultTolerance)
+		return r.handleDetected(ctx, snCR, state, apiClient, clusterUUID, maxFaultTolerance, fdEnabled)
 	case simplyblockv1alpha1.DrainPhaseShutdownCalled:
 		return r.handleShutdownCalled(ctx, snCR, state, apiClient, clusterUUID)
 	case simplyblockv1alpha1.DrainPhaseDraining:
@@ -405,8 +413,19 @@ func (r *NodeDrainCoordinatorReconciler) advanceStateMachine(
 }
 
 // handleDetected waits for a drain slot then initiates the simplyblock shutdown.
-// Gate: number of nodes currently in {shutdown_called, draining, restart_called}
-// must be less than MaxFaultTolerance.
+//
+// Gate without failure domains: number of nodes currently in
+// {shutdown_called, draining, restart_called} must be less than MaxFaultTolerance.
+//
+// Gate with failure domains enabled: placement guarantees at most one
+// erasure-coding chunk per domain, so an entire domain going down at once is
+// already tolerated the same way a single node is tolerated without FD — the
+// unit MaxFaultTolerance counts against becomes the domain, not the node. A
+// candidate whose domain already has an active drain (for any reason —
+// another planned drain or a pre-existing unhealthy node) is free to proceed
+// alongside it; a candidate that would add a *new* domain to the active set
+// is gated on the number of distinct active domains, not the node count. See
+// activeDrainDomains.
 //
 // Importantly, the storage pod is labelled and a blocking PDB (maxUnavailable=0)
 // is created BEFORE the slot check, so that MCP/kubectl-drain cannot evict the
@@ -418,6 +437,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 	apiClient *webapi.Client,
 	clusterUUID string,
 	maxFaultTolerance int,
+	fdEnabled bool,
 ) (time.Duration, error) {
 	log := logf.FromContext(ctx)
 
@@ -452,11 +472,35 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 		log.Info("Storage PDB in place; released manager self-PDB — manager will migrate to another node", "node", state.Hostname)
 	}
 
-	activeDrains := countActiveDrains(ctx, snCR, apiClient, clusterUUID)
-	if activeDrains >= maxFaultTolerance {
-		state.Message = fmt.Sprintf("waiting for drain slot (%d/%d active)", activeDrains, maxFaultTolerance)
-		log.Info("No drain slot available, blocking PDB in place", "node", state.Hostname, "active", activeDrains, "max", maxFaultTolerance)
-		return 10 * time.Second, nil
+	if fdEnabled {
+		myDomain, hasDomain := snCR.Spec.NodeFailureDomains[state.Hostname]
+		if !hasDomain {
+			// FD is enabled cluster-wide but this node has no domain assignment
+			// yet (should not normally happen — add_node enforces the pairing).
+			// Fall back to the plain node-count gate rather than let an
+			// unassigned node bypass the budget entirely.
+			activeDrains := countActiveDrains(ctx, snCR, apiClient, clusterUUID)
+			if activeDrains >= maxFaultTolerance {
+				state.Message = fmt.Sprintf("waiting for drain slot (%d/%d active, no failure-domain assignment)", activeDrains, maxFaultTolerance)
+				log.Info("No drain slot available (node has no FD assignment; using node count)", "node", state.Hostname, "active", activeDrains, "max", maxFaultTolerance)
+				return 10 * time.Second, nil
+			}
+		} else {
+			activeWorkers := activeDrainWorkers(ctx, snCR, apiClient, clusterUUID)
+			activeDomains := activeDrainDomains(snCR, activeWorkers)
+			if !activeDomains[myDomain] && len(activeDomains) >= maxFaultTolerance {
+				state.Message = fmt.Sprintf("waiting for drain slot (failure domain %d not yet active; %d/%d domains active)", myDomain, len(activeDomains), maxFaultTolerance)
+				log.Info("No drain slot available for new failure domain", "node", state.Hostname, "domain", myDomain, "activeDomains", len(activeDomains), "max", maxFaultTolerance)
+				return 10 * time.Second, nil
+			}
+		}
+	} else {
+		activeDrains := countActiveDrains(ctx, snCR, apiClient, clusterUUID)
+		if activeDrains >= maxFaultTolerance {
+			state.Message = fmt.Sprintf("waiting for drain slot (%d/%d active)", activeDrains, maxFaultTolerance)
+			log.Info("No drain slot available, blocking PDB in place", "node", state.Hostname, "active", activeDrains, "max", maxFaultTolerance)
+			return 10 * time.Second, nil
+		}
 	}
 
 	nodeUUIDs := findAllNodeUUIDs(snCR, state.Hostname)
@@ -1196,6 +1240,61 @@ func countActiveDrains(
 		return backendCount
 	}
 	return controllerCount
+}
+
+// activeDrainWorkers returns the set of worker hostnames currently in the
+// active drain window, merging the same two sources as countActiveDrains
+// (controller-tracked phases and backend node status) into an actual set
+// rather than a count — needed so the failure-domain gate can test which
+// domains those workers belong to, not just how many there are.
+func activeDrainWorkers(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+	apiClient *webapi.Client,
+	clusterUUID string,
+) map[string]bool {
+	active := map[string]bool{}
+	for _, s := range snCR.Status.DrainCoordination {
+		switch s.Phase {
+		case simplyblockv1alpha1.DrainPhaseShutdownCalled,
+			simplyblockv1alpha1.DrainPhaseDraining,
+			simplyblockv1alpha1.DrainPhaseRestartCalled:
+			active[s.Hostname] = true
+		}
+	}
+
+	seen := map[string]bool{}
+	for _, n := range snCR.Status.Nodes {
+		if n.UUID == "" || n.Hostname == "" || seen[n.Hostname] {
+			continue
+		}
+		seen[n.Hostname] = true
+		info, err := getBackendNodeInfo(ctx, apiClient, clusterUUID, n.UUID)
+		if err != nil {
+			// Conservatively mark active on a query error, same as countActiveDrains.
+			active[n.Hostname] = true
+			continue
+		}
+		switch info.Status {
+		case "in_shutdown", "in_restart":
+			active[n.Hostname] = true
+		}
+	}
+	return active
+}
+
+// activeDrainDomains maps a set of active worker hostnames to their
+// failure-domain groups via StorageNodeSet.spec.nodeFailureDomains. Workers
+// with no domain assignment are excluded — the caller falls back to the plain
+// node-count gate for those.
+func activeDrainDomains(snCR *simplyblockv1alpha1.StorageNodeSet, activeWorkers map[string]bool) map[int32]bool {
+	domains := map[int32]bool{}
+	for w := range activeWorkers {
+		if d, ok := snCR.Spec.NodeFailureDomains[w]; ok {
+			domains[d] = true
+		}
+	}
+	return domains
 }
 
 // findNodeUUID returns the backend UUID for the given hostname from StorageNodeSet status.
