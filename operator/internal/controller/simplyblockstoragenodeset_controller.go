@@ -79,6 +79,7 @@ type SNODEAPIResponse struct {
 	RPC_PORT           int    `json:"rpc_port"`
 	LVOL_PORT          int    `json:"lvol_subsys_port"`
 	NVMF_PORT          int    `json:"nvmf_port"`
+	FailureDomain      int    `json:"failure_domain"`
 }
 
 var (
@@ -1433,7 +1434,7 @@ func onAllSocketNodesOnline(
 			RpcPort:       ptr.To(int32(res.RPC_PORT)),
 			LvolPort:      ptr.To(int32(res.LVOL_PORT)),
 			NvmfPort:      ptr.To(int32(res.NVMF_PORT)),
-			FailureDomain: failureDomainForWorker(snCR, nodeName),
+			FailureDomain: fdPtr(res.FailureDomain),
 		}
 
 		// Try to find existing entry by UUID first, then fall back to the
@@ -1552,7 +1553,7 @@ func (r *StorageNodeSetReconciler) syncTrackedNodesStatus(
 			NvmfPort:      ptr.To(int32(res.NVMF_PORT)),
 			PostedAt:      n.PostedAt,
 			Uptime:        n.Uptime,
-			FailureDomain: failureDomainForWorker(snCR, n.Hostname),
+			FailureDomain: fdPtr(res.FailureDomain),
 		}
 		if !reflect.DeepEqual(*n, updated) {
 			*n = updated
@@ -1570,17 +1571,14 @@ func (r *StorageNodeSetReconciler) syncTrackedNodesStatus(
 	return nil
 }
 
-// failureDomainForWorker returns the effective failure-domain index for a worker
-// node derived from the StorageNodeSet spec: nodeConfigs[worker].failureDomain
-// takes precedence over nodeFailureDomains[worker]. Returns nil when unset.
-func failureDomainForWorker(sns *simplyblockv1alpha1.StorageNodeSet, workerNode string) *int32 {
-	if nc, ok := sns.Spec.NodeConfigs[workerNode]; ok && nc.FailureDomain != nil {
-		return nc.FailureDomain
+// fdPtr converts a failure_domain integer from the backend API into a *int32
+// suitable for status fields. Returns nil when the value is 0 (unset).
+func fdPtr(fd int) *int32 {
+	if fd <= 0 {
+		return nil
 	}
-	if v, ok := sns.Spec.NodeFailureDomains[workerNode]; ok {
-		return &v
-	}
-	return nil
+	v := int32(fd)
+	return &v
 }
 
 // maybeActivateCluster activates the cluster when online-node conditions are met.
