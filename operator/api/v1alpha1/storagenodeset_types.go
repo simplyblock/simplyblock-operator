@@ -313,6 +313,11 @@ type NodeStatus struct {
 	// PostedAt is when the storage-node add request was sent. Used to detect
 	// timeout without blocking the reconcile goroutine.
 	PostedAt *metav1.Time `json:"postedAt,omitempty"`
+	// FailureDomain is the effective failure-domain group index for this node,
+	// reflected from spec.nodeConfigs[hostname].failureDomain or spec.nodeFailureDomains[hostname].
+	// Zero means unset.
+	// +optional
+	FailureDomain *int32 `json:"failureDomain,omitempty"`
 }
 
 type ActionStatus struct {

@@ -126,7 +126,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			// POST already sent but UUID not in status.nodes[] — this happens for
 			// manually created StorageNodes whose worker is not in spec.workerNodes.
 			// Poll the backend by worker IP to retrieve the UUID directly.
-			if err := r.pollUUIDFromBackend(ctx, &sn, clusterUUID, apiClient); err != nil {
+			if err := r.pollUUIDFromBackend(ctx, &sn, &sns, clusterUUID, apiClient); err != nil {
 				return ctrl.Result{}, err
 			}
 			if sn.Status.UUID == "" {
@@ -140,7 +140,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Node provisioned → sync status periodically.
-	return r.syncStatus(ctx, &sn, clusterUUID, apiClient)
+	return r.syncStatus(ctx, &sn, &sns, clusterUUID, apiClient)
 }
 
 // pollUUIDFromBackend lists all backend nodes for the cluster, finds the ones
@@ -153,6 +153,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 func (r *StorageNodeReconciler) pollUUIDFromBackend(
 	ctx context.Context,
 	sn *simplyblockv1alpha1.StorageNode,
+	sns *simplyblockv1alpha1.StorageNodeSet,
 	clusterUUID string,
 	apiClient *webapi.Client,
 ) error {
@@ -215,6 +216,7 @@ func (r *StorageNodeReconciler) pollUUIDFromBackend(
 	sn.Status.Status = n.Status
 	sn.Status.Health = n.Health
 	sn.Status.Hostname = n.Hostname
+	sn.Status.FailureDomain = failureDomainForWorker(sns, sn.Spec.WorkerNode)
 	sn.Status.Resources = &simplyblockv1alpha1.StorageNodeResources{
 		CPU:     &cpu,
 		Volumes: &volumes,
@@ -251,6 +253,7 @@ func (r *StorageNodeReconciler) syncUUIDFromNodeSet(
 		sn.Status.UUID = ns.UUID
 		sn.Status.Status = ns.Status
 		sn.Status.Health = ns.Health
+		sn.Status.FailureDomain = failureDomainForWorker(sns, sn.Spec.WorkerNode)
 		if err := r.Status().Patch(ctx, sn, patch); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("syncing UUID for StorageNode %s: %w", sn.Name, err)
 		}
@@ -524,6 +527,7 @@ func journalManagerCountFromSpec(spec *simplyblockv1alpha1.JournalManagerSpec) i
 func (r *StorageNodeReconciler) syncStatus(
 	ctx context.Context,
 	sn *simplyblockv1alpha1.StorageNode,
+	sns *simplyblockv1alpha1.StorageNodeSet,
 	clusterUUID string,
 	apiClient *webapi.Client,
 ) (ctrl.Result, error) {
@@ -573,6 +577,7 @@ func (r *StorageNodeReconciler) syncStatus(
 	sn.Status.Status = resp.Status
 	sn.Status.Health = resp.Health
 	sn.Status.Hostname = resp.Hostname
+	sn.Status.FailureDomain = failureDomainForWorker(sns, sn.Spec.WorkerNode)
 	sn.Status.Resources = &simplyblockv1alpha1.StorageNodeResources{
 		CPU:     &cpu,
 		Volumes: &volumes,

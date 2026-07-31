@@ -641,6 +641,13 @@ spec:
                       description: Devices is the backend summary of devices on this
                         node.
                       type: string
+                    failureDomain:
+                      description: |-
+                        FailureDomain is the effective failure-domain group index for this node,
+                        reflected from spec.nodeConfigs[hostname].failureDomain or spec.nodeFailureDomains[hostname].
+                        Zero means unset.
+                      format: int32
+                      type: integer
                     health:
                       description: Health indicates whether health checks are currently
                         passing.

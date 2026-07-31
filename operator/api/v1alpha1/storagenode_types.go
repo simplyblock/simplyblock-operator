@@ -225,6 +225,12 @@ type StorageNodeStatus struct {
 	// used by the volume rebalancer to make data-placement decisions.
 	// +optional
 	LatencyMetrics *NodeLatencyMetrics `json:"latencyMetrics,omitempty"`
+
+	// FailureDomain is the effective failure-domain group index for this node,
+	// reflected from spec.overrides.failureDomain or the parent
+	// StorageNodeSet.spec.nodeFailureDomains[workerNode]. Zero means unset.
+	// +optional
+	FailureDomain *int32 `json:"failureDomain,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -233,6 +239,7 @@ type StorageNodeStatus struct {
 // +kubebuilder:printcolumn:name="Worker",type=string,JSONPath=".spec.workerNode"
 // +kubebuilder:printcolumn:name="Socket",type=string,JSONPath=".spec.socketId"
 // +kubebuilder:printcolumn:name="NodeIdx",type=integer,JSONPath=".spec.nodeIndex"
+// +kubebuilder:printcolumn:name="FD",type=integer,JSONPath=".status.failureDomain",priority=1
 // +kubebuilder:printcolumn:name="UUID",type=string,JSONPath=".status.uuid"
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.status"
 // +kubebuilder:printcolumn:name="Health",type=boolean,JSONPath=".status.health"

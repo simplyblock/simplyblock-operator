@@ -1421,18 +1421,19 @@ func onAllSocketNodesOnline(
 
 	for _, res := range onlineForHost {
 		updated := simplyblockv1alpha1.NodeStatus{
-			Hostname: nodeName,
-			UUID:     res.UUID,
-			Health:   res.Health,
-			Status:   res.Status,
-			MgmtIp:   res.IP,
-			Devices:  fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
-			CPU:      ptr.To(int32(res.CPU)),
-			Memory:   utils.HumanBytes(res.Memory, "iec"),
-			Volumes:  ptr.To(int32(res.Volumes)),
-			RpcPort:  ptr.To(int32(res.RPC_PORT)),
-			LvolPort: ptr.To(int32(res.LVOL_PORT)),
-			NvmfPort: ptr.To(int32(res.NVMF_PORT)),
+			Hostname:      nodeName,
+			UUID:          res.UUID,
+			Health:        res.Health,
+			Status:        res.Status,
+			MgmtIp:        res.IP,
+			Devices:       fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
+			CPU:           ptr.To(int32(res.CPU)),
+			Memory:        utils.HumanBytes(res.Memory, "iec"),
+			Volumes:       ptr.To(int32(res.Volumes)),
+			RpcPort:       ptr.To(int32(res.RPC_PORT)),
+			LvolPort:      ptr.To(int32(res.LVOL_PORT)),
+			NvmfPort:      ptr.To(int32(res.NVMF_PORT)),
+			FailureDomain: failureDomainForWorker(snCR, nodeName),
 		}
 
 		// Try to find existing entry by UUID first, then fall back to the
@@ -1537,20 +1538,21 @@ func (r *StorageNodeSetReconciler) syncTrackedNodesStatus(
 			continue
 		}
 		updated := simplyblockv1alpha1.NodeStatus{
-			Hostname: n.Hostname,
-			UUID:     res.UUID,
-			Health:   res.Health,
-			Status:   res.Status,
-			MgmtIp:   res.IP,
-			Devices:  fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
-			CPU:      ptr.To(int32(res.CPU)),
-			Memory:   utils.HumanBytes(res.Memory, "iec"),
-			Volumes:  ptr.To(int32(res.Volumes)),
-			RpcPort:  ptr.To(int32(res.RPC_PORT)),
-			LvolPort: ptr.To(int32(res.LVOL_PORT)),
-			NvmfPort: ptr.To(int32(res.NVMF_PORT)),
-			PostedAt: n.PostedAt,
-			Uptime:   n.Uptime,
+			Hostname:      n.Hostname,
+			UUID:          res.UUID,
+			Health:        res.Health,
+			Status:        res.Status,
+			MgmtIp:        res.IP,
+			Devices:       fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
+			CPU:           ptr.To(int32(res.CPU)),
+			Memory:        utils.HumanBytes(res.Memory, "iec"),
+			Volumes:       ptr.To(int32(res.Volumes)),
+			RpcPort:       ptr.To(int32(res.RPC_PORT)),
+			LvolPort:      ptr.To(int32(res.LVOL_PORT)),
+			NvmfPort:      ptr.To(int32(res.NVMF_PORT)),
+			PostedAt:      n.PostedAt,
+			Uptime:        n.Uptime,
+			FailureDomain: failureDomainForWorker(snCR, n.Hostname),
 		}
 		if !reflect.DeepEqual(*n, updated) {
 			*n = updated
@@ -1564,6 +1566,19 @@ func (r *StorageNodeSetReconciler) syncTrackedNodesStatus(
 			return err
 		}
 		log.Info("Storage node status synced")
+	}
+	return nil
+}
+
+// failureDomainForWorker returns the effective failure-domain index for a worker
+// node derived from the StorageNodeSet spec: nodeConfigs[worker].failureDomain
+// takes precedence over nodeFailureDomains[worker]. Returns nil when unset.
+func failureDomainForWorker(sns *simplyblockv1alpha1.StorageNodeSet, workerNode string) *int32 {
+	if nc, ok := sns.Spec.NodeConfigs[workerNode]; ok && nc.FailureDomain != nil {
+		return nc.FailureDomain
+	}
+	if v, ok := sns.Spec.NodeFailureDomains[workerNode]; ok {
+		return &v
 	}
 	return nil
 }

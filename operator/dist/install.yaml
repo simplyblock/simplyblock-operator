@@ -2265,6 +2265,10 @@ spec:
     - jsonPath: .spec.nodeIndex
       name: NodeIdx
       type: integer
+    - jsonPath: .status.failureDomain
+      name: FD
+      priority: 1
+      type: integer
     - jsonPath: .status.uuid
       name: UUID
       type: string
@@ -2469,6 +2473,13 @@ spec:
                   ActiveOpsRef is the name of the currently active StorageNodeOps CR targeting
                   this node. Empty when no operation is in progress. Used for mutual exclusion.
                 type: string
+              failureDomain:
+                description: |-
+                  FailureDomain is the effective failure-domain group index for this node,
+                  reflected from spec.overrides.failureDomain or the parent
+                  StorageNodeSet.spec.nodeFailureDomains[workerNode]. Zero means unset.
+                format: int32
+                type: integer
               health:
                 description: Health is the backend-reported node health flag.
                 type: boolean
@@ -3208,6 +3219,13 @@ spec:
                       description: Devices is the backend summary of devices on this
                         node.
                       type: string
+                    failureDomain:
+                      description: |-
+                        FailureDomain is the effective failure-domain group index for this node,
+                        reflected from spec.nodeConfigs[hostname].failureDomain or spec.nodeFailureDomains[hostname].
+                        Zero means unset.
+                      format: int32
+                      type: integer
                     health:
                       description: Health indicates whether health checks are currently
                         passing.
