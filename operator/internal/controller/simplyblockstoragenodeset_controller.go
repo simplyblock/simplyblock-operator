@@ -1572,9 +1572,9 @@ func (r *StorageNodeSetReconciler) syncTrackedNodesStatus(
 }
 
 // fdPtr converts a failure_domain integer from the backend API into a *int32
-// suitable for status fields. Returns nil when the value is 0 (unset).
+// suitable for status fields. Returns nil only for negative values (unset sentinel).
 func fdPtr(fd int) *int32 {
-	if fd <= 0 {
+	if fd < 0 {
 		return nil
 	}
 	v := int32(fd)

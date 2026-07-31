@@ -610,7 +610,7 @@ func (r *StorageNodeReconciler) checkFailureDomain(
 	if cluster.Spec.EnableFailureDomains == nil || !*cluster.Spec.EnableFailureDomains {
 		return nil
 	}
-	if effectiveFailureDomain(sn, sns) > 0 {
+	if effectiveFailureDomainSet(sn, sns) {
 		return nil
 	}
 	return fmt.Errorf(
@@ -696,6 +696,16 @@ func effectiveNodeConfig(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1
 		eff.Expand = o.Expand
 	}
 	return eff
+}
+
+// effectiveFailureDomainSet reports whether a failure domain has been explicitly
+// assigned to the node via spec.overrides.failureDomain or spec.nodeFailureDomains.
+func effectiveFailureDomainSet(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1alpha1.StorageNodeSet) bool {
+	if sn.Spec.Overrides != nil && sn.Spec.Overrides.FailureDomain != nil {
+		return true
+	}
+	_, ok := sns.Spec.NodeFailureDomains[sn.Spec.WorkerNode]
+	return ok
 }
 
 // effectiveFailureDomain returns the failure domain for the node:

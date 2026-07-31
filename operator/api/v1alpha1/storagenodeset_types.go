@@ -159,7 +159,7 @@ type StorageNodeSetSpec struct {
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node Failure Domains"
-	// NodeFailureDomains assigns each worker node to a failure-domain group (integer ≥ 1).
+	// NodeFailureDomains assigns each worker node to a failure-domain group (integer ≥ 0).
 	// Required when the referenced StorageCluster has enableFailureDomains=true.
 	// Keys are Kubernetes worker node names; values are the failure-domain group index.
 	// Each node in the same physical failure domain (rack, AZ, power unit) should share
@@ -357,7 +357,7 @@ type ActionStatus struct {
 // +kubebuilder:printcolumn:name="Suspended",type=integer,JSONPath=".status.suspendedNodes",priority=1
 // +kubebuilder:printcolumn:name="Creating",type=integer,JSONPath=".status.creatingNodes",priority=1
 // +kubebuilder:printcolumn:name="Removed",type=integer,JSONPath=".status.removedNodes",priority=1
-// +kubebuilder:validation:XValidation:rule="!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k, self.spec.nodeFailureDomains[k] >= 1)",message="all nodeFailureDomains values must be >= 1 (failure-domain group index)"
+// +kubebuilder:validation:XValidation:rule="!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k, self.spec.nodeFailureDomains[k] >= 0)",message="all nodeFailureDomains values must be >= 0 (failure-domain group index)"
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.nodeConfigs) || self.spec.nodeConfigs.all(k, self.spec.workerNodes.exists(w, w == k))",message="nodeConfigs keys must match a workerNode entry"
 // +operator-sdk:csv:customresourcedefinitions:displayName="Storage Node",resources={{ServiceAccount,v1,simplyblock-storage-node},{Service,v1,simplyblock-storage-node},{DaemonSet,v1,simplyblock-storage-node},{ClusterRole,v1,simplyblock-storage-node},{ClusterRoleBinding,v1,simplyblock-storage-node}}
 // StorageNodeSet is the Schema for the storagenodesets API

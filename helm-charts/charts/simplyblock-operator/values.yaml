@@ -38,16 +38,16 @@ image:
     tag: v8.2.0
     pullPolicy: Always
   simplyblock:
-    repository: docker.io/simplyblock/simplyblock
-    tag: main
+    repository: quay.io/simplyblock-io/simplyblock
+    tag: "26.2.6-PRE"
     pullPolicy: Always
   storageNode:
     repository: quay.io/simplyblock-io/storage-node-handler
     tag: v0.1.9
     pullPolicy: Always
   operator:
-    repository: docker.io/simplyblock/simplyblock-operator
-    tag: add_failure_domain_status
+    repository: quay.io/simplyblock-io/simplyblock-operator
+    tag: v26.2.6
     pullPolicy: Always
   rebalancer:
     repository: quay.io/simplyblock-io/simplyblock-rebalancer
@@ -595,3 +595,4 @@ tls:
 
   # Mutual TLS (clients present and verify certificates). Only allowed when provider == cert-manager.
   mutual_enabled: false
+  

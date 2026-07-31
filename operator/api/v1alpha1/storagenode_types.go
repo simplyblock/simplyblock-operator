@@ -98,10 +98,10 @@ type StorageNodeOverrides struct {
 	// +optional
 	SkipKubeletConfiguration *bool `json:"skipKubeletConfiguration,omitempty"`
 
-	// FailureDomain is the failure-domain group index (≥ 1) for this node.
+	// FailureDomain is the failure-domain group index (≥ 0) for this node.
 	// Required when the parent StorageCluster has enableFailureDomains=true.
 	// Overrides StorageNodeSet.spec.nodeFailureDomains[workerNode] when both are set.
-	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Minimum=0
 	// +optional
 	FailureDomain *int32 `json:"failureDomain,omitempty"`
 
@@ -226,9 +226,8 @@ type StorageNodeStatus struct {
 	// +optional
 	LatencyMetrics *NodeLatencyMetrics `json:"latencyMetrics,omitempty"`
 
-	// FailureDomain is the effective failure-domain group index for this node,
-	// reflected from spec.overrides.failureDomain or the parent
-	// StorageNodeSet.spec.nodeFailureDomains[workerNode]. Zero means unset.
+	// FailureDomain is the effective failure-domain group index for this node
+	// as reported by the backend (≥ 0). Nil when the backend has not assigned one.
 	// +optional
 	FailureDomain *int32 `json:"failureDomain,omitempty"`
 }
