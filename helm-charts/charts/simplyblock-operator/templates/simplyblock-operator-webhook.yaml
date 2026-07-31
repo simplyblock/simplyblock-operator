@@ -1,26 +1,17 @@
 {{- if .Values.operator.enabled }}
-# Webhook Service + Mutating/ValidatingWebhookConfiguration for the operator's
-# admission webhooks (simplyblock-rebalancer-injector,
-# simplyblock-volume-placement-injector, pinned-volume-validator, vstoragenode).
-#
-# Names must exactly match internal/utils/constants.go (WebhookServiceName,
-# WebhookConfigurationName) — the operator looks these up by hardcoded name to
-# provision the self-signed serving certificate and inject its CA bundle
-# (internal/webhook/cert.go). This isn't parameterized via env/flag, so keep
-# these in sync with that file if either ever changes.
----
 apiVersion: v1
 kind: Service
 metadata:
   name: simplyblock-operator-webhook-service
+  namespace: {{ .Release.Namespace }}
 spec:
   ports:
   - port: 443
     protocol: TCP
     targetPort: 9443
   selector:
-    control-plane: simplyblock-operator
     app: simplyblock-operator
+    control-plane: simplyblock-operator
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration

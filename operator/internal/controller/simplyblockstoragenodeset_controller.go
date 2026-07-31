@@ -79,6 +79,7 @@ type SNODEAPIResponse struct {
 	RPC_PORT           int    `json:"rpc_port"`
 	LVOL_PORT          int    `json:"lvol_subsys_port"`
 	NVMF_PORT          int    `json:"nvmf_port"`
+	FailureDomain      int    `json:"failure_domain"`
 }
 
 var (
@@ -1421,18 +1422,19 @@ func onAllSocketNodesOnline(
 
 	for _, res := range onlineForHost {
 		updated := simplyblockv1alpha1.NodeStatus{
-			Hostname: nodeName,
-			UUID:     res.UUID,
-			Health:   res.Health,
-			Status:   res.Status,
-			MgmtIp:   res.IP,
-			Devices:  fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
-			CPU:      ptr.To(int32(res.CPU)),
-			Memory:   utils.HumanBytes(res.Memory, "iec"),
-			Volumes:  ptr.To(int32(res.Volumes)),
-			RpcPort:  ptr.To(int32(res.RPC_PORT)),
-			LvolPort: ptr.To(int32(res.LVOL_PORT)),
-			NvmfPort: ptr.To(int32(res.NVMF_PORT)),
+			Hostname:      nodeName,
+			UUID:          res.UUID,
+			Health:        res.Health,
+			Status:        res.Status,
+			MgmtIp:        res.IP,
+			Devices:       fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
+			CPU:           ptr.To(int32(res.CPU)),
+			Memory:        utils.HumanBytes(res.Memory, "iec"),
+			Volumes:       ptr.To(int32(res.Volumes)),
+			RpcPort:       ptr.To(int32(res.RPC_PORT)),
+			LvolPort:      ptr.To(int32(res.LVOL_PORT)),
+			NvmfPort:      ptr.To(int32(res.NVMF_PORT)),
+			FailureDomain: fdPtr(res.FailureDomain),
 		}
 
 		// Try to find existing entry by UUID first, then fall back to the
@@ -1537,20 +1539,21 @@ func (r *StorageNodeSetReconciler) syncTrackedNodesStatus(
 			continue
 		}
 		updated := simplyblockv1alpha1.NodeStatus{
-			Hostname: n.Hostname,
-			UUID:     res.UUID,
-			Health:   res.Health,
-			Status:   res.Status,
-			MgmtIp:   res.IP,
-			Devices:  fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
-			CPU:      ptr.To(int32(res.CPU)),
-			Memory:   utils.HumanBytes(res.Memory, "iec"),
-			Volumes:  ptr.To(int32(res.Volumes)),
-			RpcPort:  ptr.To(int32(res.RPC_PORT)),
-			LvolPort: ptr.To(int32(res.LVOL_PORT)),
-			NvmfPort: ptr.To(int32(res.NVMF_PORT)),
-			PostedAt: n.PostedAt,
-			Uptime:   n.Uptime,
+			Hostname:      n.Hostname,
+			UUID:          res.UUID,
+			Health:        res.Health,
+			Status:        res.Status,
+			MgmtIp:        res.IP,
+			Devices:       fmt.Sprintf("%d/%d", res.DevicesCount, res.OnlineDevicesCount),
+			CPU:           ptr.To(int32(res.CPU)),
+			Memory:        utils.HumanBytes(res.Memory, "iec"),
+			Volumes:       ptr.To(int32(res.Volumes)),
+			RpcPort:       ptr.To(int32(res.RPC_PORT)),
+			LvolPort:      ptr.To(int32(res.LVOL_PORT)),
+			NvmfPort:      ptr.To(int32(res.NVMF_PORT)),
+			PostedAt:      n.PostedAt,
+			Uptime:        n.Uptime,
+			FailureDomain: fdPtr(res.FailureDomain),
 		}
 		if !reflect.DeepEqual(*n, updated) {
 			*n = updated
@@ -1566,6 +1569,16 @@ func (r *StorageNodeSetReconciler) syncTrackedNodesStatus(
 		log.Info("Storage node status synced")
 	}
 	return nil
+}
+
+// fdPtr converts a failure_domain integer from the backend API into a *int32
+// suitable for status fields. Returns nil only for negative values (unset sentinel).
+func fdPtr(fd int) *int32 {
+	if fd < 0 {
+		return nil
+	}
+	v := int32(fd)
+	return &v
 }
 
 // maybeActivateCluster activates the cluster when online-node conditions are met.

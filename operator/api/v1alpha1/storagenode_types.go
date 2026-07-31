@@ -98,10 +98,10 @@ type StorageNodeOverrides struct {
 	// +optional
 	SkipKubeletConfiguration *bool `json:"skipKubeletConfiguration,omitempty"`
 
-	// FailureDomain is the failure-domain group index (≥ 1) for this node.
+	// FailureDomain is the failure-domain group index (≥ 0) for this node.
 	// Required when the parent StorageCluster has enableFailureDomains=true.
 	// Overrides StorageNodeSet.spec.nodeFailureDomains[workerNode] when both are set.
-	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Minimum=0
 	// +optional
 	FailureDomain *int32 `json:"failureDomain,omitempty"`
 
@@ -225,6 +225,11 @@ type StorageNodeStatus struct {
 	// used by the volume rebalancer to make data-placement decisions.
 	// +optional
 	LatencyMetrics *NodeLatencyMetrics `json:"latencyMetrics,omitempty"`
+
+	// FailureDomain is the effective failure-domain group index for this node
+	// as reported by the backend (≥ 0). Nil when the backend has not assigned one.
+	// +optional
+	FailureDomain *int32 `json:"failureDomain,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -233,6 +238,7 @@ type StorageNodeStatus struct {
 // +kubebuilder:printcolumn:name="Worker",type=string,JSONPath=".spec.workerNode"
 // +kubebuilder:printcolumn:name="Socket",type=string,JSONPath=".spec.socketId"
 // +kubebuilder:printcolumn:name="NodeIdx",type=integer,JSONPath=".spec.nodeIndex"
+// +kubebuilder:printcolumn:name="FD",type=integer,JSONPath=".status.failureDomain",priority=1
 // +kubebuilder:printcolumn:name="UUID",type=string,JSONPath=".status.uuid"
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.status"
 // +kubebuilder:printcolumn:name="Health",type=boolean,JSONPath=".status.health"

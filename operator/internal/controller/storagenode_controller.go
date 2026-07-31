@@ -215,6 +215,7 @@ func (r *StorageNodeReconciler) pollUUIDFromBackend(
 	sn.Status.Status = n.Status
 	sn.Status.Health = n.Health
 	sn.Status.Hostname = n.Hostname
+	sn.Status.FailureDomain = fdPtr(n.FailureDomain)
 	sn.Status.Resources = &simplyblockv1alpha1.StorageNodeResources{
 		CPU:     &cpu,
 		Volumes: &volumes,
@@ -251,6 +252,7 @@ func (r *StorageNodeReconciler) syncUUIDFromNodeSet(
 		sn.Status.UUID = ns.UUID
 		sn.Status.Status = ns.Status
 		sn.Status.Health = ns.Health
+		sn.Status.FailureDomain = ns.FailureDomain
 		if err := r.Status().Patch(ctx, sn, patch); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("syncing UUID for StorageNode %s: %w", sn.Name, err)
 		}
@@ -573,6 +575,7 @@ func (r *StorageNodeReconciler) syncStatus(
 	sn.Status.Status = resp.Status
 	sn.Status.Health = resp.Health
 	sn.Status.Hostname = resp.Hostname
+	sn.Status.FailureDomain = fdPtr(resp.FailureDomain)
 	sn.Status.Resources = &simplyblockv1alpha1.StorageNodeResources{
 		CPU:     &cpu,
 		Volumes: &volumes,
@@ -607,7 +610,7 @@ func (r *StorageNodeReconciler) checkFailureDomain(
 	if cluster.Spec.EnableFailureDomains == nil || !*cluster.Spec.EnableFailureDomains {
 		return nil
 	}
-	if effectiveFailureDomain(sn, sns) > 0 {
+	if effectiveFailureDomainSet(sn, sns) {
 		return nil
 	}
 	return fmt.Errorf(
@@ -693,6 +696,16 @@ func effectiveNodeConfig(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1
 		eff.Expand = o.Expand
 	}
 	return eff
+}
+
+// effectiveFailureDomainSet reports whether a failure domain has been explicitly
+// assigned to the node via spec.overrides.failureDomain or spec.nodeFailureDomains.
+func effectiveFailureDomainSet(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1alpha1.StorageNodeSet) bool {
+	if sn.Spec.Overrides != nil && sn.Spec.Overrides.FailureDomain != nil {
+		return true
+	}
+	_, ok := sns.Spec.NodeFailureDomains[sn.Spec.WorkerNode]
+	return ok
 }
 
 // effectiveFailureDomain returns the failure domain for the node:

@@ -14,7 +14,7 @@ CRD_DST="$HELM_CHARTS_DIR/charts/simplyblock-operator/crds"
 RBAC_SRC="$OPERATOR_DIR/config/rbac"
 ROLES_DST="$HELM_CHARTS_DIR/charts/simplyblock-operator/templates/roles"
 WEBHOOK_SRC="$OPERATOR_DIR/config/webhook"
-WEBHOOK_DST="$HELM_CHARTS_DIR/charts/simplyblock-operator/templates/webhook.yaml"
+WEBHOOK_DST="$HELM_CHARTS_DIR/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml"
 
 echo "Syncing from: $OPERATOR_DIR"
 echo ""

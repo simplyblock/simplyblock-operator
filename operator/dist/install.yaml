@@ -2265,6 +2265,10 @@ spec:
     - jsonPath: .spec.nodeIndex
       name: NodeIdx
       type: integer
+    - jsonPath: .status.failureDomain
+      name: FD
+      priority: 1
+      type: integer
     - jsonPath: .status.uuid
       name: UUID
       type: string
@@ -2346,11 +2350,11 @@ spec:
                     type: boolean
                   failureDomain:
                     description: |-
-                      FailureDomain is the failure-domain group index (≥ 1) for this node.
+                      FailureDomain is the failure-domain group index (≥ 0) for this node.
                       Required when the parent StorageCluster has enableFailureDomains=true.
                       Overrides StorageNodeSet.spec.nodeFailureDomains[workerNode] when both are set.
                     format: int32
-                    minimum: 1
+                    minimum: 0
                     type: integer
                   journalManager:
                     description: JournalManagerSpec overrides journal manager tuning
@@ -2469,6 +2473,12 @@ spec:
                   ActiveOpsRef is the name of the currently active StorageNodeOps CR targeting
                   this node. Empty when no operation is in progress. Used for mutual exclusion.
                 type: string
+              failureDomain:
+                description: |-
+                  FailureDomain is the effective failure-domain group index for this node
+                  as reported by the backend (≥ 0). Nil when the backend has not assigned one.
+                format: int32
+                type: integer
               health:
                 description: Health is the backend-reported node health flag.
                 type: boolean
@@ -2888,11 +2898,11 @@ spec:
                       type: boolean
                     failureDomain:
                       description: |-
-                        FailureDomain is the failure-domain group index (≥ 1) for this node.
+                        FailureDomain is the failure-domain group index (≥ 0) for this node.
                         Required when the parent StorageCluster has enableFailureDomains=true.
                         Overrides StorageNodeSet.spec.nodeFailureDomains[workerNode] when both are set.
                       format: int32
-                      minimum: 1
+                      minimum: 0
                       type: integer
                     journalManager:
                       description: JournalManagerSpec overrides journal manager tuning
@@ -2975,7 +2985,7 @@ spec:
                   format: int32
                   type: integer
                 description: |-
-                  NodeFailureDomains assigns each worker node to a failure-domain group (integer ≥ 1).
+                  NodeFailureDomains assigns each worker node to a failure-domain group (integer ≥ 0).
                   Required when the referenced StorageCluster has enableFailureDomains=true.
                   Keys are Kubernetes worker node names; values are the failure-domain group index.
                   Each node in the same physical failure domain (rack, AZ, power unit) should share
@@ -3208,6 +3218,13 @@ spec:
                       description: Devices is the backend summary of devices on this
                         node.
                       type: string
+                    failureDomain:
+                      description: |-
+                        FailureDomain is the effective failure-domain group index for this node,
+                        reflected from spec.nodeConfigs[hostname].failureDomain or spec.nodeFailureDomains[hostname].
+                        Zero means unset.
+                      format: int32
+                      type: integer
                     health:
                       description: Health indicates whether health checks are currently
                         passing.
@@ -3297,10 +3314,10 @@ spec:
         - spec
         type: object
         x-kubernetes-validations:
-        - message: all nodeFailureDomains values must be >= 1 (failure-domain group
+        - message: all nodeFailureDomains values must be >= 0 (failure-domain group
             index)
           rule: '!has(self.spec.nodeFailureDomains) || self.spec.nodeFailureDomains.all(k,
-            self.spec.nodeFailureDomains[k] >= 1)'
+            self.spec.nodeFailureDomains[k] >= 0)'
         - message: nodeConfigs keys must match a workerNode entry
           rule: '!has(self.spec.nodeConfigs) || self.spec.nodeConfigs.all(k, self.spec.workerNodes.exists(w,
             w == k))'
