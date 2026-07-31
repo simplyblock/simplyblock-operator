@@ -237,6 +237,68 @@ func TestCountActiveDrainsBackendTakesPrecedence(t *testing.T) {
 	}
 }
 
+func TestActiveDrainWorkersUnionsControllerAndBackend(t *testing.T) {
+	// Controller state flags node-a; backend independently flags node-b (e.g.
+	// a real failure with no coordinator-driven drain in progress). Both must
+	// appear in the set so the failure-domain gate sees each affected domain.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"in_shutdown","health_check":false}`))
+	}))
+	defer srv.Close()
+
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			DrainCoordination: []simplyblockv1alpha1.NodeDrainState{
+				{Hostname: "node-a", Phase: simplyblockv1alpha1.DrainPhaseShutdownCalled},
+			},
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "node-b", UUID: "uuid-b"},
+			},
+		},
+	}
+
+	got := activeDrainWorkers(context.Background(), snCR, webapi.NewClient(srv.URL), "cluster")
+	if !got["node-a"] || !got["node-b"] || len(got) != 2 {
+		t.Fatalf("expected {node-a, node-b}, got %v", got)
+	}
+}
+
+func TestActiveDrainWorkersConservativeOnBackendError(t *testing.T) {
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "node-a", UUID: "uuid-a"},
+			},
+		},
+	}
+
+	got := activeDrainWorkers(context.Background(), snCR, webapi.NewClient("http://127.0.0.1:1"), "cluster")
+	if !got["node-a"] {
+		t.Fatalf("expected node-a marked active conservatively on API error, got %v", got)
+	}
+}
+
+func TestActiveDrainDomainsMapsAndDedupsAndFiltersUnassigned(t *testing.T) {
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			NodeFailureDomains: map[string]int32{
+				"node-a": 1,
+				"node-b": 1, // same domain as node-a
+				"node-c": 2,
+				// node-d intentionally has no domain assignment
+			},
+		},
+	}
+
+	activeWorkers := map[string]bool{"node-a": true, "node-b": true, "node-c": true, "node-d": true}
+	domains := activeDrainDomains(snCR, activeWorkers)
+
+	if len(domains) != 2 || !domains[1] || !domains[2] {
+		t.Fatalf("expected domains {1, 2} (node-a/node-b share domain 1, node-d excluded), got %v", domains)
+	}
+}
+
 // ---- reconciler tests ----
 
 func TestNodeDrainReconcileNotFound(t *testing.T) {
@@ -637,7 +699,7 @@ func TestProcessWorkerUncordonedNoState(t *testing.T) {
 
 	requeue, shouldBreak := r.processWorker(
 		context.Background(), snCR, "node-g",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false,
 	)
 	if requeue != 0 || shouldBreak {
 		t.Fatalf("expected (0, false) for uncordoned node with no state, got (%v, %v)", requeue, shouldBreak)
@@ -661,7 +723,7 @@ func TestProcessWorkerSkipsCordonedNotYetOnline(t *testing.T) {
 
 	requeue, shouldBreak := r.processWorker(
 		context.Background(), snCR, "node-h",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false,
 	)
 	if requeue != 0 || shouldBreak {
 		t.Fatalf("expected (0, false) for cordoned node not yet online, got (%v, %v)", requeue, shouldBreak)
@@ -690,7 +752,7 @@ func TestProcessWorkerCordonedOnlineInitializesState(t *testing.T) {
 
 	r.processWorker(
 		context.Background(), snCR, "node-i",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false,
 	)
 
 	// Drain state must have been initialized (phase may be detected or failed
