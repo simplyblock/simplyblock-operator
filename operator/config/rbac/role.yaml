@@ -197,6 +197,7 @@ rules:
   - backuppolicies
   - backuprestores
   - controlplanes
+  - logicalvolumes
   - replicationops
   - replicationpairs
   - replicationpolicies
@@ -246,6 +247,7 @@ rules:
   - backuppolicies/status
   - backuprestores/status
   - controlplanes/status
+  - logicalvolumes/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status

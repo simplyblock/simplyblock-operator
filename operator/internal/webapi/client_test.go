@@ -182,3 +182,23 @@ func writeNamespaceAndCertPair(t *testing.T) (string, string, string, string) {
 
 	return nsPath, caPath, certPath, keyPath
 }
+
+func TestNewStreamClientHasNoTimeout(t *testing.T) {
+	t.Setenv("SB_TLS_SERVE", "")
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://example:1234")
+
+	sc, err := NewStreamClient()
+	if err != nil {
+		t.Fatalf("NewStreamClient: %v", err)
+	}
+	if sc.BaseURL != "http://example:1234" {
+		t.Errorf("BaseURL = %q, want http://example:1234", sc.BaseURL)
+	}
+	if sc.Client == nil {
+		t.Fatal("Client unset")
+	}
+	// A fixed timeout would sever a long-lived stream.
+	if sc.Client.Timeout != 0 {
+		t.Errorf("Client.Timeout = %v, want 0 (no timeout for streams)", sc.Client.Timeout)
+	}
+}

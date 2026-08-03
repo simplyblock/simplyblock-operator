@@ -91,3 +91,31 @@ func NewClient(baseURL ...string) *Client {
 
 	return c
 }
+
+// StreamClient carries what a long-lived streaming request needs against the
+// control-plane API: the resolved base URL and an HTTP client that shares the
+// operator's TLS/mTLS configuration but has no request timeout (a fixed timeout
+// would sever a stream).
+type StreamClient struct {
+	BaseURL string
+	Client  *http.Client
+}
+
+// NewStreamClient resolves the endpoint and TLS setup exactly as [NewClient],
+// but returns a client suitable for streaming: it shares NewClient's transport
+// (and thus its TLS/mTLS config) without the request timeout. Unlike NewClient
+// it surfaces the TLS-setup error instead of deferring it to the first request.
+func NewStreamClient(baseURL ...string) (*StreamClient, error) {
+	base := NewClient(baseURL...)
+	if base.initErr != nil {
+		return nil, base.initErr
+	}
+	transport := http.DefaultTransport
+	if base.HttpClient != nil && base.HttpClient.Transport != nil {
+		transport = base.HttpClient.Transport
+	}
+	return &StreamClient{
+		BaseURL: base.BaseURL,
+		Client:  &http.Client{Transport: transport},
+	}, nil
+}
