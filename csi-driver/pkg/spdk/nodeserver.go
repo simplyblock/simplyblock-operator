@@ -179,18 +179,47 @@ func (ns *nodeServer) NodeGetVolumeStats(
 		return nil, status.Error(codes.InvalidArgument, "volume_path is required")
 	}
 
+	// IsMountPoint/stat on volumePath can still succeed even after the backing NVMe-oF
+	// device is gone (see backingBlockDeviceGone), so check the stashed device path
+	// directly rather than relying on volumePath alone.
+	if stagingPath := req.GetStagingTargetPath(); stagingPath != "" {
+		if vc, err := util.LookupVolumeContext(stagingPath); err == nil {
+			if devicePath := vc["devicePath"]; devicePath != "" && !deviceExists(devicePath) {
+				return &csi.NodeGetVolumeStatsResponse{
+					VolumeCondition: &csi.VolumeCondition{
+						Abnormal: true,
+						Message:  fmt.Sprintf("NVMe device %s not found; volume has disconnected", devicePath),
+					},
+				}, nil
+			}
+		}
+	}
+
 	st, err := os.Stat(volumePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, status.Error(codes.NotFound, "volume_path not found")
 		}
-		return nil, status.Errorf(codes.Internal, "stat volume_path %q: %v", volumePath, err)
+		// Any other stat error (EIO, ENOTCONN) means the mount is unhealthy.
+		return &csi.NodeGetVolumeStatsResponse{
+			VolumeCondition: &csi.VolumeCondition{
+				Abnormal: true,
+				Message:  fmt.Sprintf("stat %q failed: %v", volumePath, err),
+			},
+		}, nil
 	}
 
 	if st.IsDir() {
 		var s unix.Statfs_t
 		if err := unix.Statfs(volumePath, &s); err != nil {
-			return nil, status.Errorf(codes.Internal, "statfs %q: %v", volumePath, err)
+			// statfs failing on a mounted directory means the backing device has
+			// gone away (stale NVMe/TCP mount surfaces as EIO or ENOTCONN here).
+			return &csi.NodeGetVolumeStatsResponse{
+				VolumeCondition: &csi.VolumeCondition{
+					Abnormal: true,
+					Message:  fmt.Sprintf("statfs %q failed: %v", volumePath, err),
+				},
+			}, nil
 		}
 
 		// Compute in uint64 (Bsize is int64 on Linux but uint32 on darwin; the block
@@ -225,12 +254,18 @@ func (ns *nodeServer) NodeGetVolumeStats(
 					Available: availInodes,
 				},
 			},
+			VolumeCondition: &csi.VolumeCondition{Abnormal: false},
 		}, nil
 	}
 
 	sizeBytes, err := getBlockSizeBytes(volumePath)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "get block size for %q: %v", volumePath, err)
+		return &csi.NodeGetVolumeStatsResponse{
+			VolumeCondition: &csi.VolumeCondition{
+				Abnormal: true,
+				Message:  fmt.Sprintf("get block size for %q failed: %v", volumePath, err),
+			},
+		}, nil
 	}
 
 	return &csi.NodeGetVolumeStatsResponse{
@@ -242,6 +277,7 @@ func (ns *nodeServer) NodeGetVolumeStats(
 				Available: int64(sizeBytes),
 			},
 		},
+		VolumeCondition: &csi.VolumeCondition{Abnormal: false},
 	}, nil
 }
 
