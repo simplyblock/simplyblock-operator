@@ -1050,20 +1050,21 @@ func TestNodeDrainStatusPatch409RetryPreservesDrainState(t *testing.T) {
 // ---- failure-domain gate tests ----
 
 // snCRWithFD builds a minimal StorageNodeSet with two nodes whose failure domains
-// are provided in nodeFailureDomains, and node-a already in an active drain phase.
+// are set in status.nodes (populated from the backend API), and node-a already
+// in an active drain phase.
 func snCRWithFD(nodeADomain, nodeBDomain int32) *simplyblockv1alpha1.StorageNodeSet {
 	return &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-fd", Namespace: "default"},
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
 			WorkerNodes: []string{"node-a", "node-b"},
-			NodeFailureDomains: map[string]int32{
-				"node-a": nodeADomain,
-				"node-b": nodeBDomain,
-			},
 		},
 		Status: simplyblockv1alpha1.StorageNodeSetStatus{
-			// DrainCoordination only — no Nodes with UUIDs so activeDrainWorkers
-			// makes no backend API calls.
+			// FailureDomain sourced from backend API response, stored in status.
+			// No UUIDs so activeDrainWorkers makes no backend API calls.
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "node-a", FailureDomain: &nodeADomain},
+				{Hostname: "node-b", FailureDomain: &nodeBDomain},
+			},
 			DrainCoordination: []simplyblockv1alpha1.NodeDrainState{
 				{Hostname: "node-a", Phase: simplyblockv1alpha1.DrainPhaseShutdownCalled},
 			},
@@ -1148,40 +1149,24 @@ func TestHandleDetectedCrossDomainGated(t *testing.T) {
 	}
 }
 
-// TestWorkerFailureDomainPrefersNodeConfigs verifies that spec.nodeConfigs[worker].failureDomain
-// takes precedence over spec.nodeFailureDomains[worker].
-func TestWorkerFailureDomainPrefersNodeConfigs(t *testing.T) {
+// TestWorkerFailureDomainFromStatus verifies that the failure domain is read
+// from status.nodes[].failureDomain (populated from the backend API response).
+func TestWorkerFailureDomainFromStatus(t *testing.T) {
 	fd := int32(5)
 	snCR := &simplyblockv1alpha1.StorageNodeSet{
-		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
-			NodeFailureDomains: map[string]int32{"worker-a": 1},
-			NodeConfigs: map[string]simplyblockv1alpha1.StorageNodeOverrides{
-				"worker-a": {FailureDomain: &fd},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "worker-a", FailureDomain: &fd},
 			},
 		},
 	}
 
 	got, ok := workerFailureDomain(snCR, "worker-a")
 	if !ok {
-		t.Fatal("expected domain to be found")
+		t.Fatal("expected domain to be found in status")
 	}
 	if got != 5 {
-		t.Fatalf("expected nodeConfigs override (5), got %d", got)
-	}
-}
-
-// TestWorkerFailureDomainFallsBackToMap verifies that spec.nodeFailureDomains is
-// used when no nodeConfigs override is present.
-func TestWorkerFailureDomainFallsBackToMap(t *testing.T) {
-	snCR := &simplyblockv1alpha1.StorageNodeSet{
-		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
-			NodeFailureDomains: map[string]int32{"worker-b": 3},
-		},
-	}
-
-	got, ok := workerFailureDomain(snCR, "worker-b")
-	if !ok || got != 3 {
-		t.Fatalf("expected 3 from nodeFailureDomains, got (%d, %v)", got, ok)
+		t.Fatalf("expected 5 from status.nodes, got %d", got)
 	}
 }
 
