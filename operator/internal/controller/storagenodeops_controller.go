@@ -290,7 +290,7 @@ func (r *StorageNodeOpsReconciler) runMigrate(
 		// observable before any preparation work begins.
 		return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhasePreparing)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhasePreparing:
-		return r.migratePrepare(ctx, ops, sn, sns, target)
+		return r.migratePrepare(ctx, ops, sn, sns, target, clusterUUID)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseMigrating:
 		return r.migrateRestart(ctx, ops, sn, target, clusterUUID, nodeUUID, apiClient)
 	case simplyblockv1alpha1.StorageNodeOpsSubPhaseRestarting:
@@ -316,6 +316,7 @@ func (r *StorageNodeOpsReconciler) migratePrepare(
 	sn *simplyblockv1alpha1.StorageNode,
 	sns *simplyblockv1alpha1.StorageNodeSet,
 	target string,
+	clusterUUID string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -344,11 +345,17 @@ func (r *StorageNodeOpsReconciler) migratePrepare(
 
 	// Label the target so the storage-node DaemonSet schedules a storage-node-api
 	// pod there and the StorageNodeSet reconcile publishes its per-pod DNS name
-	// in the EndpointSlice.
-	if labeled, err := r.ensureWorkerLabeled(ctx, &node, sns.Spec.ClusterName); err != nil {
-		log.Error(err, "migrate: failed to label target worker", "worker", target)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	} else if labeled {
+	// in the EndpointSlice. Reuse the canonical StorageNodeSet labeler so the
+	// migration target receives the exact DaemonSet node-selector labels
+	// (io.simplyblock.node-type AND io.simplyblock.storagenodeset) — the target is
+	// not yet in sns.Spec.WorkerNodes (that swap happens in the Promoting phase),
+	// so it is injected via extraWorkers.
+	if node.Labels["io.simplyblock.node-type"] != "simplyblock-storage-plane-"+sns.Spec.ClusterName ||
+		node.Labels["io.simplyblock.storagenodeset"] != sns.Name {
+		if err := labelWorkerNodes(ctx, r.Client, r.Recorder, sns, clusterUUID, target); err != nil {
+			log.Error(err, "migrate: failed to label target worker", "worker", target)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "TargetWorkerLabeled", "TargetWorkerLabeled",
 			"labeled worker %s for storage plane of cluster %s", target, sns.Spec.ClusterName)
 		r.emitOnStorageNode(ctx, ops, corev1.EventTypeNormal, "TargetWorkerLabeled",
@@ -838,30 +845,6 @@ func mergePcieList(base, extra []string) []string {
 		}
 	}
 	return out
-}
-
-// ensureWorkerLabeled applies the storage-plane node label to a worker so the
-// storage-node DaemonSet schedules a pod there. It mirrors
-// StorageNodeSetReconciler.labelWorkerNodes. Returns true if a label was added.
-func (r *StorageNodeOpsReconciler) ensureWorkerLabeled(
-	ctx context.Context,
-	node *corev1.Node,
-	clusterName string,
-) (bool, error) {
-	const key = "io.simplyblock.node-type"
-	value := "simplyblock-storage-plane-" + clusterName
-	if node.Labels[key] == value {
-		return false, nil
-	}
-	patch := client.MergeFrom(node.DeepCopy())
-	if node.Labels == nil {
-		node.Labels = map[string]string{}
-	}
-	node.Labels[key] = value
-	if err := r.Patch(ctx, node, patch); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 // storageNodePodReady reports whether the storage-node DaemonSet pod on the given
