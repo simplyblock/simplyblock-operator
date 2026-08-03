@@ -1047,6 +1047,154 @@ func TestNodeDrainStatusPatch409RetryPreservesDrainState(t *testing.T) {
 	}
 }
 
+// ---- failure-domain gate tests ----
+
+// snCRWithFD builds a minimal StorageNodeSet with two nodes whose failure domains
+// are provided in nodeFailureDomains, and node-a already in an active drain phase.
+func snCRWithFD(nodeADomain, nodeBDomain int32) *simplyblockv1alpha1.StorageNodeSet {
+	return &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-fd", Namespace: "default"},
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			WorkerNodes: []string{"node-a", "node-b"},
+			NodeFailureDomains: map[string]int32{
+				"node-a": nodeADomain,
+				"node-b": nodeBDomain,
+			},
+		},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			// DrainCoordination only — no Nodes with UUIDs so activeDrainWorkers
+			// makes no backend API calls.
+			DrainCoordination: []simplyblockv1alpha1.NodeDrainState{
+				{Hostname: "node-a", Phase: simplyblockv1alpha1.DrainPhaseShutdownCalled},
+			},
+		},
+	}
+}
+
+// TestHandleDetectedFDDisabledUsesGlobalGate verifies that when fdEnabled=false
+// the existing node-count gate blocks a second drain when activeDrains >= maxFaultTolerance.
+func TestHandleDetectedFDDisabledUsesGlobalGate(t *testing.T) {
+	snCR := snCRWithFD(1, 2)
+	state := &simplyblockv1alpha1.NodeDrainState{Hostname: "node-b", Phase: simplyblockv1alpha1.DrainPhaseDetected}
+	r := newNodeDrainTestReconciler(t, snCR)
+
+	requeue, err := r.handleDetected(
+		context.Background(), snCR, state,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster",
+		1,     // maxFaultTolerance=1 → node-a already consumes the slot
+		false, // fdEnabled=false → global gate
+	)
+
+	if err != nil {
+		t.Fatalf("expected nil error when blocked, got %v", err)
+	}
+	if requeue != 10*time.Second {
+		t.Fatalf("expected 10s requeue when blocked by global gate, got %v", requeue)
+	}
+	if state.Phase == simplyblockv1alpha1.DrainPhaseShutdownCalled {
+		t.Fatalf("phase must not advance while drain slot is unavailable")
+	}
+}
+
+// TestHandleDetectedSameDomainParallelAllowed verifies that when fdEnabled=true,
+// a worker in the same failure domain as an already-draining worker is allowed
+// past the gate without waiting.
+func TestHandleDetectedSameDomainParallelAllowed(t *testing.T) {
+	// Both node-a and node-b are in failure domain 1.
+	snCR := snCRWithFD(1, 1)
+	state := &simplyblockv1alpha1.NodeDrainState{Hostname: "node-b", Phase: simplyblockv1alpha1.DrainPhaseDetected}
+	r := newNodeDrainTestReconciler(t, snCR)
+
+	requeue, err := r.handleDetected(
+		context.Background(), snCR, state,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster",
+		1,    // maxFaultTolerance=1 — same domain must still be allowed through
+		true, // fdEnabled=true
+	)
+
+	// The gate passes; the function proceeds until it finds no UUID for node-b
+	// and returns a 15s requeue with a non-nil error (UUID missing). That proves
+	// it was NOT held back at the drain-slot check.
+	blocked := err == nil && requeue == 10*time.Second
+	if blocked {
+		t.Fatalf("node in the same failure domain must not be blocked; state.Message=%q", state.Message)
+	}
+}
+
+// TestHandleDetectedCrossDomainGated verifies that when fdEnabled=true, a worker
+// in a different failure domain from the already-draining worker is blocked when
+// the active domain count meets maxFaultTolerance.
+func TestHandleDetectedCrossDomainGated(t *testing.T) {
+	// node-a is in domain 1 (already draining); node-b is in domain 2.
+	snCR := snCRWithFD(1, 2)
+	state := &simplyblockv1alpha1.NodeDrainState{Hostname: "node-b", Phase: simplyblockv1alpha1.DrainPhaseDetected}
+	r := newNodeDrainTestReconciler(t, snCR)
+
+	requeue, err := r.handleDetected(
+		context.Background(), snCR, state,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster",
+		1,    // maxFaultTolerance=1 → domain 1 already consuming the slot
+		true, // fdEnabled=true
+	)
+
+	if err != nil {
+		t.Fatalf("expected nil error when blocked by domain gate, got %v", err)
+	}
+	if requeue != 10*time.Second {
+		t.Fatalf("expected 10s requeue when cross-domain is gated, got %v", requeue)
+	}
+	if state.Phase == simplyblockv1alpha1.DrainPhaseShutdownCalled {
+		t.Fatalf("phase must not advance when cross-domain drain slot is unavailable")
+	}
+}
+
+// TestWorkerFailureDomainPrefersNodeConfigs verifies that spec.nodeConfigs[worker].failureDomain
+// takes precedence over spec.nodeFailureDomains[worker].
+func TestWorkerFailureDomainPrefersNodeConfigs(t *testing.T) {
+	fd := int32(5)
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			NodeFailureDomains: map[string]int32{"worker-a": 1},
+			NodeConfigs: map[string]simplyblockv1alpha1.StorageNodeOverrides{
+				"worker-a": {FailureDomain: &fd},
+			},
+		},
+	}
+
+	got, ok := workerFailureDomain(snCR, "worker-a")
+	if !ok {
+		t.Fatal("expected domain to be found")
+	}
+	if got != 5 {
+		t.Fatalf("expected nodeConfigs override (5), got %d", got)
+	}
+}
+
+// TestWorkerFailureDomainFallsBackToMap verifies that spec.nodeFailureDomains is
+// used when no nodeConfigs override is present.
+func TestWorkerFailureDomainFallsBackToMap(t *testing.T) {
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			NodeFailureDomains: map[string]int32{"worker-b": 3},
+		},
+	}
+
+	got, ok := workerFailureDomain(snCR, "worker-b")
+	if !ok || got != 3 {
+		t.Fatalf("expected 3 from nodeFailureDomains, got (%d, %v)", got, ok)
+	}
+}
+
+// TestWorkerFailureDomainUnassigned verifies that a worker with no domain
+// assignment returns (0, false).
+func TestWorkerFailureDomainUnassigned(t *testing.T) {
+	snCR := &simplyblockv1alpha1.StorageNodeSet{}
+	_, ok := workerFailureDomain(snCR, "worker-missing")
+	if ok {
+		t.Fatal("expected (0, false) for unassigned worker")
+	}
+}
+
 // ---- helper ----
 
 func newNodeDrainTestReconciler(t *testing.T, objects ...client.Object) *NodeDrainCoordinatorReconciler {
