@@ -473,7 +473,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 	}
 
 	if fdEnabled {
-		myDomain, hasDomain := snCR.Spec.NodeFailureDomains[state.Hostname]
+		myDomain, hasDomain := workerFailureDomain(snCR, state.Hostname)
 		if !hasDomain {
 			// FD is enabled cluster-wide but this node has no domain assignment
 			// yet (should not normally happen — add_node enforces the pairing).
@@ -1283,14 +1283,27 @@ func activeDrainWorkers(
 	return active
 }
 
+// workerFailureDomain returns the effective failure-domain group for a worker
+// hostname, checking spec.nodeConfigs[hostname].failureDomain first (per-node
+// override) and falling back to spec.nodeFailureDomains[hostname]. Returns
+// (0, false) when no domain is configured for the worker.
+func workerFailureDomain(snCR *simplyblockv1alpha1.StorageNodeSet, hostname string) (int32, bool) {
+	if nc, ok := snCR.Spec.NodeConfigs[hostname]; ok && nc.FailureDomain != nil {
+		return *nc.FailureDomain, true
+	}
+	if d, ok := snCR.Spec.NodeFailureDomains[hostname]; ok {
+		return d, true
+	}
+	return 0, false
+}
+
 // activeDrainDomains maps a set of active worker hostnames to their
-// failure-domain groups via StorageNodeSet.spec.nodeFailureDomains. Workers
-// with no domain assignment are excluded — the caller falls back to the plain
-// node-count gate for those.
+// failure-domain groups. Workers with no domain assignment are excluded — the
+// caller falls back to the plain node-count gate for those.
 func activeDrainDomains(snCR *simplyblockv1alpha1.StorageNodeSet, activeWorkers map[string]bool) map[int32]bool {
 	domains := map[int32]bool{}
 	for w := range activeWorkers {
-		if d, ok := snCR.Spec.NodeFailureDomains[w]; ok {
+		if d, ok := workerFailureDomain(snCR, w); ok {
 			domains[d] = true
 		}
 	}
