@@ -769,5 +769,6 @@ func (r *VolumeMigrationReconciler) SetupWithManager(
 		For(&simplyblockv1alpha1.VolumeMigration{}).
 		Owns(&batchv1.Job{}).
 		Named("volumemigration").
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }

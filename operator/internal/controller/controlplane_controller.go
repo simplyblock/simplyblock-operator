@@ -128,5 +128,6 @@ func (r *ControlPlaneReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.ControlPlane{}).
 		Named("controlplane").
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }

@@ -452,6 +452,7 @@ func (r *StorageClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageCluster{}).
 		Named("storagecluster").
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }
 

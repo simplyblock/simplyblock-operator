@@ -299,6 +299,7 @@ func (r *BackupImportReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.BackupImport{}).
 		Named("backupimport").
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }
 

@@ -186,5 +186,6 @@ func (r *TaskReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.Task{}).
 		Named("task").
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }

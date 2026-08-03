@@ -580,6 +580,7 @@ func (r *PoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.Pool{}).
 		Named("pool").
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }
 

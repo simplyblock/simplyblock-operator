@@ -334,6 +334,7 @@ func (r *StorageNodeSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.controlPlaneToStorageNodeSetRequests),
 			builder.WithPredicates(predicate.NewPredicateFuncs(isSimplyblockControlPlane)),
 		).
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }
 

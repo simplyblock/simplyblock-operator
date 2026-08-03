@@ -1604,5 +1604,6 @@ func (r *StorageNodeOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.storageNodeToOpsRequests),
 		).
 		Owns(&simplyblockv1alpha1.VolumeMigration{}).
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }

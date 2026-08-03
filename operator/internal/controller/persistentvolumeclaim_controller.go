@@ -378,5 +378,6 @@ func (r *PersistentVolumeClaimReconciler) SetupWithManager(mgr ctrl.Manager) err
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.PersistentVolumeClaim{}, builder.WithPredicates(pinnedVolumeChanged)).
 		Named("pinnedvolume").
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }

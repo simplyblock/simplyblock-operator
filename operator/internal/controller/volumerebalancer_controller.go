@@ -559,6 +559,6 @@ func (r *VolumeRebalancerReconciler) SetupWithManager(
 			))).
 		Owns(&simplyblockv1alpha1.VolumeMigration{}).
 		Named("volumerebalancer").
-		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1, RateLimiter: defaultRateLimiter()}).
 		Complete(r)
 }

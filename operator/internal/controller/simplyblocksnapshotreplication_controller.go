@@ -132,6 +132,7 @@ func (r *SnapshotReplicationReconciler) SetupWithManager(mgr ctrl.Manager) error
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.SnapshotReplication{}).
 		Named("snapshotreplication").
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }
 
