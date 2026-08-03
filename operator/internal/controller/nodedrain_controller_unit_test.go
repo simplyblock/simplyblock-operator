@@ -280,13 +280,14 @@ func TestActiveDrainWorkersConservativeOnBackendError(t *testing.T) {
 }
 
 func TestActiveDrainDomainsMapsAndDedupsAndFiltersUnassigned(t *testing.T) {
+	fd1, fd2 := int32(1), int32(2)
 	snCR := &simplyblockv1alpha1.StorageNodeSet{
-		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
-			NodeFailureDomains: map[string]int32{
-				"node-a": 1,
-				"node-b": 1, // same domain as node-a
-				"node-c": 2,
-				// node-d intentionally has no domain assignment
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "node-a", FailureDomain: &fd1},
+				{Hostname: "node-b", FailureDomain: &fd1}, // same domain as node-a
+				{Hostname: "node-c", FailureDomain: &fd2},
+				// node-d intentionally has no status entry → excluded
 			},
 		},
 	}
