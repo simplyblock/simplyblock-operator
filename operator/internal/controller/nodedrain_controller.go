@@ -550,7 +550,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 			continue
 		}
 		state.ActiveNodeUUID = s.uuid
-		if s.status == "in_shutdown" {
+		if s.status == nodeStatusInShutdown {
 			log.Info("First pending node already in_shutdown; advancing to shutdown_called", "node", state.Hostname, "nodeUUID", s.uuid)
 			state.Message = fmt.Sprintf("node %s already in_shutdown; waiting for offline", s.uuid)
 		} else {
@@ -1230,7 +1230,7 @@ func countActiveDrains(
 			continue
 		}
 		switch info.Status {
-		case "in_shutdown", "in_restart":
+		case nodeStatusInShutdown, nodeStatusInRestart:
 			activeWorkers[n.Hostname] = true
 		}
 	}
@@ -1276,7 +1276,7 @@ func activeDrainWorkers(
 			continue
 		}
 		switch info.Status {
-		case "in_shutdown", "in_restart":
+		case nodeStatusInShutdown, nodeStatusInRestart:
 			active[n.Hostname] = true
 		}
 	}
