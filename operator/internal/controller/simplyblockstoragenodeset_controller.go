@@ -166,7 +166,7 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	apiClient := webapi.NewClient()
 
-	if err := r.labelWorkerNodes(ctx, snCR, clusterUUID); err != nil {
+	if err := labelWorkerNodes(ctx, r.Client, r.Recorder, snCR, clusterUUID); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -457,15 +457,29 @@ func (r *StorageNodeSetReconciler) ensureFinalizer(
 // in sync with topologyKeyStorageNodeUUIDPrefix in csi-driver.
 const storageNodeUUIDLabelPrefix = "simplyblock.io/storage-node-uuid."
 
-func (r *StorageNodeSetReconciler) labelWorkerNodes(
+// labelWorkerNodes applies the storage-plane node labels — the DaemonSet node
+// selector (io.simplyblock.node-type and io.simplyblock.storagenodeset) plus the
+// per-slot storage-node-uuid labels — to every worker owned by the StorageNodeSet.
+// It is a free function (not a method) so both the StorageNodeSet reconciler and
+// the StorageNodeOps migration flow drive the identical labeling; a migration
+// target that is not yet in spec.workerNodes is passed via extraWorkers so its
+// DaemonSet pod schedules before the topology swap.
+func labelWorkerNodes(
 	ctx context.Context,
+	c client.Client,
+	recorder events.EventRecorder,
 	sn *simplyblockv1alpha1.StorageNodeSet,
 	clusterUUID string,
+	extraWorkers ...string,
 ) error {
-	// Collect all workers: spec.workerNodes plus any manually created StorageNode CRs
-	// that reference this StorageNodeSet but are not in spec.workerNodes.
-	workers := make(map[string]struct{}, len(sn.Spec.WorkerNodes))
+	// Collect all workers: spec.workerNodes, any explicitly requested extras
+	// (e.g. a migration target not yet in the spec), plus any manually created
+	// StorageNode CRs that reference this StorageNodeSet but are not in spec.workerNodes.
+	workers := make(map[string]struct{}, len(sn.Spec.WorkerNodes)+len(extraWorkers))
 	for _, w := range sn.Spec.WorkerNodes {
+		workers[w] = struct{}{}
+	}
+	for _, w := range extraWorkers {
 		workers[w] = struct{}{}
 	}
 
@@ -475,26 +489,32 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(
 	slotsByWorker := make(map[string]map[string]string)
 
 	var snList simplyblockv1alpha1.StorageNodeList
-	if err := r.List(ctx, &snList,
+	// A failed List must abort: slotsByWorker is the source of truth for which
+	// per-slot storage-node-uuid labels are desired, so an empty map from a
+	// transient API error or a missing field index would make the cleanup loop
+	// below delete every simplyblock.io/storage-node-uuid.<clusterUUID>.* label
+	// from the workers, breaking CSI topology. Return the error and requeue.
+	if err := c.List(ctx, &snList,
 		client.InNamespace(sn.Namespace),
 		client.MatchingFields{"spec.storageNodeSetRef": sn.Name},
-	); err == nil {
-		for _, snCR := range snList.Items {
-			workers[snCR.Spec.WorkerNode] = struct{}{}
+	); err != nil {
+		return fmt.Errorf("listing StorageNodes for StorageNodeSet %s: %w", sn.Name, err)
+	}
+	for _, snCR := range snList.Items {
+		workers[snCR.Spec.WorkerNode] = struct{}{}
 
-			if snCR.Status.UUID == "" {
-				continue
-			}
-			ordinal := int32(0)
-			if snCR.Spec.SocketIndex != nil {
-				ordinal = *snCR.Spec.SocketIndex
-			}
-			if slotsByWorker[snCR.Spec.WorkerNode] == nil {
-				slotsByWorker[snCR.Spec.WorkerNode] = map[string]string{}
-			}
-			slotKey := fmt.Sprintf("%s.%d", clusterUUID, ordinal)
-			slotsByWorker[snCR.Spec.WorkerNode][slotKey] = snCR.Status.UUID
+		if snCR.Status.UUID == "" {
+			continue
 		}
+		ordinal := int32(0)
+		if snCR.Spec.SocketIndex != nil {
+			ordinal = *snCR.Spec.SocketIndex
+		}
+		if slotsByWorker[snCR.Spec.WorkerNode] == nil {
+			slotsByWorker[snCR.Spec.WorkerNode] = map[string]string{}
+		}
+		slotKey := fmt.Sprintf("%s.%d", clusterUUID, ordinal)
+		slotsByWorker[snCR.Spec.WorkerNode][slotKey] = snCR.Status.UUID
 	}
 
 	key := "io.simplyblock.node-type"
@@ -507,8 +527,8 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(
 
 	for nodeName := range workers {
 		var node corev1.Node
-		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
-			r.Recorder.Eventf(sn, nil, corev1.EventTypeWarning, "WorkerNodeNotFound", "WorkerNodeNotFound",
+		if err := c.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
+			recorder.Eventf(sn, nil, corev1.EventTypeWarning, "WorkerNodeNotFound", "WorkerNodeNotFound",
 				"worker node %q: %v", nodeName, err)
 			return err
 		}
@@ -557,7 +577,7 @@ func (r *StorageNodeSetReconciler) labelWorkerNodes(
 			continue
 		}
 
-		if err := r.Update(ctx, &node); err != nil {
+		if err := c.Update(ctx, &node); err != nil {
 			return err
 		}
 	}
