@@ -774,6 +774,119 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+  name: logicalvolumes.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: LogicalVolume
+    listKind: LogicalVolumeList
+    plural: logicalvolumes
+    singular: logicalvolume
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Backend volume name
+      jsonPath: .status.name
+      name: Name
+      type: string
+    - description: Backend lifecycle status
+      jsonPath: .status.state
+      name: State
+      type: string
+    - description: Provisioned size in bytes
+      jsonPath: .status.sizeBytes
+      name: Size
+      type: integer
+    - description: Backend pool name
+      jsonPath: .status.poolName
+      name: Pool
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          LogicalVolume is the Schema for the logicalvolumes API. It is a read model of a
+          control-plane volume, kept in sync by the SSE informer.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec identifies the mirrored control-plane volume
+            properties:
+              clusterID:
+                description: ClusterID is the backend cluster UUID that owns the volume.
+                type: string
+              poolID:
+                description: PoolID is the backend storage-pool UUID that owns the
+                  volume.
+                type: string
+              volumeID:
+                description: VolumeID is the backend volume UUID.
+                type: string
+            required:
+            - clusterID
+            - poolID
+            - volumeID
+            type: object
+          status:
+            description: status defines the observed state of the volume
+            properties:
+              name:
+                description: Name is the backend volume name.
+                type: string
+              nqn:
+                description: NQN is the NVMe Qualified Name the volume is exported
+                  under.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the generation last reconciled
+                  into this status.
+                format: int64
+                type: integer
+              poolName:
+                description: PoolName is the backend pool name the volume belongs
+                  to.
+                type: string
+              sizeBytes:
+                description: SizeBytes is the provisioned size in bytes.
+                format: int64
+                type: integer
+              state:
+                description: State is the backend lifecycle status (e.g. "online",
+                  "deleted").
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: replicationops.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -4469,6 +4582,7 @@ rules:
   - backuppolicies
   - backuprestores
   - controlplanes
+  - logicalvolumes
   - replicationops
   - replicationpairs
   - replicationpolicies
@@ -4518,6 +4632,7 @@ rules:
   - backuppolicies/status
   - backuprestores/status
   - controlplanes/status
+  - logicalvolumes/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status

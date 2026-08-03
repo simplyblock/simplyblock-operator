@@ -37,6 +37,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -53,6 +54,9 @@ type StoragePoolReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
+	// VolumeScopes, if set, receives this pool's (cluster, pool) scope so the
+	// control-plane SSE manager streams its volumes. Optional (nil in tests).
+	VolumeScopes *cpinformer.ScopeSet
 }
 
 // StoragePoolDTO mirrors the new API's storage pool response format.
@@ -205,6 +209,11 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.handleStoragePoolCreation(ctx, storagePoolCR, apiClient, clusterUUID)
 	}
 
+	// Pool is ready: register its scope so the SSE manager streams its volumes.
+	if r.VolumeScopes != nil {
+		r.VolumeScopes.Add(cpinformer.Scope{clusterUUID, storagePoolCR.Status.UUID})
+	}
+
 	if err := r.createStorageClassIfNotExists(ctx, storagePoolCR, clusterUUID); err != nil {
 		log.Error(err, "Failed to create StorageClass for pool")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -249,6 +258,9 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 func (r *StoragePoolReconciler) handleStoragePoolDeletion(ctx context.Context, storagePoolCR *simplyblockv1alpha1.StoragePool, apiClient *webapi.Client, clusterUUID string) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	if r.VolumeScopes != nil && storagePoolCR.Status.UUID != "" {
+		r.VolumeScopes.Remove(cpinformer.Scope{clusterUUID, storagePoolCR.Status.UUID})
+	}
 	if utils.ContainsString(storagePoolCR.Finalizers, utils.FinalizerStoragePool) {
 		if storagePoolCR.Status.UUID != "" {
 			// Backend pool exists — delete it first.
