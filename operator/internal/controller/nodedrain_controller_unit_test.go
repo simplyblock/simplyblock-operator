@@ -300,6 +300,95 @@ func TestActiveDrainDomainsMapsAndDedupsAndFiltersUnassigned(t *testing.T) {
 	}
 }
 
+func TestDistinctDomainCount(t *testing.T) {
+	fd1, fd2, fd3 := int32(1), int32(2), int32(3)
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "a", FailureDomain: &fd1},
+				{Hostname: "b", FailureDomain: &fd1},
+				{Hostname: "c", FailureDomain: &fd2},
+				{Hostname: "d", FailureDomain: &fd3},
+				{Hostname: "e"}, // unassigned -> excluded
+			},
+		},
+	}
+
+	if got := distinctDomainCount(snCR); got != 3 {
+		t.Fatalf("expected 3 distinct domains, got %d", got)
+	}
+	if got := distinctDomainCount(&simplyblockv1alpha1.StorageNodeSet{}); got != 0 {
+		t.Fatalf("expected 0 for empty status, got %d", got)
+	}
+}
+
+func TestFdDrainGateWellProvisionedGatesOnDomainCount(t *testing.T) {
+	// 2+2 with 4 domains (ndcs+npcs=4): full one-chunk-per-domain isolation.
+	// Two domains already active, budget is 2 -> a third distinct domain blocks.
+	activeDomains := map[int32]bool{1: true, 2: true}
+	blocked, reason := fdDrainGate(map[string]bool{"n1": true, "n2": true}, activeDomains, 3, 4, 4, 2)
+	if !blocked || reason == "" {
+		t.Fatalf("expected a new (3rd) domain to be blocked at the 2-domain budget, got blocked=%v reason=%q", blocked, reason)
+	}
+
+	// Piling onto an already-active domain is always free, regardless of count.
+	blocked, _ = fdDrainGate(map[string]bool{"n1": true, "n2": true}, activeDomains, 1, 4, 4, 2)
+	if blocked {
+		t.Fatalf("expected piling onto an already-active domain to proceed")
+	}
+
+	// A new domain within budget (only 1 active, budget 2) proceeds.
+	blocked, _ = fdDrainGate(map[string]bool{"n1": true}, map[int32]bool{1: true}, 2, 4, 4, 2)
+	if blocked {
+		t.Fatalf("expected a 2nd domain to proceed while still under the 2-domain budget")
+	}
+}
+
+func TestFdDrainGateUnderProvisionedAllowsOneFullDomainOrNodeBudgetAcrossTwo(t *testing.T) {
+	// 2+2 (domainsNeeded=4) but only 2 real failure domains -> under-provisioned.
+	// maxFaultTolerance=2 per the existing erasure-code-only budget.
+	const domainsAvailable = 2
+	const domainsNeeded = 4
+	const maxFaultTolerance = 2
+
+	// No domain active yet: first mover into domain 1 always proceeds.
+	if blocked, _ := fdDrainGate(map[string]bool{}, map[int32]bool{}, 1, domainsAvailable, domainsNeeded, maxFaultTolerance); blocked {
+		t.Fatalf("expected the first candidate to proceed")
+	}
+
+	// Domain 1 already fully active (e.g. both its nodes draining) -- a 3rd
+	// node in the SAME domain 1 must still be free, no matter the node count,
+	// since this mirrors losing that whole domain outright.
+	activeInDomain1 := map[string]bool{"n1": true, "n2": true}
+	if blocked, _ := fdDrainGate(activeInDomain1, map[int32]bool{1: true}, 1, domainsAvailable, domainsNeeded, maxFaultTolerance); blocked {
+		t.Fatalf("expected continuing to drain within the already-active domain to proceed unconditionally")
+	}
+
+	// Opening domain 2 while domain 1 has 1 active node (total active nodes
+	// below maxFaultTolerance) is the "two different nodes from different FD"
+	// case -- must proceed.
+	if blocked, _ := fdDrainGate(map[string]bool{"n1": true}, map[int32]bool{1: true}, 2, domainsAvailable, domainsNeeded, maxFaultTolerance); blocked {
+		t.Fatalf("expected a 2nd domain to proceed while total active nodes is still under maxFaultTolerance")
+	}
+
+	// Opening domain 2 once the raw node budget is already exhausted must block
+	// -- we cannot assume losing 2 distinct domains at once is safe here.
+	activeAtBudget := map[string]bool{"n1": true, "n2": true}
+	blocked, reason := fdDrainGate(activeAtBudget, map[int32]bool{1: true}, 2, domainsAvailable, domainsNeeded, maxFaultTolerance)
+	if !blocked || reason == "" {
+		t.Fatalf("expected opening a 2nd domain at the node budget to block, got blocked=%v reason=%q", blocked, reason)
+	}
+}
+
+func TestFdDrainGateUnknownSchemeTreatedAsUnderProvisioned(t *testing.T) {
+	// domainsNeededForFullDisjoint=0 signals the scheme could not be parsed;
+	// must not be treated as "enough domains" via a stray >= 0 comparison.
+	blocked, _ := fdDrainGate(map[string]bool{"n1": true, "n2": true}, map[int32]bool{1: true}, 2, 5, 0, 2)
+	if !blocked {
+		t.Fatalf("expected unknown scheme (domainsNeeded=0) to fall back to the node-budget gate and block here")
+	}
+}
+
 // ---- reconciler tests ----
 
 func TestNodeDrainReconcileNotFound(t *testing.T) {
@@ -700,7 +789,7 @@ func TestProcessWorkerUncordonedNoState(t *testing.T) {
 
 	requeue, shouldBreak := r.processWorker(
 		context.Background(), snCR, "node-g",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false, 0,
 	)
 	if requeue != 0 || shouldBreak {
 		t.Fatalf("expected (0, false) for uncordoned node with no state, got (%v, %v)", requeue, shouldBreak)
@@ -724,7 +813,7 @@ func TestProcessWorkerSkipsCordonedNotYetOnline(t *testing.T) {
 
 	requeue, shouldBreak := r.processWorker(
 		context.Background(), snCR, "node-h",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false, 0,
 	)
 	if requeue != 0 || shouldBreak {
 		t.Fatalf("expected (0, false) for cordoned node not yet online, got (%v, %v)", requeue, shouldBreak)
@@ -753,7 +842,7 @@ func TestProcessWorkerCordonedOnlineInitializesState(t *testing.T) {
 
 	r.processWorker(
 		context.Background(), snCR, "node-i",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false, 0,
 	)
 
 	// Drain state must have been initialized (phase may be detected or failed
@@ -1085,6 +1174,7 @@ func TestHandleDetectedFDDisabledUsesGlobalGate(t *testing.T) {
 		webapi.NewClient("http://127.0.0.1:1"), "cluster",
 		1,     // maxFaultTolerance=1 → node-a already consumes the slot
 		false, // fdEnabled=false → global gate
+		0,     // domainsNeededForFullDisjoint unused when fdEnabled=false
 	)
 
 	if err != nil {
@@ -1112,6 +1202,7 @@ func TestHandleDetectedSameDomainParallelAllowed(t *testing.T) {
 		webapi.NewClient("http://127.0.0.1:1"), "cluster",
 		1,    // maxFaultTolerance=1 — same domain must still be allowed through
 		true, // fdEnabled=true
+		2,    // domainsNeededForFullDisjoint — irrelevant here: same-domain always proceeds
 	)
 
 	// The gate passes; the function proceeds until it finds no UUID for node-b
@@ -1137,6 +1228,7 @@ func TestHandleDetectedCrossDomainGated(t *testing.T) {
 		webapi.NewClient("http://127.0.0.1:1"), "cluster",
 		1,    // maxFaultTolerance=1 → domain 1 already consuming the slot
 		true, // fdEnabled=true
+		2,    // domainsNeededForFullDisjoint=2, domainsAvailable=2 → well-provisioned, gates on domain count
 	)
 
 	if err != nil {
