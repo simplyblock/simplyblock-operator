@@ -1284,15 +1284,14 @@ func activeDrainWorkers(
 }
 
 // workerFailureDomain returns the effective failure-domain group for a worker
-// hostname, checking spec.nodeConfigs[hostname].failureDomain first (per-node
-// override) and falling back to spec.nodeFailureDomains[hostname]. Returns
-// (0, false) when no domain is configured for the worker.
+// hostname from status.nodes[].failureDomain, which is populated by the backend
+// API response and is therefore authoritative even for nodes added outside the
+// operator. Returns (0, false) when the backend has not assigned a domain.
 func workerFailureDomain(snCR *simplyblockv1alpha1.StorageNodeSet, hostname string) (int32, bool) {
-	if nc, ok := snCR.Spec.NodeConfigs[hostname]; ok && nc.FailureDomain != nil {
-		return *nc.FailureDomain, true
-	}
-	if d, ok := snCR.Spec.NodeFailureDomains[hostname]; ok {
-		return d, true
+	for _, ns := range snCR.Status.Nodes {
+		if ns.Hostname == hostname && ns.FailureDomain != nil {
+			return *ns.FailureDomain, true
+		}
 	}
 	return 0, false
 }
