@@ -225,30 +225,17 @@ ifndef ignore-not-found
   ignore-not-found = false
 endif
 
-MANIFEST_ACCEPT := application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json
-
 .PHONY: bundle
 bundle: yq ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
 	@set -e; \
 	operator-sdk generate kustomize manifests -q; \
-	OPERATOR_DIGEST=$$(curl -sI \
-	  "https://quay.io/v2/simplyblock-io/simplyblock-operator/manifests/$(IMG_TAG)" \
-	  -H "Accept: $(MANIFEST_ACCEPT)" \
-	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	digest() { $(CONTAINER_TOOL) buildx imagetools inspect "$$1" 2>/dev/null | awk '/^Digest:/ {print $$2}'; }; \
+	OPERATOR_DIGEST=$$(digest $(IMG_BASE):$(IMG_TAG)); \
 	test -n "$$OPERATOR_DIGEST" \
 	  || { echo "ERROR: could not fetch digest for $(IMG_BASE):$(IMG_TAG) — is the image pushed?"; exit 1; }; \
-	CLUSTER_DIGEST=$$(curl -sI \
-	  "https://quay.io/v2/simplyblock-io/simplyblock/manifests/$(CLUSTER_IMAGE_TAG)" \
-	  -H "Accept: $(MANIFEST_ACCEPT)" \
-	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
-	SPDK_DIGEST=$$(curl -sI \
-	  "https://quay.io/v2/simplyblock-io/ultra/manifests/$(SPDK_IMAGE_TAG)" \
-	  -H "Accept: $(MANIFEST_ACCEPT)" \
-	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
-	REBALANCER_DIGEST=$$(curl -sI \
-	  "https://quay.io/v2/simplyblock-io/simplyblock-rebalancer/manifests/$(IMG_TAG)" \
-	  -H "Accept: $(MANIFEST_ACCEPT)" \
-	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	CLUSTER_DIGEST=$$(digest $(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)); \
+	SPDK_DIGEST=$$(digest $(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)); \
+	REBALANCER_DIGEST=$$(digest $(REBALANCER_IMG_BASE):$(IMG_TAG)); \
 	test -n "$$REBALANCER_DIGEST" \
 	  || { echo "ERROR: could not fetch digest for $(REBALANCER_IMG_BASE):$(IMG_TAG) — is the image pushed?"; exit 1; }; \
 	(cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
