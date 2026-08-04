@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/simplyblock/atlas/errs"
@@ -37,11 +36,12 @@ func (c *Client) ListStoragePools(ctx context.Context, clusterID string) ([]Stor
 	if err != nil {
 		return nil, fmt.Errorf("list storage pools in %s: %w", clusterID, err)
 	}
-	if resp.JSON200 == nil {
-		return nil, respError("list storage pools in "+clusterID, resp.StatusCode(), resp.Body)
+	ds, err := payload("list storage pools in "+clusterID, resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return nil, err
 	}
-	out := make([]StoragePool, 0, len(*resp.JSON200))
-	for _, d := range *resp.JSON200 {
+	out := make([]StoragePool, 0, len(*ds))
+	for _, d := range *ds {
 		out = append(out, storagePoolFromDTO(d))
 	}
 	return out, nil
@@ -58,10 +58,11 @@ func (c *Client) GetStoragePool(ctx context.Context, clusterID, poolID string) (
 	if err != nil {
 		return StoragePool{}, fmt.Errorf("get storage pool %s: %w", poolID, err)
 	}
-	if resp.JSON200 == nil {
-		return StoragePool{}, respError("storage pool "+poolID, resp.StatusCode(), resp.Body)
+	d, err := payload("storage pool "+poolID, resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return StoragePool{}, err
 	}
-	return storagePoolFromDTO(*resp.JSON200), nil
+	return storagePoolFromDTO(*d), nil
 }
 
 // StoragePoolByName returns the pool with the given name in a cluster. The v2
@@ -126,12 +127,9 @@ func (c *Client) CreateStoragePool(ctx context.Context, clusterID string, params
 	}
 	// The create endpoint returns the full StoragePoolDTO body (untyped in the
 	// spec's response, so decode it here).
-	if code := resp.StatusCode(); code < 200 || code >= 300 {
-		return StoragePool{}, respError("create storage pool "+params.Name, code, resp.Body)
-	}
-	var d cpapi.StoragePoolDTO
-	if err := json.Unmarshal(resp.Body, &d); err != nil {
-		return StoragePool{}, fmt.Errorf("create storage pool %q: decode response: %w", params.Name, err)
+	d, err := decodeBody[cpapi.StoragePoolDTO]("create storage pool "+params.Name, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return StoragePool{}, err
 	}
 	return storagePoolFromDTO(d), nil
 }

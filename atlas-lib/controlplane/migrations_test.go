@@ -76,3 +76,29 @@ func TestClientCreateVolumeMigration(t *testing.T) {
 		t.Errorf("migration = %+v", m)
 	}
 }
+
+// TestClientCreateVolumeMigrationPreConnect covers the other side of the
+// namespace asymmetry: a migration's pre-connect strings share the /connect
+// model but have no namespace yet, and must not be rejected for it.
+func TestClientCreateVolumeMigrationPreConnect(t *testing.T) {
+	const target = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"` + testMigration + `","lvol_id":"` + testVolume + `","source_node_id":"s",` +
+			`"target_node_id":"` + target + `","phase":"pre_created","status":"new","error_message":"",` +
+			`"retry_count":0,"max_retries":3,"snaps_migrated":0,"snaps_total":0,"completed_at":0,` +
+			`"started_at":0,"intermediate_snap_rounds":0,"max_intermediate_snap_rounds":0,` +
+			`"connect_strings":[{"transport":"tcp","ip":"10.10.10.1","port":9090,"nqn":"nqn.t",` +
+			`"reconnect-delay":2,"ctrl-loss-tmo":60,"fast-io-fail-tmo":20,"nr-io-queues":6,` +
+			`"keep-alive-tmo":5,"connect":"sudo nvme connect ...","ns-id":null}]}`))
+	})
+
+	m, err := c.CreateVolumeMigration(context.Background(), testHandle, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.ID != testMigration || m.Phase != "pre_created" {
+		t.Errorf("migration = %+v", m)
+	}
+}
