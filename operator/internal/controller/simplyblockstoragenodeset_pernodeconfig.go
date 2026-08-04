@@ -47,6 +47,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
@@ -98,6 +99,36 @@ func (r *StorageNodeSetReconciler) reconcilePerNodeConfigMap(
 
 	var existing corev1.ConfigMap
 	err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: sns.Namespace}, &existing)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("getting per-node ConfigMap: %w", err)
+	}
+
+	// Include workers labeled into this StorageNodeSet but not yet in
+	// spec.workerNodes or backed by a StorageNode CR — an in-flight StorageNodeOps
+	// migration labels its target and ensureMigratedWorkerConfig authors the
+	// target's per-node entry (source clone + newSsdPcie merged into PCI_ALLOWED)
+	// during Preparing, before reconcileMigratedTopology folds the target into
+	// spec.workerNodes once it is online. Without this, the full rebuild above
+	// drops that entry, and when the target's DaemonSet pod (re)starts its init
+	// container sources an empty env and config generation fails on max-lvol=0.
+	// Prefer the existing entry so the clone/newSsdPcie survive the rebuild; fall
+	// back to fleet defaults so a target whose entry was already lost still boots
+	// with a valid config. Mirrors reconcileEndpointSlice's label-based inclusion.
+	var labeledNodes corev1.NodeList
+	if listErr := r.List(ctx, &labeledNodes, client.MatchingLabels{kube.LabelStorageNodeSet: sns.Name}); listErr != nil {
+		return fmt.Errorf("listing storage-plane nodes for per-node ConfigMap: %w", listErr)
+	}
+	for i := range labeledNodes.Items {
+		worker := labeledNodes.Items[i].Name
+		if _, ok := data[worker]; ok {
+			continue // already covered by spec.workerNodes or a StorageNode CR
+		}
+		if entry, ok := existing.Data[worker]; ok {
+			data[worker] = entry
+		} else {
+			data[worker] = buildPerNodeEnvFile(sns, worker)
+		}
+	}
 
 	if apierrors.IsNotFound(err) {
 		cm := &corev1.ConfigMap{
@@ -115,9 +146,6 @@ func (r *StorageNodeSetReconciler) reconcilePerNodeConfigMap(
 		}
 		log.Info("created per-node ConfigMap", "name", name)
 		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("getting per-node ConfigMap: %w", err)
 	}
 
 	// Update if data changed.
