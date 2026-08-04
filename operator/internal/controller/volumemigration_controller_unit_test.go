@@ -2,15 +2,20 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/events"
@@ -30,6 +35,9 @@ const (
 	testPoolUUID      = "pool-uuid"
 	testVolumeUUID    = "vol-uuid"
 	testMigrationUUID = "migration-1"
+	// testValidationJobName is the NVMe path-validation Job name shared by
+	// validatingVM (which records it in status) and validationJob.
+	testValidationJobName = "vmig-validate-1"
 )
 
 // unreachableAPI is a base URL that always fails to connect; use it for tests
@@ -47,14 +55,28 @@ func newVMReconciler(t *testing.T, apiURL string, objs ...client.Object) (*Volum
 		corev1.AddToScheme,
 		batchv1.AddToScheme,
 	)
-	cl := newTestClient(t, scheme, []client.Object{&simplyblockv1alpha1.VolumeMigration{}}, objs...)
+	// StorageClasses are read through scResolver (a clientset-backed LiveResolver),
+	// not through the controller-runtime client, so they are seeded separately.
+	var scObjs []runtime.Object
+	crObjs := make([]client.Object, 0, len(objs))
+	for _, o := range objs {
+		if sc, ok := o.(*storagev1.StorageClass); ok {
+			scObjs = append(scObjs, sc)
+			continue
+		}
+		crObjs = append(crObjs, o)
+	}
 
+	cl := newTestClient(t, scheme, []client.Object{&simplyblockv1alpha1.VolumeMigration{}}, crObjs...)
+
+	cs := k8sfake.NewSimpleClientset(scObjs...)
 	r := &VolumeMigrationReconciler{
 		Client:     cl,
 		Scheme:     scheme,
 		Recorder:   events.NewFakeRecorder(64),
 		apiClient:  webapi.NewClient(apiURL),
-		coreClient: k8sfake.NewSimpleClientset().CoreV1(),
+		coreClient: cs.CoreV1(),
+		scResolver: atlaskube.NewLiveResolver(cs),
 		// The fake client serves both cached and uncached reads in tests.
 		apiReader: cl,
 	}
@@ -102,6 +124,30 @@ func csiPV(handle string) *corev1.PersistentVolume {
 				CSI: &corev1.CSIPersistentVolumeSource{VolumeHandle: handle},
 			},
 		},
+	}
+}
+
+// classedCSIPV returns a PV provisioned by the simplyblock CSI driver (so
+// atlaskube.IsManaged accepts it) referencing the named StorageClass — the shape
+// StorageClass-based namespaced-volume detection requires.
+func classedCSIPV(handle, scName string) *corev1.PersistentVolume {
+	pv := csiPV(handle)
+	pv.Spec.CSI.Driver = atlaskube.DriverName
+	pv.Spec.StorageClassName = scName
+	return pv
+}
+
+// simplyblockStorageClass returns a simplyblock StorageClass whose
+// max_namespace_per_subsys is maxNS (parameter omitted when maxNS is 0).
+func simplyblockStorageClass(name string, maxNS int) *storagev1.StorageClass {
+	params := map[string]string{}
+	if maxNS > 0 {
+		params[atlaskube.ParamMaxNamespacePerSubsys] = strconv.Itoa(maxNS)
+	}
+	return &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: name},
+		Provisioner: atlaskube.DriverName,
+		Parameters:  params,
 	}
 }
 
@@ -314,6 +360,109 @@ func TestReconcileStart_DefaultsToEnabled(t *testing.T) {
 	}
 }
 
+// ---- namespaced-volume (multi-namespace) detection ----
+
+// A volume is namespaced when its StorageClass provisions more than one
+// namespace per subsystem. That verdict must be recorded in status so
+// ContinueMigration can be told the migration may affect sibling volumes.
+func TestReconcileStart_DetectsMultiNamespace(t *testing.T) {
+	const scName = "sb-namespaced"
+	cases := []struct {
+		name string
+		pv   *corev1.PersistentVolume
+		sc   *storagev1.StorageClass
+		want bool
+	}{
+		{
+			name: "StorageClass max_namespace_per_subsys > 1",
+			pv:   classedCSIPV(testClusterUUID+":"+testPoolUUID+":"+testVolumeUUID, scName),
+			sc:   simplyblockStorageClass(scName, 32),
+			want: true,
+		},
+		{
+			name: "single namespace per subsystem",
+			pv:   classedCSIPV(testClusterUUID+":"+testPoolUUID+":"+testVolumeUUID, scName),
+			sc:   simplyblockStorageClass(scName, 1),
+			want: false,
+		},
+		{
+			// An unresolvable StorageClass must not stall the migration: it fails
+			// open to single-namespace.
+			name: "unresolvable StorageClass fails open",
+			pv:   classedCSIPV(testClusterUUID+":"+testPoolUUID+":"+testVolumeUUID, "missing-class"),
+			sc:   simplyblockStorageClass(scName, 32),
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","connect_strings":[{"nqn":"nqn.x","ip":"10.0.0.1","port":4420,"transport":"tcp"}]}`))
+			})
+
+			r, cl := newVMReconciler(t, srv.URL, baseVM(), tc.pv, tc.sc, migrationCluster())
+			if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			got := getVM(t, cl)
+			if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseValidating {
+				t.Fatalf("phase = %q, want Validating", got.Status.Phase)
+			}
+			if got.Status.MultiNamespace != tc.want {
+				t.Errorf("MultiNamespace = %v, want %v", got.Status.MultiNamespace, tc.want)
+			}
+		})
+	}
+}
+
+// The recorded namespaced-volume verdict must reach the backend as the batch
+// flag on the continue call — that is what tells it the migration may involve
+// more than one volume.
+func TestPerformMigration_PassesMultiNamespaceAsBatchFlag(t *testing.T) {
+	for _, multiNS := range []bool{true, false} {
+		name := "single-namespace"
+		if multiNS {
+			name = "namespaced"
+		}
+		t.Run(name, func(t *testing.T) {
+			var gotBatch bool
+			var sawContinue bool
+			srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+					_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
+					sawContinue = true
+					var params webapi.ContinueMigrationParams
+					if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+						t.Errorf("decode continue body: %v", err)
+					}
+					gotBatch = params.Batch
+					w.WriteHeader(http.StatusOK)
+				default:
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+			})
+
+			vm := validatingVM(testValidationJobName)
+			vm.Status.MultiNamespace = multiNS
+			job := validationJob(batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue})
+			r, _ := newVMReconciler(t, srv.URL, vm, job)
+
+			if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if !sawContinue {
+				t.Fatalf("expected ContinueMigration to be called")
+			}
+			if gotBatch != multiNS {
+				t.Errorf("continue batch flag = %v, want %v", gotBatch, multiNS)
+			}
+		})
+	}
+}
+
 // ---- reconcileValidating / pollValidationJob ----
 
 func validatingVM(jobName string) *simplyblockv1alpha1.VolumeMigration {
@@ -329,9 +478,11 @@ func validatingVM(jobName string) *simplyblockv1alpha1.VolumeMigration {
 	return vm
 }
 
-func validationJob(name string, conditions ...batchv1.JobCondition) *batchv1.Job {
+// validationJob returns the validation Job named testValidationJobName — the
+// name validatingVM records in status — with the given conditions.
+func validationJob(conditions ...batchv1.JobCondition) *batchv1.Job {
 	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testVMNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: testValidationJobName, Namespace: testVMNamespace},
 		Status:     batchv1.JobStatus{Conditions: conditions},
 	}
 }
@@ -361,8 +512,8 @@ func TestPollValidationJob_NotFound_ClearsNameAndRequeues(t *testing.T) {
 }
 
 func TestPollValidationJob_InProgress_NoTransition(t *testing.T) {
-	vm := validatingVM("vmig-validate-1")
-	job := validationJob("vmig-validate-1") // no terminal conditions
+	vm := validatingVM(testValidationJobName)
+	job := validationJob() // no terminal conditions
 	r, cl := newVMReconciler(t, unreachableAPI, vm, job)
 
 	res, err := r.Reconcile(context.Background(), vmRequest())
@@ -376,7 +527,7 @@ func TestPollValidationJob_InProgress_NoTransition(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseValidating {
 		t.Errorf("phase = %q, want Validating", got.Status.Phase)
 	}
-	if got.Status.ValidationJobName != "vmig-validate-1" {
+	if got.Status.ValidationJobName != testValidationJobName {
 		t.Errorf("ValidationJobName = %q, want unchanged", got.Status.ValidationJobName)
 	}
 }
@@ -396,8 +547,8 @@ func TestPollValidationJob_Succeeded_ContinuesToRunning(t *testing.T) {
 		}
 	})
 
-	vm := validatingVM("vmig-validate-1")
-	job := validationJob("vmig-validate-1", batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue})
+	vm := validatingVM(testValidationJobName)
+	job := validationJob(batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue})
 	r, cl := newVMReconciler(t, srv.URL, vm, job)
 
 	res, err := r.Reconcile(context.Background(), vmRequest())
@@ -433,8 +584,8 @@ func TestPollValidationJob_Failed_CancelsAndFails(t *testing.T) {
 		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 	})
 
-	vm := validatingVM("vmig-validate-1")
-	job := validationJob("vmig-validate-1", batchv1.JobCondition{Type: batchv1.JobFailed, Status: corev1.ConditionTrue})
+	vm := validatingVM(testValidationJobName)
+	job := validationJob(batchv1.JobCondition{Type: batchv1.JobFailed, Status: corev1.ConditionTrue})
 	r, cl := newVMReconciler(t, srv.URL, vm, job)
 
 	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
