@@ -189,7 +189,8 @@ type rule struct {
 	typ      string
 	tags     map[string]string
 	keys     []string
-	order    []string // field names, in the order their keys appear in the yaml
+	order    []string          // field names, in the order their keys appear in the yaml
+	wire     map[string]string // Go field to the wire key it came from, for messages
 	base     string
 	endpoint string
 }
@@ -255,6 +256,10 @@ func compile(rulesYAML []byte, structs map[string]*ast.StructType, doc spec, spe
 		if b.endpoint != "" {
 			continue
 		}
+		if _, dup := bases[b.schema]; dup {
+			return nil, fmt.Errorf("line %d: a second %s block; merge it into the first, or the later one silently wins",
+				b.line, b.schema)
+		}
 		r, err := compileRules(b, b.schema, structs, doc, specPath)
 		if err != nil {
 			return nil, err
@@ -266,7 +271,16 @@ func compile(rulesYAML []byte, structs map[string]*ast.StructType, doc spec, spe
 		if b.endpoint == "" {
 			continue
 		}
-		r, err := compileVariant(b, bases[b.schema], structs, doc, specPath)
+		// Without the base's block there is nothing to merge, and the variant
+		// would quietly enforce only its own rules — the shared ones would look
+		// inherited and not be. An empty `<schema>: {}` says "no shared rules"
+		// deliberately.
+		base, ok := bases[b.schema]
+		if !ok {
+			return nil, fmt.Errorf("line %d: %s@%s has no %s block to extend — an endpoint-scoped block compiles to the base's rules plus its own, so add one (`%s: {}` if there are none to share)",
+				b.line, b.schema, b.endpoint, b.schema, b.schema)
+		}
+		r, err := compileVariant(b, base, structs, doc, specPath)
 		if err != nil {
 			return nil, err
 		}
@@ -327,7 +341,7 @@ func compileRules(b block, name string, structs map[string]*ast.StructType, doc 
 			b.line, name, specPath)
 	}
 
-	r := rule{typ: name, tags: map[string]string{}}
+	r := rule{typ: name, tags: map[string]string{}, wire: map[string]string{}}
 	for j := 0; j+1 < len(b.body.Content); j += 2 {
 		keyNode, tag := b.body.Content[j], b.body.Content[j+1].Value
 		key := keyNode.Value
@@ -356,6 +370,7 @@ func compileRules(b block, name string, structs map[string]*ast.StructType, doc 
 		}
 		if tag != "" {
 			r.tags[field] = tag
+			r.wire[field] = key
 			r.order = append(r.order, field)
 		}
 	}
@@ -407,19 +422,21 @@ func compileVariant(b block, base rule, structs map[string]*ast.StructType, doc 
 // Overriding a key the base already rules is legitimate (an endpoint promising
 // more than the model), and reported so it is never silent.
 func merge(base, own rule, as, schema, endpoint string) rule {
-	merged := rule{typ: as, tags: map[string]string{}, base: schema, endpoint: endpoint}
+	merged := rule{typ: as, tags: map[string]string{}, wire: map[string]string{}, base: schema, endpoint: endpoint}
 	for _, field := range base.order {
 		merged.tags[field] = base.tags[field]
+		merged.wire[field] = base.wire[field]
 		merged.order = append(merged.order, field)
 	}
 	merged.keys = append(merged.keys, base.keys...)
 	for _, field := range own.order {
-		if _, override := merged.tags[field]; override {
-			fmt.Printf("%s: overrides %s.%s\n", as, schema, field)
+		if was, override := merged.tags[field]; override {
+			fmt.Printf("%s: %s.%s is %q here, not %q\n", as, schema, own.wire[field], own.tags[field], was)
 		} else {
 			merged.order = append(merged.order, field)
 		}
 		merged.tags[field] = own.tags[field]
+		merged.wire[field] = own.wire[field]
 	}
 	for _, key := range own.keys {
 		if !slices.Contains(merged.keys, key) {
