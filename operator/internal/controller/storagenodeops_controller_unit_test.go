@@ -43,9 +43,10 @@ func newOpsReconciler(t *testing.T, objects ...client.Object) *StorageNodeOpsRec
 		objects...,
 	)
 	return &StorageNodeOpsReconciler{
-		Client:   cl,
-		Scheme:   scheme,
-		Recorder: events.NewFakeRecorder(16),
+		Client:    cl,
+		Scheme:    scheme,
+		Recorder:  events.NewFakeRecorder(16),
+		apiReader: cl,
 	}
 }
 
@@ -337,7 +338,7 @@ func TestEndpointSliceHasWorker_MatchesBuilderOutput(t *testing.T) {
 		discoveryv1.AddToScheme,
 	)
 	cl := newTestClient(t, scheme, nil, slice)
-	r := &StorageNodeOpsReconciler{Client: cl, Scheme: scheme, Recorder: events.NewFakeRecorder(16)}
+	r := &StorageNodeOpsReconciler{Client: cl, Scheme: scheme, Recorder: events.NewFakeRecorder(16), apiReader: cl}
 
 	// The enrolled worker is found — this is what the drifted name broke.
 	ok, err := r.endpointSliceHasWorker(context.Background(), ns, sns.Name, worker)
