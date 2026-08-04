@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,9 @@ const (
 	testPoolUUID      = "pool-uuid"
 	testVolumeUUID    = "vol-uuid"
 	testMigrationUUID = "migration-1"
+	// testValidationJobName is the NVMe path-validation Job name shared by
+	// validatingVM (which records it in status) and validationJob.
+	testValidationJobName = "vmig-validate-1"
 )
 
 // unreachableAPI is a base URL that always fails to connect; use it for tests
@@ -59,6 +63,25 @@ func newVMReconciler(t *testing.T, apiURL string, objs ...client.Object) (*Volum
 		apiReader: cl,
 	}
 	return r, cl
+}
+
+// testSubsystemNQN is the NQN the fake API reports for testVolumeUUID. Migrations
+// are addressed by it, so it appears in every migration URL the controller calls.
+const testSubsystemNQN = "nqn.2014-08.io.simplyblock:cluster-uuid:lvol:vol-uuid"
+
+// migrationsPath is the collection endpoint the controller must use for the
+// volume under test.
+const migrationsPath = "/api/v2/clusters/" + testClusterUUID + "/subsystems/" + testSubsystemNQN + "/migrations"
+
+// serveVolume answers the GetVolume call reconcileStart makes to resolve the
+// volume's subsystem, and reports whether it handled the request. Fake API
+// handlers used by reconcileStart tests must call it first.
+func serveVolume(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/volumes/"+testVolumeUUID+"/") {
+		return false
+	}
+	_, _ = w.Write([]byte(`{"id":"` + testVolumeUUID + `","nqn":"` + testSubsystemNQN + `"}`))
+	return true
 }
 
 // newAPIServer starts an httptest server that is closed at test end.
@@ -155,10 +178,14 @@ func migrationCluster() *simplyblockv1alpha1.StorageCluster {
 
 func TestReconcileStart_TransitionsToValidating(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/migrations") {
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		if serveVolume(w, r) {
+			return
 		}
-		_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","connect_strings":[{"nqn":"nqn.x","ip":"10.0.0.1","port":4420,"transport":"tcp"}]}`))
+		if r.Method != http.MethodPost || r.URL.Path != migrationsPath {
+			t.Errorf("unexpected request %s %s, want POST %s", r.Method, r.URL.Path, migrationsPath)
+		}
+		_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","target_nqn":"` + testSubsystemNQN +
+			`","member_count":3,"connect_strings":[{"nqn":"nqn.x","ip":"10.0.0.1","port":4420,"transport":"tcp"}]}`))
 	})
 
 	vm := baseVM()
@@ -182,6 +209,12 @@ func TestReconcileStart_TransitionsToValidating(t *testing.T) {
 	}
 	if got.Status.ClusterUUID != testClusterUUID || got.Status.PoolUUID != testPoolUUID || got.Status.VolumeUUID != testVolumeUUID {
 		t.Errorf("UUIDs not resolved from CSI handle: %+v", got.Status)
+	}
+	if got.Status.SubsystemNQN != testSubsystemNQN {
+		t.Errorf("SubsystemNQN = %q, want %q", got.Status.SubsystemNQN, testSubsystemNQN)
+	}
+	if got.Status.MemberCount != 3 {
+		t.Errorf("MemberCount = %d, want 3", got.Status.MemberCount)
 	}
 	if got.Status.StartedAt == nil {
 		t.Errorf("StartedAt should be set after start")
@@ -220,7 +253,10 @@ func TestReconcileStart_BadCSIHandle_Fails(t *testing.T) {
 }
 
 func TestReconcileStart_EmptyMigrationUUID_Fails(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if serveVolume(w, r) {
+			return
+		}
 		_, _ = w.Write([]byte(`{"id":""}`))
 	})
 	vm := baseVM()
@@ -292,7 +328,10 @@ func TestReconcileStart_DefaultsToEnabled(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if serveVolume(w, r) {
+					return
+				}
 				_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `"}`))
 			})
 
@@ -314,6 +353,68 @@ func TestReconcileStart_DefaultsToEnabled(t *testing.T) {
 	}
 }
 
+// ---- subsystem-scoped migration addressing ----
+
+// A volume with no resolvable subsystem cannot be migrated: without an NQN there
+// is no migration endpoint to address, so the migration must fail instead of
+// being submitted somewhere else.
+func TestReconcileStart_VolumeWithoutNQN_Fails(t *testing.T) {
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			t.Errorf("CreateMigration must not be called without a subsystem NQN")
+		}
+		_, _ = w.Write([]byte(`{"id":"` + testVolumeUUID + `"}`))
+	})
+
+	pv := csiPV(testClusterUUID + ":" + testPoolUUID + ":" + testVolumeUUID)
+	r, cl := newVMReconciler(t, srv.URL, baseVM(), pv, migrationCluster())
+
+	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	got := getVM(t, cl)
+	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
+		t.Fatalf("phase = %q, want Failed", got.Status.Phase)
+	}
+	if !strings.Contains(got.Status.ErrorMessage, "no subsystem NQN") {
+		t.Errorf("ErrorMessage = %q, want mention of the missing subsystem NQN", got.Status.ErrorMessage)
+	}
+}
+
+// Every call after create — read, continue, cancel — must address the migration
+// under the subsystem recorded in status, since that is the only collection the
+// migration ID resolves in.
+func TestPerformMigration_AddressesMigrationBySubsystem(t *testing.T) {
+	var paths []string
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	vm := validatingVM(testValidationJobName)
+	job := validationJob(batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue})
+	r, _ := newVMReconciler(t, srv.URL, vm, job)
+
+	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	want := []string{
+		http.MethodGet + " " + migrationsPath + "/" + testMigrationUUID,
+		http.MethodPost + " " + migrationsPath + "/" + testMigrationUUID + "/continue",
+	}
+	if !slices.Equal(paths, want) {
+		t.Errorf("requests = %v, want %v", paths, want)
+	}
+}
+
 // ---- reconcileValidating / pollValidationJob ----
 
 func validatingVM(jobName string) *simplyblockv1alpha1.VolumeMigration {
@@ -323,15 +424,18 @@ func validatingVM(jobName string) *simplyblockv1alpha1.VolumeMigration {
 	vm.Status.ClusterUUID = testClusterUUID
 	vm.Status.PoolUUID = testPoolUUID
 	vm.Status.VolumeUUID = testVolumeUUID
+	vm.Status.SubsystemNQN = testSubsystemNQN
 	vm.Status.ValidationJobName = jobName
 	now := metav1.Now()
 	vm.Status.StartedAt = &now
 	return vm
 }
 
-func validationJob(name string, conditions ...batchv1.JobCondition) *batchv1.Job {
+// validationJob returns the validation Job named testValidationJobName — the
+// name validatingVM records in status — with the given conditions.
+func validationJob(conditions ...batchv1.JobCondition) *batchv1.Job {
 	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testVMNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: testValidationJobName, Namespace: testVMNamespace},
 		Status:     batchv1.JobStatus{Conditions: conditions},
 	}
 }
@@ -361,8 +465,8 @@ func TestPollValidationJob_NotFound_ClearsNameAndRequeues(t *testing.T) {
 }
 
 func TestPollValidationJob_InProgress_NoTransition(t *testing.T) {
-	vm := validatingVM("vmig-validate-1")
-	job := validationJob("vmig-validate-1") // no terminal conditions
+	vm := validatingVM(testValidationJobName)
+	job := validationJob() // no terminal conditions
 	r, cl := newVMReconciler(t, unreachableAPI, vm, job)
 
 	res, err := r.Reconcile(context.Background(), vmRequest())
@@ -376,7 +480,7 @@ func TestPollValidationJob_InProgress_NoTransition(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseValidating {
 		t.Errorf("phase = %q, want Validating", got.Status.Phase)
 	}
-	if got.Status.ValidationJobName != "vmig-validate-1" {
+	if got.Status.ValidationJobName != testValidationJobName {
 		t.Errorf("ValidationJobName = %q, want unchanged", got.Status.ValidationJobName)
 	}
 }
@@ -396,8 +500,8 @@ func TestPollValidationJob_Succeeded_ContinuesToRunning(t *testing.T) {
 		}
 	})
 
-	vm := validatingVM("vmig-validate-1")
-	job := validationJob("vmig-validate-1", batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue})
+	vm := validatingVM(testValidationJobName)
+	job := validationJob(batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue})
 	r, cl := newVMReconciler(t, srv.URL, vm, job)
 
 	res, err := r.Reconcile(context.Background(), vmRequest())
@@ -433,8 +537,8 @@ func TestPollValidationJob_Failed_CancelsAndFails(t *testing.T) {
 		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 	})
 
-	vm := validatingVM("vmig-validate-1")
-	job := validationJob("vmig-validate-1", batchv1.JobCondition{Type: batchv1.JobFailed, Status: corev1.ConditionTrue})
+	vm := validatingVM(testValidationJobName)
+	job := validationJob(batchv1.JobCondition{Type: batchv1.JobFailed, Status: corev1.ConditionTrue})
 	r, cl := newVMReconciler(t, srv.URL, vm, job)
 
 	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
@@ -765,7 +869,8 @@ func TestReconcileRunning_Cancelled_Fails(t *testing.T) {
 
 func TestReconcileRunning_InProgress_UpdatesProgress(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","status":"running","snaps_total":10,"snaps_migrated":3}`))
+		_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID +
+			`","status":"running","source_node_id":"source-node","member_count":3}`))
 	})
 	past := metav1.NewTime(time.Now().Add(-1 * time.Minute))
 	r, cl := newVMReconciler(t, srv.URL, runningVM(&past))
@@ -781,8 +886,9 @@ func TestReconcileRunning_InProgress_UpdatesProgress(t *testing.T) {
 	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseRunning {
 		t.Errorf("phase = %q, want still Running", got.Status.Phase)
 	}
-	if got.Status.SnapsTotal != 10 || got.Status.SnapsMigrated != 3 {
-		t.Errorf("progress = %d/%d, want 3/10", got.Status.SnapsMigrated, got.Status.SnapsTotal)
+	if got.Status.SourceNodeUUID != "source-node" || got.Status.MemberCount != 3 {
+		t.Errorf("progress = source %q, %d member(s); want source-node, 3",
+			got.Status.SourceNodeUUID, got.Status.MemberCount)
 	}
 }
 

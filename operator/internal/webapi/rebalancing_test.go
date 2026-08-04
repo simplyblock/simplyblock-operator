@@ -1,9 +1,65 @@
 package webapi
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
+
+// testNQN carries the colons a real NQN has, which must survive path escaping.
+const testNQN = "nqn.2014-08.io.simplyblock:cluster:lvol:vol-1"
+
+func TestMigrationURLs(t *testing.T) {
+	const wantCollection = "/api/v2/clusters/cluster-1/subsystems/" + testNQN + "/migrations"
+
+	if got := migrationsURL("cluster-1", testNQN); got != wantCollection {
+		t.Errorf("migrationsURL = %q, want %q", got, wantCollection)
+	}
+	if got, want := migrationURL("cluster-1", testNQN, "mig-1"), wantCollection+"/mig-1"; got != want {
+		t.Errorf("migrationURL = %q, want %q", got, want)
+	}
+	// A slash in the NQN must not open a new path segment.
+	if got, want := migrationsURL("cluster-1", "nqn.x/y"), "/api/v2/clusters/cluster-1/subsystems/nqn.x%2Fy/migrations"; got != want {
+		t.Errorf("migrationsURL with slash = %q, want %q", got, want)
+	}
+}
+
+// A create rejected because a migration already exists must cancel the in-flight
+// one — the finished ones in the list are not what blocks the request — and
+// return (nil, nil) so the caller retries the create on its next pass.
+func TestCreateMigrationCancelsInFlightMigrationOnConflict(t *testing.T) {
+	collection := migrationsURL("cluster-1", testNQN)
+	var cancelled []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == collection:
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"detail":"a migration already exists. Cancel it first."}`))
+		case r.Method == http.MethodGet && r.URL.Path == collection:
+			_, _ = w.Write([]byte(`[{"id":"mig-new","status":"running"},{"id":"mig-old","status":"done"}]`))
+		case r.Method == http.MethodDelete:
+			cancelled = append(cancelled, r.URL.Path)
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	m, err := NewClient(srv.URL).CreateMigration(context.Background(), "cluster-1", testNQN, "target-node")
+	if err != nil {
+		t.Fatalf("CreateMigration: %v", err)
+	}
+	if m != nil {
+		t.Errorf("migration = %+v, want nil so the caller retries", m)
+	}
+	want := collection + "/mig-new"
+	if len(cancelled) != 1 || cancelled[0] != want {
+		t.Errorf("cancelled = %v, want [%s]", cancelled, want)
+	}
+}
 
 func TestIsExistingMigrationConflict(t *testing.T) {
 	// The exact body observed in the field: the API rejects CreateMigration with

@@ -3546,8 +3546,8 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.snapsMigrated
-      name: Snaps
+    - jsonPath: .status.memberCount
+      name: Volumes
       priority: 1
       type: integer
     - jsonPath: .metadata.creationTimestamp
@@ -3661,6 +3661,12 @@ spec:
               errorMessage:
                 description: ErrorMessage holds the failure reason when Phase is Failed.
                 type: string
+              memberCount:
+                description: |-
+                  MemberCount is the number of volumes (namespaces) in the migrated
+                  subsystem, as reported by the storage API. More than one means the
+                  migration moves sibling volumes along with this one.
+                type: integer
               migrationUUID:
                 description: |-
                   MigrationUUID is the identifier returned by the storage API when the
@@ -3679,14 +3685,6 @@ spec:
               poolUUID:
                 description: PoolUUID is the storage pool UUID that contains the volume.
                 type: string
-              snapsMigrated:
-                description: SnapsMigrated is the number of snapshots migrated so
-                  far.
-                type: integer
-              snapsTotal:
-                description: SnapsTotal is the total number of snapshots to migrate,
-                  as reported by the API.
-                type: integer
               sourceNodeUUID:
                 description: |-
                   SourceNodeUUID is the storage node UUID where the volume resided before
@@ -3696,6 +3694,12 @@ spec:
                 description: StartedAt is the time the migration was submitted to
                   the storage API.
                 format: date-time
+                type: string
+              subsystemNQN:
+                description: |-
+                  SubsystemNQN is the NQN of the volume's NVMe subsystem, resolved from the
+                  storage API when the migration is submitted. The migration is addressed by
+                  it, and every volume sharing the subsystem moves with it.
                 type: string
               validationJobName:
                 description: |-

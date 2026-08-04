@@ -80,15 +80,19 @@ type VolumeMigrationStatus struct {
 	// PoolUUID is the storage pool UUID that contains the volume.
 	PoolUUID string `json:"poolUUID,omitempty"`
 
+	// SubsystemNQN is the NQN of the volume's NVMe subsystem, resolved from the
+	// storage API when the migration is submitted. The migration is addressed by
+	// it, and every volume sharing the subsystem moves with it.
+	SubsystemNQN string `json:"subsystemNQN,omitempty"`
+
 	// SourceNodeUUID is the storage node UUID where the volume resided before
 	// migration, as reported by the storage API.
 	SourceNodeUUID string `json:"sourceNodeUUID,omitempty"`
 
-	// SnapsTotal is the total number of snapshots to migrate, as reported by the API.
-	SnapsTotal int `json:"snapsTotal,omitempty"`
-
-	// SnapsMigrated is the number of snapshots migrated so far.
-	SnapsMigrated int `json:"snapsMigrated,omitempty"`
+	// MemberCount is the number of volumes (namespaces) in the migrated
+	// subsystem, as reported by the storage API. More than one means the
+	// migration moves sibling volumes along with this one.
+	MemberCount int `json:"memberCount,omitempty"`
 
 	// ErrorMessage holds the failure reason when Phase is Failed.
 	ErrorMessage string `json:"errorMessage,omitempty"`
@@ -116,7 +120,7 @@ type VolumeMigrationStatus struct {
 // +kubebuilder:printcolumn:name="PV",type="string",JSONPath=".spec.pvName"
 // +kubebuilder:printcolumn:name="Target Node",type="string",JSONPath=".spec.targetNodeUUID"
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
-// +kubebuilder:printcolumn:name="Snaps",type="integer",JSONPath=".status.snapsMigrated",priority=1
+// +kubebuilder:printcolumn:name="Volumes",type="integer",JSONPath=".status.memberCount",priority=1
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // VolumeMigration triggers a storage-node migration for a single PersistentVolume.
