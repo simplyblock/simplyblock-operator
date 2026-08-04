@@ -4,6 +4,61 @@ package kube
 // Spec.CSI.Driver equals this value are managed by this stack.
 const DriverName = "csi.simplyblock.io"
 
+// StorageNodeSetAPIServiceName is the headless Service that fronts the
+// storage-node-api pods of every StorageNodeSet in a namespace. The control
+// plane reaches an individual pod at <node-hostname>.<this-service>.<ns>.svc.
+const StorageNodeSetAPIServiceName = "simplyblock-storage-node-api"
+
+// StorageNodeSetAPIEndpointSliceName returns the name of the EndpointSlice that
+// publishes the storage-node-api pods for the given StorageNodeSet. It is named
+// per-StorageNodeSet so multiple sets can each own their own slice while all
+// backing the shared StorageNodeSetAPIServiceName Service. Both the operator's
+// slice builder and any consumer checking whether a worker is published must
+// derive the name here so the two cannot drift.
+func StorageNodeSetAPIEndpointSliceName(storageNodeSetName string) string {
+	return storageNodeSetName + "-storage-node-api-endpoints"
+}
+
+// Storage-plane workload identity. The storage-node DaemonSet, its pods, and the
+// worker Nodes it enrolls carry these labels so controllers can select them.
+// Centralized here because a rename that updates some sites but not others has
+// silently broken storage-node scheduling and migration before.
+const (
+	// LabelApp marks the storage-node workload; value AppStorageNode. Carried by
+	// the DaemonSet and its pods.
+	LabelApp       = "app"
+	AppStorageNode = "storage-node"
+
+	// LabelSimplyblockCluster records the simplyblock cluster name on the
+	// storage-node DaemonSet and its pods. Cluster-scoped: shared by every
+	// StorageNodeSet in the cluster.
+	LabelSimplyblockCluster = "simplyblock-cluster"
+
+	// LabelNodeType marks a worker Node as part of a cluster's storage plane;
+	// value is NodeTypeStoragePlaneValue(clusterName). Cluster-scoped — do not
+	// use it to select a single StorageNodeSet's workers; use LabelStorageNodeSet.
+	LabelNodeType = "io.simplyblock.node-type"
+
+	// LabelStorageNodeSet scopes a worker Node, pod, and DaemonSet to a single
+	// StorageNodeSet (value = the StorageNodeSet name). It is the storage-node
+	// DaemonSet's node selector, letting multiple StorageNodeSets coexist in one
+	// cluster.
+	LabelStorageNodeSet = "io.simplyblock.storagenodeset"
+)
+
+// NodeTypeStoragePlaneValue is the LabelNodeType value marking a worker as part
+// of the given cluster's storage plane.
+func NodeTypeStoragePlaneValue(clusterName string) string {
+	return "simplyblock-storage-plane-" + clusterName
+}
+
+// StorageNodeSetDaemonSetName is the name of the storage-node DaemonSet owned by
+// the named StorageNodeSet. Named per-set so multiple sets can coexist in one
+// cluster without sharing a DaemonSet or per-node ConfigMap.
+func StorageNodeSetDaemonSetName(storageNodeSetName string) string {
+	return "simplyblock-storage-node-ds-" + storageNodeSetName
+}
+
 // StorageClass parameter keys. These are the operator/CSI-controller inputs
 // that describe how to provision a logical volume; the CSI controller reads
 // them at CreateVolume (see PropertiesFromStorageClass, which parses them into

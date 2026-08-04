@@ -46,6 +46,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
@@ -517,12 +518,12 @@ func labelWorkerNodes(
 		slotsByWorker[snCR.Spec.WorkerNode][slotKey] = snCR.Status.UUID
 	}
 
-	key := "io.simplyblock.node-type"
-	value := "simplyblock-storage-plane-" + sn.Spec.ClusterName
+	key := kube.LabelNodeType
+	value := kube.NodeTypeStoragePlaneValue(sn.Spec.ClusterName)
 	// Per-StorageNodeSet label: used as the DaemonSet node selector so that
 	// each StorageNodeSet owns its own DaemonSet and per-node ConfigMap,
 	// enabling multiple StorageNodeSets per cluster for node grouping.
-	snsLabelKey := "io.simplyblock.storagenodeset"
+	snsLabelKey := kube.LabelStorageNodeSet
 	snsLabelVal := sn.Name
 
 	for nodeName := range workers {
@@ -760,20 +761,21 @@ func (r *StorageNodeSetReconciler) reconcileEndpointSlice(
 		}
 	}
 
-	// Also include every node currently labeled into this cluster's storage
-	// plane. A StorageNodeOps migrate labels the target worker (so the
-	// storage-node DaemonSet schedules a pod there) before the backend
-	// restart, but the target is not yet in spec.workerNodes or any
-	// StorageNode CR — those are only updated by reconcileMigratedTopology
-	// AFTER the node comes online on the target. Without publishing the
-	// target's per-pod DNS name here, the control plane cannot resolve
-	// node_address, the restart fails, the node never comes online, and the
-	// topology swap never runs: a deadlock. Keying off the label breaks it —
-	// the target's DNS entry appears as soon as it is labeled. (This mirrored
-	// behavior was lost in the StorageNodeSet/StorageNode split.)
+	// Also include every node currently labeled into THIS StorageNodeSet. A
+	// StorageNodeOps migrate labels the target worker (so the storage-node
+	// DaemonSet schedules a pod there) before the backend restart, but the
+	// target is not yet in spec.workerNodes or any StorageNode CR — those are
+	// only updated by reconcileMigratedTopology AFTER the node comes online on
+	// the target. Without publishing the target's per-pod DNS name here, the
+	// control plane cannot resolve node_address, the restart fails, the node
+	// never comes online, and the topology swap never runs: a deadlock. Keying
+	// off the label breaks it — the target's DNS entry appears as soon as it is
+	// labeled. (This mirrored behavior was lost in the StorageNodeSet/StorageNode
+	// split.) Select on the per-set label, not the cluster-wide node-type label,
+	// so a second StorageNodeSet's workers are not pulled into this set's slice.
 	var nodeList corev1.NodeList
 	if err := r.List(ctx, &nodeList, client.MatchingLabels{
-		"io.simplyblock.node-type": "simplyblock-storage-plane-" + snCR.Spec.ClusterName,
+		kube.LabelStorageNodeSet: snCR.Name,
 	}); err == nil {
 		for i := range nodeList.Items {
 			nodeName := nodeList.Items[i].Name

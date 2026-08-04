@@ -350,8 +350,8 @@ func (r *StorageNodeOpsReconciler) migratePrepare(
 	// (io.simplyblock.node-type AND io.simplyblock.storagenodeset) — the target is
 	// not yet in sns.Spec.WorkerNodes (that swap happens in the Promoting phase),
 	// so it is injected via extraWorkers.
-	if node.Labels["io.simplyblock.node-type"] != "simplyblock-storage-plane-"+sns.Spec.ClusterName ||
-		node.Labels["io.simplyblock.storagenodeset"] != sns.Name {
+	if node.Labels[kube.LabelNodeType] != kube.NodeTypeStoragePlaneValue(sns.Spec.ClusterName) ||
+		node.Labels[kube.LabelStorageNodeSet] != sns.Name {
 		if err := labelWorkerNodes(ctx, r.Client, r.Recorder, sns, clusterUUID, target); err != nil {
 			log.Error(err, "migrate: failed to label target worker", "worker", target)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -363,7 +363,7 @@ func (r *StorageNodeOpsReconciler) migratePrepare(
 	}
 
 	// Wait for the storage-node-api pod to be Running+Ready on the target.
-	ready, err := r.storageNodePodReady(ctx, sns.Namespace, sns.Spec.ClusterName, target)
+	ready, err := r.storageNodePodReady(ctx, sns.Namespace, sns.Name, target)
 	if err != nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -375,7 +375,7 @@ func (r *StorageNodeOpsReconciler) migratePrepare(
 	// headless DNS name, which only exists once the target is published in the
 	// storage-node-api EndpointSlice (built from labeled storage-plane nodes).
 	// Hold in Preparing until the entry appears so the restart can resolve it.
-	inSlice, err := r.endpointSliceHasWorker(ctx, sns.Namespace, target)
+	inSlice, err := r.endpointSliceHasWorker(ctx, sns.Namespace, sns.Name, target)
 	if err != nil {
 		log.Error(err, "migrate: failed to read storage-node-api EndpointSlice", "target", target)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -580,11 +580,11 @@ func (r *StorageNodeOpsReconciler) migrateWaitingAfter(
 // i.e. whether <worker>.simplyblock-storage-node-api.<ns>.svc resolves.
 func (r *StorageNodeOpsReconciler) endpointSliceHasWorker(
 	ctx context.Context,
-	namespace, worker string,
+	namespace, storageNodeSetName, worker string,
 ) (bool, error) {
 	var eps discoveryv1.EndpointSlice
 	if err := r.Get(ctx, types.NamespacedName{
-		Name:      "simplyblock-storage-node-api-endpoints",
+		Name:      kube.StorageNodeSetAPIEndpointSliceName(storageNodeSetName),
 		Namespace: namespace,
 	}, &eps); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -849,15 +849,17 @@ func mergePcieList(base, extra []string) []string {
 
 // storageNodePodReady reports whether the storage-node DaemonSet pod on the given
 // worker is Running and Ready, which is the precondition for the control plane to
-// reach that host's storage-node-api at node_address.
+// reach that host's storage-node-api at node_address. It selects on the per-set
+// label so it inspects only the target StorageNodeSet's pods, not every set in
+// the cluster.
 func (r *StorageNodeOpsReconciler) storageNodePodReady(
 	ctx context.Context,
-	namespace, clusterName, workerName string,
+	namespace, storageNodeSetName, workerName string,
 ) (bool, error) {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods,
 		client.InNamespace(namespace),
-		client.MatchingLabels{"app": "storage-node", "simplyblock-cluster": clusterName},
+		client.MatchingLabels{kube.LabelApp: kube.AppStorageNode, kube.LabelStorageNodeSet: storageNodeSetName},
 	); err != nil {
 		return false, err
 	}
