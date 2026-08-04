@@ -331,21 +331,15 @@ func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
 
 	deviceGlob := fmt.Sprintf(DevDiskByID, fmt.Sprintf("%s*_%s", nvmf.model, nvmf.nsId))
 
-	deviceGlobOld := fmt.Sprintf(DevDiskByID, nvmf.model)
-
 	deviceGlobFallback := fmt.Sprintf(DevDiskByID, fmt.Sprintf("%s*_%s", nvmf.lvolID, nvmf.nsId))
 
 	devicePath, err := waitForDeviceReady(ctx, deviceGlob, 10)
 	if err != nil {
-		klog.Warningf("New device symlink not found (%s). Retrying legacy format: %s", deviceGlob, deviceGlobOld)
-		devicePath, err = waitForDeviceReady(ctx, deviceGlobOld, 10)
+		klog.Warningf("New device symlink not found (%s). Retrying fallback format: %s", deviceGlob, deviceGlobFallback)
+		devicePath, err = waitForDeviceReady(ctx, deviceGlobFallback, 10)
 		if err != nil {
-			klog.Warningf("Legacy format not found (%s). Retrying with fallback: %s", deviceGlobOld, deviceGlobFallback)
-			devicePath, err = waitForDeviceReady(ctx, deviceGlobFallback, 10)
-			if err != nil {
-				return "", fmt.Errorf("device not found in both new (%s), old (%s), and fallback (%s) formats: %w",
-					deviceGlob, deviceGlobOld, deviceGlobFallback, err)
-			}
+			return "", fmt.Errorf("device not found in both new (%s), and fallback (%s) formats: %w",
+				deviceGlob, deviceGlobFallback, err)
 		}
 	}
 
