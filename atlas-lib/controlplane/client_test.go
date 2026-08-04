@@ -42,8 +42,8 @@ func TestClientVolume(t *testing.T) {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"name":"vol1","pool_name":"pool1","size":20971520,` +
-			`"nqn":"nqn.2023-02.io.simplyblock:c:lvol:v"}`))
+		_, _ = w.Write([]byte(`{"id":"` + testVolume + `","name":"vol1","pool_name":"pool1",` +
+			`"size":20971520,"ns_id":1,"nqn":"nqn.2023-02.io.simplyblock:c:lvol:v"}`))
 	})
 
 	v, err := c.Volume(context.Background(), testHandle)
@@ -71,8 +71,8 @@ func TestClientConnection(t *testing.T) {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"transport":"tcp","ip":"10.10.10.1","port":4420,"nqn":"nqn.x"},` +
-			`{"transport":"tcp","ip":"10.10.10.2","port":4420,"nqn":"nqn.x"}]`))
+		_, _ = w.Write([]byte(`[{"transport":"tcp","ip":"10.10.10.1","port":4420,"nqn":"nqn.x","ns-id":1},` +
+			`{"transport":"tcp","ip":"10.10.10.2","port":4420,"nqn":"nqn.x","ns-id":1}]`))
 	})
 
 	conn, err := c.Connection(context.Background(), testHandle)
@@ -97,8 +97,9 @@ func TestClientListVolumes(t *testing.T) {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"id":"` + testVolume + `","name":"vol1","pool_name":"pool1","size":100,"nqn":"nqn.a"},` +
-			`{"id":"44444444-4444-4444-4444-444444444444","name":"vol2","pool_name":"pool1","size":200,"nqn":"nqn.b"}]`))
+		_, _ = w.Write([]byte(`[{"id":"` + testVolume + `","name":"vol1","pool_name":"pool1","size":100,` +
+			`"ns_id":1,"nqn":"nqn.a"},{"id":"44444444-4444-4444-4444-444444444444","name":"vol2",` +
+			`"pool_name":"pool1","size":200,"ns_id":2,"nqn":"nqn.b"}]`))
 	})
 
 	vols, err := c.ListVolumes(context.Background(), testCluster, testPool)
@@ -207,5 +208,52 @@ func TestClientCloneVolume(t *testing.T) {
 	}
 	if !strings.Contains(body, `"snapshot_id":"snap-1"`) {
 		t.Errorf("request body = %q", body)
+	}
+}
+
+// TestClientConnectionKeyDrift is the end-to-end shape of a version skew: the
+// control plane answers 200 with a body that decodes, but under the wrong key
+// for the namespace id. The client must refuse it rather than hand back an
+// endpoint that would attach namespace 0.
+func TestClientConnectionKeyDrift(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"transport":"tcp","ip":"10.10.10.1","port":4420,"nqn":"nqn.x","ns_id":1}]`))
+	})
+
+	_, err := c.Connection(context.Background(), testHandle)
+	if !errors.Is(err, errs.ErrInvalidResponse) {
+		t.Fatalf("err = %v, want ErrInvalidResponse", err)
+	}
+	if !strings.Contains(err.Error(), "ns-id") {
+		t.Errorf("error %q does not name the key the client expected", err)
+	}
+}
+
+// TestClientConnectionRequiresNamespace covers the promise only /connect makes:
+// the endpoint always carries the namespace to attach, so an entry without one
+// is a control plane that changed its mind, not a path we can use.
+func TestClientConnectionRequiresNamespace(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"transport":"tcp","ip":"10.10.10.1","port":4420,"nqn":"nqn.x","ns-id":null}]`))
+	})
+
+	if _, err := c.Connection(context.Background(), testHandle); !errors.Is(err, errs.ErrInvalidResponse) {
+		t.Fatalf("err = %v, want ErrInvalidResponse", err)
+	}
+}
+
+// TestClientVolumeKeyDrift covers the same skew on a typed (spec-modelled)
+// response, where the generated client does the decoding.
+func TestClientVolumeKeyDrift(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"` + testVolume + `","name":"vol1","pool":"pool1",` +
+			`"size":20971520,"ns_id":1,"nqn":"nqn.2023-02.io.simplyblock:c:lvol:v"}`))
+	})
+
+	if _, err := c.Volume(context.Background(), testHandle); !errors.Is(err, errs.ErrInvalidResponse) {
+		t.Fatalf("err = %v, want ErrInvalidResponse", err)
 	}
 }

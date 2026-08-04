@@ -57,11 +57,12 @@ func (c *Client) ListStorageNodes(ctx context.Context, clusterID string) ([]Stor
 	if err != nil {
 		return nil, fmt.Errorf("list storage nodes in %s: %w", clusterID, err)
 	}
-	if resp.JSON200 == nil {
-		return nil, respError("list storage nodes in "+clusterID, resp.StatusCode(), resp.Body)
+	ds, err := payload("list storage nodes in "+clusterID, resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return nil, err
 	}
-	out := make([]StorageNode, 0, len(*resp.JSON200))
-	for _, d := range *resp.JSON200 {
+	out := make([]StorageNode, 0, len(*ds))
+	for _, d := range *ds {
 		out = append(out, storageNodeFromDTO(d))
 	}
 	return out, nil
@@ -82,13 +83,10 @@ func (c *Client) GetStorageNode(ctx context.Context, clusterID, nodeID string) (
 	if err != nil {
 		return StorageNode{}, fmt.Errorf("get storage node %s: %w", nodeID, err)
 	}
-	if resp.StatusCode() != 200 {
-		return StorageNode{}, respError("storage node "+nodeID, resp.StatusCode(), resp.Body)
-	}
 	// Detail is untyped in the spec; the body is a StorageNodeDTO.
-	var d cpapi.StorageNodeDTO
-	if err := json.Unmarshal(resp.Body, &d); err != nil {
-		return StorageNode{}, fmt.Errorf("get storage node %s: decode response: %w", nodeID, err)
+	d, err := decodeBody[cpapi.StorageNodeDTO]("storage node "+nodeID, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return StorageNode{}, err
 	}
 	return storageNodeFromDTO(d), nil
 }
@@ -107,13 +105,10 @@ func (c *Client) ListStorageNodeNICs(ctx context.Context, clusterID, nodeID stri
 	if err != nil {
 		return nil, fmt.Errorf("list NICs for node %s: %w", nodeID, err)
 	}
-	if resp.StatusCode() != 200 {
-		return nil, respError("NICs for node "+nodeID, resp.StatusCode(), resp.Body)
-	}
 	// The /nics body is untyped in the spec; decode its documented shape.
-	var raw []nicEntry
-	if err := json.Unmarshal(resp.Body, &raw); err != nil {
-		return nil, fmt.Errorf("list NICs for node %s: decode response: %w", nodeID, err)
+	raw, err := decodeBody[[]nicEntry]("NICs for node "+nodeID, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return nil, err
 	}
 	out := make([]NIC, 0, len(raw))
 	for _, e := range raw {
@@ -122,11 +117,25 @@ func (c *Client) ListStorageNodeNICs(ctx context.Context, clusterID, nodeID stri
 	return out, nil
 }
 
-// nicEntry mirrors the (untyped) /nics response element keys.
+// nicEntry mirrors the (untyped) /nics response element keys. Being
+// hand-written, it carries its constraints as `validate` struct tags rather
+// than in cpapi's rule table, and validates itself on decode the same way the
+// generated DTOs do.
 type nicEntry struct {
-	ID      string `json:"ID"`
-	Device  string `json:"Device name"`
-	Address string `json:"Address"`
-	NetType string `json:"Net type"`
-	Status  string `json:"Status"`
+	ID      string `json:"ID" validate:"required"`
+	Device  string `json:"Device name" validate:"required"`
+	Address string `json:"Address" validate:"omitempty,ip"`
+	NetType string `json:"Net type" validate:"required"`
+	Status  string `json:"Status" validate:"required"`
+}
+
+// UnmarshalJSON decodes and validates one /nics entry.
+func (e *nicEntry) UnmarshalJSON(data []byte) error {
+	type plain nicEntry // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*e = nicEntry(v)
+	return cpapi.Validate(data, e)
 }

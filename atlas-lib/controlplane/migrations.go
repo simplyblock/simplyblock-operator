@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/simplyblock/atlas/internal/cpapi"
@@ -50,11 +49,12 @@ func (c *Client) ListVolumeMigrations(ctx context.Context, h lvol.VolumeHandle) 
 	if err != nil {
 		return nil, fmt.Errorf("list migrations for volume %s: %w", h, err)
 	}
-	if resp.JSON200 == nil {
-		return nil, respError("migrations for volume "+string(h), resp.StatusCode(), resp.Body)
+	ds, err := payload("migrations for volume "+string(h), resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return nil, err
 	}
-	out := make([]VolumeMigration, 0, len(*resp.JSON200))
-	for _, d := range *resp.JSON200 {
+	out := make([]VolumeMigration, 0, len(*ds))
+	for _, d := range *ds {
 		out = append(out, volumeMigrationFromDTO(d))
 	}
 	return out, nil
@@ -75,10 +75,11 @@ func (c *Client) GetVolumeMigration(ctx context.Context, h lvol.VolumeHandle, mi
 	if err != nil {
 		return VolumeMigration{}, fmt.Errorf("get migration %s: %w", migrationID, err)
 	}
-	if resp.JSON200 == nil {
-		return VolumeMigration{}, respError("migration "+migrationID, resp.StatusCode(), resp.Body)
+	d, err := payload("migration "+migrationID, resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return VolumeMigration{}, err
 	}
-	return volumeMigrationFromDTO(*resp.JSON200), nil
+	return volumeMigrationFromDTO(*d), nil
 }
 
 // CancelVolumeMigration cancels a migration of the volume identified by h.
@@ -135,12 +136,9 @@ func (c *Client) CreateVolumeMigration(ctx context.Context, h lvol.VolumeHandle,
 	}
 	// The create endpoint returns the full MigrationDTO body (untyped in the
 	// spec's response, so decode it here).
-	if code := resp.StatusCode(); code < 200 || code >= 300 {
-		return VolumeMigration{}, respError("create migration for volume "+string(h), code, resp.Body)
-	}
-	var d cpapi.MigrationDTO
-	if err := json.Unmarshal(resp.Body, &d); err != nil {
-		return VolumeMigration{}, fmt.Errorf("create migration for volume %s: decode response: %w", h, err)
+	d, err := decodeBody[cpapi.MigrationDTO]("create migration for volume "+string(h), resp.StatusCode(), resp.Body)
+	if err != nil {
+		return VolumeMigration{}, err
 	}
 	return volumeMigrationFromDTO(d), nil
 }
