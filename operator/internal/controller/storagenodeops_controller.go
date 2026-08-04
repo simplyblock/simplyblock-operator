@@ -155,7 +155,7 @@ func (r *StorageNodeOpsReconciler) acquireLock(
 		ops.Status.SubPhase = simplyblockv1alpha1.StorageNodeOpsSubPhaseValidating
 	}
 	if err := r.Status().Patch(ctx, ops, opsPatch); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{Requeue: true}, nil
 	}
 	return ctrl.Result{Requeue: true}, nil
 }
@@ -218,7 +218,7 @@ func (r *StorageNodeOpsReconciler) runSimpleAction(
 		ops.Status.Triggered = true
 		ops.Status.Message = fmt.Sprintf("%s request sent, waiting for node", action)
 		if err := r.Status().Patch(ctx, ops, patch); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
@@ -426,7 +426,7 @@ func (r *StorageNodeOpsReconciler) migrateRestart(
 		ops.Status.Triggered = true
 		ops.Status.Message = fmt.Sprintf("migrating node %s to worker %s, waiting for restart to begin", nodeUUID, target)
 		if err := r.Status().Patch(ctx, ops, patch); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigrateStarted", "MigrateStarted",
 			"restart with target worker %s issued for node %s", target, nodeUUID)
@@ -509,7 +509,7 @@ func (r *StorageNodeOpsReconciler) migratePromote(
 		ops.Status.Triggered = true
 		ops.Status.Message = fmt.Sprintf("promoted node %s on worker %s; rebalance started", nodeUUID, target)
 		if err := r.Status().Patch(ctx, ops, patch); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 		log.Info("migrate: promoted relocated node; rebalance started", "nodeUUID", nodeUUID, "target", target)
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigratePromoted", "MigratePromoted",
@@ -1461,7 +1461,7 @@ func (r *StorageNodeOpsReconciler) advanceSubPhase(
 	ops.Status.Triggered = false
 	ops.Status.Message = fmt.Sprintf("entering phase %s", next)
 	if err := r.Status().Patch(ctx, ops, patch); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{Requeue: true}, nil
 	}
 	return ctrl.Result{RequeueAfter: drainRequeueImmediate}, nil
 }
@@ -1478,7 +1478,7 @@ func (r *StorageNodeOpsReconciler) succeedOps(
 	ops.Status.SubPhase = ""
 	ops.Status.CompletedAt = &now
 	if err := r.Status().Patch(ctx, ops, patch); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{Requeue: true}, nil
 	}
 	return ctrl.Result{}, r.releaseLock(ctx, sn, ops.Name)
 }
@@ -1501,7 +1501,7 @@ func (r *StorageNodeOpsReconciler) failOps(
 	ops.Status.Message = reason
 	ops.Status.CompletedAt = &now
 	if err := r.Status().Patch(ctx, ops, patch); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	var sn simplyblockv1alpha1.StorageNode

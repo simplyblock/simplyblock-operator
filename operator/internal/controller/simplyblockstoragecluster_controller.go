@@ -574,7 +574,7 @@ func (r *StorageClusterReconciler) reconcileActivate(
 
 		clusterCR.Status.ActionStatus.Triggered = true
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -631,7 +631,7 @@ func (r *StorageClusterReconciler) reconcileActivate(
 		clusterCR.Status.MaxFaultTolerance = &mft
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 
 		log.Info("Cluster activated successfully", "cluster", clusterCR.Name)
@@ -692,7 +692,7 @@ func (r *StorageClusterReconciler) reconcileExpand(
 
 		clusterCR.Status.ActionStatus.Triggered = true
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -727,7 +727,7 @@ func (r *StorageClusterReconciler) reconcileExpand(
 		clusterCR.Status.MaxFaultTolerance = &mft
 
 		if err := r.Status().Update(ctx, clusterCR); err != nil {
-			return ctrl.Result{}, err
+			return ctrl.Result{Requeue: true}, nil
 		}
 
 		log.Info("Cluster expansion completed", "cluster", clusterCR.Name)
