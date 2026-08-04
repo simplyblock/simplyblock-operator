@@ -53,6 +53,11 @@ type StorageNodeOpsReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
+	// apiReader is an uncached reader (mgr.GetAPIReader) used for the migrate
+	// DNS gate (endpointSliceHasWorker). A stale informer cache could otherwise
+	// miss the target worker's freshly-published storage-node-api endpoint and
+	// wedge the migration in Preparing on "waiting for DNS" indefinitely.
+	apiReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodeops,verbs=get;list;watch;create;update;patch;delete
@@ -582,8 +587,13 @@ func (r *StorageNodeOpsReconciler) endpointSliceHasWorker(
 	ctx context.Context,
 	namespace, storageNodeSetName, worker string,
 ) (bool, error) {
+	log := logf.FromContext(ctx)
 	var eps discoveryv1.EndpointSlice
-	if err := r.Get(ctx, types.NamespacedName{
+	// Uncached read via the APIReader: this is a liveness gate — if it reads a
+	// stale slice and misses the target's freshly-published endpoint, the
+	// migration wedges in Preparing on "waiting for DNS" with no error. Reading
+	// straight from the API server removes any dependence on informer freshness.
+	if err := r.apiReader.Get(ctx, types.NamespacedName{
 		Name:      kube.StorageNodeSetAPIEndpointSliceName(storageNodeSetName),
 		Namespace: namespace,
 	}, &eps); err != nil {
@@ -599,6 +609,19 @@ func (r *StorageNodeOpsReconciler) endpointSliceHasWorker(
 			return true, nil
 		}
 	}
+	// Diagnostic: dump exactly what the read returned so a recurrence tells us
+	// whether the worker was absent (slice not yet published) or present but
+	// unmatched (hostname/address mismatch) — the two have different root causes.
+	seen := make([]string, 0, len(eps.Endpoints))
+	for i := range eps.Endpoints {
+		h := "<nil>"
+		if eps.Endpoints[i].Hostname != nil {
+			h = *eps.Endpoints[i].Hostname
+		}
+		seen = append(seen, fmt.Sprintf("%s=%v", h, eps.Endpoints[i].Addresses))
+	}
+	log.Info("migrate: target worker not present in storage-node-api EndpointSlice",
+		"want", want, "sliceResourceVersion", eps.ResourceVersion, "endpoints", seen)
 	return false, nil
 }
 
@@ -1580,6 +1603,9 @@ func (r *StorageNodeOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	); err != nil {
 		return err
 	}
+
+	// Uncached reader for the migrate DNS gate (endpointSliceHasWorker).
+	r.apiReader = mgr.GetAPIReader()
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageNodeOps{}).
