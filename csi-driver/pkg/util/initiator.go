@@ -79,7 +79,7 @@ type initiatorNVMf struct {
 	nrIoQueues     string
 	ctrlLossTmo    string
 	model          string
-	nsId           string
+	nsId           int
 	hostIface      string
 	hostNQN        string
 	poolID         string
@@ -250,16 +250,23 @@ func isUUID(s string) bool {
 func NewSpdkCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, error) {
 	targetType := strings.ToLower(volumeContext["targetType"])
 	klog.Infof("Simplyblock targetType created :%s", targetType)
+	nsId, err := strconv.Atoi(volumeContext["nsId"])
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert namespace ID %s to integer: %w", volumeContext["nsId"], err)
+	}
+	if nsId < 1 {
+		return nil, fmt.Errorf("namespace ID must be greater than zero")
+	}
 	switch targetType {
 	case TargetTypeTCP, TargetTypeRDMA:
 		return &initiatorNVMf{
+			nsId:           nsId,
 			targetType:     volumeContext["targetType"],
 			nqn:            volumeContext["nqn"],
 			reconnectDelay: volumeContext["reconnectDelay"],
 			nrIoQueues:     volumeContext["nrIoQueues"],
 			ctrlLossTmo:    volumeContext["ctrlLossTmo"],
 			model:          volumeContext["model"],
-			nsId:           volumeContext["nsId"],
 			hostIface:      volumeContext["hostIface"],
 			hostNQN:        volumeContext["hostNQN"],
 			poolID:         volumeContext["poolID"],
@@ -329,24 +336,9 @@ func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
 		}
 	}
 
-	deviceGlob := fmt.Sprintf(DevDiskByID, fmt.Sprintf("%s*_%s", nvmf.model, nvmf.nsId))
-
-	deviceGlobOld := fmt.Sprintf(DevDiskByID, nvmf.model)
-
-	deviceGlobFallback := fmt.Sprintf(DevDiskByID, fmt.Sprintf("%s*_%s", nvmf.lvolID, nvmf.nsId))
-
-	devicePath, err := waitForDeviceReady(ctx, deviceGlob, 10)
+	devicePath, err := nvmf.matchNvmeDevice(ctx)
 	if err != nil {
-		klog.Warningf("New device symlink not found (%s). Retrying legacy format: %s", deviceGlob, deviceGlobOld)
-		devicePath, err = waitForDeviceReady(ctx, deviceGlobOld, 10)
-		if err != nil {
-			klog.Warningf("Legacy format not found (%s). Retrying with fallback: %s", deviceGlobOld, deviceGlobFallback)
-			devicePath, err = waitForDeviceReady(ctx, deviceGlobFallback, 10)
-			if err != nil {
-				return "", fmt.Errorf("device not found in both new (%s), old (%s), and fallback (%s) formats: %w",
-					deviceGlob, deviceGlobOld, deviceGlobFallback, err)
-			}
-		}
+		return "", err
 	}
 
 	// Register presence synchronously instead of waiting for the next
@@ -364,6 +356,22 @@ func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
 		klog.Warningf("Connect: failed to resolve device path %s for lvol %s: %v", devicePath, nvmf.lvolID, err)
 	}
 
+	return devicePath, nil
+}
+
+func (nvmf *initiatorNVMf) matchNvmeDevice(ctx context.Context) (string, error) {
+	deviceGlob := fmt.Sprintf(DevDiskByID, fmt.Sprintf("%s*_%d", nvmf.model, nvmf.nsId))
+	deviceGlobFallback := fmt.Sprintf(DevDiskByID, fmt.Sprintf("%s*_%d", nvmf.lvolID, nvmf.nsId))
+
+	devicePath, err := waitForDeviceReady(ctx, deviceGlob, 10)
+	if err != nil {
+		klog.Warningf("New device symlink not found (%s). Retrying fallback format: %s", deviceGlob, deviceGlobFallback)
+		devicePath, err = waitForDeviceReady(ctx, deviceGlobFallback, 10)
+		if err != nil {
+			return "", fmt.Errorf("device not found in both new (%s), and fallback (%s) formats: %w",
+				deviceGlob, deviceGlobFallback, err)
+		}
+	}
 	return devicePath, nil
 }
 
@@ -397,9 +405,21 @@ func waitForDeviceReady(ctx context.Context, deviceGlob string, seconds int) (st
 		if err != nil {
 			return "", err
 		}
-		// two symbol links under /dev/disk/by-id/ to same device
-		if len(matches) >= 1 {
+		switch {
+		case len(matches) == 1:
 			return matches[0], nil
+		case len(matches) > 1:
+			// Several links under /dev/disk/by-id/ usually point at the same
+			// device, which is fine. But a broken matcher may match multiple
+			// devices, which is not fine. Also, a dangling device from a
+			// previous connect may match.
+			match, err := resolveToSameDevice(matches)
+			if err != nil {
+				return "", err
+			} else if err == nil {
+				return match, nil
+			}
+			klog.Warningf("device glob %s has not settled yet: %v", deviceGlob, err)
 		}
 		select {
 		case <-time.After(time.Second):
@@ -408,6 +428,28 @@ func waitForDeviceReady(ctx context.Context, deviceGlob string, seconds int) (st
 		}
 	}
 	return "", fmt.Errorf("timed out waiting device ready: %s", deviceGlob)
+}
+
+// resolveToSameDevice resolves every path in matches and returns the first one
+// if they all point at the same device. It fails if a path cannot be resolved or
+// if the resolved targets diverge.
+func resolveToSameDevice(matches []string) (string, error) {
+	var target string
+	for _, match := range matches {
+		resolved, err := filepath.EvalSymlinks(match)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve device path %s: %w", match, err)
+		}
+		if target == "" {
+			target = resolved
+			continue
+		}
+		if resolved != target {
+			return "", fmt.Errorf("matches resolve to different devices: %s -> %s, %s -> %s",
+				matches[0], target, match, resolved)
+		}
+	}
+	return matches[0], nil
 }
 
 // wait for device file gone or timeout
