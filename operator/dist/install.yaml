@@ -1555,6 +1555,33 @@ spec:
                 description: Message is a human-readable description of the current
                   state or failure reason.
                 type: string
+              nodeRecycleStatus:
+                description: |-
+                  NodeRecycleStatus tracks per-node progress for the node-recycle action.
+                  Nil for all other actions.
+                properties:
+                  nodePhase:
+                    description: |-
+                      NodePhase is the current step for the node being recycled:
+                      "snode-refresh" | "snode-refresh-wait" | "shutting-down" | "restarting" | "rebalancing"
+                    type: string
+                  pendingNodes:
+                    description: PendingNodes is the ordered list of node UUIDs still
+                      to be recycled.
+                    items:
+                      type: string
+                    type: array
+                  phaseTriggered:
+                    description: PhaseTriggered indicates the API call for the current
+                      NodePhase was already sent.
+                    type: boolean
+                  processedNodes:
+                    description: ProcessedNodes is the list of node UUIDs already
+                      recycled.
+                    items:
+                      type: string
+                    type: array
+                type: object
               phase:
                 description: Phase is the high-level lifecycle phase.
                 enum:
@@ -1983,32 +2010,6 @@ spec:
                   FIXME: Unused for now (API update required?)
                 format: int32
                 type: integer
-              nodeRecycleStatus:
-                description: NodeRecycleStatus tracks in-progress state for the node-recycle
-                  action.
-                properties:
-                  nodePhase:
-                    description: |-
-                      NodePhase is the current step for the node being recycled:
-                      "snode-refresh" | "snode-refresh-wait" | "shutting-down" | "restarting" | "rebalancing"
-                    type: string
-                  pendingNodes:
-                    description: PendingNodes is the ordered list of node UUIDs still
-                      to be recycled.
-                    items:
-                      type: string
-                    type: array
-                  phaseTriggered:
-                    description: PhaseTriggered indicates the API call for the current
-                      NodePhase was already sent.
-                    type: boolean
-                  processedNodes:
-                    description: ProcessedNodes is the list of node UUIDs already
-                      recycled.
-                    items:
-                      type: string
-                    type: array
-                type: object
               nqn:
                 description: NQN is the cluster NVM subsystem qualified name.
                 type: string

@@ -35,20 +35,6 @@ type StripeSpec struct {
 	ParityChunks *int32 `json:"parityChunks,omitempty"`
 }
 
-// NodeRecycleStatus tracks in-progress state for the node-recycle action.
-// All fields are persisted in CR status so the reconciler can resume after a requeue.
-type NodeRecycleStatus struct {
-	// PendingNodes is the ordered list of node UUIDs still to be recycled.
-	PendingNodes []string `json:"pendingNodes,omitempty"`
-	// ProcessedNodes is the list of node UUIDs already recycled.
-	ProcessedNodes []string `json:"processedNodes,omitempty"`
-	// NodePhase is the current step for the node being recycled:
-	// "snode-refresh" | "snode-refresh-wait" | "shutting-down" | "restarting" | "rebalancing"
-	NodePhase string `json:"nodePhase,omitempty"`
-	// PhaseTriggered indicates the API call for the current NodePhase was already sent.
-	PhaseTriggered bool `json:"phaseTriggered,omitempty"`
-}
-
 // VolumeMigrationSettings carries cluster-level settings for volume migration.
 // Automatic load-based rebalancing is configured separately via
 // StorageClusterSpec.VolumeAutoPlacement, keeping the manual-migration controls
@@ -368,8 +354,6 @@ type StorageClusterStatus struct {
 	// Empty when no operation is in progress.
 	// +optional
 	ActiveOpsRef string `json:"activeOpsRef,omitempty"`
-	// NodeRecycleStatus tracks in-progress state for the node-recycle action.
-	NodeRecycleStatus *NodeRecycleStatus `json:"nodeRecycleStatus,omitempty"`
 	// RebalancingMetrics is updated by the auto-rebalancer each evaluation cycle.
 	// +optional
 	RebalancingMetrics *RebalancingMetrics `json:"rebalancingMetrics,omitempty"`

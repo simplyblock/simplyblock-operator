@@ -36,8 +36,8 @@ import (
 )
 
 // reconcileNodeRecycle drives the full node-recycle state machine for a
-// StorageClusterOps CR. State is tracked via cluster.Status.NodeRecycleStatus
-// so that it survives operator restarts. ops.Status.Triggered is set on first
+// StorageClusterOps CR. State is tracked in ops.Status.NodeRecycleStatus so
+// that it survives operator restarts. ops.Status.Triggered is set on first
 // entry to prevent re-initialising a run that is already in progress.
 func (r *StorageClusterOpsReconciler) reconcileNodeRecycle(
 	ctx context.Context,
@@ -46,15 +46,13 @@ func (r *StorageClusterOpsReconciler) reconcileNodeRecycle(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	// First entry: clear any stale NodeRecycleStatus left from a previous run.
+	// First entry: clear any stale NodeRecycleStatus from a previous run.
 	if !ops.Status.Triggered {
-		cluster.Status.NodeRecycleStatus = nil
-		if err := r.Status().Update(ctx, cluster); err != nil {
-			return ctrl.Result{Requeue: true}, nil
-		}
-		opsPatch := client.MergeFrom(ops.DeepCopy())
+		patch := client.MergeFrom(ops.DeepCopy())
 		ops.Status.Triggered = true
-		if err := r.Status().Patch(ctx, ops, opsPatch); err != nil {
+		ops.Status.NodeRecycleStatus = nil
+		ops.Status.Message = "Initialising node-recycle"
+		if err := r.Status().Patch(ctx, ops, patch); err != nil {
 			return ctrl.Result{Requeue: true}, nil
 		}
 		log.Info("Node recycle initialised", "cluster", cluster.Name)
@@ -68,7 +66,7 @@ func (r *StorageClusterOpsReconciler) reconcileNodeRecycle(
 	}
 
 	// Discover all nodes on first reconcile after initialisation.
-	if cluster.Status.NodeRecycleStatus == nil {
+	if ops.Status.NodeRecycleStatus == nil {
 		nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 		if err != nil {
 			log.Error(err, "Failed to list storage nodes for node-recycle init")
@@ -81,34 +79,39 @@ func (r *StorageClusterOpsReconciler) reconcileNodeRecycle(
 		for _, n := range nodes {
 			uuids = append(uuids, n.UUID)
 		}
-		cluster.Status.NodeRecycleStatus = &simplyblockv1alpha1.NodeRecycleStatus{
+		patch := client.MergeFrom(ops.DeepCopy())
+		ops.Status.NodeRecycleStatus = &simplyblockv1alpha1.NodeRecycleStatus{
 			PendingNodes:   uuids,
 			ProcessedNodes: []string{},
-			NodePhase:      nodeRecycleFirstPhase(cluster),
+			NodePhase:      nodeRecycleFirstPhase(),
 		}
-		if err := r.Status().Update(ctx, cluster); err != nil {
+		ops.Status.Message = fmt.Sprintf("Recycling %d nodes", len(uuids))
+		if err := r.Status().Patch(ctx, ops, patch); err != nil {
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	nrs := cluster.Status.NodeRecycleStatus
+	nrs := ops.Status.NodeRecycleStatus
 	if len(nrs.PendingNodes) == 0 {
 		return r.succeedOps(ctx, ops, cluster, "All nodes recycled successfully")
 	}
 
 	currentNodeUUID := nrs.PendingNodes[0]
+	total := len(nrs.PendingNodes) + len(nrs.ProcessedNodes)
+	nodeIdx := len(nrs.ProcessedNodes) + 1
+
 	switch nrs.NodePhase {
 	case utils.NodeRecyclePhaseSnodeRefresh:
-		return r.scopsNodeRecycleSnodeRefresh(ctx, cluster, apiClient, clusterUUID, currentNodeUUID)
+		return r.scopsNodeRecycleSnodeRefresh(ctx, ops, cluster, apiClient, clusterUUID, currentNodeUUID, nodeIdx, total)
 	case utils.NodeRecyclePhaseSnodeRefreshWait:
-		return r.scopsNodeRecycleSnodeRefreshWait(ctx, cluster, apiClient, clusterUUID, currentNodeUUID)
+		return r.scopsNodeRecycleSnodeRefreshWait(ctx, ops, cluster, apiClient, clusterUUID, currentNodeUUID, nodeIdx, total)
 	case utils.NodeRecyclePhaseShuttingDown:
-		return r.scopsNodeRecycleShuttingDown(ctx, ops, cluster, apiClient, clusterUUID, currentNodeUUID)
+		return r.scopsNodeRecycleShuttingDown(ctx, ops, cluster, apiClient, clusterUUID, currentNodeUUID, nodeIdx, total)
 	case utils.NodeRecyclePhaseRestarting:
-		return r.scopsNodeRecycleRestarting(ctx, cluster, apiClient, clusterUUID, currentNodeUUID)
+		return r.scopsNodeRecycleRestarting(ctx, ops, cluster, apiClient, clusterUUID, currentNodeUUID, nodeIdx, total)
 	case utils.NodeRecyclePhaseRebalancing:
-		return r.scopsNodeRecycleRebalancing(ctx, cluster, apiClient, clusterUUID, currentNodeUUID)
+		return r.scopsNodeRecycleRebalancing(ctx, ops, cluster, apiClient, clusterUUID, currentNodeUUID, nodeIdx, total)
 	default:
 		return r.failOps(ctx, ops, cluster, fmt.Sprintf("unknown node-recycle phase: %q", nrs.NodePhase))
 	}
@@ -116,18 +119,21 @@ func (r *StorageClusterOpsReconciler) reconcileNodeRecycle(
 
 func (r *StorageClusterOpsReconciler) scopsNodeRecycleSnodeRefresh(
 	ctx context.Context,
+	ops *simplyblockv1alpha1.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
+	nodeIdx, total int,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	nrs := cluster.Status.NodeRecycleStatus
+	nrs := ops.Status.NodeRecycleStatus
 
-	// Persist the phase advance BEFORE the irreversible pod delete so that an
-	// operator crash between delete and update re-enters snode-refresh-wait.
+	// Write-ahead: advance to snode-refresh-wait before the irreversible pod delete.
+	patch := client.MergeFrom(ops.DeepCopy())
 	nrs.NodePhase = utils.NodeRecyclePhaseSnodeRefreshWait
 	nrs.PhaseTriggered = false
-	if err := r.Status().Update(ctx, cluster); err != nil {
+	ops.Status.Message = nodeRecycleMsg(nodeIdx, total, nodeUUID, "refreshing snode pod")
+	if err := r.Status().Patch(ctx, ops, patch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
 
@@ -138,9 +144,11 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleSnodeRefresh(
 	}
 	if !found {
 		log.Info("Node not in storage node list, skipping snode-refresh — proceeding to restart", "nodeUUID", nodeUUID)
+		patch := client.MergeFrom(ops.DeepCopy())
 		nrs.NodePhase = utils.NodeRecyclePhaseRestarting
 		nrs.PhaseTriggered = false
-		if err := r.Status().Update(ctx, cluster); err != nil {
+		ops.Status.Message = nodeRecycleMsg(nodeIdx, total, nodeUUID, "restarting")
+		if err := r.Status().Patch(ctx, ops, patch); err != nil {
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -152,9 +160,11 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleSnodeRefresh(
 
 func (r *StorageClusterOpsReconciler) scopsNodeRecycleSnodeRefreshWait(
 	ctx context.Context,
+	ops *simplyblockv1alpha1.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
+	nodeIdx, total int,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -168,10 +178,12 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleSnodeRefreshWait(
 	}
 
 	log.Info("Storage node pod refreshed, proceeding to restart", "nodeUUID", nodeUUID)
-	nrs := cluster.Status.NodeRecycleStatus
+	nrs := ops.Status.NodeRecycleStatus
+	patch := client.MergeFrom(ops.DeepCopy())
 	nrs.NodePhase = utils.NodeRecyclePhaseRestarting
 	nrs.PhaseTriggered = false
-	if err := r.Status().Update(ctx, cluster); err != nil {
+	ops.Status.Message = nodeRecycleMsg(nodeIdx, total, nodeUUID, "restarting")
+	if err := r.Status().Patch(ctx, ops, patch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
 	return ctrl.Result{Requeue: true}, nil
@@ -182,7 +194,7 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleSnodeRefreshWait(
 // PhaseTriggered=true before the API call, then fires the API call.
 func (r *StorageClusterOpsReconciler) scopsNodeRecycleTriggerPhase(
 	ctx context.Context,
-	cluster *simplyblockv1alpha1.StorageCluster,
+	ops *simplyblockv1alpha1.StorageClusterOps,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 	alreadyDoneStatuses []string,
@@ -191,7 +203,7 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleTriggerPhase(
 	actionName string,
 ) *ctrl.Result {
 	log := logf.FromContext(ctx)
-	nrs := cluster.Status.NodeRecycleStatus
+	nrs := ops.Status.NodeRecycleStatus
 
 	nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
 	if err != nil {
@@ -215,8 +227,9 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleTriggerPhase(
 		}
 	}
 
+	patch := client.MergeFrom(ops.DeepCopy())
 	nrs.PhaseTriggered = true
-	if err := r.Status().Update(ctx, cluster); err != nil {
+	if err := r.Status().Patch(ctx, ops, patch); err != nil {
 		res := ctrl.Result{Requeue: true}
 		return &res
 	}
@@ -243,13 +256,14 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleShuttingDown(
 	cluster *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
+	nodeIdx, total int,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	nrs := cluster.Status.NodeRecycleStatus
+	nrs := ops.Status.NodeRecycleStatus
 
 	if !nrs.PhaseTriggered {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown", clusterUUID, nodeUUID)
-		if res := r.scopsNodeRecycleTriggerPhase(ctx, cluster, apiClient, clusterUUID, nodeUUID,
+		if res := r.scopsNodeRecycleTriggerPhase(ctx, ops, apiClient, clusterUUID, nodeUUID,
 			[]string{utils.NodeStatusInShutdown, utils.NodeStatusOffline, utils.NodeStatusInRestart},
 			http.MethodPost, endpoint, nil, "shutdown",
 		); res != nil {
@@ -281,15 +295,18 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleShuttingDown(
 
 	switch nodeStatus {
 	case utils.NodeStatusOffline, utils.NodeStatusInRestart:
+		patch := client.MergeFrom(ops.DeepCopy())
 		if refreshSNode {
 			log.Info("Node shutdown confirmed, refreshing snode pod before restart", "nodeUUID", nodeUUID)
 			nrs.NodePhase = utils.NodeRecyclePhaseSnodeRefresh
+			ops.Status.Message = nodeRecycleMsg(nodeIdx, total, nodeUUID, "refreshing snode pod")
 		} else {
 			log.Info("Node shutdown confirmed, advancing to restart", "nodeUUID", nodeUUID)
 			nrs.NodePhase = utils.NodeRecyclePhaseRestarting
+			ops.Status.Message = nodeRecycleMsg(nodeIdx, total, nodeUUID, "restarting")
 		}
 		nrs.PhaseTriggered = false
-		if err := r.Status().Update(ctx, cluster); err != nil {
+		if err := r.Status().Patch(ctx, ops, patch); err != nil {
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{Requeue: true}, nil
@@ -300,16 +317,18 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleShuttingDown(
 
 func (r *StorageClusterOpsReconciler) scopsNodeRecycleRestarting(
 	ctx context.Context,
+	ops *simplyblockv1alpha1.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
+	nodeIdx, total int,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	nrs := cluster.Status.NodeRecycleStatus
+	nrs := ops.Status.NodeRecycleStatus
 
 	if !nrs.PhaseTriggered {
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterUUID, nodeUUID)
-		if res := r.scopsNodeRecycleTriggerPhase(ctx, cluster, apiClient, clusterUUID, nodeUUID,
+		if res := r.scopsNodeRecycleTriggerPhase(ctx, ops, apiClient, clusterUUID, nodeUUID,
 			[]string{utils.NodeStatusInRestart, utils.NodeStatusOnline},
 			http.MethodPost, endpoint, map[string]bool{"force": true}, "restart",
 		); res != nil {
@@ -336,9 +355,11 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleRestarting(
 	}
 
 	log.Info("Node online, waiting for rebalancing to complete", "nodeUUID", nodeUUID)
+	patch := client.MergeFrom(ops.DeepCopy())
 	nrs.NodePhase = utils.NodeRecyclePhaseRebalancing
 	nrs.PhaseTriggered = false
-	if err := r.Status().Update(ctx, cluster); err != nil {
+	ops.Status.Message = nodeRecycleMsg(nodeIdx, total, nodeUUID, "rebalancing")
+	if err := r.Status().Patch(ctx, ops, patch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
 	return ctrl.Result{Requeue: true}, nil
@@ -346,12 +367,14 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleRestarting(
 
 func (r *StorageClusterOpsReconciler) scopsNodeRecycleRebalancing(
 	ctx context.Context,
+	ops *simplyblockv1alpha1.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
+	nodeIdx, total int,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	nrs := cluster.Status.NodeRecycleStatus
+	nrs := ops.Status.NodeRecycleStatus
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
 	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
@@ -374,13 +397,15 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleRebalancing(
 	}
 
 	log.Info("Rebalancing complete, node recycled — advancing to next node", "nodeUUID", nodeUUID)
+	patch := client.MergeFrom(ops.DeepCopy())
 	nrs.ProcessedNodes = append(nrs.ProcessedNodes, nodeUUID)
 	nrs.PendingNodes = nrs.PendingNodes[1:]
 	if len(nrs.PendingNodes) > 0 {
-		nrs.NodePhase = nodeRecycleFirstPhase(cluster)
+		nrs.NodePhase = nodeRecycleFirstPhase()
 		nrs.PhaseTriggered = false
+		ops.Status.Message = fmt.Sprintf("Recycling node %d/%d: shutting-down", nodeIdx+1, total)
 	}
-	if err := r.Status().Update(ctx, cluster); err != nil {
+	if err := r.Status().Patch(ctx, ops, patch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
 	return ctrl.Result{Requeue: true}, nil
@@ -500,8 +525,12 @@ func (r *StorageClusterOpsReconciler) scopsFindStorageNodeSetPod(
 
 // ── package-level helpers ─────────────────────────────────────────────────────
 
-func nodeRecycleFirstPhase(_ *simplyblockv1alpha1.StorageCluster) string {
+func nodeRecycleFirstPhase() string {
 	return utils.NodeRecyclePhaseShuttingDown
+}
+
+func nodeRecycleMsg(nodeIdx, total int, nodeUUID, phase string) string {
+	return fmt.Sprintf("Node %d/%d (%s): %s", nodeIdx, total, nodeUUID, phase)
 }
 
 func listClusterStorageNodeSets(
