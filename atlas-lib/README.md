@@ -23,11 +23,15 @@ atlas/
 │
 ├── nvme/                   Read-only NVMe subsystem/controller/namespace lookups
 │   ├── device.go           Subsystem, Controller, Address, Namespace, Device
-│   ├── resolver.go         SubsystemResolver (List/ByNQN) + DeviceResolver (List/ByUUID/ByDevicePath/ByNamespace)
+│   ├── resolver.go         SubsystemResolver (List/ByNQN) + DeviceResolver (List/ListWithSelector/ByUUID/ByDevicePath/ByNamespace)
+│   ├── selector.go         DeviceSelector: NQN/NSID/UUID/device filter (Matches/Filter)
+│   ├── reachability.go     Device.Accessible: can this device serve I/O
 │   ├── sysfs_resolver.go   local impl: NewSysfsSubsystemResolver / NewSysfsDeviceResolver
 │   └── sysfs_scan.go       sysfs tree walk + attribute parsing
 ├── nvmeof/                 NVMe-oF fabric connect/disconnect (TCP)
-│   └── connector.go        Connector: Connect / Disconnect / IsConnected
+│   ├── connector.go        Connector: Connect / Disconnect / IsConnected
+│   ├── fabrics.go          local impl: NewFabricsConnector (/dev/nvme-fabrics)
+│   └── wait.go             ConnectDevice / WaitForDevice: attach -> nvme.Device
 ├── nqn/                    Build & parse simplyblock lvol NQNs
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume

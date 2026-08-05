@@ -80,30 +80,47 @@ func (r *SysfsDeviceResolver) List(ctx context.Context) ([]Device, error) {
 	return scanDevices(r.cfg.sysRoot(), r.cfg.devRoot())
 }
 
+func (r *SysfsDeviceResolver) ListWithSelector(ctx context.Context, sel DeviceSelector) ([]Device, error) {
+	devs, err := r.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return sel.Filter(devs), nil
+}
+
 func (r *SysfsDeviceResolver) ByUUID(ctx context.Context, uuid string) (Device, error) {
-	return r.find(func(d Device) bool { return d.Namespace.UUID == uuid },
-		"device uuid %q", uuid)
+	return r.pick(ctx, DeviceSelector{UUID: uuid})
 }
 
 func (r *SysfsDeviceResolver) ByDevicePath(ctx context.Context, devicePath string) (Device, error) {
-	return r.find(func(d Device) bool { return d.Namespace.DevicePath == devicePath },
-		"device path %q", devicePath)
+	return r.pick(ctx, DeviceSelector{DevicePath: devicePath})
 }
 
 func (r *SysfsDeviceResolver) ByNamespace(ctx context.Context, nqn string, nsid NamespaceID) (Device, error) {
-	return r.find(func(d Device) bool { return d.Subsystem.NQN == nqn && d.Namespace.ID == nsid },
-		"device nqn %q nsid %d", nqn, nsid)
+	return r.pick(ctx, DeviceSelector{NQN: nqn, NSID: nsid})
 }
 
-func (r *SysfsDeviceResolver) find(match func(Device) bool, format string, args ...any) (Device, error) {
-	devs, err := scanDevices(r.cfg.sysRoot(), r.cfg.devRoot())
+// pick returns the most reachable match for sel — the single-result shape of the
+// By* lookups, whose keys are all selector fields. Several matches mean a stale
+// subsystem beside a fresh one, or one device per path with native multipath
+// off; ranking beats scan order, which favors the older instance. It is a
+// preference only and still returns an unreachable device over none. Callers
+// that must not be handed a wrong device judge the whole set through
+// ListWithSelector (nvmeof.WaitForDevice does).
+func (r *SysfsDeviceResolver) pick(ctx context.Context, sel DeviceSelector) (Device, error) {
+	devs, err := r.ListWithSelector(ctx, sel)
 	if err != nil {
 		return Device{}, err
 	}
-	for _, d := range devs {
-		if match(d) {
-			return d, nil
+	if len(devs) == 0 {
+		return Device{}, fmt.Errorf("device %s: %w", sel, errs.ErrNotFound)
+	}
+
+	best, bestRank := devs[0], devs[0].rank()
+	for _, d := range devs[1:] {
+		if rk := d.rank(); rk > bestRank {
+			best, bestRank = d, rk
 		}
 	}
-	return Device{}, fmt.Errorf(format+": %w", append(args, errs.ErrNotFound)...)
+	return best, nil
 }
