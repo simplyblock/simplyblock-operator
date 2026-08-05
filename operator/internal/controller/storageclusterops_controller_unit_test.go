@@ -44,18 +44,18 @@ func newClusterOpsReconciler(t *testing.T, objects ...client.Object) *StorageClu
 	}
 }
 
-func newTestStorageCluster(name, ns, uuid string) *simplyblockv1alpha1.StorageCluster {
+func newTestStorageCluster() *simplyblockv1alpha1.StorageCluster {
 	return &simplyblockv1alpha1.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: scopsTestClusterName, Namespace: scopsTestNS},
 		Status: simplyblockv1alpha1.StorageClusterStatus{
-			UUID: uuid,
+			UUID: scopsTestClusterUUID,
 		},
 	}
 }
 
-func newTestStorageClusterOps(name, ns, clusterRef, action string) *simplyblockv1alpha1.StorageClusterOps {
+func newTestStorageClusterOps(clusterRef, action string) *simplyblockv1alpha1.StorageClusterOps {
 	return &simplyblockv1alpha1.StorageClusterOps{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: scopsTestOpsName, Namespace: scopsTestNS},
 		Spec: simplyblockv1alpha1.StorageClusterOpsSpec{
 			ClusterRef: clusterRef,
 			Action:     action,
@@ -66,8 +66,8 @@ func newTestStorageClusterOps(name, ns, clusterRef, action string) *simplyblockv
 // ── TestReconcile_TerminalPhases ──────────────────────────────────────────────
 
 func TestStorageClusterOps_TerminalSucceeded_IsNoop(t *testing.T) {
-	cluster := newTestStorageCluster(scopsTestClusterName, scopsTestNS, scopsTestClusterUUID)
-	ops := newTestStorageClusterOps(scopsTestOpsName, scopsTestNS, scopsTestClusterName, "activate")
+	cluster := newTestStorageCluster()
+	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
 	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseSucceeded
 	r := newClusterOpsReconciler(t, cluster, ops)
 
@@ -81,8 +81,8 @@ func TestStorageClusterOps_TerminalSucceeded_IsNoop(t *testing.T) {
 }
 
 func TestStorageClusterOps_TerminalFailed_IsNoop(t *testing.T) {
-	cluster := newTestStorageCluster(scopsTestClusterName, scopsTestNS, scopsTestClusterUUID)
-	ops := newTestStorageClusterOps(scopsTestOpsName, scopsTestNS, scopsTestClusterName, "expand")
+	cluster := newTestStorageCluster()
+	ops := newTestStorageClusterOps(scopsTestClusterName, "expand")
 	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseFailed
 	r := newClusterOpsReconciler(t, cluster, ops)
 
@@ -98,7 +98,7 @@ func TestStorageClusterOps_TerminalFailed_IsNoop(t *testing.T) {
 // ── TestReconcile_ClusterNotFound ─────────────────────────────────────────────
 
 func TestStorageClusterOps_ClusterNotFound_Fails(t *testing.T) {
-	ops := newTestStorageClusterOps(scopsTestOpsName, scopsTestNS, "missing-cluster", "activate")
+	ops := newTestStorageClusterOps("missing-cluster", "activate")
 	r := newClusterOpsReconciler(t, ops)
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: scopsTestNS, Name: scopsTestOpsName}})
@@ -119,10 +119,10 @@ func TestStorageClusterOps_ClusterNotFound_Fails(t *testing.T) {
 // ── TestMutualExclusion ───────────────────────────────────────────────────────
 
 func TestStorageClusterOps_RequeuesWhenAnotherOpsActive(t *testing.T) {
-	cluster := newTestStorageCluster(scopsTestClusterName, scopsTestNS, scopsTestClusterUUID)
+	cluster := newTestStorageCluster()
 	cluster.Status.ActiveOpsRef = scopsTestOtherOps
 
-	ops := newTestStorageClusterOps(scopsTestOpsName, scopsTestNS, scopsTestClusterName, "activate")
+	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
 	r := newClusterOpsReconciler(t, cluster, ops)
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: scopsTestNS, Name: scopsTestOpsName}})
@@ -142,8 +142,8 @@ func TestStorageClusterOps_RequeuesWhenAnotherOpsActive(t *testing.T) {
 }
 
 func TestStorageClusterOps_AcquiresLockAndTransitionsOutOfPending(t *testing.T) {
-	cluster := newTestStorageCluster(scopsTestClusterName, scopsTestNS, scopsTestClusterUUID)
-	ops := newTestStorageClusterOps(scopsTestOpsName, scopsTestNS, scopsTestClusterName, "shutdown")
+	cluster := newTestStorageCluster()
+	ops := newTestStorageClusterOps(scopsTestClusterName, "shutdown")
 	r := newClusterOpsReconciler(t, cluster, ops)
 
 	// shutdown POSTs to the backend — fails with no real API, so the ops ends up
@@ -168,10 +168,10 @@ func TestStorageClusterOps_AcquiresLockAndTransitionsOutOfPending(t *testing.T) 
 // ── TestSucceedOps ────────────────────────────────────────────────────────────
 
 func TestStorageClusterOps_SucceedOps_SetsPhaseAndClearsLock(t *testing.T) {
-	cluster := newTestStorageCluster(scopsTestClusterName, scopsTestNS, scopsTestClusterUUID)
+	cluster := newTestStorageCluster()
 	cluster.Status.ActiveOpsRef = scopsTestOpsName
 
-	ops := newTestStorageClusterOps(scopsTestOpsName, scopsTestNS, scopsTestClusterName, "activate")
+	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
 	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseRunning
 	r := newClusterOpsReconciler(t, cluster, ops)
 
@@ -205,10 +205,10 @@ func TestStorageClusterOps_SucceedOps_SetsPhaseAndClearsLock(t *testing.T) {
 // ── TestFailOps ───────────────────────────────────────────────────────────────
 
 func TestStorageClusterOps_FailOps_SetsPhaseAndClearsLock(t *testing.T) {
-	cluster := newTestStorageCluster(scopsTestClusterName, scopsTestNS, scopsTestClusterUUID)
+	cluster := newTestStorageCluster()
 	cluster.Status.ActiveOpsRef = scopsTestOpsName
 
-	ops := newTestStorageClusterOps(scopsTestOpsName, scopsTestNS, scopsTestClusterName, "expand")
+	ops := newTestStorageClusterOps(scopsTestClusterName, "expand")
 	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseRunning
 	r := newClusterOpsReconciler(t, cluster, ops)
 
@@ -240,7 +240,7 @@ func TestStorageClusterOps_FailOps_SetsPhaseAndClearsLock(t *testing.T) {
 }
 
 func TestStorageClusterOps_FailOps_NilCluster_DoesNotPanic(t *testing.T) {
-	ops := newTestStorageClusterOps(scopsTestOpsName, scopsTestNS, scopsTestClusterName, "activate")
+	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
 	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseRunning
 	r := newClusterOpsReconciler(t, ops)
 
@@ -259,10 +259,10 @@ func TestStorageClusterOps_FailOps_NilCluster_DoesNotPanic(t *testing.T) {
 // ── TestReleaseClusterLock ────────────────────────────────────────────────────
 
 func TestStorageClusterOps_ReleaseLock_OnlyClearsIfOwner(t *testing.T) {
-	cluster := newTestStorageCluster(scopsTestClusterName, scopsTestNS, scopsTestClusterUUID)
+	cluster := newTestStorageCluster()
 	cluster.Status.ActiveOpsRef = scopsTestOtherOps
 
-	ops := newTestStorageClusterOps(scopsTestOpsName, scopsTestNS, scopsTestClusterName, "activate")
+	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
 	r := newClusterOpsReconciler(t, cluster, ops)
 
 	r.releaseClusterLock(context.Background(), ops, cluster)
@@ -275,7 +275,7 @@ func TestStorageClusterOps_ReleaseLock_OnlyClearsIfOwner(t *testing.T) {
 }
 
 func TestStorageClusterOps_ReleaseLock_NilCluster_DoesNotPanic(t *testing.T) {
-	ops := newTestStorageClusterOps(scopsTestOpsName, scopsTestNS, scopsTestClusterName, "activate")
+	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
 	r := newClusterOpsReconciler(t, ops)
 
 	// Should be a no-op and not panic.
@@ -285,8 +285,8 @@ func TestStorageClusterOps_ReleaseLock_NilCluster_DoesNotPanic(t *testing.T) {
 // ── TestUnknownAction ─────────────────────────────────────────────────────────
 
 func TestStorageClusterOps_UnknownAction_Fails(t *testing.T) {
-	cluster := newTestStorageCluster(scopsTestClusterName, scopsTestNS, scopsTestClusterUUID)
-	ops := newTestStorageClusterOps(scopsTestOpsName, scopsTestNS, scopsTestClusterName, "bogus-action")
+	cluster := newTestStorageCluster()
+	ops := newTestStorageClusterOps(scopsTestClusterName, "bogus-action")
 	r := newClusterOpsReconciler(t, cluster, ops)
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: scopsTestNS, Name: scopsTestOpsName}})
@@ -304,8 +304,8 @@ func TestStorageClusterOps_UnknownAction_Fails(t *testing.T) {
 // ── TestNodeRecycle_MissingNodeUUID ───────────────────────────────────────────
 
 func TestStorageClusterOps_NodeRecycle_MissingNodeUUID_Fails(t *testing.T) {
-	cluster := newTestStorageCluster(scopsTestClusterName, scopsTestNS, scopsTestClusterUUID)
-	ops := newTestStorageClusterOps(scopsTestOpsName, scopsTestNS, scopsTestClusterName, "node-recycle")
+	cluster := newTestStorageCluster()
+	ops := newTestStorageClusterOps(scopsTestClusterName, "node-recycle")
 	// NodeUUID intentionally left empty.
 	r := newClusterOpsReconciler(t, cluster, ops)
 

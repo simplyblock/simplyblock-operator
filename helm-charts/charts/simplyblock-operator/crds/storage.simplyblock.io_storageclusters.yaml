@@ -423,6 +423,11 @@ spec:
                       migration.
                     type: integer
                 type: object
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef is the name of the currently active ClusterOps on this cluster.
+                  Empty when no operation is in progress.
+                type: string
               clusterName:
                 description: ClusterName is the resolved backend cluster name.
                 type: string
