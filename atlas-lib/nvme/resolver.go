@@ -20,6 +20,14 @@ type SubsystemResolver interface {
 type DeviceResolver interface {
 	// List returns every attached NVMe device.
 	List(ctx context.Context) ([]Device, error)
+	// ListWithSelector returns every attached device matching sel, in the
+	// same order List would. Unlike the By* lookups it hands back *all*
+	// matches instead of the first, so a caller can see when a selector is
+	// satisfied by more than one device (a stale namespace lingering next
+	// to a freshly connected one) and decide for itself rather than
+	// being handed an arbitrary winner. A zero selector is equivalent to
+	// List. No match is an empty slice, not an error.
+	ListWithSelector(ctx context.Context, sel DeviceSelector) ([]Device, error)
 	// ByUUID returns the device whose namespace UUID matches
 	// (simplyblock: the lvol UUID).
 	ByUUID(ctx context.Context, uuid string) (Device, error)

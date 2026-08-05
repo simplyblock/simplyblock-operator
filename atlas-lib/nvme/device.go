@@ -129,6 +129,16 @@ type Namespace struct {
 	// per controller fronting the subsystem). Empty for non-multipath
 	// devices.
 	Paths []Path
+
+	// Controller names the single controller that owns this namespace, set
+	// only when the kernel exposes no multipath head
+	// (nvme_core.multipath=0) and the namespace is therefore one
+	// controller's private block device. A volume reachable over several
+	// paths then appears as one such namespace per path (see
+	// Device.Siblings), and only the owning controller's state says whether
+	// this one can serve I/O. Empty for a multipath head, which belongs to
+	// the subsystem as a whole and carries its reachability in Paths.
+	Controller ControllerID
 }
 
 // Device is a resolved, attachable namespace together with the subsystem

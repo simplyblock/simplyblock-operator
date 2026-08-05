@@ -1,83 +1,74 @@
-// Package nvme discovers and looks up local NVMe controllers and
-// namespaces (for simplyblock, typically NVMe-oF/TCP attachments).
+// Package nvme discovers and looks up local NVMe controllers and namespaces
+// (for simplyblock, typically NVMe-oF/TCP attachments).
 //
-// It is read-only: establishing and tearing down fabric connections is
-// the job of package nvmeof. The actual enumeration is delegated to
-// internal/sysfs so this package stays a stable, testable API surface.
-//
-// The model types (Subsystem, Controller, Namespace, Path, Device) are
-// immutable value snapshots of kernel state at scan time. To observe changed
-// state, re-resolve through a resolver rather than mutating a value in place.
+// It is read-only — connecting and disconnecting is package nvmeof — and
+// delegates enumeration to internal/sysfs. The model types (Subsystem,
+// Controller, Namespace, Path, Device) are immutable snapshots of kernel state
+// at scan time; re-resolve to observe changes rather than mutating a value.
 //
 // # Resolving devices
 //
-// A resolver reads the local sysfs tree; the zero SysfsConfig uses /sys and
-// /dev. Each call re-scans, so results reflect current kernel state.
+// Resolvers read the local sysfs tree and re-scan per call; the zero
+// SysfsConfig uses /sys and /dev.
 //
-//	ctx := context.Background()
 //	devices := nvme.NewSysfsDeviceResolver(nvme.SysfsConfig{})
-//
-//	// Every attached namespace device.
 //	all, err := devices.List(ctx)
-//	if err != nil {
-//		return err
-//	}
 //
-//	// The device backing one simplyblock volume (lvol UUID == namespace UUID).
+//	// One volume's device; lvol UUID == namespace UUID. Wraps
+//	// errs.ErrNotFound when the volume is not attached.
 //	dev, err := devices.ByUUID(ctx, "fee75e72-1291-4193-8357-3e228ced6c49")
-//	if err != nil {
-//		return err // wraps errs.ErrNotFound when the volume is not attached
-//	}
-//	fmt.Println(dev.Namespace.DevicePath) // e.g. /dev/nvme0n1
+//	fmt.Println(dev.Namespace.DevicePath) // /dev/nvme0n1
+//
+// DeviceSelector combines those keys and, via ListWithSelector, returns every
+// match rather than the first — for when "several matched" is meaningful: one
+// namespace of a multi-namespace subsystem, or a fresh device beside a stale
+// same-NQN one (see nvmeof.WaitForDevice). Filter applies it to a snapshot
+// already held.
+//
+//	sel := nvme.DeviceSelector{NQN: "nqn.2023-02.io.simplyblock:...", NSID: 2}
+//	matches, err := devices.ListWithSelector(ctx, sel)
+//	matches = sel.Filter(all)
+//
+// # Reachability
+//
+// Attached is not usable. Accessible reports whether I/O can be issued: an
+// accessible ANA path, or a live owning controller where the kernel publishes
+// no ANA view. The By* lookups prefer a reachable match, so a fresh subsystem
+// beats the stale one the kernel has yet to reap.
+//
+//	if !dev.Accessible() { /* present, but every path is lost */ }
 //
 // # Multipath paths
 //
-// A device's per-controller ANA paths describe multipath/HA reachability;
-// the kernel routes I/O to optimized paths first.
+// A device's ANA paths are its multipath/HA legs; the kernel routes I/O to
+// optimized ones first.
 //
 //	for _, p := range dev.Namespace.Paths {
-//		fmt.Printf("%s via %s: %s (accessible=%t)\n",
-//			p.Name, p.Controller, p.ANAState, p.ANAState.Accessible())
+//		fmt.Println(p.Name, p.Controller, p.ANAState, p.ANAState.Accessible())
 //	}
 //
 // # Siblings (same volume)
 //
-// A volume is identified by its namespace UUID. When native NVMe multipath is
-// disabled it can surface as several block devices sharing that UUID;
-// Siblings returns the other devices backing the same volume (empty under
-// native multipath, where the volume is a single multipath head).
+// With native multipath disabled a volume surfaces as one device per path, all
+// sharing its namespace UUID; Siblings returns the others (empty under native
+// multipath, which has a single head). SiblingsVia re-scans when you hold a
+// Device and a resolver but no list.
 //
-//	for _, s := range dev.Siblings(all) {
-//	}
-//
-//	// When you hold a Device and a resolver but not a list, re-scan for a
-//	// fresh, coherent snapshot:
-//	siblings, err := nvme.SiblingsVia(ctx, devices, dev)
+//	sibs := dev.Siblings(all)
+//	sibs, err := nvme.SiblingsVia(ctx, devices, dev)
 //
 // # Multi-namespace subsystems
 //
-// simplyblock "namespaced" volumes share a single subsystem (created with
-// max_namespaces > 1). IsMultiNamespace answers from sysfs when it can — more
-// than one namespace, or any NSID > 1 — and only for the ambiguous
-// single-namespace-at-NSID-1 case issues an NVMe Identify Controller command
-// (Linux only) to read MNAN, the subsystem's maximum allowed namespace count.
+// simplyblock "namespaced" volumes share one subsystem (max_namespaces > 1).
+// IsMultiNamespace answers from sysfs where it can — several NSIDs, or any
+// NSID > 1 — and only for the ambiguous single-namespace-at-NSID-1 case issues
+// an Identify Controller command (Linux only) to read MNAN.
 //
+//	// errs.ErrUnsupported off Linux; errs.ErrNotConnected without a live path.
 //	multi, err := dev.IsMultiNamespace()
-//	if err != nil {
-//		// errs.ErrUnsupported off Linux; errs.ErrNotConnected if no live path
-//		return err
-//	}
-//	if multi {
-//		// this namespace shares its subsystem with other volumes
-//	}
+//	mnan, err := dev.Subsystem.Controllers[0].MaxNamespaces()
 //
-//	// The raw capacity is available per controller:
-//	if len(dev.Subsystem.Controllers) > 0 {
-//		mnan, _ := dev.Subsystem.Controllers[0].MaxNamespaces() // MNAN from Identify
-//		fmt.Println("max namespaces:", mnan)
-//	}
-//
-// Subsystems can be resolved directly too:
+// Subsystems resolve directly too:
 //
 //	subs := nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{})
 //	s, err := subs.ByNQN(ctx, dev.Subsystem.NQN)

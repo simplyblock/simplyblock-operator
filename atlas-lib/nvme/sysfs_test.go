@@ -53,6 +53,9 @@ func vm17Fixture(t *testing.T) string {
 		ns + "/hidden":                   "0",
 		ns + "/dev":                      "259:1",
 		ns + "/queue/logical_block_size": "4096",
+		// controller links the kernel places in the subsystem dir
+		sub + "/nvme0/uevent": "",
+		sub + "/nvme1/uevent": "",
 		// controller nvme0 (path A -> vm19)
 		"class/nvme/nvme0/subsysnqn":   nqn,
 		"class/nvme/nvme0/transport":   "tcp",
@@ -176,5 +179,25 @@ func TestSysfsDeviceResolver(t *testing.T) {
 	}
 	if _, err := r.ByUUID(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
 		t.Errorf("ByUUID(missing) err = %v, want ErrNotFound", err)
+	}
+
+	// ListWithSelector: same fixture, but every match rather than the first.
+	sel := DeviceSelector{NQN: d.Subsystem.NQN, NSID: 1}
+	matches, err := r.ListWithSelector(ctx, sel)
+	if err != nil {
+		t.Fatalf("ListWithSelector: %v", err)
+	}
+	if len(matches) != 1 || matches[0].Namespace.DevicePath != "/dev/nvme0n1" {
+		t.Errorf("ListWithSelector(%s) = %d devices, want just /dev/nvme0n1", sel, len(matches))
+	}
+	all, err := r.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zero, err := r.ListWithSelector(ctx, DeviceSelector{}); err != nil || len(zero) != len(all) {
+		t.Errorf("ListWithSelector(zero) = %d devices (err %v), want all %d", len(zero), err, len(all))
+	}
+	if none, err := r.ListWithSelector(ctx, DeviceSelector{NQN: "nqn.does.not:exist"}); err != nil || len(none) != 0 {
+		t.Errorf("ListWithSelector(missing) = %v, %v; want empty, nil", none, err)
 	}
 }

@@ -17,6 +17,28 @@ var nsNameRE = regexp.MustCompile(`^nvme\d+n\d+$`)
 // the ANA-bearing path under a controller directory.
 var legNameRE = regexp.MustCompile(`^nvme\d+c\d+n\d+$`)
 
+// ctrlNameRE matches a controller entry such as "nvme0". The kernel links
+// every controller into its subsystem's directory, which is how a controller
+// is tied to the subsystem it fronts.
+var ctrlNameRE = regexp.MustCompile(`^nvme\d+$`)
+
+// legHeadRE splits a leg name into the head it serves and the controller it
+// runs over: "nvme0c1n1" -> head "nvme0" + "n1", i.e. head device "nvme0n1"
+// reached via controller "nvme1".
+var legHeadRE = regexp.MustCompile(`^(nvme\d+)c\d+(n\d+)$`)
+
+// legHead returns the name of the namespace head a leg serves, or "" if leg is
+// not a leg name. Two subsystems can front the same NQN — a stale one the
+// kernel has yet to reap next to a fresh one — and their namespaces then have
+// the same NSID, so NSID alone cannot say which head a leg belongs to.
+func legHead(leg string) string {
+	m := legHeadRE.FindStringSubmatch(leg)
+	if m == nil {
+		return ""
+	}
+	return m[1] + m[2]
+}
+
 // scanSubsystems reads every NVMe subsystem under sysRoot, populating each
 // with its namespaces and the controllers (paths) that front it.
 func scanSubsystems(sysRoot, devRoot string) ([]Subsystem, error) {
@@ -58,27 +80,97 @@ func scanSubsystems(sysRoot, devRoot string) ([]Subsystem, error) {
 			}
 		}
 
-		ctrlIDs := make(map[ControllerID]bool)
-		for _, c := range ctrls {
-			if c.NQN == s.NQN {
-				s.Controllers = append(s.Controllers, c)
-				ctrlIDs[c.ID] = true
-			}
+		s.Controllers = subsystemControllers(s, entries, ctrls)
+		ctrlIDs := make(map[ControllerID]bool, len(s.Controllers))
+		for _, c := range s.Controllers {
+			ctrlIDs[c.ID] = true
 		}
 
-		// Attach each ANA path to its namespace (matched by NSID), but only
-		// paths whose owning controller belongs to this subsystem.
+		// Attach each ANA path to the namespace head it serves. The head is
+		// named by the leg itself, so two subsystems fronting one NQN keep
+		// their own ANA view instead of inheriting each other's paths — which
+		// is what lets a caller tell a live subsystem from a stale one.
 		for i := range s.Namespaces {
 			for _, p := range paths {
-				if ctrlIDs[p.Controller] && p.NSID == s.Namespaces[i].ID {
+				if ctrlIDs[p.Controller] && legHead(p.Name) == s.Namespaces[i].Name && p.NSID == s.Namespaces[i].ID {
 					s.Namespaces[i].Paths = append(s.Namespaces[i].Paths, p)
 				}
 			}
 		}
 
+		// Without a multipath head (nvme_core.multipath=0) the namespaces are
+		// each controller's own block devices instead, so collect those too.
+		s.Namespaces = append(s.Namespaces, controllerNamespaces(s, devRoot)...)
+
 		subs = append(subs, s)
 	}
 	return subs, nil
+}
+
+// subsystemControllers returns the controllers fronting s, preferring the
+// controller links the kernel places in the subsystem's own directory. That
+// association is exact, where matching on the NQN is not: two subsystems can
+// carry the same NQN while a stale one awaits reaping, and NQN matching would
+// then hand each of them all of the other's controllers, making a dead
+// subsystem indistinguishable from a live one. NQN matching stays as the
+// fallback for trees that carry no controller links.
+func subsystemControllers(s Subsystem, entries []string, ctrls []Controller) []Controller {
+	byID := make(map[ControllerID]Controller, len(ctrls))
+	for _, c := range ctrls {
+		byID[c.ID] = c
+	}
+
+	var out []Controller
+	for _, e := range entries {
+		if !ctrlNameRE.MatchString(e) {
+			continue
+		}
+		if c, ok := byID[ControllerID(e)]; ok {
+			out = append(out, c)
+		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+
+	for _, c := range ctrls {
+		if c.NQN == s.NQN {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// controllerNamespaces returns the namespaces owned by s's controllers rather
+// than by s itself — the layout when native NVMe multipath is off
+// (nvme_core.multipath=0): the kernel builds no subsystem-level head, and each
+// controller exposes its own block device for a namespace, so one volume
+// reached over several paths becomes several devices sharing a namespace UUID
+// (see Device.Siblings). Names already claimed by a head are skipped, so a
+// kernel that links a head under its controller too is not counted twice.
+func controllerNamespaces(s Subsystem, devRoot string) []Namespace {
+	heads := make(map[string]bool, len(s.Namespaces))
+	for _, ns := range s.Namespaces {
+		heads[ns.Name] = true
+	}
+
+	var out []Namespace
+	for _, c := range s.Controllers {
+		entries, err := sysfs.List(c.SysfsPath)
+		if err != nil {
+			continue // a controller removed mid-scan is not this scan's problem
+		}
+		for _, e := range entries {
+			if !nsNameRE.MatchString(e) || heads[e] {
+				continue
+			}
+			ns := scanNamespace(filepath.Join(c.SysfsPath, e), devRoot, e)
+			ns.Controller = c.ID
+			out = append(out, ns)
+			heads[e] = true
+		}
+	}
+	return out
 }
 
 // scanDevices flattens the subsystems into attachable namespace devices.
