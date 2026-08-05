@@ -6,6 +6,7 @@ const (
 	FinalizerSnapshotReplication = "storage.simplyblock.io/snapshotreplication-finalizer"
 	FinalizerStorageNodeSet      = "storage.simplyblock.io/storagenodeset-finalizer"
 	FinalizerStorageCluster      = "storage.simplyblock.io/cluster-finalizer"
+	FinalizerStorageClusterOps   = "storage.simplyblock.io/storageclusterops"
 
 	ClusterActionActivate    = "activate"
 	ClusterActionExpand      = "expand"

@@ -30,6 +30,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -60,9 +61,29 @@ func (r *StorageClusterOpsReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Terminal phases — nothing left to do.
+	// Handle deletion: release the cluster lock before the CR disappears.
+	if !ops.DeletionTimestamp.IsZero() {
+		var cluster simplyblockv1alpha1.StorageCluster
+		if err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.ClusterRef, Namespace: ops.Namespace}, &cluster); err == nil {
+			r.releaseClusterLock(ctx, &ops, &cluster)
+		}
+		controllerutil.RemoveFinalizer(&ops, utils.FinalizerStorageClusterOps)
+		return ctrl.Result{}, r.Update(ctx, &ops)
+	}
+
+	// Ensure our finalizer is present so we can clear activeOpsRef on deletion.
+	if !controllerutil.ContainsFinalizer(&ops, utils.FinalizerStorageClusterOps) {
+		controllerutil.AddFinalizer(&ops, utils.FinalizerStorageClusterOps)
+		return ctrl.Result{}, r.Update(ctx, &ops)
+	}
+
+	// Terminal phases — remove the finalizer so the CR can be GC'd, then stop.
 	switch ops.Status.Phase {
 	case simplyblockv1alpha1.StorageClusterOpsPhaseSucceeded, simplyblockv1alpha1.StorageClusterOpsPhaseFailed:
+		if controllerutil.ContainsFinalizer(&ops, utils.FinalizerStorageClusterOps) {
+			controllerutil.RemoveFinalizer(&ops, utils.FinalizerStorageClusterOps)
+			return ctrl.Result{}, r.Update(ctx, &ops)
+		}
 		return ctrl.Result{}, nil
 	}
 
