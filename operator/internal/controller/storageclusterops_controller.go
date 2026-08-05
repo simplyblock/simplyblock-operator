@@ -322,49 +322,6 @@ func (r *StorageClusterOpsReconciler) reconcileSimplePost(
 	return r.succeedOps(ctx, ops, cluster, fmt.Sprintf("Cluster %s completed", action))
 }
 
-// reconcileNodeRecycle handles node-recycle: POST /api/v2/clusters/{id}/node-recycle/{nodeUUID}.
-func (r *StorageClusterOpsReconciler) reconcileNodeRecycle(
-	ctx context.Context,
-	ops *simplyblockv1alpha1.StorageClusterOps,
-	cluster *simplyblockv1alpha1.StorageCluster,
-) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
-	if ops.Spec.NodeUUID == "" {
-		return r.failOps(ctx, ops, cluster, "nodeUUID is required for node-recycle action")
-	}
-
-	if ops.Status.Triggered {
-		return r.succeedOps(ctx, ops, cluster, "Node recycle initiated")
-	}
-
-	apiClient := webapi.NewClient()
-	clusterUUID, err := utils.GetClusterID(ctx, apiClient, cluster)
-	if err != nil {
-		return r.failOps(ctx, ops, cluster, fmt.Sprintf("resolve cluster UUID: %v", err))
-	}
-
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/node-recycle/%s", clusterUUID, ops.Spec.NodeUUID)
-	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
-	if err != nil || status >= 300 {
-		if err == nil {
-			err = fmt.Errorf("status %d: %s", status, string(body))
-		}
-		log.Error(err, "node-recycle POST failed", "cluster", cluster.Name, "node", ops.Spec.NodeUUID)
-		return r.failOps(ctx, ops, cluster, fmt.Sprintf("node-recycle POST failed: %v", err))
-	}
-
-	log.Info("Cluster node-recycle POST sent", "cluster", cluster.Name, "node", ops.Spec.NodeUUID)
-	patch := client.MergeFrom(ops.DeepCopy())
-	ops.Status.Triggered = true
-	if err := r.Status().Patch(ctx, ops, patch); err != nil {
-		return ctrl.Result{Requeue: true}, nil
-	}
-
-	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "NodeRecycle", "NodeRecycle",
-		"Node recycle initiated for node %s on cluster %s", ops.Spec.NodeUUID, cluster.Name)
-	return r.succeedOps(ctx, ops, cluster, fmt.Sprintf("Node %s recycle initiated", ops.Spec.NodeUUID))
-}
 
 // succeedOps transitions ops to Succeeded and releases the cluster lock.
 func (r *StorageClusterOpsReconciler) succeedOps(

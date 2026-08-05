@@ -244,14 +244,9 @@ type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="HA Type"
 	// HAType defines the backend high-availability mode.
 	HAType string `json:"haType,omitempty"`
-	// +kubebuilder:validation:Enum=activate;expand;shutdown;start;restart;node-recycle
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
-	// Action triggers a cluster-level action.
-	Action string `json:"action,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node Recycle"
 	// NodeRecycle configures the node-recycle action.
 	NodeRecycle *NodeRecycleSpec `json:"nodeRecycle,omitempty"`
-
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Single Node"
 	// IsSingleNode enables single-node cluster mode.
 	IsSingleNode *bool `json:"isSingleNode,omitempty"`
@@ -384,8 +379,6 @@ type StorageClusterStatus struct {
 	// Empty when no operation is in progress.
 	// +optional
 	ActiveOpsRef string `json:"activeOpsRef,omitempty"`
-	// ActionStatus tracks the most recent action execution state.
-	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 	// NodeRecycleStatus tracks in-progress state for the node-recycle action.
 	NodeRecycleStatus *NodeRecycleStatus `json:"nodeRecycleStatus,omitempty"`
 	// RebalancingMetrics is updated by the auto-rebalancer each evaluation cycle.

@@ -301,19 +301,23 @@ func TestStorageClusterOps_UnknownAction_Fails(t *testing.T) {
 	}
 }
 
-// ── TestNodeRecycle_MissingNodeUUID ───────────────────────────────────────────
+// ── TestNodeRecycle_Initialises ───────────────────────────────────────────────
 
-func TestStorageClusterOps_NodeRecycle_MissingNodeUUID_Fails(t *testing.T) {
+func TestStorageClusterOps_NodeRecycle_Initialises(t *testing.T) {
 	cluster := newTestStorageCluster()
 	ops := newTestStorageClusterOps(scopsTestClusterName, "node-recycle")
-	// NodeUUID intentionally left empty.
 	r := newClusterOpsReconciler(t, cluster, ops)
 
+	// First reconcile: the state machine sets ops.Status.Triggered=true and
+	// requeues. No backend is available so it can't list nodes yet.
 	r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: scopsTestNS, Name: scopsTestOpsName}}) //nolint:errcheck
 
-	var updated simplyblockv1alpha1.StorageClusterOps
-	_ = r.Get(context.Background(), types.NamespacedName{Name: scopsTestOpsName, Namespace: scopsTestNS}, &updated)
-	if updated.Status.Phase != simplyblockv1alpha1.StorageClusterOpsPhaseFailed {
-		t.Errorf("phase: got %q want Failed when nodeUUID is missing", updated.Status.Phase)
+	var updatedOps simplyblockv1alpha1.StorageClusterOps
+	_ = r.Get(context.Background(), types.NamespacedName{Name: scopsTestOpsName, Namespace: scopsTestNS}, &updatedOps)
+	if !updatedOps.Status.Triggered {
+		t.Error("ops.status.triggered should be true after first reconcile")
+	}
+	if updatedOps.Status.Phase != simplyblockv1alpha1.StorageClusterOpsPhaseRunning {
+		t.Errorf("ops phase: got %q want Running", updatedOps.Status.Phase)
 	}
 }

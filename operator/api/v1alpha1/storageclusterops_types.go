@@ -41,10 +41,6 @@ type StorageClusterOpsSpec struct {
 	// +kubebuilder:validation:Enum=activate;expand;shutdown;restart;node-recycle
 	// +kubebuilder:validation:Required
 	Action string `json:"action"`
-
-	// NodeUUID is the target node UUID, required only when action=node-recycle.
-	// +optional
-	NodeUUID string `json:"nodeUUID,omitempty"`
 }
 
 // StorageClusterOpsStatus holds the observed state of a StorageClusterOps.
