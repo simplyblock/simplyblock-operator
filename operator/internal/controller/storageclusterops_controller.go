@@ -131,8 +131,10 @@ func (r *StorageClusterOpsReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.reconcileExpand(ctx, &ops, &cluster)
 	case utils.ClusterActionShutdown:
 		return r.reconcileSimplePost(ctx, &ops, &cluster, "shutdown")
+	case utils.ClusterActionStart:
+		return r.reconcileSimplePost(ctx, &ops, &cluster, "start")
 	case utils.ClusterActionRestart:
-		return r.reconcileSimplePost(ctx, &ops, &cluster, "restart")
+		return r.reconcileRestart(ctx, &ops, &cluster)
 	case utils.ClusterActionNodeRecycle:
 		return r.reconcileNodeRecycle(ctx, &ops, &cluster)
 	default:
@@ -341,6 +343,99 @@ func (r *StorageClusterOpsReconciler) reconcileSimplePost(
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, action, action,
 		"Cluster %s %s initiated", cluster.Name, action)
 	return r.succeedOps(ctx, ops, cluster, fmt.Sprintf("Cluster %s completed", action))
+}
+
+// reconcileRestart handles a two-phase cluster restart: POST /shutdown, wait
+// until the cluster leaves "active", then POST /start and wait until it returns
+// to "active". The sub-phase is tracked in ops.Status.Message.
+func (r *StorageClusterOpsReconciler) reconcileRestart(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.StorageClusterOps,
+	cluster *simplyblockv1alpha1.StorageCluster,
+) (ctrl.Result, error) {
+	const (
+		subPhaseShuttingDown = "shutting-down"
+		subPhaseStarting     = "starting"
+	)
+	log := logf.FromContext(ctx)
+	apiClient := webapi.NewClient()
+
+	clusterUUID, err := utils.GetClusterID(ctx, apiClient, cluster)
+	if err != nil {
+		return r.failOps(ctx, ops, cluster, fmt.Sprintf("resolve cluster UUID: %v", err))
+	}
+
+	// Phase 1: send shutdown.
+	if !ops.Status.Triggered {
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/shutdown", clusterUUID)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
+		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("status %d: %s", status, string(body))
+			}
+			log.Error(err, "restart: shutdown POST failed", "cluster", cluster.Name)
+			return r.failOps(ctx, ops, cluster, fmt.Sprintf("restart shutdown POST failed: %v", err))
+		}
+		patch := client.MergeFrom(ops.DeepCopy())
+		ops.Status.Triggered = true
+		ops.Status.Message = subPhaseShuttingDown
+		if err := r.Status().Patch(ctx, ops, patch); err != nil {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		log.Info("Cluster shutdown POST sent for restart", "cluster", cluster.Name)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	// Poll current cluster status from the API.
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("status %d: %s", status, string(body))
+		}
+		log.Error(err, "restart: cluster status poll failed", "cluster", cluster.Name)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	resp, err := webapi.ParseClusterResponse(body)
+	if err != nil {
+		log.Error(err, "restart: parse cluster response failed")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	// Phase 2: wait for shutdown to complete, then send start.
+	if ops.Status.Message == subPhaseShuttingDown {
+		if resp.Status == utils.ClusterStatusActive {
+			log.Info("Waiting for cluster to leave active state after shutdown", "cluster", cluster.Name, "status", resp.Status)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		startEndpoint := fmt.Sprintf("/api/v2/clusters/%s/start", clusterUUID)
+		body, status, err := apiClient.Do(ctx, http.MethodPost, startEndpoint, nil)
+		if err != nil || status >= 300 {
+			if err == nil {
+				err = fmt.Errorf("status %d: %s", status, string(body))
+			}
+			log.Error(err, "restart: start POST failed", "cluster", cluster.Name)
+			return r.failOps(ctx, ops, cluster, fmt.Sprintf("restart start POST failed: %v", err))
+		}
+		patch := client.MergeFrom(ops.DeepCopy())
+		ops.Status.Message = subPhaseStarting
+		if err := r.Status().Patch(ctx, ops, patch); err != nil {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		log.Info("Cluster start POST sent for restart", "cluster", cluster.Name)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	// Phase 3: wait for cluster to become active again.
+	if resp.Status != utils.ClusterStatusActive {
+		log.Info("Waiting for cluster to become active after start", "cluster", cluster.Name, "status", resp.Status)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	log.Info("Cluster restarted successfully", "cluster", cluster.Name)
+	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "Restarted", "Restarted",
+		"Cluster %s restarted successfully", cluster.Name)
+	return r.succeedOps(ctx, ops, cluster, "Cluster restarted successfully")
 }
 
 // succeedOps transitions ops to Succeeded and releases the cluster lock.

@@ -62,7 +62,7 @@ type StorageClusterOpsSpec struct {
 	ClusterRef string `json:"clusterRef"`
 
 	// Action is the operation to perform. Immutable.
-	// +kubebuilder:validation:Enum=activate;expand;shutdown;restart;node-recycle
+	// +kubebuilder:validation:Enum=activate;expand;shutdown;start;restart;node-recycle
 	// +kubebuilder:validation:Required
 	Action string `json:"action"`
 

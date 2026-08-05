@@ -1520,6 +1520,7 @@ spec:
                 - activate
                 - expand
                 - shutdown
+                - start
                 - restart
                 - node-recycle
                 type: string
