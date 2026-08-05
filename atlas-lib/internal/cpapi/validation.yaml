@@ -1,0 +1,105 @@
+# What this client depends on every control-plane response carrying, by
+# response type and JSON key. internal/cpapi/gen turns this into the rule
+# tables in validation.gen.go, and each response type checks itself against
+# them as it is deserialized (see validation.go for the why).
+#
+# Keys are the wire names, so this file reads as the contract it is; the
+# generator resolves them to the generated Go fields and fails if a key is not
+# one the type decodes from, so a spec change cannot leave a rule silently
+# validating nothing.
+#
+# Values are go-playground/validator tags, plus one addition:
+#
+#   present   the key must appear in the body. For fields whose zero value is
+#             legitimate — a node with 0 lvols — nothing else can tell "the
+#             control plane said zero" from "we decoded the wrong key".
+#
+# Rules of thumb, both learned the hard way:
+#
+#   - Only constrain what this client reads. A rule on a field nobody consumes
+#     turns a working cluster into a broken one the day the control plane stops
+#     sending it. That is also why the spec's full `required` list is not
+#     mirrored here, tempting as it is.
+#   - Only with constraints that hold for every control-plane version we
+#     support. Enum membership is deliberately absent: a newer control plane is
+#     allowed to invent statuses.
+
+# A volume's identity, size and subsystem: what CSI publishes, resizes and
+# attaches (controlplane/volumes.go).
+VolumeDTO:
+  id: required
+  name: required
+  pool_name: required
+  # The create path rejects anything under 100MiB, so a volume never has size 0.
+  size: gt=0
+  # Every subsystem NQN is built as "<cluster nqn>:lvol:<uuid>", and the cluster
+  # NQN is "nqn.2023-02.io.simplyblock:<uuid>".
+  nqn: required,startswith=nqn.
+  # Not gt=0: ns_id is 0 while a volume is in creation, until the primary's
+  # namespace add assigns the real one (sbcli lvol_controller.add_lvol).
+  ns_id: present
+
+# One NVMe-oF path, as returned by /connect and carried in a migration's
+# connect_strings. Its keys are hyphenated to match the `nvme connect` option
+# names, which is the drift-prone part.
+#
+# `ns-id` is deliberately absent here even though it is what prompted all this:
+# the two paths that build this model promise different things (sbcli
+# simplyblock_core/utils/nvme.py). The lvol connect path always sets it; the
+# migration pre-connect path never does, since the target namespace does not
+# exist yet. A rule here would reject every migration response, so it belongs to
+# the endpoint that makes the promise — see the scoped block below.
+NvmeConnectEntry:
+  transport: required
+  # Present, not required: connect_lvol emits an entry per data NIC without
+  # skipping one that has no IPv4 address, and one unconfigured NIC must not
+  # invalidate the paths that do work.
+  ip: present
+  port: required,gt=0,lte=65535
+  nqn: required,startswith=nqn.
+
+# An endpoint-scoped variant: the rules above, plus what this one endpoint
+# promises on top. It compiles to its own Go type (`as`), because rules are
+# registered per type — so this is also the type to decode that endpoint's body
+# into. Only usable for a body the client decodes itself, which is the case
+# here: the spec declares no response model for /connect.
+#
+# Namespace ids start at 1, so a missing or zero one from here means the wrong
+# key was decoded — the `ns-id` to `ns_id` rename this all started with.
+NvmeConnectEntry@GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/connect:
+  as: LvolConnectEntry
+  ns-id: required,gt=0
+
+StoragePoolDTO:
+  id: required
+  cluster_id: required
+  name: required
+  max_size: present # 0 means unlimited
+
+StorageNodeDTO:
+  id: required
+  cluster_id: required
+  hostname: required
+  status: required
+  mgmt_ip: required,ipv4 # IPv4Address in the control plane's own model
+  # Counts a fresh or empty node legitimately reports as 0, and the secondary
+  # a node legitimately has none of.
+  lvols: present
+  lvols_max: present
+  device_count: present
+  secondary_node_id: present
+
+MigrationDTO:
+  id: required
+  lvol_id: required
+  source_node_id: required
+  target_node_id: required
+  phase: required
+  status: required
+  # Progress counters, zero before the migration gets going, and the error
+  # message that is empty while nothing has gone wrong.
+  retry_count: present
+  max_retries: present
+  snaps_migrated: present
+  snaps_total: present
+  error_message: present

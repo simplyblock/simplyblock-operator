@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -24,10 +23,10 @@ func (c *Client) Volume(ctx context.Context, h lvol.VolumeHandle) (lvol.Volume, 
 	if err != nil {
 		return lvol.Volume{}, fmt.Errorf("volume %s: %w", h, err)
 	}
-	if resp.JSON200 == nil {
-		return lvol.Volume{}, statusError(h, resp.StatusCode(), resp.Body)
+	d, err := payload("volume "+string(h), resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return lvol.Volume{}, err
 	}
-	d := resp.JSON200
 	return lvol.Volume{
 		ID:        h,
 		Name:      d.Name,
@@ -50,25 +49,24 @@ func (c *Client) Connection(ctx context.Context, h lvol.VolumeHandle) (lvol.Conn
 	if err != nil {
 		return lvol.Connection{}, fmt.Errorf("connect %s: %w", h, err)
 	}
-	if resp.StatusCode() != http.StatusOK {
-		return lvol.Connection{}, statusError(h, resp.StatusCode(), resp.Body)
-	}
-
 	// The /connect body is untyped in the spec (FastAPI declares no response
-	// model), so decode it here: a list of per-path connect entries.
-	var entries []connectEndpoint
-	if err := json.Unmarshal(resp.Body, &entries); err != nil {
-		return lvol.Connection{}, fmt.Errorf("connect %s: decode response: %w", h, err)
+	// model), but its shape is the spec's NvmeConnectEntry — the same model a
+	// migration's connect_strings carry. Decode it as this endpoint's flavour
+	// of that model (see internal/cpapi/validation.yaml), which additionally
+	// holds the control plane to the namespace id only /connect promises.
+	entries, err := decodeBody[[]cpapi.LvolConnectEntry]("connect volume "+string(h), resp.StatusCode(), resp.Body)
+	if err != nil {
+		return lvol.Connection{}, err
 	}
 	if len(entries) == 0 {
 		return lvol.Connection{}, fmt.Errorf("connect %s: %w", h, errs.ErrNotConnected)
 	}
 
-	conn := lvol.Connection{NQN: entries[0].NQN}
+	conn := lvol.Connection{NQN: entries[0].Nqn}
 	for _, e := range entries {
 		conn.Endpoints = append(conn.Endpoints, lvol.Endpoint{
 			Transport: e.Transport,
-			Address:   e.IP,
+			Address:   e.Ip,
 			Port:      e.Port,
 		})
 	}
@@ -85,12 +83,12 @@ func (c *Client) ListVolumes(ctx context.Context, clusterID, poolID string) ([]l
 	if err != nil {
 		return nil, fmt.Errorf("list volumes in %s/%s: %w", clusterID, poolID, err)
 	}
-	if resp.JSON200 == nil {
-		return nil, fmt.Errorf("list volumes in %s/%s: control-plane returned %d: %s",
-			clusterID, poolID, resp.StatusCode(), strings.TrimSpace(string(resp.Body)))
+	ds, err := payload("list volumes in "+clusterID+"/"+poolID, resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return nil, err
 	}
-	out := make([]lvol.Volume, 0, len(*resp.JSON200))
-	for _, d := range *resp.JSON200 {
+	out := make([]lvol.Volume, 0, len(*ds))
+	for _, d := range *ds {
 		out = append(out, lvol.Volume{
 			ID:        lvol.VolumeHandle(clusterID + ":" + poolID + ":" + d.Id.String()),
 			Name:      d.Name,
@@ -118,7 +116,7 @@ func (c *Client) ResizeVolume(ctx context.Context, h lvol.VolumeHandle, sizeByte
 		return fmt.Errorf("resize volume %s: %w", h, err)
 	}
 	if code := resp.StatusCode(); code != http.StatusOK && code != http.StatusNoContent {
-		return statusError(h, code, resp.Body)
+		return respError("resize volume "+string(h), code, resp.Body)
 	}
 	return nil
 }
@@ -138,7 +136,7 @@ func (c *Client) DeleteVolume(ctx context.Context, h lvol.VolumeHandle) error {
 	case http.StatusOK, http.StatusNoContent, http.StatusNotFound:
 		return nil
 	default:
-		return statusError(h, resp.StatusCode(), resp.Body)
+		return respError("delete volume "+string(h), resp.StatusCode(), resp.Body)
 	}
 }
 
@@ -314,22 +312,4 @@ func sizeToInt(bytes uint64) (int, error) {
 		return 0, fmt.Errorf("size %d bytes exceeds the maximum supported (%d)", bytes, uint64(math.MaxInt))
 	}
 	return int(bytes), nil
-}
-
-// connectEndpoint is one element of the /connect response.
-type connectEndpoint struct {
-	Transport string `json:"transport"`
-	IP        string `json:"ip"`
-	Port      int    `json:"port"`
-	NQN       string `json:"nqn"`
-}
-
-// statusError maps a non-success control-plane response for a volume to an
-// error, using the shared ErrNotFound sentinel for 404 so callers can match
-// with errors.Is.
-func statusError(h lvol.VolumeHandle, code int, body []byte) error {
-	if code == http.StatusNotFound {
-		return fmt.Errorf("volume %s: %w", h, errs.ErrNotFound)
-	}
-	return fmt.Errorf("volume %s: control-plane returned %d: %s", h, code, strings.TrimSpace(string(body)))
 }
