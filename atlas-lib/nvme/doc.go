@@ -6,6 +6,11 @@
 // Controller, Namespace, Path, Device) are immutable snapshots of kernel state
 // at scan time; re-resolve to observe changes rather than mutating a value.
 //
+// A Device additionally remembers the resolver it came out of, so a question it
+// cannot answer from its own snapshot re-scans without the caller threading a
+// resolver back in (Device.HasSiblings). A device assembled by hand carries
+// none; bind one with Device.WithResolver.
+//
 // # Resolving devices
 //
 // Resolvers read the local sysfs tree and re-scan per call; the zero
@@ -50,12 +55,27 @@
 // # Siblings (same volume)
 //
 // With native multipath disabled a volume surfaces as one device per path, all
-// sharing its namespace UUID; Siblings returns the others (empty under native
-// multipath, which has a single head). SiblingsVia re-scans when you hold a
-// Device and a resolver but no list.
+// sharing its namespace UUID; siblings are those other devices (none under
+// native multipath, which has a single head). Co-tenants are the opposite
+// relation: *other* volumes on the same subsystem, the namespaces of a
+// multi-namespace subsystem. A teardown asks about both — every sibling has to
+// be released, and a co-tenant forbids disconnecting the subsystem — and often
+// only needs to know whether there are any.
 //
-//	sibs := dev.Siblings(all)
-//	sibs, err := nvme.SiblingsVia(ctx, devices, dev)
+// Each question comes as a pure filter over a snapshot the caller owns, which is
+// the cheap form since one List answers all four for every device in it:
+//
+//	sibs := nvme.Siblings(dev, all)
+//	tenants := nvme.CoTenants(dev, all)
+//	if nvme.HasSiblings(dev, all) || nvme.HasCoTenants(dev, all) { }
+//
+// and as a method that re-scans through the resolver the device came from, so
+// the answer is current rather than as-of scan time:
+//
+//	sibs, err := dev.Siblings(ctx)
+//	tenants, err := dev.CoTenants(ctx)
+//	more, err := dev.HasSiblings(ctx)
+//	shared, err := dev.HasCoTenants(ctx)
 //
 // # Multi-namespace subsystems
 //

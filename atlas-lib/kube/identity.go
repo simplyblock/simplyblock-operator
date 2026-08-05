@@ -38,6 +38,39 @@ func IsPinnedVolume(annotations map[string]string) bool {
 	return PinnedNode(annotations) != ""
 }
 
+// PendingPin returns the pinned storage node a controller has not acted on yet,
+// and whether there is one. It is the strict change diff behind a pin migration:
+// a pin is pending when the annotations name a target (see PinnedNode) that
+// differs from AnnoSelectedStorageNodeApplied, the value the controller recorded
+// after last acting.
+//
+// The diff matters because a controller that requests a migration also writes
+// the PVC, and reconciling on its own write would request the same migration
+// again. Callers must therefore write the target to
+// AnnoSelectedStorageNodeApplied once the migration is under way.
+//
+// A rejected target is deliberately still reported as pending: whether a node id
+// is valid can change (a node joins, a typo is corrected elsewhere), so the
+// decision to re-validate is the caller's. Use PinRejected to keep the caller
+// from repeating a warning event about a target it has already refused.
+func PendingPin(annotations map[string]string) (string, bool) {
+	target := PinnedNode(annotations)
+	if target == "" {
+		return "", false
+	}
+	if target == annotations[AnnoSelectedStorageNodeApplied] {
+		return "", false
+	}
+	return target, true
+}
+
+// PinRejected reports whether target is the pin value a controller has already
+// rejected as an unknown storage node, i.e. whether warning about it again would
+// be a duplicate.
+func PinRejected(annotations map[string]string, target string) bool {
+	return target != "" && annotations[AnnoSelectedStorageNodeRejected] == target
+}
+
 // VolumeHandleFromPV extracts the simplyblock logical-volume handle from a
 // PV. It returns errs.ErrUnsupported if the PV is not a CSI volume owned by
 // this driver.
