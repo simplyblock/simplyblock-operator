@@ -52,10 +52,15 @@ func SiblingsVia(ctx context.Context, r DeviceResolver, d Device) ([]Device, err
 // the device already carries, so it needs no rescan.
 func (d Device) CoTenants() []Device {
 	var out []Device
+	seen := make(map[NamespaceID]bool, len(d.Subsystem.Namespaces))
 	for _, ns := range d.Subsystem.Namespaces {
-		if ns.ID == d.Namespace.ID {
+		// One entry per co-tenant volume: without a multipath head a
+		// namespace appears once per controller, and those repeats are the
+		// same volume, not another tenant.
+		if ns.ID == d.Namespace.ID || seen[ns.ID] {
 			continue
 		}
+		seen[ns.ID] = true
 		out = append(out, Device{Namespace: ns, Subsystem: d.Subsystem})
 	}
 	return out

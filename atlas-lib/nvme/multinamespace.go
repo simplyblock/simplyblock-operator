@@ -33,13 +33,18 @@ var identifyMNAN = identifyControllerMNAN
 // and needs a live controller (returns errs.ErrNotConnected when the subsystem
 // has none). The conclusive sysfs cases never touch the device and never error.
 func (s Subsystem) IsMultiNamespace() (bool, error) {
-	if len(s.Namespaces) > 1 {
-		return true, nil
-	}
+	// Distinct NSIDs, not entry count: without a multipath head the same
+	// namespace appears once per controller, which is one volume on several
+	// paths rather than several volumes.
+	nsids := make(map[NamespaceID]bool, len(s.Namespaces))
 	for _, ns := range s.Namespaces {
+		nsids[ns.ID] = true
 		if ns.ID > 1 {
 			return true, nil
 		}
+	}
+	if len(nsids) > 1 {
+		return true, nil
 	}
 
 	ctrl, ok := s.liveController()

@@ -110,6 +110,9 @@ func TestCoTenants(t *testing.T) {
 type fakeDeviceResolver struct{ devs []Device }
 
 func (f fakeDeviceResolver) List(context.Context) ([]Device, error) { return f.devs, nil }
+func (f fakeDeviceResolver) ListWithSelector(_ context.Context, sel DeviceSelector) ([]Device, error) {
+	return sel.Filter(f.devs), nil
+}
 func (f fakeDeviceResolver) ByUUID(context.Context, string) (Device, error) {
 	return Device{}, nil
 }
