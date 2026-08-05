@@ -1,0 +1,119 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: storageclusterops.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: StorageClusterOps
+    listKind: StorageClusterOpsList
+    plural: storageclusterops
+    shortNames:
+    - scops
+    singular: storageclusterops
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.clusterRef
+      name: Cluster
+      type: string
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageClusterOps is a one-shot operational CR targeting a single SimplyblocksStorageCluster.
+          Analogous to a Kubernetes Job — it drives a cluster-level operation (activate, expand,
+          shutdown, restart, node-recycle) to completion and records the result. Only one
+          StorageClusterOps can be active per cluster at a time.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StorageClusterOpsSpec defines the desired state of a StorageClusterOps.
+            properties:
+              action:
+                description: Action is the operation to perform. Immutable.
+                enum:
+                - activate
+                - expand
+                - shutdown
+                - restart
+                - node-recycle
+                type: string
+              clusterRef:
+                description: ClusterRef is the name of the target SimplyblocksStorageCluster.
+                  Immutable.
+                type: string
+              nodeUUID:
+                description: NodeUUID is the target node UUID, required only when
+                  action=node-recycle.
+                type: string
+            required:
+            - action
+            - clusterRef
+            type: object
+          status:
+            description: StorageClusterOpsStatus holds the observed state of a StorageClusterOps.
+            properties:
+              completedAt:
+                description: CompletedAt is when the operation finished (successfully
+                  or not).
+                format: date-time
+                type: string
+              message:
+                description: Message is a human-readable description of the current
+                  state or failure reason.
+                type: string
+              phase:
+                description: Phase is the high-level lifecycle phase.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              startedAt:
+                description: StartedAt is when the operation began.
+                format: date-time
+                type: string
+              triggered:
+                description: |-
+                  Triggered indicates the backend POST has been sent for this operation.
+                  Guards against duplicate backend calls on retry.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

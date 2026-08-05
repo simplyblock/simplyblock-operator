@@ -380,6 +380,10 @@ type StorageClusterStatus struct {
 	// be simultaneously offline (failed, drained, or restarted) without violating
 	// the cluster's redundancy guarantees.
 	MaxFaultTolerance *int32 `json:"maxFaultTolerance,omitempty"`
+	// ActiveOpsRef is the name of the currently active ClusterOps on this cluster.
+	// Empty when no operation is in progress.
+	// +optional
+	ActiveOpsRef string `json:"activeOpsRef,omitempty"`
 	// ActionStatus tracks the most recent action execution state.
 	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 	// NodeRecycleStatus tracks in-progress state for the node-recycle action.

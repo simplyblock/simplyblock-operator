@@ -389,6 +389,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeOps")
 		os.Exit(1)
 	}
+	if err := (&controller.StorageClusterOpsReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storageclusterops-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageClusterOps")
+		os.Exit(1)
+	}
 	if err := (&controller.VolumeRebalancerReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),

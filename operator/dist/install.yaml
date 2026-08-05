@@ -1876,6 +1876,11 @@ spec:
                       migration.
                     type: integer
                 type: object
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef is the name of the currently active ClusterOps on this cluster.
+                  Empty when no operation is in progress.
+                type: string
               clusterName:
                 description: ClusterName is the resolved backend cluster name.
                 type: string
@@ -3868,6 +3873,7 @@ rules:
   - backupimports
   - backuppolicies
   - backuprestores
+  - clusterops
   - controlplanes
   - pools
   - snapshotreplications
@@ -3892,6 +3898,7 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
+  - clusterops/finalizers
   - pools/finalizers
   - snapshotreplications/finalizers
   - storagebackups/finalizers
@@ -3909,6 +3916,7 @@ rules:
   - backupimports/status
   - backuppolicies/status
   - backuprestores/status
+  - clusterops/status
   - controlplanes/status
   - pools/status
   - snapshotreplications/status
