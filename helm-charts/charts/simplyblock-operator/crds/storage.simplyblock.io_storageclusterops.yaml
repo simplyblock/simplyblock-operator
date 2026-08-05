@@ -74,10 +74,18 @@ spec:
                 description: ClusterRef is the name of the target SimplyblocksStorageCluster.
                   Immutable.
                 type: string
-              nodeUUID:
-                description: NodeUUID is the target node UUID, required only when
-                  action=node-recycle.
-                type: string
+              nodeRecycle:
+                description: |-
+                  NodeRecycle configures behaviour specific to the node-recycle action.
+                  Ignored for all other actions.
+                properties:
+                  refreshSNodeAPI:
+                    description: |-
+                      RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
+                      after the backend node is shut down and before it is restarted, ensuring
+                      the latest image is running before the node comes back online.
+                    type: boolean
+                type: object
             required:
             - action
             - clusterRef

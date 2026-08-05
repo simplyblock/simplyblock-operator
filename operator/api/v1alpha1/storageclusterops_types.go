@@ -31,6 +31,15 @@ const (
 	StorageClusterOpsPhaseFailed    StorageClusterOpsPhase = "Failed"
 )
 
+// NodeRecycleSpec configures the node-recycle action behaviour.
+type NodeRecycleSpec struct {
+	// RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
+	// after the backend node is shut down and before it is restarted, ensuring
+	// the latest image is running before the node comes back online.
+	// +optional
+	RefreshSNodeAPI bool `json:"refreshSNodeAPI,omitempty"`
+}
+
 // StorageClusterOpsSpec defines the desired state of a StorageClusterOps.
 type StorageClusterOpsSpec struct {
 	// ClusterRef is the name of the target SimplyblocksStorageCluster. Immutable.
@@ -41,6 +50,11 @@ type StorageClusterOpsSpec struct {
 	// +kubebuilder:validation:Enum=activate;expand;shutdown;restart;node-recycle
 	// +kubebuilder:validation:Required
 	Action string `json:"action"`
+
+	// NodeRecycle configures behaviour specific to the node-recycle action.
+	// Ignored for all other actions.
+	// +optional
+	NodeRecycle *NodeRecycleSpec `json:"nodeRecycle,omitempty"`
 }
 
 // StorageClusterOpsStatus holds the observed state of a StorageClusterOps.

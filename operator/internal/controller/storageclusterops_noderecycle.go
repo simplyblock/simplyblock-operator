@@ -104,7 +104,7 @@ func (r *StorageClusterOpsReconciler) reconcileNodeRecycle(
 	case utils.NodeRecyclePhaseSnodeRefreshWait:
 		return r.scopsNodeRecycleSnodeRefreshWait(ctx, cluster, apiClient, clusterUUID, currentNodeUUID)
 	case utils.NodeRecyclePhaseShuttingDown:
-		return r.scopsNodeRecycleShuttingDown(ctx, cluster, apiClient, clusterUUID, currentNodeUUID)
+		return r.scopsNodeRecycleShuttingDown(ctx, ops, cluster, apiClient, clusterUUID, currentNodeUUID)
 	case utils.NodeRecyclePhaseRestarting:
 		return r.scopsNodeRecycleRestarting(ctx, cluster, apiClient, clusterUUID, currentNodeUUID)
 	case utils.NodeRecyclePhaseRebalancing:
@@ -239,6 +239,7 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleTriggerPhase(
 
 func (r *StorageClusterOpsReconciler) scopsNodeRecycleShuttingDown(
 	ctx context.Context,
+	ops *simplyblockv1alpha1.StorageClusterOps,
 	cluster *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
@@ -276,7 +277,7 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleShuttingDown(
 
 	log.Info("Polling node status after shutdown trigger", "nodeUUID", nodeUUID, "status", nodeStatus)
 
-	refreshSNode := cluster.Spec.NodeRecycle != nil && cluster.Spec.NodeRecycle.RefreshSNodeAPI
+	refreshSNode := ops.Spec.NodeRecycle != nil && ops.Spec.NodeRecycle.RefreshSNodeAPI
 
 	switch nodeStatus {
 	case utils.NodeStatusOffline, utils.NodeStatusInRestart:

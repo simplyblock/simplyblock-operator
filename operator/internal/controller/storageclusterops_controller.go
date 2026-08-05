@@ -322,7 +322,6 @@ func (r *StorageClusterOpsReconciler) reconcileSimplePost(
 	return r.succeedOps(ctx, ops, cluster, fmt.Sprintf("Cluster %s completed", action))
 }
 
-
 // succeedOps transitions ops to Succeeded and releases the cluster lock.
 func (r *StorageClusterOpsReconciler) succeedOps(
 	ctx context.Context,

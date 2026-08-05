@@ -35,14 +35,6 @@ type StripeSpec struct {
 	ParityChunks *int32 `json:"parityChunks,omitempty"`
 }
 
-// NodeRecycleSpec configures the node-recycle action behaviour.
-type NodeRecycleSpec struct {
-	// RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
-	// after the backend node is shut down and before it is restarted, ensuring
-	// the latest image is running before the node comes back online.
-	RefreshSNodeAPI bool `json:"refreshSNodeAPI,omitempty"`
-}
-
 // NodeRecycleStatus tracks in-progress state for the node-recycle action.
 // All fields are persisted in CR status so the reconciler can resume after a requeue.
 type NodeRecycleStatus struct {
@@ -244,9 +236,6 @@ type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="HA Type"
 	// HAType defines the backend high-availability mode.
 	HAType string `json:"haType,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node Recycle"
-	// NodeRecycle configures the node-recycle action.
-	NodeRecycle *NodeRecycleSpec `json:"nodeRecycle,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Single Node"
 	// IsSingleNode enables single-node cluster mode.
 	IsSingleNode *bool `json:"isSingleNode,omitempty"`
