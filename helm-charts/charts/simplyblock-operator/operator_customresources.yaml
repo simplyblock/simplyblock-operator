@@ -143,13 +143,3 @@ spec:
   # nodeConfigs:
   #   worker-node-1:
   #     failureDomain: 0
----
-apiVersion: storage.simplyblock.io/v1alpha1
-kind: StorageClusterOps
-metadata:
-  name: simplyblock-cluster-activate
-  namespace: simplyblock
-spec:
-  clusterRef: simplyblock-cluster
-  # action: activate    # One of: activate, expand, shutdown, restart, node-recycle
-  # nodeUUID: ""        # Required only when action=node-recycle

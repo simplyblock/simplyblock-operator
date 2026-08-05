@@ -45,9 +45,9 @@ type StorageClusterOpsReconciler struct {
 	Recorder events.EventRecorder
 }
 
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=clusterops,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=clusterops/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=clusterops/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusterops,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusterops/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusterops/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch

@@ -3873,11 +3873,11 @@ rules:
   - backupimports
   - backuppolicies
   - backuprestores
-  - clusterops
   - controlplanes
   - pools
   - snapshotreplications
   - storagebackups
+  - storageclusterops
   - storageclusters
   - storagenodeops
   - storagenodes
@@ -3898,10 +3898,10 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
-  - clusterops/finalizers
   - pools/finalizers
   - snapshotreplications/finalizers
   - storagebackups/finalizers
+  - storageclusterops/finalizers
   - storageclusters/finalizers
   - storagenodeops/finalizers
   - storagenodes/finalizers
@@ -3916,11 +3916,11 @@ rules:
   - backupimports/status
   - backuppolicies/status
   - backuprestores/status
-  - clusterops/status
   - controlplanes/status
   - pools/status
   - snapshotreplications/status
   - storagebackups/status
+  - storageclusterops/status
   - storageclusters/status
   - storagenodeops/status
   - storagenodes/status
