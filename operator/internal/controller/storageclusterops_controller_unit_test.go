@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -55,7 +56,11 @@ func newTestStorageCluster() *simplyblockv1alpha1.StorageCluster {
 
 func newTestStorageClusterOps(clusterRef, action string) *simplyblockv1alpha1.StorageClusterOps {
 	return &simplyblockv1alpha1.StorageClusterOps{
-		ObjectMeta: metav1.ObjectMeta{Name: scopsTestOpsName, Namespace: scopsTestNS},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       scopsTestOpsName,
+			Namespace:  scopsTestNS,
+			Finalizers: []string{utils.FinalizerStorageClusterOps},
+		},
 		Spec: simplyblockv1alpha1.StorageClusterOpsSpec{
 			ClusterRef: clusterRef,
 			Action:     action,
