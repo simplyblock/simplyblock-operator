@@ -107,11 +107,11 @@ func (r *StorageClusterOpsReconciler) reconcileNodeRecycle(
 	case utils.NodeRecyclePhaseSnodeRefreshWait:
 		return r.scopsNodeRecycleSnodeRefreshWait(ctx, ops, cluster, apiClient, clusterUUID, currentNodeUUID, nodeIdx, total)
 	case utils.NodeRecyclePhaseShuttingDown:
-		return r.scopsNodeRecycleShuttingDown(ctx, ops, cluster, apiClient, clusterUUID, currentNodeUUID, nodeIdx, total)
+		return r.scopsNodeRecycleShuttingDown(ctx, ops, apiClient, clusterUUID, currentNodeUUID, nodeIdx, total)
 	case utils.NodeRecyclePhaseRestarting:
-		return r.scopsNodeRecycleRestarting(ctx, ops, cluster, apiClient, clusterUUID, currentNodeUUID, nodeIdx, total)
+		return r.scopsNodeRecycleRestarting(ctx, ops, apiClient, clusterUUID, currentNodeUUID, nodeIdx, total)
 	case utils.NodeRecyclePhaseRebalancing:
-		return r.scopsNodeRecycleRebalancing(ctx, ops, cluster, apiClient, clusterUUID, currentNodeUUID, nodeIdx, total)
+		return r.scopsNodeRecycleRebalancing(ctx, ops, apiClient, clusterUUID, currentNodeUUID, nodeIdx, total)
 	default:
 		return r.failOps(ctx, ops, cluster, fmt.Sprintf("unknown node-recycle phase: %q", nrs.NodePhase))
 	}
@@ -253,7 +253,6 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleTriggerPhase(
 func (r *StorageClusterOpsReconciler) scopsNodeRecycleShuttingDown(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.StorageClusterOps,
-	cluster *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 	nodeIdx, total int,
@@ -318,7 +317,6 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleShuttingDown(
 func (r *StorageClusterOpsReconciler) scopsNodeRecycleRestarting(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.StorageClusterOps,
-	cluster *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 	nodeIdx, total int,
@@ -368,7 +366,6 @@ func (r *StorageClusterOpsReconciler) scopsNodeRecycleRestarting(
 func (r *StorageClusterOpsReconciler) scopsNodeRecycleRebalancing(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.StorageClusterOps,
-	cluster *simplyblockv1alpha1.StorageCluster,
 	apiClient *webapi.Client,
 	clusterUUID, nodeUUID string,
 	nodeIdx, total int,
