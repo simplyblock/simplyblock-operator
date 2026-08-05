@@ -88,7 +88,7 @@ func WaitForDevice(ctx context.Context, devs nvme.DeviceResolver, sel nvme.Devic
 		select {
 		case <-ctx.Done():
 			if unsettled != nil {
-				return nvme.Device{}, fmt.Errorf("wait for device %s: %w: %w", sel, ctx.Err(), unsettled)
+				return nvme.Device{}, fmt.Errorf("wait for device %s: %w", sel, errors.Join(ctx.Err(), unsettled))
 			}
 			return nvme.Device{}, fmt.Errorf("wait for device %s: %w", sel, ctx.Err())
 		case <-ticker.C:
