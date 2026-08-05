@@ -175,11 +175,11 @@ func TestNonMultipathNamespaces(t *testing.T) {
 
 	// Same volume over two paths: siblings, not co-tenants, and not a
 	// multi-namespace subsystem.
-	sibs := all[0].Siblings(all)
+	sibs := Siblings(all[0], all)
 	if len(sibs) != 1 || sibs[0].Namespace.Name != all[1].Namespace.Name {
 		t.Errorf("Siblings = %v, want the other path's device", devNames(sibs))
 	}
-	if ct := all[0].CoTenants(); len(ct) != 0 {
+	if ct, _ := all[0].CoTenants(context.Background()); len(ct) != 0 {
 		t.Errorf("CoTenants = %v, want none", devNames(ct))
 	}
 	stubIdentifyMNAN(t, 1, nil)

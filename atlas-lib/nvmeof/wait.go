@@ -38,6 +38,42 @@ func ConnectDevice(
 	return WaitForDevice(ctx, devs, nvme.DeviceSelector{NQN: t.NQN, NSID: nsid})
 }
 
+// ConnectMultipathDevice attaches a volume over all of its fabric paths and
+// returns the local namespace device that came up for it — the whole of what a
+// CSI NodeStage does, in one call. It is the multipath form of ConnectDevice,
+// and the one to reach for by default: a volume published over several paths
+// that is attached over one is a volume one node failure away from losing I/O.
+//
+// The paths are established in the order given, which is the control plane's
+// priority order (build targets with Targets to keep it). A path that cannot be
+// established does not stop the others; its reason is in the returned
+// PathResult, which is returned even on error so a caller can report or retry
+// per path. The error is non-nil only when no path came up at all, or when the
+// paths came up but no block device followed.
+//
+// nsid picks the namespace on a multi-namespace subsystem — pass
+// lvol.Connection.NSID; 0 means "the subsystem's only namespace".
+func ConnectMultipathDevice(
+	ctx context.Context,
+	c Connector,
+	devs nvme.DeviceResolver,
+	targets []Target,
+	nsid nvme.NamespaceID,
+) (nvme.Device, []PathResult, error) {
+	if len(targets) == 0 {
+		return nvme.Device{}, nil, fmt.Errorf("connect: no targets")
+	}
+	results, err := c.ConnectPaths(ctx, targets)
+	if err != nil {
+		return nvme.Device{}, results, err
+	}
+	dev, err := WaitForDevice(ctx, devs, nvme.DeviceSelector{NQN: targets[0].NQN, NSID: nsid})
+	if err != nil {
+		return nvme.Device{}, results, err
+	}
+	return dev, results, nil
+}
+
 // WaitForDevice polls devs until the namespace selected by sel is attached and
 // returns it. The block device shows up a moment after the controller goes
 // live, so a caller that connected and immediately looked it up would race the
