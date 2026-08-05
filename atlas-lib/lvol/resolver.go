@@ -2,18 +2,45 @@ package lvol
 
 import "context"
 
-// Endpoint is one NVMe-oF path through which a logical volume is reachable.
-// A volume may expose several (multipath, or HA across storage nodes).
+// Endpoint is one NVMe-oF path through which a logical volume is reachable,
+// with the connect parameters the control plane chose for it. A volume may
+// expose several endpoints (multipath, or HA across storage nodes).
+//
+// The control plane also returns a prebuilt "connect" command line and the
+// subsystem's allowed-hosts list; neither is carried here — the connector
+// renders its own connect options, and host authorization is not the
+// initiator's business.
 type Endpoint struct {
 	Transport string // e.g. "tcp"
 	Address   string // storage-node host or IP
 	Port      int    // service port, typically 4420
+
+	// Per-path connect tunables as the control plane chose them. The
+	// timeouts are pointers because 0 is a meaningful value (fail I/O
+	// immediately) distinct from "not specified".
+	NrIOQueues        int  // number of I/O queue pairs
+	ReconnectDelaySec int  // delay between reconnect attempts
+	KeepAliveTMOSec   int  // keep-alive timeout
+	CtrlLossTMOSec    *int // give up on a lost controller after this long
+	FastIOFailTMOSec  *int // fail fast on I/O while a controller is down
+
+	HostIface string // bind the path to this source interface
+	// TLS reports that the control plane expects this path to be encrypted.
+	// Establishing it needs a pre-shared key in the host keyring.
+	TLS bool
 }
 
 // Connection is the control-plane's answer to "how do I attach this
 // volume over the fabric": the subsystem NQN plus the paths to it.
 type Connection struct {
-	NQN       string
+	NQN string
+	// NSID is the namespace id the volume occupies within the subsystem, for
+	// subsystems that export several. Zero when the control plane does not
+	// report one.
+	NSID uint32
+	// Endpoints are in the control plane's priority order — primary,
+	// secondary, tertiary — and that order is preserved as received.
+	// nvmeof.ConnectPaths relies on it to attach the primary path first.
 	Endpoints []Endpoint
 }
 
