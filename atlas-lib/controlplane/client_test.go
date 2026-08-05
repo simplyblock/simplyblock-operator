@@ -91,6 +91,41 @@ func TestClientConnection(t *testing.T) {
 	}
 }
 
+// The /connect entries carry the connect parameters the control plane picked
+// for each path (hyphenated keys, matching the nvme connect options); all of
+// them have to survive decoding.
+func TestClientConnectionCarriesConnectParameters(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"transport":"tcp","ip":"10.10.10.1","port":4420,"nqn":"nqn.x",` +
+			`"reconnect-delay":2,"ctrl-loss-tmo":60,"fast-io-fail-tmo":0,"nr-io-queues":8,` +
+			`"keep-alive-tmo":5,"host-iface":"eth1","tls":true,"ns-id":3,` +
+			`"connect":"nvme connect ...","allowed-hosts":["nqn.host"]}]`))
+	})
+
+	conn, err := c.Connection(context.Background(), testHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conn.NSID != 3 {
+		t.Errorf("NSID = %d, want 3", conn.NSID)
+	}
+	e := conn.Endpoints[0]
+	if e.NrIOQueues != 8 || e.ReconnectDelaySec != 2 || e.KeepAliveTMOSec != 5 {
+		t.Errorf("queues/delay/kato = %d/%d/%d, want 8/2/5", e.NrIOQueues, e.ReconnectDelaySec, e.KeepAliveTMOSec)
+	}
+	if e.CtrlLossTMOSec == nil || *e.CtrlLossTMOSec != 60 {
+		t.Errorf("ctrl-loss-tmo = %v, want 60", e.CtrlLossTMOSec)
+	}
+	// 0 means "fail I/O immediately", which must not be lost as "unset".
+	if e.FastIOFailTMOSec == nil || *e.FastIOFailTMOSec != 0 {
+		t.Errorf("fast-io-fail-tmo = %v, want 0", e.FastIOFailTMOSec)
+	}
+	if e.HostIface != "eth1" || !e.TLS {
+		t.Errorf("host-iface/tls = %q/%v, want eth1/true", e.HostIface, e.TLS)
+	}
+}
+
 func TestClientListVolumes(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/storage-pools/"+testPool+"/volumes/") {

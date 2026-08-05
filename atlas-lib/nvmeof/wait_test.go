@@ -308,7 +308,7 @@ func TestConnectDevice(t *testing.T) {
 				if !connected {
 					return notFound()
 				}
-				return liveSub(nqn)
+				return liveSub(nqn, "10.0.0.1")
 			}},
 			connect: func(context.Context, string) (string, error) { connected = true; return "", nil },
 		}
