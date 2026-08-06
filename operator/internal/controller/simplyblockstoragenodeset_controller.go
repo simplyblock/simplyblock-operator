@@ -1620,6 +1620,30 @@ func maybeActivateCluster(
 	}
 
 	if utils.ShouldActivateCluster(requiredEc, onlineHealthy, snCR) {
+		// Failure-domain readiness gate: mirrors the one in reconcileActivate
+		// (simplyblockstoragecluster_controller.go). ShouldActivateCluster only
+		// counts online-healthy nodes against the erasure-coding scheme -- it
+		// has no notion of failure domains, so without this check a cluster
+		// with enough nodes but too few/unbalanced FDs gets POSTed to
+		// /activate every time this reconciler runs, which the backend
+		// synchronously rejects and reverts (unready -> in_activation ->
+		// unready), producing a permanent activation-retry loop instead of
+		// quietly waiting. No-op for FD-disabled clusters.
+		if ptr.BoolFromOrFalse(clusterCR.Spec.EnableFailureDomains) {
+			hostDomains, err := clusterFailureDomainHosts(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+			if err != nil {
+				log.Error(err, "Failed to list StorageNodeSets for failure-domain readiness check",
+					"cluster", clusterCR.Name)
+				return err
+			}
+			npcs := stripeParityChunks(clusterCR.Spec.StripeSpec)
+			if reason := fdActivationDomainCountViolation(npcs, hostDomains); reason != "" {
+				log.Info("Not activating yet, waiting on failure-domain readiness",
+					"cluster", clusterCR.Name, "reason", reason)
+				return nil
+			}
+		}
+
 		if err := waitForNodeOnlineSleepFn(ctx, waitForNodeOnlineActivationDelay); err != nil {
 			return err
 		}
