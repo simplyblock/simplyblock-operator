@@ -320,7 +320,7 @@ func TestReconcileActivateProceedsOnceFailureDomainsAreReady(t *testing.T) {
 	if cluster.Status.ActionStatus.State != utils.ActionStateRunning {
 		t.Fatalf("expected Running state, got %#v", cluster.Status.ActionStatus)
 	}
-	if res.Requeue != true {
+	if res.IsZero() {
 		t.Fatalf("expected immediate requeue for the init-action step, got %+v", res)
 	}
 }
