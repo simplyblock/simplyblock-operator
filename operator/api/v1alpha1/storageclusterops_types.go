@@ -58,10 +58,12 @@ type NodeRecycleSpec struct {
 // StorageClusterOpsSpec defines the desired state of a StorageClusterOps.
 type StorageClusterOpsSpec struct {
 	// ClusterRef is the name of the target SimplyblocksStorageCluster. Immutable.
+	// +k8s:immutable
 	// +kubebuilder:validation:Required
 	ClusterRef string `json:"clusterRef"`
 
 	// Action is the operation to perform. Immutable.
+	// +k8s:immutable
 	// +kubebuilder:validation:Enum=activate;expand;shutdown;start;restart;node-recycle
 	// +kubebuilder:validation:Required
 	Action string `json:"action"`

@@ -1524,10 +1524,16 @@ spec:
                 - restart
                 - node-recycle
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               clusterRef:
                 description: ClusterRef is the name of the target SimplyblocksStorageCluster.
                   Immutable.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               nodeRecycle:
                 description: |-
                   NodeRecycle configures behaviour specific to the node-recycle action.
