@@ -322,70 +322,105 @@ func TestDistinctDomainCount(t *testing.T) {
 	}
 }
 
-func TestFdDrainGateWellProvisionedGatesOnDomainCount(t *testing.T) {
-	// 2+2 with 4 domains (ndcs+npcs=4): full one-chunk-per-domain isolation.
-	// Two domains already active, budget is 2 -> a third distinct domain blocks.
-	activeDomains := map[int32]bool{1: true, 2: true}
-	blocked, reason := fdDrainGate(map[string]bool{"n1": true, "n2": true}, activeDomains, 3, 4, 4, 2)
-	if !blocked || reason == "" {
-		t.Fatalf("expected a new (3rd) domain to be blocked at the 2-domain budget, got blocked=%v reason=%q", blocked, reason)
+func TestActiveDrainDomainCountsTallies(t *testing.T) {
+	fd1, fd2 := int32(1), int32(2)
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "node-a", FailureDomain: &fd1},
+				{Hostname: "node-b", FailureDomain: &fd1},
+				{Hostname: "node-c", FailureDomain: &fd2},
+				// node-d intentionally has no status entry -> excluded
+			},
+		},
 	}
-
-	// Piling onto an already-active domain is always free, regardless of count.
-	blocked, _ = fdDrainGate(map[string]bool{"n1": true, "n2": true}, activeDomains, 1, 4, 4, 2)
-	if blocked {
-		t.Fatalf("expected piling onto an already-active domain to proceed")
-	}
-
-	// A new domain within budget (only 1 active, budget 2) proceeds.
-	blocked, _ = fdDrainGate(map[string]bool{"n1": true}, map[int32]bool{1: true}, 2, 4, 4, 2)
-	if blocked {
-		t.Fatalf("expected a 2nd domain to proceed while still under the 2-domain budget")
+	activeWorkers := map[string]bool{"node-a": true, "node-b": true, "node-c": true, "node-d": true}
+	counts := activeDrainDomainCounts(snCR, activeWorkers)
+	if counts[1] != 2 || counts[2] != 1 || len(counts) != 2 {
+		t.Fatalf("expected {1:2, 2:1}, got %v", counts)
 	}
 }
 
-func TestFdDrainGateUnderProvisionedAllowsOneFullDomainOrNodeBudgetAcrossTwo(t *testing.T) {
-	// 2+2 (domainsNeeded=4) but only 2 real failure domains -> under-provisioned.
-	// maxFaultTolerance=2 per the existing erasure-code-only budget.
-	const domainsAvailable = 2
-	const domainsNeeded = 4
-	const maxFaultTolerance = 2
+// fdDrainGate is confirmed against the backend team's stated requirements
+// (2026-08, Dmitrii Iakovlev) for a 2+2 layout:
+//   - 2 domains: "1 whole domain" or "1 node in each of the 2 domains" are
+//     the only safe combinations.
+//   - 3 domains: only 1 domain may be fully down, not 2.
+//   - 4 domains: 2 domains may be fully down (well-provisioned case).
 
-	// No domain active yet: first mover into domain 1 always proceeds.
-	if blocked, _ := fdDrainGate(map[string]bool{}, map[int32]bool{}, 1, domainsAvailable, domainsNeeded, maxFaultTolerance); blocked {
-		t.Fatalf("expected the first candidate to proceed")
-	}
-
-	// Domain 1 already fully active (e.g. both its nodes draining) -- a 3rd
-	// node in the SAME domain 1 must still be free, no matter the node count,
-	// since this mirrors losing that whole domain outright.
-	activeInDomain1 := map[string]bool{"n1": true, "n2": true}
-	if blocked, _ := fdDrainGate(activeInDomain1, map[int32]bool{1: true}, 1, domainsAvailable, domainsNeeded, maxFaultTolerance); blocked {
-		t.Fatalf("expected continuing to drain within the already-active domain to proceed unconditionally")
-	}
-
-	// Opening domain 2 while domain 1 has 1 active node (total active nodes
-	// below maxFaultTolerance) is the "two different nodes from different FD"
-	// case -- must proceed.
-	if blocked, _ := fdDrainGate(map[string]bool{"n1": true}, map[int32]bool{1: true}, 2, domainsAvailable, domainsNeeded, maxFaultTolerance); blocked {
-		t.Fatalf("expected a 2nd domain to proceed while total active nodes is still under maxFaultTolerance")
-	}
-
-	// Opening domain 2 once the raw node budget is already exhausted must block
-	// -- we cannot assume losing 2 distinct domains at once is safe here.
-	activeAtBudget := map[string]bool{"n1": true, "n2": true}
-	blocked, reason := fdDrainGate(activeAtBudget, map[int32]bool{1: true}, 2, domainsAvailable, domainsNeeded, maxFaultTolerance)
-	if !blocked || reason == "" {
-		t.Fatalf("expected opening a 2nd domain at the node budget to block, got blocked=%v reason=%q", blocked, reason)
+func TestFdDrainGate2DomainsOneWholeDomainSafe(t *testing.T) {
+	// chunksPerDomain = ceil(4/2) = 2. Domain 1 already has 3 nodes down
+	// (maxed at chunksPerDomain regardless of how many more) -- a 4th is free.
+	counts := map[int32]int{1: 3}
+	if blocked, _ := fdDrainGate(counts, 1, 2, 4, 2); blocked {
+		t.Fatalf("expected piling further within an already-maxed domain to proceed")
 	}
 }
 
-func TestFdDrainGateUnknownSchemeTreatedAsUnderProvisioned(t *testing.T) {
+func TestFdDrainGate2DomainsOneNodePerDomainSafe(t *testing.T) {
+	counts := map[int32]int{1: 1}
+	if blocked, _ := fdDrainGate(counts, 2, 2, 4, 2); blocked {
+		t.Fatalf("expected 1 node in each of the 2 domains to proceed")
+	}
+}
+
+func TestFdDrainGate2DomainsWholeDomainPlusOtherIsUnsafe(t *testing.T) {
+	// Domain 1 fully down (4 nodes, maxed at chunksPerDomain=2) -- a node in
+	// domain 2 must now be blocked (not one of the two safe combinations).
+	counts := map[int32]int{1: 4}
+	blocked, reason := fdDrainGate(counts, 2, 2, 4, 2)
+	if !blocked || reason == "" {
+		t.Fatalf("expected domain 2 to be blocked once domain 1 is fully down, got blocked=%v reason=%q", blocked, reason)
+	}
+}
+
+func TestFdDrainGate2DomainsOnePerDomainPlusExtraInEitherIsUnsafe(t *testing.T) {
+	// 1 node down in each of domains 1 and 2 already (the safe combo) --
+	// piling a SECOND node onto EITHER domain must now be blocked, even
+	// though that domain is already "active". This is the exact gap the old
+	// unconditional-piling logic missed.
+	counts := map[int32]int{1: 1, 2: 1}
+	if blocked, _ := fdDrainGate(counts, 2, 2, 4, 2); !blocked {
+		t.Fatalf("expected a 2nd node in domain 2 to be blocked once 1+1 is already committed")
+	}
+	if blocked, _ := fdDrainGate(counts, 1, 2, 4, 2); !blocked {
+		t.Fatalf("expected a 2nd node in domain 1 to be blocked once 1+1 is already committed")
+	}
+}
+
+func TestFdDrainGate3DomainsOneWholeDomainSafeTwoUnsafe(t *testing.T) {
+	// chunksPerDomain = ceil(4/3) = 2, same per-domain cap as 2 domains, but
+	// spread across 3. 1 domain fully down is safe; opening a 2nd is not.
+	counts := map[int32]int{1: 2} // domain 1 already maxed
+	if blocked, _ := fdDrainGate(counts, 1, 3, 4, 2); blocked {
+		t.Fatalf("expected piling within the already-maxed domain 1 to proceed")
+	}
+	if blocked, _ := fdDrainGate(counts, 2, 3, 4, 2); !blocked {
+		t.Fatalf("expected opening domain 2 to be blocked once domain 1 has maxed the risk budget")
+	}
+}
+
+func TestFdDrainGate4DomainsTwoWholeDomainsSafeThreeUnsafe(t *testing.T) {
+	// chunksPerDomain = ceil(4/4) = 1 (well-provisioned): up to npcs=2 whole
+	// domains may be fully down.
+	counts := map[int32]int{1: 1} // domain 1 already maxed (chunksPerDomain=1)
+	if blocked, _ := fdDrainGate(counts, 2, 4, 4, 2); blocked {
+		t.Fatalf("expected opening a 2nd domain to proceed while under the npcs=2 domain budget")
+	}
+	countsTwoActive := map[int32]int{1: 1, 2: 1}
+	if blocked, _ := fdDrainGate(countsTwoActive, 3, 4, 4, 2); !blocked {
+		t.Fatalf("expected opening a 3rd domain to be blocked once 2 domains already max the npcs=2 budget")
+	}
+}
+
+func TestFdDrainGateUnknownSchemeTreatedAsSingleDomainChunk(t *testing.T) {
 	// domainsNeededForFullDisjoint=0 signals the scheme could not be parsed;
-	// must not be treated as "enough domains" via a stray >= 0 comparison.
-	blocked, _ := fdDrainGate(map[string]bool{"n1": true, "n2": true}, map[int32]bool{1: true}, 2, 5, 0, 2)
-	if !blocked {
-		t.Fatalf("expected unknown scheme (domainsNeeded=0) to fall back to the node-budget gate and block here")
+	// chunksPerDomain must fall back to >= 1, not 0 (which would divide by
+	// zero / always-block via a degenerate cap).
+	counts := map[int32]int{1: 1}
+	blocked, _ := fdDrainGate(counts, 2, 5, 0, 2)
+	if blocked {
+		t.Fatalf("expected an unparsed scheme to still allow a 2nd domain within the npcs budget, got blocked")
 	}
 }
 
@@ -789,7 +824,7 @@ func TestProcessWorkerUncordonedNoState(t *testing.T) {
 
 	requeue, shouldBreak := r.processWorker(
 		context.Background(), snCR, "node-g",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false, 0,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false, 0, 0,
 	)
 	if requeue != 0 || shouldBreak {
 		t.Fatalf("expected (0, false) for uncordoned node with no state, got (%v, %v)", requeue, shouldBreak)
@@ -813,7 +848,7 @@ func TestProcessWorkerSkipsCordonedNotYetOnline(t *testing.T) {
 
 	requeue, shouldBreak := r.processWorker(
 		context.Background(), snCR, "node-h",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false, 0,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false, 0, 0,
 	)
 	if requeue != 0 || shouldBreak {
 		t.Fatalf("expected (0, false) for cordoned node not yet online, got (%v, %v)", requeue, shouldBreak)
@@ -842,7 +877,7 @@ func TestProcessWorkerCordonedOnlineInitializesState(t *testing.T) {
 
 	r.processWorker(
 		context.Background(), snCR, "node-i",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false, 0,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false, 0, 0,
 	)
 
 	// Drain state must have been initialized (phase may be detected or failed
@@ -1175,6 +1210,7 @@ func TestHandleDetectedFDDisabledUsesGlobalGate(t *testing.T) {
 		1,     // maxFaultTolerance=1 → node-a already consumes the slot
 		false, // fdEnabled=false → global gate
 		0,     // domainsNeededForFullDisjoint unused when fdEnabled=false
+		0,     // npcs unused when fdEnabled=false
 	)
 
 	if err != nil {
@@ -1200,9 +1236,12 @@ func TestHandleDetectedSameDomainParallelAllowed(t *testing.T) {
 	requeue, err := r.handleDetected(
 		context.Background(), snCR, state,
 		webapi.NewClient("http://127.0.0.1:1"), "cluster",
-		1,    // maxFaultTolerance=1 — same domain must still be allowed through
+		1,    // maxFaultTolerance=1 — unused inside the fdEnabled branch
 		true, // fdEnabled=true
-		2,    // domainsNeededForFullDisjoint — irrelevant here: same-domain always proceeds
+		1,    // domainsNeededForFullDisjoint=1, domainsAvailable=1 -> chunksPerDomain=1,
+		// so node-a (already active in domain 1) has already maxed the domain's
+		// contribution -- node-b proceeds unconditionally regardless of npcs.
+		1, // npcs -- irrelevant here since the maxed-domain shortcut fires first
 	)
 
 	// The gate passes; the function proceeds until it finds no UUID for node-b
@@ -1226,9 +1265,10 @@ func TestHandleDetectedCrossDomainGated(t *testing.T) {
 	requeue, err := r.handleDetected(
 		context.Background(), snCR, state,
 		webapi.NewClient("http://127.0.0.1:1"), "cluster",
-		1,    // maxFaultTolerance=1 → domain 1 already consuming the slot
+		1,    // maxFaultTolerance=1 — unused inside the fdEnabled branch
 		true, // fdEnabled=true
-		2,    // domainsNeededForFullDisjoint=2, domainsAvailable=2 → well-provisioned, gates on domain count
+		2,    // domainsNeededForFullDisjoint=2, domainsAvailable=2 -> chunksPerDomain=1 (well-provisioned)
+		1,    // npcs=1: currentRisk(1)+1=2 > npcs(1) -> correctly blocked
 	)
 
 	if err != nil {
