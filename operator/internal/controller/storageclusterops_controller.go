@@ -543,10 +543,8 @@ func (r *StorageClusterOpsReconciler) failOps(
 	if err := r.Status().Patch(ctx, ops, patch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
-	if cluster != nil {
-		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "Failed", "Failed",
-			"StorageClusterOps %s failed: %s", ops.Name, reason)
-	}
+	r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "Failed", "Failed",
+		"StorageClusterOps %s failed: %s", ops.Name, reason)
 	r.releaseClusterLock(ctx, ops, cluster)
 	return ctrl.Result{}, nil
 }
