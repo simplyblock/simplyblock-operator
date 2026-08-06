@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
@@ -19,6 +20,94 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
+
+
+func TestFdActivationDomainCountViolation(t *testing.T) {
+	hosts := func(domainCounts ...int32) map[string]int32 {
+		m := map[string]int32{}
+		for i, fd := range domainCounts {
+			m[fmt.Sprintf("10.0.0.%d", i)] = fd
+		}
+		return m
+	}
+
+	cases := []struct {
+		name    string
+		npcs    int
+		hosts   map[string]int32
+		wantErr bool
+	}{
+		{"empty", 1, map[string]int32{}, true},
+		{"npcs1 two domains violates", 1, hosts(0, 0, 1, 1), true},
+		{"npcs1 three domains ok", 1, hosts(0, 1, 2), false},
+		{"npcs1 three domains unequal violates", 1, hosts(0, 1, 1, 2), true},
+		{"npcs2 two domains violates", 2, hosts(0, 0, 1, 1), true},
+		{"npcs2 three domains violates", 2, hosts(0, 1, 2), true},
+		{"npcs2 four domains ok", 2, hosts(0, 1, 2, 3), false},
+		{"npcs2 four domains unequal violates", 2, hosts(0, 0, 1, 2, 3), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reason := fdActivationDomainCountViolation(tc.npcs, tc.hosts)
+			if tc.wantErr && reason == "" {
+				t.Fatalf("expected a violation reason, got none")
+			}
+			if !tc.wantErr && reason != "" {
+				t.Fatalf("expected no violation, got: %s", reason)
+			}
+		})
+	}
+}
+
+func TestClusterFailureDomainHosts(t *testing.T) {
+	fd := func(v int32) *int32 { return &v }
+
+	nsA := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "set-a", Namespace: "default"},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-x"},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "w0", MgmtIp: "10.0.0.1", FailureDomain: fd(0)},
+				{Hostname: "w1", MgmtIp: "10.0.0.2", FailureDomain: fd(1)},
+				{Hostname: "w2", MgmtIp: "10.0.0.3"}, // no domain yet, must be skipped
+			},
+		},
+	}
+	nsB := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "set-b", Namespace: "default"},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-x"},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "w3", MgmtIp: "10.0.0.4", FailureDomain: fd(2)},
+			},
+		},
+	}
+	nsOther := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "set-other", Namespace: "default"},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-y"},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "y0", MgmtIp: "10.0.0.9", FailureDomain: fd(0)},
+			},
+		},
+	}
+
+	r := newClusterStateTestReconciler(t, nsA, nsB, nsOther)
+
+	got, err := clusterFailureDomainHosts(context.Background(), r.Client, "default", "cluster-x")
+	if err != nil {
+		t.Fatalf("clusterFailureDomainHosts returned error: %v", err)
+	}
+	want := map[string]int32{"10.0.0.1": 0, "10.0.0.2": 1, "10.0.0.4": 2}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for ip, fdVal := range want {
+		if got[ip] != fdVal {
+			t.Fatalf("expected %s -> domain %d, got %v", ip, fdVal, got)
+		}
+	}
+}
 
 func TestClusterEnsureFinalizer(t *testing.T) {
 	cluster := &simplyblockv1alpha1.StorageCluster{
