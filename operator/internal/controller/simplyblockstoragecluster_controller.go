@@ -532,6 +532,26 @@ func (r *StorageClusterReconciler) reconcileActivate(
 
 	log := logf.FromContext(ctx)
 
+	// Failure-domain readiness gate: checked before any ActionStatus
+	// mutation, so a not-yet-ready cluster has nothing to get stuck on --
+	// just requeue and re-check next pass. No-op for FD-disabled clusters.
+	// Mirrors simplyblock_core's fd_activation_domain_count_violation
+	// (Python side) so the two stay in lockstep.
+	if ptr.BoolFromOrFalse(clusterCR.Spec.EnableFailureDomains) {
+		hostDomains, err := clusterFailureDomainHosts(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+		if err != nil {
+			log.Error(err, "Failed to list StorageNodeSets for failure-domain readiness check",
+				"cluster", clusterCR.Name)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		npcs := stripeParityChunks(clusterCR.Spec.StripeSpec)
+		if reason := fdActivationDomainCountViolation(npcs, hostDomains); reason != "" {
+			log.Info("Cluster not ready for activation yet, waiting on failure-domain readiness",
+				"cluster", clusterCR.Name, "reason", reason)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+	}
+
 	if clusterCR.Status.ActionStatus != nil &&
 		clusterCR.Status.ActionStatus.Action == utils.ClusterActionActivate &&
 		clusterCR.Status.ActionStatus.State == utils.ActionStateSuccess &&
@@ -768,6 +788,75 @@ func (r *StorageClusterReconciler) failExpand(
 	_ = r.Status().Update(ctx, clusterCR)
 
 	return ctrl.Result{}, nil
+}
+
+// clusterFailureDomainHosts aggregates each host's (by management IP)
+// failure domain across every StorageNodeSet belonging to clusterName in
+// namespace. Hosts with no failure-domain assignment reported to status
+// yet are skipped, not treated as domain 0.
+func clusterFailureDomainHosts(
+	ctx context.Context, c client.Client, namespace, clusterName string,
+) (map[string]int32, error) {
+	var snList simplyblockv1alpha1.StorageNodeSetList
+	if err := c.List(ctx, &snList, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+	hostDomains := map[string]int32{}
+	for _, sn := range snList.Items {
+		if sn.Spec.ClusterName != clusterName {
+			continue
+		}
+		for _, ns := range sn.Status.Nodes {
+			if ns.FailureDomain == nil || ns.MgmtIp == "" {
+				continue
+			}
+			hostDomains[ns.MgmtIp] = *ns.FailureDomain
+		}
+	}
+	return hostDomains, nil
+}
+
+// fdActivationDomainCountViolation validates the number of distinct failure
+// domains and per-domain host balance for fresh activation, mirroring
+// simplyblock_core's fd_activation_domain_count_violation (Python side) so
+// the two stay in lockstep.
+//
+// A 2-FD layout can never absorb a second independent failure once one
+// domain is fully down, so fresh activation requires npcs+2 distinct
+// domains (3 for npcs=1, 4 for npcs=2) with an EQUAL host count in each --
+// below npcs+1 domains even the initial static role-placement rotation is
+// structurally wrong; at exactly npcs+1 it is correct but has zero spare
+// capacity for a later single add/remove. Returns a human-readable reason
+// when the cluster isn't ready yet, "" when it is.
+func fdActivationDomainCountViolation(npcs int, hostDomains map[string]int32) string {
+	if len(hostDomains) == 0 {
+		return "no storage nodes with a failure-domain assignment reported yet"
+	}
+	counts := map[int32]int{}
+	for _, fd := range hostDomains {
+		counts[fd]++
+	}
+	minDomains := npcs + 2
+	if len(counts) < minDomains {
+		return fmt.Sprintf(
+			"failure domains are enabled with npcs=%d, which requires at least "+
+				"%d distinct failure domains (2 domains is not supported at any "+
+				"npcs level); currently have %d",
+			npcs, minDomains, len(counts))
+	}
+	first := -1
+	for _, c := range counts {
+		if first == -1 {
+			first = c
+			continue
+		}
+		if c != first {
+			return fmt.Sprintf(
+				"failure domains must hold an equal number of hosts at "+
+					"activation; current split: %v", counts)
+		}
+	}
+	return ""
 }
 
 func (r *StorageClusterReconciler) upsertCSICredentialsSecret(
