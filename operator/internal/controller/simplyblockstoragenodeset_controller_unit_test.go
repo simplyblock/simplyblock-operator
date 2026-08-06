@@ -2588,3 +2588,112 @@ func TestParallelNodeAddContinuesPastPendingWorker(t *testing.T) {
 		t.Error("worker-2: expected RequeueAfter after processing")
 	}
 }
+
+// maybeActivateCluster is the OTHER path that can fire an activate call
+// (alongside reconcileActivate, gated in simplyblockstoragecluster_controller.go).
+// ShouldActivateCluster only counts online-healthy nodes against the erasure
+// coding scheme -- it has no notion of failure domains, so this reconciler
+// needs the same npcs+2 readiness gate or it POSTs /activate every time it
+// runs whenever enough nodes are online but the FDs aren't ready yet (the
+// 2026-08-06 repeated unready->in_activation->unready incident).
+func newActivationTestClusterAndNodeSet(clusterName string, nodeFDs []int32) (
+	*simplyblockv1alpha1.StorageCluster, *simplyblockv1alpha1.StorageNodeSet,
+) {
+	parity := int32(2)
+	cluster := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: "default"},
+		Spec: simplyblockv1alpha1.StorageClusterSpec{
+			EnableFailureDomains: &[]bool{true}[0],
+			StripeSpec:           &simplyblockv1alpha1.StripeSpec{ParityChunks: &parity},
+		},
+		Status: simplyblockv1alpha1.StorageClusterStatus{
+			ErasureCodingScheme: "1x1", // requiredEc=2, required=3 in ShouldActivateCluster
+		},
+	}
+
+	workerNodes := make([]string, 0, len(nodeFDs))
+	nodes := make([]simplyblockv1alpha1.NodeStatus, 0, len(nodeFDs))
+	for i, fdv := range nodeFDs {
+		host := fmt.Sprintf("w%d", i)
+		workerNodes = append(workerNodes, host)
+		fd := fdv
+		nodes = append(nodes, simplyblockv1alpha1.NodeStatus{
+			Hostname:      host,
+			MgmtIp:        fmt.Sprintf("10.0.0.%d", i+1),
+			Status:        utils.NodeStatusOnline,
+			Health:        true,
+			FailureDomain: &fd,
+		})
+	}
+	nodeSet := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "set-" + clusterName, Namespace: "default"},
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			ClusterName: clusterName,
+			WorkerNodes: workerNodes,
+		},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{Nodes: nodes},
+	}
+	return cluster, nodeSet
+}
+
+func TestMaybeActivateClusterWaitsForFailureDomainReadiness(t *testing.T) {
+	// 3 online/healthy nodes (enough to satisfy ShouldActivateCluster), but
+	// only 2 distinct failure domains for npcs=2 -- must NOT be allowed
+	// through (requires npcs+2 = 4). No POST should ever reach the backend.
+	cluster, nodeSet := newActivationTestClusterAndNodeSet(
+		"cluster-maybe-activate-wait", []int32{0, 0, 1})
+
+	r := newStorageNodeSetStateTestReconciler(t, cluster, nodeSet)
+
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	apiClient := webapi.NewClient(srv.URL)
+
+	err := maybeActivateCluster(context.Background(), apiClient, "cluster-uuid-wait", nodeSet, r)
+	if err != nil {
+		t.Fatalf("maybeActivateCluster returned unexpected error: %v", err)
+	}
+	if called {
+		t.Fatalf("expected no activate call to reach the backend while failure domains aren't ready")
+	}
+}
+
+func TestMaybeActivateClusterProceedsOnceFailureDomainsAreReady(t *testing.T) {
+	// 4 online/healthy nodes across 4 distinct, equally-sized failure domains
+	// for npcs=2 -- satisfies npcs+2 = 4, so the gate must let this through
+	// to the real activation call.
+	cluster, nodeSet := newActivationTestClusterAndNodeSet(
+		"cluster-maybe-activate-ready", []int32{0, 1, 2, 3})
+
+	r := newStorageNodeSetStateTestReconciler(t, cluster, nodeSet)
+
+	origSleepFn := waitForNodeOnlineSleepFn
+	t.Cleanup(func() { waitForNodeOnlineSleepFn = origSleepFn })
+	waitForNodeOnlineSleepFn = func(context.Context, time.Duration) error { return nil }
+
+	activateCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodPost {
+			activateCalled = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"cluster-uuid-ready","status":"active"}`))
+	}))
+	defer srv.Close()
+	apiClient := webapi.NewClient(srv.URL)
+
+	err := maybeActivateCluster(context.Background(), apiClient, "cluster-uuid-ready", nodeSet, r)
+	if err != nil {
+		t.Fatalf("maybeActivateCluster returned unexpected error: %v", err)
+	}
+	if !activateCalled {
+		t.Fatalf("expected the gate to let activation proceed once failure domains are ready")
+	}
+}
