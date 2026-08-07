@@ -18,6 +18,7 @@ package spdk
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -40,12 +41,18 @@ import (
 	"k8s.io/utils/exec"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
 	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
 	sbkube "github.com/spdk/spdk-csi/pkg/kubernetes"
 	"github.com/spdk/spdk-csi/pkg/util"
 )
+
+// vdoCapableMarkerPath is where the DaemonSet's postStart hook records the outcome of
+// installing/loading kvdo (see helm-charts .../templates/node.yaml) -- read at node-server
+// startup by advertiseVDOCapability.
+const vdoCapableMarkerPath = "/var/run/simplyblock/vdo-capable/marker"
 
 type nodeServer struct {
 	*csicommon.DefaultNodeServer
@@ -88,7 +95,69 @@ func newNodeServer(d *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*no
 		}
 	}, manager, ns.Driver.GetName())
 
+	if ns.kubeClient != nil {
+		go ns.advertiseVDOCapability(context.Background())
+	}
+
 	return ns, nil
+}
+
+// advertiseVDOCapability reads the VDO-capability marker file written by this DaemonSet's
+// postStart hook (kmod-kvdo/vdo install + modprobe, see helm-charts node.yaml) and patches
+// this Node's simplyblock.io/vdo-capable label to match. Runs in the background and retries
+// with a bounded timeout, since the postStart hook (a dnf install on first run) can take
+// longer than node-server startup should block on -- without the retry, a fast-starting
+// node server could read "marker not found yet" and wrongly label the node incapable.
+func (ns *nodeServer) advertiseVDOCapability(ctx context.Context) {
+	const (
+		maxWait  = 5 * time.Minute
+		interval = 5 * time.Second
+	)
+
+	nodeName := ns.Driver.GetNodeID()
+	if nodeName == "" {
+		klog.Warning("advertiseVDOCapability: no node ID, skipping")
+		return
+	}
+
+	deadline := time.Now().Add(maxWait)
+	var capable bool
+	for {
+		data, err := os.ReadFile(vdoCapableMarkerPath)
+		if err == nil {
+			capable = strings.TrimSpace(string(data)) == "true"
+			break
+		}
+		if time.Now().After(deadline) {
+			klog.Warningf(
+				"advertiseVDOCapability: marker file %s never appeared after %s, treating node as not VDO-capable: %v", //nolint:lll
+				vdoCapableMarkerPath, maxWait, err,
+			)
+			capable = false
+			break
+		}
+		time.Sleep(interval)
+	}
+
+	if err := ns.patchVDOCapableLabel(ctx, nodeName, capable); err != nil {
+		klog.Errorf("advertiseVDOCapability: failed to patch node %s label: %v", nodeName, err)
+	}
+}
+
+func (ns *nodeServer) patchVDOCapableLabel(ctx context.Context, nodeName string, capable bool) error {
+	patch := struct {
+		Metadata struct {
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+	}{}
+	patch.Metadata.Labels = map[string]string{vdoCapableLabelKey: strconv.FormatBool(capable)}
+
+	body, err := json.Marshal(patch)
+	if err != nil {
+		return fmt.Errorf("marshal label patch: %w", err)
+	}
+	_, err = ns.kubeClient.CoreV1().Nodes().Patch(ctx, nodeName, types.MergePatchType, body, metav1.PatchOptions{})
+	return err
 }
 
 func (ns *nodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
@@ -151,6 +220,10 @@ func (ns *nodeServer) buildAccessibleTopology(ctx context.Context) map[string]st
 		if strings.HasPrefix(key, topologyKeyStorageNodeUUIDPrefix) {
 			segments[key] = val
 		}
+	}
+
+	if node.Labels[vdoCapableLabelKey] == "true" {
+		segments[vdoCapableLabelKey] = "true"
 	}
 
 	if len(segments) == 0 {
@@ -329,8 +402,36 @@ func (ns *nodeServer) NodeStageVolume(
 			initiator.Disconnect(ctx) //nolint:errcheck // ignore error
 		}
 	}()
-	if err = ns.stageVolume(devicePath, stagingTargetPath, req, vc); err != nil { // idempotent
-		klog.Errorf("failed to stage volume, volumeID: %s devicePath:%s err: %v", volumeID, devicePath, err)
+
+	// A VDO device sits between the raw NVMe-oF device and the filesystem whenever either
+	// client-side parameter is set -- dedup-only volumes still need a working kvdo module,
+	// so this is not gated on client_compression alone.
+	mountDevicePath := devicePath
+	if vc[paramClientCompression] == "true" || vc[paramClientDeduplication] == "true" {
+		lvolID := volumeID
+		if spdkVol, perr := parseVolumeID(volumeID); perr == nil {
+			lvolID = spdkVol.lvolID
+		}
+		// Always resolve a possible byte-level clone identity collision before touching
+		// the device -- driven by the device's actual on-disk VG name, not by whether the
+		// controller told us this was a clone, so it's correct whether or not that fact
+		// was threaded through the volume context.
+		if err = util.ResolveClonedVDO(ctx, devicePath, lvolID); err != nil {
+			klog.Errorf("failed to resolve cloned VDO identity, volumeID: %s err: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		mountDevicePath, err = util.CreateOrAttachVDO(
+			ctx, devicePath, lvolID,
+			vc[paramClientCompression] == "true", vc[paramClientDeduplication] == "true",
+		)
+		if err != nil {
+			klog.Errorf("failed to create/attach VDO, volumeID: %s err: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	}
+
+	if err = ns.stageVolume(mountDevicePath, stagingTargetPath, req, vc); err != nil { // idempotent
+		klog.Errorf("failed to stage volume, volumeID: %s devicePath:%s err: %v", volumeID, mountDevicePath, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -374,6 +475,21 @@ func (ns *nodeServer) NodeUnstageVolume(
 	}
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cleanupCancel()
+
+	// VDO must come down before the raw device it sits on is disconnected -- disconnecting
+	// first would leave a live dm-vdo stack mapped on top of a device that just vanished,
+	// the same orphaned-stack state documented in the design doc's spike log.
+	if volumeContext[paramClientCompression] == "true" || volumeContext[paramClientDeduplication] == "true" {
+		lvolID := volumeID
+		if spdkVol, perr := parseVolumeID(volumeID); perr == nil {
+			lvolID = spdkVol.lvolID
+		}
+		if err = util.RemoveVDO(cleanupCtx, lvolID); err != nil {
+			klog.Errorf("failed to remove VDO device, volumeID: %s err: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	}
+
 	err = initiator.Disconnect(cleanupCtx) // idempotent
 	if err != nil {
 		klog.Errorf("failed to disconnect initiator, volumeID: %s err: %v", volumeID, err)
@@ -509,14 +625,27 @@ func (ns *nodeServer) NodeExpandVolume(
 		return &csi.NodeExpandVolumeResponse{}, nil
 	}
 
+	resizeDevicePath := devicePath
+	if volumeContext[paramClientCompression] == "true" || volumeContext[paramClientDeduplication] == "true" {
+		lvolID := volumeID
+		if spdkVol, perr := parseVolumeID(volumeID); perr == nil {
+			lvolID = spdkVol.lvolID
+		}
+		grownPath, growErr := util.GrowVDO(ctx, devicePath, lvolID)
+		if growErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to grow VDO device for volume %s: %v", volumeID, growErr)
+		}
+		resizeDevicePath = grownPath
+	}
+
 	resizer := mount.NewResizeFs(exec.New())
-	needsResize, err := resizer.NeedResize(devicePath, volumeMountPath)
+	needsResize, err := resizer.NeedResize(resizeDevicePath, volumeMountPath)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to check if volume %s needs resizing: %v", volumeID, err)
 	}
 
 	if needsResize {
-		resized, err := resizer.Resize(devicePath, volumeMountPath)
+		resized, err := resizer.Resize(resizeDevicePath, volumeMountPath)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to resize volume %s: %v", volumeID, err)
 		}
@@ -598,7 +727,11 @@ func (ns *nodeServer) stageVolume(
 	mntFlags := stagingMountFlags(req.GetVolumeCapability())
 	formatOptions := []string{}
 
-	if fsType == "xfs" {
+	// VDO virtualizes and relocates blocks, so once it's in play the filesystem is no
+	// longer directly on the erasure-coded backend device these stripe hints were computed
+	// for -- applying them to a VDO virtual device is actively misleading, not just useless.
+	usesVDO := volumeContext[paramClientCompression] == "true" || volumeContext[paramClientDeduplication] == "true"
+	if fsType == "xfs" && !usesVDO {
 		formatOptions = append(formatOptions, xfsStripeOptions(volumeContext)...)
 	}
 
@@ -828,13 +961,31 @@ func (ns *nodeServer) restageVolume(
 		return fmt.Errorf("reconnect device: %w", err)
 	}
 
+	mountDevicePath := devicePath
+	if volumeContext[paramClientCompression] == "true" || volumeContext[paramClientDeduplication] == "true" {
+		lvolID := volumeID
+		if spdkVol, perr := parseVolumeID(volumeID); perr == nil {
+			lvolID = spdkVol.lvolID
+		}
+		// Reattach only -- CreateOrAttachVDO is idempotent and reactivates an existing VG
+		// rather than recreating it, matching this function's own "never reformat, data
+		// already exists" invariant.
+		mountDevicePath, err = util.CreateOrAttachVDO(
+			ctx, devicePath, lvolID,
+			volumeContext[paramClientCompression] == "true", volumeContext[paramClientDeduplication] == "true",
+		)
+		if err != nil {
+			return fmt.Errorf("reattach VDO device for %s: %w", volumeID, err)
+		}
+	}
+
 	if _, err := ns.createMountPoint(stagingTargetPath); err != nil {
 		return fmt.Errorf("recreate staging dir: %w", err)
 	}
 	// Plain Mount, not FormatAndMount: the volume already holds a filesystem and
 	// reformatting would destroy data.
-	if err := ns.mounter.Mount(devicePath, stagingTargetPath, fsTypeOrDefault(volCap), stagingMountFlags(volCap)); err != nil { //nolint:lll // unwrappable string/log/signature
-		return fmt.Errorf("remount device %s at %s: %w", devicePath, stagingTargetPath, err)
+	if err := ns.mounter.Mount(mountDevicePath, stagingTargetPath, fsTypeOrDefault(volCap), stagingMountFlags(volCap)); err != nil { //nolint:lll // unwrappable string/log/signature
+		return fmt.Errorf("remount device %s at %s: %w", mountDevicePath, stagingTargetPath, err)
 	}
 
 	volumeContext["devicePath"] = devicePath

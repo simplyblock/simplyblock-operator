@@ -81,6 +81,20 @@ type StorageClassParameters struct {
 	// Compression enables compression for logical volumes.
 	// +kubebuilder:default="False"
 	Compression string `json:"compression,omitempty"`
+	// ClientCompression enables client-side (VDO) compression for logical volumes in this
+	// pool. Distinct from Compression (server-side). Independent of ClientDeduplication --
+	// either, both, or neither may be set. Changing this on a Pool whose StorageClass
+	// already exists has no effect (see issue #401) -- it only takes effect for pools
+	// whose StorageClass does not exist yet.
+	// +kubebuilder:default=false
+	ClientCompression *bool `json:"clientCompression,omitempty"`
+	// ClientDeduplication enables client-side (VDO) deduplication for logical volumes in
+	// this pool. Carries a significant, measured, fixed RAM cost per volume independent of
+	// ClientCompression -- intended to be opt-in on specific pools where duplicate data is
+	// actually expected, not enabled by default. Same StorageClass-immutability caveat as
+	// ClientCompression applies.
+	// +kubebuilder:default=false
+	ClientDeduplication *bool `json:"clientDeduplication,omitempty"`
 	// Encryption enables encryption for logical volumes.
 	// +kubebuilder:default=false
 	Encryption *bool `json:"encryption,omitempty"`
