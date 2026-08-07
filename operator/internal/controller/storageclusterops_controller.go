@@ -110,10 +110,17 @@ func (r *StorageClusterOpsReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Acquire the lock: set activeOpsRef on the cluster.
+	// Use an optimistic-lock patch so a concurrent reconcile for a different ops
+	// that also passed the free-check above gets a 409 and backs off rather than
+	// silently racing to overwrite the lock.
 	if cluster.Status.ActiveOpsRef != ops.Name {
-		patch := client.MergeFrom(cluster.DeepCopy())
+		base := cluster.DeepCopy()
 		cluster.Status.ActiveOpsRef = ops.Name
+		patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
 		if err := r.Status().Patch(ctx, &cluster, patch); err != nil {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("set activeOpsRef: %w", err)
 		}
 	}
