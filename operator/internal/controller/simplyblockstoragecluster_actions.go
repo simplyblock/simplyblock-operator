@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/simplyblock/atlas/kube"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -838,8 +839,8 @@ func (r *StorageClusterReconciler) findStorageNodeSetPod(
 	if err := r.List(ctx, podList,
 		client.InNamespace(namespace),
 		client.MatchingLabels{
-			"app":                 "storage-node",
-			"simplyblock-cluster": clusterName,
+			kube.LabelApp:                kube.AppStorageNode,
+			kube.LabelSimplyblockCluster: clusterName,
 		},
 	); err != nil {
 		return nil, fmt.Errorf("list storage node pods: %w", err)

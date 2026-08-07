@@ -5,12 +5,14 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -41,9 +43,10 @@ func newOpsReconciler(t *testing.T, objects ...client.Object) *StorageNodeOpsRec
 		objects...,
 	)
 	return &StorageNodeOpsReconciler{
-		Client:   cl,
-		Scheme:   scheme,
-		Recorder: events.NewFakeRecorder(16),
+		Client:    cl,
+		Scheme:    scheme,
+		Recorder:  events.NewFakeRecorder(16),
+		apiReader: cl,
 	}
 }
 
@@ -310,5 +313,58 @@ func TestResolveOpsSystemVolumeFilter_InvalidPatternReturnsError(t *testing.T) {
 	_, err := r.resolveOpsSystemVolumeFilter(ops)
 	if err == nil {
 		t.Fatal("expected error for invalid regex pattern")
+	}
+}
+
+// TestEndpointSliceHasWorker_MatchesBuilderOutput guards the coupling between the
+// EndpointSlice builder and the migrate flow's DNS gate: a slice built by
+// BuildStorageNodeSetEndpointSlice must be found by endpointSliceHasWorker. The
+// two independently encoded the slice name and hostname, and a rename that
+// touched only the builder silently wedged migrations at "waiting for DNS".
+func TestEndpointSliceHasWorker_MatchesBuilderOutput(t *testing.T) {
+	const ns = "test"
+	const worker = "worker-5.ocp.simplyblock.ai"
+
+	sns := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-node", Namespace: ns},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-a"},
+	}
+	// Build the slice exactly as reconcileEndpointSlice does.
+	slice := utils.BuildStorageNodeSetEndpointSlice(sns, map[string]string{worker: "10.0.0.15"})
+
+	scheme := newTestScheme(t,
+		simplyblockv1alpha1.AddToScheme,
+		corev1.AddToScheme,
+		discoveryv1.AddToScheme,
+	)
+	cl := newTestClient(t, scheme, nil, slice)
+	r := &StorageNodeOpsReconciler{Client: cl, Scheme: scheme, Recorder: events.NewFakeRecorder(16), apiReader: cl}
+
+	// The enrolled worker is found — this is what the drifted name broke.
+	ok, err := r.endpointSliceHasWorker(context.Background(), ns, sns.Name, worker)
+	if err != nil {
+		t.Fatalf("endpointSliceHasWorker returned error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected worker %q to be found in slice %q built for StorageNodeSet %q", worker, slice.Name, sns.Name)
+	}
+
+	// A worker not published is not found.
+	ok, err = r.endpointSliceHasWorker(context.Background(), ns, sns.Name, "worker-0.ocp.simplyblock.ai")
+	if err != nil {
+		t.Fatalf("endpointSliceHasWorker returned error: %v", err)
+	}
+	if ok {
+		t.Fatal("did not expect an unpublished worker to be found")
+	}
+
+	// A different StorageNodeSet name resolves to a different (absent) slice, so
+	// the worker is not found — guards the per-set name derivation.
+	ok, err = r.endpointSliceHasWorker(context.Background(), ns, "other-set", worker)
+	if err != nil {
+		t.Fatalf("endpointSliceHasWorker returned error: %v", err)
+	}
+	if ok {
+		t.Fatal("expected miss when querying under the wrong StorageNodeSet name")
 	}
 }

@@ -96,9 +96,9 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 		}
 		nodeA := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
 		nodeB := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-b"}}
-		r := newStorageNodeSetStateTestReconciler(t, sn, nodeA, nodeB)
+		r := newStorageNodeUUIDLabelTestReconciler(t, sn, nodeA, nodeB)
 
-		if err := r.labelWorkerNodes(context.Background(), sn, testClusterUUID); err != nil {
+		if err := labelWorkerNodes(context.Background(), r.Client, r.Recorder, sn, testClusterUUID); err != nil {
 			t.Fatalf("labelWorkerNodes returned error: %v", err)
 		}
 
@@ -126,9 +126,9 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 				WorkerNodes: []string{"vm12.simplyblock4.localdomain"},
 			},
 		}
-		r := newStorageNodeSetStateTestReconciler(t, sn)
+		r := newStorageNodeUUIDLabelTestReconciler(t, sn)
 
-		if err := r.labelWorkerNodes(context.Background(), sn, testClusterUUID); err == nil {
+		if err := labelWorkerNodes(context.Background(), r.Client, r.Recorder, sn, testClusterUUID); err == nil {
 			t.Fatalf("expected labelWorkerNodes to return an error for a missing node")
 		}
 
@@ -164,7 +164,7 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 		nodeA := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
 		r := newStorageNodeUUIDLabelTestReconciler(t, sn, storageNode, nodeA)
 
-		if err := r.labelWorkerNodes(context.Background(), sn, testClusterUUID); err != nil {
+		if err := labelWorkerNodes(context.Background(), r.Client, r.Recorder, sn, testClusterUUID); err != nil {
 			t.Fatalf("labelWorkerNodes returned error: %v", err)
 		}
 
@@ -210,7 +210,7 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 		nodeA := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}
 		r := newStorageNodeUUIDLabelTestReconciler(t, sn, snSocket0, snSocket1, nodeA)
 
-		if err := r.labelWorkerNodes(context.Background(), sn, testClusterUUID); err != nil {
+		if err := labelWorkerNodes(context.Background(), r.Client, r.Recorder, sn, testClusterUUID); err != nil {
 			t.Fatalf("labelWorkerNodes returned error: %v", err)
 		}
 
@@ -258,7 +258,7 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 		}
 		r := newStorageNodeUUIDLabelTestReconciler(t, sn, storageNode, nodeA)
 
-		if err := r.labelWorkerNodes(context.Background(), sn, testClusterUUID); err != nil {
+		if err := labelWorkerNodes(context.Background(), r.Client, r.Recorder, sn, testClusterUUID); err != nil {
 			t.Fatalf("labelWorkerNodes returned error: %v", err)
 		}
 
@@ -292,7 +292,7 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 		}
 		r := newStorageNodeUUIDLabelTestReconciler(t, sn, nodeA)
 
-		if err := r.labelWorkerNodes(context.Background(), sn, testClusterUUID); err != nil {
+		if err := labelWorkerNodes(context.Background(), r.Client, r.Recorder, sn, testClusterUUID); err != nil {
 			t.Fatalf("labelWorkerNodes returned error: %v", err)
 		}
 
@@ -307,11 +307,12 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 }
 
 // newStorageNodeUUIDLabelTestReconciler builds a fake-client-backed reconciler
-// with the "spec.storageNodeSetRef" index registered, needed by labelWorkerNodes'
-// StorageNode list (unlike newStorageNodeSetStateTestReconciler, which doesn't
-// register it — a List against an unindexed field errors, and labelWorkerNodes
-// silently ignores that error, so tests exercising the storage-node-uuid path
-// need this index to actually see StorageNode objects).
+// with the "spec.storageNodeSetRef" index registered, which labelWorkerNodes'
+// StorageNode list requires. newStorageNodeSetStateTestReconciler does not
+// register it, and a List against an unindexed field errors; because
+// labelWorkerNodes now returns that error rather than swallowing it, any test
+// that drives labelWorkerNodes must use this builder (both to see StorageNode
+// objects for the storage-node-uuid path and to avoid a spurious List error).
 func newStorageNodeUUIDLabelTestReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetReconciler {
 	t.Helper()
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
@@ -1507,12 +1508,23 @@ func newStorageNodeSetStateTestReconciler(
 	}
 	allObjects := append([]client.Object{singleton}, objects...)
 
-	cl := newTestClient(t, scheme, []client.Object{
-		&simplyblockv1alpha1.StorageNodeSet{},
-		&simplyblockv1alpha1.StorageCluster{},
-		&simplyblockv1alpha1.ControlPlane{},
-		&appsv1.DaemonSet{},
-	}, allObjects...)
+	// Register the "spec.storageNodeSetRef" index that SetupWithManager wires up
+	// in production; labelWorkerNodes (reached via Reconcile) lists StorageNodes
+	// on that field and now returns an error when the index is absent instead of
+	// silently proceeding, so the fake client must mirror the real one.
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(
+			&simplyblockv1alpha1.StorageNodeSet{},
+			&simplyblockv1alpha1.StorageCluster{},
+			&simplyblockv1alpha1.ControlPlane{},
+			&appsv1.DaemonSet{},
+		).
+		WithObjects(allObjects...).
+		WithIndex(&simplyblockv1alpha1.StorageNode{}, "spec.storageNodeSetRef", func(obj client.Object) []string {
+			return []string{obj.(*simplyblockv1alpha1.StorageNode).Spec.StorageNodeSetRef}
+		}).
+		Build()
 
 	return &StorageNodeSetReconciler{
 		Client:    cl,
