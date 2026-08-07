@@ -298,7 +298,12 @@ func GrowVDO(ctx context.Context, devicePath, lvolID string) (string, error) {
 	if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, "pvresize", devicePath); err != nil {
 		return "", fmt.Errorf("pvresize %s: %w", devicePath, err)
 	}
-	if _, err := runLVMCommand(ctx, vdoGrowTimeoutSeconds, "lvextend", "-l100%FREE", vg+"/"+poolLVName); err != nil {
+	// lvextend's -l (unlike lvcreate's) treats a bare "100%FREE" as an ABSOLUTE target size
+	// (100% of what's currently free), not "grow by" -- confirmed live ("New size given
+	// (1024 extents) not larger than existing size (1535 extents)"), since free-space-alone
+	// is smaller than the pool's current size. The "+" prefix makes it additive (current
+	// size + free space), which is what "grow to consume all newly-available space" means.
+	if _, err := runLVMCommand(ctx, vdoGrowTimeoutSeconds, "lvextend", "-l+100%FREE", vg+"/"+poolLVName); err != nil {
 		return "", fmt.Errorf("grow VDO pool LV %s/%s: %w", vg, poolLVName, err)
 	}
 
