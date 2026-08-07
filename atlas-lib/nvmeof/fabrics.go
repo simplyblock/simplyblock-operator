@@ -30,6 +30,17 @@ const (
 	// that is restarting must not consume the caller's whole context before
 	// the remaining paths get their turn.
 	defaultPathTimeout = 10 * time.Second
+	// defaultDeviceTimeout bounds the first wait for a namespace device once
+	// the paths are live. It exists because that wait has a failure mode no
+	// amount of patience fixes: a subsystem attached with live controllers
+	// that exports no namespace at all — stale controllers left by a
+	// half-completed or broken connection. Reusing that attachment never
+	// yields a block device, so the bound is what turns an endless wait into
+	// the stale-subsystem reconcile ConnectDevice does. It is a backstop for
+	// callers whose context carries no deadline of its own; a caller with a
+	// shorter deadline (kubelet's CSI operation timeout, say) still wins,
+	// since context.WithTimeout takes the earlier one.
+	defaultDeviceTimeout = 30 * time.Second
 )
 
 // FabricsConnector establishes and tears down NVMe-oF connections by talking
