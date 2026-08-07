@@ -576,6 +576,41 @@ afterward via `lvchange` measured ~391MB, matching the isolated figures above.*
   object (`vgs`/`lvs`); there is no VDO-specific idempotency mechanism to rely
   on instead.
 
+- **Write policy (`sync`/`async`/`auto`)**: `auto` (LVM's default, and what
+  every example command in this doc uses — none override it) picks `sync` or
+  `async` based on whether the backing device reports a volatile write cache.
+  A loop device typically doesn't report one, so any measurement taken
+  against a loop device (as in earlier drafts of this doc, since removed) was
+  most likely exercising `sync`, not what real deployments actually get.
+
+  *Checked against a real NVMe-oF-backed lvol on `vm04`*: `nvme id-ctrl`
+  reports `vwc: 0x5` (volatile-write-cache-present bit set), and the kernel
+  agrees (`/sys/block/nvme0n1/queue/write_cache` = `write back`) — real
+  simplyblock-backed storage does advertise a write cache to the client,
+  unlike a loop device. The same VDO volume was then created three times on
+  that real device, forcing `sync`, `async`, and `auto` in turn, each put
+  through an identical `fio` sequential-write test (1MB blocks, `iodepth=16`,
+  direct I/O, 2000MB): `sync` 37.3 MiB/s, `async` 35.7 MiB/s, `auto`
+  34.5 MiB/s — within one run-to-run standard deviation of each other, i.e.
+  **no measurable throughput difference** between policies on real hardware.
+  Something other than the local sync-vs-cache-ack decision dominates cost
+  here; the large gap seen in earlier loop-device numbers doesn't generalize.
+
+  **Recommendation**: don't force a non-default write policy for tests or for
+  this feature. There's no throughput upside to justify it — the measurement
+  above removes the "async is much faster" argument — and `async`'s actual
+  safety question (whether flush/FUA correctly forces durability end-to-end
+  through NVMe-oF to the simplyblock backend before an `fsync()` returns) is
+  still unverified: confirming the client *sees* a write-back cache is not
+  the same as confirming a crash can't lose an acknowledged write. Leave
+  `vdo_write_policy` at its `auto` default — it's also the most representative
+  choice for tests, since it's exactly what production gets with zero
+  deliberate configuration.
+
+  **Not yet tested**: a real crash-consistency check (kill the connection or
+  the node mid-write under `async`, then verify no acknowledged-but-unflushed
+  write was lost). This is the actual safety question and remains open.
+
 ### Wiring into `nodeserver.go`
 
 - `NodeStageVolume` (line 248-346): when **either**
