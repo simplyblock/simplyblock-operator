@@ -24,7 +24,7 @@ non-destructive), or **E2E** (live cluster, may alter cluster state).
 | `TestStorageClusterOps_ReleaseLock_OnlyClearsIfOwner` | `releaseClusterLock` does not clear a lock owned by a different ops |
 | `TestStorageClusterOps_ReleaseLock_NilCluster_DoesNotPanic` | `releaseClusterLock` with nil cluster is a no-op |
 | `TestStorageClusterOps_UnknownAction_Fails` | Unknown `spec.action` immediately sets phase to `Failed` |
-| `TestStorageClusterOps_NodeRecycle_MissingNodeUUID_Fails` | `action=node-recycle` without `nodeUUID` sets phase to `Failed` |
+| `TestStorageClusterOps_NodeRecycle_Initialises` | First reconcile for `action=node-recycle` sets `status.triggered=true` and transitions to `Running` |
 
 ---
 
