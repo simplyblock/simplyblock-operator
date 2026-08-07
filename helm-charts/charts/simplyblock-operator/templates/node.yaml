@@ -31,6 +31,7 @@ spec:
         {{ .Values.node.nodeSelector.key }}: {{ .Values.node.nodeSelector.value }}
       {{- end }}
       hostNetwork: true
+      hostPID: true
       dnsPolicy: ClusterFirstWithHostNet
       {{- if .Values.node.tolerations.create }}
       tolerations:
@@ -107,7 +108,13 @@ spec:
                   modprobe nvme-rdma || echo failed to modprobe nvme-rdma && \
                   if [ ! -f /var/lib/nvme/hostid ]; then uuidgen > /var/lib/nvme/hostid; fi && \
                   cp /var/lib/nvme/hostid /etc/nvme/hostid && \
-                  echo \"nqn.2014-08.org.nvmexpress:uuid:$(cat /etc/nvme/hostid)\" > /etc/nvme/hostnqn"
+                  echo \"nqn.2014-08.org.nvmexpress:uuid:$(cat /etc/nvme/hostid)\" > /etc/nvme/hostnqn; \
+                  mkdir -p /var/run/simplyblock/vdo-capable; \
+                  if nsenter -t 1 -m -u -n -i -- sh -c 'rpm -q kmod-kvdo vdo >/dev/null 2>&1 || dnf install -y kmod-kvdo vdo' && modprobe kvdo; then \
+                  echo true > /var/run/simplyblock/vdo-capable/marker; \
+                  else \
+                  echo false > /var/run/simplyblock/vdo-capable/marker; \
+                  fi"
                 ]
         volumeMounts:
         - name: socket-dir
@@ -139,6 +146,8 @@ spec:
           readOnly: true
         - name: guardian-state
           mountPath: /var/run/simplyblock/guardian
+        - name: vdo-capable-marker
+          mountPath: /var/run/simplyblock/vdo-capable
         {{- include "simplyblock.tlsVolumeMount" . | nindent 8 }}
       volumes:
       - name: socket-dir
@@ -173,6 +182,10 @@ spec:
       - name: guardian-state
         hostPath:
           path: /var/lib/simplyblock/guardian
+          type: DirectoryOrCreate
+      - name: vdo-capable-marker
+        hostPath:
+          path: /var/lib/simplyblock/vdo-capable
           type: DirectoryOrCreate
       - name: csi-nodeserver-config
         configMap:

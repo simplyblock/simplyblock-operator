@@ -90,6 +90,15 @@ const (
 	// createVolume can place a new volume on the storage node co-located with
 	// wherever the consuming Pod's Kubernetes node/pod affinity schedules it.
 	topologyKeyStorageNodeUUIDPrefix = "simplyblock.io/storage-node-uuid."
+
+	// vdoCapableLabelKey is the Kubernetes Node label the CSI node plugin sets to
+	// advertise that this node's kvdo module is installed and loadable, gating
+	// scheduling of client_compression/client_deduplication volumes onto it via CSI
+	// topology (nodeserver.go buildAccessibleTopology / advertiseVDOCapability).
+	vdoCapableLabelKey = "simplyblock.io/vdo-capable"
+
+	paramClientCompression   = "client_compression"
+	paramClientDeduplication = "client_deduplication"
 )
 
 // dhchapAllowedNodeLabelValue must match the literal value the operator's
