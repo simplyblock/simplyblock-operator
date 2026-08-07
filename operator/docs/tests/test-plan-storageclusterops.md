@@ -96,6 +96,7 @@ non-destructive), or **E2E** (live cluster, may alter cluster state).
 |---|---|---|
 | Create `StorageClusterOps(action=node-rolling-restart)` | Per-node state machine runs: shutdown → restart → rebalance for each node sequentially; ops `Succeeded` | E2E |
 | Provide `nodeRollingRestart.refreshSNodeAPI=true` | DaemonSet pod deleted and awaited ready between shutdown and restart for each node | E2E |
+| Peer node goes offline while a node is being restarted | Rolling restart holds at current node (`status.message` shows "waiting for peer nodes"); resumes automatically once peer recovers | E2E |
 
 ---
 

@@ -258,7 +258,7 @@ shutting-down ──► [snode-refresh ──► snode-refresh-wait ──►] r
 
 | Phase | What happens |
 |---|---|
-| `shutting-down` | POST `/storage-nodes/{id}/shutdown`; skip if already `in_shutdown`, `offline`, or `in_restart`. Poll until `offline` or `in_restart`. |
+| `shutting-down` | **Pre-shutdown health check**: verify all peer nodes are `online` before proceeding; if any peer is not online, requeue every 30 s until it recovers (prevents exceeding FTT). Then POST `/storage-nodes/{id}/shutdown`; skip if already `in_shutdown`, `offline`, or `in_restart`. Poll until `offline` or `in_restart`. |
 | `snode-refresh` | Delete the DaemonSet pod for this node (forces image pull). Advance to `snode-refresh-wait`. |
 | `snode-refresh-wait` | Poll until the replacement pod is `Ready`. |
 | `restarting` | POST `/storage-nodes/{id}/restart`; skip if already `in_restart` or `online`. Poll until `online`. |

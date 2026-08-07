@@ -261,6 +261,21 @@ func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartShuttingDown(
 	nrs := ops.Status.NodeRollingRestartStatus
 
 	if !nrs.PhaseTriggered {
+		// Safety check: all peer nodes must be online before we shut this one down.
+		// A concurrent node failure would push the cluster past its FTT if we proceed.
+		healthy, err := r.scopsNodeRollingRestartClusterHealthy(ctx, apiClient, clusterUUID, nodeUUID)
+		if err != nil {
+			log.Error(err, "Failed to check cluster health before shutdown", "nodeUUID", nodeUUID)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if !healthy {
+			log.Info("Holding rolling restart: waiting for all peer nodes to be online", "nodeUUID", nodeUUID)
+			patch := client.MergeFrom(ops.DeepCopy())
+			ops.Status.Message = nodeRollingRestartMsg(nodeIdx, total, nodeUUID, "waiting for peer nodes")
+			_ = r.Status().Patch(ctx, ops, patch)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown", clusterUUID, nodeUUID)
 		if res := r.scopsNodeRollingRestartTriggerPhase(ctx, ops, apiClient, clusterUUID, nodeUUID,
 			[]string{utils.NodeStatusInShutdown, utils.NodeStatusOffline, utils.NodeStatusInRestart},
@@ -521,6 +536,31 @@ func (r *StorageClusterOpsReconciler) scopsFindStorageNodeSetPod(
 }
 
 // ── package-level helpers ─────────────────────────────────────────────────────
+
+// scopsNodeRollingRestartClusterHealthy returns true when every cluster node
+// except skipNodeUUID is online. Called before each per-node shutdown to ensure
+// a concurrent node failure hasn't already reduced the cluster below its FTT.
+func (r *StorageClusterOpsReconciler) scopsNodeRollingRestartClusterHealthy(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID, skipNodeUUID string,
+) (bool, error) {
+	log := logf.FromContext(ctx)
+	nodes, err := listClusterStorageNodeSets(ctx, apiClient, clusterUUID)
+	if err != nil {
+		return false, err
+	}
+	for _, n := range nodes {
+		if n.UUID == skipNodeUUID {
+			continue
+		}
+		if strings.ToLower(n.Status) != utils.NodeStatusOnline {
+			log.Info("Peer node is not online", "peerNodeUUID", n.UUID, "peerStatus", n.Status)
+			return false, nil
+		}
+	}
+	return true, nil
+}
 
 func nodeRollingRestartFirstPhase() string {
 	return utils.NodeRollingRestartPhaseShuttingDown
