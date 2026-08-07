@@ -241,7 +241,7 @@ fi
 if run_test 6; then
   section "Test 6 — activeOpsRef cleared after ops completes"
   delete_ops "test-ref-clear"
-  # Use a missing clusterRef so the ops fails fast without touching any real cluster
+  # Use the real cluster so the lock is actually acquired and we can verify it is released.
   kubectl apply -f - <<EOF
 apiVersion: storage.simplyblock.io/v1alpha1
 kind: StorageClusterOps
@@ -249,13 +249,13 @@ metadata:
   name: test-ref-clear
   namespace: $NAMESPACE
 spec:
-  clusterRef: does-not-exist
-  action: restart
+  clusterRef: $CLUSTER_REF
+  action: activate
 EOF
-  wait_for_ops_phase "test-ref-clear" "Failed" 30 || true
+  wait_for_ops_phase "test-ref-clear" "Succeeded" 60 || \
+  wait_for_ops_phase "test-ref-clear" "Failed" 10 || true
 
-  active=$(kubectl -n "$NAMESPACE" get storagecluster does-not-exist \
-    -o jsonpath='{.status.activeOpsRef}' 2>/dev/null || true)
+  active=$(active_ops_ref)
   if [[ -z "$active" ]]; then
     pass "activeOpsRef is empty after ops completed (lock released correctly)"
   else
