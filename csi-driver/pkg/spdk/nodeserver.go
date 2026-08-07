@@ -239,9 +239,20 @@ func (ns *nodeServer) buildAccessibleTopology(ctx context.Context) map[string]st
 		}
 	}
 
-	if node.Labels[vdoCapableLabelKey] == vdoCapableLabelValue {
-		segments[vdoCapableLabelKey] = vdoCapableLabelValue
+	// Always present, value only ever changes -- CSINode's topology KEY SET is captured
+	// once at plugin registration (moments after this pod starts), while
+	// advertiseVDOCapability patches the underlying label asynchronously in the
+	// background (it can take minutes, waiting on the postStart hook's dnf install).
+	// Conditionally omitting this key when false would mean it's essentially never
+	// present at registration time, permanently breaking the topology gate for that
+	// node's CSINode entry -- external-provisioner reads the VALUE fresh from the live
+	// Node object on every provision, so only the key's presence needs to be stable,
+	// exactly like topologyKeyStorageNodeUUIDPrefix above.
+	vdoCapable := node.Labels[vdoCapableLabelKey]
+	if vdoCapable == "" {
+		vdoCapable = "false"
 	}
+	segments[vdoCapableLabelKey] = vdoCapable
 
 	if len(segments) == 0 {
 		// No zone/region labels found. Return hostname so the external-provisioner
