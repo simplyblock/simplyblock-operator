@@ -362,6 +362,35 @@ operator:
   enabled: true
   openShiftCluster: true
 
+# The CSI link: the CSI node and controller pods dial the operator and hold the
+# connection open, so the operator can query a node's storage state without
+# anything listening on the node. Off by default; it needs a serving
+# certificate, which is why it is not simply on.
+csiLink:
+  enabled: false
+
+  # Port the operator listens on, and the Service that fronts it.
+  port: 9500
+
+  # Secret holding the operator's serving certificate (keys tls.crt / tls.key).
+  # Its SANs must cover the service name below. With cert-manager, point a
+  # Certificate at this Secret.
+  certSecret: simplyblock-csi-link-cert
+
+  # Name the CSI pods verify against that certificate, and dial.
+  serviceName: simplyblock-csi-link
+
+  # CA bundle that signs the certificate, as a ConfigMap key. Leave the
+  # ConfigMap empty to fall back to the system roots (only right for a
+  # publicly rooted certificate).
+  caConfigMap: simplyblock-csi-link-ca
+  caKey: ca.crt
+
+  # Audience the CSI pods' projected tokens carry, and the operator requires. A
+  # token bound to no particular audience is one anything holding it can replay
+  # against the operator.
+  audience: simplyblock-csi-link
+
 mongodb-kubernetes:
   name: "simplyblock-mongodb"
   deployment_name: "simplyblock-mongodb"

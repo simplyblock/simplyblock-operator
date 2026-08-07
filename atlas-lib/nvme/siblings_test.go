@@ -1,13 +1,6 @@
 package nvme
 
-import (
-	"context"
-	"errors"
-	"slices"
-	"testing"
-
-	"github.com/simplyblock/atlas/errs"
-)
+import "testing"
 
 // dev builds a Device with the given namespace name/uuid; the sysfs path is
 // derived from the name so distinct names are distinct identities.
@@ -74,49 +67,12 @@ func TestSiblings(t *testing.T) {
 		}
 	})
 
-	t.Run("the method resolves and matches the pure form", func(t *testing.T) {
-		r := &fakeDeviceResolver{devs: all}
-		for _, d := range []Device{a1, a2, b1, dev("nvme9n1", volA), dev("nvme0n1", "")} {
-			want := names(Siblings(d, all))
-			got, err := d.WithResolver(r).Siblings(context.Background())
-			if err != nil {
-				t.Fatalf("Siblings(%s): %v", d.Namespace.Name, err)
-			}
-			if !slices.Equal(names(got), want) {
-				t.Errorf("Siblings(%s) = %v, want %v", d.Namespace.Name, names(got), want)
-			}
-		}
-	})
-
 	t.Run("HasSiblings agrees with Siblings", func(t *testing.T) {
-		r := &fakeDeviceResolver{devs: all}
 		for _, d := range []Device{a1, a2, b1, dev("nvme9n1", volA), dev("nvme0n1", "")} {
 			want := len(Siblings(d, all)) > 0
-			got, err := d.WithResolver(r).HasSiblings(context.Background())
-			if err != nil {
-				t.Fatalf("HasSiblings(%s): %v", d.Namespace.Name, err)
-			}
-			if got != want {
+			if got := HasSiblings(d, all); got != want {
 				t.Errorf("HasSiblings(%s) = %t, want %t", d.Namespace.Name, got, want)
 			}
-		}
-	})
-
-	t.Run("HasSiblings skips the scan without a uuid", func(t *testing.T) {
-		r := &countingResolver{fakeDeviceResolver{devs: all}, 0}
-		d := dev("nvme0n1", "").WithResolver(r)
-		if got, err := d.HasSiblings(context.Background()); got || err != nil {
-			t.Errorf("HasSiblings for uuid-less device = %t, %v; want false, nil", got, err)
-		}
-		if r.calls != 0 {
-			t.Errorf("resolver called %d times, want none", r.calls)
-		}
-	})
-
-	t.Run("HasSiblings needs a resolver", func(t *testing.T) {
-		_, err := a1.HasSiblings(context.Background()) // never bound
-		if !errors.Is(err, errs.ErrUnsupported) {
-			t.Errorf("HasSiblings on an unbound device = %v, want errs.ErrUnsupported", err)
 		}
 	})
 }
@@ -190,40 +146,6 @@ func TestCoTenants(t *testing.T) {
 			t.Errorf("per-controller repeats reported as co-tenants: %v", names(ct))
 		}
 	})
-
-	t.Run("the method resolves and matches the pure form", func(t *testing.T) {
-		r := &fakeDeviceResolver{devs: all}
-		got, err := d.WithResolver(r).CoTenants(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !slices.Equal(names(got), names(CoTenants(d, all))) {
-			t.Errorf("Device.CoTenants = %v, want %v", names(got), names(CoTenants(d, all)))
-		}
-	})
-
-	t.Run("the method sees a namespace attached since the snapshot", func(t *testing.T) {
-		// d was resolved when it was alone on its subsystem — the very case
-		// where reading the carried snapshot would wrongly allow a disconnect.
-		alone := Subsystem{ID: sharedSubsys.ID, NQN: sharedSubsys.NQN,
-			Namespaces: sharedSubsys.Namespaces[:1]}
-		r := &fakeDeviceResolver{devs: devicesOf(alone)}
-		stale := devicesOf(alone)[0].WithResolver(r)
-
-		if got, _ := stale.HasCoTenants(context.Background()); got {
-			t.Fatal("HasCoTenants = true while alone on the subsystem")
-		}
-		r.devs = all // a namespaced sibling volume showed up
-		if got, err := stale.HasCoTenants(context.Background()); err != nil || !got {
-			t.Errorf("HasCoTenants = %t, %v; want true, nil", got, err)
-		}
-	})
-
-	t.Run("needs a resolver", func(t *testing.T) {
-		if _, err := d.CoTenants(context.Background()); !errors.Is(err, errs.ErrUnsupported) {
-			t.Errorf("CoTenants on an unbound device = %v, want errs.ErrUnsupported", err)
-		}
-	})
 }
 
 func TestHasCoTenants(t *testing.T) {
@@ -260,66 +182,5 @@ func TestHasCoTenants(t *testing.T) {
 		if HasCoTenants(d, devicesOf(sharedSubsys)) {
 			t.Error("HasCoTenants = true for a device with no subsystem NQN")
 		}
-		// And the method short-circuits rather than scanning.
-		r := &countingResolver{fakeDeviceResolver{devs: devicesOf(sharedSubsys)}, 0}
-		if got, err := d.WithResolver(r).HasCoTenants(context.Background()); got || err != nil {
-			t.Errorf("HasCoTenants = %t, %v; want false, nil", got, err)
-		}
-		if r.calls != 0 {
-			t.Errorf("resolver called %d times, want none", r.calls)
-		}
 	})
-}
-
-// countingResolver records how many lookups actually reached the resolver, so a
-// test can assert that a short-circuit skipped the scan.
-type countingResolver struct {
-	fakeDeviceResolver
-	calls int
-}
-
-func (c *countingResolver) ListWithSelector(ctx context.Context, sel DeviceSelector) ([]Device, error) {
-	c.calls++
-	return c.fakeDeviceResolver.ListWithSelector(ctx, sel)
-}
-
-// fakeDeviceResolver returns a fixed device list from List; other methods are
-// unused here.
-type fakeDeviceResolver struct{ devs []Device }
-
-func (f fakeDeviceResolver) List(context.Context) ([]Device, error) { return f.devs, nil }
-func (f fakeDeviceResolver) ListWithSelector(_ context.Context, sel DeviceSelector) ([]Device, error) {
-	return sel.Filter(f.devs), nil
-}
-func (f fakeDeviceResolver) ByUUID(context.Context, string) (Device, error) {
-	return Device{}, nil
-}
-func (f fakeDeviceResolver) ByDevicePath(context.Context, string) (Device, error) {
-	return Device{}, nil
-}
-func (f fakeDeviceResolver) ByNamespace(context.Context, string, NamespaceID) (Device, error) {
-	return Device{}, nil
-}
-
-func TestDeviceSiblings_ReScans(t *testing.T) {
-	const volA = "fee75e72-1291-4193-8357-3e228ced6c49"
-	a1 := dev("nvme0n1", volA)
-	a2 := dev("nvme1n1", volA)
-	r := &fakeDeviceResolver{devs: []Device{a1, dev("nvme2n1", "other")}}
-
-	// The device was resolved when it was the volume's only block device; the
-	// method must see the path that showed up since, not that snapshot.
-	bound := a1.WithResolver(r)
-	if got, err := bound.Siblings(context.Background()); err != nil || len(got) != 0 {
-		t.Fatalf("Siblings = %v, %v; want none, nil", names(got), err)
-	}
-	r.devs = append(r.devs, a2)
-
-	got, err := bound.Siblings(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].Namespace.Name != "nvme1n1" {
-		t.Errorf("Siblings = %v, want [nvme1n1]", names(got))
-	}
 }

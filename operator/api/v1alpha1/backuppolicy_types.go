@@ -64,7 +64,7 @@ type AttachedLvol struct {
 	PVCName string `json:"pvcName"`
 	// PVCNamespace is the namespace of the PVC.
 	PVCNamespace string `json:"pvcNamespace"`
-	// LvolID is the Simplyblock logical volume UUID that this policy is attached to.
+	// LvolID is the simplyblock logical volume UUID that this policy is attached to.
 	LvolID string `json:"lvolID"`
 }
 
@@ -79,11 +79,11 @@ type BackupPolicyStatus struct {
 
 	// ClusterUUID is the resolved backend cluster UUID.
 	ClusterUUID string `json:"clusterUUID,omitempty"`
-	// PolicyID is the UUID assigned to this policy by the Simplyblock backend.
+	// PolicyID is the UUID assigned to this policy by the simplyblock backend.
 	PolicyID string `json:"policyID,omitempty"`
 
 	// AttachedLvols lists the PVCs (and their lvol IDs) currently attached to
-	// this policy in the Simplyblock backend. The controller uses this to detect
+	// this policy in the simplyblock backend. The controller uses this to detect
 	// and reconcile annotation additions and removals.
 	AttachedLvols []AttachedLvol `json:"attachedLvols,omitempty"`
 }
@@ -99,13 +99,13 @@ type BackupPolicyStatus struct {
 
 // BackupPolicy is the Schema for the backuppolicies API.
 //
-// A BackupPolicy defines retention and scheduling parameters for Simplyblock
+// A BackupPolicy defines retention and scheduling parameters for simplyblock
 // backups. To apply a policy to a PVC, annotate the PVC with:
 //
 //	simplybk/backup-policy: <BackupPolicy-name>
 //
 // The BackupPolicy must be in the same namespace as the annotated PVC.
-// The controller attaches and detaches the policy in the Simplyblock backend
+// The controller attaches and detaches the policy in the simplyblock backend
 // whenever the annotation is added or removed.
 type BackupPolicy struct {
 	metav1.TypeMeta `json:",inline"`

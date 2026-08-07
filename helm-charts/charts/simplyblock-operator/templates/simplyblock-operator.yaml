@@ -51,6 +51,12 @@ spec:
           args:
             - --leader-elect
             - --health-probe-bind-address=:8081
+            {{- if .Values.csiLink.enabled }}
+            - --csi-link
+            - --csi-link-bind-address=:{{ .Values.csiLink.port }}
+            - --csi-link-cert-path=/etc/simplyblock/csi-link-certs
+            - --csi-link-audience={{ .Values.csiLink.audience }}
+            {{- end }}
           env:
             - name: WATCH_NAMESPACE
               valueFrom:
@@ -80,9 +86,20 @@ spec:
             # (including /tmp) is read-only, so this must be a writable volume.
             - mountPath: /tmp/k8s-webhook-server/serving-certs
               name: webhook-certs
+            {{- if .Values.csiLink.enabled }}
+            - mountPath: /etc/simplyblock/csi-link-certs
+              name: csi-link-certs
+              readOnly: true
+            {{- end }}
             {{- if .Values.tls.enabled }}
             {{- include "simplyblock.tlsVolumeMount" . | nindent 12 }}
             {{- end }}
+          {{- if .Values.csiLink.enabled }}
+          ports:
+            - containerPort: {{ .Values.csiLink.port }}
+              name: csi-link
+              protocol: TCP
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -103,6 +120,15 @@ spec:
         # optional:true lets the pod start before the operator creates/populates it.
         # In cert-manager mode the operator writes the issued cert to disk itself,
         # so a writable emptyDir is required there instead.
+        {{- if .Values.csiLink.enabled }}
+        # The link carries bearer tokens, so it is TLS-only. The Secret is
+        # supplied by the deployer (a cert-manager Certificate, say); its SANs
+        # must cover .Values.csiLink.serviceName, which is the name the CSI
+        # pods verify against.
+        - name: csi-link-certs
+          secret:
+            secretName: {{ .Values.csiLink.certSecret }}
+        {{- end }}
         - name: webhook-certs
           {{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") }}
           emptyDir: {}

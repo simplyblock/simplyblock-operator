@@ -62,20 +62,18 @@
 // be released, and a co-tenant forbids disconnecting the subsystem — and often
 // only needs to know whether there are any.
 //
-// Each question comes as a pure filter over a snapshot the caller owns, which is
-// the cheap form since one List answers all four for every device in it:
+// Each question is a pure filter over a snapshot the caller owns, and one List
+// answers all four for every device in it:
 //
 //	sibs := nvme.Siblings(dev, all)
 //	tenants := nvme.CoTenants(dev, all)
 //	if nvme.HasSiblings(dev, all) || nvme.HasCoTenants(dev, all) { }
 //
-// and as a method that re-scans through the resolver the device came from, so
-// the answer is current rather than as-of scan time:
-//
-//	sibs, err := dev.Siblings(ctx)
-//	tenants, err := dev.CoTenants(ctx)
-//	more, err := dev.HasSiblings(ctx)
-//	shared, err := dev.HasCoTenants(ctx)
+// Asking them against current kernel state instead — a namespace may have been
+// attached since the snapshot, which is exactly the case a teardown must not
+// miss — means re-scanning, and that belongs to whatever holds the resolvers:
+// see storage.Accessor, whose methods of the same names do the scan and then
+// these filters.
 //
 // # Multi-namespace subsystems
 //

@@ -1,0 +1,220 @@
+syntax = "proto3";
+
+// Package atlas.storage.v1 exposes a node's local NVMe state to the operator over
+// a link.
+//
+// The messages mirror the snapshot types in the atlas nvme package field for
+// field. That is deliberate and worth preserving: those types are immutable
+// scans of sysfs with no behaviour attached, so the wire form can be a complete
+// copy rather than a summary, and a caller on the far side of a link gets the
+// same answers -- including the derived ones like Device.Accessible, which is a
+// pure function of the fields carried here -- as a caller on the node.
+//
+// Everything here is read-only. Attaching and detaching fabrics is a separate,
+// mutating service, so that a credential can be granted this and not that.
+package atlas.storage.v1;
+
+option go_package = "github.com/simplyblock/atlas/storage/storagerpc/storagev1;storagev1";
+
+// SubsystemService enumerates and finds NVMe subsystems on the node. It is the
+// wire form of atlas nvme.SubsystemResolver.
+service SubsystemService {
+  // ListSubsystems returns every attached NVMe subsystem.
+  rpc ListSubsystems(ListSubsystemsRequest) returns (ListSubsystemsResponse);
+
+  // GetSubsystemByNQN returns one subsystem with all of its controller paths
+  // and namespaces. A subsystem that is not attached is NOT_FOUND.
+  rpc GetSubsystemByNQN(GetSubsystemByNQNRequest) returns (GetSubsystemByNQNResponse);
+}
+
+// DeviceService enumerates and finds attachable namespace devices on the node.
+// It is the wire form of atlas nvme.DeviceResolver.
+service DeviceService {
+  // ListDevices returns every attached NVMe device.
+  rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse);
+
+  // ListDevicesBySelector returns every device matching the selector, in the
+  // order ListDevices would. It hands back all matches rather than a winner:
+  // a selector satisfied by more than one device (a stale namespace lingering
+  // beside a freshly connected one) is something the caller has to see, not
+  // something the node should resolve by picking. No match is an empty list,
+  // not an error.
+  rpc ListDevicesBySelector(ListDevicesBySelectorRequest) returns (ListDevicesBySelectorResponse);
+
+  // GetDeviceByUUID returns the device whose namespace UUID matches
+  // (simplyblock: the lvol UUID). NOT_FOUND when nothing matches.
+  rpc GetDeviceByUUID(GetDeviceByUUIDRequest) returns (GetDeviceByUUIDResponse);
+
+  // GetDeviceByDevicePath returns the device for a block node such as
+  // "/dev/nvme0n1". NOT_FOUND when nothing matches.
+  rpc GetDeviceByDevicePath(GetDeviceByDevicePathRequest) returns (GetDeviceByDevicePathResponse);
+
+  // GetDeviceByNamespace returns the device identified by its subsystem NQN
+  // and namespace id -- the precise coordinates of one namespace when a
+  // subsystem exports several. NOT_FOUND when nothing matches.
+  rpc GetDeviceByNamespace(GetDeviceByNamespaceRequest) returns (GetDeviceByNamespaceResponse);
+}
+
+// Address is a parsed NVMe-oF controller address.
+message Address {
+  string traddr = 1; // target transport address
+  string trsvcid = 2; // target service id (port)
+  string src_addr = 3; // host source address; may be empty
+}
+
+// Controller is one path into a subsystem.
+message Controller {
+  string id = 1; // "nvme0"
+  string sysfs_path = 2;
+  string device_path = 3; // "/dev/nvme0" (char/admin device)
+  string dev = 4; // "major:minor"
+
+  string nqn = 5;
+  uint32 cntlid = 6; // controller id within the subsystem
+  string type = 7; // "io", "discovery", "admin"
+  string transport = 8; // "tcp", "rdma", "fc", "pcie"
+  string state = 9; // "live", "connecting", "resetting"
+  Address address = 10;
+
+  string host_nqn = 11;
+  string host_id = 12;
+  int32 numa_node = 13; // -1 when unset
+
+  int32 queue_count = 14;
+  int32 sq_size = 15;
+
+  int32 keep_alive_to_sec = 16;
+  int32 ctrl_loss_tmo_sec = 17;
+  int32 reconnect_delay_sec = 18;
+  string fast_io_fail_tmo = 19; // "off" or seconds
+}
+
+// Path is one controller's access path to a namespace, carrying the ANA state
+// that says whether I/O may travel over it.
+message Path {
+  string controller = 1; // owning controller, e.g. "nvme1"
+  string name = 2; // leg name, e.g. "nvme0c1n1"
+  string sysfs_path = 3;
+  uint32 nsid = 4;
+
+  string ana_state = 5; // "optimized", "non-optimized", "inaccessible", ...
+  uint32 ana_group_id = 6;
+}
+
+// Namespace is a block namespace exported by a subsystem.
+message Namespace {
+  uint32 id = 1; // nsid
+  string name = 2; // "nvme0n1"
+  string sysfs_path = 3;
+  string device_path = 4; // "/dev/nvme0n1"
+  string dev = 5; // "major:minor"
+
+  string uuid = 6; // simplyblock: the lvol UUID
+  string nguid = 7;
+  string wwid = 8;
+  int32 csi = 9; // command set identifier (0 = NVM)
+
+  uint32 logical_block_size = 10; // bytes
+  // capacity and used are in 512-byte sectors, independent of
+  // logical_block_size.
+  uint64 capacity = 11;
+  uint64 used = 12;
+  uint32 metadata_bytes = 13;
+
+  bool read_only = 14;
+  bool hidden = 15;
+
+  // paths is the per-controller ANA view. Empty for non-multipath devices.
+  repeated Path paths = 16;
+
+  // controller names the single owning controller, set only where the kernel
+  // exposes no multipath head and the namespace is one controller's private
+  // block device. Empty for a multipath head.
+  string controller = 17;
+}
+
+// Subsystem is an NVMe subsystem: the unit a simplyblock logical volume maps
+// to, fronted by one or more controllers and exporting one or more namespaces.
+message Subsystem {
+  string id = 1; // "nvme-subsys0"
+  string sysfs_path = 2;
+
+  string nqn = 3;
+  string model = 4; // simplyblock encodes the lvol UUID here
+  string serial = 5;
+  string firmware_rev = 6;
+  string type = 7; // "nvm", "discovery"
+  string io_policy = 8; // "numa", "round-robin", "queue-depth"
+
+  repeated Controller controllers = 9;
+  repeated Namespace namespaces = 10;
+}
+
+// Device is a namespace together with the subsystem exporting it -- the unit a
+// CSI NodeStage/NodePublish acts on.
+message Device {
+  Namespace namespace = 1;
+  Subsystem subsystem = 2;
+}
+
+// DeviceSelector narrows a set of devices. Every field is optional and all set
+// fields are ANDed, so an unset selector matches everything.
+message DeviceSelector {
+  string nqn = 1;
+  uint32 nsid = 2; // 0: any
+  string uuid = 3;
+  string device_path = 4;
+}
+
+message ListSubsystemsRequest {}
+
+message ListSubsystemsResponse {
+  repeated Subsystem subsystems = 1;
+}
+
+message GetSubsystemByNQNRequest {
+  string nqn = 1;
+}
+
+message GetSubsystemByNQNResponse {
+  Subsystem subsystem = 1;
+}
+
+message ListDevicesRequest {}
+
+message ListDevicesResponse {
+  repeated Device devices = 1;
+}
+
+message ListDevicesBySelectorRequest {
+  DeviceSelector selector = 1;
+}
+
+message ListDevicesBySelectorResponse {
+  repeated Device devices = 1;
+}
+
+message GetDeviceByUUIDRequest {
+  string uuid = 1;
+}
+
+message GetDeviceByUUIDResponse {
+  Device device = 1;
+}
+
+message GetDeviceByDevicePathRequest {
+  string device_path = 1;
+}
+
+message GetDeviceByDevicePathResponse {
+  Device device = 1;
+}
+
+message GetDeviceByNamespaceRequest {
+  string nqn = 1;
+  uint32 nsid = 2;
+}
+
+message GetDeviceByNamespaceResponse {
+  Device device = 1;
+}

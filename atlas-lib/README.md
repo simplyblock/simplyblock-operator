@@ -34,8 +34,10 @@ atlas/
 ├── nvmeof/                 NVMe-oF fabric connect/disconnect (TCP)
 │   ├── connector.go        Connector iface; Target, Targets + TargetOptions
 │   ├── fabrics.go          local impl: NewFabricsConnector (/dev/nvme-fabrics)
-│   ├── multipath.go        ConnectPaths (ordered per-path connect) + PathResult
-│   └── wait.go             ConnectDevice / WaitForDevice: attach -> nvme.Device
+│   ├── wait.go             ConnectMultipathDevice: attach all paths -> nvme.Device (start here)
+│   ├── reconcile.go        ReconcilePaths: make attached paths match the control plane + PathState
+│   ├── detach.go           DetachDevice: disconnect unless the subsystem is shared
+│   └── multipath.go        the halves: ConnectPaths (ordered per-path connect) + PathResult
 ├── nqn/                    Build & parse simplyblock lvol NQNs
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
@@ -58,6 +60,25 @@ atlas/
 │   ├── pools.go            storage pools (incl. by-name lookup)
 │   ├── storagenodes.go     storage nodes + their data NICs
 │   └── migrations.go       volume migrations: create / get / continue / cancel
+├── link/                   gRPC operator ↔ CSI, over connections the CSI driver opens
+│   ├── doc.go              why the connection runs backwards, and how gRPC still works on it
+│   ├── session.go          Session: yamux-multiplexed link, gRPC server + client on both ends
+│   ├── hub.go              Hub: operator side — accepts links, serves the handshake
+│   ├── agent.go            Agent: CSI side — dials, identifies, serves, reconnects
+│   ├── registry.go         Registry: who is linked right now (ErrNoSession when not)
+│   ├── peer.go             PeerKind/PeerID/Claim/Identity/Peer
+│   ├── auth.go             Authenticator iface, bearer-token plumbing, TokenSource
+│   ├── kubeauth.go         KubeAuthenticator: TokenReview → the pod's node, not the peer's word
+│   ├── dial.go             TLSDialer / InsecureDialer
+│   └── linkv1/             the Hello handshake protocol (buf-generated, committed)
+├── storage/                one node's storage as one value — no gRPC in here
+│   ├── accessor.go         Accessor: every lookup flat, plus the questions that re-scan
+│   │                       Local(sysfs) fills one in; storagerpc.Remote fills the same struct
+│   └── storagerpc/         the same Accessor, served over a link and reached over one
+│       ├── server.go       NewServer(storage.Accessor); Register is the link agent's hook
+│       ├── client.go       Remote(conn) + the nvme resolver interfaces, remoted
+│       ├── convert.go      nvme snapshot types ↔ wire form (total, both directions)
+│       └── storagev1/      SubsystemService + DeviceService (buf-generated, committed)
 ├── net/                    Outbound URL validation (SSRF guard)
 ├── ptr/                    Pointer/optional-field helpers for generated + K8s types
 ├── errs/                   Sentinel errors (errors.Is across packages)
@@ -331,6 +352,46 @@ Ids are random, not derived: retry with a fresh call on a name collision.
 
 ### Node & fabric
 
+Everything in this section goes through `storage.Accessor` — one node's storage
+as one value. There are two ways to get one, and the code after that point is
+identical either way:
+
+```go
+// On the node itself:
+store := storage.Local(nvme.SysfsConfig{})
+
+// In the operator, for a node at the other end of a link:
+store := storagerpc.Remote(peer.Conn())
+```
+
+Both give a `storage.Accessor`, which is a plain struct holding the two
+resolvers:
+
+```go
+type Accessor struct {
+    SubsystemResolver nvme.SubsystemResolver
+    DeviceResolver    nvme.DeviceResolver
+}
+```
+
+Call it two ways. The lookups are flat on the accessor and each says what it
+returns — this is the usual way:
+
+```go
+dev, err := store.DeviceByUUID(ctx, lvolUUID)
+sub, err := store.SubsystemByNQN(ctx, nqn)
+all, err := store.ListDevices(ctx)
+```
+
+Or reach a resolver through its field, which is what you do when something else
+wants the interface — `nvmeof.ConnectMultipathDevice(ctx, c, store.DeviceResolver, …)`
+below is the example:
+
+```go
+store.DeviceResolver     // nvme.DeviceResolver
+store.SubsystemResolver  // nvme.SubsystemResolver
+```
+
 #### Attach a volume
 
 The CSI node service's `NodeStageVolume`. Outside a single-node installation the
@@ -347,7 +408,7 @@ connect them in order → wait for the block device".
 // connect, so one unreachable node cannot eat the whole NodeStage deadline.
 connector := nvmeof.NewFabricsConnector(nil, // nil ⇒ local sysfs resolver
     nvmeof.WithPathTimeout(15*time.Second))
-devices := nvme.NewSysfsDeviceResolver(nvme.SysfsConfig{})
+store := storage.Local(nvme.SysfsConfig{})
 
 // controlplane.Client implements lvol.Resolver, so the node service can depend
 // on the interface and be tested without a control plane.
@@ -364,13 +425,17 @@ targets := nvmeof.Targets(conn,
     nvmeof.WithHostNQN(hostNQN),
 )
 
-// Attach every path, one at a time, in that order — the first path to come up
-// carries I/O until the kernel has the full ANA picture. A path whose node is
-// down is skipped, not reordered, so a partially reachable volume still stages.
-results, err := connector.ConnectPaths(ctx, targets)
-if err != nil {
-    handleError(err) // non-nil only when no path at all came up
-}
+// The whole of NodeStage in one call: attach every path in the given order,
+// then wait for the block device that comes up behind them. NSID picks the
+// namespace on a multi-namespace subsystem; 0 means the subsystem's only one.
+//
+// It takes an nvme.DeviceResolver rather than the accessor, hence the field —
+// and it must be a local one, because the wait resolves device symlinks against
+// whatever filesystem it runs on. Never hand it a storagerpc.Remote.
+dev, results, err := nvmeof.ConnectMultipathDevice(ctx, connector,
+    store.DeviceResolver, targets, nvme.NamespaceID(conn.NSID))
+
+// results comes back even on error, so per-path reporting happens either way.
 for _, r := range results {
     switch {
     case !r.Live:
@@ -379,35 +444,34 @@ for _, r := range results {
         log.V(1).Info("path already attached", "address", r.Target.Address)
     }
 }
-
-// Then wait for the block device: a live controller does not mean the
-// namespace is visible yet. Selecting by NQN *and* NSID matters on a
-// multi-namespace subsystem, where the volume is one namespace among several —
-// and WaitForDevice refuses to guess between a fresh namespace and a stale one
-// the kernel has not reaped, instead of handing back the wrong block device.
-dev, err := nvmeof.WaitForDevice(ctx, devices, nvme.DeviceSelector{
-    NQN:  conn.NQN,
-    NSID: nvme.NamespaceID(conn.NSID), // 0 ⇒ the subsystem's only namespace
-})
 if err != nil {
-    handleError(err)
+    handleError(err) // no path came up at all, or none produced a device
 }
 stage(dev.Namespace.DevicePath) // /dev/nvme0n1 — the multipath head, not a leg
 ```
 
+Prefer the composed call over assembling it by hand. Both halves have a failure
+mode that is easy to get wrong and expensive when you do: the paths must be
+attached in the control plane's order, because the first one up carries I/O
+until the kernel has the full ANA picture; and the device wait must not guess
+between a freshly connected namespace and a stale one the kernel has yet to
+reap, since handing back the wrong block device is a data-corruption-grade
+mistake. A path whose node is down is skipped, not reordered, so a partially
+reachable volume still stages.
+
 Connecting is idempotent per path — a controller already fronting an endpoint is
 left alone rather than duplicated — so a retried NodeStage re-establishes only
-what is missing. `Connector.Connect` is the single-path form (`ConnectPaths` with
-one target), and `nvmeof.ConnectDevice` pairs it with the device wait for the
-cases that genuinely have one path.
+what is missing. `nvmeof.ConnectDevice` is the single-path form for volumes that
+genuinely have one; `ConnectPaths` and `WaitForDevice` are the two halves, for a
+caller that has to interleave something between them.
 
 Once attached, `nvme.DeviceSelector` addresses the volume in any later lookup,
-with `ListWithSelector` when a caller wants to see *every* match rather than the
-first:
+with `ListDevicesBySelector` when a caller wants to see *every* match rather
+than the first:
 
 ```go
 sel := nvme.DeviceSelector{NQN: conn.NQN, UUID: volumeID.String()}
-matched, err := devices.ListWithSelector(ctx, sel)
+matched, err := store.ListDevicesBySelector(ctx, sel)
 ```
 
 _Today:_ the CSI node service still connects, repairs, and ANA-reconciles paths
@@ -426,7 +490,7 @@ if err != nil {
 }
 if out.SharedSubsystem {
     // Unmount only, leave the fabric up for the volumes that share it.
-    // CoTenants(ctx) names the current ones for an event, if you want them.
+    // store.CoTenants(ctx, dev) names the current ones for an event.
     return nil
 }
 ```
@@ -452,7 +516,7 @@ owns, which is the cheap way to sweep many devices — one `List` answers all fo
 for all of them:
 
 ```go
-all, err := devices.List(ctx)
+all, err := store.ListDevices(ctx)
 if err != nil {
     handleError(err)
 }
@@ -469,7 +533,7 @@ The node-side connection guardian. `Device` values are immutable snapshots, so
 re-resolve to observe change rather than expecting a value to update.
 
 ```go
-dev, err := devices.ByUUID(ctx, volumeID.String()) // fresh snapshot
+dev, err := store.DeviceByUUID(ctx, volumeID.String()) // fresh snapshot
 if err != nil {
     handleError(err)
 }
@@ -486,28 +550,34 @@ for _, p := range dev.Namespace.Paths {
     }
 }
 
-live := 0
-for _, c := range dev.Subsystem.Controllers {
-    if c.IsLive() { // otherwise "connecting", "resetting", "deleting", …
-        live++
-    }
-}
-
 // How many paths *should* exist is a control-plane question — the set changes
 // after a migration or a node replacement — so repair re-asks and reconnects.
 conn, err := client.Connection(ctx, handle)
 if err != nil {
     handleError(err)
 }
-if live < len(conn.Endpoints) {
-    // Repair re-issues the missing paths one at a time rather than replaying
-    // the whole ordered attach: Connect is idempotent per path, so the paths
-    // that are up are left alone and keep their relative order.
-    for _, t := range nvmeof.Targets(conn, nvmeof.WithCtrlLossTMOSec(60)) {
-        if err := connector.Connect(ctx, t); err != nil {
-            log.Info("path still unavailable", "address", t.Address, "error", err)
-        }
-    }
+
+// The whole repair in one call: establish the published paths that are not up,
+// in priority order, and report what is left over. Safe on every tick —
+// connecting is idempotent per path, so a volume already attached over all of
+// them costs one controller lookup each and changes nothing.
+state, err := nvmeof.ReconcilePaths(ctx, connector, store.SubsystemResolver, conn,
+    nvmeof.WithCtrlLossTMOSec(60))
+if err != nil {
+    handleError(err) // non-nil only when no path could be established at all
+}
+switch {
+case state.Down():
+    log.Error(nil, "volume cannot serve I/O", "nqn", state.NQN)
+case state.Degraded():
+    log.Info("volume short of paths", "live", state.Live, "expected", state.Expected)
+}
+
+// Stale paths are reported, never removed: a path missing from the control
+// plane's answer right now is not necessarily gone for good — a node in restart
+// is the obvious case — and tearing down a controller changes a live data path.
+for _, c := range state.Stale {
+    log.Info("attached path no longer published", "controller", c.ID, "address", c.Address.TrAddr)
 }
 ```
 
@@ -521,7 +591,7 @@ When native NVMe multipath is off, a volume can surface as several block devices
 sharing its namespace UUID, and a teardown has to release every one of them:
 
 ```go
-siblings, err := dev.Siblings(ctx) // re-scans; nvme.Siblings(dev, all) is pure
+siblings, err := store.Siblings(ctx, dev) // re-scans the node
 if err != nil {
     handleError(err)
 }
@@ -529,6 +599,12 @@ for _, s := range siblings {
     release(s.Namespace.DevicePath)
 }
 ```
+
+These live on the accessor, not on `nvme.Device`, because they re-scan and a
+rescan needs a resolver — a device that quietly carried one would hide the cost,
+which over a link is a round trip each. `nvme.Siblings(dev, all)` is the pure
+form over a snapshot you already hold, and the one to use when sweeping many
+devices.
 
 Siblings and co-tenants are the two opposite relations, and mixing them up is a
 data-loss bug: siblings are the *same* volume reached another way and all have to
@@ -560,6 +636,114 @@ if s, ok := nqn.Parse(dev.Subsystem.NQN); ok {
     _, _ = s.ClusterID, s.LvolID
 }
 ```
+
+### Operator ↔ CSI link
+
+#### Reach a node's services from the operator
+
+The operator needs to ask nodes questions, but nothing listens on a node. The CSI
+pods dial the operator instead and hold the connection open; the operator issues
+its RPCs back down it. Each link is a yamux session, so both ends run an ordinary
+gRPC server *and* an ordinary client on it — which end dialled stops mattering
+once the session exists.
+
+Operator side, as a leader-election `Runnable`:
+
+```go
+hub, err := link.NewHub(link.HubConfig{
+    Listener: tls.NewListener(lis, servingTLS), // bearer tokens: encrypt the link
+    Auth: &link.KubeAuthenticator{
+        Client:    clientset,
+        Audiences: []string{"atlas-link"},
+        ServiceAccounts: map[link.PeerKind][]string{
+            link.PeerKindNode:       {"simplyblock/csi-node"},
+            link.PeerKindController: {"simplyblock/csi-controller"},
+        },
+    },
+    // Only the replica doing the reconciling may hold peers; the rest turn them
+    // away so they redial to the leader.
+    Accepting: func() bool {
+        select {
+        case <-mgr.Elected():
+            return true
+        default:
+            return false
+        }
+    },
+})
+go hub.Serve(ctx)
+```
+
+CSI side, one call for the whole lifecycle — dial, identify, serve, reconnect:
+
+```go
+agent, err := link.NewAgent(link.AgentConfig{
+    Dial:        link.TLSDialer("simplyblock-operator-link:9443", clientTLS),
+    ID:          link.NodePeer(os.Getenv("NODE_NAME")),   // downward API
+    InstanceUID: os.Getenv("POD_UID"),                    // supersedes a stale session
+    Token:       link.TokenFile("/var/run/secrets/atlas/link/token"),
+    Register:     nodeServer.Register,  // see "Serve a node's NVMe state" below
+    Capabilities: storagerpc.Capabilities(),
+})
+go agent.Run(ctx)
+```
+
+A peer's identity is never taken from what it says. Every node plugin pod shares
+one ServiceAccount, so a token proves DaemonSet membership, not which node sent
+it; `KubeAuthenticator` derives the node from the token's bound-pod claims and
+refuses a `Hello` that disagrees.
+
+#### Serve a node's NVMe state, and read it from the operator
+
+This is the other half of `storage.Accessor` (see [Node & fabric](#node--fabric)):
+the node serves its own, and the operator fills in the same struct with clients
+that reach it. Everything written against the local resolvers runs unchanged
+against a node elsewhere in the cluster — which is the point of there being one
+type and no mixed form. `storage` itself carries no gRPC; the transport is
+`storage/storagerpc`.
+
+On the node:
+
+```go
+nodeServer, err := storagerpc.NewServer(storage.Local(nvme.SysfsConfig{}))
+// nodeServer.Register is the link agent's Register hook, above.
+```
+
+In a reconciler:
+
+```go
+conn, err := hub.Registry().Conn(link.NodePeer(nodeName))
+if errors.Is(err, link.ErrNoSession) {
+    // Not a failure: the node is mid-rollout, or leadership just moved.
+    // ErrNoSession classifies as Unavailable/retryable, so requeue.
+    return ctrl.Result{RequeueAfter: backoff}, nil
+}
+
+store := storagerpc.Remote(conn)                // a storage.Accessor
+dev, err := store.DeviceByUUID(ctx, lvolUUID)   // errs.ErrNotFound as usual
+if err != nil {
+    return ctrl.Result{}, err
+}
+if !dev.Accessible() {                         // derived from fields that crossed
+    // attached, but nothing can serve I/O to it
+}
+
+// Needs to be current, not as-of-scan-time — costs a round trip:
+shared, err := store.HasCoTenants(ctx, dev)
+```
+
+The snapshot crosses whole, so everything derived from it is just as true on the
+operator: `Accessible`, and the pure filters `nvme.Siblings` / `nvme.CoTenants`.
+The re-scanning questions on `Accessor` work too — by asking the same node again.
+
+Two things to keep in mind. Each call is a round trip, so a caller wanting
+several answers should `List` once and use the package-level filters
+(`nvme.Siblings`, `nvme.CoTenants`, `DeviceSelector.Filter`) over the snapshot;
+the `Accessor` methods of the same name are for when being current is the point.
+And the `nvmeof` composition helpers must not be assembled across a link:
+`WaitForDevice` resolves device symlinks against the filesystem it runs on, so
+in the operator it would consult the operator's `/dev`. Those belong on the node,
+behind their own RPC.
 
 ### Cross-cutting
 
@@ -622,11 +806,16 @@ Every public API is an interface or accepts a config, so consumer tests need no
 kernel, `/sys`, `nvme-cli`, cluster, or control plane:
 
 ```go
-// Point the sysfs resolvers at a fixture tree.
-devices := nvme.NewSysfsDeviceResolver(nvme.SysfsConfig{
+// Point the whole accessor at a fixture tree.
+store := storage.Local(nvme.SysfsConfig{
     SysRoot: "testdata/sys",
     DevRoot: "testdata/dev",
 })
+
+// Or compose one from fakes — the resolvers are the seam worth faking, and a
+// partial accessor is fine: what is missing reports errs.ErrUnsupported rather
+// than answering as an empty node.
+store := storage.Accessor{DeviceResolver: &fakeDevices{...}}
 
 // Uncached resolver over a fake clientset — real index/aggregation logic.
 resolver := kube.NewLiveResolver(kfake.NewSimpleClientset(pv, pvc, sc))
@@ -641,6 +830,15 @@ resolver := kube.NewLiveResolver(kfake.NewSimpleClientset(pv, pvc, sc))
 - **Public APIs are interfaces** (`nvme.SubsystemResolver`/`nvme.DeviceResolver`, `nvmeof.Connector`,
   `lvol.Mapper`) so the operator and CSI driver can unit-test against
   fakes without a kernel, `/sys`, or `nvme-cli` present.
+- **One node's storage is one value** (`storage.Accessor`), reached the same way
+  whether it is this machine or one across a link. It is a struct, not an
+  interface: there is a single implementation and the variation is in what goes
+  *in* it, which is also what lets the questions that re-scan live on it instead
+  of becoming an obligation on every implementer.
+- **Snapshots carry no handles.** `nvme.Device` and friends are immutable scans
+  with nothing pointing back at what produced them, so they compare, copy and
+  cross a wire as the values they look like. Anything needing a fresh scan is a
+  method on the accessor, where the cost of asking is visible.
 - **The Linux grunt work hides in `internal/`** (sysfs parsing, command
   execution). It can change freely; consumers depend on behavior, not
   mechanism.

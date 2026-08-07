@@ -108,6 +108,14 @@ rules:
   - patch
   - update
   - watch
+# The CSI link verifies each peer's ServiceAccount token, and derives which
+# node it is from the pod that token is bound to.
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
 - apiGroups:
   - batch
   resources:

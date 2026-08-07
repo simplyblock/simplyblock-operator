@@ -115,7 +115,7 @@ func TestDetachDevice_KeepsAShareableSubsystemWithNoCurrentCoTenants(t *testing.
 	c := &recordingConnector{}
 
 	dev := device(1, 1)
-	if tenants, err := dev.CoTenants(context.Background()); err == nil && len(tenants) != 0 {
+	if tenants := nvme.CoTenants(dev, []nvme.Device{dev}); len(tenants) != 0 {
 		t.Fatalf("fixture must have no current co-tenants, got %d", len(tenants))
 	}
 

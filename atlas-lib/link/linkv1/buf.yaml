@@ -1,0 +1,18 @@
+# buf module for the link handshake protocol.
+#
+# The .proto lives next to the Go code generated from it rather than under a
+# proto/atlas/link/v1/ tree, which keeps one package's definition, generated
+# code and hand-written client in one directory. PACKAGE_DIRECTORY_MATCH is the
+# lint rule that costs us -- it wants atlas/link/v1/link.proto -- so it is the
+# one exception.
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - FILE

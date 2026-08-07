@@ -13,6 +13,10 @@
 //	nqn          Build and parse NVMe Qualified Names.
 //	lvol         Logical-volume identity and lvol -> NVMe device mapping.
 //	controlplane Client for the simplyblock control-plane API.
+//	link         gRPC between operator and CSI driver, over connections the
+//	             CSI driver opens.
+//	storage      One node's storage as one value (Accessor); storage/storagerpc
+//	             serves it over a link and reaches another node's.
 //	log          Structured logging shared by both consumers.
 //	errs         Shared sentinel errors.
 //

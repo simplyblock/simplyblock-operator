@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
@@ -40,8 +41,11 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	"github.com/simplyblock/atlas/link"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
+	"github.com/simplyblock/simplyblock-operator/internal/csilink"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	internalwebhook "github.com/simplyblock/simplyblock-operator/internal/webhook"
@@ -121,6 +125,23 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	var csiLinkEnabled bool
+	var csiLinkAddr, csiLinkCertPath, csiLinkCertName, csiLinkCertKey, csiLinkAudience string
+	flag.BoolVar(&csiLinkEnabled, "csi-link", false,
+		"Serve the CSI link: the CSI node and controller pods dial the operator and hold "+
+			"the connection, and the operator issues its RPCs back down it.")
+	flag.StringVar(&csiLinkAddr, "csi-link-bind-address", ":9500",
+		"The address the CSI link endpoint binds to.")
+	flag.StringVar(&csiLinkCertPath, "csi-link-cert-path", "",
+		"The directory that contains the CSI link serving certificate. Required with --csi-link: "+
+			"peers authenticate with bearer tokens, which must not travel in the clear.")
+	flag.StringVar(&csiLinkCertName, "csi-link-cert-name", "tls.crt",
+		"The name of the CSI link serving certificate file.")
+	flag.StringVar(&csiLinkCertKey, "csi-link-cert-key", "tls.key",
+		"The name of the CSI link serving key file.")
+	flag.StringVar(&csiLinkAudience, "csi-link-audience", "simplyblock-csi-link",
+		"The audience the peers' projected ServiceAccount tokens must carry.")
+
 	var latencyPercentile string
 	flag.StringVar(&latencyPercentile, "latency-percentile", "p50",
 		"fio write-latency percentile driving the volume-rebalancing deviation signal: "+
@@ -253,6 +274,27 @@ func main() {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
+
+	// The CSI link, when enabled. csiPeers is the registry of linked node and
+	// controller plugins; a reconciler reaching a node goes through it, and
+	// treats link.ErrNoSession as a requeue rather than a failure.
+	var csiPeers *link.Registry
+	if csiLinkEnabled {
+		csiPeers, err = csilink.Setup(mgr, csilink.Config{
+			BindAddress:              csiLinkAddr,
+			CertFile:                 filepath.Join(csiLinkCertPath, csiLinkCertName),
+			KeyFile:                  filepath.Join(csiLinkCertPath, csiLinkCertKey),
+			Namespace:                operatorNamespace,
+			Audiences:                []string{csiLinkAudience},
+			NodeServiceAccount:       "simplyblock-csi-node-sa",
+			ControllerServiceAccount: "simplyblock-csi-controller-sa",
+		})
+		if err != nil {
+			setupLog.Error(err, "unable to set up the CSI link")
+			os.Exit(1)
+		}
+	}
+	_ = csiPeers // handed to reconcilers as they start using it
 
 	if err := (&controller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
