@@ -110,7 +110,7 @@ Once rebalancing finishes (status flips to false), drain should automatically
 resume on the next reconcile.
 
 **Test concept (can be semi-automated):**
-1. Force cluster into rebalancing state (trigger a node-recycle).
+1. Force cluster into rebalancing state (trigger a node-rolling-restart).
 2. Apply `action=remove` during rebalancing.
 3. Observe `subPhase=Validating` with `ClusterRebalancing` event.
 4. Wait for rebalancing to complete.

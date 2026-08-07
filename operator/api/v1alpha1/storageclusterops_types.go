@@ -31,23 +31,23 @@ const (
 	StorageClusterOpsPhaseFailed    StorageClusterOpsPhase = "Failed"
 )
 
-// NodeRecycleStatus tracks in-progress state for the node-recycle action.
+// NodeRollingRestartStatus tracks in-progress state for the node-rolling-restart action.
 // All fields are persisted in the StorageClusterOps status so the reconciler
 // can resume after a requeue or operator restart.
-type NodeRecycleStatus struct {
-	// PendingNodes is the ordered list of node UUIDs still to be recycled.
+type NodeRollingRestartStatus struct {
+	// PendingNodes is the ordered list of node UUIDs still to be restarted.
 	PendingNodes []string `json:"pendingNodes,omitempty"`
-	// ProcessedNodes is the list of node UUIDs already recycled.
+	// ProcessedNodes is the list of node UUIDs already restarted.
 	ProcessedNodes []string `json:"processedNodes,omitempty"`
-	// NodePhase is the current step for the node being recycled:
+	// NodePhase is the current step for the node being restarted:
 	// "snode-refresh" | "snode-refresh-wait" | "shutting-down" | "restarting" | "rebalancing"
 	NodePhase string `json:"nodePhase,omitempty"`
 	// PhaseTriggered indicates the API call for the current NodePhase was already sent.
 	PhaseTriggered bool `json:"phaseTriggered,omitempty"`
 }
 
-// NodeRecycleSpec configures the node-recycle action behaviour.
-type NodeRecycleSpec struct {
+// NodeRollingRestartSpec configures the node-rolling-restart action behaviour.
+type NodeRollingRestartSpec struct {
 	// RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
 	// after the backend node is shut down and before it is restarted, ensuring
 	// the latest image is running before the node comes back online.
@@ -64,14 +64,14 @@ type StorageClusterOpsSpec struct {
 
 	// Action is the operation to perform. Immutable.
 	// +k8s:immutable
-	// +kubebuilder:validation:Enum=activate;expand;shutdown;start;restart;node-recycle
+	// +kubebuilder:validation:Enum=activate;expand;shutdown;start;restart;node-rolling-restart
 	// +kubebuilder:validation:Required
 	Action string `json:"action"`
 
-	// NodeRecycle configures behaviour specific to the node-recycle action.
+	// NodeRollingRestart configures behaviour specific to the node-rolling-restart action.
 	// Ignored for all other actions.
 	// +optional
-	NodeRecycle *NodeRecycleSpec `json:"nodeRecycle,omitempty"`
+	NodeRollingRestart *NodeRollingRestartSpec `json:"nodeRollingRestart,omitempty"`
 }
 
 // StorageClusterOpsStatus holds the observed state of a StorageClusterOps.
@@ -97,10 +97,10 @@ type StorageClusterOpsStatus struct {
 	// +optional
 	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
 
-	// NodeRecycleStatus tracks per-node progress for the node-recycle action.
+	// NodeRollingRestartStatus tracks per-node progress for the node-rolling-restart action.
 	// Nil for all other actions.
 	// +optional
-	NodeRecycleStatus *NodeRecycleStatus `json:"nodeRecycleStatus,omitempty"`
+	NodeRollingRestartStatus *NodeRollingRestartStatus `json:"nodeRollingRestartStatus,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -114,7 +114,7 @@ type StorageClusterOpsStatus struct {
 
 // StorageClusterOps is a one-shot operational CR targeting a single SimplyblocksStorageCluster.
 // Analogous to a Kubernetes Job — it drives a cluster-level operation (activate, expand,
-// shutdown, restart, node-recycle) to completion and records the result. Only one
+// shutdown, restart, node-rolling-restart) to completion and records the result. Only one
 // StorageClusterOps can be active per cluster at a time.
 type StorageClusterOps struct {
 	metav1.TypeMeta   `json:",inline"`

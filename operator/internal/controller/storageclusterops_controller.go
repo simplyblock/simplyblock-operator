@@ -148,8 +148,8 @@ func (r *StorageClusterOpsReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.reconcileStart(ctx, &ops, &cluster)
 	case utils.ClusterActionRestart:
 		return r.reconcileRestart(ctx, &ops, &cluster)
-	case utils.ClusterActionNodeRecycle:
-		return r.reconcileNodeRecycle(ctx, &ops, &cluster)
+	case utils.ClusterActionNodeRollingRestart:
+		return r.reconcileNodeRollingRestart(ctx, &ops, &cluster)
 	default:
 		return r.failOps(ctx, &ops, &cluster, fmt.Sprintf("unknown action %q", ops.Spec.Action))
 	}

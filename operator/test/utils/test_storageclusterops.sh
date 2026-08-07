@@ -8,7 +8,7 @@
 # Tests:
 #   1  — Short name: kubectl get scops works
 #   2  — Unknown action rejected at admission by CRD enum validation
-#   3  — node-recycle: initialises (Triggered=true) and eventually Succeeds (E2E)
+#   3  — node-rolling-restart: initialises (Triggered=true) and eventually Succeeds (E2E)
 #   4  — Reference to non-existent cluster → Failed phase
 #   5  — Mutual exclusion: second ops requeues while first holds activeOpsRef
 #   6  — activeOpsRef cleared after ops completes (Succeeded or Failed)
@@ -115,31 +115,31 @@ EOF
 fi
 
 if run_test 3; then
-  section "Test 3 — node-recycle: initialises and eventually Succeeds (E2E)"
-  info "WARNING: This test triggers node-recycle on the live cluster (all nodes)."
-  delete_ops "test-node-recycle"
+  section "Test 3 — node-rolling-restart: initialises and eventually Succeeds (E2E)"
+  info "WARNING: This test triggers node-rolling-restart on the live cluster (all nodes)."
+  delete_ops "test-node-rolling-restart"
   kubectl apply -f - <<EOF
 apiVersion: storage.simplyblock.io/v1alpha1
 kind: StorageClusterOps
 metadata:
-  name: test-node-recycle
+  name: test-node-rolling-restart
   namespace: $NAMESPACE
 spec:
   clusterRef: $CLUSTER_REF
-  action: node-recycle
+  action: node-rolling-restart
 EOF
   # Give the reconciler one tick to initialise (set Triggered, transition to Running)
   sleep 10
 
-  ops_triggered=$(kubectl -n "$NAMESPACE" get storageclusterops test-node-recycle \
+  ops_triggered=$(kubectl -n "$NAMESPACE" get storageclusterops test-node-rolling-restart \
     -o jsonpath='{.status.triggered}' 2>/dev/null || true)
   if [[ "$ops_triggered" == "true" ]]; then
-    pass "ops.status.triggered=true — node-recycle state machine initialised"
+    pass "ops.status.triggered=true — node-rolling-restart state machine initialised"
   else
     fail "ops.status.triggered not set (got '$ops_triggered')"
   fi
 
-  ops_phase=$(kubectl -n "$NAMESPACE" get storageclusterops test-node-recycle \
+  ops_phase=$(kubectl -n "$NAMESPACE" get storageclusterops test-node-rolling-restart \
     -o jsonpath='{.status.phase}' 2>/dev/null || true)
   if [[ "$ops_phase" == "Running" || "$ops_phase" == "Succeeded" ]]; then
     pass "StorageClusterOps phase=$ops_phase"
@@ -148,18 +148,18 @@ EOF
   fi
 
   # Wait for all nodes to be recycled
-  info "Waiting up to ${TIMEOUT_OPS}s for node-recycle to complete..."
-  wait_for_any_terminal_phase "test-node-recycle" "$TIMEOUT_OPS" || true
-  final_phase=$(kubectl -n "$NAMESPACE" get storageclusterops test-node-recycle \
+  info "Waiting up to ${TIMEOUT_OPS}s for node-rolling-restart to complete..."
+  wait_for_any_terminal_phase "test-node-rolling-restart" "$TIMEOUT_OPS" || true
+  final_phase=$(kubectl -n "$NAMESPACE" get storageclusterops test-node-rolling-restart \
     -o jsonpath='{.status.phase}' 2>/dev/null || true)
-  final_msg=$(kubectl -n "$NAMESPACE" get storageclusterops test-node-recycle \
+  final_msg=$(kubectl -n "$NAMESPACE" get storageclusterops test-node-rolling-restart \
     -o jsonpath='{.status.message}' 2>/dev/null || true)
   if [[ "$final_phase" == "Succeeded" ]]; then
-    pass "node-recycle completed with phase=Succeeded (message: $final_msg)"
+    pass "node-rolling-restart completed with phase=Succeeded (message: $final_msg)"
   else
-    fail "node-recycle did not Succeed (phase=$final_phase, message=$final_msg)"
+    fail "node-rolling-restart did not Succeed (phase=$final_phase, message=$final_msg)"
   fi
-  delete_ops "test-node-recycle"
+  delete_ops "test-node-rolling-restart"
 fi
 
 if run_test 4; then

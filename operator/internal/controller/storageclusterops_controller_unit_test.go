@@ -306,11 +306,11 @@ func TestStorageClusterOps_UnknownAction_Fails(t *testing.T) {
 	}
 }
 
-// ── TestNodeRecycle_Initialises ───────────────────────────────────────────────
+// ── TestNodeRollingRestart_Initialises ───────────────────────────────────────
 
-func TestStorageClusterOps_NodeRecycle_Initialises(t *testing.T) {
+func TestStorageClusterOps_NodeRollingRestart_Initialises(t *testing.T) {
 	cluster := newTestStorageCluster()
-	ops := newTestStorageClusterOps(scopsTestClusterName, "node-recycle")
+	ops := newTestStorageClusterOps(scopsTestClusterName, "node-rolling-restart")
 	r := newClusterOpsReconciler(t, cluster, ops)
 
 	// First reconcile: the state machine sets ops.Status.Triggered=true and

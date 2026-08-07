@@ -24,7 +24,7 @@ non-destructive), or **E2E** (live cluster, may alter cluster state).
 | `TestStorageClusterOps_ReleaseLock_OnlyClearsIfOwner` | `releaseClusterLock` does not clear a lock owned by a different ops |
 | `TestStorageClusterOps_ReleaseLock_NilCluster_DoesNotPanic` | `releaseClusterLock` with nil cluster is a no-op |
 | `TestStorageClusterOps_UnknownAction_Fails` | Unknown `spec.action` immediately sets phase to `Failed` |
-| `TestStorageClusterOps_NodeRecycle_Initialises` | First reconcile for `action=node-recycle` sets `status.triggered=true` and transitions to `Running` |
+| `TestStorageClusterOps_NodeRollingRestart_Initialises` | First reconcile for `action=node-rolling-restart` sets `status.triggered=true` and transitions to `Running` |
 
 ---
 
@@ -59,7 +59,7 @@ non-destructive), or **E2E** (live cluster, may alter cluster state).
 | Scenario | Expected | Classification |
 |---|---|---|
 | Submit ops with unrecognised `action` | Phase set to `Failed` with `unknown action` message; no cluster mutation | Integration |
-| Submit `action=node-recycle` without `nodeUUID` | Phase set to `Failed` with `nodeUUID required` message | Integration |
+| Submit `action=node-rolling-restart` without `nodeUUID` | Phase set to `Failed` with `nodeUUID required` message | Integration |
 | Reference a non-existent cluster in `spec.clusterRef` | Phase set to `Failed` with cluster-not-found message | Integration |
 
 ---
@@ -90,12 +90,12 @@ non-destructive), or **E2E** (live cluster, may alter cluster state).
 |---|---|---|
 | Create `StorageClusterOps(action=restart)` | Backend `/clusters/{uuid}/shutdown` called; ops polls until cluster leaves `active`; then `/clusters/{uuid}/start` called; ops polls until `active`; ops `Succeeded` | E2E |
 
-### Node Recycle
+### Node Rolling Restart
 
 | Scenario | Expected | Classification |
 |---|---|---|
-| Create `StorageClusterOps(action=node-recycle)` | Per-node state machine runs: shutdown → restart → rebalance for each node sequentially; ops `Succeeded` | E2E |
-| Provide `nodeRecycle.refreshSNodeAPI=true` | DaemonSet pod deleted and awaited ready between shutdown and restart for each node | E2E |
+| Create `StorageClusterOps(action=node-rolling-restart)` | Per-node state machine runs: shutdown → restart → rebalance for each node sequentially; ops `Succeeded` | E2E |
+| Provide `nodeRollingRestart.refreshSNodeAPI=true` | DaemonSet pod deleted and awaited ready between shutdown and restart for each node | E2E |
 
 ---
 

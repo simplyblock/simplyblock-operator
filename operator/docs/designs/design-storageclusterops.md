@@ -9,7 +9,7 @@
 
 ## 1. Background
 
-The `SimplyblocksStorageCluster` reconciler previously conflated two distinct concerns:
+The `StorageCluster` reconciler previously conflated two distinct concerns:
 
 | Concern | Previous location | Problem |
 |---|---|---|
@@ -29,10 +29,10 @@ driven through `StorageClusterOps`.
 
 ## 2. Goals
 
-- **`StorageClusterOps`** — a one-shot CR that targets a `SimplyblocksStorageCluster` and drives a
-  cluster-level operation (`activate`, `expand`, `shutdown`, `start`, `restart`, `node-recycle`)
+- **`StorageClusterOps`** — a one-shot CR that targets a `StorageCluster` and drives a
+  cluster-level operation (`activate`, `expand`, `shutdown`, `start`, `restart`, `node-rolling-restart`)
   to completion, then records the result.
-- **`SimplyblocksStorageCluster` reconciler** — narrowed to steady-state only: status sync,
+- **`StorageCluster` reconciler** — narrowed to steady-state only: status sync,
   deletion, adoption. No imperative operation handling.
 - Per-operation history, auditability, and safe retry without duplicate backend calls.
 - Consistent operator pattern across node-level (`StorageNodeOps`) and cluster-level operations.
@@ -48,27 +48,27 @@ driven through `StorageClusterOps`.
 ## 4. Architecture Overview
 
 ```
-SimplyblocksStorageCluster  (steady-state reconciler)
+StorageCluster  (steady-state reconciler)
     │  referenced by
     └─► StorageClusterOps  (action: activate)    Phase: Running → Succeeded
-    └─► StorageClusterOps  (action: node-recycle) Phase: Pending
+    └─► StorageClusterOps  (action: node-rolling-restart) Phase: Pending
 ```
 
-`StorageClusterOps` is scoped to a single `SimplyblocksStorageCluster`. Only one `StorageClusterOps`
+`StorageClusterOps` is scoped to a single `StorageCluster`. Only one `StorageClusterOps`
 can be active per cluster at a time, enforced via `status.activeOpsRef` on the cluster CR.
 
 ---
 
 ## 5. API Design
 
-### 5.1 SimplyblocksStorageCluster (revised)
+### 5.1 StorageCluster (revised)
 
 All imperative fields removed from `spec` and `status`. Only steady-state fields remain.
 
 ```go
 type StorageClusterSpec struct {
     // All existing steady-state fields unchanged.
-    // REMOVED: Action string, NodeRecycle *NodeRecycleSpec
+    // REMOVED: Action string, NodeRollingRestart *NodeRollingRestartSpec
     //          (moved to StorageClusterOps.spec)
 }
 
@@ -79,7 +79,7 @@ type StorageClusterStatus struct {
     // Empty when no operation is in progress.
     ActiveOpsRef string `json:"activeOpsRef,omitempty"`
 
-    // REMOVED: ActionStatus, NodeRecycleStatus
+    // REMOVED: ActionStatus, NodeRollingRestartStatus
     //          (moved to StorageClusterOps.status)
 }
 ```
@@ -98,21 +98,21 @@ type StorageClusterStatus struct {
 type StorageClusterOps struct { ... }
 
 type StorageClusterOpsSpec struct {
-    // ClusterRef is the name of the target SimplyblocksStorageCluster. Immutable.
+    // ClusterRef is the name of the target StorageCluster. Immutable.
     ClusterRef string `json:"clusterRef"`
 
     // Action is the operation to perform. Immutable.
-    // +kubebuilder:validation:Enum=activate;expand;shutdown;start;restart;node-recycle
+    // +kubebuilder:validation:Enum=activate;expand;shutdown;start;restart;node-rolling-restart
     Action string `json:"action"`
 
-    // NodeRecycle configures behaviour specific to the node-recycle action.
+    // NodeRollingRestart configures behaviour specific to the node-rolling-restart action.
     // Ignored for all other actions.
     // +optional
-    NodeRecycle *NodeRecycleSpec `json:"nodeRecycle,omitempty"`
+    NodeRollingRestart *NodeRollingRestartSpec `json:"nodeRollingRestart,omitempty"`
 }
 
-// NodeRecycleSpec configures the node-recycle action.
-type NodeRecycleSpec struct {
+// NodeRollingRestartSpec configures the node-rolling-restart action.
+type NodeRollingRestartSpec struct {
     // RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node after
     // the backend node is shut down and before it is restarted. Ensures the latest
     // image is running before the node comes back online.
@@ -137,13 +137,13 @@ type StorageClusterOpsStatus struct {
     StartedAt   *metav1.Time           `json:"startedAt,omitempty"`
     CompletedAt *metav1.Time           `json:"completedAt,omitempty"`
 
-    // NodeRecycleStatus tracks per-node progress for the node-recycle action.
+    // NodeRollingRestartStatus tracks per-node progress for the node-rolling-restart action.
     // Nil for all other actions. Survives operator restarts.
-    NodeRecycleStatus *NodeRecycleStatus `json:"nodeRecycleStatus,omitempty"`
+    NodeRollingRestartStatus *NodeRollingRestartStatus `json:"nodeRollingRestartStatus,omitempty"`
 }
 
-// NodeRecycleStatus tracks in-progress state for the node-recycle action.
-type NodeRecycleStatus struct {
+// NodeRollingRestartStatus tracks in-progress state for the node-rolling-restart action.
+type NodeRollingRestartStatus struct {
     PendingNodes   []string `json:"pendingNodes,omitempty"`
     ProcessedNodes []string `json:"processedNodes,omitempty"`
     // NodePhase: "shutting-down" | "snode-refresh" | "snode-refresh-wait" |
@@ -170,7 +170,7 @@ Narrowed to steady-state management only:
 ### 6.2 StorageClusterOpsReconciler
 
 Drives all imperative cluster operations. Located in `storageclusterops_controller.go` and
-`storageclusterops_noderecycle.go`.
+`storageclusterops_noderollingrestart.go`.
 
 **Reconcile loop:**
 
@@ -206,7 +206,7 @@ Lifecycle:
 | `shutdown` | `POST /clusters/{id}/shutdown` | Write-ahead `Triggered=true`, poll until `status != active` |
 | `start` | `POST /clusters/{id}/start` | Write-ahead `Triggered=true`, poll until `status=active` |
 | `restart` | `POST /clusters/{id}/shutdown` → `POST /clusters/{id}/start` | Two-phase (see §6.5) |
-| `node-recycle` | Per-node state machine | Multi-phase (see §7) |
+| `node-rolling-restart` | Per-node state machine | Multi-phase (see §7) |
 
 > **Note:** There is no `/clusters/{id}/restart` API endpoint. The `restart` action is
 > implemented as a sequenced shutdown + start (§6.5).
@@ -233,18 +233,18 @@ API call is made, so operator restarts cannot issue duplicate backend calls.
 
 ---
 
-## 7. Node-Recycle State Machine
+## 7. Node Rolling-Restart State Machine
 
-Node-recycle is a multi-phase per-node state machine that iterates all storage nodes in
-the cluster sequentially. Progress is tracked entirely in `ops.Status.NodeRecycleStatus`
+Node rolling-restart is a multi-phase per-node state machine that iterates all storage nodes in
+the cluster sequentially. Progress is tracked entirely in `ops.Status.NodeRollingRestartStatus`
 so the reconciler can resume after a restart or requeue.
 
 ### 7.1 Initialisation
 
 On first reconcile (`Triggered=false`):
-1. Set `Triggered=true`, `NodeRecycleStatus=nil`, `Message="Initialising node-recycle"`.
+1. Set `Triggered=true`, `NodeRollingRestartStatus=nil`, `Message="Initialising node-rolling-restart"`.
 2. On next reconcile: list all cluster storage nodes from the API.
-3. Populate `NodeRecycleStatus.PendingNodes` (ordered list of UUIDs) and set
+3. Populate `NodeRollingRestartStatus.PendingNodes` (ordered list of UUIDs) and set
    `NodePhase=shutting-down`.
 
 ### 7.2 Per-Node Phases
@@ -253,7 +253,7 @@ For each node at the head of `PendingNodes`:
 
 ```
 shutting-down ──► [snode-refresh ──► snode-refresh-wait ──►] restarting ──► rebalancing
-                   (if NodeRecycle.RefreshSNodeAPI=true)
+                   (if NodeRollingRestart.RefreshSNodeAPI=true)
 ```
 
 | Phase | What happens |
@@ -334,14 +334,14 @@ transition, so the next reconcile after removal exits cleanly).
 ### Phase 1 — Introduce StorageClusterOps ✅ Complete
 
 - Added `StorageClusterOps` CRD and `StorageClusterOpsReconciler`.
-- `SimplyblocksStorageCluster.spec.action` still accepted as a bridge shim.
+- `StorageCluster.spec.action` still accepted as a bridge shim.
 
 ### Phase 2 — Remove legacy inline operation handling ✅ Complete
 
 - Removed `reconcileActivate`, `reconcileExpand`, and all `spec.action` / `status.actionStatus`
-  fields from `SimplyblocksStorageCluster`.
-- Removed `NodeRecycleSpec` from `StorageCluster.spec`.
-- Removed `NodeRecycleStatus` from `StorageCluster.status` (moved to `StorageClusterOps.status`).
+  fields from `StorageCluster`.
+- Removed `NodeRollingRestartSpec` from `StorageCluster.spec`.
+- Removed `NodeRollingRestartStatus` from `StorageCluster.status` (moved to `StorageClusterOps.status`).
 - Removed bridge shim from `StorageClusterReconciler`.
 - Updated CRD YAML and Helm chart.
 - Users create `StorageClusterOps` CRs directly.
@@ -359,6 +359,6 @@ indefinite retention for audit, or a `ttlSecondsAfterFinished`-style field? Not 
 carry a typed `ExpandParams` sub-object, or pass them as a free-form map?
 
 **Q4: Concurrent StorageClusterOps of different types**  
-Should two independent, non-conflicting operations (e.g. a status-only poll and a node-recycle)
+Should two independent, non-conflicting operations (e.g. a status-only poll and a node-rolling-restart)
 be allowed concurrently? The current model enforces one active op per cluster — is that too
 restrictive?
