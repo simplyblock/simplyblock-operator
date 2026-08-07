@@ -106,7 +106,19 @@ func pvVGName(ctx context.Context, devicePath string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(out)
+	// runLVMCommand merges stdout+stderr, and pvs can print WARNING: lines ahead of the
+	// actual field value (e.g. duplicate-PV warnings on a byte-level clone, confirmed
+	// live) -- take the first non-empty, non-warning line rather than trusting the whole
+	// trimmed blob, which would otherwise pollute both the identity comparison below and
+	// any log message built from it.
+	for line := range strings.SplitSeq(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "WARNING:") {
+			continue
+		}
+		return line
+	}
+	return ""
 }
 
 // CreateOrAttachVDO idempotently ensures a VDO-backed logical volume exists on top of
