@@ -28,6 +28,12 @@ FROM simplyblock/spdkcsi:base_image
 USER root
 WORKDIR /app
 
+# lvm2 (pvcreate/vgcreate/lvcreate/vgchange/lvextend/dmsetup/etc.) is required by
+# pkg/util/vdo.go to manage client-side VDO devices -- not part of base_image, added here
+# rather than there to avoid rebuilding/overwriting that shared, cross-branch image tag for
+# an in-progress feature. Candidate for promotion into Dockerfile_base once this lands.
+RUN dnf install -y lvm2 --nogpgcheck && dnf clean all
+
 COPY --from=builder --chmod=0755 /workspace/spdkcsi spdkcsi
 
 ENTRYPOINT ["/app/spdkcsi"]
