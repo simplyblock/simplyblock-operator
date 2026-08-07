@@ -77,9 +77,15 @@ func (r *StorageClusterOpsReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, r.Update(ctx, &ops)
 	}
 
-	// Terminal phases — remove the finalizer so the CR can be GC'd, then stop.
+	// Terminal phases — best-effort release the cluster lock (guards against a crash
+	// after the terminal phase was persisted but before releaseClusterLock ran), then
+	// remove the finalizer so the CR can be GC'd.
 	switch ops.Status.Phase {
 	case simplyblockv1alpha1.StorageClusterOpsPhaseSucceeded, simplyblockv1alpha1.StorageClusterOpsPhaseFailed:
+		var cluster simplyblockv1alpha1.StorageCluster
+		if err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.ClusterRef, Namespace: ops.Namespace}, &cluster); err == nil {
+			r.releaseClusterLock(ctx, &ops, &cluster)
+		}
 		if controllerutil.ContainsFinalizer(&ops, utils.FinalizerStorageClusterOps) {
 			controllerutil.RemoveFinalizer(&ops, utils.FinalizerStorageClusterOps)
 			return ctrl.Result{}, r.Update(ctx, &ops)

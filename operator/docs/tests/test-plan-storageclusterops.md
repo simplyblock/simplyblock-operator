@@ -88,14 +88,14 @@ non-destructive), or **E2E** (live cluster, may alter cluster state).
 
 | Scenario | Expected | Classification |
 |---|---|---|
-| Create `StorageClusterOps(action=restart)` | Backend `/cluster/{uuid}/restart` called; ops `Succeeded` | E2E |
+| Create `StorageClusterOps(action=restart)` | Backend `/clusters/{uuid}/shutdown` called; ops polls until cluster leaves `active`; then `/clusters/{uuid}/start` called; ops polls until `active`; ops `Succeeded` | E2E |
 
 ### Node Recycle
 
 | Scenario | Expected | Classification |
 |---|---|---|
-| Create `StorageClusterOps(action=node-recycle, nodeUUID=<uuid>)` | Backend `/cluster/{uuid}/node-recycle/{nodeUUID}` called; ops `Succeeded` | E2E |
-| Provide an invalid `nodeUUID` | Backend returns non-2xx; ops transitions to `Failed` with error message | E2E |
+| Create `StorageClusterOps(action=node-recycle)` | Per-node state machine runs: shutdown → restart → rebalance for each node sequentially; ops `Succeeded` | E2E |
+| Provide `nodeRecycle.refreshSNodeAPI=true` | DaemonSet pod deleted and awaited ready between shutdown and restart for each node | E2E |
 
 ---
 
