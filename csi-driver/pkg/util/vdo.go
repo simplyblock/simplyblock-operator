@@ -92,13 +92,14 @@ func vgExists(ctx context.Context, vg string) (bool, error) {
 }
 
 // pvVGName returns the VG name a device's on-disk PV signature currently belongs to, or ""
-// if the device carries no LVM signature at all (a genuinely blank device -- not an error).
-func pvVGName(ctx context.Context, devicePath string) (string, error) {
+// if the device carries no LVM signature at all (a genuinely blank device, or the probe
+// itself failing -- both are treated the same way by callers: nothing to resolve).
+func pvVGName(ctx context.Context, devicePath string) string {
 	out, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, "pvs", "--noheadings", "-o", "vg_name", devicePath)
 	if err != nil {
-		return "", nil //nolint:nilerr // "no PV signature found" is not an error case for callers
+		return ""
 	}
-	return strings.TrimSpace(out), nil
+	return strings.TrimSpace(out)
 }
 
 // CreateOrAttachVDO idempotently ensures a VDO-backed logical volume exists on top of
@@ -106,7 +107,9 @@ func pvVGName(ctx context.Context, devicePath string) (string, error) {
 // If the VG already exists it is reactivated (never recreated); only a genuinely absent VG
 // is created fresh. compression and deduplication are set independently at creation time --
 // changing them on an already-existing volume is SetVDOFeatures' job, not this function's.
-func CreateOrAttachVDO(ctx context.Context, devicePath, lvolID string, compression, deduplication bool) (string, error) {
+func CreateOrAttachVDO(
+	ctx context.Context, devicePath, lvolID string, compression, deduplication bool,
+) (string, error) {
 	vg := vgName(lvolID)
 
 	// LVM discovers PVs by content-scanning visible devices, not by remembering a path --
@@ -161,10 +164,7 @@ func ResolveClonedVDO(ctx context.Context, devicePath, lvolID string) error {
 	}
 
 	vg := vgName(lvolID)
-	currentVG, err := pvVGName(ctx, devicePath)
-	if err != nil {
-		return fmt.Errorf("check PV/VG identity of %s: %w", devicePath, err)
-	}
+	currentVG := pvVGName(ctx, devicePath)
 	if currentVG == "" || currentVG == vg {
 		// Blank device, or already carries this volume's own identity -- nothing to do.
 		return nil
