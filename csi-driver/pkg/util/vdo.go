@@ -284,6 +284,13 @@ func removeOrphanedDMNodes(ctx context.Context, vg string) error {
 		return fmt.Errorf("dmsetup ls: %w", err)
 	}
 
+	// device-mapper flattens "<vg>-<lv>" into a single dm device name by doubling every
+	// literal "-" within the VG/LV name components and using a single "-" as the separator
+	// -- confirmed live: matching against the unescaped VG name found nothing, leaving the
+	// stack orphaned even though this exact fallback had just been chosen specifically to
+	// clean it up.
+	escapedVG := strings.ReplaceAll(vg, "-", "--")
+
 	var names []string
 	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimSpace(line)
@@ -291,7 +298,7 @@ func removeOrphanedDMNodes(ctx context.Context, vg string) error {
 			continue
 		}
 		name := strings.Fields(line)[0]
-		if strings.HasPrefix(name, vg+"-") {
+		if strings.HasPrefix(name, escapedVG+"-") {
 			names = append(names, name)
 		}
 	}
