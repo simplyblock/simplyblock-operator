@@ -477,8 +477,9 @@ afterward via `lvchange` measured ~391MB, matching the isolated figures above.*
   a deduplication-scaling risk specifically — a fleet of compression-only
   volumes would scale the much smaller ~182MB figure instead.
 
-- **Multiple instances across a restart**: two related behaviors have each
-  been verified independently, but not in combination.
+- **Multiple instances across a restart** — now verified in combination, via
+  the real implementation (`CreateOrAttachVDO`/`NodeStageVolume`), not just
+  raw LVM commands.
 
   **Tested:**
   - Multiple VDO instances in parallel — two simultaneous VDO-backed volumes
@@ -487,19 +488,37 @@ afterward via `lvchange` measured ~391MB, matching the isolated figures above.*
   - A single VDO instance surviving a node restart — `pvscan --cache` +
     `vgchange -ay` reattach cleanly across a full reboot, with no ghost state
     in between (see "Reattaching after a lost connection" above).
+  - **The combination**: two real PVCs (`clientCompression`/
+    `clientDeduplication` both true) provisioned against real NVMe-oF-backed
+    lvols on the same node, each written with distinct, checksummed data,
+    then the node rebooted. Both VDO instances reattached cleanly: `vgs`
+    showed both VGs intact post-reboot, `kvdo`'s module-wide usage count
+    matched exactly 2 (no leak, no orphan, no duplicate), both LVs reported
+    `VDOOperatingMode: normal` with compression and deduplication still
+    enabled, and both files' SHA-256 checksums matched exactly before and
+    after. Driver logs confirm the actual sequence: post-reboot, kubelet
+    calls `NodeStageVolume` fresh for both volumes (not `restageVolume` —
+    kubelet's own bookkeeping resets on reboot too), each independently
+    running `pvscan --cache` → `vgs` → `vgchange -ay` → mount, with no errors
+    and no lock-contention symptoms.
+  - **Caveat**: in this run, the two `NodeStageVolume` calls' underlying LVM
+    command sequences happened to complete one after the other rather than
+    genuinely overlapping (confirmed from log timestamps — each device's full
+    `pvscan`/`vgs`/`vgchange` sequence finished before the next one's
+    started). This confirms clean *sequential* reactivation of multiple
+    instances after a reboot, but does not by itself prove safety under
+    LVM commands that are genuinely racing at the same instant — that
+    narrower race window remains unexercised.
 
   **Scenarios to be tested:**
-  - Multiple VDO instances present simultaneously, then surviving a reboot
-    together. Specific risks that neither test above exercises on its own:
-    - A boot-time activation race across several VGs becoming visible in
-      close succession, ahead of or interleaved with the CSI driver's own
-      controlled reconnect logic.
-    - LVM's internal command locking (`/run/lock/lvm`) under genuinely
-      concurrent `vgchange -ay`/`pvscan --cache` calls, since
-      `NodeStageVolume` processes multiple volumes concurrently.
-    - `kvdo` module behavior when reactivating several targets in quick
-      succession right after a fresh post-reboot `modprobe`, versus the
-      single-target case already tested.
+  - Genuinely concurrent (not just closely-timed) `vgchange -ay`/
+    `pvscan --cache` calls actually overlapping in execution, to exercise
+    LVM's internal command locking (`/run/lock/lvm`) directly — not achieved
+    by the test above, where the sequences happened not to overlap.
+  - A boot-time activation race across several VGs becoming visible in close
+    succession, ahead of or interleaved with the CSI driver's own controlled
+    reconnect logic (kubelet's own reconnect timing meant this didn't
+    manifest in the run above, but wasn't deliberately forced either).
 
 - **Stale VDO/LVM state after a node loses a volume without a clean
   unstage** (e.g. a pod force-rescheduled off a node that goes NotReady, or
