@@ -3579,6 +3579,14 @@ spec:
                   MigrationUUID is the identifier returned by the storage API when the
                   migration was submitted. Used for polling and cancellation.
                 type: string
+              multiNamespace:
+                description: |-
+                  MultiNamespace records that the volume shares its NVMe subsystem with
+                  sibling volumes ("namespaced" volumes), so moving it may affect more than
+                  one volume. Resolved once when the migration is submitted, from the
+                  StorageClass's max_namespace_per_subsys, and passed to the backend's
+                  ContinueMigration as the batch flag.
+                type: boolean
               phase:
                 description: Phase is the current lifecycle phase of the migration.
                 enum:

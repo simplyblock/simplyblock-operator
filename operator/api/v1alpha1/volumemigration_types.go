@@ -103,6 +103,13 @@ type VolumeMigrationStatus struct {
 	// Set during the Validating phase; cleared when the phase advances to Running.
 	ValidationJobName string `json:"validationJobName,omitempty"`
 
+	// MultiNamespace records that the volume shares its NVMe subsystem with
+	// sibling volumes ("namespaced" volumes), so moving it may affect more than
+	// one volume. Resolved once when the migration is submitted, from the
+	// StorageClass's max_namespace_per_subsys, and passed to the backend's
+	// ContinueMigration as the batch flag.
+	MultiNamespace bool `json:"multiNamespace,omitempty"`
+
 	// StartedAt is the time the migration was submitted to the storage API.
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	batchv1 "k8s.io/api/batch/v1"
@@ -37,6 +38,7 @@ import (
 // +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get
 
 // VolumeMigrationReconciler reconciles VolumeMigration resources.
 type VolumeMigrationReconciler struct {
@@ -50,6 +52,9 @@ type VolumeMigrationReconciler struct {
 	// otherwise miss a genuinely-running consumer and cause validation to be
 	// skipped for a live volume, breaking its I/O path after cutover.
 	apiReader client.Reader
+	// scResolver reads the StorageClass that provisioned a PV, to tell whether the
+	// volume is namespaced (shares its NVMe subsystem with siblings).
+	scResolver atlaskube.Resolver
 }
 
 // errConsumerNotReady indicates that a pod references the volume's PVC but is not
@@ -161,6 +166,9 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 	vm.Status.ClusterUUID = clusterUUID
 	vm.Status.VolumeUUID = volumeUUID
 	vm.Status.PoolUUID = poolUUID
+	// Resolved here, where the PV (and through it the StorageClass) is at hand, and
+	// persisted so the later continue step needs no second lookup.
+	vm.Status.MultiNamespace = r.isMultiNamespaceMigration(ctx, pv)
 	// SourceNodeUUID and SnapsTotal are populated from GetMigration once status=Running.
 	vm.Status.Connections = conns
 	vm.Status.StartedAt = &now
@@ -172,6 +180,39 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 		"Migration %s created: validating %d connection(s) to node %s",
 		migration.ID, len(conns), vm.Spec.TargetNodeUUID)
 	return ctrl.Result{Requeue: true}, nil
+}
+
+// isMultiNamespaceMigration reports whether the migration may affect more than
+// one volume, i.e. whether the volume's NVMe subsystem is shared with sibling
+// volumes ("namespaced" volumes). The answer comes from the StorageClass that
+// provisioned the PV: max_namespace_per_subsys > 1
+// (atlaskube.Properties.IsMultiNamespace) makes every volume of the class
+// shared, including one that is currently still the first — and so far only —
+// namespace in its subsystem. The volume's live NSID would be the host-side
+// counterpart, but it is not part of the control plane's volume or migration
+// data and the operator has no host sysfs access to Identify it.
+//
+// A StorageClass that cannot be resolved is treated as single-namespace and
+// logged, the same fail-open stance the rebalancer's namespaced-set collection
+// takes: one unreadable class must not stall a migration.
+func (r *VolumeMigrationReconciler) isMultiNamespaceMigration(
+	ctx context.Context,
+	pv *corev1.PersistentVolume,
+) bool {
+	log := logf.FromContext(ctx)
+
+	props, err := atlaskube.ResolvePropertiesForPV(ctx, r.scResolver, pv)
+	if err != nil {
+		log.Info("Cannot resolve StorageClass for volume; assuming a single-namespace migration",
+			"pv", pv.Name, "error", err.Error())
+		return false
+	}
+	if props.IsMultiNamespace() {
+		log.Info("StorageClass provisions namespaced volumes; migration is namespaced",
+			"pv", pv.Name, "maxNamespacePerSubsys", props.MaxNamespacePerSubsys)
+		return true
+	}
+	return false
 }
 
 // reconcileValidating creates a Job on the target worker node that:
@@ -336,7 +377,7 @@ func (r *VolumeMigrationReconciler) performMigration(
 		log.Info("Migration already terminal before continue; advancing to Running for classification",
 			"migration", vm.Status.MigrationUUID, "status", m.Status)
 	case m.Phase == webapi.MigrationPhasePreCreated:
-		if err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID); err != nil {
+		if err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID, vm.Status.MigrationUUID, vm.Status.MultiNamespace); err != nil {
 			// The continue may have taken effect despite the error. Only a
 			// migration still stuck in pre_created is a genuine start failure
 			// worth cancelling; anything else means it already advanced.
@@ -763,6 +804,7 @@ func (r *VolumeMigrationReconciler) SetupWithManager(
 		return fmt.Errorf("create k8s client for log collection: %w", err)
 	}
 	r.coreClient = k8s.CoreV1()
+	r.scResolver = atlaskube.NewLiveResolver(k8s)
 	// Uncached reader for the consumer-detection decision (see resolveConsumerNodeName).
 	r.apiReader = mgr.GetAPIReader()
 	return ctrl.NewControllerManagedBy(mgr).

@@ -325,9 +325,6 @@ func (lvs *LogicalVolumeSelector) BuildCSIManagedVolumes(ctx context.Context, cl
 	return managed, nil
 }
 
-// storageClassResolver adapts the controller-runtime client to
-// kube.StorageClassResolver, so the rebalancer resolves provisioning Properties
-// through the shared kube package rather than reimplementing the parsing. Gets
 // BuildNamespacedSet returns the set of simplyblock CSI-managed volume UUIDs in
 // the cluster whose StorageClass provisions a multi-namespace NVMe subsystem
 // (max_namespace_per_subsys > 1). Such volumes share a subsystem with sibling
