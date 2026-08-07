@@ -500,14 +500,17 @@ func (ns *nodeServer) NodeUnstageVolume(
 
 	// VDO must come down before the raw device it sits on is disconnected -- disconnecting
 	// first would leave a live dm-vdo stack mapped on top of a device that just vanished,
-	// the same orphaned-stack state documented in the design doc's spike log.
+	// the same orphaned-stack state documented in the design doc's spike log. Deactivate
+	// only -- NodeUnstageVolume fires any time no pod on this node needs the volume mounted
+	// (including a routine pod delete+recreate on the same node), not only when the volume
+	// is being deleted; CreateOrAttachVDO's vgchange -ay reactivates this same state later.
 	if _, _, wantsVDO := vdoParams(volumeContext); wantsVDO {
 		lvolID := volumeID
 		if spdkVol, perr := parseVolumeID(volumeID); perr == nil {
 			lvolID = spdkVol.lvolID
 		}
-		if err = util.RemoveVDO(cleanupCtx, lvolID); err != nil {
-			klog.Errorf("failed to remove VDO device, volumeID: %s err: %v", volumeID, err)
+		if err = util.DeactivateVDO(cleanupCtx, lvolID); err != nil {
+			klog.Errorf("failed to deactivate VDO device, volumeID: %s err: %v", volumeID, err)
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}

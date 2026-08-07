@@ -206,11 +206,29 @@ func ResolveClonedVDO(ctx context.Context, devicePath, lvolID string) error {
 	return nil
 }
 
-// RemoveVDO deactivates and removes the VG/LV stack for lvolID. If the backing device is
-// unreachable (crash / force-detach without a clean unstage -- see the design doc's
-// orphaned-stack finding), normal vgremove fails because it needs to read/write metadata
-// that lives on the now-gone device; falls back to direct dmsetup removal of any live dm
-// nodes in that case.
+// DeactivateVDO deactivates (but does not destroy) the VG/LV stack for lvolID. This is the
+// correct, non-destructive counterpart to a plain NVMe-oF disconnect: NodeUnstageVolume
+// fires any time no pod on this node currently needs the volume mounted (including a
+// routine pod delete+recreate on the same node), not only when the volume is actually being
+// deleted -- confirmed live: calling RemoveVDO (vgremove) from NodeUnstageVolume destroyed
+// a volume's VDO metadata/data on an ordinary pod recreate, well before the volume was
+// ever meant to be removed. CreateOrAttachVDO's own vgchange -ay reactivates this exact
+// state later without recreating anything.
+func DeactivateVDO(ctx context.Context, lvolID string) error {
+	vg := vgName(lvolID)
+	if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, "vgchange", "-an", vg); err != nil {
+		return fmt.Errorf("deactivate VG %s: %w", vg, err)
+	}
+	return nil
+}
+
+// RemoveVDO deactivates and removes the VG/LV stack for lvolID, destroying its data. Only
+// appropriate when the underlying volume itself is actually being removed, or to clean up
+// a stale/orphaned stack whose backing device is already gone -- never call this from a
+// routine NodeUnstageVolume. If the backing device is unreachable (crash / force-detach
+// without a clean unstage -- see the design doc's orphaned-stack finding), normal vgremove
+// fails because it needs to read/write metadata that lives on the now-gone device; falls
+// back to direct dmsetup removal of any live dm nodes in that case.
 func RemoveVDO(ctx context.Context, lvolID string) error {
 	vg := vgName(lvolID)
 	_, _ = runLVMCommand(ctx, vdoCmdTimeoutSeconds, "vgchange", "-an", vg)
