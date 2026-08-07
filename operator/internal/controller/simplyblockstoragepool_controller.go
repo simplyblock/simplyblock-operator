@@ -348,6 +348,10 @@ func (r *StoragePoolReconciler) deleteStorageClass(ctx context.Context, storageP
 	return client.IgnoreNotFound(r.Delete(ctx, sc))
 }
 
+// scParamTrue is the CSI driver's string encoding of a true StorageClassParameters boolean
+// (see boolStr in mergeStorageClassParameters below).
+const scParamTrue = "True"
+
 // createStorageClassIfNotExists creates the StorageClass for the pool the first time it's
 // needed. It is intentionally create-only, not create-or-update: StorageClass Parameters and
 // AllowedTopologies are immutable in the Kubernetes API itself, so there is no "update" to
@@ -400,7 +404,7 @@ func (r *StoragePoolReconciler) createStorageClassIfNotExists(ctx context.Contex
 	// param to thread through here: vdoCapableLabelKey is a single fixed, well-known
 	// key/value (unlike DHCHAP's per-pool dynamic key), so CreateVolume can check
 	// client_compression/client_deduplication directly (see the #403-equivalent fix there).
-	if params["client_compression"] == "True" || params["client_deduplication"] == "True" {
+	if params["client_compression"] == scParamTrue || params["client_deduplication"] == scParamTrue {
 		topologyExprs = append(topologyExprs, corev1.TopologySelectorLabelRequirement{
 			Key:    "simplyblock.io/vdo-capable",
 			Values: []string{"true"},
@@ -429,7 +433,7 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 	}
 	boolStr := func(b *bool) string {
 		if b != nil && *b {
-			return "True"
+			return scParamTrue
 		}
 		return "False"
 	}
