@@ -38,12 +38,12 @@ Each scenario is classified two ways:
 
 | Test | Scenario | Type | Level |
 |---|---|---|---|
-| Clone with byte-duplicate PV/VG UUID vs. its source | UUIDs regenerated, VG renamed to `volumeID`, before `CreateOrAttachVDO`'s own `vgs` check runs | Positive | Unit + Integration (real `sbctl` clone) |
+| Direct PVC-to-PVC clone (`dataSource: PersistentVolumeClaim`), scheduled onto the same node as its still-live source | **Verified**: `vgimportclone` + `lvrename` correctly ran, mounted cleanly, data matched source (SHA-256), source unaffected | Positive | E2E (done) |
+| Snapshot restore (`dataSource: VolumeSnapshot`), scheduled onto the same node as its still-live source | **Verified**: same mechanism, same outcome — mounted cleanly, data matched source exactly | Positive | E2E (done) |
+| Three volumes (source + PVC clone + snapshot restore) coexisting simultaneously on one node | **Verified**: three independent VG identities, no collisions; writing new data to the clone or the restore left the other two volumes unaffected | Positive | E2E (done) |
 | Genuinely fresh, non-clone device | No-op — does not misfire and rename a legitimately new device | Negative (guards against a false positive) | Unit |
-| `VolumeContentSource` unset, but device-level `blkid`/`pvs` shows an LVM/VDO signature under a foreign VG name | Defensive fallback still triggers `ResolveClonedVDO` | Positive | Unit + Integration |
 | UUID-regeneration step fails mid-way (`vgimportclone`-equivalent partially applied) | Returns error; does not leave the VG in a half-renamed, half-old-UUID state that a later `CreateOrAttachVDO` could misinterpret | Negative | Unit |
 | Two clones of the same source, scheduled to the same node in the same reconcile batch | Both resolve to independent identities without racing each other's `vgimportclone`/rename step | Negative (concurrency) | Integration/E2E |
-| Clone scheduled to the **same node as its still-live source** | Both devices visible to the same node's LVM scan simultaneously; source's own VG/PV must not be affected by the clone's resolution | Negative | Integration |
 
 ## 3. `RemoveVDO`
 
@@ -93,8 +93,8 @@ Each scenario is classified two ways:
 |---|---|---|---|
 | `client_compression=="true"` OR `client_deduplication=="true"` in volume context | `CreateOrAttachVDO` called between `initiator.Connect` and `stageVolume`; VDO device path passed to `stageVolume`, not the raw NVMe-oF path | Positive | Unit (mocked VDO layer) |
 | Neither flag true | `CreateOrAttachVDO` never called; raw device path used directly, unchanged from today's behavior | Negative (no-regression) | Unit |
-| Volume created from `VolumeContentSource` (clone/snapshot restore) | `ResolveClonedVDO` runs before `CreateOrAttachVDO`'s own `vgs` check | Positive | Unit |
-| `NodeUnstageVolume`, VDO was in use | `RemoveVDO` called **before** `initiator.Disconnect` (order asserted, not just both-called) | Positive | Unit |
+| Any stage where either client flag is set | `ResolveClonedVDO` runs unconditionally before `CreateOrAttachVDO`'s own `vgs` check — not gated on `VolumeContentSource`, verified live for both clone and snapshot-restore paths | Positive | Unit + E2E (done) |
+| `NodeUnstageVolume`, VDO was in use | `DeactivateVDO` called **before** `initiator.Disconnect` (order asserted, not just both-called) — non-destructive, confirmed live after an earlier bug had this destroying data via `RemoveVDO` instead | Positive | Unit + E2E (done) |
 | `restageVolume`/`ensureDeviceConnected` reconnect path, VDO was in use | Existing VDO device reattached (`pvscan --cache`, `vgchange -ay`) — never recreated/reformatted | Positive | Unit + Integration |
 | Reconnect path encounters a device that looks blank/uninitialized where VDO was expected | Must fail loudly, not silently `lvcreate` a fresh VDO container over what should already hold data | Negative | Unit |
 | `NodeExpandVolume`, VDO in use | `GrowVDO` called before the existing filesystem-resize logic | Positive | Unit |
@@ -118,7 +118,7 @@ Each scenario is classified two ways:
 
 | Test | Scenario | Type | Level |
 |---|---|---|---|
-| Clone/snapshot-restored volume scheduled onto the same node as its still-live source | Byte-duplicate PV/VG UUID resolved by `ResolveClonedVDO` before either device's LVM activation collides node-wide | Negative | E2E |
+| Clone/snapshot-restored volume scheduled onto the same node as its still-live source | **Verified** (see Section 2 above) — byte-duplicate PV/VG UUID resolved by `ResolveClonedVDO` before either device's LVM activation collides node-wide | Positive | E2E (done) |
 | XFS requested as `fsType` with either client flag true | End-to-end pass with XFS on top of a real VDO device — every existing spike used ext4 only (see design doc Section 12's added note) | Negative (untested combination) | Integration |
 | Server-side `compression=true` + `client_compression=true` on the same volume | Redundant but not harmful — confirm no double-compression correctness issue, just wasted CPU | Negative | Integration |
 | Server-side `encryption=true` + `client_compression=true` | Confirmed compatible via architecture research (crypto bdev sits below the nvmf attach point) — port the plaintext-vs-ciphertext compression-ratio check into a repeatable test | Positive | Integration |
