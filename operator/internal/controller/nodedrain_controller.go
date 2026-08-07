@@ -1006,6 +1006,7 @@ func (r *NodeDrainCoordinatorReconciler) SetupWithManager(mgr ctrl.Manager) erro
 			&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.trackedPodToStorageNodeSetRequests),
 		).
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }
 

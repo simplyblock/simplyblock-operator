@@ -165,7 +165,7 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 	vm.Status.Connections = conns
 	vm.Status.StartedAt = &now
 	if err := r.Status().Patch(ctx, vm, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch status Validating: %w", err)
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationCreated", "MigrationCreated",
@@ -239,7 +239,7 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 	patch := client.MergeFrom(vm.DeepCopy())
 	vm.Status.ValidationJobName = job.Name
 	if err := r.Status().Patch(ctx, vm, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch ValidationJobName: %w", err)
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	log.Info("Validation job created", "job", job.Name, "node", hostname,
@@ -359,7 +359,7 @@ func (r *VolumeMigrationReconciler) performMigration(
 	vm.Status.Connections = nil
 	vm.Status.ValidationJobName = ""
 	if err := r.Status().Patch(ctx, vm, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch status Running: %w", err)
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationStarted", "MigrationStarted",
@@ -598,7 +598,7 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 		patch := client.MergeFrom(vm.DeepCopy())
 		vm.Status.StartedAt = &now
 		if err := r.Status().Patch(ctx, vm, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("backfill StartedAt: %w", err)
+			return ctrl.Result{Requeue: true}, nil
 		}
 		log.Info("StartedAt was unset in Running phase; backfilled", "migration", vm.Status.MigrationUUID)
 	}
@@ -620,7 +620,7 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 			if apierrors.IsNotFound(err) {
 				return ctrl.Result{}, nil
 			}
-			return ctrl.Result{}, fmt.Errorf("patch progress: %w", err)
+			return ctrl.Result{Requeue: true}, nil
 		}
 	}
 
@@ -642,7 +642,7 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 	if result.Succeeded {
 		vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseCompleted
 		if err := r.Status().Patch(ctx, vm, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("patch status Completed: %w", err)
+			return ctrl.Result{Requeue: true}, nil
 		}
 		r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationCompleted", "MigrationCompleted",
 			"Migration %s completed successfully", vm.Status.MigrationUUID)
@@ -654,7 +654,7 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 		vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseFailed
 		vm.Status.ErrorMessage = result.Migration.ErrorMessage
 		if err := r.Status().Patch(ctx, vm, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("patch status Failed: %w", err)
+			return ctrl.Result{Requeue: true}, nil
 		}
 		r.Recorder.Eventf(vm, nil, corev1.EventTypeWarning, "MigrationFailed", "MigrationFailed",
 			"Migration %s failed: %s", vm.Status.MigrationUUID, result.Migration.ErrorMessage)
@@ -731,7 +731,7 @@ func (r *VolumeMigrationReconciler) reconcileAbort(
 	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseAborted
 	vm.Status.CompletedAt = &now
 	if err := r.Status().Patch(ctx, vm, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch status Aborted: %w", err)
+		return ctrl.Result{Requeue: true}, nil
 	}
 	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationAborted", "MigrationAborted",
 		"Migration %s cancelled", vm.Status.MigrationUUID)
@@ -748,7 +748,7 @@ func (r *VolumeMigrationReconciler) setFailed(
 	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseFailed
 	vm.Status.ErrorMessage = reason
 	if err := r.Status().Patch(ctx, vm, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch status Failed: %w", err)
+		return ctrl.Result{Requeue: true}, nil
 	}
 	r.Recorder.Eventf(vm, nil, corev1.EventTypeWarning, "MigrationFailed", "MigrationFailed", "%s", reason)
 	return ctrl.Result{}, nil
@@ -769,5 +769,6 @@ func (r *VolumeMigrationReconciler) SetupWithManager(
 		For(&simplyblockv1alpha1.VolumeMigration{}).
 		Owns(&batchv1.Job{}).
 		Named("volumemigration").
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }

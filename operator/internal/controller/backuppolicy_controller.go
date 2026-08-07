@@ -279,6 +279,7 @@ func (r *BackupPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			},
 		).
 		Named("backuppolicy").
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }
 

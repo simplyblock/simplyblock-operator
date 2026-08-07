@@ -447,6 +447,7 @@ func (r *StorageBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageBackup{}).
 		Named("storagebackup").
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }
 

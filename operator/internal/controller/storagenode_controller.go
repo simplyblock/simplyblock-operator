@@ -855,5 +855,6 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.storageNodeSetToStorageNodeRequests),
 		).
 		Owns(&simplyblockv1alpha1.StorageNodeOps{}).
+		WithOptions(defaultControllerOptions()).
 		Complete(r)
 }

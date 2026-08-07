@@ -548,6 +548,6 @@ func (r *StorageNodeLatencyReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		For(&simplyblockv1alpha1.StorageNodeSet{}).
 		Owns(&batchv1.Job{}).
 		Named("storagenodelatency").
-		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1, RateLimiter: defaultRateLimiter()}).
 		Complete(r)
 }
