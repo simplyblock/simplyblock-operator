@@ -349,6 +349,10 @@ func (r *PoolReconciler) deleteStorageClass(ctx context.Context, poolCR *simplyb
 // upsertStorageClass creates a StorageClass for the pool if one does not already exist.
 // StorageClass parameters are immutable in Kubernetes, so this is create-once: if the
 // StorageClass already exists it is left unchanged.
+// scParamTrue is the CSI driver's string encoding of a true StorageClassParameters boolean
+// (see boolStr in mergeStorageClassParameters below).
+const scParamTrue = "True"
+
 func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyblockv1alpha1.Pool, clusterUUID string) error {
 	bindingMode := storagev1.VolumeBindingWaitForFirstConsumer
 	reclaimPolicy := corev1.PersistentVolumeReclaimDelete
@@ -377,16 +381,29 @@ func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyb
 		AllowVolumeExpansion: &allowExpansion,
 	}
 
+	// A pool may need to compose two independent topology requirements (DHCHAP-allowed
+	// nodes, VDO-capable nodes). Both go into a single TopologySelectorTerm's
+	// MatchLabelExpressions, which Kubernetes ANDs together within one term -- separate
+	// terms would be ORed, which would incorrectly let a volume needing both land on a
+	// node satisfying only one.
+	var topologyExprs []corev1.TopologySelectorLabelRequirement
 	if poolCR.Spec.DHCHAP && len(poolCR.Spec.AllowedNodes) > 0 {
+		topologyExprs = append(topologyExprs, corev1.TopologySelectorLabelRequirement{
+			Key:    poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name),
+			Values: []string{"allowed"},
+		})
+	}
+	// VDO is needed whenever either client-side parameter is true, not client_compression
+	// alone -- a dedup-only volume still needs a working kvdo module on the node.
+	if params["client_compression"] == scParamTrue || params["client_deduplication"] == scParamTrue {
+		topologyExprs = append(topologyExprs, corev1.TopologySelectorLabelRequirement{
+			Key:    "simplyblock.io/vdo-capable",
+			Values: []string{"true"},
+		})
+	}
+	if len(topologyExprs) > 0 {
 		sc.AllowedTopologies = []corev1.TopologySelectorTerm{
-			{
-				MatchLabelExpressions: []corev1.TopologySelectorLabelRequirement{
-					{
-						Key:    poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name),
-						Values: []string{"allowed"},
-					},
-				},
-			},
+			{MatchLabelExpressions: topologyExprs},
 		}
 	}
 
@@ -406,7 +423,7 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 	}
 	boolStr := func(b *bool) string {
 		if b != nil && *b {
-			return "True"
+			return scParamTrue
 		}
 		return "False"
 	}
@@ -415,6 +432,8 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 	dst["qos_r_mbytes"] = p.QosRMbytes
 	dst["qos_w_mbytes"] = p.QosWMbytes
 	dst["compression"] = p.Compression
+	dst["client_compression"] = boolStr(p.ClientCompression)
+	dst["client_deduplication"] = boolStr(p.ClientDeduplication)
 	dst["encryption"] = boolStr(p.Encryption)
 	dst["replicate"] = boolStr(p.Replicate)
 	dst["distr_ndcs"] = p.NumDataChunks
