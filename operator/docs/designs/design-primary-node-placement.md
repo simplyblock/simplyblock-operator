@@ -1,6 +1,6 @@
 # Design Document: Volume Placement at Creation Time
 
-**Status:** Proposed
+**Status:** Implemented
 
 **Author:** Manohar Reddy &nbsp;·&nbsp; **Date:** 2026-07-23
 
@@ -29,7 +29,7 @@
     - [Mechanism](#mechanism)
     - [Multi-instance tie-break](#multi-instance-tie-break)
     - [Works with nodeSelector, nodeAffinity, and podAffinity — not with `spec.nodeName`](#works-with-nodeselector-nodeaffinity-and-podaffinity--not-with-specnodename)
-    - [Reusing `EnableNodeAffinity` as Tier 1's gate](#reusing-enablenodeaffinity-as-tier-1s-gate)
+    - [`EnableNodeAffinity` is unrelated to Tier 1](#enablenodeaffinity-is-unrelated-to-tier-1)
     - [Per-PVC `pod-affinity` annotation](#per-pvc-pod-affinity-annotation)
   - [5. Tier 2: Load-Aware Placement](#5-tier-2-load-aware-placement)
     - [5.1 Architecture Overview](#51-architecture-overview)
@@ -90,18 +90,18 @@ pin is never silently overridden.
 
 **Each automatic tier has its own gate:**
 
-- **Tier 1** is gated by **two conditions, both required**: the cluster's
-  **node-affinity** feature (`StorageCluster.Spec.EnableNodeAffinity`,
-  `--enable-node-affinity` at cluster creation — the same flag that makes the
-  SPDK data plane keep a volume's data local to its primary node), *and* the
-  PVC's own `simplyblock.io/pod-affinity: "true"` annotation (§4). The
-  cluster flag makes co-location possible at all; the per-PVC annotation is
-  what a specific workload uses to actually request it — without it, that
-  PVC doesn't get Tier 1 treatment even on a node-affinity-enabled cluster.
-- **Tier 2** is gated by the cluster's **auto-rebalancing** feature
-  (`autoRebalancing` in `StorageCluster.Spec.VolumeMigrationSettings`) — it
-  activates whenever a cluster has that configured, independent of node
-  affinity.
+- **Tier 1** is gated solely by the PVC's own
+  `simplyblock.io/pod-affinity: "true"` annotation (§4) — a specific
+  workload opts itself in. This is independent of
+  `StorageCluster.Spec.EnableNodeAffinity` (`--enable-node-affinity` at
+  cluster creation): that flag is an unrelated SPDK data-plane hint that
+  keeps an *already-placed* volume's erasure-coded chunks local to its
+  primary node — it has no bearing on this CSI-level, Kubernetes-topology
+  co-location mechanism (§4).
+- **Tier 2** is gated by the cluster's **auto-placement latency benchmark**
+  (`StorageCluster.Spec.VolumeAutoPlacement.LatencyBenchmarkEnabled`) — it
+  activates whenever a cluster has that enabled, independent of node affinity
+  and independent of the rebalancer's own `Enabled` flag (§7).
 
 A single volume can also opt out of both tiers on its own, regardless of
 cluster-wide gating, via `simplyblock.io/disable-smart-placement: "true"`
@@ -151,13 +151,14 @@ already relies on, always setting `HostID` explicitly.
   changes to the creation path itself for any tier.
 - An explicit user-supplied `host_id` annotation (Tier 0) always wins over
   every automatic tier below it, including Tier 1 — see §3.
-- Tier 1 is gated by the cluster's existing node-affinity feature
-  (`StorageCluster.Spec.EnableNodeAffinity`) — the same flag that makes the
-  SPDK data plane actually honor locality (§4, §7). No new flag is introduced
-  for this.
-- Tier 2 is gated by the cluster's existing auto-rebalancing feature
-  (`autoRebalancing` in `StorageCluster.Spec.VolumeMigrationSettings`),
-  independent of Tier 1/node affinity.
+- Tier 1 is gated solely by the PVC's own `simplyblock.io/pod-affinity`
+  annotation (§4) — no new CRD field is introduced for this, and it is
+  independent of `StorageCluster.Spec.EnableNodeAffinity`, the unrelated SPDK
+  data-plane locality flag (§4).
+- Tier 2 is gated by the cluster's existing auto-placement latency-benchmark
+  feature (`StorageCluster.Spec.VolumeAutoPlacement.LatencyBenchmarkEnabled`),
+  independent of Tier 1/node affinity and independent of the rebalancer's own
+  `Enabled` flag.
 - Every configuration knob in this design — the per-tier gates, the load
   threshold — is a `StorageCluster` CR spec field, reconciled live. None of
   it is a command-line flag or environment variable that requires an
@@ -230,13 +231,13 @@ Tier 3 — Control-plane default   Annotation still empty after all of the above
                                   (_get_next_3_nodes) runs unmodified.
 ```
 
-Tier 1 is gated by `StorageCluster.Spec.EnableNodeAffinity` **and** the PVC's
-own `simplyblock.io/pod-affinity` annotation — both required (§4, §7); Tier
-2 is gated independently by `autoRebalancing`. When Tier 1's gate is off
-(either half of it), evaluation falls straight through to Tier 2 or Tier 3;
-when Tier 2's gate is off, straight through to Tier 1 or Tier 3. Tier 0 (an
-explicit pin) is never gated — that's a property of the annotation itself,
-not of any tier's logic.
+Tier 1 is gated solely by the PVC's own `simplyblock.io/pod-affinity`
+annotation (§4, §7) — `StorageCluster.Spec.EnableNodeAffinity` is unrelated
+(§4); Tier 2 is gated independently by
+`volumeAutoPlacement.latencyBenchmarkEnabled`. When Tier 1's gate is off,
+evaluation falls straight through to Tier 2 or Tier 3; when Tier 2's gate is
+off, straight through to Tier 1 or Tier 3. Tier 0 (an explicit pin) is never
+gated — that's a property of the annotation itself, not of any tier's logic.
 
 A single volume can also opt out of both automatic tiers regardless of
 cluster-wide gating, via a per-PVC annotation — see §7's per-PVC opt-out.
@@ -360,7 +361,7 @@ which Kubernetes mechanism put the Pod there:
 | `podAffinity` (`requiredDuringSchedulingIgnoredDuringExecution`, `topologyKey: kubernetes.io/hostname`, matching an anchor Pod pinned elsewhere) | Same result — Tier 1 doesn't care that the Pod's node was resolved indirectly via another Pod's label, only that it *was* resolved to a specific node |
 | `spec.nodeName` set directly on the Pod | **Does not work — but not because of Tier 1.** Setting `nodeName` bypasses the Kubernetes scheduler entirely, so the scheduler's `VolumeBinding` plugin never runs and the `volume.kubernetes.io/selected-node` PVC annotation `WaitForFirstConsumer` depends on is never written. The PVC sits at `WaitForFirstConsumer` forever, `Provisioning` is never even attempted. This is a well-known upstream Kubernetes limitation ([kubernetes/kubernetes#89953](https://github.com/kubernetes/kubernetes/issues/89953)) that affects *every* CSI driver under `WaitForFirstConsumer`, not something specific to this feature or to `spdk-csi`. |
 
-### Reusing `EnableNodeAffinity` as Tier 1's gate
+### `EnableNodeAffinity` is unrelated to Tier 1
 
 `StorageClusterSpec.EnableNodeAffinity` **already exists** on the CRD
 (`operator/api/v1alpha1/storagecluster_types.go`) and is **already wired up
@@ -380,49 +381,31 @@ In `sbcli`'s `add_lvol_ha`
 unconditionally becomes the volume's primary node
 (`lvol.node_id = host_node.get_id()`, then `add_lvol_on_node`) — **regardless**
 of `enable_node_affinity`. So `host_id` (from a manual pin, or from Tier 1)
-places the volume's primary correctly on *any* cluster. What
-`enable_node_affinity` additionally buys is the `ppln1` hint that makes the
-distributed/erasure-coded placement algorithm *also* prefer keeping that
-volume's redundant chunks local to the primary — the deeper half of the
-locality benefit this whole feature exists for.
+places the volume's primary correctly on *any* cluster, whether or not
+`enable_node_affinity` is set.
 
-**Tier 1 reuses `EnableNodeAffinity` directly as its gate — no new flag.**
-Even though `EnableNodeAffinity`'s original purpose is the SPDK data-plane
-hint, it's the right signal for Tier 1 too: Tier 1 only exists to exploit that
-same locality mechanism, so a cluster without it enabled has nothing to gain
-from Tier 1 either. See §7 for exactly where this check happens (on the
-*labeling* side, in the operator, not inside `spdk-csi`).
-
-This is a cluster-wide precondition, not per-volume control — it decides
-whether co-location is possible on this cluster *at all*, not which specific
-PVCs should actually get it. That's what the next annotation is for.
+**Tier 1 does not gate on `EnableNodeAffinity`.** `labelWorkerNodes` labels
+every co-located worker unconditionally — `EnableNodeAffinity` is not a
+precondition for topology labeling. Tier 1 is entirely per-PVC, gated only by
+the annotation below. The two co-location mechanisms are independent; a
+cluster can have one without the other.
 
 ### Per-PVC `pod-affinity` annotation
 
-`EnableNodeAffinity` alone would make Tier 1 apply to *every* PVC on a
-node-affinity-enabled cluster, whether or not that specific workload actually
-wants its volume kept local. A PVC opts in explicitly instead:
+A PVC opts into Tier 1 explicitly:
 
 ```
 simplyblock.io/pod-affinity: "true"
 ```
 
 **Set by the workload's author** (or their Helm chart/deployment tooling) on
-the PVC manifest itself. Both conditions are required for Tier 1 to actually
-fire on a given PVC:
+the PVC manifest itself. This is the *only* condition Tier 1 checks: the PVC
+carries `simplyblock.io/pod-affinity: "true"`, which gates whether
+`createVolume` calls `coLocatedHostID` for *this* PVC (§4 Mechanism, step 3).
 
-- The cluster has `StorageCluster.Spec.EnableNodeAffinity` set (§7) — gates
-  whether the operator's `labelWorkerNodes` emits `storage-node-uuid` labels
-  at all, on the *labeling* side.
-- The PVC carries `simplyblock.io/pod-affinity: "true"` — gates whether
-  `createVolume` actually calls `coLocatedHostID` for *this* PVC, on the
-  *resolution* side, inside `spdk-csi` (§4 Mechanism, step 3).
-
-Without the annotation, a PVC on a node-affinity-enabled cluster still falls
-through to Tier 2/Tier 3 exactly as if the cluster-wide flag were off — Tier
-1 never even attempts the topology lookup for it. This gives per-workload
-control over which volumes want locality and which don't, independent of the
-cluster-wide setting: some workloads on the same cluster can request
+Without the annotation, a PVC falls through to Tier 2/Tier 3 — Tier 1 never
+even attempts the topology lookup for it. This gives per-workload control
+over which volumes want locality and which don't: some workloads can request
 co-location while others participate in ordinary load-aware placement (Tier
 2) without being pinned to wherever their Pod happens to land.
 
@@ -433,7 +416,7 @@ co-location while others participate in ordinary load-aware placement (Tier
 This tier's mutating webhook
 (`operator/internal/webhook/simplyblock_volume_placement_injector.go`) is
 described here in full, since it's the concrete mechanism the rest of this
-document builds around. Unlike Tier 1, **Tier 2 is not gated by
+document builds around. Like Tier 1, **Tier 2 is not gated by
 `EnableNodeAffinity`** — picking the least-loaded node is a load-balancing
 concern independent of whether the SPDK data plane's locality optimization is
 active.
@@ -450,10 +433,10 @@ PVC created (user)
 │  1. Skip if simplyblock.io/host-id already set (explicit pin wins)      │
 │  2. Resolve StorageClass → cluster_id / pool_name params                │
 │  3. Resolve StorageCluster CR by Status.UUID == cluster_id              │
-│  4. Skip if AutoRebalancing disabled or PrometheusURL unset             │
+│  4. Skip if latencyBenchmarkEnabled is false or PrometheusURL unset     │
 │  5. GET storage-nodes (webapi.Client) → filter online/healthy/          │
 │     under-capacity                                                       │
-│  6. autobalancing.StorageNodeSelector.SelectBestNode(...)               │
+│  6. autoplacement.StorageNodeSelector.SelectBestNode(...)               │
 │     → lowest current-latency-deviation eligible node                   │
 │  7. Patch PVC: simplyblock.io/host-id = <chosen node UUID>              │
 └───────────────────────────────┬──────────────────────────────────────────┘
@@ -515,7 +498,7 @@ Tier 1, for the same reason: the clone path never reaches
 
 ### 5.3 Node Selection Algorithm
 
-Reuses the exact signal `autobalancing.StorageNodeSelector` computes for the
+Reuses the exact signal `autoplacement.StorageNodeSelector` computes for the
 rebalancer (Issue #130 §5.2):
 
 ```
@@ -588,7 +571,7 @@ same shape as `simplyblock_rebalancer_injector.go`.
 type SimplyblockVolumePlacementInjector struct {
     Client       client.Client
     APIClient    storageNodeLister   // narrow interface over *webapi.Client
-    NodeSelector primaryNodeSelector // narrow interface over *autobalancing.StorageNodeSelector
+    NodeSelector primaryNodeSelector // narrow interface over *autoplacement.StorageNodeSelector
 }
 ```
 
@@ -602,11 +585,12 @@ type SimplyblockVolumePlacementInjector struct {
      `parameters["cluster_id"]` is empty.
 2. Resolve the `StorageCluster` CR whose `Status.UUID == cluster_id` — same
    lookup pattern as `SimplyblockRebalancerInjector.resolveConfig`. Allow
-   unmodified if not found, or if `Spec.VolumeMigrationSettings.AutoRebalancing`
-   is nil/disabled, or `PrometheusURL` is unset — this is Tier 2's gate
-   (§7), nothing more is needed.
-3. Build `autobalancing.RebalancingConfig` via the existing
-   `autobalancing.ResolveRebalancingConfig(spec)`.
+   unmodified if not found, or if `Spec.VolumeAutoPlacement.LatencyBenchmarkEnabled`
+   is false, or `PrometheusURL` is unset — this is Tier 2's gate (§7), nothing
+   more is needed. This is independent of `Spec.VolumeAutoPlacement.Enabled`,
+   which only gates the rebalancer's periodic migrations, not this webhook.
+3. Build `autoplacement.RebalancingConfig` via the existing
+   `autoplacement.ResolveAutoPlacementConfig(spec)`.
 4. `APIClient.GetStorageNodes(ctx, clusterUUID)` — same call
    `VolumeRebalancerReconciler` already makes (in-cluster service-account
    auth, no per-cluster secret).
@@ -629,7 +613,7 @@ mgr.GetWebhookServer().Register("/mutate-v1-pvc-simplyblock-placement",
     &webhook.Admission{Handler: &internalwebhook.SimplyblockVolumePlacementInjector{
         Client:       mgr.GetClient(),
         APIClient:    webapi.NewClient(),
-        NodeSelector: autobalancing.NewStorageNodeSelector(mgr.GetClient()),
+        NodeSelector: autoplacement.NewStorageNodeSelector(mgr.GetClient()),
     }})
 ```
 
@@ -678,42 +662,43 @@ caching, on every single PVC admission request.
 
 ```yaml
 spec:
-  volumeMigrationSettings:
-    autoRebalancing:
-      enabled: true
-      latencyBenchmarkEnabled: true
-      prometheusURL: "http://prometheus.monitoring:9090"
+  volumeAutoPlacement:
+    enabled: true
+    latencyBenchmarkEnabled: true
+    prometheusURL: "http://prometheus.monitoring:9090"
 ```
 
-These are the same fields Issue #130 introduced for the rebalancer. Tier 2
-activates whenever a cluster has them set — there is no dedicated flag for
-creation-time placement, distinct from the rebalancer's own
-migration-enablement flag. A cluster may want migration-based rebalancing
-without opting into creation-time placement override, or vice versa.
+`Spec.VolumeAutoPlacement` is the same top-level field (renamed from
+`AutoRebalancing`) Issue #130 introduced for the rebalancer. Tier 2 activates
+whenever a cluster has `latencyBenchmarkEnabled: true` here — placement only
+needs the latency signal, not the migration behavior itself, so it is
+deliberately decoupled from the rebalancer's own activation flag:
+`SimplyblockVolumePlacementInjector` gates on
+`Spec.VolumeAutoPlacement.LatencyBenchmarkEnabled`, while
+`VolumeRebalancerReconciler` gates on `Spec.VolumeAutoPlacement.Enabled` — a
+cluster can opt into one without the other. The distinct `MigrationEnabled`
+sub-field only controls whether the rebalancer's periodic evaluation actually
+creates `VolumeMigration` CRs once triggered (dry-run vs. not) — it has no
+effect on Tier 2 either.
 
 ### Tier 1's gate
 
-No new CRD field is needed — Tier 1 reuses
-`StorageCluster.Spec.EnableNodeAffinity` directly (§4).
+No new CRD field is needed, and no `StorageCluster` field is involved at all
+— Tier 1 is gated entirely by the per-PVC `simplyblock.io/pod-affinity`
+annotation (§4).
 
-**Mechanism:** `spdk-csi` has no visibility into `StorageCluster` CRs, so the
-gate belongs on the operator side instead. `labelWorkerNodes` resolves the
-owning `StorageCluster` CR elsewhere in the same reconcile
-(`utils.ResolveClusterCR`) and only emits `simplyblock.io/storage-node-uuid.*`
-labels when that CR's `Spec.EnableNodeAffinity` is true. If it's false, no
-worker advertises a co-located storage node, Tier 1 has nothing to match, and
-volumes fall through to Tier 2/Tier 3 — zero `spdk-csi` changes needed.
+**Mechanism:** `labelWorkerNodes` labels every co-located worker with
+`simplyblock.io/storage-node-uuid.*` unconditionally, regardless of
+`StorageCluster.Spec.EnableNodeAffinity` — that flag is an unrelated SPDK
+data-plane locality hint (§4), not a precondition for this labeling.
+`createVolume` in `spdk-csi` calls `coLocatedHostID` against those labels
+**only when the PVC carries `simplyblock.io/pod-affinity: "true"`**; without
+it, Tier 1 never attempts the topology lookup and volumes fall through to
+Tier 2/Tier 3.
 
-**Tier 0** (the manual annotation) has no equivalent hook: it's a raw
-annotation `spdk-csi` reads directly, and `spdk-csi` has no CR-read capability
-to check `EnableNodeAffinity`. The pragmatic default is to leave Tier 0
-always-honored regardless of `EnableNodeAffinity`, since a manual pin already
-implies the operator knows what they're doing.
-
-This cluster-wide flag is only half of Tier 1's gate — the other half is the
-per-PVC `simplyblock.io/pod-affinity` annotation (§4), which controls
-whether an individual PVC actually gets Tier 1 treatment even when this flag
-is on.
+**Tier 0** (the manual annotation) is unaffected by any of this: it's a raw
+annotation `spdk-csi` reads directly and always honors, independent of Tier 1's
+gate.
 
 ### Per-PVC opt-out annotation
 
@@ -763,19 +748,18 @@ because the rebalancer never needed them.
 
 ### 8.2 `StorageCluster` CRD — one field addition (§6's load threshold)
 
-- `Spec.VolumeMigrationSettings.AutoRebalancing.MinImbalancePct *int32` (name/
-  semantics TBD, §6) — the only new CRD field in this design.
+- `Spec.VolumeAutoPlacement.MinImbalancePct *int32` (name/semantics TBD, §6) — the
+  only new CRD field in this design.
 
-Tier 1's gate (§7) needs **no CRD change at all**: it reuses the existing
-`Spec.EnableNodeAffinity` field; `labelWorkerNodes` checks that field before
-emitting its labels.
+Tier 1's gate (§7) needs **no CRD field at all**: it is entirely per-PVC, via
+the `simplyblock.io/pod-affinity` annotation.
 
 ### 8.3 `StorageNodeSet` controller — label extension (Tier 1, §4)
 
 `labelWorkerNodes`
 (`operator/internal/controller/simplyblockstoragenodeset_controller.go`)
-labels each worker with `io.simplyblock.node-type` and, gated on
-`StorageCluster.Spec.EnableNodeAffinity` (§7), with
+labels each worker with `io.simplyblock.node-type` and, unconditionally (no
+`StorageCluster.Spec.EnableNodeAffinity` check — see §4), with
 `simplyblock.io/storage-node-uuid.<clusterUUID>.<socketOrdinal> = <uuid>` for
 every co-located storage-node instance — reconciling additions, value updates
 (UUID churn on node replacement), and removals (stale slots) on every pass.
@@ -796,9 +780,9 @@ every co-located storage-node instance — reconciling additions, value updates
 
 ### 8.5 No other CRD changes
 
-Tier 2 reads existing fields only: `StorageCluster.Spec.VolumeMigrationSettings.AutoRebalancing`
+Tier 2 reads existing fields only: `StorageCluster.Spec.VolumeAutoPlacement`
 (Issue #130 §4.1) and `StorageNodeSet.Status.LatencyMetrics` (Issue #130 §4.3).
-Tier 1 reads one CRD field for its gate, `Spec.EnableNodeAffinity` (§7).
+Tier 1 reads no CRD field at all for its gate (§7) — it is entirely per-PVC.
 
 ---
 
@@ -807,11 +791,10 @@ Tier 1 reads one CRD field for its gate, `Spec.EnableNodeAffinity` (§7).
 | Condition | Behavior |
 |---|---|
 | `simplyblock.io/host-id` already set on the PVC (Tier 0) | Skip Tier 2 and Tier 1 — explicit pin always wins (§3) |
-| `StorageCluster.Spec.EnableNodeAffinity` is false or unset (§7) | Skip Tier 1 — operator never emits `storage-node-uuid` labels for that cluster's workers, so Tier 1 has nothing to match; falls through to whatever's in `host-id` (Tier 0/2) or Tier 3 |
-| PVC lacks `simplyblock.io/pod-affinity: "true"` (§4) | Skip Tier 1 for this PVC specifically — `createVolume` never calls `coLocatedHostID`, even if the cluster has `EnableNodeAffinity` on and the Pod's worker hosts a co-located storage node; falls through to Tier 2/Tier 3 |
+| PVC lacks `simplyblock.io/pod-affinity: "true"` (§4) | Skip Tier 1 for this PVC — `createVolume` never calls `coLocatedHostID`, even if the Pod's worker hosts a co-located storage node; falls through to whatever's in `host-id` (Tier 0/2) or Tier 3 |
 | StorageClass isn't simplyblock-provisioned, or has no `cluster_id` | Skip Tier 2 |
 | `StorageCluster` not found for `cluster_id` | Skip Tier 2 (log) |
-| `AutoRebalancing` nil/disabled or `PrometheusURL` unset for the cluster | Skip Tier 2 — cluster hasn't opted into the load signal |
+| `VolumeAutoPlacement` nil, `LatencyBenchmarkEnabled` false, or `PrometheusURL` unset for the cluster | Skip Tier 2 — cluster hasn't opted into the load signal |
 | Backend API (`GetStorageNodes`) unreachable | Skip Tier 2 (log); `failurePolicy=Ignore` also protects at the webhook-server level |
 | Prometheus unreachable / query error | Skip Tier 2 (log) |
 | No eligible node, or none clears the load threshold (§6) | Skip Tier 2 (log) |
@@ -853,7 +836,7 @@ Mirroring `simplyblock_rebalancer_injector_test.go`, with a fake
 
 - Annotation already set → PVC unmodified.
 - StorageClass missing / not simplyblock-provisioned → PVC unmodified.
-- `AutoRebalancing` disabled or `PrometheusURL` unset → PVC unmodified.
+- `LatencyBenchmarkEnabled` false or `PrometheusURL` unset → PVC unmodified.
 - Multiple eligible nodes with different deviations → lowest-deviation node
   chosen.
 - Offline / unhealthy / at-capacity nodes excluded from candidates.
@@ -886,8 +869,9 @@ Mirroring `simplyblock_rebalancer_injector_test.go`, with a fake
 
 ### Manual / E2E (Tier 2)
 
-On a cluster (3+ nodes) with `spec.volumeMigrationSettings.autoRebalancing`
-set (`enabled: true`, `prometheusURL` pointing at the cluster's Prometheus):
+On a cluster (3+ nodes) with `spec.volumeAutoPlacement` set
+(`latencyBenchmarkEnabled: true`, `prometheusURL` pointing at the cluster's
+Prometheus):
 
 - Create a plain PVC against the pool's StorageClass, with no consuming Pod
   yet. Confirm `simplyblock.io/host-id` is stamped on the PVC at admission,
@@ -901,11 +885,12 @@ set (`enabled: true`, `prometheusURL` pointing at the cluster's Prometheus):
 
 ### Manual / E2E (Tier 1)
 
-On a multi-node cluster (operator + `spdk-csi`) with `EnableNodeAffinity` set
-on the `StorageCluster` and at least one worker co-located with a storage
-node. Unless noted otherwise, every PVC below also carries
-`simplyblock.io/pod-affinity: "true"` — without it, Tier 1 does not
-evaluate at all regardless of the scheduling outcome:
+On a multi-node cluster (operator + `spdk-csi`) with at least one worker
+co-located with a storage node — `EnableNodeAffinity` on the `StorageCluster`
+is irrelevant to Tier 1 and need not be set (§4). Unless noted otherwise,
+every PVC below also carries `simplyblock.io/pod-affinity: "true"` —
+without it, Tier 1 does not evaluate at all regardless of the scheduling
+outcome:
 
 - **`pod-affinity` gate:** create two otherwise-identical PVCs, each with a
   Pod pinned via `nodeSelector` to the same storage-plane worker — one PVC
@@ -941,7 +926,9 @@ evaluate at all regardless of the scheduling outcome:
 
 ### Further Coverage
 
-- Unit + manual test for the `EnableNodeAffinity` precondition gate (§7): a
-  `StorageNodeSet` on a cluster with `EnableNodeAffinity: false` should never
-  get `storage-node-uuid` labels written, and a Pod pinned to such a worker
-  should fall straight through to Tier 2/Tier 3.
+- Unit + manual test confirming Tier 1 has no `EnableNodeAffinity`
+  dependency (§4, §7): a `StorageNodeSet` on a cluster with
+  `EnableNodeAffinity: false` (or unset) should still get
+  `storage-node-uuid` labels written, and a Pod pinned to such a worker with
+  `simplyblock.io/pod-affinity: "true"` on its PVC should still resolve
+  Tier 1 co-location.
