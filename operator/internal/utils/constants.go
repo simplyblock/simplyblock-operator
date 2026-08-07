@@ -6,13 +6,14 @@ const (
 	FinalizerSnapshotReplication = "storage.simplyblock.io/snapshotreplication-finalizer"
 	FinalizerStorageNodeSet      = "storage.simplyblock.io/storagenodeset-finalizer"
 	FinalizerStorageCluster      = "storage.simplyblock.io/cluster-finalizer"
+	FinalizerStorageClusterOps   = "storage.simplyblock.io/storageclusterops-finalizer"
 
-	ClusterActionActivate    = "activate"
-	ClusterActionExpand      = "expand"
-	ClusterActionShutdown    = "shutdown"
-	ClusterActionStart       = "start"
-	ClusterActionRestart     = "restart"
-	ClusterActionNodeRecycle = "node-recycle"
+	ClusterActionActivate           = "activate"
+	ClusterActionExpand             = "expand"
+	ClusterActionShutdown           = "shutdown"
+	ClusterActionStart              = "start"
+	ClusterActionRestart            = "restart"
+	ClusterActionNodeRollingRestart = "node-rolling-restart"
 
 	// StorageNode action names.
 	NodeActionShutdown = "shutdown"
@@ -22,12 +23,12 @@ const (
 	NodeActionRemove   = "remove"
 	NodeActionMigrate  = "migrate"
 
-	// NodeRecycle per-node phases
-	NodeRecyclePhaseSnodeRefresh     = "snode-refresh"
-	NodeRecyclePhaseSnodeRefreshWait = "snode-refresh-wait"
-	NodeRecyclePhaseShuttingDown     = "shutting-down"
-	NodeRecyclePhaseRestarting       = "restarting"
-	NodeRecyclePhaseRebalancing      = "rebalancing"
+	// NodeRollingRestart per-node phases
+	NodeRollingRestartPhaseSnodeRefresh     = "snode-refresh"
+	NodeRollingRestartPhaseSnodeRefreshWait = "snode-refresh-wait"
+	NodeRollingRestartPhaseShuttingDown     = "shutting-down"
+	NodeRollingRestartPhaseRestarting       = "restarting"
+	NodeRollingRestartPhaseRebalancing      = "rebalancing"
 
 	ActionStateRunning = "running"
 	ActionStateSuccess = "success"

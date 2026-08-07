@@ -1457,6 +1457,167 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+  name: storageclusterops.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: StorageClusterOps
+    listKind: StorageClusterOpsList
+    plural: storageclusterops
+    shortNames:
+    - scops
+    singular: storageclusterops
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.clusterRef
+      name: Cluster
+      type: string
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageClusterOps is a one-shot operational CR targeting a single SimplyblocksStorageCluster.
+          Analogous to a Kubernetes Job — it drives a cluster-level operation (activate, expand,
+          shutdown, restart, node-rolling-restart) to completion and records the result. Only one
+          StorageClusterOps can be active per cluster at a time.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StorageClusterOpsSpec defines the desired state of a StorageClusterOps.
+            properties:
+              action:
+                description: Action is the operation to perform. Immutable.
+                enum:
+                - activate
+                - expand
+                - shutdown
+                - start
+                - restart
+                - node-rolling-restart
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              clusterRef:
+                description: ClusterRef is the name of the target SimplyblocksStorageCluster.
+                  Immutable.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              nodeRollingRestart:
+                description: |-
+                  NodeRollingRestart configures behaviour specific to the node-rolling-restart action.
+                  Ignored for all other actions.
+                properties:
+                  refreshSNodeAPI:
+                    description: |-
+                      RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
+                      after the backend node is shut down and before it is restarted, ensuring
+                      the latest image is running before the node comes back online.
+                    type: boolean
+                type: object
+            required:
+            - action
+            - clusterRef
+            type: object
+          status:
+            description: StorageClusterOpsStatus holds the observed state of a StorageClusterOps.
+            properties:
+              completedAt:
+                description: CompletedAt is when the operation finished (successfully
+                  or not).
+                format: date-time
+                type: string
+              message:
+                description: Message is a human-readable description of the current
+                  state or failure reason.
+                type: string
+              nodeRollingRestartStatus:
+                description: |-
+                  NodeRollingRestartStatus tracks per-node progress for the node-rolling-restart action.
+                  Nil for all other actions.
+                properties:
+                  nodePhase:
+                    description: |-
+                      NodePhase is the current step for the node being restarted:
+                      "snode-refresh" | "snode-refresh-wait" | "shutting-down" | "restarting" | "rebalancing"
+                    type: string
+                  pendingNodes:
+                    description: PendingNodes is the ordered list of node UUIDs still
+                      to be restarted.
+                    items:
+                      type: string
+                    type: array
+                  phaseTriggered:
+                    description: PhaseTriggered indicates the API call for the current
+                      NodePhase was already sent.
+                    type: boolean
+                  processedNodes:
+                    description: ProcessedNodes is the list of node UUIDs already
+                      restarted.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              phase:
+                description: Phase is the high-level lifecycle phase.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              startedAt:
+                description: StartedAt is when the operation began.
+                format: date-time
+                type: string
+              triggered:
+                description: |-
+                  Triggered indicates the backend POST has been sent for this operation.
+                  Guards against duplicate backend calls on retry.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: storageclusters.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -1508,16 +1669,6 @@ spec:
           spec:
             description: spec defines the desired state of StorageCluster
             properties:
-              action:
-                description: Action triggers a cluster-level action.
-                enum:
-                - activate
-                - expand
-                - shutdown
-                - start
-                - restart
-                - node-recycle
-                type: string
               backup:
                 description: Backup specifies the specification for backup to S3 configuration
                 properties:
@@ -1618,16 +1769,6 @@ spec:
                 description: MaxQueueSize defines the maximum backend queue size.
                 format: int32
                 type: integer
-              nodeRecycle:
-                description: NodeRecycle configures the node-recycle action.
-                properties:
-                  refreshSNodeAPI:
-                    description: |-
-                      RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
-                      after the backend node is shut down and before it is restarted, ensuring
-                      the latest image is running before the node comes back online.
-                    type: boolean
-                type: object
               nvmfBasePort:
                 description: NvmfBasePort defines the base NVMf service port.
                 format: int32
@@ -1829,53 +1970,11 @@ spec:
           status:
             description: status defines the observed state of StorageCluster
             properties:
-              actionStatus:
-                description: ActionStatus tracks the most recent action execution
-                  state.
-                properties:
-                  action:
-                    description: Action is the requested action name.
-                    type: string
-                  message:
-                    description: Message is a human-readable action result or error.
-                    type: string
-                  nodeUUID:
-                    description: NodeUUID is the target node UUID for the action.
-                    type: string
-                  observedGeneration:
-                    description: ObservedGeneration is the resource generation observed
-                      by this status.
-                    format: int64
-                    type: integer
-                  state:
-                    type: string
-                  subPhase:
-                    description: SubPhase tracks the active drain step within the
-                      remove action.
-                    enum:
-                    - Validating
-                    - Suspending
-                    - Migrating
-                    - Verifying
-                    - Removing
-                    type: string
-                  triggered:
-                    description: Triggered indicates whether the underlying backend
-                      action has been fired.
-                    type: boolean
-                  updatedAt:
-                    description: UpdatedAt is the timestamp of the last status transition.
-                    format: date-time
-                    type: string
-                  volumesMigrated:
-                    description: VolumesMigrated is the count of volumes successfully
-                      migrated so far.
-                    type: integer
-                  volumesPending:
-                    description: VolumesPending is the count of volumes still awaiting
-                      migration.
-                    type: integer
-                type: object
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef is the name of the currently active ClusterOps on this cluster.
+                  Empty when no operation is in progress.
+                type: string
               clusterName:
                 description: ClusterName is the resolved backend cluster name.
                 type: string
@@ -1918,32 +2017,6 @@ spec:
                   FIXME: Unused for now (API update required?)
                 format: int32
                 type: integer
-              nodeRecycleStatus:
-                description: NodeRecycleStatus tracks in-progress state for the node-recycle
-                  action.
-                properties:
-                  nodePhase:
-                    description: |-
-                      NodePhase is the current step for the node being recycled:
-                      "snode-refresh" | "snode-refresh-wait" | "shutting-down" | "restarting" | "rebalancing"
-                    type: string
-                  pendingNodes:
-                    description: PendingNodes is the ordered list of node UUIDs still
-                      to be recycled.
-                    items:
-                      type: string
-                    type: array
-                  phaseTriggered:
-                    description: PhaseTriggered indicates the API call for the current
-                      NodePhase was already sent.
-                    type: boolean
-                  processedNodes:
-                    description: ProcessedNodes is the list of node UUIDs already
-                      recycled.
-                    items:
-                      type: string
-                    type: array
-                type: object
               nqn:
                 description: NQN is the cluster NVM subsystem qualified name.
                 type: string
@@ -3872,6 +3945,7 @@ rules:
   - pools
   - snapshotreplications
   - storagebackups
+  - storageclusterops
   - storageclusters
   - storagenodeops
   - storagenodes
@@ -3895,6 +3969,7 @@ rules:
   - pools/finalizers
   - snapshotreplications/finalizers
   - storagebackups/finalizers
+  - storageclusterops/finalizers
   - storageclusters/finalizers
   - storagenodeops/finalizers
   - storagenodes/finalizers
@@ -3913,6 +3988,7 @@ rules:
   - pools/status
   - snapshotreplications/status
   - storagebackups/status
+  - storageclusterops/status
   - storageclusters/status
   - storagenodeops/status
   - storagenodes/status

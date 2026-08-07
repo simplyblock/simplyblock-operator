@@ -286,9 +286,9 @@ spec:
       - description: MaxQueueSize defines the maximum backend queue size.
         displayName: Max Queue Size
         path: maxQueueSize
-      - description: NodeRecycle configures the node-recycle action.
+      - description: NodeRollingRestart configures the node-rolling-restart action.
         displayName: Node Recycle
-        path: nodeRecycle
+        path: nodeRollingRestart
       - description: NvmfBasePort defines the base NVMf service port.
         displayName: NVMf Base Port
         path: nvmfBasePort

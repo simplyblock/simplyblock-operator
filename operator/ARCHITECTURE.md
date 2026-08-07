@@ -66,7 +66,7 @@ Most controllers project an explicit `running/success/failed` action workflow in
 - `ControlPlane` (singleton)
   Reflects readiness of the simplyblock control plane (FoundationDB + management API) via `/api/v2/_meta/ready`. Reconciler ignores any CR whose name is not `simplyblock`; the CR is created automatically by the Helm chart and surfaces a `Phase` (`Initializing` / `Ready`) plus the resolved cluster image (`spec.image`) used for downstream provisioning.
 - `StorageCluster`
-  Creates/activates/expands clusters, stores cluster UUID and NQN in status, writes cluster secrets (including CSI credentials), and provisions one StorageClass per pool with a unique, namespace-scoped name. Supports `activate`, `expand`, `shutdown`, `start`, `restart`, and `node-recycle` action workflows via `simplyblockstoragecluster_actions.go`. Spec also carries erasure-coding (`stripe`), backup/S3 (`backup`), HashiCorp Vault (`hashicorpVaultSettings`), and volume-migration (`volumeMigrationSettings`, including the rebalancer image) configuration.
+  Creates/activates/expands clusters, stores cluster UUID and NQN in status, writes cluster secrets (including CSI credentials), and provisions one StorageClass per pool with a unique, namespace-scoped name. Supports `activate`, `expand`, `shutdown`, `start`, `restart`, and `node-rolling-restart` action workflows via `simplyblockstoragecluster_actions.go`. Spec also carries erasure-coding (`stripe`), backup/S3 (`backup`), HashiCorp Vault (`hashicorpVaultSettings`), and volume-migration (`volumeMigrationSettings`, including the rebalancer image) configuration.
 - `StorageNodeSet`
   Labels worker nodes, reconciles the storage-node DaemonSet (privileged SPDK pods), the headless Service and EndpointSlice used for NVMe target discovery, and namespaced RBAC (ServiceAccount, ClusterRole, ClusterRoleBinding). Manages TLS certificates via cert-manager, creates and manages storage nodes, exposes node-drain coordination state, and tracks node/action status (`shutdown`, `restart`, `suspend`, `resume`, `remove`). `maxSize` denotes the maximum huge-page allocation for the node; `maxParallelNodeAdds` throttles concurrent (non-FDB) worker-node additions.
 - `Pool`
@@ -130,7 +130,7 @@ These findings are based on the original implementation and hardening cycle capt
 
 ### Action-State Machine Conventions
 - Explicit action state machines are implemented in:
-  - `StorageCluster` (`activate`, `expand`, `shutdown`, `start`, `restart`, `node-recycle`)
+  - `StorageCluster` (`activate`, `expand`, `shutdown`, `start`, `restart`, `node-rolling-restart`)
   - `StorageNodeSet` (`shutdown`, `restart`, `suspend`, `resume`, `remove`)
 - `Pool` and `Task` reconcile state directly without explicit `running/success/failed` action workflows.
 
