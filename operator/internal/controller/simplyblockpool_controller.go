@@ -349,6 +349,10 @@ func (r *PoolReconciler) deleteStorageClass(ctx context.Context, poolCR *simplyb
 // upsertStorageClass creates a StorageClass for the pool if one does not already exist.
 // StorageClass parameters are immutable in Kubernetes, so this is create-once: if the
 // StorageClass already exists it is left unchanged.
+// scParamTrue is the CSI driver's string encoding of a true StorageClassParameters boolean
+// (see boolStr in mergeStorageClassParameters below).
+const scParamTrue = "True"
+
 func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyblockv1alpha1.Pool, clusterUUID string) error {
 	bindingMode := storagev1.VolumeBindingWaitForFirstConsumer
 	reclaimPolicy := corev1.PersistentVolumeReclaimDelete
@@ -391,7 +395,7 @@ func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyb
 	}
 	// VDO is needed whenever either client-side parameter is true, not client_compression
 	// alone -- a dedup-only volume still needs a working kvdo module on the node.
-	if params["client_compression"] == "True" || params["client_deduplication"] == "True" {
+	if params["client_compression"] == scParamTrue || params["client_deduplication"] == scParamTrue {
 		topologyExprs = append(topologyExprs, corev1.TopologySelectorLabelRequirement{
 			Key:    "simplyblock.io/vdo-capable",
 			Values: []string{"true"},
@@ -419,7 +423,7 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 	}
 	boolStr := func(b *bool) string {
 		if b != nil && *b {
-			return "True"
+			return scParamTrue
 		}
 		return "False"
 	}

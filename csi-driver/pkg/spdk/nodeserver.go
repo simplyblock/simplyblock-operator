@@ -34,6 +34,7 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/simplyblock/atlas/errs/deferrers"
+	"github.com/simplyblock/atlas/kube"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
@@ -53,6 +54,22 @@ import (
 // installing/loading kvdo (see helm-charts .../templates/node.yaml) -- read at node-server
 // startup by advertiseVDOCapability.
 const vdoCapableMarkerPath = "/var/run/simplyblock/vdo-capable/marker"
+
+// vdoCapableLabelValue is the value of vdoCapableLabelKey (and the marker file's own
+// contents) when a node is VDO-capable.
+const vdoCapableLabelValue = "true"
+
+// vdoParams parses the two client-side VDO parameters out of a volume context, tolerating
+// the same boolean string forms kube.BoolParam already accepts for encryption/replicate
+// elsewhere in this driver -- a plain == "true" comparison would silently never match the
+// "True" that mergeStorageClassParameters' boolStr actually emits. wantsVDO is true if
+// either is set: a dedup-only volume still needs a working kvdo module, not
+// client_compression alone.
+func vdoParams(vc map[string]string) (compression, deduplication, wantsVDO bool) {
+	compression, _ = kube.BoolParam(vc, paramClientCompression, false)
+	deduplication, _ = kube.BoolParam(vc, paramClientDeduplication, false)
+	return compression, deduplication, compression || deduplication
+}
 
 type nodeServer struct {
 	*csicommon.DefaultNodeServer
@@ -125,7 +142,7 @@ func (ns *nodeServer) advertiseVDOCapability(ctx context.Context) {
 	for {
 		data, err := os.ReadFile(vdoCapableMarkerPath)
 		if err == nil {
-			capable = strings.TrimSpace(string(data)) == "true"
+			capable = strings.TrimSpace(string(data)) == vdoCapableLabelValue
 			break
 		}
 		if time.Now().After(deadline) {
@@ -222,8 +239,8 @@ func (ns *nodeServer) buildAccessibleTopology(ctx context.Context) map[string]st
 		}
 	}
 
-	if node.Labels[vdoCapableLabelKey] == "true" {
-		segments[vdoCapableLabelKey] = "true"
+	if node.Labels[vdoCapableLabelKey] == vdoCapableLabelValue {
+		segments[vdoCapableLabelKey] = vdoCapableLabelValue
 	}
 
 	if len(segments) == 0 {
@@ -407,7 +424,7 @@ func (ns *nodeServer) NodeStageVolume(
 	// client-side parameter is set -- dedup-only volumes still need a working kvdo module,
 	// so this is not gated on client_compression alone.
 	mountDevicePath := devicePath
-	if vc[paramClientCompression] == "true" || vc[paramClientDeduplication] == "true" {
+	if compression, deduplication, wantsVDO := vdoParams(vc); wantsVDO {
 		lvolID := volumeID
 		if spdkVol, perr := parseVolumeID(volumeID); perr == nil {
 			lvolID = spdkVol.lvolID
@@ -420,10 +437,7 @@ func (ns *nodeServer) NodeStageVolume(
 			klog.Errorf("failed to resolve cloned VDO identity, volumeID: %s err: %v", volumeID, err)
 			return nil, status.Error(codes.Internal, err.Error())
 		}
-		mountDevicePath, err = util.CreateOrAttachVDO(
-			ctx, devicePath, lvolID,
-			vc[paramClientCompression] == "true", vc[paramClientDeduplication] == "true",
-		)
+		mountDevicePath, err = util.CreateOrAttachVDO(ctx, devicePath, lvolID, compression, deduplication)
 		if err != nil {
 			klog.Errorf("failed to create/attach VDO, volumeID: %s err: %v", volumeID, err)
 			return nil, status.Error(codes.Internal, err.Error())
@@ -479,7 +493,7 @@ func (ns *nodeServer) NodeUnstageVolume(
 	// VDO must come down before the raw device it sits on is disconnected -- disconnecting
 	// first would leave a live dm-vdo stack mapped on top of a device that just vanished,
 	// the same orphaned-stack state documented in the design doc's spike log.
-	if volumeContext[paramClientCompression] == "true" || volumeContext[paramClientDeduplication] == "true" {
+	if _, _, wantsVDO := vdoParams(volumeContext); wantsVDO {
 		lvolID := volumeID
 		if spdkVol, perr := parseVolumeID(volumeID); perr == nil {
 			lvolID = spdkVol.lvolID
@@ -626,7 +640,7 @@ func (ns *nodeServer) NodeExpandVolume(
 	}
 
 	resizeDevicePath := devicePath
-	if volumeContext[paramClientCompression] == "true" || volumeContext[paramClientDeduplication] == "true" {
+	if _, _, wantsVDO := vdoParams(volumeContext); wantsVDO {
 		lvolID := volumeID
 		if spdkVol, perr := parseVolumeID(volumeID); perr == nil {
 			lvolID = spdkVol.lvolID
@@ -730,7 +744,7 @@ func (ns *nodeServer) stageVolume(
 	// VDO virtualizes and relocates blocks, so once it's in play the filesystem is no
 	// longer directly on the erasure-coded backend device these stripe hints were computed
 	// for -- applying them to a VDO virtual device is actively misleading, not just useless.
-	usesVDO := volumeContext[paramClientCompression] == "true" || volumeContext[paramClientDeduplication] == "true"
+	_, _, usesVDO := vdoParams(volumeContext)
 	if fsType == "xfs" && !usesVDO {
 		formatOptions = append(formatOptions, xfsStripeOptions(volumeContext)...)
 	}
@@ -962,7 +976,7 @@ func (ns *nodeServer) restageVolume(
 	}
 
 	mountDevicePath := devicePath
-	if volumeContext[paramClientCompression] == "true" || volumeContext[paramClientDeduplication] == "true" {
+	if compression, deduplication, wantsVDO := vdoParams(volumeContext); wantsVDO {
 		lvolID := volumeID
 		if spdkVol, perr := parseVolumeID(volumeID); perr == nil {
 			lvolID = spdkVol.lvolID
@@ -970,10 +984,7 @@ func (ns *nodeServer) restageVolume(
 		// Reattach only -- CreateOrAttachVDO is idempotent and reactivates an existing VG
 		// rather than recreating it, matching this function's own "never reformat, data
 		// already exists" invariant.
-		mountDevicePath, err = util.CreateOrAttachVDO(
-			ctx, devicePath, lvolID,
-			volumeContext[paramClientCompression] == "true", volumeContext[paramClientDeduplication] == "true",
-		)
+		mountDevicePath, err = util.CreateOrAttachVDO(ctx, devicePath, lvolID, compression, deduplication)
 		if err != nil {
 			return fmt.Errorf("reattach VDO device for %s: %w", volumeID, err)
 		}
