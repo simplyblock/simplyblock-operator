@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -65,6 +66,12 @@ func runLVMCommand(ctx context.Context, timeoutSeconds int, args ...string) (str
 	klog.Infof("running command: %v", args)
 	//nolint:gosec // runLVMCommand assumes valid cmd arguments
 	cmd := exec.CommandContext(execCtx, args[0], args[1:]...)
+	// This container has no udev daemon, so device-mapper's usual wait-for-udev-to-create-
+	// the-device-node handshake never completes -- confirmed live ("device not cleared,
+	// Aborting. Failed to wipe start of new LV" from lvcreate). DM_DISABLE_UDEV tells
+	// device-mapper to create/manage nodes itself instead of waiting on udev, the standard
+	// fix for running LVM tools inside a container.
+	cmd.Env = append(os.Environ(), "DM_DISABLE_UDEV=1")
 	output, err := cmd.CombinedOutput()
 
 	if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
