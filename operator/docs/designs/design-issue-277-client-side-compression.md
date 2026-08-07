@@ -549,15 +549,42 @@ afterward via `lvchange` measured ~391MB, matching the isolated figures above.*
 
   **Tested:**
   - The dangerous variant — node stays up, backing device disappears without
-    a clean disconnect — reproduced by accident during the memory-scaling
-    measurement above: an orphaned VDO stack from an earlier real-cluster
-    migration spike had its backing lvol deleted server-side while its
-    dm-mapper entries were still live in the kernel. `vgremove` failed
-    outright ("VG not found"), since it needs to read/write VG metadata that
-    lives on the now-gone device; only a direct `dmsetup remove` on the
-    orphaned devices, in dependency order, cleared it. `pvscan`/`vgs`
-    otherwise silently skip a PV they can't find rather than erroring (also
-    confirmed separately in the clone-collision reproduction above).
+    a clean disconnect — originally reproduced by accident during the
+    memory-scaling measurement above (an orphaned VDO stack from an earlier
+    real-cluster migration spike had its backing lvol deleted server-side
+    while its dm-mapper entries were still live in the kernel; `vgremove`
+    failed outright, "VG not found").
+  - **Now reproduced deliberately, against the real implementation (PR
+    #402), and the full self-healing path confirmed end-to-end**: created a
+    real VDO-backed PVC/pod, wrote data, then forcibly disconnected the
+    backing NVMe-oF subsystem at the host level (`nvme disconnect`) while the
+    node and pod both stayed up — simulating "the storage side disconnecting
+    the initiator while the node itself stays up" directly. Kernel logs
+    confirmed the actual failure sequence: for roughly 19 seconds, reads and
+    even a new write both *appeared* to succeed (silently absorbed by
+    caching), before the real I/O failure surfaced ("attempt to access
+    beyond end of device") once something actually needed to reach the
+    vanished device. At that point VDO correctly fenced itself into
+    **read-only mode** rather than corrupting anything, and ext4
+    independently aborted its own journal for the same reason — both layers
+    protected data correctly on their own, with no wiring from this design
+    needed for that part. The pod stayed reported as `1/1 Running` by
+    Kubernetes throughout, with no visible signal anything was wrong.
+  - Deleting the pod after this point **found two real bugs, both now
+    fixed**: (1) `NodeUnstageVolume`'s `DeactivateVDO` call had no fallback
+    for an unreachable device — `vgchange -an` failed with the identical
+    "Volume group ... not found" `vgremove` hits, on every one of 18 retries,
+    until kubelet gave up and force-removed the pod anyway, leaving the
+    orphaned stack permanently stuck with nothing left to clean it up. (2)
+    once a `dmsetup remove` fallback was added to `DeactivateVDO` (mirroring
+    `RemoveVDO`'s existing one), it *still* didn't work at first: the
+    orphaned-device name matching compared against the plain VG name, but
+    device-mapper flattens `<vg>-<lv>` into a dm device name by doubling
+    every literal `-` in the VG/LV name components, so the match silently
+    found nothing. With both fixed, the full sequence — disconnect, pod
+    delete, `vgchange -an` failing correctly, falling back to `dmsetup
+    remove`, clean final state — was reproduced a second time and confirmed
+    fully automatic, no manual intervention needed.
 
   **Scenarios to be tested:**
   - The clean-reboot variant end-to-end: in-kernel dm tables are RAM-only and
@@ -565,16 +592,17 @@ afterward via `lvchange` measured ~391MB, matching the isolated figures above.*
     `/etc/lvm/devices/system.devices` bookkeeping only (harmless per the
     skip-on-missing behavior above) — not yet deliberately reproduced.
   - Whether kubelet's own volume reconciler reliably re-invokes
-    `NodeUnstageVolume` on the original node once it rejoins as Ready, so the
-    `dmsetup remove` fallback above actually gets a chance to run without
-    manual intervention — this is standard kubelet/CSI mechanics, not
-    simplyblock-specific, but not yet verified against this cluster's actual
-    failure/reschedule path.
-  - Whether `RemoveVDO`'s planned `vgchange -an`/`vgremove` teardown needs an
-    explicit `dmsetup remove` fallback for the case above, and whether
-    cleanup should also prune the corresponding `system.devices` entry
-    (`lvmdevices --deldev`/`--delpvid`) to stop it from accumulating dead
-    entries across repeated node-failure cycles over a node's lifetime.
+    `NodeUnstageVolume` on the *original* node specifically after that node
+    itself goes NotReady and later rejoins — the test above forced the
+    device to disappear while the node and kubelet stayed healthy the whole
+    time, then deleted the pod normally; kubelet's behavior when the node
+    itself was unreachable for a period and the pod was rescheduled
+    elsewhere in the meantime is a different, still-unverified code path.
+  - Whether cleanup should also prune the corresponding `system.devices`
+    entry (`lvmdevices --deldev`/`--delpvid`) to stop it from accumulating
+    dead entries across repeated node-failure cycles over a node's lifetime
+    — not exercised by the fix above, which only addressed the live
+    dm-mapper state, not any host-level LVM devices-file bookkeeping.
 
 - **The ~390MB deduplication cost is constant with respect to volume size, by
   construction, not by coincidence of the sizes tested.** The measurements
