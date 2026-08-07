@@ -29,10 +29,13 @@ USER root
 WORKDIR /app
 
 # lvm2 (pvcreate/vgcreate/lvcreate/vgchange/lvextend/dmsetup/etc.) is required by
-# pkg/util/vdo.go to manage client-side VDO devices -- not part of base_image, added here
-# rather than there to avoid rebuilding/overwriting that shared, cross-branch image tag for
-# an in-progress feature. Candidate for promotion into Dockerfile_base once this lands.
-RUN dnf install -y lvm2 --nogpgcheck && dnf clean all
+# pkg/util/vdo.go to manage client-side VDO devices. vdo provides vdoformat, which
+# lvcreate --type vdo shells out to internally to format the new VDO pool -- confirmed live
+# ("/usr/bin/vdoformat: execvp failed: No such file or directory") after lvm2 alone wasn't
+# enough. Neither is part of base_image; added here rather than there to avoid
+# rebuilding/overwriting that shared, cross-branch image tag for an in-progress feature.
+# Candidate for promotion into Dockerfile_base once this lands.
+RUN dnf install -y lvm2 vdo --nogpgcheck && dnf clean all
 
 COPY --from=builder --chmod=0755 /workspace/spdkcsi spdkcsi
 
