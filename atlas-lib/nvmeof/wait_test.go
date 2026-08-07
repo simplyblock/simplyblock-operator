@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -308,7 +309,7 @@ func TestConnectDevice(t *testing.T) {
 				if !connected {
 					return notFound()
 				}
-				return liveSub(nqn)
+				return liveSub(nqn, "10.0.0.1")
 			}},
 			connect: func(context.Context, string) (string, error) { connected = true; return "", nil },
 		}
@@ -339,6 +340,89 @@ func TestConnectDevice(t *testing.T) {
 		}
 		if devs.calls != 0 {
 			t.Errorf("List called %d times after a failed connect, want 0", devs.calls)
+		}
+	})
+}
+
+func TestConnectMultipathDevice(t *testing.T) {
+	// Two namespaces of one multi-namespace subsystem: staging the wrong one is
+	// the mistake the NSID selector prevents.
+	ns1 := dev("nvme-subsys0", testNQN, "nvme0n1", "259:1", 1)
+	ns2 := dev("nvme-subsys0", testNQN, "nvme0n2", "259:2", 2)
+
+	t.Run("attaches every path, then returns the selected namespace", func(t *testing.T) {
+		f := &fabric{}
+		devs := &fakeDevs{snapshots: [][]nvme.Device{{}, {ns1, ns2}}}
+
+		got, results, err := ConnectMultipathDevice(waitCtx(t), f.connector(), devs,
+			targets("10.0.0.1", "10.0.0.2", "10.0.0.3"), 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(f.order, []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}) {
+			t.Errorf("attach order = %v, want all three in priority order", f.order)
+		}
+		if len(results) != 3 {
+			t.Errorf("results = %d, want one per path", len(results))
+		}
+		if got.Namespace.DevicePath != "/dev/nvme0n2" {
+			t.Errorf("device = %q, want /dev/nvme0n2 (nsid 2)", got.Namespace.DevicePath)
+		}
+	})
+
+	t.Run("a degraded volume still stages", func(t *testing.T) {
+		f := &fabric{fail: map[string]error{"10.0.0.1": errors.New("connection refused")}}
+		devs := &fakeDevs{snapshots: [][]nvme.Device{{ns1}}}
+
+		got, results, err := ConnectMultipathDevice(waitCtx(t), f.connector(), devs,
+			targets("10.0.0.1", "10.0.0.2"), 0)
+		if err != nil {
+			t.Fatalf("err = %v, want nil: the secondary path came up", err)
+		}
+		if got.Namespace.DevicePath != "/dev/nvme0n1" {
+			t.Errorf("device = %q, want /dev/nvme0n1", got.Namespace.DevicePath)
+		}
+		if results[0].Live || results[1].Live == false {
+			t.Errorf("results = %+v, want the primary failed and the secondary live", results)
+		}
+	})
+
+	t.Run("no path up returns the per-path reasons", func(t *testing.T) {
+		f := &fabric{fail: map[string]error{
+			"10.0.0.1": errors.New("connection refused"),
+			"10.0.0.2": errors.New("no route to host"),
+		}}
+		devs := &fakeDevs{snapshots: [][]nvme.Device{{}}}
+
+		_, results, err := ConnectMultipathDevice(waitCtx(t), f.connector(), devs,
+			targets("10.0.0.1", "10.0.0.2"), 0)
+		if err == nil {
+			t.Error("err = nil, want an error when nothing came up")
+		}
+		if len(results) != 2 || results[0].Err == nil || results[1].Err == nil {
+			t.Errorf("results = %+v, want both failures recorded", results)
+		}
+	})
+
+	t.Run("paths up but no device", func(t *testing.T) {
+		f := &fabric{}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		devs := &fakeDevs{snapshots: [][]nvme.Device{{}}} // never shows up
+
+		_, results, err := ConnectMultipathDevice(ctx, f.connector(), devs, targets("10.0.0.1"), 0)
+		if err == nil {
+			t.Error("err = nil, want the device wait to fail")
+		}
+		if len(results) != 1 || !results[0].Live {
+			t.Errorf("results = %+v, want the path reported live", results)
+		}
+	})
+
+	t.Run("no targets", func(t *testing.T) {
+		f := &fabric{}
+		if _, _, err := ConnectMultipathDevice(waitCtx(t), f.connector(), &fakeDevs{}, nil, 0); err == nil {
+			t.Error("err = nil, want an error for an empty target list")
 		}
 	})
 }

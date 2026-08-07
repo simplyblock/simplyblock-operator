@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,8 +29,19 @@ func notFound() (nvme.Subsystem, error) {
 	return nvme.Subsystem{}, fmt.Errorf("subsystem: %w", errs.ErrNotFound)
 }
 
-func liveSub(nqn string) (nvme.Subsystem, error) {
-	return nvme.Subsystem{NQN: nqn, Controllers: []nvme.Controller{{ID: "nvme0", State: "live"}}}, nil
+// ctrl is a controller fronting addr over TCP on the default service port.
+func ctrl(id, addr, state string) nvme.Controller {
+	return nvme.Controller{
+		ID:        nvme.ControllerID(id),
+		Transport: "tcp",
+		State:     state,
+		Address:   nvme.Address{TrAddr: addr, TrSvcID: strconv.Itoa(defaultTrSvcID)},
+	}
+}
+
+// liveSub is a single-path subsystem whose controller fronts addr and is live.
+func liveSub(nqn, addr string) (nvme.Subsystem, error) {
+	return nvme.Subsystem{NQN: nqn, Controllers: []nvme.Controller{ctrl("nvme0", addr, "live")}}, nil
 }
 
 func TestOptions(t *testing.T) {
@@ -64,12 +76,12 @@ func TestConnect_WritesFabricsThenWaitsLive(t *testing.T) {
 	connected := false
 	var gotOpts string
 	c := &FabricsConnector{
-		hostNQN: "h", hostID: "i", poll: time.Millisecond,
+		hostNQN: "h", hostID: "i", poll: time.Millisecond, pathTimeout: time.Second,
 		subs: fakeSubs{byNQN: func(_ context.Context, nqn string) (nvme.Subsystem, error) {
 			if !connected {
 				return notFound()
 			}
-			return liveSub(nqn)
+			return liveSub(nqn, "10.0.0.1")
 		}},
 		connect: func(_ context.Context, opts string) (string, error) {
 			gotOpts = opts
@@ -85,26 +97,49 @@ func TestConnect_WritesFabricsThenWaitsLive(t *testing.T) {
 	}
 }
 
-func TestConnect_IdempotentWhenAlreadyLive(t *testing.T) {
+func TestConnect_IdempotentWhenPathAlreadyLive(t *testing.T) {
 	called := false
 	c := &FabricsConnector{
-		poll: time.Millisecond,
+		poll: time.Millisecond, pathTimeout: time.Second,
 		subs: fakeSubs{byNQN: func(_ context.Context, nqn string) (nvme.Subsystem, error) {
-			return liveSub(nqn)
+			return liveSub(nqn, "10.0.0.1")
 		}},
 		connect: func(context.Context, string) (string, error) { called = true; return "", nil },
 	}
-	if err := c.Connect(context.Background(), Target{NQN: "nqn.x", Address: "a"}); err != nil {
+	if err := c.Connect(context.Background(), Target{NQN: "nqn.x", Address: "10.0.0.1"}); err != nil {
 		t.Fatal(err)
 	}
 	if called {
-		t.Error("connect wrote the fabrics device despite an already-live controller")
+		t.Error("connect wrote the fabrics device despite an already-live controller for this path")
+	}
+}
+
+// A live controller at another address is a different path, not this one — a
+// storage node whose IP changed must still be connected at its new address.
+func TestConnect_ConnectsWhenOnlyAnotherPathIsLive(t *testing.T) {
+	connected := false
+	c := &FabricsConnector{
+		poll: time.Millisecond, pathTimeout: time.Second,
+		subs: fakeSubs{byNQN: func(_ context.Context, nqn string) (nvme.Subsystem, error) {
+			s, _ := liveSub(nqn, "10.0.0.1")
+			if connected {
+				s.Controllers = append(s.Controllers, ctrl("nvme1", "10.0.0.2", "live"))
+			}
+			return s, nil
+		}},
+		connect: func(context.Context, string) (string, error) { connected = true; return "", nil },
+	}
+	if err := c.Connect(context.Background(), Target{NQN: "nqn.x", Address: "10.0.0.2"}); err != nil {
+		t.Fatal(err)
+	}
+	if !connected {
+		t.Error("connect did not attach the new path")
 	}
 }
 
 func TestConnect_WriteErrorPropagates(t *testing.T) {
 	c := &FabricsConnector{
-		poll: time.Millisecond,
+		poll: time.Millisecond, pathTimeout: time.Second,
 		subs: fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) { return notFound() }},
 		connect: func(context.Context, string) (string, error) {
 			return "", errors.New("connection refused")
@@ -160,7 +195,7 @@ func TestIsConnected(t *testing.T) {
 	ctx := context.Background()
 	t.Run("live", func(t *testing.T) {
 		c := &FabricsConnector{subs: fakeSubs{byNQN: func(_ context.Context, nqn string) (nvme.Subsystem, error) {
-			return liveSub(nqn)
+			return liveSub(nqn, "10.0.0.1")
 		}}}
 		if ok, err := c.IsConnected(ctx, "n"); err != nil || !ok {
 			t.Errorf("IsConnected = %v, %v; want true, nil", ok, err)

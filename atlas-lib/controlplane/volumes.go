@@ -64,10 +64,23 @@ func (c *Client) Connection(ctx context.Context, h lvol.VolumeHandle) (lvol.Conn
 
 	conn := lvol.Connection{NQN: entries[0].Nqn}
 	for _, e := range entries {
+		if conn.NSID == 0 && e.NsId != nil && *e.NsId > 0 {
+			conn.NSID = uint32(*e.NsId)
+		}
 		conn.Endpoints = append(conn.Endpoints, lvol.Endpoint{
-			Transport: e.Transport,
-			Address:   e.Ip,
-			Port:      e.Port,
+			Transport:         e.Transport,
+			Address:           e.Ip,
+			Port:              e.Port,
+			NrIOQueues:        e.NrIoQueues,
+			ReconnectDelaySec: e.ReconnectDelay,
+			KeepAliveTMOSec:   e.KeepAliveTmo,
+			// The spec makes both timeouts required, so whatever arrives is
+			// the control plane's answer — including 0 ("fail I/O
+			// immediately"), which must not degrade into "unspecified".
+			CtrlLossTMOSec:   ptr.To(e.CtrlLossTmo),
+			FastIOFailTMOSec: ptr.To(e.FastIoFailTmo),
+			HostIface:        ptr.From(e.HostIface, ""),
+			TLS:              ptr.BoolFromOrFalse(e.Tls),
 		})
 	}
 	return conn, nil

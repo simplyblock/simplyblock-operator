@@ -174,3 +174,72 @@ func TestResolvePropertiesForPV(t *testing.T) {
 		t.Errorf("missing class: err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestPendingPin(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		anns   map[string]string
+		want   string
+		wantOK bool
+	}{
+		{"no pin", nil, "", false},
+		{"pin never acted on", map[string]string{AnnoSelectedStorageNode: "n1"}, "n1", true},
+		{
+			name: "pin already applied",
+			anns: map[string]string{
+				AnnoSelectedStorageNode:        "n1",
+				AnnoSelectedStorageNodeApplied: "n1",
+			},
+			want: "", wantOK: false,
+		},
+		{
+			name: "pin changed since it was applied",
+			anns: map[string]string{
+				AnnoSelectedStorageNode:        "n2",
+				AnnoSelectedStorageNodeApplied: "n1",
+			},
+			want: "n2", wantOK: true,
+		},
+		{
+			// A node id refused once can become valid; re-validating is the
+			// caller's decision, so the pin stays pending.
+			name: "rejected pin is still pending",
+			anns: map[string]string{
+				AnnoSelectedStorageNode:         "n9",
+				AnnoSelectedStorageNodeRejected: "n9",
+			},
+			want: "n9", wantOK: true,
+		},
+		{
+			name: "legacy host-id pin is honored",
+			anns: map[string]string{AnnoHostID: "n1"},
+			want: "n1", wantOK: true,
+		},
+		{
+			// A hint is not a pin, so there is nothing to migrate for.
+			name: "placement hint only",
+			anns: map[string]string{AnnoPlacementHint: "n1"},
+			want: "", wantOK: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := PendingPin(tc.anns)
+			if got != tc.want || ok != tc.wantOK {
+				t.Errorf("PendingPin(%v) = (%q, %v), want (%q, %v)", tc.anns, got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestPinRejected(t *testing.T) {
+	anns := map[string]string{AnnoSelectedStorageNodeRejected: "n9"}
+	if !PinRejected(anns, "n9") {
+		t.Error("PinRejected(n9) = false, want true: the warning would be a duplicate")
+	}
+	if PinRejected(anns, "n1") {
+		t.Error("PinRejected(n1) = true, want false: a different target was rejected")
+	}
+	if PinRejected(nil, "n9") || PinRejected(anns, "") {
+		t.Error("PinRejected must be false without a recorded rejection or a target")
+	}
+}

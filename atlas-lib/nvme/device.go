@@ -144,7 +144,29 @@ type Namespace struct {
 // Device is a resolved, attachable namespace together with the subsystem
 // that exports it — and thus all of its controller paths. It is the unit a
 // CSI NodeStage/NodePublish operation acts on.
+//
+// The exported fields stay an immutable snapshot of kernel state at scan time.
+// A device also remembers the resolver it came out of, so the questions worth
+// asking about what else is attached — Siblings, CoTenants and their predicates
+// — need no resolver threaded back in at the call site. That reference is a
+// handle for a fresh lookup, not part of the snapshot: the data never changes
+// under a caller, and a method that uses the handle re-scans and says so by
+// returning an error.
 type Device struct {
 	Namespace Namespace
 	Subsystem Subsystem
+
+	// resolver is the DeviceResolver this device was resolved through, or nil
+	// for a device built by hand (a test fixture, say). Methods that need it
+	// fail with errs.ErrUnsupported rather than silently answering from an
+	// empty world; see WithResolver.
+	resolver DeviceResolver
+}
+
+// WithResolver returns a copy of d bound to r, so the methods that have to
+// re-scan (Siblings, CoTenants, HasSiblings, HasCoTenants) can. Devices from a
+// resolver are already bound; this is for the ones a caller assembled itself.
+func (d Device) WithResolver(r DeviceResolver) Device {
+	d.resolver = r
+	return d
 }

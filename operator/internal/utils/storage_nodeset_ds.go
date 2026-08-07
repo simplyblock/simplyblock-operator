@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
@@ -47,9 +48,9 @@ var defaultContainerResources = corev1.ResourceRequirements{
 func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
 
 	labels := map[string]string{
-		"app":                           "storage-node",
-		"simplyblock-cluster":           sn.Spec.ClusterName,
-		"io.simplyblock.storagenodeset": sn.Name,
+		kube.LabelApp:                kube.AppStorageNode,
+		kube.LabelSimplyblockCluster: sn.Spec.ClusterName,
+		kube.LabelStorageNodeSet:     sn.Name,
 	}
 
 	image := sn.Spec.ClusterImage
@@ -265,7 +266,7 @@ fi`
 	// targets only the workers it enrolled (via the io.simplyblock.storagenodeset label).
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-storage-node-ds-" + sn.Name,
+			Name:      kube.StorageNodeSetDaemonSetName(sn.Name),
 			Namespace: sn.Namespace,
 			Labels:    labels,
 		},
@@ -292,7 +293,7 @@ fi`
 					HostNetwork:        true,
 					Tolerations:        sn.Spec.Tolerations,
 					NodeSelector: map[string]string{
-						"io.simplyblock.storagenodeset": sn.Name,
+						kube.LabelStorageNodeSet: sn.Name,
 					},
 
 					Volumes: volumes,
@@ -470,7 +471,7 @@ func StorageNodeSetAPIAddress(workerNode, namespace string) string {
 func BuildStorageNodeSetService(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabled bool, tlsProvider string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        "simplyblock-storage-node-api",
+			Name:        kube.StorageNodeSetAPIServiceName,
 			Namespace:   sn.Namespace,
 			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, SecretNameStorageNodeSetAPITLS),
 		},
@@ -505,10 +506,10 @@ func BuildStorageNodeSetEndpointSlice(sn *simplyblockv1alpha1.StorageNodeSet, no
 		ObjectMeta: metav1.ObjectMeta{
 			// Named per-StorageNodeSet so multiple StorageNodeSets can each own
 			// their own slice while all contributing to the same Service.
-			Name:      sn.Name + "-storage-node-api-endpoints",
+			Name:      kube.StorageNodeSetAPIEndpointSliceName(sn.Name),
 			Namespace: sn.Namespace,
 			Labels: map[string]string{
-				"kubernetes.io/service-name": "simplyblock-storage-node-api",
+				"kubernetes.io/service-name": kube.StorageNodeSetAPIServiceName,
 			},
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
