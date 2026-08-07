@@ -228,10 +228,27 @@ func ResolveClonedVDO(ctx context.Context, devicePath, lvolID string) error {
 // state later without recreating anything.
 func DeactivateVDO(ctx context.Context, lvolID string) error {
 	vg := vgName(lvolID)
-	if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, "vgchange", "-an", vg); err != nil {
+	_, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, "vgchange", "-an", vg)
+	if err == nil {
+		return nil
+	}
+	if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "Failed to find") {
 		return fmt.Errorf("deactivate VG %s: %w", vg, err)
 	}
-	return nil
+
+	// Confirmed live: this is the same "Volume group ... not found" failure vgremove hits in
+	// RemoveVDO, when the backing device disappeared without a clean unstage (storage-side
+	// disconnect, force-reschedule) -- vgchange -an needs to read/write the VG's own metadata
+	// to deactivate it safely, and there is none left to read. Falling back to a direct
+	// dmsetup removal here is safe, not destructive: it only clears this host's own dead
+	// references to a device that has already vanished, not the actual VDO metadata/data on
+	// the (still-existing, just currently unreachable) backend volume. Without this fallback,
+	// NodeUnstageVolume fails indefinitely and the orphaned dm-vdo stack is never cleaned up.
+	klog.Warningf(
+		"vgchange -an %s failed (backing device unreachable) -- falling back to direct dmsetup removal of any live dm nodes", //nolint:lll
+		vg,
+	)
+	return removeOrphanedDMNodes(ctx, vg)
 }
 
 // RemoveVDO deactivates and removes the VG/LV stack for lvolID, destroying its data. Only
