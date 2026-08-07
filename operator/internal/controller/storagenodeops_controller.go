@@ -710,7 +710,11 @@ func (r *StorageNodeOpsReconciler) reconcileMigratedTopology(
 	if !workersChanged && !hadSourceCfg && !setTarget {
 		// Spec already reconciled (idempotent re-run); still prune the stale
 		// source-host status entry left behind by the move.
-		return r.pruneMigratedSourceStatus(ctx, fresh.Name, fresh.Namespace, source, sn.Status.UUID)
+		if err := r.pruneMigratedSourceStatus(ctx, fresh.Name, fresh.Namespace, source, sn.Status.UUID); err != nil {
+			return err
+		}
+		r.removeSourceWorkerLabels(ctx, source, sn.Status.UUID, fresh.Namespace)
+		return nil
 	}
 
 	patch := client.MergeFrom(fresh.DeepCopy())
@@ -732,7 +736,15 @@ func (r *StorageNodeOpsReconciler) reconcileMigratedTopology(
 	//    Status.Nodes by hostname, so once the migrated node reports from the
 	//    target it is appended as a new entry while the source entry (same
 	//    backend UUID) lingers. Drop it so the set reflects only live hosts.
-	return r.pruneMigratedSourceStatus(ctx, fresh.Name, fresh.Namespace, source, sn.Status.UUID)
+	if err := r.pruneMigratedSourceStatus(ctx, fresh.Name, fresh.Namespace, source, sn.Status.UUID); err != nil {
+		return err
+	}
+
+	// 4. Remove storage-plane labels from the source K8s Node now that no
+	//    storage node runs there. Best-effort: the migration itself has already
+	//    succeeded at this point.
+	r.removeSourceWorkerLabels(ctx, source, sn.Status.UUID, fresh.Namespace)
+	return nil
 }
 
 // pruneMigratedSourceStatus removes the StorageNodeSet.Status.Nodes entry left
@@ -768,6 +780,71 @@ func (r *StorageNodeOpsReconciler) pruneMigratedSourceStatus(
 		return fmt.Errorf("pruning migrated source status entry for %s on %s: %w", uuid, source, err)
 	}
 	return nil
+}
+
+// removeSourceWorkerLabels removes storage-plane K8s Node labels from the source
+// worker after a successful migration. It removes:
+//   - the UUID slot label whose value matches migratedUUID (identifies this node's slot)
+//   - io.simplyblock.node-type and io.simplyblock.storagenodeset if no other
+//     StorageNode CRs in the namespace still target this worker (multi-socket guard)
+//
+// Best-effort: errors are logged but do not block the migration result.
+func (r *StorageNodeOpsReconciler) removeSourceWorkerLabels(
+	ctx context.Context,
+	source, migratedUUID, namespace string,
+) {
+	log := logf.FromContext(ctx)
+
+	var snList simplyblockv1alpha1.StorageNodeList
+	if err := r.List(ctx, &snList, client.InNamespace(namespace)); err != nil {
+		log.Error(err, "removeSourceWorkerLabels: failed to list StorageNodes", "source", source)
+		return
+	}
+	hasOtherSNs := false
+	for _, sn := range snList.Items {
+		if sn.Spec.WorkerNode == source {
+			hasOtherSNs = true
+			break
+		}
+	}
+
+	var node corev1.Node
+	if err := r.Get(ctx, client.ObjectKey{Name: source}, &node); err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.Error(err, "removeSourceWorkerLabels: failed to get k8s Node", "source", source)
+		}
+		return
+	}
+
+	patch := client.MergeFrom(node.DeepCopy())
+	changed := false
+
+	// Remove the UUID slot label that identifies this storage node's slot.
+	for k, v := range node.Labels {
+		if strings.HasPrefix(k, storageNodeUUIDLabelPrefix) && v == migratedUUID {
+			delete(node.Labels, k)
+			changed = true
+		}
+	}
+
+	// Remove cluster-level labels only when no sibling storage nodes remain on this host.
+	if !hasOtherSNs {
+		for _, lk := range []string{kube.LabelNodeType, kube.LabelStorageNodeSet} {
+			if _, ok := node.Labels[lk]; ok {
+				delete(node.Labels, lk)
+				changed = true
+			}
+		}
+	}
+
+	if !changed {
+		return
+	}
+	if err := r.Patch(ctx, &node, patch); err != nil {
+		log.Error(err, "removeSourceWorkerLabels: failed to patch k8s Node", "source", source)
+		return
+	}
+	log.Info("Removed storage-plane labels from migrated source node", "node", source)
 }
 
 // ensureMigratedWorkerConfig clones the source worker's entry in the per-node
