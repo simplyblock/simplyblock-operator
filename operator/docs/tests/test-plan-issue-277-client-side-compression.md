@@ -100,7 +100,7 @@ Each scenario is classified two ways:
 | Reconnect path encounters a device that looks blank/uninitialized where VDO was expected | Must fail loudly, not silently `lvcreate` a fresh VDO container over what should already hold data | Negative | Unit |
 | `NodeExpandVolume`, VDO in use | `GrowVDO` called before the existing filesystem-resize logic | Positive | Unit |
 | `NodeExpandVolume`, VDO in use, `GrowVDO` fails | Filesystem resize NOT attempted against a not-actually-grown device | Negative | Unit |
-| `stageVolume` with `fsType=="xfs"` and either client flag true | `xfsStripeOptions` skipped entirely (stripe hints computed for the raw device are meaningless/misleading once VDO virtualizes blocks) | Positive | Unit — **not yet exercised beyond unit level; every hands-on spike so far used ext4, see design doc Section 12** |
+| `stageVolume` with `fsType=="xfs"` and either client flag true | **Verified end-to-end**: `mkfs.xfs` ran with only `[-f <device>]`, no stripe-alignment flags; mounted cleanly with `nouuid` intact, compression/dedup stayed enabled, data round-tripped correctly, reattach-on-recreate confirmed | Positive | Unit + E2E (done) |
 | `stageVolume` with `fsType=="ext4"` and either client flag true | Unaffected — `xfsStripeOptions` path never applies to ext4 regardless | Negative (no-regression) | Unit |
 
 ## 8. Re-Provisioning / Failure Handling (design doc Section 8)
@@ -114,13 +114,14 @@ Each scenario is classified two ways:
 | Backing device disappears without a clean unstage while the node stays up (storage-side force-disconnect) | **Verified end-to-end** (see §3 above) — deliberately reproduced, found and fixed two real bugs, confirmed fully automatic recovery on a second run | Positive | E2E (done) |
 | Original node itself goes NotReady and later rejoins as Ready, pod meanwhile rescheduled elsewhere | Still open — the test above kept the node and kubelet healthy throughout (only the storage connection was severed) and deleted the pod normally; whether kubelet's volume reconciler reliably re-invokes `NodeUnstageVolume` on the *original* node specifically after a NotReady/rejoin cycle is a different, unverified code path | Negative | E2E |
 | `system.devices` bookkeeping after repeated node-failure cycles | Stale entries pruned (`lvmdevices --deldev`) rather than accumulating indefinitely across a node's lifetime | Negative (hygiene, not correctness) | Integration |
+| Crash-consistency of `vdo_write_policy=async`: an `fsync()`'d write must survive a genuine, unclean crash | **Verified**: forced `async` explicitly on a real NVMe-oF-backed lvol, wrote one `fsync()`'d file and one non-`fsync()`'d file, then genuinely crashed the node (`sysrq` immediate reboot, confirmed via a new `who -b` boot timestamp — not a graceful reboot, which would have flushed everything and proven nothing). The `fsync()`'d file survived with an exact checksum match; the non-`fsync()`'d file was lost entirely — the correct POSIX outcome, and proof the test genuinely distinguished durable from non-durable writes | Positive | E2E (done) |
 
 ## 9. Compatibility Gaps (design doc Section 12)
 
 | Test | Scenario | Type | Level |
 |---|---|---|---|
 | Clone/snapshot-restored volume scheduled onto the same node as its still-live source | **Verified** (see Section 2 above) — byte-duplicate PV/VG UUID resolved by `ResolveClonedVDO` before either device's LVM activation collides node-wide | Positive | E2E (done) |
-| XFS requested as `fsType` with either client flag true | End-to-end pass with XFS on top of a real VDO device — every existing spike used ext4 only (see design doc Section 12's added note) | Negative (untested combination) | Integration |
+| XFS requested as `fsType` with either client flag true | **Verified** (see Section 7 above) — end-to-end pass with XFS on top of a real VDO device, no bugs found | Positive | Integration (done) |
 | Server-side `compression=true` + `client_compression=true` on the same volume | Redundant but not harmful — confirm no double-compression correctness issue, just wasted CPU | Negative | Integration |
 | Server-side `encryption=true` + `client_compression=true` | Confirmed compatible via architecture research (crypto bdev sits below the nvmf attach point) — port the plaintext-vs-ciphertext compression-ratio check into a repeatable test | Positive | Integration |
 | Placement webhook / volume placement injector co-locating a workload with a non-`vdo-capable` storage node | Confirm the two placement constraints compose as AND rather than conflicting | Negative | Integration |

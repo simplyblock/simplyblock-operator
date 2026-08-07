@@ -667,18 +667,29 @@ afterward via `lvchange` measured ~391MB, matching the isolated figures above.*
 
   **Recommendation**: don't force a non-default write policy for tests or for
   this feature. There's no throughput upside to justify it — the measurement
-  above removes the "async is much faster" argument — and `async`'s actual
-  safety question (whether flush/FUA correctly forces durability end-to-end
-  through NVMe-oF to the simplyblock backend before an `fsync()` returns) is
-  still unverified: confirming the client *sees* a write-back cache is not
-  the same as confirming a crash can't lose an acknowledged write. Leave
-  `vdo_write_policy` at its `auto` default — it's also the most representative
-  choice for tests, since it's exactly what production gets with zero
-  deliberate configuration.
+  above removes the "async is much faster" argument. Leave `vdo_write_policy`
+  at its `auto` default — it's also the most representative choice for
+  tests, since it's exactly what production gets with zero deliberate
+  configuration.
 
-  **Not yet tested**: a real crash-consistency check (kill the connection or
-  the node mid-write under `async`, then verify no acknowledged-but-unflushed
-  write was lost). This is the actual safety question and remains open.
+  **Crash-consistency, now tested for real**: forced `vdo_write_policy=async`
+  explicitly on a real NVMe-oF-backed lvol on `vm04`, wrote one file with an
+  explicit `fsync()` and a second file without one, then genuinely crashed
+  the node (`echo 1 > /proc/sys/kernel/sysrq && echo b > /proc/sysrq-trigger`
+  — an immediate hard reboot with zero filesystem sync, run with direct VM
+  access rather than through a container, since triggering a real kernel
+  reboot needs `CAP_SYS_BOOT`, which neither `kubectl debug node`'s
+  `sysadmin` profile nor an ordinary `privileged: true` pod's default
+  capability set reliably includes). Confirmed via a genuinely new
+  `who -b` boot timestamp that this was a real crash, not a graceful reboot
+  that would have flushed everything anyway and told us nothing. Result: the
+  `fsync()`'d file survived with an exact checksum match; the file written
+  without `fsync()` was lost entirely (didn't exist after remount) — exactly
+  the POSIX-correct outcome, and useful confirmation the test genuinely
+  distinguished durable from non-durable writes rather than everything
+  simply surviving by luck. **`async` correctly honors flush/FUA durability
+  end-to-end through NVMe-oF to the simplyblock backend — an acknowledged
+  (`fsync()`'d) write is safe under `async`, not just under `sync`.**
 
 ### Wiring into `nodeserver.go`
 
@@ -906,11 +917,19 @@ this failure mode does not occur here. **No design change needed.**
   filesystem on a VDO device is no longer directly on the erasure-coded
   backend device the stripe hints were computed for. **Fix**: skip
   `xfsStripeOptions` entirely when `client_compression` is set (added to
-  Section 7's wiring notes). **Untested**: every hands-on spike in this
-  investigation formatted the VDO device with `mkfs.ext4` — XFS on top of a
-  VDO device has not actually been run. The fix above is reasoned from how
-  `xfsStripeOptions` and VDO's block virtualization each work, not confirmed
-  by exercising XFS-on-VDO directly.
+  Section 7's wiring notes).
+
+  **Now verified end-to-end against the real implementation (PR #402)**:
+  provisioned a real VDO-backed volume with `csi.storage.k8s.io/fstype: xfs`
+  (every prior hands-on spike had used `ext4`). `mkfs.xfs` ran with only
+  `[-f <device>]` — no stripe-alignment flags — confirming the skip fires
+  correctly. The volume mounted cleanly with the existing `nouuid` flag
+  intact, compression and deduplication both stayed `enabled`, a real
+  checksummed write round-tripped correctly, and deleting/recreating the pod
+  reattached the same VDO device (not a reformat) with the data still
+  intact — the same re-provisioning guarantee already confirmed for `ext4`.
+  No bugs found; this scenario just needed exercising once the fix was
+  already reasoned correctly.
 - ~~Server-side `encryption=true` + `client_compression=true` likely defeats
   compression~~ **Retracted — spiked and confirmed wrong; moved to "Confirmed
   compatible" above.** The client always receives plaintext for an encrypted
