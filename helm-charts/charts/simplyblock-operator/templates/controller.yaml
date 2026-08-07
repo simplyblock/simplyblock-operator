@@ -123,17 +123,43 @@ spec:
         - "--endpoint=unix:///csi/csi-provisioner.sock"
         - "--nodeid=$(NODE_ID)"
         - "--controller"
+        {{- if $.Values.csiLink.enabled }}
+        - "--link"
+        - "--link-hub-address={{ $.Values.csiLink.serviceName }}.{{ $.Release.Namespace }}.svc:{{ $.Values.csiLink.port }}"
+        - "--link-server-name={{ $.Values.csiLink.serviceName }}.{{ $.Release.Namespace }}.svc"
+        - "--link-ca-file=/etc/simplyblock/csi-link-ca/{{ $.Values.csiLink.caKey }}"
+        {{- end }}
         env:
         - name: NODE_ID
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
+        {{- if $.Values.csiLink.enabled }}
+        # The operator verifies this identity against the pod's token and
+        # refuses a link that disagrees, so it comes from the downward API.
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        {{- end }}
         {{- include "simplyblock.tlsEnv" . | nindent 8 }}
         {{- if .Values.controller.serviceAccountAuth.enabled }}
         - name: SPDKCSI_API_TOKEN_PATH
           value: /var/run/secrets/kubernetes.io/serviceaccount/token
         {{- end }}
         volumeMounts:
+        {{- if $.Values.csiLink.enabled }}
+        - name: csi-link-token
+          mountPath: /var/run/secrets/simplyblock.io/link
+          readOnly: true
+        - name: csi-link-ca
+          mountPath: /etc/simplyblock/csi-link-ca
+          readOnly: true
+        {{- end }}
         - name: socket-dir
           mountPath: /csi
         - name: csi-config
@@ -144,6 +170,22 @@ spec:
           readOnly: true
         {{- include "simplyblock.tlsVolumeMount" . | nindent 8 }}
       volumes:
+      {{- if $.Values.csiLink.enabled }}
+      # A token projected for the operator's audience specifically: a token
+      # bound to no particular audience is one anything holding it can replay.
+      # kubelet rotates it, and the agent re-reads the file on every attempt.
+      - name: csi-link-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              audience: {{ $.Values.csiLink.audience }}
+              expirationSeconds: 3600
+      - name: csi-link-ca
+        configMap:
+          name: {{ $.Values.csiLink.caConfigMap }}
+          optional: true
+      {{- end }}
       - name: socket-dir
         emptyDir:
           medium: "Memory"

@@ -63,7 +63,7 @@ spec:
                   rule: self == oldSelf
               pvcRef:
                 description: |-
-                  PVCRef identifies the PVC whose backing Simplyblock volume should be snapshotted and backed up.
+                  PVCRef identifies the PVC whose backing simplyblock volume should be snapshotted and backed up.
                   Not required when SourceClusterUUID is set (imported backup).
                 properties:
                   name:
@@ -124,7 +124,7 @@ spec:
                   which StorageClass the restored PVC ends up using.
                 type: string
               lvolID:
-                description: LvolID is the Simplyblock volume UUID.
+                description: LvolID is the simplyblock volume UUID.
                 type: string
               lvolName:
                 description: LvolName is the backend logical volume name.
@@ -141,7 +141,7 @@ spec:
                   output.
                 type: string
               poolName:
-                description: PoolName is the Simplyblock pool name derived from the
+                description: PoolName is the simplyblock pool name derived from the
                   CSI volume handle.
                 type: string
               poolUUID:

@@ -140,14 +140,36 @@ so **a build can change tracked files**. The CSI binary is always cross-compiled
 for `linux` with `CGO_ENABLED=0`. On macOS the resulting binary does not run
 locally, and that is intended.
 
-`atlas-lib` is the one component with real file targets rather than phony ones:
+`atlas-lib` is the one component with real file targets rather than phony ones,
+so `make -C atlas-lib generate` is a no-op when make thinks they are current.
+Deleting the output is what forces one.
+
 `internal/cpapi/cpapi.gen.go` and `validation.gen.go` rebuild only when
 `../shared/openapi.json`, the codegen config, the overlay, or the generator
-source is newer. To force them:
+source is newer:
 
 ```bash
 rm atlas-lib/internal/cpapi/*.gen.go && make -C atlas-lib generate
 ```
+
+The gRPC protocols rebuild only when their `.proto`, `buf.gen.yaml`, or
+`buf.yaml` is newer. Both halves of a pair (`*.pb.go` and `*_grpc.pb.go`) come
+out of one `buf` invocation, so deleting the `.pb.go` regenerates both:
+
+```bash
+rm atlas-lib/storage/storagerpc/storagev1/nvme.pb.go && make -C atlas-lib generate
+rm atlas-lib/link/linkv1/link.pb.go && make -C atlas-lib generate
+```
+
+`buf` compiles the `.proto` in pure Go, with no `protoc`, and finds the two
+generators on `PATH` because the atlas-lib Makefile puts `.bin` there. The
+generated code is committed, so only a regeneration needs the toolchain.
+`make -C atlas-lib lint-proto` lints the definitions themselves.
+
+**`protoc-gen-go` must not outrun the runtime.** It is pinned to a version no
+newer than the `google.golang.org/protobuf` in `atlas-lib/go.mod`, because
+generated code refuses to compile against an older runtime than the generator.
+Bumping one means bumping the other.
 
 ## Traps
 
@@ -173,10 +195,16 @@ rm atlas-lib/internal/cpapi/*.gen.go && make -C atlas-lib generate
   or the schema in the operator's markers and types, then sync. The
   `house-style` gates exclude exactly those three paths for that reason, while
   checking the rest of the development chart, which is hand-written source.
-- **`.bin` holds tools no target references.** `buf`, `protoc-gen-go`, and
-  `protoc-gen-go-grpc` are left over from prototype work and are not in
-  `scripts/tools.manifest`. Do not assume a binary in `.bin` is part of the
-  build.
+- **Not everything in `.bin` is a pinned tool.** `scripts/tools.manifest` pins
+  `buf`, `controller-gen`, `golangci-lint`, `kustomize`, `protoc-gen-go`,
+  `protoc-gen-go-grpc`, `setup-envtest`, and `yq`, each with a checksum in
+  `scripts/tools.lock`. Three things in `.bin` are not those: `openapi-venv`, a
+  Python virtualenv the root Makefile builds and manages itself; `k8s`, the
+  API-server binaries `setup-envtest` downloads; and `openapi-gen`, which no
+  target, script, or manifest references at all — a leftover carrying
+  `tools.sh`'s version-suffixed symlink naming, which is exactly what makes it
+  look pinned. Do not infer from a binary's presence in `.bin` that the build
+  uses it; check `scripts/tools.manifest`.
 - **Two `bin` conventions.** The kubebuilder scaffold's `operator/bin` is not
   used. Every pinned tool lives in the repo-root `.bin` via
   `scripts/tools.mk`. A recipe referring to `$(LOCALBIN)` means `.bin` as well.

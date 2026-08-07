@@ -166,18 +166,28 @@ Variables: `GOARCH` (host default), `CSI_IMAGE_REGISTRY` (`simplyblock`),
 Includes `../scripts/tools.mk`. Default goal `all` is `build test`. The only
 component with **file targets**, so make's staleness rules apply.
 
-| Target                             | Runs                                                                                                         |
-|------------------------------------|--------------------------------------------------------------------------------------------------------------|
-| `generate`                         | the two generated files below, when out of date                                                              |
-| `internal/cpapi/cpapi.gen.go`      | `go generate ./internal/cpapi/...`, depending on `../shared/openapi.json`, `oapi-codegen.yaml`, and `gen.go` |
-| `internal/cpapi/validation.gen.go` | `cd internal/cpapi && go run ./gen`, depending on the client, `validation.yaml`, `gen/main.go`               |
-| `build`                            | the generated files, then `go build ./...`                                                                   |
-| `test`                             | `vet`, then `go test -race -coverprofile=coverage.out ./...`                                                 |
-| `lint`                             | pinned `golangci-lint run ./...`                                                                             |
-| `vet`, `fmt`                       | `go vet` / `go fmt`                                                                                          |
+| Target                                        | Runs                                                                                                         |
+|-----------------------------------------------|--------------------------------------------------------------------------------------------------------------|
+| `generate`                                    | every generated file below, when out of date                                                                 |
+| `internal/cpapi/cpapi.gen.go`                 | `go generate ./internal/cpapi/...`, depending on `../shared/openapi.json`, `oapi-codegen.yaml`, and `gen.go` |
+| `internal/cpapi/validation.gen.go`            | `cd internal/cpapi && go run ./gen`, depending on the client, `validation.yaml`, `gen/main.go`               |
+| `link/linkv1/link.pb.go`                      | `buf generate` in that directory, depending on `link.proto`, `buf.gen.yaml`, `buf.yaml`                      |
+| `storage/storagerpc/storagev1/nvme.pb.go`     | `buf generate` in that directory, depending on `nvme.proto`, `buf.gen.yaml`, `buf.yaml`                      |
+| `*_grpc.pb.go`                                | nothing of its own: each depends on its `.pb.go`, whose one recipe writes both                                |
+| `build`                                       | the generated files, then `go build ./...`                                                                   |
+| `test`                                        | `vet`, then `go test -race -coverprofile=coverage.out ./...`                                                 |
+| `lint`                                        | pinned `golangci-lint run ./...`                                                                             |
+| `lint-proto`                                  | `buf lint` in each protocol directory. **Not run by `lint`, and not run in CI**                              |
+| `vet`, `fmt`                                  | `go vet` / `go fmt`                                                                                          |
 
 The `oapi-codegen` version is pinned in `go.mod` through
-`internal/cpapi/tools.go`, not in the tool manifest.
+`internal/cpapi/tools.go`, not in the tool manifest. The protobuf toolchain is
+the other way round: `buf`, `protoc-gen-go`, and `protoc-gen-go-grpc` are pinned
+in `scripts/tools.manifest` precisely so they stay out of `go.mod`. `buf` is an
+order-only prerequisite of the `.pb.go` rules, so it installs on demand and its
+timestamp never makes the outputs look stale. The recipes prepend `$(BIN_DIR)`
+to `PATH` because `buf` finds the two generators there rather than being told
+where they are.
 
 ## scripts/tools.mk and scripts/tools.sh
 

@@ -29,4 +29,27 @@ type Config struct {
 
 	IsControllerServer bool
 	IsNodeServer       bool
+
+	// Link to the operator. The driver dials out and holds the connection; the
+	// operator issues its RPCs back down it. Disabled by default — the driver
+	// serves CSI whether or not it is linked.
+	LinkEnabled bool
+	// LinkHubAddress is the operator's link endpoint, "host:port".
+	LinkHubAddress string
+	// LinkCAFile signs the operator's serving certificate; empty uses the
+	// system roots.
+	LinkCAFile string
+	// LinkServerName overrides the name verified against that certificate.
+	LinkServerName string
+	// LinkTokenFile is the projected ServiceAccount token presented to the
+	// operator. It must be projected with the audience the operator expects.
+	LinkTokenFile string
+
+	// PodUID identifies this process lifetime to the operator, so a restarted
+	// pod supersedes the session its predecessor left behind. From the
+	// downward API (metadata.uid).
+	PodUID string
+	// PodName is this pod's name, which is how a controller plugin is
+	// identified on the link (a node plugin is identified by NodeID).
+	PodName string
 }
