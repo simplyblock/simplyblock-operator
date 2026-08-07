@@ -442,13 +442,15 @@ afterward via `lvchange` measured ~391MB, matching the isolated figures above.*
   activating the device under its inherited identity risks an LVM collision
   the moment the source volume's own device is also visible on the same node.
 
-  **Detection**: the CSI controller already knows when a volume is a
-  clone/snapshot restore, via `VolumeContentSource` on the `CreateVolume`
-  request — thread that fact into the volume context so `NodeStageVolume` has
-  it explicitly. A device-level check (`blkid`/`pvs` on `devicePath` reports a
-  valid LVM/VDO signature under a VG name that is not `volumeID`) serves as a
-  defensive fallback for cases where the content-source metadata doesn't
-  survive.
+  **Detection — implemented more simply than originally planned**: rather
+  than threading `VolumeContentSource` through the volume context, the
+  implementation detects a clone unconditionally, on every stage, purely from
+  the device's own on-disk identity (`pvs` on `devicePath` reports a VG name
+  that isn't this volume's own ID). This is correct regardless of whether the
+  content-source fact survived into the volume context, and is a no-op
+  (returns immediately) for a genuinely fresh device or one already resolved
+  to its own identity — so no separate "is this a clone" plumbing was needed
+  at all.
 
   **Ordering**: `ResolveClonedVDO` must complete — regenerating fresh PV/VG
   UUIDs and renaming the VG to `volumeID` — before `CreateOrAttachVDO`'s
@@ -466,6 +468,26 @@ afterward via `lvchange` measured ~391MB, matching the isolated figures above.*
   previously-skipped device, resolved the collision by giving the clone its
   own PV/VG UUIDs — but left the clone's LV still named after the source, so
   a complete implementation also needs an explicit LV rename.*
+
+  *Verified end-to-end against the real implementation (`ResolveClonedVDO` in
+  PR #402), for both clone paths: a direct PVC-to-PVC clone
+  (`dataSource: PersistentVolumeClaim`) and a snapshot restore
+  (`dataSource: VolumeSnapshot`), both scheduled onto the same node as their
+  still-live source — the specific co-location scenario this finding warns
+  about. In both cases `ResolveClonedVDO` correctly detected the foreign VG
+  identity, ran `vgimportclone --basevgname <new-vg> <device>` followed by
+  the explicit `lvrename` this finding calls out, and the resulting volume
+  mounted cleanly with data matching the source exactly (SHA-256). All three
+  volumes (source, PVC clone, snapshot restore) coexisted simultaneously on
+  one node with independent VG identities and no collisions; writing new,
+  distinct data to the clone and to the restore each left the other two
+  volumes unaffected, confirming genuine independence post-resolution, not
+  just a one-time copy that happens to look right. One bug found and fixed
+  along the way: the collision-detection log message (and the identity
+  comparison itself) was picking up `pvs`'s own stderr `WARNING:` lines
+  merged into its output, not just the actual VG name — harmless here since
+  the polluted string still differed from the target either way, but fixed
+  to parse just the actual field.*
 
 - **Multi-instance memory scaling**: `KVDO module bytes used` is a
   module-wide total, not per-instance. Two simultaneous VDO-backed volumes
