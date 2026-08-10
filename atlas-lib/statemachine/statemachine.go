@@ -3,9 +3,9 @@
 //
 // A machine is declared up front as data: every state names the states it may
 // transition to, and optionally an entry hook that runs when the machine enters
-// it. Declaring the graph as a map means a duplicated state is a compiler error,
-// and an edge pointing at an undeclared state is caught by [New] rather than at
-// runtime on the unhappy path.
+// it. Declaring the graph as a map literal makes duplicated states a compile-time
+// error, and an edge pointing at an undeclared state is caught by [New] rather than
+// at runtime on the unhappy path.
 //
 // # Deadlines
 //
