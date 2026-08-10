@@ -484,9 +484,12 @@ func (g *Guardian) tick(ctx context.Context) {
 
 			klog.Warningf("Guardian debug: lvol=%s podUIDs=%v", lvolID, lvolPods[lvolID])
 
-			// If this lvolID shares an NVMe subsystem with others, restart all
-			// pods on that subsystem simultaneously to avoid partial teardown.
-			if siblings := SubsystemLvolIDs(lvolID); len(siblings) > 1 {
+			// Determine how to restart based on the NQN index:
+			//   nil        → lvolID not yet indexed; fall back to StorageClass check
+			//   len == 1   → known single-member subsystem; individual restart is safe
+			//   len > 1    → shared subsystem; coordinated restart required
+			siblings := SubsystemLvolIDs(lvolID)
+			if len(siblings) > 1 {
 				restarted += g.coordinatedSubsystemRestart(ctx, cid, siblings, lvolPods, uidToPod)
 				for _, s := range siblings {
 					handledLvols[s] = true
@@ -508,10 +511,12 @@ func (g *Guardian) tick(ctx context.Context) {
 					continue
 				}
 
-				// Safety fallback: if the NVMe subsystem map has not been
-				// populated yet (device reconnected before Connect ran),
-				// keep suppressing until coordinated restart is possible.
-				if g.podUsesNamespacedSubsystem(ctx, &pod) {
+				// NQN index not yet populated for this lvolID: suppress if the
+				// StorageClass indicates a shared subsystem, to avoid tearing
+				// down a shared NQN that siblings may still be using.
+				// Once reconnectSubsystems populates the index (next tick or
+				// sooner), siblings == 1 and the individual path fires.
+				if siblings == nil && g.podUsesNamespacedSubsystem(ctx, &pod) {
 					klog.Warningf("Guardian: suppressing auto-restart for pod %s/%s (uid=%s, lvol=%s): "+
 						"NVMe subsystem map not yet populated; coordinated restart unavailable this tick",
 						pod.Namespace, pod.Name, podUID, lvolID)

@@ -597,8 +597,11 @@ func disconnectDevicePath(ctx context.Context, devicePath string) error {
 }
 
 // SubsystemLvolIDs returns all lvolIDs that share the same NVMe-oF subsystem
-// as lvolID, including lvolID itself. Returns nil when lvolID is unknown or
-// when the subsystem is not shared (only one member). Safe for concurrent use.
+// as lvolID, including lvolID itself. Returns nil when lvolID is not in the
+// NQN index (unknown — NQN mapping not yet populated). Returns a single-element
+// slice when the subsystem has only one member (individual restart is safe).
+// Returns multiple elements when the subsystem is shared (coordinated restart
+// required). Safe for concurrent use.
 func SubsystemLvolIDs(lvolID string) []string {
 	mu.Lock()
 	defer mu.Unlock()
@@ -607,7 +610,7 @@ func SubsystemLvolIDs(lvolID string) []string {
 		return nil
 	}
 	ids := lvolIDsByNQN[nqn]
-	if len(ids) <= 1 {
+	if len(ids) == 0 {
 		return nil
 	}
 	result := make([]string, len(ids))
