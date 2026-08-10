@@ -880,6 +880,128 @@ func fetchLvolConnection(
 	return connections, nil
 }
 
+// orphanReconnectCooldown bounds how often a single (NQN, IP) may be torn
+// down and reconnected by connectMissingPath, so a repair that does not stick
+// degrades into periodic retries instead of a disconnect/reconnect loop at
+// monitor cadence.
+const orphanReconnectCooldown = 5 * time.Minute
+
+var (
+	orphanReconnectMu   sync.Mutex
+	orphanReconnectLast = make(map[string]time.Time)
+)
+
+// isAlreadyConnectedErr reports whether an `nvme connect` failed solely
+// because a controller for that NQN/address already exists.
+func isAlreadyConnectedErr(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "already connected")
+}
+
+// parseTrsvcid extracts the service id (port) from an nvme-cli Address string.
+// Returns "" when the field is absent.
+func parseTrsvcid(address string) string {
+	for _, part := range strings.Split(address, ",") {
+		if strings.HasPrefix(part, "trsvcid=") {
+			return strings.TrimPrefix(part, "trsvcid=")
+		}
+	}
+	return ""
+}
+
+// findControllerForAddress returns the controller device name (e.g. "nvme3")
+// that is connected to nqn at ip:port, host-wide.
+//
+// This deliberately queries `nvme list-subsys` WITHOUT a device argument. The
+// device-scoped form only reports controllers that contribute a path to that
+// device's namespace head; a controller whose namespace never joined the head
+// is missing there but present here, and that difference is exactly the state
+// we need to detect.
+func findControllerForAddress(ctx context.Context, nqn, ip string, port int) (string, bool) {
+	output, err := execNVMeQuery(ctx, "nvme", "list-subsys", "-o", "json")
+	if err != nil {
+		klog.Errorf("findControllerForAddress: failed to list subsystems: %v", err)
+		return "", false
+	}
+
+	var hosts []subsystemResponse
+	if err := json.Unmarshal(output, &hosts); err != nil {
+		klog.Errorf("findControllerForAddress: failed to parse list-subsys output: %v", err)
+		return "", false
+	}
+
+	wantPort := strconv.Itoa(port)
+	for _, host := range hosts {
+		for _, s := range host.Subsystems {
+			if s.NQN != nqn {
+				continue
+			}
+			for _, p := range s.Paths {
+				if parseAddress(p.Address) != ip {
+					continue
+				}
+				if svc := parseTrsvcid(p.Address); svc != "" && svc != wantPort {
+					continue
+				}
+				return p.Name, true
+			}
+		}
+	}
+	return "", false
+}
+
+// connectMissingPath establishes a path the namespace head is missing.
+//
+// A plain `nvme connect` is not always sufficient. The controller can already
+// exist while contributing NO path to the head: its namespace never joined, so
+// the device-scoped `nvme list-subsys` does not list it and the monitor keeps
+// seeing a degraded subsystem — but `nvme connect` refuses with "already
+// connected" because, at the controller level, nothing is missing. Those two
+// views never reconcile, and the repair loop spins forever.
+//
+// Incident 2026-08-09 (K8sNativeResilientFailoverTest iteration 28): 106 such
+// retries over 11 minutes for volume 638be965, not one of which produced a
+// single packet to the target. The volume ran at 2 of 3 paths the whole time
+// and lost all I/O when the outage removed the other two — ext4 went
+// read-only with "no available path - failing I/O".
+//
+// So when — and only when — the connect fails for that specific reason, tear
+// the orphaned controller down and reconnect, which forces a fresh controller
+// and a fresh namespace scan. The normal path is untouched.
+func connectMissingPath(ctx context.Context, conn *LvolConnectResp, ctrlLossTmo int) error {
+	err := connectViaNVMe(ctx, conn, ctrlLossTmo, 1)
+	if !isAlreadyConnectedErr(err) {
+		return err
+	}
+
+	key := fmt.Sprintf("%s|%s:%d", conn.Nqn, conn.IP, conn.Port)
+	orphanReconnectMu.Lock()
+	last, seen := orphanReconnectLast[key]
+	if seen && time.Since(last) < orphanReconnectCooldown {
+		orphanReconnectMu.Unlock()
+		return fmt.Errorf("orphaned controller for %s:%d already reconnected %s ago, "+
+			"waiting out cooldown: %w", conn.IP, conn.Port, time.Since(last).Truncate(time.Second), err)
+	}
+	orphanReconnectLast[key] = time.Now()
+	orphanReconnectMu.Unlock()
+
+	ctrlName, found := findControllerForAddress(ctx, conn.Nqn, conn.IP, conn.Port)
+	if !found {
+		return fmt.Errorf("connect reported \"already connected\" but no controller "+
+			"for %s at %s:%d was found; cannot repair: %w", conn.Nqn, conn.IP, conn.Port, err)
+	}
+
+	klog.Warningf("connectMissingPath: controller %s is connected to %s:%d but contributes "+
+		"no path to the namespace head — disconnecting and reconnecting to force a "+
+		"fresh namespace scan", ctrlName, conn.IP, conn.Port)
+
+	disconnectCmd := []string{"nvme", "disconnect", "-d", ctrlName}
+	if derr := execWithTimeoutRetry(ctx, disconnectCmd, 40, 1); derr != nil {
+		return fmt.Errorf("failed to disconnect orphaned controller %s: %w", ctrlName, derr)
+	}
+
+	return connectViaNVMe(ctx, conn, ctrlLossTmo, 1)
+}
+
 func connectViaNVMe(ctx context.Context, conn *LvolConnectResp, ctrlLossTmo int, retries int) error {
 	cmd := []string{
 		"nvme", "connect", "-t", strings.ToLower(conn.TargetType),
@@ -1096,7 +1218,7 @@ func reconcileOptimizedPath(
 			return
 		}
 		klog.Infof("reconcileOptimizedPath: connecting missing optimized path ip=%s", conn.IP)
-		if err := connectViaNVMe(context.Background(), conn, ctrlLossTmo, 1); err != nil {
+		if err := connectMissingPath(context.Background(), conn, ctrlLossTmo); err != nil {
 			klog.Errorf("reconcileOptimizedPath: connect to %s failed: %v", conn.IP, err)
 		}
 		return
@@ -1185,7 +1307,7 @@ func reconcileNonOptimizedPaths(
 			continue
 		}
 		klog.Infof("reconcileNonOptimizedPaths: connecting missing path ip=%s", conn.IP)
-		if err := connectViaNVMe(context.Background(), conn, ctrlLossTmo, 1); err != nil {
+		if err := connectMissingPath(context.Background(), conn, ctrlLossTmo); err != nil {
 			klog.Errorf("reconcileNonOptimizedPaths: connect to %s failed: %v", conn.IP, err)
 		}
 	}
