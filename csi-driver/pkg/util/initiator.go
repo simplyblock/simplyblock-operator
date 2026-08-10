@@ -964,6 +964,9 @@ func connectViaNVMe(ctx context.Context, conn *LvolConnectResp, ctrlLossTmo int,
 		cmd = append(cmd, "-f", conn.HostIface)
 	}
 	if err := execWithTimeoutRetry(ctx, cmd, 40, retries); err != nil {
+		if strings.Contains(err.Error(), "already connected") {
+			return nil
+		}
 		klog.Errorf("nvme connect failed: %v", err)
 		return err
 	}
