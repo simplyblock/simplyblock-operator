@@ -500,6 +500,10 @@ func (g *Guardian) tick(ctx context.Context) {
 					continue
 				}
 
+				if !controllerManaged(&pod) {
+					continue
+				}
+
 				if !g.podOptedInForAutoRestart(ctx, &pod) {
 					continue
 				}
@@ -518,10 +522,6 @@ func (g *Guardian) tick(ctx context.Context) {
 				// if pod.Labels[g.cfg.OptOutLabelKey] == g.cfg.OptOutLabelValue {
 				// 	continue
 				// }
-
-				if !controllerManaged(&pod) {
-					continue
-				}
 				if last, ok := g.getLastRestart(podUID); ok && time.Since(last) < g.cfg.RestartBackoff {
 					continue
 				}
@@ -596,17 +596,18 @@ func (g *Guardian) coordinatedSubsystemRestart(
 	for _, c := range candidates {
 		pod := c.pod
 		podUID := string(pod.UID)
+		if !controllerManaged(&pod) {
+			klog.Warningf(
+				"Guardian: coordinated restart for shared subsystem (cluster=%s, lvols=%v) suppressed: "+
+					"pod %s/%s has no owner controller (standalone pod)",
+				cid, siblings, pod.Namespace, pod.Name)
+			return 0
+		}
 		if !g.podOptedInForAutoRestart(ctx, &pod) {
 			klog.Warningf(
 				"Guardian: coordinated restart for shared subsystem (cluster=%s, lvols=%v) suppressed: "+
 					"pod %s/%s not opted in",
 				cid, siblings, pod.Namespace, pod.Name)
-			return 0
-		}
-		if !controllerManaged(&pod) {
-			klog.Warningf(
-				"Guardian: coordinated restart suppressed: pod %s/%s has no owner controller",
-				pod.Namespace, pod.Name)
 			return 0
 		}
 		if last, ok := g.getLastRestart(podUID); ok && time.Since(last) < g.cfg.RestartBackoff {
@@ -842,6 +843,11 @@ func (g *Guardian) podUsesOptedInSimplyBlockStorageClass(ctx context.Context, po
 				continue
 			}
 			return false, fmt.Errorf("get pvc %s: %w", pvcKey, err)
+		}
+
+		if hasOptInMetadata(pvc.Labels, pvc.Annotations, g.cfg.OptInLabelKey, g.cfg.OptInLabelValue) {
+			klog.Infof("Guardian: pod %s/%s opted in via PVC %s", pod.Namespace, pod.Name, pvcKey)
+			return true, nil
 		}
 
 		pvName := strings.TrimSpace(pvc.Spec.VolumeName)
