@@ -120,6 +120,13 @@ var (
 	deviceToLvolIDMap = make(map[string]string)
 	mu                sync.Mutex
 
+	// nqnByLvolID and lvolIDsByNQN index which lvolIDs share the same NVMe-oF
+	// subsystem (NQN). Maintained in Connect/Disconnect/reconnectSubsystems.
+	// Used by the guardian to identify all volumes that need a coordinated
+	// simultaneous restart when a shared subsystem recovers.
+	nqnByLvolID  = make(map[string]string)   // lvolID → NQN
+	lvolIDsByNQN = make(map[string][]string)  // NQN → []lvolID
+
 	// maxSeenPathsMap caches the highest number of active NVMe-oF paths ever
 	// observed per NQN. Used by the connection monitor to detect degradation
 	// without querying the API on every cycle.
@@ -351,6 +358,19 @@ func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
 		mu.Lock()
 		devicePresentMap[realPath] = true
 		deviceToLvolIDMap[realPath] = nvmf.lvolID
+		if nvmf.nqn != "" && nvmf.lvolID != "" {
+			nqnByLvolID[nvmf.lvolID] = nvmf.nqn
+			found := false
+			for _, id := range lvolIDsByNQN[nvmf.nqn] {
+				if id == nvmf.lvolID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				lvolIDsByNQN[nvmf.nqn] = append(lvolIDsByNQN[nvmf.nqn], nvmf.lvolID)
+			}
+		}
 		mu.Unlock()
 	} else {
 		klog.Warningf("Connect: failed to resolve device path %s for lvol %s: %v", devicePath, nvmf.lvolID, err)
@@ -550,11 +570,49 @@ func disconnectDevicePath(ctx context.Context, devicePath string) error {
 	}
 
 	mu.Lock()
+	lvolID := deviceToLvolIDMap[realPath]
 	delete(devicePresentMap, realPath)
 	delete(deviceToLvolIDMap, realPath)
+	if lvolID != "" {
+		nqn := nqnByLvolID[lvolID]
+		if nqn != "" {
+			ids := lvolIDsByNQN[nqn]
+			newIDs := make([]string, 0, len(ids))
+			for _, id := range ids {
+				if id != lvolID {
+					newIDs = append(newIDs, id)
+				}
+			}
+			if len(newIDs) == 0 {
+				delete(lvolIDsByNQN, nqn)
+			} else {
+				lvolIDsByNQN[nqn] = newIDs
+			}
+			delete(nqnByLvolID, lvolID)
+		}
+	}
 	mu.Unlock()
 
 	return nil
+}
+
+// SubsystemLvolIDs returns all lvolIDs that share the same NVMe-oF subsystem
+// as lvolID, including lvolID itself. Returns nil when lvolID is unknown or
+// when the subsystem is not shared (only one member). Safe for concurrent use.
+func SubsystemLvolIDs(lvolID string) []string {
+	mu.Lock()
+	defer mu.Unlock()
+	nqn := nqnByLvolID[lvolID]
+	if nqn == "" {
+		return nil
+	}
+	ids := lvolIDsByNQN[nqn]
+	if len(ids) <= 1 {
+		return nil
+	}
+	result := make([]string, len(ids))
+	copy(result, ids)
+	return result
 }
 
 // logicalVolumeIdByDevicePath reads /sys/block/<dev>/uuid for a device path like /dev/nvme0n2.
@@ -744,6 +802,19 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 				mu.Lock()
 				devicePresentMap[device.devicePath] = true
 				deviceToLvolIDMap[device.devicePath] = lvolID
+				if subsystem.NQN != "" && lvolID != "" {
+					nqnByLvolID[lvolID] = subsystem.NQN
+					found := false
+					for _, id := range lvolIDsByNQN[subsystem.NQN] {
+						if id == lvolID {
+							found = true
+							break
+						}
+					}
+					if !found {
+						lvolIDsByNQN[subsystem.NQN] = append(lvolIDsByNQN[subsystem.NQN], lvolID)
+					}
+				}
 				mu.Unlock()
 
 				numActive := len(subsystem.Paths)

@@ -473,8 +473,26 @@ func (g *Guardian) tick(ctx context.Context) {
 	for cid, lvolIDs := range actionableByCluster {
 		klog.Warningf("Guardian: cluster %s active; attempting restarts for broken lvols=%v", cid, lvolIDs)
 
+		// handledLvols prevents double-processing lvolIDs already restarted
+		// as part of a coordinated subsystem restart.
+		handledLvols := map[string]bool{}
+
 		for _, lvolID := range lvolIDs {
+			if handledLvols[lvolID] {
+				continue
+			}
+
 			klog.Warningf("Guardian debug: lvol=%s podUIDs=%v", lvolID, lvolPods[lvolID])
+
+			// If this lvolID shares an NVMe subsystem with others, restart all
+			// pods on that subsystem simultaneously to avoid partial teardown.
+			if siblings := SubsystemLvolIDs(lvolID); len(siblings) > 1 {
+				restarted += g.coordinatedSubsystemRestart(ctx, cid, siblings, lvolPods, uidToPod)
+				for _, s := range siblings {
+					handledLvols[s] = true
+				}
+				continue
+			}
 
 			for _, podUID := range lvolPods[lvolID] {
 				pod, ok := uidToPod[podUID]
@@ -486,14 +504,12 @@ func (g *Guardian) tick(ctx context.Context) {
 					continue
 				}
 
-				// Suppress restart when the pod's volume uses a namespaced NVMe
-				// subsystem (max_namespace_per_subsys > 1 in the StorageClass).
-				// Restarting the pod would tear down the shared subsystem and
-				// knock out NVMe-oF paths of every other volume on it.
+				// Safety fallback: if the NVMe subsystem map has not been
+				// populated yet (device reconnected before Connect ran),
+				// keep suppressing until coordinated restart is possible.
 				if g.podUsesNamespacedSubsystem(ctx, &pod) {
 					klog.Warningf("Guardian: suppressing auto-restart for pod %s/%s (uid=%s, lvol=%s): "+
-						"volume shares an NVMe subsystem (max_namespace_per_subsys > 1); "+
-						"restarting would disrupt other volumes on the same subsystem",
+						"NVMe subsystem map not yet populated; coordinated restart unavailable this tick",
 						pod.Namespace, pod.Name, podUID, lvolID)
 					g.emitSharedSubsystemEvent(ctx, &pod)
 					continue
@@ -534,7 +550,6 @@ func (g *Guardian) tick(ctx context.Context) {
 					g.mu.Unlock()
 				}
 			}
-
 		}
 	}
 
@@ -545,6 +560,96 @@ func (g *Guardian) tick(ctx context.Context) {
 	g.mu.Lock()
 	g.persistLocked()
 	g.mu.Unlock()
+}
+
+// coordinatedSubsystemRestart restarts all pods that share an NVMe-oF
+// subsystem simultaneously. All candidates must pass every check before any
+// pod is deleted — a single failure suppresses the whole group to prevent a
+// partial teardown that would disconnect the shared subsystem while other
+// pods are still using it. Returns the number of pods deleted.
+func (g *Guardian) coordinatedSubsystemRestart(
+	ctx context.Context,
+	cid string,
+	siblings []string,
+	lvolPods map[string][]string,
+	uidToPod map[string]v1.Pod,
+) int {
+	type podEntry struct {
+		pod    v1.Pod
+		lvolID string
+	}
+	var candidates []podEntry
+	for _, sibLvolID := range siblings {
+		for _, podUID := range lvolPods[sibLvolID] {
+			pod, ok := uidToPod[podUID]
+			if !ok {
+				continue
+			}
+			candidates = append(candidates, podEntry{pod: pod, lvolID: sibLvolID})
+		}
+	}
+	if len(candidates) == 0 {
+		return 0
+	}
+
+	// Gate: every candidate must pass all checks before any pod is deleted.
+	for _, c := range candidates {
+		pod := c.pod
+		podUID := string(pod.UID)
+		if !g.podOptedInForAutoRestart(ctx, &pod) {
+			klog.Warningf(
+				"Guardian: coordinated restart for shared subsystem (cluster=%s, lvols=%v) suppressed: "+
+					"pod %s/%s not opted in",
+				cid, siblings, pod.Namespace, pod.Name)
+			return 0
+		}
+		if !controllerManaged(&pod) {
+			klog.Warningf(
+				"Guardian: coordinated restart suppressed: pod %s/%s has no owner controller",
+				pod.Namespace, pod.Name)
+			return 0
+		}
+		if last, ok := g.getLastRestart(podUID); ok && time.Since(last) < g.cfg.RestartBackoff {
+			klog.Infof(
+				"Guardian: coordinated restart deferred: pod %s/%s still in backoff (%.0fs remaining)",
+				pod.Namespace, pod.Name,
+				(g.cfg.RestartBackoff-time.Since(last)).Seconds())
+			return 0
+		}
+	}
+
+	klog.Warningf(
+		"Guardian: coordinated restart: deleting %d pods on shared NVMe subsystem (cluster=%s, lvols=%v)",
+		len(candidates), cid, siblings)
+
+	deleted := 0
+	for _, c := range candidates {
+		pod := c.pod
+		podUID := string(pod.UID)
+		if !g.cfg.DryRun {
+			err := g.cs.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
+				GracePeriodSeconds: &g.cfg.GraceSeconds,
+			})
+			if err != nil && !apierrors.IsNotFound(err) {
+				klog.Errorf(
+					"Guardian: coordinated restart: delete pod %s/%s failed: %v",
+					pod.Namespace, pod.Name, err)
+				continue
+			}
+		}
+		g.setLastRestart(podUID)
+		deleted++
+		g.mu.Lock()
+		g.removePodFromLvolLocked(c.lvolID, podUID)
+		g.mu.Unlock()
+	}
+
+	if deleted > 0 {
+		klog.Warningf(
+			"Guardian: coordinated restart complete: deleted %d/%d pods (cluster=%s, lvols=%v)",
+			deleted, len(candidates), cid, siblings)
+	}
+	return deleted
 }
 
 func (g *Guardian) isClusterActiveByID(clusterID string) (ok bool, realStatus string, err error) {
