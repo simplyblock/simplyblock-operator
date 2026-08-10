@@ -717,18 +717,21 @@ func (sm *Machine[S]) RequeueAfter() (time.Duration, bool) {
 }
 
 // Close cancels the current state's context and the machine's own, after which
-// [Machine.TransitionTo] fails with [ErrClosed]. It is idempotent, always
-// returns nil, and is safe to defer:
+// [Machine.TransitionTo] fails with [ErrClosed]. It is idempotent and safe to
+// defer:
 //
 //	sm := statemachine.Must(ctx, cfg)
 //	defer sm.Close()
 //
-// The error return exists only to satisfy [io.Closer] and the linters that
-// notice unreleased resources.
-func (sm *Machine[S]) Close() error {
+// It returns nothing, deliberately. Closing only cancels contexts, so there is
+// no operation that could fail and nothing a caller could do about it; an error
+// return that is always nil would oblige every call site to write
+// `defer func() { _ = sm.Close() }()` to satisfy errcheck. This follows
+// [context.CancelFunc] and [time.Ticker.Stop] rather than [io.Closer], which is
+// for closers that flush.
+func (sm *Machine[S]) Close() {
 	sm.stateCancel()
 	sm.baseCancel()
-	return nil
 }
 
 // CanTransitionTo reports whether the graph allows moving to a state right now.

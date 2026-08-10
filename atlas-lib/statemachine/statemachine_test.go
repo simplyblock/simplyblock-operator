@@ -804,12 +804,8 @@ func TestClose(t *testing.T) {
 	sm := Must(context.Background(), graph(nil))
 	stateCtx := sm.Context()
 
-	if err := sm.Close(); err != nil {
-		t.Errorf("Close() = %v", err)
-	}
-	if err := sm.Close(); err != nil {
-		t.Errorf("second Close() = %v", err)
-	}
+	sm.Close()
+	sm.Close() // idempotent
 
 	if !errors.Is(stateCtx.Err(), context.Canceled) {
 		t.Errorf("state context err = %v, want Canceled", stateCtx.Err())
