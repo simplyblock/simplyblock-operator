@@ -125,7 +125,7 @@ var (
 	// Used by the guardian to identify all volumes that need a coordinated
 	// simultaneous restart when a shared subsystem recovers.
 	nqnByLvolID  = make(map[string]string)   // lvolID → NQN
-	lvolIDsByNQN = make(map[string][]string)  // NQN → []lvolID
+	lvolIDsByNQN = make(map[string][]string) // NQN → []lvolID
 
 	// maxSeenPathsMap caches the highest number of active NVMe-oF paths ever
 	// observed per NQN. Used by the connection monitor to detect degradation

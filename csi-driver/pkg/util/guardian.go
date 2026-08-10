@@ -613,7 +613,7 @@ func (g *Guardian) coordinatedSubsystemRestart(
 			klog.Infof(
 				"Guardian: coordinated restart deferred: pod %s/%s still in backoff (%.0fs remaining)",
 				pod.Namespace, pod.Name,
-				(g.cfg.RestartBackoff-time.Since(last)).Seconds())
+				(g.cfg.RestartBackoff - time.Since(last)).Seconds())
 			return 0
 		}
 	}
