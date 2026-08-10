@@ -320,34 +320,6 @@ type NodeStatus struct {
 	FailureDomain *int32 `json:"failureDomain,omitempty"`
 }
 
-type ActionStatus struct {
-	// Action is the requested action name.
-	Action string `json:"action,omitempty"`
-	// NodeUUID is the target node UUID for the action.
-	NodeUUID string `json:"nodeUUID,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Action State"
-	State string `json:"state,omitempty"` // pending | running | success | failed
-	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Action Message"
-	// Message is a human-readable action result or error.
-	Message string `json:"message,omitempty"`
-	// UpdatedAt is the timestamp of the last status transition.
-	UpdatedAt metav1.Time `json:"updatedAt,omitempty"`
-	// ObservedGeneration is the resource generation observed by this status.
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-	// Triggered indicates whether the underlying backend action has been fired.
-	Triggered bool `json:"triggered,omitempty"`
-	// SubPhase tracks the active drain step within the remove action.
-	// +kubebuilder:validation:Enum=Validating;Suspending;Migrating;Verifying;Removing
-	// +optional
-	SubPhase string `json:"subPhase,omitempty"`
-	// VolumesMigrated is the count of volumes successfully migrated so far.
-	// +optional
-	VolumesMigrated int `json:"volumesMigrated,omitempty"`
-	// VolumesPending is the count of volumes still awaiting migration.
-	// +optional
-	VolumesPending int `json:"volumesPending,omitempty"`
-}
-
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Total",type=integer,JSONPath=".status.totalNodes"

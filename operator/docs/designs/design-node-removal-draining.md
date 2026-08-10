@@ -62,7 +62,7 @@ If volume migration fails or the user cancels the `remove` action, the operator
 - Migrating non-PV-managed volumes automatically — these require manual
   intervention.
 - Migrating volumes across different storage clusters.
-- Replacing the `node-recycle` path.
+- Replacing the `node-rolling-restart` path.
 - Changing volume placement at creation time.
 
 ---

@@ -194,6 +194,7 @@ rules:
   - pools
   - snapshotreplications
   - storagebackups
+  - storageclusterops
   - storageclusters
   - storagenodeops
   - storagenodes
@@ -217,6 +218,7 @@ rules:
   - pools/finalizers
   - snapshotreplications/finalizers
   - storagebackups/finalizers
+  - storageclusterops/finalizers
   - storageclusters/finalizers
   - storagenodeops/finalizers
   - storagenodes/finalizers
@@ -235,6 +237,7 @@ rules:
   - pools/status
   - snapshotreplications/status
   - storagebackups/status
+  - storageclusterops/status
   - storageclusters/status
   - storagenodeops/status
   - storagenodes/status

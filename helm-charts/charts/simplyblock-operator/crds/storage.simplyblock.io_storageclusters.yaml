@@ -55,16 +55,6 @@ spec:
           spec:
             description: spec defines the desired state of StorageCluster
             properties:
-              action:
-                description: Action triggers a cluster-level action.
-                enum:
-                - activate
-                - expand
-                - shutdown
-                - start
-                - restart
-                - node-recycle
-                type: string
               backup:
                 description: Backup specifies the specification for backup to S3 configuration
                 properties:
@@ -165,16 +155,6 @@ spec:
                 description: MaxQueueSize defines the maximum backend queue size.
                 format: int32
                 type: integer
-              nodeRecycle:
-                description: NodeRecycle configures the node-recycle action.
-                properties:
-                  refreshSNodeAPI:
-                    description: |-
-                      RefreshSNodeAPI restarts the storage-node DaemonSet pod on each node
-                      after the backend node is shut down and before it is restarted, ensuring
-                      the latest image is running before the node comes back online.
-                    type: boolean
-                type: object
               nvmfBasePort:
                 description: NvmfBasePort defines the base NVMf service port.
                 format: int32
@@ -376,53 +356,11 @@ spec:
           status:
             description: status defines the observed state of StorageCluster
             properties:
-              actionStatus:
-                description: ActionStatus tracks the most recent action execution
-                  state.
-                properties:
-                  action:
-                    description: Action is the requested action name.
-                    type: string
-                  message:
-                    description: Message is a human-readable action result or error.
-                    type: string
-                  nodeUUID:
-                    description: NodeUUID is the target node UUID for the action.
-                    type: string
-                  observedGeneration:
-                    description: ObservedGeneration is the resource generation observed
-                      by this status.
-                    format: int64
-                    type: integer
-                  state:
-                    type: string
-                  subPhase:
-                    description: SubPhase tracks the active drain step within the
-                      remove action.
-                    enum:
-                    - Validating
-                    - Suspending
-                    - Migrating
-                    - Verifying
-                    - Removing
-                    type: string
-                  triggered:
-                    description: Triggered indicates whether the underlying backend
-                      action has been fired.
-                    type: boolean
-                  updatedAt:
-                    description: UpdatedAt is the timestamp of the last status transition.
-                    format: date-time
-                    type: string
-                  volumesMigrated:
-                    description: VolumesMigrated is the count of volumes successfully
-                      migrated so far.
-                    type: integer
-                  volumesPending:
-                    description: VolumesPending is the count of volumes still awaiting
-                      migration.
-                    type: integer
-                type: object
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef is the name of the currently active ClusterOps on this cluster.
+                  Empty when no operation is in progress.
+                type: string
               clusterName:
                 description: ClusterName is the resolved backend cluster name.
                 type: string
@@ -465,32 +403,6 @@ spec:
                   FIXME: Unused for now (API update required?)
                 format: int32
                 type: integer
-              nodeRecycleStatus:
-                description: NodeRecycleStatus tracks in-progress state for the node-recycle
-                  action.
-                properties:
-                  nodePhase:
-                    description: |-
-                      NodePhase is the current step for the node being recycled:
-                      "snode-refresh" | "snode-refresh-wait" | "shutting-down" | "restarting" | "rebalancing"
-                    type: string
-                  pendingNodes:
-                    description: PendingNodes is the ordered list of node UUIDs still
-                      to be recycled.
-                    items:
-                      type: string
-                    type: array
-                  phaseTriggered:
-                    description: PhaseTriggered indicates the API call for the current
-                      NodePhase was already sent.
-                    type: boolean
-                  processedNodes:
-                    description: ProcessedNodes is the list of node UUIDs already
-                      recycled.
-                    items:
-                      type: string
-                    type: array
-                type: object
               nqn:
                 description: NQN is the cluster NVM subsystem qualified name.
                 type: string
