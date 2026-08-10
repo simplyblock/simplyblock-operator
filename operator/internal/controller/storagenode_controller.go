@@ -122,20 +122,26 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, err
 		}
 
-		if sn.Status.UUID == "" && sn.Status.PostedAt != nil {
-			// POST already sent but UUID not in status.nodes[] — this happens for
-			// manually created StorageNodes whose worker is not in spec.workerNodes.
-			// Poll the backend by worker IP to retrieve the UUID directly.
-			if err := r.pollUUIDFromBackend(ctx, &sn, clusterUUID, apiClient); err != nil {
-				return ctrl.Result{}, err
-			}
-			if sn.Status.UUID == "" {
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		if sn.Status.UUID == "" {
+			alreadyPosted := sn.Status.PostedAt != nil
+			// An adopted node already has a backend record that
+			// provisionNode's POST can't match, so check by IP first.
+			// Only during an upgrade (upgrade secret present) — normal
+			// nodes skip this extra check.
+			adopting := !alreadyPosted && r.isUpgradeAdoption(ctx, sn.Namespace, sns.Spec.ClusterName)
+			if alreadyPosted || adopting {
+				if err := r.pollUUIDFromBackend(ctx, &sn, clusterUUID, apiClient); err != nil {
+					return ctrl.Result{}, err
+				}
 			}
 		}
 
-		if sn.Status.UUID == "" {
+		if sn.Status.UUID == "" && sn.Status.PostedAt == nil {
 			return r.provisionNode(ctx, &sn, &sns, clusterUUID, apiClient)
+		}
+		if sn.Status.UUID == "" {
+			// POST already sent (by us or a sibling socket); keep polling.
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 	}
 
@@ -233,6 +239,16 @@ func (r *StorageNodeReconciler) pollUUIDFromBackend(
 		"worker", sn.Spec.WorkerNode, "socketIndex", socketIdx,
 		"uuid", n.UUID, "status", n.Status)
 	return nil
+}
+
+// isUpgradeAdoption reports whether the "simplyblock-<cluster>-upgrade"
+// secret exists — the same signal simplyblockstoragecluster_controller.go
+// uses to adopt the StorageCluster instead of creating a new one.
+func (r *StorageNodeReconciler) isUpgradeAdoption(ctx context.Context, namespace, clusterName string) bool {
+	secretName := fmt.Sprintf("simplyblock-%s-upgrade", clusterName)
+	var secret corev1.Secret
+	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, &secret)
+	return err == nil
 }
 
 // syncUUIDFromNodeSet copies the backend UUID from StorageNodeSet.status.nodes[]
@@ -481,10 +497,10 @@ func (r *StorageNodeReconciler) countInFlightNodes(
 	return len(inFlightWorkers), nil
 }
 
-// workerAlreadyPosted returns true if any sibling StorageNode in the same
-// StorageNodeSet, for the same worker, already has PostedAt set. Used to
-// enforce one POST per worker: the backend add_node handles all sockets from
-// a single call, so only one CR per worker should trigger the POST.
+// workerAlreadyPosted returns true if a sibling StorageNode for the same
+// worker already has PostedAt or UUID set (UUID too: an adopted sibling
+// skips PostedAt entirely). Enforces one POST per worker — the backend
+// add_node handles all sockets from a single call.
 func (r *StorageNodeReconciler) workerAlreadyPosted(ctx context.Context, sn *simplyblockv1alpha1.StorageNode) bool {
 	var snList simplyblockv1alpha1.StorageNodeList
 	if err := r.List(ctx, &snList,
@@ -497,7 +513,7 @@ func (r *StorageNodeReconciler) workerAlreadyPosted(ctx context.Context, sn *sim
 		if sibling.Name == sn.Name || sibling.Spec.WorkerNode != sn.Spec.WorkerNode {
 			continue
 		}
-		if sibling.Status.PostedAt != nil {
+		if sibling.Status.PostedAt != nil || sibling.Status.UUID != "" {
 			return true
 		}
 	}
