@@ -4,18 +4,26 @@ fio_migration_test.py — simplyblock live-migration I/O stress / correlation te
 
 What it does
 ------------
-1. Creates an XFS StorageClass cloned from the live pool StorageClass
+1. Creates two XFS StorageClasses cloned from the live pool StorageClass
    (`simplyblock-default-simplyblock-cluster-pool1`, provisioner csi.simplyblock.io)
-   but with `csi.storage.k8s.io/fstype: xfs`.
-2. Provisions N (default 10) 10Gi PVCs from that StorageClass and N fio pods.
+   with `csi.storage.k8s.io/fstype: xfs`:
+     * a single-namespace class (one NVMe subsystem per volume), and
+     * a namespaced class with `max_namespace_per_subsys: 3` (--ns-per-subsys), whose
+       volumes share a subsystem with up to two siblings.
+   Volumes sharing a subsystem always migrate together, as one batch — so the test
+   mixes both kinds and verifies whole-subsystem movement (see 3./5.).
+2. Provisions N (default 10) single-namespace + M (default 6, --ns-pods) namespaced
+   10Gi PVCs and one fio pod each.
    Each pod mounts the simplyblock volume (XFS) and runs fio for 10 minutes with:
        ioengine=libaio, direct=1, iodepth=1, numjobs=1 (override with
        --iodepth/--numjobs; see cmd/simplyblock-rebalancer/main.go::measure
        for the direct/libaio reference)
    fio emits per-second IOPS / latency / bandwidth logs plus a final JSON summary.
-3. While the pods run, repeatedly picks a *random* pod and migrates its volume to a
+3. While the pods run, repeatedly picks a pod and migrates its volume to a
    *random storage node other than the one it currently lives on* by creating a
-   `VolumeMigration` CR — one migration at a time. The current storage node is
+   `VolumeMigration` CR — one migration at a time. Picks alternate between the
+   single-namespace and namespaced volumes so both kinds are exercised throughout the
+   run, interleaved rather than in phases. The current storage node is
    resolved authoritatively before each pick by running `sbctl volume list --json`
    inside a webappapi pod (simplyblock namespace) and matching the PV's logical-volume
    UUID; the sbctl Hostname (e.g. vm19_4424) is mapped to a storage-node UUID via the
@@ -29,6 +37,15 @@ What it does
    already carrying a snapshot is snapshotted again regardless.
 4. Continuously monitors pod health. After the run it pulls every pod's fio logs and
    correlates the per-second IOPS timeline against the migration windows.
+5. Verifies every migration landed correctly. A subsystem moves as a unit, so for a
+   namespaced volume the check covers *every* volume sharing its subsystem, not just
+   the one named in the CR: after a Completed migration all members must sit on the
+   target, after a Failed/Timeout one all must still sit on the source, and a
+   half-moved subsystem (some members on the target, some not) is reported as its own,
+   worst-case irregularity. Subsystem membership is re-read afterwards as well — a
+   migration must not split a subsystem or move a volume into another one. The
+   operator's own view is cross-checked too: `status.subsystemNQN` and
+   `status.memberCount` on the CR must match the subsystem the test resolved via sbctl.
 
 Failure criterion
 ------------------
@@ -37,7 +54,9 @@ script exit non-zero, with the offending interval logged explicitly:
   * a per-second sample where total IOPS drops to 0 during the timed run,
   * fio reporting a non-zero error count for any job,
   * a fio pod leaving Running / restarting / failing before its planned completion.
-Each I/O-loss event is annotated with whether it overlaps a migration window.
+Each I/O-loss event is annotated with whether it overlaps a migration window. Since a
+namespaced migration moves sibling volumes too, an outage on a *sibling's* pod counts
+the same as one on the migrated volume's pod — that is the point of the mixed run.
 
 Requirements: python3, kubectl (current context pointed at the cluster), the
 simplyblock operator running in `default`. fio is installed into the pods at runtime
@@ -65,6 +84,11 @@ SIMPLYBLOCK_NAMESPACE = "simplyblock"  # where the webappapi pods run
 WEBAPPAPI_MATCH = "webappapi"          # substring used to find a webappapi pod
 SOURCE_STORAGECLASS = "simplyblock-default-simplyblock-cluster-pool1"
 XFS_STORAGECLASS = SOURCE_STORAGECLASS + "-xfs"
+# Namespaced variant: its volumes share one NVMe subsystem with up to
+# --ns-per-subsys siblings and therefore migrate as a batch, all at once.
+NS_STORAGECLASS = XFS_STORAGECLASS + "-ns"
+PARAM_MAX_NS_PER_SUBSYS = "max_namespace_per_subsys"
+NS_PER_SUBSYS = 3
 STORAGENODE_CR = "simplyblock-node"  # StorageNodeSet CR in `default`
 FIO_IMAGE = "alpine:3"
 
@@ -156,7 +180,10 @@ class MigrationRecord:
     end: datetime | None = None
     phase: str = ""
     error: str = ""
-    snaps: str = ""
+    # The NQN the whole subsystem is migrated under, and the PVs sharing it — for a
+    # namespaced volume the migration moves every one of them, so all are verified.
+    nqn: str = ""
+    group_pvs: list[str] = field(default_factory=list)
     pre_snapshot: str = ""       # VolumeSnapshot CR created on this volume right before migrating it
     pre_snapshot_id: str = ""    # backend snapshot UUID (from the CSI VolumeSnapshotContent handle)
     # snapshot must resolve via `sbctl snapshot list` both right after creation and again
@@ -166,9 +193,25 @@ class MigrationRecord:
     snapshot_verify_msg: str = ""
     # post-migration verification (real primary node via sbctl vs expectation):
     #   Completed -> primary must be target; Failed/Timeout -> primary must stay source.
+    # For a namespaced volume this covers every member of the subsystem: member_nodes
+    # maps each member PV to the node it really sits on afterwards, and a subsystem
+    # left half-moved (some members on the target, some on the source) is flagged as
+    # its own failure mode via split_group.
     actual_node: str = ""        # real primary node UUID after the migration (sbctl)
+    member_nodes: dict[str, str] = field(default_factory=dict)
+    split_group: bool = False
     verify_ok: bool | None = None  # True=matches, False=irregularity, None=could not verify
     verify_msg: str = ""
+    # Cross-check of the operator's own view against the subsystem resolved via sbctl:
+    # status.subsystemNQN / status.memberCount on the CR.
+    cr_nqn: str = ""
+    cr_members: int | None = None
+    # The backend migration id the CR was given. Empty means the migration was never
+    # created (the submit itself failed), in which case the CR carries no subsystem
+    # either — that is not a disagreement, it is a create failure.
+    cr_migration_uuid: str = ""
+    cr_match_ok: bool | None = None
+    cr_match_msg: str = ""
 
 
 @dataclass
@@ -190,8 +233,15 @@ class FioMigrationTest:
         self.pvcs: list[str] = []
         self.pv_of: dict[str, str] = {}        # pod -> pv name
         self.pvc_of: dict[str, str] = {}       # pod -> pvc name
+        self.kind_of: dict[str, str] = {}      # pod -> "single" | "namespaced" (StorageClass kind)
         self.volume_uuid_of: dict[str, str] = {}  # pv -> simplyblock logical-volume UUID
         self.placement: dict[str, str] = {}    # pv -> current storage node uuid
+        # NVMe subsystem grouping, resolved from the backend (never assumed): which
+        # subsystem each volume lives in and which volumes share it. A namespaced
+        # volume's group has >1 member and migrates as a whole.
+        self.nqn_of: dict[str, str] = {}          # pv -> subsystem NQN
+        self.ns_id_of: dict[str, int] = {}        # pv -> namespace id within the subsystem
+        self.subsystem_pvs: dict[str, list[str]] = {}  # NQN -> [pv, ...] (by ascending ns id)
         self.nodes: list[str] = []
         self.node_host: dict[str, str] = {}    # node uuid -> k8s hostname (StorageNode CR)
         self.sbctl_host_to_node: dict[str, str] = {}  # sbctl Hostname (vmNN_PORT) -> node uuid
@@ -226,10 +276,12 @@ class FioMigrationTest:
         for u in self.nodes:
             self.log.info(f"    {u}  ({self.node_host[u]})")
 
-    def ensure_xfs_storageclass(self) -> None:
-        """(Re)create the XFS StorageClass from the live pool StorageClass.
+    def ensure_storageclasses(self) -> None:
+        """(Re)create both XFS StorageClasses from the live pool StorageClass: the
+        single-namespace one and the namespaced one (max_namespace_per_subsys =
+        --ns-per-subsys), whose volumes share a subsystem and migrate as a batch.
 
-        The XFS SC is always deleted and recreated so a stale one left over from a
+        Each SC is always deleted and recreated so a stale one left over from a
         previous run can never be reused, and its `cluster_id` is forced to the live
         cluster from `sbctl cluster list` — never copied blindly from the source SC,
         which may still carry a dead cluster id after a reinstall.
@@ -243,33 +295,43 @@ class FioMigrationTest:
                 "Check: kubectl -n default get pool pool1 -o jsonpath='{.status}'")
 
         cluster_uuid = self.sbctl_cluster_uuid()
-        params = dict(src.get("parameters", {}))
-        stale = params.get("cluster_id")
+        base = dict(src.get("parameters", {}))
+        stale = base.get("cluster_id")
         if stale and stale != cluster_uuid:
             self.log.warn(f"source SC {SOURCE_STORAGECLASS} carries stale cluster_id "
                           f"{stale}; overriding with live cluster {cluster_uuid}")
-        params["cluster_id"] = cluster_uuid
-        params["csi.storage.k8s.io/fstype"] = "xfs"
+        base["cluster_id"] = cluster_uuid
+        base["csi.storage.k8s.io/fstype"] = "xfs"
+        # A single-namespace class must say so explicitly rather than inherit whatever
+        # the source SC (or the CSI default) carries — otherwise the "single" half of
+        # the mix could silently be namespaced too and the test would compare like
+        # with like.
+        base.pop(PARAM_MAX_NS_PER_SUBSYS, None)
 
-        # Always recreate: delete any existing XFS SC first so the test never reuses a
-        # StorageClass that points at a previous (now-dead) cluster.
-        kubectl(["delete", "sc", XFS_STORAGECLASS, "--ignore-not-found"], check=False)
+        self._apply_storageclass(src, XFS_STORAGECLASS, dict(base, **{PARAM_MAX_NS_PER_SUBSYS: "1"}))
+        self.log.info(f"(re)created single-namespace StorageClass {XFS_STORAGECLASS} "
+                      f"(fstype=xfs, {PARAM_MAX_NS_PER_SUBSYS}=1, cluster_id={cluster_uuid})")
+        if self.a.ns_pods > 0:
+            self._apply_storageclass(src, NS_STORAGECLASS,
+                                     dict(base, **{PARAM_MAX_NS_PER_SUBSYS: str(self.a.ns_per_subsys)}))
+            self.log.info(f"(re)created namespaced StorageClass {NS_STORAGECLASS} "
+                          f"(fstype=xfs, {PARAM_MAX_NS_PER_SUBSYS}={self.a.ns_per_subsys}, "
+                          f"cluster_id={cluster_uuid})")
 
-        sc = {
+    @staticmethod
+    def _apply_storageclass(src: dict, name: str, params: dict) -> None:
+        kubectl(["delete", "sc", name, "--ignore-not-found"], check=False)
+        kubectl_apply(json.dumps({
             "apiVersion": "storage.k8s.io/v1",
             "kind": "StorageClass",
-            "metadata": {"name": XFS_STORAGECLASS,
+            "metadata": {"name": name,
                          "labels": {"app.kubernetes.io/created-by": "fio-migration-test"}},
             "provisioner": src.get("provisioner", "csi.simplyblock.io"),
             "parameters": params,
             "reclaimPolicy": src.get("reclaimPolicy", "Delete"),
             "volumeBindingMode": src.get("volumeBindingMode", "WaitForFirstConsumer"),
             "allowVolumeExpansion": src.get("allowVolumeExpansion", True),
-        }
-        kubectl_apply(json.dumps(sc))
-        self.log.info(f"(re)created xfs StorageClass {XFS_STORAGECLASS} "
-                      f"(provisioner={sc['provisioner']}, fstype=xfs, "
-                      f"cluster_id={cluster_uuid})")
+        }))
 
     def ensure_snapshot_class(self) -> str:
         """Find (or create) a VolumeSnapshotClass bound to the simplyblock CSI driver and
@@ -411,26 +473,34 @@ class FioMigrationTest:
         affinity = self.worker_node_affinity()
         script = self.fio_command()
         docs = []
-        for i in range(self.a.pods):
+        # Both kinds run the same workload; only the StorageClass differs. The pods keep
+        # one continuous index so the log-collection name filter ("<run_id>-fio") still
+        # matches all of them.
+        plan = ([("single", XFS_STORAGECLASS)] * self.a.pods
+                + [("namespaced", NS_STORAGECLASS)] * self.a.ns_pods)
+        for i, (kind, sc_name) in enumerate(plan):
             pvc = f"{self.run_id}-pvc-{i}"
             pod = f"{self.run_id}-fio-{i}"
             self.pvcs.append(pvc)
             self.pods.append(pod)
             self.pvc_of[pod] = pvc
+            self.kind_of[pod] = kind
             docs.append({
                 "apiVersion": "v1",
                 "kind": "PersistentVolumeClaim",
-                "metadata": {"name": pvc, "labels": {"test": self.run_id}},
+                "metadata": {"name": pvc,
+                             "labels": {"test": self.run_id, "volume-kind": kind}},
                 "spec": {
                     "accessModes": ["ReadWriteOnce"],
-                    "storageClassName": XFS_STORAGECLASS,
+                    "storageClassName": sc_name,
                     "resources": {"requests": {"storage": f"{self.a.volume_size_gb}Gi"}},
                 },
             })
             docs.append({
                 "apiVersion": "v1",
                 "kind": "Pod",
-                "metadata": {"name": pod, "labels": {"test": self.run_id, "app": "fio"}},
+                "metadata": {"name": pod, "labels": {"test": self.run_id, "app": "fio",
+                                                     "volume-kind": kind}},
                 "spec": {
                     "restartPolicy": "Never",
                     "terminationGracePeriodSeconds": 5,
@@ -456,7 +526,10 @@ class FioMigrationTest:
             })
         manifest = "\n---\n".join(json.dumps(d) for d in docs)
         kubectl_apply(manifest)
-        self.log.info(f"created {self.a.pods} PVCs + fio pods (run id {self.run_id})")
+        self.log.info(f"created {len(plan)} PVCs + fio pods (run id {self.run_id}): "
+                      f"{self.a.pods} single-namespace ({XFS_STORAGECLASS}) + "
+                      f"{self.a.ns_pods} namespaced ({NS_STORAGECLASS}, "
+                      f"{PARAM_MAX_NS_PER_SUBSYS}={self.a.ns_per_subsys})")
 
     # ---- readiness --------------------------------------------------------------
 
@@ -498,7 +571,115 @@ class FioMigrationTest:
         for pod in self.pods:
             pv = self.pv_of[pod]
             self.log.info(f"    {pod}  {self.pvc_of[pod]}  ->  {pv}  "
-                          f"(lvol {self.volume_uuid_of[pv]})")
+                          f"(lvol {self.volume_uuid_of[pv]}, {self.kind_of.get(pod, '?')})")
+
+    # ---- NVMe subsystem grouping -------------------------------------------------
+
+    def sbctl_volume_get(self, lvol: str) -> dict:
+        """`sbctl volume get <lvol> --json` — the full backend lvol record, which carries
+        the fields `volume list` does not: `nqn` (the NVMe subsystem) and `ns_id` (the
+        namespace within it)."""
+        pod = self.webappapi_pod()
+        cp = subprocess.run(
+            ["kubectl", "-n", SIMPLYBLOCK_NAMESPACE, "exec", pod, "--",
+             "sbctl", "volume", "get", lvol, "--json"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if cp.returncode != 0:
+            raise RuntimeError(f"sbctl volume get {lvol} failed: {cp.stderr.strip()}")
+        data = json.loads(cp.stdout)
+        return data if isinstance(data, dict) else {}
+
+    def _subsystem_of(self, pv: str) -> "tuple[str, int]":
+        """(NQN, ns_id) of a PV's volume, read from the backend. ('', 0) when unresolvable."""
+        lvol = self.volume_uuid_of.get(pv, "")
+        if not lvol:
+            return "", 0
+        try:
+            data = self.sbctl_volume_get(lvol)
+        except Exception as e:  # noqa: BLE001
+            self.log.warn(f"cannot resolve subsystem of {pv} (lvol {lvol}): {e}")
+            return "", 0
+        nqn = data.get("nqn") or data.get("NQN") or ""
+        try:
+            ns_id = int(data.get("ns_id") or data.get("NS ID") or 0)
+        except (TypeError, ValueError):
+            ns_id = 0
+        return nqn, ns_id
+
+    def resolve_subsystems(self) -> None:
+        """Group every volume by the NVMe subsystem it actually lives in.
+
+        The grouping is *discovered*, never assumed: the control plane decides how it
+        packs namespaced volumes into subsystems (up to --ns-per-subsys each), so the
+        test reads each volume's NQN from the backend and derives the groups from that.
+        Everything downstream — the source node of a migration, and the set of volumes
+        a migration must move — follows from these groups.
+        """
+        self.nqn_of.clear()
+        self.ns_id_of.clear()
+        self._reread_subsystems([self.pv_of[pod] for pod in self.pods])
+
+    def _reread_subsystems(self, pvs: list[str]) -> dict[str, str]:
+        """Re-read the subsystem of each PV in pvs from the backend, update the grouping
+        and return {pv: nqn} for just those PVs. PVs outside pvs keep their cached NQN, so
+        the groups stay complete."""
+        for pv in pvs:
+            nqn, ns_id = self._subsystem_of(pv)
+            if not nqn:
+                self.nqn_of.pop(pv, None)
+                continue
+            self.nqn_of[pv] = nqn
+            self.ns_id_of[pv] = ns_id
+        groups: dict[str, list[str]] = {}
+        for pv, nqn in self.nqn_of.items():
+            groups.setdefault(nqn, []).append(pv)
+        for nqn, members in groups.items():
+            groups[nqn] = sorted(members, key=lambda p: self.ns_id_of.get(p, 0))
+        self.subsystem_pvs = groups
+        return {pv: self.nqn_of.get(pv, "") for pv in pvs}
+
+    def log_subsystems(self) -> None:
+        shared = {n: pvs for n, pvs in self.subsystem_pvs.items() if len(pvs) > 1}
+        self.log.info(f"NVMe subsystems in use: {len(self.subsystem_pvs)} "
+                      f"({len(shared)} shared by more than one volume)")
+        for nqn, pvs in sorted(self.subsystem_pvs.items(), key=lambda kv: -len(kv[1])):
+            members = ", ".join(
+                f"{self.pod_of_pv(p) or p}(ns{self.ns_id_of.get(p, '?')})" for p in pvs)
+            self.log.info(f"    {nqn}  [{len(pvs)} member(s)]  {members}")
+
+    def warn_if_not_namespaced(self) -> None:
+        """Flag up front when the namespaced volumes did not actually end up sharing
+        subsystems — the multi-namespace half of the run would then be vacuous. Not fatal
+        here (the run still tests single-namespace migration), but the analysis reports it
+        as INCONCLUSIVE rather than letting it pass silently."""
+        if self.a.ns_pods < 2:
+            return
+        ns_pvs = [self.pv_of[p] for p in self.pods if self.kind_of.get(p) == "namespaced"]
+        shared = {self.nqn_of.get(pv) for pv in ns_pvs
+                  if len(self.subsystem_pvs.get(self.nqn_of.get(pv, ""), [])) > 1}
+        if not shared:
+            self.log.crit(
+                f"the {len(ns_pvs)} volume(s) from {NS_STORAGECLASS} "
+                f"({PARAM_MAX_NS_PER_SUBSYS}={self.a.ns_per_subsys}) each got their own NVMe "
+                "subsystem — no batch migration can be exercised. Check that the CSI driver "
+                f"honours {PARAM_MAX_NS_PER_SUBSYS} and that the volumes landed on the same "
+                "storage node (a subsystem is shared per node)")
+        else:
+            self.log.info(f"multi-namespace ready: {len(shared)} shared subsystem(s) across "
+                          f"{len(ns_pvs)} namespaced volume(s)")
+
+    def pod_of_pv(self, pv: str) -> str:
+        for pod, p in self.pv_of.items():
+            if p == pv:
+                return pod
+        return ""
+
+    def group_of(self, pv: str) -> list[str]:
+        """The PVs sharing pv's subsystem (including pv itself), i.e. everything a
+        migration of pv moves. Falls back to [pv] when the subsystem is unknown."""
+        nqn = self.nqn_of.get(pv, "")
+        return list(self.subsystem_pvs.get(nqn, [pv])) if nqn else [pv]
 
     @staticmethod
     def _fio_in_timed_run(pod_stdout: str) -> bool:
@@ -738,22 +919,40 @@ class FioMigrationTest:
 
     # ---- migrations -------------------------------------------------------------
 
-    def _sbctl_node_of(self, pv: str) -> str:
-        """Authoritative current primary storage-node UUID for a PV's volume, via sbctl.
-        Returns '' when it can't be resolved. Used to re-sync the placement cache (which
-        drifts because the auto-rebalancer also moves volumes) and to verify migrations."""
+    def _sbctl_nodes_of(self, pvs: list[str]) -> dict[str, str]:
+        """Authoritative current primary storage-node UUID for several PVs at once, via a
+        single `sbctl volume list`. PVs that cannot be resolved are absent from the result.
+
+        Taking the whole set from one listing matters for a shared subsystem: its members
+        must be compared against each other, and per-PV listings taken seconds apart could
+        straddle a move and make a consistent subsystem look split."""
         try:
             vols = self.sbctl_volume_list()
         except Exception as e:  # noqa: BLE001
             self.log.warn(f"sbctl volume list failed: {e}")
-            return ""
+            return {}
         if not self.sbctl_host_to_node:
             self.build_sbctl_host_map(vols)
-        lvol = self.volume_uuid_of.get(pv)
+        by_lvol = {}
         for v in vols:
-            if lvol in (v.get("Id"), v.get("LVolUUID")):
-                return self.sbctl_host_to_node.get(v.get("Hostname", ""), "")
-        return ""
+            for key in (v.get("Id"), v.get("LVolUUID")):
+                if key:
+                    by_lvol[key] = v
+        out: dict[str, str] = {}
+        for pv in pvs:
+            v = by_lvol.get(self.volume_uuid_of.get(pv, ""))
+            if not v:
+                continue
+            node = self.sbctl_host_to_node.get(v.get("Hostname", ""), "")
+            if node:
+                out[pv] = node
+        return out
+
+    def _sbctl_node_of(self, pv: str) -> str:
+        """Authoritative current primary storage-node UUID for a PV's volume, via sbctl.
+        Returns '' when it can't be resolved. Used to re-sync the placement cache (which
+        drifts because the auto-rebalancer also moves volumes) and to verify migrations."""
+        return self._sbctl_nodes_of([pv]).get(pv, "")
 
     def _snapshot_backend_id(self, snap_name: str, timeout: int = 90) -> str:
         """Wait for a VolumeSnapshot to become readyToUse and return its backend snapshot
@@ -850,6 +1049,20 @@ class FioMigrationTest:
         candidates = [n for n in self.nodes if n != current] if current else list(self.nodes)
         return random.choice(candidates)
 
+    def pick_pod(self, idx: int) -> str:
+        """Pick the pod to migrate, alternating between single-namespace and namespaced
+        volumes on successive migrations so both kinds are exercised throughout the run
+        instead of clustering by chance. Falls back to whichever kind exists."""
+        by_kind = {"single": [], "namespaced": []}
+        for pod in self.pods:
+            by_kind.setdefault(self.kind_of.get(pod, "single"), []).append(pod)
+        # The loop's first idx is 1, so odd picks namespaced — the multi-namespace path is
+        # the one worth reaching first when a run is cut short.
+        want = "namespaced" if idx % 2 == 1 else "single"
+        pool = by_kind.get(want) or by_kind.get(
+            "single" if want == "namespaced" else "namespaced") or self.pods
+        return random.choice(pool)
+
     def migration_manifest(self, name: str, pv: str, target: str) -> str:
         return json.dumps({
             "apiVersion": API_GROUP,
@@ -859,30 +1072,52 @@ class FioMigrationTest:
         })
 
     def run_one_migration(self, idx: int, hard_deadline: float) -> MigrationRecord | None:
-        pod = random.choice(self.pods)
+        pod = self.pick_pod(idx)
         pv = self.pv_of[pod]
         pvc = self.pvc_of[pod]
+        # The volume's whole subsystem migrates, so the group — not the single PV — is what
+        # gets re-synced, targeted and later verified. Re-read it here rather than trusting
+        # the initial grouping: a subsystem's membership is backend state.
+        nqn, _ = self._subsystem_of(pv)
+        if nqn and nqn != self.nqn_of.get(pv):
+            self.log.warn(f"{pv} changed subsystem since the last look: "
+                          f"{self.nqn_of.get(pv, '?')} -> {nqn}; regrouping")
+            self.resolve_subsystems()
+        group = self.group_of(pv)
         # Re-sync the real current node before picking a target: the auto-rebalancer may
         # have moved this volume since we last looked, so a cached source would make us
         # target the node it already lives on (HTTP 400 "already on node").
-        real = self._sbctl_node_of(pv)
-        if real:
-            self.placement[pv] = real
+        nodes = self._sbctl_nodes_of(group)
+        self.placement.update(nodes)
         target = self.pick_target(pv)
         name = f"{self.run_id}-mig-{idx}"
         rec = MigrationRecord(name=name, pod=pod, pvc=pvc, pv=pv, target=target)
         rec.vol = self.volume_uuid_of.get(pv, "")  # lvol UUID, as webappapi errors reference it
         rec.source = self.placement.get(pv, "")  # authoritative current node (sbctl)
+        rec.nqn = self.nqn_of.get(pv, "")
+        rec.group_pvs = group
         self.migrations.append(rec)
+
+        # Members of one subsystem live on one node, since the subsystem itself is hosted
+        # there. If they don't, the grouping or the placement is already wrong before this
+        # migration starts — say so, because it changes how the verification reads.
+        elsewhere = {p: n for p, n in nodes.items() if rec.source and n != rec.source}
+        if elsewhere:
+            self.log.warn(
+                f"subsystem {rec.nqn or '?'} is not on one node before migrating: "
+                + ", ".join(f"{self.pod_of_pv(p) or p}@{n}" for p, n in elsewhere.items()))
 
         # Randomly snapshot the volume *before* migrating it, so the migration must carry
         # the snapshot (validated again after it finishes).
         self.maybe_snapshot(rec, idx)
 
         kubectl_apply(self.migration_manifest(name, pv, target))
+        siblings = [self.pod_of_pv(p) or p for p in group if p != pv]
         self.log.event(
-            f"MIGRATION START  {name}  pod={pod}  pv={pv}  vol={rec.vol or '?'}  "
-            f"source={rec.source or '?'} ({self.node_host.get(rec.source,'?')})  "
+            f"MIGRATION START  {name}  kind={self.kind_of.get(pod,'?')}  pod={pod}  pv={pv}  "
+            f"vol={rec.vol or '?'}  subsystem={rec.nqn or '?'}  members={len(group)}"
+            + (f" (moves along: {', '.join(siblings)})" if siblings else "")
+            + f"  source={rec.source or '?'} ({self.node_host.get(rec.source,'?')})  "
             f"target={target} ({self.node_host.get(target,'?')})")
 
         # Bound the wait so a migration started late doesn't block long past fio's
@@ -897,9 +1132,10 @@ class FioMigrationTest:
                 rec.source = status["sourceNodeUUID"]
                 if not self.placement.get(pv):
                     self.placement[pv] = rec.source  # learn current node
-            st, tt = status.get("snapsTotal"), status.get("snapsMigrated")
-            if st is not None:
-                rec.snaps = f"{tt or 0}/{st}"
+            rec.cr_nqn = status.get("subsystemNQN", "") or rec.cr_nqn
+            rec.cr_migration_uuid = status.get("migrationUUID", "") or rec.cr_migration_uuid
+            if status.get("memberCount") is not None:
+                rec.cr_members = status["memberCount"]
             if phase in terminal:
                 rec.phase = phase
                 rec.error = status.get("errorMessage", "")
@@ -916,46 +1152,138 @@ class FioMigrationTest:
         if rec.phase == "Completed":
             self.log.event(
                 f"MIGRATION STOP   {name}  phase=Completed  vol={rec.vol or '?'}  {rec.source}({src_h}) -> "
-                f"{target}({tgt_h})  snaps={rec.snaps}  duration={dur:.0f}s")
+                f"{target}({tgt_h})  members={rec.cr_members if rec.cr_members is not None else len(group)}"
+                f"  duration={dur:.0f}s")
         else:
             self.log.event(
                 f"MIGRATION STOP   {name}  phase={rec.phase}  vol={rec.vol or '?'}  target={target}({tgt_h})  "
                 f"source={rec.source or '?'}  duration={dur:.0f}s  error={rec.error!r}")
 
+        self._verify_cr_subsystem(rec)
         self._verify_migration(rec)
         self._verify_snapshot_after_migration(rec)
         return rec
 
+    def _verify_cr_subsystem(self, rec: "MigrationRecord") -> None:
+        """Cross-check the operator's view of the subsystem against the test's own: the CR's
+        status.subsystemNQN must be the subsystem the volume lives in, and
+        status.memberCount the number of volumes sharing it.
+
+        This catches the operator addressing (and so moving) a different set of volumes than
+        the one the placement verification below then checks — the two would otherwise agree
+        with each other while both being wrong.
+        """
+        problems = []
+        if rec.cr_nqn and rec.nqn and rec.cr_nqn != rec.nqn:
+            problems.append(f"CR subsystemNQN={rec.cr_nqn} but volume is in {rec.nqn}")
+        # The test only sees its own volumes; a subsystem shared with volumes from outside
+        # this run would legitimately report a higher member count, so only a *lower* one
+        # is wrong.
+        if rec.cr_members is not None and rec.group_pvs and rec.cr_members < len(rec.group_pvs):
+            problems.append(f"CR memberCount={rec.cr_members} but {len(rec.group_pvs)} "
+                            f"test volume(s) share the subsystem")
+        # Only demand a subsystem once a migration actually exists. A migration whose
+        # submit was rejected never gets one, and reporting that as a view mismatch would
+        # bury the real error (the rejection) under a bogus one.
+        if not rec.cr_nqn and rec.cr_migration_uuid:
+            problems.append("CR reported a migration but no subsystemNQN")
+        if problems:
+            rec.cr_match_ok = False
+            rec.cr_match_msg = "; ".join(problems)
+            self.log.crit(f"MIGRATION CR CHECK FAIL  {rec.name}: {rec.cr_match_msg}")
+        elif rec.cr_nqn:
+            rec.cr_match_ok = True
+            self.log.event(f"MIGRATION CR CHECK  {rec.name}  OK  subsystem={rec.cr_nqn}  "
+                           f"memberCount={rec.cr_members}")
+
     def _verify_migration(self, rec: "MigrationRecord") -> None:
-        """Confirm the volume's real primary node (sbctl) matches the migration outcome:
-        Completed -> must be the target; Failed/Timeout -> must still be the source.
+        """Confirm the real primary node (sbctl) of every volume the migration moved matches
+        the outcome: Completed -> the target; Failed/Timeout -> still the source.
+
+        A subsystem moves as a unit, so for a namespaced volume this checks all of its
+        members, not only the PV named in the CR: leaving a sibling behind is exactly the
+        bug this test exists to catch. A subsystem found half-moved (some members on the
+        target, some on the source) is flagged as such — it is worse than a clean failure,
+        since the subsystem is then split across two nodes.
+
         Any mismatch is an irregularity (recorded, reported, fails the run). The real
-        position is written back to the placement cache regardless, to re-sync it."""
-        real = self._sbctl_node_of(rec.pv)
-        rec.actual_node = real
+        positions are written back to the placement cache regardless, to re-sync it. The
+        subsystem grouping is re-read afterwards as well: a migration must not change which
+        volumes share a subsystem.
+        """
+        group = rec.group_pvs or [rec.pv]
+        nodes = self._sbctl_nodes_of(group)
+        rec.member_nodes = nodes
+        rec.actual_node = nodes.get(rec.pv, "")
+        self.placement.update(nodes)  # re-sync cache to reality
+
         expected = rec.target if rec.phase == "Completed" else rec.source
         kind = "target" if rec.phase == "Completed" else "source"
-        if real:
-            self.placement[rec.pv] = real  # re-sync cache to reality
-        if not real:
+
+        def label(pv: str) -> str:
+            node = nodes.get(pv, "")
+            return (f"{self.pod_of_pv(pv) or pv}@"
+                    f"{node or '?'}({self.node_host.get(node, '?')})")
+
+        unresolved = [p for p in group if p not in nodes]
+        wrong = [p for p, n in nodes.items() if n != expected]
+        # A split subsystem: members on the target *and* members left on the source.
+        on_target = {p for p, n in nodes.items() if n == rec.target}
+        on_source = {p for p, n in nodes.items() if rec.source and n == rec.source}
+        rec.split_group = bool(len(group) > 1 and on_target and on_source)
+
+        if not nodes:
             rec.verify_ok = None
-            rec.verify_msg = "could not resolve actual node via sbctl"
+            rec.verify_msg = "could not resolve actual node(s) via sbctl"
             self.log.warn(f"MIGRATION VERIFY  {rec.name}: skipped — {rec.verify_msg}")
         elif not expected:
             rec.verify_ok = None
             rec.verify_msg = f"no expected {kind} node recorded; cannot verify"
             self.log.warn(f"MIGRATION VERIFY  {rec.name}: {rec.verify_msg}")
-        elif real == expected:
+        elif not wrong and not unresolved:
             rec.verify_ok = True
             self.log.event(
                 f"MIGRATION VERIFY  {rec.name}  OK  phase={rec.phase}  "
-                f"on {real}({self.node_host.get(real,'?')}) == expected {kind}")
+                f"all {len(group)} subsystem volume(s) on "
+                f"{expected}({self.node_host.get(expected,'?')}) == expected {kind}")
         else:
             rec.verify_ok = False
-            rec.verify_msg = (f"phase={rec.phase}: volume on {real}"
-                              f"({self.node_host.get(real,'?')}) but expected {kind} "
-                              f"{expected}({self.node_host.get(expected,'?')})")
+            detail = ", ".join(label(p) for p in wrong + unresolved)
+            rec.verify_msg = (
+                f"phase={rec.phase}: {len(wrong) + len(unresolved)} of {len(group)} "
+                f"subsystem volume(s) not on expected {kind} "
+                f"{expected}({self.node_host.get(expected,'?')}): {detail}")
+            if rec.split_group:
+                rec.verify_msg = ("SUBSYSTEM SPLIT ACROSS NODES — " + rec.verify_msg
+                                  + f"; on target: {', '.join(label(p) for p in sorted(on_target))}")
             self.log.crit(f"MIGRATION VERIFY FAIL  {rec.name}: {rec.verify_msg}")
+
+        self._verify_group_intact(rec)
+
+    def _verify_group_intact(self, rec: "MigrationRecord") -> None:
+        """Confirm the migration did not change subsystem membership: the volumes that
+        shared a subsystem before must still share one afterwards, under the same NQN
+        (moving a subsystem between nodes does not re-identify it). Membership changes are
+        folded into the migration's verification verdict.
+
+        Only the affected volumes are re-read, not every volume in the run — this runs
+        inside the migration loop, and one backend query per volume would cost more than
+        the migration gap.
+        """
+        group = rec.group_pvs or [rec.pv]
+        now = self._reread_subsystems(group)
+        if len(group) < 2:
+            return
+        nqns = {n for n in now.values() if n}
+        changed = len(nqns) > 1 or any(not n for n in now.values()) \
+            or (rec.nqn and nqns and nqns != {rec.nqn})
+        if changed:
+            detail = ", ".join(f"{self.pod_of_pv(p) or p}->{n or '?'}" for p, n in now.items())
+            msg = (f"subsystem membership changed by the migration: was one subsystem "
+                   f"({rec.nqn or '?'}) with {len(group)} volume(s), now {detail}")
+            rec.verify_ok = False
+            rec.verify_msg = (rec.verify_msg + "; " + msg) if rec.verify_msg else msg
+            self.log.crit(f"MIGRATION VERIFY FAIL  {rec.name}: {msg}")
 
     def migration_loop(self, stop_at: float) -> None:
         # Keep launching migrations across almost the whole fio runtime. A migration
@@ -1367,7 +1695,11 @@ class FioMigrationTest:
             # --- emit the per-second IOPS + latency time series as CSV ---
             csv_path = self._write_timeseries_csv(pod, pod_dir, timeline, base, completed_migs)
 
-            pod_report: dict = {"pv": self.pv_of.get(pod, ""), "jobs": [],
+            pv = self.pv_of.get(pod, "")
+            pod_report: dict = {"pv": pv, "jobs": [],
+                                "volume_kind": self.kind_of.get(pod, ""),
+                                "subsystem_nqn": self.nqn_of.get(pv, ""),
+                                "subsystem_members": len(self.group_of(pv)) if pv else 0,
                                 "timeseries_csv": os.path.relpath(csv_path, self.outdir)}
 
             # --- latency / IOPS summary from fio JSON ---
@@ -1479,8 +1811,15 @@ class FioMigrationTest:
         for m in completed_migs + [x for x in self.migrations if x.end is None]:
             report["migrations"].append({
                 "name": m.name, "pod": m.pod, "pv": m.pv, "vol": m.vol,
+                "kind": self.kind_of.get(m.pod, ""),
                 "source": m.source, "target": m.target,
-                "phase": m.phase, "snaps": m.snaps, "error": m.error,
+                "phase": m.phase, "error": m.error,
+                "subsystem_nqn": m.nqn, "subsystem_members": len(m.group_pvs),
+                "group_pvs": m.group_pvs, "member_nodes": m.member_nodes,
+                "split_group": m.split_group,
+                "cr_subsystem_nqn": m.cr_nqn, "cr_member_count": m.cr_members,
+                "cr_migration_uuid": m.cr_migration_uuid,
+                "cr_match_ok": m.cr_match_ok, "cr_match_msg": m.cr_match_msg,
                 "start": iso(m.start), "end": iso(m.end) if m.end else None,
                 "duration_s": round((m.end - m.start).total_seconds(), 0) if m.end else None,
                 "actual_node": m.actual_node, "verify_ok": m.verify_ok, "verify_msg": m.verify_msg,
@@ -1489,14 +1828,70 @@ class FioMigrationTest:
                 "snapshot_verify_msg": m.snapshot_verify_msg,
             })
 
+        # The subsystem grouping the whole verification rests on, as last resolved.
+        report["subsystems"] = [
+            {"nqn": nqn, "members": len(pvs),
+             "pvs": pvs, "pods": [self.pod_of_pv(p) for p in pvs],
+             "ns_ids": [self.ns_id_of.get(p) for p in pvs]}
+            for nqn, pvs in sorted(self.subsystem_pvs.items(), key=lambda kv: -len(kv[1]))]
+
         # Migration placement verification: a completed migration must land on its target,
-        # a failed one must stay on its source. Any mismatch is an irregularity.
+        # a failed one must stay on its source — and for a shared subsystem that holds for
+        # every volume in it. Any mismatch is an irregularity.
         verify_failures = [m for m in self.migrations if m.verify_ok is False]
         report["verification_failures"] = [
             {"name": m.name, "pv": m.pv, "phase": m.phase, "expected":
              (m.target if m.phase == "Completed" else m.source),
-             "actual": m.actual_node, "msg": m.verify_msg}
+             "actual": m.actual_node, "member_nodes": m.member_nodes,
+             "split_group": m.split_group, "msg": m.verify_msg}
             for m in verify_failures]
+
+        # Operator/backend agreement on which subsystem was migrated (CR status vs sbctl).
+        cr_failures = [m for m in self.migrations if m.cr_match_ok is False]
+        report["cr_subsystem_failures"] = [
+            {"name": m.name, "pv": m.pv, "phase": m.phase, "subsystem_nqn": m.nqn,
+             "cr_subsystem_nqn": m.cr_nqn, "cr_member_count": m.cr_members,
+             "msg": m.cr_match_msg}
+            for m in cr_failures]
+
+        # Every kind that was attempted must have migrated successfully at least once. A
+        # kind that fails *every* time (e.g. the backend rejecting that shape of request)
+        # otherwise slips through: each failed migration leaves its volume on the source,
+        # which the placement check then happily confirms as correct-for-a-failure.
+        kind_stats: dict[str, dict] = {}
+        for m in self.migrations:
+            kind = self.kind_of.get(m.pod, "?")
+            st = kind_stats.setdefault(kind, {"attempted": 0, "completed": 0, "errors": []})
+            st["attempted"] += 1
+            if m.phase == "Completed":
+                st["completed"] += 1
+            elif m.error:
+                st["errors"].append(f"{m.name}: {m.error}")
+        report["migrations_by_kind"] = kind_stats
+        never_completed = {k: st for k, st in kind_stats.items()
+                           if st["attempted"] and not st["completed"]}
+
+        # A run where no subsystem was ever shared did not test batch migration at all,
+        # even if every single-namespace migration passed — report it rather than let a
+        # vacuous PASS imply multi-namespace coverage.
+        ns_migs = [m for m in self.migrations if len(m.group_pvs) > 1]
+        shared_subsystems = [pvs for pvs in self.subsystem_pvs.values() if len(pvs) > 1]
+        report["multi_namespace"] = {
+            "ns_pods": self.a.ns_pods,
+            "ns_per_subsys": self.a.ns_per_subsys,
+            "shared_subsystems": len(shared_subsystems),
+            "migrations_of_shared_subsystems": len(ns_migs),
+        }
+        ns_untested = (self.a.ns_pods > 1 and not self.a.no_migrations
+                       and (not shared_subsystems or not ns_migs))
+        if ns_untested:
+            report["multi_namespace"]["problem"] = (
+                f"{self.a.ns_pods} namespaced volume(s) were provisioned from "
+                f"{NS_STORAGECLASS} ({PARAM_MAX_NS_PER_SUBSYS}={self.a.ns_per_subsys}) but "
+                + ("no two of them ended up sharing a subsystem"
+                   if not shared_subsystems
+                   else "no migration of a shared subsystem completed")
+                + " — multi-namespace migration was NOT exercised")
 
         # Snapshot verification: a snapshot taken before a migration must resolve via sbctl
         # both right after creation and after the migration finishes. Either False = failure.
@@ -1523,7 +1918,21 @@ class FioMigrationTest:
             report["result"] = "FAIL — I/O LOSS DETECTED"
             ok = False
         elif verify_failures:
-            report["result"] = f"FAIL — {len(verify_failures)} migration placement irregularity(ies)"
+            split = [m for m in verify_failures if m.split_group]
+            report["result"] = (f"FAIL — {len(verify_failures)} migration placement "
+                                f"irregularity(ies)"
+                                + (f", {len(split)} with a subsystem split across nodes"
+                                   if split else ""))
+            ok = False
+        elif cr_failures:
+            report["result"] = (f"FAIL — {len(cr_failures)} migration(s) where the operator's "
+                                "subsystem view disagreed with the backend")
+            ok = False
+        elif never_completed:
+            report["result"] = ("FAIL — no migration of "
+                                + " or ".join(f"{k} volume(s) ({st['attempted']} attempted)"
+                                              for k, st in never_completed.items())
+                                + " ever completed")
             ok = False
         elif snapshot_failures:
             report["result"] = (f"FAIL — {len(snapshot_failures)} snapshot(s) did not resolve "
@@ -1531,6 +1940,10 @@ class FioMigrationTest:
             ok = False
         elif no_data:
             report["result"] = "INCONCLUSIVE — no fio samples collected (run produced no data)"
+            ok = False
+        elif ns_untested:
+            report["result"] = ("INCONCLUSIVE — multi-namespace migration was not exercised "
+                               "(no shared subsystem was migrated)")
             ok = False
         else:
             report["result"] = "PASS — I/O CONTINUOUS"
@@ -1548,15 +1961,30 @@ class FioMigrationTest:
                           "data (inspect each pod's fio.log for the mismatched offsets)")
         if verify_failures:
             self.log.crit(f"MIGRATION VERIFICATION: {len(verify_failures)} irregularity(ies) — "
-                          "volume not on the expected node after migration:")
+                          "volume(s) not on the expected node after migration:")
             for m in verify_failures:
                 self.log.crit(f"    {m.name}: {m.verify_msg}")
+        if cr_failures:
+            self.log.crit(f"SUBSYSTEM VIEW: {len(cr_failures)} migration(s) where the CR's "
+                          "subsystemNQN/memberCount disagreed with the backend — the operator "
+                          "may have migrated a different set of volumes than it reported:")
+            for m in cr_failures:
+                self.log.crit(f"    {m.name}: {m.cr_match_msg}")
+        if never_completed:
+            for kind, st in never_completed.items():
+                self.log.crit(
+                    f"MIGRATION KIND {kind}: {st['attempted']} attempted, 0 completed — every "
+                    f"migration of this volume kind failed:")
+                for err in st["errors"][:5]:
+                    self.log.crit(f"    {err}")
+        if ns_untested:
+            self.log.crit("MULTI-NAMESPACE: " + report["multi_namespace"]["problem"])
         if snapshot_failures:
             self.log.crit(f"SNAPSHOT VERIFICATION: {len(snapshot_failures)} snapshot(s) failed to "
                           "resolve via sbctl after creation and/or migration:")
             for m in snapshot_failures:
                 self.log.crit(f"    {m.name} (snapshot {m.pre_snapshot}): {m.snapshot_verify_msg}")
-        if no_data and not io_lost and not verify_failures:
+        if no_data and not io_lost and not verify_failures and not cr_failures:
             self.log.crit("RESULT: INCONCLUSIVE — no per-second samples collected from any "
                           "pod; cannot confirm I/O continuity")
         return ok
@@ -1593,15 +2021,36 @@ class FioMigrationTest:
         self.log.info("SUMMARY")
         self.log.info(line)
         self.log.info(f"run id            : {self.run_id}")
-        self.log.info(f"pods              : {len(self.pods)}")
+        single_pods = len([p for p in self.pods if self.kind_of.get(p) == "single"])
+        ns_pods = len(self.pods) - single_pods
+        self.log.info(f"pods              : {len(self.pods)} "
+                      f"({single_pods} single-namespace / {ns_pods} namespaced)")
+        shared = [pvs for pvs in self.subsystem_pvs.values() if len(pvs) > 1]
+        self.log.info(f"subsystems        : {len(self.subsystem_pvs)} total / {len(shared)} shared "
+                      f"(sizes: {', '.join(str(len(p)) for p in sorted(shared, key=len, reverse=True)) or '-'})")
         self.log.info(f"migrations        : {len([m for m in self.migrations if m.end])} "
                       f"completed-window / {len(self.migrations)} attempted")
         completed = len([m for m in self.migrations if m.phase == 'Completed'])
         self.log.info(f"  of which phase=Completed: {completed}")
+        batch = [m for m in self.migrations if len(m.group_pvs) > 1]
+        solo = [m for m in self.migrations if len(m.group_pvs) <= 1]
+        moved = sum(len(m.group_pvs) for m in self.migrations if m.phase == "Completed")
+        self.log.info(f"  by subsystem size       : {len(solo)} single-namespace / "
+                      f"{len(batch)} multi-namespace (batch)")
+        self.log.info(f"  volumes moved (Completed): {moved}")
+        for kind, st in sorted(report.get("migrations_by_kind", {}).items()):
+            self.log.info(f"  {kind:>12} volumes   : {st['completed']} completed "
+                          f"/ {st['attempted']} attempted")
         verified = len([m for m in self.migrations if m.verify_ok is True])
         vfail = len([m for m in self.migrations if m.verify_ok is False])
+        split = len([m for m in self.migrations if m.split_group])
         self.log.info(f"placement verified: {verified} ok / {vfail} irregular "
-                      f"/ {len(self.migrations)} total")
+                      f"/ {len(self.migrations)} total"
+                      + (f"  ({split} with a SPLIT subsystem)" if split else ""))
+        crok = len([m for m in self.migrations if m.cr_match_ok is True])
+        crfail = len([m for m in self.migrations if m.cr_match_ok is False])
+        self.log.info(f"subsystem view    : {crok} CR/backend agree / {crfail} disagree "
+                      "(status.subsystemNQN + memberCount vs sbctl)")
         snapped = [m for m in self.migrations if m.pre_snapshot]
         if snapped:
             sok = len([m for m in snapped
@@ -1616,8 +2065,10 @@ class FioMigrationTest:
         for pod, pr in report["pods"].items():
             rd = pr["jobs"][0]["read"] if pr["jobs"] else {}
             wr = pr["jobs"][0]["write"] if pr["jobs"] else {}
+            members = pr.get("subsystem_members", 0)
             self.log.info(
-                f"  {pod}: total_iops={pr.get('total_iops',0):>9.0f} "
+                f"  {pod} [{pr.get('volume_kind','?')}, subsystem of {members}]: "
+                f"total_iops={pr.get('total_iops',0):>9.0f} "
                 f"errors={pr.get('fio_error_count',0)} "
                 f"outages={len(pr.get('outages',[]))} "
                 f"dips={pr.get('transient_dips',0)} | "
@@ -1658,7 +2109,8 @@ class FioMigrationTest:
                  "--ignore-not-found", "--grace-period=5"], check=False, timeout=180)
         kubectl(["delete", "pvc", "-l", f"test={self.run_id}",
                  "--ignore-not-found"], check=False, timeout=180)
-        self.log.info("cleanup done (xfs StorageClass kept for reuse)")
+        self.log.info("cleanup done (both xfs StorageClasses kept for reuse; each run "
+                      "recreates them)")
 
     # ---- orchestration ----------------------------------------------------------
 
@@ -1666,16 +2118,23 @@ class FioMigrationTest:
 
     def run(self) -> int:
         self.log.info(f"=== fio migration test  run_id={self.run_id} ===")
-        self.log.info(f"pods={self.a.pods} volume={self.a.volume_size_gb}Gi xfs "
-                      f"runtime={self.a.runtime}s "
+        self.log.info(f"pods={self.a.pods} single-namespace + {self.a.ns_pods} namespaced "
+                      f"({PARAM_MAX_NS_PER_SUBSYS}={self.a.ns_per_subsys})  "
+                      f"volume={self.a.volume_size_gb}Gi xfs runtime={self.a.runtime}s "
                       f"fio(direct={FIO_DIRECT},ioengine={FIO_IOENGINE},"
                       f"iodepth={self.a.iodepth},numjobs={self.a.numjobs})")
         try:
             self.discover_nodes()
-            self.ensure_xfs_storageclass()
+            self.ensure_storageclasses()
             self.create_workload()
             self.wait_pods_running()
             self.resolve_pvs()
+            # Which volumes share an NVMe subsystem — the grouping every migration and
+            # its verification is built on. Needed for the report even without
+            # migrations, so resolve it unconditionally.
+            self.resolve_subsystems()
+            self.log_subsystems()
+            self.warn_if_not_namespaced()
             if not self.a.no_migrations:
                 # build the sbctl hostname->node map and log each volume's current node
                 self.resolve_current_nodes()
@@ -1684,7 +2143,8 @@ class FioMigrationTest:
                     pv = self.pv_of[pod]
                     node = self.placement.get(pv, "")
                     self.log.info(f"    {pod}  {pv}  on  {node or '?'} "
-                                  f"({self.node_host.get(node, '?')})")
+                                  f"({self.node_host.get(node, '?')})  "
+                                  f"subsystem of {len(self.group_of(pv))}")
                 if self.a.snapshot_chance > 0:
                     self.ensure_snapshot_class()
                     self.log.info(f"snapshots enabled: {self.a.snapshot_chance:.0%} chance "
@@ -1747,7 +2207,18 @@ class FioMigrationTest:
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--pods", type=int, default=10, help="number of fio pods (default 10)")
+    p.add_argument("--pods", type=int, default=10,
+                   help="number of fio pods on single-namespace volumes (default 10)")
+    p.add_argument("--ns-pods", type=int, default=6,
+                   help="number of fio pods on namespaced volumes — volumes that share an "
+                        "NVMe subsystem with siblings and therefore migrate together as a "
+                        "batch. Migrations alternate between the two kinds. 0 disables the "
+                        "multi-namespace part of the test (default 6)")
+    p.add_argument("--ns-per-subsys", type=int, default=NS_PER_SUBSYS,
+                   help=f"{PARAM_MAX_NS_PER_SUBSYS} of the namespaced StorageClass, i.e. how "
+                        f"many volumes may share one subsystem (default {NS_PER_SUBSYS}). The "
+                        "control plane decides the actual packing; the test discovers it from "
+                        "the backend")
     p.add_argument("--volume-size-gb", type=int, default=10, help="volume size in GiB (default 10)")
     p.add_argument("--file-size-gb", type=int, default=1,
                    help="fio data file size in GiB; kept small so the up-front layout is "

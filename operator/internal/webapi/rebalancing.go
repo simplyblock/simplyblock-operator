@@ -63,14 +63,16 @@ type ContinueMigrationParams struct {
 // and a namespaced one, where several volumes share it.
 //
 // migrationsURL is the list/create endpoint for a subsystem's migrations,
-// migrationURL the detail/cancel endpoint of a single migration.
+// migrationURL the detail/cancel endpoint of a single migration. Both carry the
+// trailing slash the control plane declares them with; without it every call
+// costs a 307 redirect first.
 func migrationsURL(clusterUUID, nqn string) string {
-	return fmt.Sprintf("/api/v2/clusters/%s/subsystems/%s/migrations",
+	return fmt.Sprintf("/api/v2/clusters/%s/subsystems/%s/migrations/",
 		clusterUUID, url.PathEscape(nqn))
 }
 
 func migrationURL(clusterUUID, nqn, migrationID string) string {
-	return fmt.Sprintf("%s/%s", migrationsURL(clusterUUID, nqn), migrationID)
+	return fmt.Sprintf("%s%s/", migrationsURL(clusterUUID, nqn), migrationID)
 }
 
 // LvolConnectResp holds the NVMe-oF connection parameters for a logical volume,
@@ -100,6 +102,12 @@ type MigrateParams struct {
 // MigrationDTO is returned by POST (create), GET (poll), and ContinueMigration.
 // It describes the migration of one whole NVMe subsystem: TargetNQN identifies
 // the subsystem and MemberCount how many volumes (namespaces) move with it.
+//
+// The subsystem endpoints return one of two shapes, depending on how the volume
+// was provisioned: a batch migration of a shared subsystem carries target_nqn
+// and member_count, a migration of a single-namespace subsystem carries neither
+// (plus snapshot and retry counters this client does not read). normalize()
+// reconciles the difference so callers see one shape.
 type MigrationDTO struct {
 	ID             string            `json:"id"`
 	ClusterID      string            `json:"cluster_id"`
@@ -111,6 +119,20 @@ type MigrationDTO struct {
 	MemberCount    int               `json:"member_count"`
 	ErrorMessage   string            `json:"error_message"`
 	ConnectStrings []LvolConnectResp `json:"connect_strings"`
+}
+
+// normalize fills in what a single-namespace migration's response leaves out.
+// Such a migration still moves exactly one volume, so reporting 0 members would
+// make "how many volumes did this move" wrong for every non-namespaced volume;
+// and it is addressed under the subsystem the caller asked for, so that NQN is
+// the subsystem being migrated whether or not the response repeats it.
+func (m *MigrationDTO) normalize(nqn string) {
+	if m.MemberCount <= 0 {
+		m.MemberCount = 1
+	}
+	if m.TargetNQN == "" {
+		m.TargetNQN = nqn
+	}
 }
 
 // Migration status values reported in MigrationDTO.Status. The status field —
@@ -139,7 +161,8 @@ const (
 const (
 	// MigrationPhasePreCreated is the initial phase after CreateMigration: the
 	// target infrastructure exists but the data migration has not been started.
-	// ContinueMigration is only valid in this phase.
+	// ContinueMigration is only valid in this phase. Both a single-namespace and a
+	// shared-subsystem migration report it under this one name.
 	MigrationPhasePreCreated = "pre_created"
 )
 
@@ -325,6 +348,7 @@ func (c *Client) CreateMigration(
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, fmt.Errorf("unmarshal migration response: %w", err)
 	}
+	m.normalize(nqn)
 	logger.Info("CreateMigration parsed", "subsystem", nqn, "migration_id", m.ID,
 		"members", m.MemberCount, "connect_strings", len(m.ConnectStrings))
 	return &m, nil
@@ -387,6 +411,11 @@ func (c *Client) GetMigrations(
 	if err := json.Unmarshal(body, &migrations); err != nil {
 		return nil, fmt.Errorf("unmarshal migrations response: %w", err)
 	}
+	// The listing mixes both shapes: batch migrations of this subsystem and
+	// single-volume ones belonging to it.
+	for i := range migrations {
+		migrations[i].normalize(nqn)
+	}
 	return migrations, nil
 }
 
@@ -406,6 +435,7 @@ func (c *Client) GetMigration(
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, fmt.Errorf("unmarshal migration response: %w", err)
 	}
+	m.normalize(nqn)
 	return &m, nil
 }
 
@@ -416,7 +446,8 @@ func (c *Client) ContinueMigration(
 	ctx context.Context,
 	clusterUUID, nqn, migrationID string,
 ) error {
-	endpoint := migrationURL(clusterUUID, nqn, migrationID) + "/continue"
+	// The only migration sub-resource declared without a trailing slash.
+	endpoint := migrationURL(clusterUUID, nqn, migrationID) + "continue"
 	body, statusCode, err := c.Do(ctx, http.MethodPost, endpoint, ContinueMigrationParams{})
 	if err != nil {
 		return fmt.Errorf("continue migration %s: %w", migrationID, err)

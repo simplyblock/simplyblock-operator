@@ -10,18 +10,63 @@ import (
 // testNQN carries the colons a real NQN has, which must survive path escaping.
 const testNQN = "nqn.2014-08.io.simplyblock:cluster:lvol:vol-1"
 
+// The paths must match what the control plane declares, trailing slash included —
+// the slashless form only works via a 307 redirect.
 func TestMigrationURLs(t *testing.T) {
-	const wantCollection = "/api/v2/clusters/cluster-1/subsystems/" + testNQN + "/migrations"
+	const wantCollection = "/api/v2/clusters/cluster-1/subsystems/" + testNQN + "/migrations/"
 
 	if got := migrationsURL("cluster-1", testNQN); got != wantCollection {
 		t.Errorf("migrationsURL = %q, want %q", got, wantCollection)
 	}
-	if got, want := migrationURL("cluster-1", testNQN, "mig-1"), wantCollection+"/mig-1"; got != want {
+	if got, want := migrationURL("cluster-1", testNQN, "mig-1"), wantCollection+"mig-1/"; got != want {
 		t.Errorf("migrationURL = %q, want %q", got, want)
 	}
 	// A slash in the NQN must not open a new path segment.
-	if got, want := migrationsURL("cluster-1", "nqn.x/y"), "/api/v2/clusters/cluster-1/subsystems/nqn.x%2Fy/migrations"; got != want {
+	if got, want := migrationsURL("cluster-1", "nqn.x/y"), "/api/v2/clusters/cluster-1/subsystems/nqn.x%2Fy/migrations/"; got != want {
 		t.Errorf("migrationsURL with slash = %q, want %q", got, want)
+	}
+}
+
+// A migration of a single-namespace subsystem comes back as the control plane's
+// solo DTO: no target_nqn, no member_count, plus counters this client ignores. It
+// still moved one volume in the subsystem that was asked for, and must be reported
+// that way rather than as zero volumes in no subsystem.
+func TestGetMigrationNormalizesSoloResponse(t *testing.T) {
+	solo := `{"id":"mig-1","lvol_id":"lv-1","source_node_id":"A","target_node_id":"B",
+	          "phase":"pre_created","status":"new","snaps_total":4,"snaps_migrated":1,
+	          "retry_count":0,"max_retries":10,"error_message":"","started_at":0,"completed_at":0}`
+	batch := `{"id":"mig-2","cluster_id":"c","source_node_id":"A","target_node_id":"B",
+	           "target_nqn":"` + testNQN + `","phase":"pre_created","status":"new",
+	           "member_count":3,"error_message":""}`
+
+	for _, tc := range []struct {
+		name        string
+		body        string
+		wantMembers int
+	}{
+		{"single-namespace subsystem", solo, 1},
+		{"shared subsystem", batch, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			m, err := NewClient(srv.URL).GetMigration(context.Background(), "c", testNQN, "mig-1")
+			if err != nil {
+				t.Fatalf("GetMigration: %v", err)
+			}
+			if m.MemberCount != tc.wantMembers {
+				t.Errorf("MemberCount = %d, want %d", m.MemberCount, tc.wantMembers)
+			}
+			if m.TargetNQN != testNQN {
+				t.Errorf("TargetNQN = %q, want %q", m.TargetNQN, testNQN)
+			}
+			if m.Phase != MigrationPhasePreCreated || m.Status != MigrationStatusNew {
+				t.Errorf("phase/status = %q/%q, want pre_created/new", m.Phase, m.Status)
+			}
+		})
 	}
 }
 
@@ -55,7 +100,7 @@ func TestCreateMigrationCancelsInFlightMigrationOnConflict(t *testing.T) {
 	if m != nil {
 		t.Errorf("migration = %+v, want nil so the caller retries", m)
 	}
-	want := collection + "/mig-new"
+	want := collection + "mig-new/"
 	if len(cancelled) != 1 || cancelled[0] != want {
 		t.Errorf("cancelled = %v, want [%s]", cancelled, want)
 	}

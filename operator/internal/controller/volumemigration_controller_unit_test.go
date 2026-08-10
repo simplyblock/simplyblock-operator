@@ -71,7 +71,13 @@ const testSubsystemNQN = "nqn.2014-08.io.simplyblock:cluster-uuid:lvol:vol-uuid"
 
 // migrationsPath is the collection endpoint the controller must use for the
 // volume under test.
-const migrationsPath = "/api/v2/clusters/" + testClusterUUID + "/subsystems/" + testSubsystemNQN + "/migrations"
+const migrationsPath = "/api/v2/clusters/" + testClusterUUID + "/subsystems/" + testSubsystemNQN + "/migrations/"
+
+// migrationPath and continuePath are the endpoints of the single migration under
+// test. The trailing slashes are the control plane's own — a path without them
+// only resolves via a redirect.
+const migrationPath = migrationsPath + testMigrationUUID + "/"
+const continuePath = migrationPath + "continue"
 
 // serveVolume answers the GetVolume call reconcileStart makes to resolve the
 // volume's subsystem, and reports whether it handled the request. Fake API
@@ -284,7 +290,7 @@ func TestReconcileStart_Disabled_NeverMigrates(t *testing.T) {
 	image := "rebalancer:test"
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/migrations") {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/migrations/") {
 			t.Errorf("CreateMigration must not be called when migration is disabled")
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -384,34 +390,53 @@ func TestReconcileStart_VolumeWithoutNQN_Fails(t *testing.T) {
 // Every call after create — read, continue, cancel — must address the migration
 // under the subsystem recorded in status, since that is the only collection the
 // migration ID resolves in.
+//
+// Run for both shapes the control plane returns: a migration of a shared subsystem
+// reports status "running" from the moment it is created, where a single-namespace one
+// starts at "new". Neither is terminal, so both must still be continued.
 func TestPerformMigration_AddressesMigrationBySubsystem(t *testing.T) {
-	var paths []string
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.Method+" "+r.URL.Path)
-		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
-			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
-			w.WriteHeader(http.StatusOK)
-		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-		}
-	})
+	for _, tc := range []struct {
+		name  string
+		phase string
+		state string
+	}{
+		{"single-namespace subsystem", "pre_created", "new"},
+		{"shared subsystem", "pre_created", "running"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var paths []string
+			srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.Method+" "+r.URL.Path)
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == migrationPath:
+					_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID +
+						`","phase":"` + tc.phase + `","status":"` + tc.state + `"}`))
+				case r.Method == http.MethodPost && r.URL.Path == continuePath:
+					w.WriteHeader(http.StatusOK)
+				default:
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+			})
 
-	vm := validatingVM(testValidationJobName)
-	job := validationJob(batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue})
-	r, _ := newVMReconciler(t, srv.URL, vm, job)
+			vm := validatingVM(testValidationJobName)
+			job := validationJob(batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue})
+			r, cl := newVMReconciler(t, srv.URL, vm, job)
 
-	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+			if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
 
-	want := []string{
-		http.MethodGet + " " + migrationsPath + "/" + testMigrationUUID,
-		http.MethodPost + " " + migrationsPath + "/" + testMigrationUUID + "/continue",
-	}
-	if !slices.Equal(paths, want) {
-		t.Errorf("requests = %v, want %v", paths, want)
+			want := []string{
+				http.MethodGet + " " + migrationPath,
+				http.MethodPost + " " + continuePath,
+			}
+			if !slices.Equal(paths, want) {
+				t.Errorf("requests = %v, want %v", paths, want)
+			}
+			if got := getVM(t, cl); got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseRunning {
+				t.Errorf("phase = %q, want Running", got.Status.Phase)
+			}
+		})
 	}
 }
 
@@ -489,10 +514,10 @@ func TestPollValidationJob_Succeeded_ContinuesToRunning(t *testing.T) {
 	var continueCalled bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+		case r.Method == http.MethodGet && r.URL.Path == migrationPath:
 			// performMigration reads the phase before continuing.
 			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
+		case r.Method == http.MethodPost && r.URL.Path == continuePath:
 			continueCalled = true
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -560,10 +585,10 @@ func TestReconcileValidating_NoRunningConsumer_SkipsValidationAndContinues(t *te
 	var continueCalled bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+		case r.Method == http.MethodGet && r.URL.Path == migrationPath:
 			// performMigration reads the phase before continuing.
 			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
+		case r.Method == http.MethodPost && r.URL.Path == continuePath:
 			continueCalled = true
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -600,9 +625,9 @@ func TestReconcileValidating_BoundButNoConsumerPod_SkipsValidation(t *testing.T)
 	var continueCalled bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+		case r.Method == http.MethodGet && r.URL.Path == migrationPath:
 			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
+		case r.Method == http.MethodPost && r.URL.Path == continuePath:
 			continueCalled = true
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -697,10 +722,10 @@ func TestPerformMigration_AlreadyContinued_SkipsContinueAndCancel(t *testing.T) 
 	var continueCalled, cancelCalled bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+		case r.Method == http.MethodGet && r.URL.Path == migrationPath:
 			// Backend already advanced: continue happened in a prior reconcile.
 			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"snap_copy","status":"running"}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
+		case r.Method == http.MethodPost && r.URL.Path == continuePath:
 			continueCalled = true
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/"):
@@ -741,10 +766,10 @@ func TestPerformMigration_ContinueFails_StillPreCreated_CancelsAndFails(t *testi
 	var cancelCalled bool
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+testMigrationUUID):
+		case r.Method == http.MethodGet && r.URL.Path == migrationPath:
 			// Never advances past pre_created, even after the continue attempt.
 			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/continue"):
+		case r.Method == http.MethodPost && r.URL.Path == continuePath:
 			http.Error(w, "boom", http.StatusInternalServerError)
 		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/"):
 			cancelCalled = true
