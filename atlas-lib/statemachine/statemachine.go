@@ -397,7 +397,7 @@ type Machine[S comparable] struct {
 // lifetime of whatever the machine models, never one scoped to a single request.
 //
 // New reports [ErrUnknownState] if [Config.Initial] is absent from
-// [Config.States], or if any state declares an edge to a state that is.
+// [Config.States], or if any state declares an edge to a state that is not declared.
 func New[S comparable](ctx context.Context, config Config[S]) (*Machine[S], error) {
 	if _, ok := config.States[config.Initial]; !ok {
 		return nil, fmt.Errorf("%w: initial state %v", ErrUnknownState, config.Initial)
