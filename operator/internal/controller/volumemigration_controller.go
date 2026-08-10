@@ -360,7 +360,12 @@ func (r *VolumeMigrationReconciler) performMigration(
 			// migration still stuck in pre_created is a genuine start failure
 			// worth cancelling; anything else means it already advanced.
 			if m2, gerr := r.apiClient.GetMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID); gerr == nil && m2.Phase == webapi.MigrationPhasePreCreated {
-				_ = r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID)
+				// Best-effort: the CR fails either way, but a failed cancel leaves
+				// target-side objects behind, so it must not be silent.
+				if cerr := r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID); cerr != nil {
+					log.Error(cerr, "Cannot cancel migration that failed to continue; target-side objects may remain",
+						"migration", vm.Status.MigrationUUID, "subsystem", vm.Status.SubsystemNQN)
+				}
 				return r.setFailed(ctx, vm, fmt.Sprintf("ContinueMigration: %v", err))
 			}
 			log.Info("ContinueMigration errored but migration has advanced past pre_created; treating as continued",
