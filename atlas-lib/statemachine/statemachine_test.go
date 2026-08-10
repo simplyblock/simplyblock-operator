@@ -202,23 +202,36 @@ func TestMust(t *testing.T) {
 
 func TestConfigIsDeeplyCopied(t *testing.T) {
 	cfg := graph(nil)
+
+	// Keep a reference to the exact To slice New will clone. It has to be taken
+	// before New, and before the map entry holding it is replaced below —
+	// reaching for cfg.States[off].To afterwards would find a different slice.
+	offEdges := cfg.States[off].To
+	if len(offEdges) == 0 || offEdges[0] != off {
+		t.Fatalf("setup: off's edges are %v, expected them to start with %v", offEdges, off)
+	}
+
 	sm, err := New(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	defer sm.Close()
 
-	// Mutate every part of the config the machine might have aliased.
+	// Mutate every part of the config the machine might have aliased: the slice
+	// itself, the map entry, the map, and the initial state.
+	offEdges[0] = undeclared
 	cfg.States[off] = StateDef[st]{To: []st{term}}
 	delete(cfg.States, on)
 	cfg.Initial = term
-	// The To slice the machine cloned must not be writable through the config.
-	if to := graph(nil).States[off].To; len(to) > 0 {
-		to[0] = undeclared
-	}
 
+	if !sm.CanTransitionTo(off) {
+		t.Error("machine aliased a To slice: writing through it removed an edge")
+	}
+	if sm.CanTransitionTo(undeclared) {
+		t.Error("machine aliased a To slice: writing through it added an edge")
+	}
 	if !sm.CanTransitionTo(on) {
-		t.Error("machine followed a later mutation of Config.States")
+		t.Error("machine followed a later deletion from Config.States")
 	}
 	if sm.CanTransitionTo(term) {
 		t.Error("machine picked up an edge added after New")
