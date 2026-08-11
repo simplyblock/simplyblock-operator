@@ -86,10 +86,6 @@ func standaloneOptInPod(name, uid string) v1.Pod {
 	}
 }
 
-func buildLvolPods(lvolID string, uids ...string) map[string][]string {
-	return map[string][]string{lvolID: uids}
-}
-
 func buildUIDToPod(pods ...v1.Pod) map[string]v1.Pod {
 	m := make(map[string]v1.Pod, len(pods))
 	for _, p := range pods {
@@ -131,7 +127,7 @@ func TestCoordinatedSubsystemRestart_NoCandidates_UnknownUID(t *testing.T) {
 	got := g.coordinatedSubsystemRestart(
 		context.Background(), "cid",
 		[]string{"lvol-1"},
-		buildLvolPods("lvol-1", "uid-missing"),
+		map[string][]string{"lvol-1": {"uid-missing"}},
 		map[string]v1.Pod{},
 	)
 	if got != 0 {
@@ -147,7 +143,7 @@ func TestCoordinatedSubsystemRestart_Gate_StandalonePodSuppressesGroup(t *testin
 		standaloneOptInPod("pod-b", "uid-2"), // no controller → gate fires
 	}
 	g := newTestGuardian(fake.NewSimpleClientset(toRuntimeObjs(pods...)...))
-	lvolPods := buildLvolPods("lvol-1", "uid-1", "uid-2")
+	lvolPods := map[string][]string{"lvol-1": {"uid-1", "uid-2"}}
 	uidToPod := buildUIDToPod(pods...)
 
 	got := g.coordinatedSubsystemRestart(context.Background(), "cid", []string{"lvol-1"}, lvolPods, uidToPod)
@@ -168,7 +164,7 @@ func TestCoordinatedSubsystemRestart_Gate_NonOptedInSuppressesGroup(t *testing.T
 		controlledNonOptInPod("pod-b", "uid-2"), // no opt-in label → gate fires
 	}
 	g := newTestGuardian(fake.NewSimpleClientset(toRuntimeObjs(pods...)...))
-	lvolPods := buildLvolPods("lvol-1", "uid-1", "uid-2")
+	lvolPods := map[string][]string{"lvol-1": {"uid-1", "uid-2"}}
 	uidToPod := buildUIDToPod(pods...)
 
 	got := g.coordinatedSubsystemRestart(context.Background(), "cid", []string{"lvol-1"}, lvolPods, uidToPod)
@@ -190,7 +186,7 @@ func TestCoordinatedSubsystemRestart_Gate_BackoffSuppressesGroup(t *testing.T) {
 	got := g.coordinatedSubsystemRestart(
 		context.Background(), "cid",
 		[]string{"lvol-1"},
-		buildLvolPods("lvol-1", "uid-1"),
+		map[string][]string{"lvol-1": {"uid-1"}},
 		buildUIDToPod(pod),
 	)
 	if got != 0 {
@@ -208,7 +204,7 @@ func TestCoordinatedSubsystemRestart_Gate_ExpiredBackoffAllowsRestart(t *testing
 	got := g.coordinatedSubsystemRestart(
 		context.Background(), "cid",
 		[]string{"lvol-1"},
-		buildLvolPods("lvol-1", "uid-1"),
+		map[string][]string{"lvol-1": {"uid-1"}},
 		buildUIDToPod(pod),
 	)
 	if got != 1 {
@@ -225,7 +221,7 @@ func TestCoordinatedSubsystemRestart_AllPass_DeletesAll(t *testing.T) {
 		controlledOptInPod("pod-c", "uid-3"),
 	}
 	g := newTestGuardian(fake.NewSimpleClientset(toRuntimeObjs(pods...)...))
-	lvolPods := buildLvolPods("lvol-1", "uid-1", "uid-2", "uid-3")
+	lvolPods := map[string][]string{"lvol-1": {"uid-1", "uid-2", "uid-3"}}
 	uidToPod := buildUIDToPod(pods...)
 
 	got := g.coordinatedSubsystemRestart(context.Background(), "cid", []string{"lvol-1"}, lvolPods, uidToPod)
@@ -271,7 +267,7 @@ func TestCoordinatedSubsystemRestart_DryRun_NoDeletions(t *testing.T) {
 	}
 	g := newTestGuardian(fake.NewSimpleClientset(toRuntimeObjs(pods...)...))
 	g.cfg.DryRun = true
-	lvolPods := buildLvolPods("lvol-1", "uid-1", "uid-2")
+	lvolPods := map[string][]string{"lvol-1": {"uid-1", "uid-2"}}
 	uidToPod := buildUIDToPod(pods...)
 
 	got := g.coordinatedSubsystemRestart(context.Background(), "cid", []string{"lvol-1"}, lvolPods, uidToPod)
@@ -302,7 +298,7 @@ func TestCoordinatedSubsystemRestart_DeleteError_NonNotFound_SkipsPod(t *testing
 	})
 
 	g := newTestGuardian(fakeClient)
-	lvolPods := buildLvolPods("lvol-1", "uid-1", "uid-2", "uid-3")
+	lvolPods := map[string][]string{"lvol-1": {"uid-1", "uid-2", "uid-3"}}
 	uidToPod := buildUIDToPod(pods...)
 
 	got := g.coordinatedSubsystemRestart(context.Background(), "cid", []string{"lvol-1"}, lvolPods, uidToPod)
@@ -321,7 +317,7 @@ func TestCoordinatedSubsystemRestart_DeleteNotFound_CountedAsDeleted(t *testing.
 	got := g.coordinatedSubsystemRestart(
 		context.Background(), "cid",
 		[]string{"lvol-1"},
-		buildLvolPods("lvol-1", "uid-1"),
+		map[string][]string{"lvol-1": {"uid-1"}},
 		buildUIDToPod(pod),
 	)
 	if got != 1 {
@@ -347,7 +343,7 @@ func TestCoordinatedSubsystemRestart_OptInViaAnnotation(t *testing.T) {
 	got := g.coordinatedSubsystemRestart(
 		context.Background(), "cid",
 		[]string{"lvol-1"},
-		buildLvolPods("lvol-1", "uid-1"),
+		map[string][]string{"lvol-1": {"uid-1"}},
 		buildUIDToPod(pod),
 	)
 	if got != 1 {
