@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"regexp"
 	"sort"
 	"strings"
@@ -188,6 +189,13 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 	switch {
 	case errors.Is(err, webapi.ErrMigrationNotAcceptingYet):
 		return r.deferMigration(ctx, vm, clusterUUID, err)
+	case isIndeterminateCreate(err):
+		// The request never got an answer, so whether the control plane created the
+		// migration is unknown — and it may well have: a create can take longer than the
+		// client timeout while a rebalance is in flight, and it allocates bdevs on the way.
+		// Failing here would abandon that half-created migration. Retrying instead lets the
+		// next attempt hit the existing-migration path, which cancels it before re-creating.
+		return r.retryIndeterminateCreate(ctx, vm, clusterUUID, err)
 	case err != nil:
 		return r.setFailed(ctx, vm, fmt.Sprintf("CreateMigration: %v", err))
 	}
@@ -276,6 +284,60 @@ func (r *VolumeMigrationReconciler) deferMigration(
 	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationDeferred", "MigrationDeferred",
 		"Cluster %s is not accepting migrations yet (waiting %s of at most %s); retrying in %s",
 		clusterUUID, waited, maxMigrationDeferral, migrationDeferredRetryDelay)
+	return ctrl.Result{RequeueAfter: migrationDeferredRetryDelay}, nil
+}
+
+// isIndeterminateCreate reports whether a CreateMigration error left the outcome unknown
+// rather than establishing that no migration was created. A timeout or a dropped
+// connection says nothing about what the control plane did with the request; an HTTP
+// status does, and is handled as a real failure.
+func isIndeterminateCreate(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return false
+}
+
+// retryIndeterminateCreate keeps a migration whose create timed out in Pending and retries
+// it, bounded by the same deferral ceiling: the request may have taken effect, so the CR
+// must not be failed until a later attempt can observe (and cancel) what was left behind.
+func (r *VolumeMigrationReconciler) retryIndeterminateCreate(
+	ctx context.Context,
+	vm *simplyblockv1alpha1.VolumeMigration,
+	clusterUUID string,
+	cause error,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if vm.Status.DeferredSince == nil {
+		now := metav1.Now()
+		patch := client.MergeFrom(vm.DeepCopy())
+		vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhasePending
+		vm.Status.DeferredSince = &now
+		if err := r.Status().Patch(ctx, vm, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("patch status Pending (create timed out): %w", err)
+		}
+	} else if waited := time.Since(vm.Status.DeferredSince.Time); waited > maxMigrationDeferral {
+		return r.setFailed(ctx, vm, fmt.Sprintf(
+			"CreateMigration did not return within %s of retrying on cluster %s: %v",
+			maxMigrationDeferral, clusterUUID, cause))
+	}
+
+	waited := time.Since(vm.Status.DeferredSince.Time).Round(time.Second)
+	log.Info("CreateMigration gave no answer; the migration may exist on the backend, retrying",
+		"cluster", clusterUUID, "waited", waited, "giveUpAfter", maxMigrationDeferral,
+		"reason", cause.Error())
+	r.Recorder.Eventf(vm, nil, corev1.EventTypeWarning, "MigrationCreateIndeterminate",
+		"MigrationCreateIndeterminate",
+		"CreateMigration on cluster %s returned no answer (%v); it may have taken effect, "+
+			"so retrying in %s rather than failing", clusterUUID, cause, migrationDeferredRetryDelay)
 	return ctrl.Result{RequeueAfter: migrationDeferredRetryDelay}, nil
 }
 

@@ -2,6 +2,9 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -604,3 +607,37 @@ func TestReconcileValidating_ConvergesWithStaggeredCompletions(t *testing.T) {
 		t.Errorf("validation was started %d times, want once for the whole node set", starts)
 	}
 }
+
+// A create whose answer never arrived must not fail the migration: the control plane may
+// have created it (and allocated bdevs for it) while the client gave up, and only a later
+// attempt can observe and cancel that. Failing here abandons it.
+func TestIsIndeterminateCreate(t *testing.T) {
+	timeoutErr := &net.OpError{Op: "dial", Err: &timeoutError{}}
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"no error", nil, false},
+		{"client timeout", fmt.Errorf("http error: %w", context.DeadlineExceeded), true},
+		{"context cancelled", fmt.Errorf("wrapped: %w", context.Canceled), true},
+		{"net timeout", fmt.Errorf("post: %w", timeoutErr), true},
+		// An HTTP status is an answer: the control plane decided, so this is a real failure.
+		{"rejected by the backend", errors.New("create migration: unexpected status 400"), false},
+		{"connection refused", errors.New("dial tcp: connection refused"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isIndeterminateCreate(tc.err); got != tc.want {
+				t.Errorf("isIndeterminateCreate(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
