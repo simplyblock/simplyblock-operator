@@ -69,8 +69,15 @@ Failure criterion
 Losing I/O is a TOTAL FAIL. Any of the following is treated as I/O loss and makes the
 script exit non-zero, with the offending interval logged explicitly:
   * a per-second sample where total IOPS drops to 0 during the timed run,
-  * fio reporting a non-zero error count for any job,
+  * a fio job ending in error (its JSON "error" errno; note this is an errno, not a count),
   * a fio pod leaving Running / restarting / failing before its planned completion.
+
+Ranked above all of those is a DATA INTEGRITY failure — fio reading back a block whose
+checksum does not match what it wrote. It is reported separately and never folded into the
+I/O-error bucket: the read succeeded, so nothing surfaces as an error anywhere else in the
+stack. It is detected two ways, either of which is sufficient: the "verify: bad magic
+header" / md5 mismatch lines in the pod's log, and fio's own errno EILSEQ (84) on the job,
+which survives even if the log was truncated.
 Each I/O-loss event is annotated with whether it overlaps a migration window. Since a
 namespaced migration moves sibling volumes too, an outage on a *sibling's* pod counts
 the same as one on the migrated volume's pod — that is the point of the mixed run.
@@ -122,6 +129,27 @@ FIO_RWMIXREAD = 70  # randrw read percentage
 # for the whole run. --eta=always + --eta-newline forces a periodic status line to stdout
 # (every N seconds) without corrupting the --output JSON report.
 FIO_ETA_NEWLINE_SEC = 5
+
+# fio reports the errno of a job's last error in its JSON "error" field. Only the ones
+# this test can actually produce are named; anything else is reported as a bare errno.
+#
+# EILSEQ is the one that must never be read as a generic I/O failure: fio uses it for a
+# data-integrity mismatch, i.e. the block it read back did not match the checksum it wrote.
+# That is silent corruption — the read *succeeded* — and it ranks above every transport
+# error, so it is classified separately everywhere below.
+# How many individual mismatches to spell out per pod in the log. With verify_fatal=0 a
+# corrupting migration can produce thousands; beyond a handful they add nothing a count and
+# a per-migration aggregate do not.
+CORRUPTION_DETAIL_LIMIT = 5
+
+FIO_ERRNO_DATA_INTEGRITY = 84  # EILSEQ, as set by fio's verify path
+FIO_ERRNO_MEANING = {
+    5: "EIO — I/O error",
+    28: "ENOSPC — out of space",
+    30: "EROFS — read-only file system",
+    FIO_ERRNO_DATA_INTEGRITY:
+        "EILSEQ — DATA INTEGRITY: checksum mismatch on read-back (fio verify)",
+}
 
 API_GROUP = "storage.simplyblock.io/v1alpha1"
 
@@ -277,6 +305,11 @@ class MigrationRecord:
     ana_ok: bool | None = None    # True=paths behaved, False=violation, None=not sampled
     ana_msgs: list[str] = field(default_factory=list)
     ana_stall_s: float = 0.0      # longest window with no accessible path for some namespace
+    # The cutover as the *hosts* saw it (per node): the first instant a target path was
+    # optimized while no source path was. The CR reaching Completed trails this by tens of
+    # seconds, so this — not rec.end — is the instant to correlate I/O against.
+    ana_cutover: dict[str, str] = field(default_factory=dict)
+    ana_cr_lag_s: float = 0.0     # how far the CR's Completed trailed the observed cutover
     # The CR phase as last polled, so each sample can be stamped with the phase in force
     # when it was taken (`phase` itself is only set once the migration goes terminal).
     live_phase: str = ""
@@ -494,17 +527,23 @@ class FioMigrationTest:
         # Only enable verify when both are 1; otherwise run a pure load test.
         if self.a.iodepth == 1 and self.a.numjobs == 1:
             fio_args += [
-                # md5 header per block; verify_fatal makes a checksum mismatch a HARD
-                # failure (overrides continue_on_error=all for verify), so corruption
-                # aborts immediately while transient EIO during a path switch is still
-                # tolerated. verify_backlog re-verifies recently-written blocks
-                # continuously during the run, so corruption is caught while the volume
-                # is migrating (not only at job end).
+                # md5 header per block. verify_backlog re-verifies recently-written blocks
+                # continuously during the run, so corruption is caught while the volume is
+                # migrating (not only at job end), and verify_dump writes the mismatched
+                # block to a file per offset so the content can be inspected afterwards
+                # (a block that reverted to its pre-write content = a lost write).
                 "--verify=md5",
-                "--verify_fatal=1",
                 "--verify_backlog=4096",
                 "--verify_backlog_batch=4096",
                 "--verify_dump=1",
+                # verify_fatal=0 (default here) keeps the job running past a mismatch, so
+                # EVERY corrupted block of the run is reported instead of only the first.
+                # That turns the mismatch count into a measurement: with a known write rate
+                # it bounds how wide the interval was in which acknowledged writes were
+                # lost. verify_fatal=1 stops at the first failure — cheaper on a corrupted
+                # volume, but it also ends that verify batch, so the count becomes a lower
+                # bound of 1 and says nothing about the size of the window.
+                f"--verify_fatal={1 if self.a.verify_fatal else 0}",
             ]
         else:
             self.log.warn(
@@ -1318,16 +1357,22 @@ class FioMigrationTest:
     def _verify_ana_states(self, rec: "MigrationRecord") -> None:
         """Verify the host-side path behaviour of one migration against its ANA samples.
 
+        The cutover instant is taken from the samples themselves — the first moment a target
+        path is optimized while no source path is — not from the CR reaching Completed. The
+        CR trails the real cutover by tens of seconds (the lag is reported), so judging
+        "before cutover" against it would flag every normal migration.
+
         Three things must hold, all of them invisible to the placement check:
 
-        * The target must not start serving before cutover. A path that grows accessible
-          namespaces while the migration is still running lets reads land on a target that
-          does not hold the data yet — the corruption signature. The baseline is each
-          node's *first* sample, so a target that was already an accessible HA listener
-          before we started is not mistaken for one that became accessible mid-flight.
-        * After a Completed migration the target must serve *every* namespace of the
-          subsystem on every consuming node. A batch migration that leaves one namespace
-          without a path on the target is exactly the half-moved case, seen from the host.
+        * Source and target must never serve at the same time. Two simultaneously
+          optimized paths to two copies means reads can land on either, and a read served
+          by the copy that is behind returns data that was never written there.
+        * After a Completed migration a *live* target controller must serve every namespace
+          of the subsystem on every consuming node. A batch migration that leaves one
+          namespace unserved on the target is the half-moved case, seen from the host.
+          Non-live controllers at the target address are reported but do not fail the
+          check: the old instance's controllers are torn down at the same address while
+          the new one takes over.
         * No namespace may be left with no accessible path anywhere for long. That is an
           I/O stall, which the fio timeline shows as a gap but cannot attribute.
         """
@@ -1341,8 +1386,10 @@ class FioMigrationTest:
         expected = {self.ns_id_of[pv] for pv in (rec.group_pvs or [rec.pv])
                     if pv in self.ns_id_of}
 
-        def is_target(s: AnaSample) -> bool:
-            return s.address.rsplit(":", 1)[0] == tgt_ip
+        src_ip = self.node_ip.get(rec.source, "")
+
+        def ip_of(s: AnaSample) -> str:
+            return s.address.rsplit(":", 1)[0]
 
         problems: list[str] = []
         by_node: dict[str, list[AnaSample]] = {}
@@ -1351,41 +1398,59 @@ class FioMigrationTest:
 
         for node, samples in sorted(by_node.items()):
             samples.sort(key=lambda x: x.ts)
-            first_ts = samples[0].ts
-            baseline = {n for s in samples if s.ts == first_ts and is_target(s)
-                        for n in s.accessible_nsids()}
-            # 1. served before cutover
-            early = {}
+            rounds: dict[datetime, list[AnaSample]] = {}
             for s in samples:
-                if not is_target(s) or (rec.end and s.ts >= rec.end):
-                    continue
-                new = s.accessible_nsids() - baseline
-                if new:
-                    early.setdefault(s.ts, set()).update(new)
-            if early:
-                ts0 = min(early)
-                lead = (rec.end - ts0).total_seconds() if rec.end else -1
-                problems.append(
-                    f"{node}: target {tgt_ip} started serving namespace(s) "
-                    f"{sorted(early[ts0])} at {iso(ts0)}, {lead:.0f}s BEFORE cutover "
-                    f"(phase was {[s.phase for s in samples if s.ts == ts0][:1]})")
+                rounds.setdefault(s.ts, []).append(s)
+            times = sorted(rounds)
 
-            # 2. serves everything afterwards
+            # 1. the host-observed cutover, and any instant where both copies served.
+            # "optimized" is what the kernel prefers; a target that is merely non-optimized
+            # alongside an optimized source is the normal HA standby, not a second writer.
+            overlaps = []
+            cutover_at = None
+            for t in times:
+                src_opt = [s.address for s in rounds[t]
+                           if ip_of(s) == src_ip and "optimized" in s.ana.values()]
+                tgt_opt = [s.address for s in rounds[t]
+                           if ip_of(s) == tgt_ip and "optimized" in s.ana.values()]
+                if tgt_opt and not src_opt and cutover_at is None:
+                    cutover_at = t
+                    rec.ana_cutover[node] = iso(t)
+                if src_opt and tgt_opt and src_ip != tgt_ip:
+                    overlaps.append((t, src_opt, tgt_opt))
+            if overlaps:
+                t0, src_addrs, tgt_addrs = overlaps[0]
+                problems.append(
+                    f"{node}: source {', '.join(src_addrs)} and target "
+                    f"{', '.join(tgt_addrs)} were BOTH optimized at {iso(t0)} "
+                    f"({len(overlaps)} sample(s)) — reads could be served by either copy")
+
+            # The CR's Completed is not the cutover; record how far it trailed, since every
+            # correlation against the fio timeline has to use the observed instant instead.
+            if rec.end and cutover_at:
+                rec.ana_cr_lag_s = max(rec.ana_cr_lag_s,
+                                       (rec.end - cutover_at).total_seconds())
+
+            # 2. a live target controller serves everything afterwards
             if rec.phase == "Completed":
-                last_ts = samples[-1].ts
-                final = [s for s in samples if s.ts == last_ts and is_target(s)]
-                served = {n for s in final for n in s.accessible_nsids()}
-                dead = [s.address for s in final if s.state != "live"]
+                final = [s for s in rounds[times[-1]] if ip_of(s) == tgt_ip]
+                live = [s for s in final if s.state == "live"]
+                served = {n for s in live for n in s.accessible_nsids()}
+                stale = [f"{s.address}({s.state})" for s in final if s.state != "live"]
+                if stale:
+                    self.log.info(f"ANA VERIFY  {rec.name}  {node}: non-live controller(s) at "
+                                  f"the target address: {', '.join(stale)} — the old instance "
+                                  "being torn down")
                 if not final:
                     problems.append(f"{node}: no controller for the target {tgt_ip} after "
                                     "a completed migration — the host never joined it")
-                elif dead:
-                    problems.append(f"{node}: target controller(s) {', '.join(dead)} not live "
-                                    "after cutover")
+                elif not live:
+                    problems.append(f"{node}: no live controller for the target {tgt_ip} after "
+                                    f"cutover (found {', '.join(stale)})")
                 elif expected and expected - served:
                     problems.append(
-                        f"{node}: target {tgt_ip} serves namespace(s) {sorted(served) or '-'} "
-                        f"but the subsystem has {sorted(expected)} — "
+                        f"{node}: live target controller(s) at {tgt_ip} serve namespace(s) "
+                        f"{sorted(served) or '-'} but the subsystem has {sorted(expected)} — "
                         f"{sorted(expected - served)} unserved after cutover")
 
             # 3. stalls: some namespace with no accessible path anywhere on this node
@@ -1420,7 +1485,10 @@ class FioMigrationTest:
             self.log.event(
                 f"ANA VERIFY  {rec.name}  OK  nodes={len(by_node)}  "
                 f"samples={len(rec.ana_samples)}  namespaces={sorted(expected) or '?'}  "
-                f"max_stall={rec.ana_stall_s:.0f}s")
+                f"max_stall={rec.ana_stall_s:.0f}s  "
+                f"cutover={', '.join(f'{n}@{t}' for n, t in sorted(rec.ana_cutover.items())) or '-'}"
+                + (f"  (CR reported Completed {rec.ana_cr_lag_s:.0f}s later)"
+                   if rec.ana_cr_lag_s else ""))
 
     # ---- target selection --------------------------------------------------------
 
@@ -2095,6 +2163,46 @@ class FioMigrationTest:
                 continue
         return hits
 
+    def _attribute_corruption(self, hits: list[str]) -> list[dict]:
+        """Place each fio verify failure on the migration timeline.
+
+        A corrupted read only says *when* it happened; what makes it diagnosable is where
+        that instant falls relative to the migration that was in flight — and within it,
+        relative to the cutover the hosts actually observed (which the CR reports tens of
+        seconds late). "3s after cutover" and "during the copy" are different bugs.
+        """
+        out = []
+        for line in hits:
+            stamp = line.split(" ", 1)[0]
+            when = None
+            try:  # CRI log prefix: 2026-08-11T10:10:33.696991802Z stderr F <msg>
+                when = datetime.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S").replace(
+                    tzinfo=timezone.utc)
+            except ValueError:
+                pass
+            where = "outside every migration window"
+            migration, into, after_cutover = "", None, None
+            if when:
+                for m in self.migrations:
+                    if not m.end or not (m.start <= when <= m.end):
+                        continue
+                    cut = sorted(m.ana_cutover.values())
+                    migration = m.name
+                    into = round((when - m.start).total_seconds(), 1)
+                    where = f"during {m.name} (phase={m.phase}, {into:.0f}s in)"
+                    if cut:
+                        cut_dt = datetime.strptime(cut[0], "%Y-%m-%dT%H:%M:%SZ").replace(
+                            tzinfo=timezone.utc)
+                        after_cutover = round((when - cut_dt).total_seconds(), 1)
+                        where += (f", {abs(after_cutover):.0f}s "
+                                  f"{'AFTER' if after_cutover >= 0 else 'before'} the "
+                                  f"host-observed cutover at {cut[0]}")
+                    break
+            out.append({"ts": stamp if when else "", "where": where, "line": line,
+                        "migration": migration, "seconds_into_migration": into,
+                        "seconds_after_cutover": after_cutover})
+        return out
+
     @staticmethod
     def _overlaps_migration(start_s: int, base: datetime,
                             migs: list[MigrationRecord]) -> MigrationRecord | None:
@@ -2138,11 +2246,19 @@ class FioMigrationTest:
 
             # --- latency / IOPS summary from fio JSON ---
             total_iops = 0.0
-            fio_errors = 0
+            # fio's per-job "error" is the errno of the LAST error, not a count — summing it
+            # produces a meaningless number that reads like a tally (a single md5 mismatch
+            # shows up as "84", which is EILSEQ, fio's errno for a data-integrity failure).
+            # Keep the errno and its meaning; the count of verify failures is scanned from
+            # the log separately.
+            failed_jobs = 0
+            errnos: set[int] = set()
             for job in result.get("jobs", []):
                 rd, wr = job.get("read", {}), job.get("write", {})
                 err = job.get("error", 0)
-                fio_errors += err
+                if err:
+                    failed_jobs += 1
+                    errnos.add(err)
                 total_iops += rd.get("iops", 0.0) + wr.get("iops", 0.0)
 
                 def clat_us(io):
@@ -2163,7 +2279,15 @@ class FioMigrationTest:
                 })
 
             pod_report["total_iops"] = round(total_iops, 1)
-            pod_report["fio_error_count"] = fio_errors
+            pod_report["fio_failed_jobs"] = failed_jobs
+            pod_report["fio_errnos"] = sorted(
+                f"{e} ({FIO_ERRNO_MEANING.get(e, 'errno')})" for e in errnos)
+            # A checksum mismatch is corruption whether or not the log line survived; the
+            # errno is the authoritative record, since fio sets it on the job itself while
+            # the message only lands on stderr (which can be rotated or truncated away).
+            integrity_errno = FIO_ERRNO_DATA_INTEGRITY in errnos
+            pod_report["fio_data_integrity_error"] = integrity_errno
+            io_errnos = sorted(e for e in errnos if e != FIO_ERRNO_DATA_INTEGRITY)
 
             # --- I/O continuity ---
             # A loss is a SUSTAINED outage: a contiguous run of >= outage_seconds where
@@ -2190,15 +2314,43 @@ class FioMigrationTest:
             # lost data — the most severe failure, ranked above I/O outages.
             verify_hits = self._scan_verify_failures(pod_dir)
             pod_report["verify_failures"] = len(verify_hits)
-            if verify_hits:
+            pod_report["corruption_events"] = self._attribute_corruption(verify_hits)
+            if verify_hits or integrity_errno:
                 corruption_pods.append(pod)
+                evs = pod_report["corruption_events"]
+                # With verify_fatal=0 a single run can report thousands of mismatches; the
+                # count and its spread are the measurement, so only the first few are shown
+                # in full. All of them stay in report.json and are aggregated per migration
+                # in the summary below.
+                for ev in evs[:CORRUPTION_DETAIL_LIMIT]:
+                    self.log.crit(f"CORRUPTION {pod} at {ev['ts'] or '?'}: {ev['where']}")
+                    self.log.crit(f"    {ev['line'][:200]}")
+                if len(evs) > CORRUPTION_DETAIL_LIMIT:
+                    self.log.crit(f"CORRUPTION {pod}: {len(evs)} mismatches total, "
+                                  f"{len(evs) - CORRUPTION_DETAIL_LIMIT} not shown "
+                                  "(all in report.json → pods[].corruption_events)")
+                if integrity_errno and not verify_hits:
+                    # No log line to place on the timeline, but the verdict stands.
+                    self.log.crit(
+                        f"CORRUPTION {pod}: fio job ended with errno "
+                        f"{FIO_ERRNO_DATA_INTEGRITY} (EILSEQ) — checksum mismatch on "
+                        "read-back, with no verify message in the log (truncated?)")
 
-            errored = fio_errors > 0 or (fio_rc not in (None, "", "0")) or bool(verify_hits)
+            errored = (failed_jobs > 0 or (fio_rc not in (None, "", "0"))
+                       or bool(verify_hits) or integrity_errno)
             problems = []
-            if verify_hits:
-                problems.append(f"DATA CORRUPTION: {len(verify_hits)} fio md5 verify failure(s)")
-            if fio_errors > 0:
-                problems.append(f"fio reported {fio_errors} I/O error(s)")
+            if verify_hits or integrity_errno:
+                detail = []
+                if verify_hits:
+                    detail.append(f"{len(verify_hits)} md5 verify failure(s)")
+                if integrity_errno:
+                    detail.append(f"fio errno {FIO_ERRNO_DATA_INTEGRITY} (EILSEQ)")
+                problems.append(
+                    "DATA INTEGRITY — CHECKSUM MISMATCH on read-back: " + ", ".join(detail))
+            if io_errnos:
+                problems.append(
+                    f"{failed_jobs} fio job(s) ended in error: "
+                    + ", ".join(f"{e} ({FIO_ERRNO_MEANING.get(e, 'errno')})" for e in io_errnos))
             if fio_rc not in (None, "", "0"):
                 problems.append(f"fio exited with rc={fio_rc}")
             if outages:
@@ -2266,6 +2418,8 @@ class FioMigrationTest:
                 "ana_ok": m.ana_ok, "ana_msgs": m.ana_msgs,
                 "ana_samples": len(m.ana_samples), "ana_csv": m.ana_csv,
                 "ana_max_stall_s": round(m.ana_stall_s, 1),
+                "ana_observed_cutover": m.ana_cutover,
+                "ana_cr_completed_lag_s": round(m.ana_cr_lag_s, 1),
             })
 
         # The subsystem grouping the whole verification rests on, as last resolved.
@@ -2382,8 +2536,39 @@ class FioMigrationTest:
 
         report["data_corruption_pods"] = corruption_pods
 
+        # Per-migration corruption aggregate. With verify_fatal=0 every lost write that gets
+        # re-read is reported, so the count per migration bounds how wide the interval was in
+        # which acknowledged writes were lost — divide by the pod's write rate to get seconds.
+        # The spread relative to the host-observed cutover says when the loss happened: a
+        # tight cluster just after cutover is a cutover-instant loss, a wide spread means a
+        # long unprotected interval.
+        by_mig: dict[str, dict] = {}
+        for pod, pr in report["pods"].items():
+            for ev in pr.get("corruption_events", []):
+                key = ev.get("migration") or "outside-any-migration"
+                st = by_mig.setdefault(key, {"blocks": 0, "pods": {}, "after_cutover_s": []})
+                st["blocks"] += 1
+                st["pods"][pod] = st["pods"].get(pod, 0) + 1
+                if ev.get("seconds_after_cutover") is not None:
+                    st["after_cutover_s"].append(ev["seconds_after_cutover"])
+        for key, st in by_mig.items():
+            deltas = st.pop("after_cutover_s")
+            st["vs_cutover_s"] = ({"first": min(deltas), "last": max(deltas),
+                                   "n_timed": len(deltas)} if deltas else None)
+            mig = next((m for m in self.migrations if m.name == key), None)
+            # Writes per second summed over the affected pods, so blocks/rate ≈ the width of
+            # the lossy interval if every write in it was lost.
+            rate = sum(report["pods"].get(p, {}).get("jobs", [{}])[0]
+                       .get("write", {}).get("iops", 0.0) for p in st["pods"])
+            st["write_iops_affected_pods"] = round(rate, 1)
+            st["implied_lossy_window_s"] = round(st["blocks"] / rate, 3) if rate else None
+            st["subsystem_members"] = len(mig.group_pvs) if mig else None
+            st["verify_fatal"] = bool(self.a.verify_fatal)
+        report["corruption_by_migration"] = by_mig
+
         if corruption_pods:
-            report["result"] = f"FAIL — DATA CORRUPTION (md5 verify) on {len(corruption_pods)} pod(s)"
+            report["result"] = ("FAIL — DATA INTEGRITY: CHECKSUM MISMATCH on read-back on "
+                                f"{len(corruption_pods)} pod(s)")
             ok = False
         elif io_lost:
             report["result"] = "FAIL — I/O LOSS DETECTED"
@@ -2433,10 +2618,25 @@ class FioMigrationTest:
         self.log.info(f"wrote machine-readable report -> {report_path}")
 
         self._print_summary(report, io_lost)
+        for key, st in sorted(report.get("corruption_by_migration", {}).items()):
+            vs = st["vs_cutover_s"]
+            self.log.crit(
+                f"CORRUPTION SUMMARY  {key}: {st['blocks']} block(s) across "
+                + ", ".join(f"{p.rsplit('-', 1)[-1]}={c}" for p, c in sorted(st["pods"].items()))
+                + (f"  |  first {vs['first']:.0f}s / last {vs['last']:.0f}s "
+                   "relative to the host-observed cutover" if vs else "")
+                + (f"  |  {st['write_iops_affected_pods']:.0f} write IOPS over those pods "
+                   f"=> lossy interval ~{st['implied_lossy_window_s']:.3f}s if every write "
+                   "in it was lost" if st["implied_lossy_window_s"] else "")
+                + ("  |  NOTE: --verify-fatal was set, so each pod stopped at its first "
+                   "mismatch — these counts are lower bounds" if st["verify_fatal"] else ""))
         if corruption_pods:
-            self.log.crit("DATA CORRUPTION: fio md5 verification FAILED on pod(s): "
-                          f"{', '.join(corruption_pods)} — the migration lost or corrupted "
-                          "data (inspect each pod's fio.log for the mismatched offsets)")
+            self.log.crit(
+                "DATA INTEGRITY — CHECKSUM MISMATCH: fio read back blocks that did not match "
+                f"the checksums it wrote, on pod(s): {', '.join(corruption_pods)}. The reads "
+                "SUCCEEDED (no I/O error), so this is silent corruption: the migration served "
+                "data that was never written at those offsets. Inspect each pod's fio.log for "
+                "the mismatched offsets and the *.hdr_fail dumps.")
         if verify_failures:
             self.log.crit(f"MIGRATION VERIFICATION: {len(verify_failures)} irregularity(ies) — "
                           "volume(s) not on the expected node after migration:")
@@ -2572,7 +2772,7 @@ class FioMigrationTest:
             self.log.info(
                 f"  {pod} [{pr.get('volume_kind','?')}, subsystem of {members}]: "
                 f"total_iops={pr.get('total_iops',0):>9.0f} "
-                f"errors={pr.get('fio_error_count',0)} "
+                f"failed_jobs={pr.get('fio_failed_jobs', 0)} "
                 f"outages={len(pr.get('outages',[]))} "
                 f"dips={pr.get('transient_dips',0)} | "
                 f"read p99={rd.get('p99_us','-')}us write p99={wr.get('p99_us','-')}us")
@@ -2755,6 +2955,11 @@ def parse_args():
                    help="extra seconds past fio runtime to let a late migration finish (default 120)")
     p.add_argument("--migration-poll", type=int, default=5,
                    help="migration status poll interval seconds (default 5)")
+    p.add_argument("--verify-fatal", action="store_true",
+                   help="stop each fio job at its FIRST checksum mismatch. Default is to keep "
+                        "going, so every corrupted block is reported and the count measures how "
+                        "many acknowledged writes were lost (see --ana-interval for the paired "
+                        "path-state evidence)")
     p.add_argument("--target-policy", default="alternate",
                    choices=["alternate", "consumer", "no-consumer", "random"],
                    help="whether the migration target node may also run a pod consuming the "
