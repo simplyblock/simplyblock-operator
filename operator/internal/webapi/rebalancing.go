@@ -3,6 +3,7 @@ package webapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -325,6 +326,11 @@ func (c *Client) CreateMigration(
 		return nil, fmt.Errorf("create migration for subsystem %s: %w", nqn, err)
 	}
 
+	if isMigrationNotAcceptingYet(statusCode, body) {
+		return nil, fmt.Errorf("create migration for subsystem %s: %s: %w",
+			nqn, strings.TrimSpace(string(body)), ErrMigrationNotAcceptingYet)
+	}
+
 	if isExistingMigrationConflict(statusCode, body) {
 		logger.Info("CreateMigration rejected: a migration already exists for the subsystem; cancelling before retry",
 			"subsystem", nqn, "status", statusCode)
@@ -352,6 +358,32 @@ func (c *Client) CreateMigration(
 	logger.Info("CreateMigration parsed", "subsystem", nqn, "migration_id", m.ID,
 		"members", m.MemberCount, "connect_strings", len(m.ConnectStrings))
 	return &m, nil
+}
+
+// ErrMigrationNotAcceptingYet reports that the control plane refused to create the
+// migration because of a condition that clears by itself: a cluster-wide data
+// rebalance in progress, or a node already busy with a data migration. The request
+// is well-formed and the volume is fine — the same call succeeds once the cluster
+// settles, so the caller should wait and retry rather than fail the migration.
+//
+// This matters because the operator itself causes the condition: every completed
+// migration flags the cluster for a control-plane data realignment, which the
+// rebalancer then triggers, and the control plane rejects new migrations while that
+// runs.
+var ErrMigrationNotAcceptingYet = errors.New("cluster is not accepting migrations yet")
+
+// isMigrationNotAcceptingYet reports whether a CreateMigration rejection is one of
+// those self-clearing conditions. Matched narrowly on the control plane's own
+// wording (migration_controller.py's PreconditionError messages) so that a genuinely
+// bad request — a volume already on the target node, an unknown node — still fails
+// fast instead of being retried forever.
+func isMigrationNotAcceptingYet(statusCode int, body []byte) bool {
+	if statusCode != http.StatusBadRequest {
+		return false
+	}
+	b := strings.ToLower(string(body))
+	return strings.Contains(b, "is rebalancing") ||
+		strings.Contains(b, "data migration in progress")
 }
 
 // isExistingMigrationConflict reports whether a CreateMigration response

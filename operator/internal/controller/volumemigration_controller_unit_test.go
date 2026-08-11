@@ -359,6 +359,87 @@ func TestReconcileStart_DefaultsToEnabled(t *testing.T) {
 	}
 }
 
+// A cluster busy rebalancing refuses new migrations until it settles — and the
+// operator itself causes that, since every completed migration triggers a data
+// realignment. The migration must therefore be retried, not failed: it stays pending
+// with no migration UUID, and the request is re-submitted later.
+func TestReconcileStart_ClusterRebalancing_RetriesInsteadOfFailing(t *testing.T) {
+	var creates int
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if serveVolume(w, r) {
+			return
+		}
+		creates++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"detail":"Cluster ` + testClusterUUID +
+			` is rebalancing; wait for it to finish before migrating"}`))
+	})
+
+	pv := csiPV(testClusterUUID + ":" + testPoolUUID + ":" + testVolumeUUID)
+	r, cl := newVMReconciler(t, srv.URL, baseVM(), pv, migrationCluster())
+
+	res, err := r.Reconcile(context.Background(), vmRequest())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.RequeueAfter <= 0 {
+		t.Errorf("RequeueAfter = %v, want a retry delay", res.RequeueAfter)
+	}
+	got := getVM(t, cl)
+	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhasePending {
+		t.Errorf("phase = %q, want Pending while deferred", got.Status.Phase)
+	}
+	if got.Status.DeferredSince == nil {
+		t.Errorf("DeferredSince not stamped; the deferral window could not be bounded")
+	}
+	if got.Status.MigrationUUID != "" {
+		t.Errorf("MigrationUUID = %q, want empty (nothing was created)", got.Status.MigrationUUID)
+	}
+
+	// The retry re-submits rather than giving up.
+	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	if creates != 2 {
+		t.Errorf("CreateMigration called %d time(s), want 2 (retried)", creates)
+	}
+}
+
+// The retrying is bounded: a cluster that never starts accepting migrations must not
+// leave the CR in a non-terminal phase forever, since everything waiting on it waits
+// for a terminal phase.
+func TestReconcileStart_ClusterRebalancing_FailsAfterDeferralWindow(t *testing.T) {
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if serveVolume(w, r) {
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"detail":"Cluster ` + testClusterUUID +
+			` is rebalancing; wait for it to finish before migrating"}`))
+	})
+
+	vm := baseVM()
+	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhasePending
+	deferred := metav1.NewTime(time.Now().Add(-maxMigrationDeferral - time.Minute))
+	vm.Status.DeferredSince = &deferred
+	pv := csiPV(testClusterUUID + ":" + testPoolUUID + ":" + testVolumeUUID)
+	r, cl := newVMReconciler(t, srv.URL, vm, pv, migrationCluster())
+
+	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	got := getVM(t, cl)
+	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
+		t.Fatalf("phase = %q, want Failed once the deferral window elapsed", got.Status.Phase)
+	}
+	// The reason must name both the window and the control plane's own detail.
+	for _, want := range []string{maxMigrationDeferral.String(), "is rebalancing"} {
+		if !strings.Contains(got.Status.ErrorMessage, want) {
+			t.Errorf("ErrorMessage = %q, want it to mention %q", got.Status.ErrorMessage, want)
+		}
+	}
+}
+
 // ---- subsystem-scoped migration addressing ----
 
 // A volume with no resolvable subsystem cannot be migrated: without an NQN there

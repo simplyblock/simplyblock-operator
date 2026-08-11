@@ -2,8 +2,10 @@ package webapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -103,6 +105,45 @@ func TestCreateMigrationCancelsInFlightMigrationOnConflict(t *testing.T) {
 	want := collection + "mig-new/"
 	if len(cancelled) != 1 || cancelled[0] != want {
 		t.Errorf("cancelled = %v, want [%s]", cancelled, want)
+	}
+}
+
+// A cluster busy rebalancing (often because a previous migration triggered the
+// realignment) refuses new migrations with a 400 that clears by itself. It must be
+// reported as ErrMigrationNotAcceptingYet so callers retry, while genuinely bad
+// requests keep failing fast.
+func TestCreateMigrationReportsDeferralSeparately(t *testing.T) {
+	cases := []struct {
+		name        string
+		body        string
+		wantDeferId bool
+	}{
+		{"cluster rebalancing", `{"detail":"Cluster c1 is rebalancing; wait for it to finish before migrating"}`, true},
+		{"node busy with a data migration", `{"detail":"Node n1 has a data migration in progress; wait for it to finish"}`, true},
+		{"volume already on the target node", `{"detail":"LVol v1 is already on node n1; cannot migrate to the same node"}`, false},
+		{"unknown target node", `{"detail":"Target node n9 not found"}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			_, err := NewClient(srv.URL).CreateMigration(context.Background(), "c1", testNQN, "n1")
+			if err == nil {
+				t.Fatalf("expected an error for %s", tc.body)
+			}
+			if got := errors.Is(err, ErrMigrationNotAcceptingYet); got != tc.wantDeferId {
+				t.Errorf("errors.Is(err, ErrMigrationNotAcceptingYet) = %v, want %v (err: %v)",
+					got, tc.wantDeferId, err)
+			}
+			// The control plane's own wording must survive into the error either way.
+			if !strings.Contains(err.Error(), "detail") {
+				t.Errorf("error %q does not carry the API detail", err)
+			}
+		})
 	}
 }
 

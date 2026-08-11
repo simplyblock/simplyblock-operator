@@ -861,31 +861,35 @@ class FioMigrationTest:
         self._cluster_uuid = uuid
         return uuid
 
-    def build_sbctl_host_map(self, vols: list[dict]) -> None:
-        """Map each sbctl Hostname (e.g. 'vm19_4424') to a storage-node UUID.
+    def sbctl_storage_node_list(self) -> list[dict]:
+        """Run `sbctl storage-node list --json` inside a webappapi pod and parse it."""
+        pod = self.webappapi_pod()
+        cp = subprocess.run(
+            ["kubectl", "-n", SIMPLYBLOCK_NAMESPACE, "exec", pod, "--",
+             "sbctl", "storage-node", "list", "--json"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if cp.returncode != 0:
+            raise RuntimeError(f"sbctl storage-node list failed: {cp.stderr.strip()}")
+        return json.loads(cp.stdout)
 
-        Authoritative source: the rebalancer benchmark volumes are named
-        'simplyblock-rebalancer-<nodeUUID>' and live on that node, so their
-        Hostname field directly ties an sbctl hostname to a node UUID. Falls back
-        to matching the short hostname (vmNN) against the StorageNode CR hostnames.
+    def build_sbctl_host_map(self) -> None:
+        """Map each sbctl Hostname (e.g. 'vm04_4424') to its storage-node UUID, straight
+        from `sbctl storage-node list`: it reports both for every node in the cluster,
+        whether or not that node currently holds a volume.
+
+        The translation is needed because a volume's Hostname is the *storage node's*
+        name (short host + rpc port), while the StorageNode CR — where the test learns
+        the migration targets — carries the Kubernetes node name
+        (vm04.simplyblock4.localdomain).
         """
-        m: dict[str, str] = {}
-        for v in vols:
-            name = v.get("Name", "")
-            host = v.get("Hostname", "")
-            if host and name.startswith("simplyblock-rebalancer-"):
-                uuid = name[len("simplyblock-rebalancer-"):]
-                if uuid in self.nodes:
-                    m[host] = uuid
-        # fallback: short hostname (vmNN) -> node uuid via StorageNode CR hostnames
-        if len(m) < len({v.get("Hostname", "") for v in vols if v.get("Hostname")}):
-            short_to_uuid = {h.split(".")[0]: u for u, h in self.node_host.items()}
-            for v in vols:
-                host = v.get("Hostname", "")
-                if host and host not in m:
-                    short = host.split("_")[0]
-                    if short in short_to_uuid:
-                        m[host] = short_to_uuid[short]
+        m = {}
+        for n in self.sbctl_storage_node_list():
+            host, uuid = n.get("Hostname", ""), n.get("UUID", "")
+            if host and uuid:
+                m[host] = uuid
+        if not m:
+            raise RuntimeError("sbctl storage-node list reported no Hostname/UUID pairs")
         self.sbctl_host_to_node = m
         self.log.info("sbctl hostname -> storage node map:")
         for h, u in sorted(m.items()):
@@ -894,8 +898,7 @@ class FioMigrationTest:
     def resolve_current_nodes(self) -> None:
         """Authoritatively set placement[pv] = current storage node for every PV."""
         vols = self.sbctl_volume_list()
-        if not self.sbctl_host_to_node:
-            self.build_sbctl_host_map(vols)
+        self.build_sbctl_host_map()
         # The CSI volume handle's volume field is sbctl's "Id" (not "LVolUUID"), so
         # index by both to be robust.
         by_vol = {}
@@ -928,25 +931,46 @@ class FioMigrationTest:
         straddle a move and make a consistent subsystem look split."""
         try:
             vols = self.sbctl_volume_list()
+            if not self.sbctl_host_to_node:
+                self.build_sbctl_host_map()
         except Exception as e:  # noqa: BLE001
-            self.log.warn(f"sbctl volume list failed: {e}")
+            self.log.warn(f"cannot resolve volume placement via sbctl: {e}")
             return {}
-        if not self.sbctl_host_to_node:
-            self.build_sbctl_host_map(vols)
         by_lvol = {}
         for v in vols:
             for key in (v.get("Id"), v.get("LVolUUID")):
                 if key:
                     by_lvol[key] = v
-        out: dict[str, str] = {}
-        for pv in pvs:
-            v = by_lvol.get(self.volume_uuid_of.get(pv, ""))
-            if not v:
-                continue
-            node = self.sbctl_host_to_node.get(v.get("Hostname", ""), "")
-            if node:
-                out[pv] = node
-        return out
+
+        def resolve(rebuilt: bool = False) -> dict[str, str]:
+            out: dict[str, str] = {}
+            missed = []
+            for pv in pvs:
+                v = by_lvol.get(self.volume_uuid_of.get(pv, ""))
+                if not v:
+                    continue
+                host = v.get("Hostname", "")
+                node = self.sbctl_host_to_node.get(host, "")
+                if node:
+                    out[pv] = node
+                else:
+                    missed.append(host)
+            # A hostname the map does not know is not proof the volume is unplaceable:
+            # a node may have joined since the map was built. Rebuild once and retry
+            # before giving up, so a stale map cannot silently turn every verification
+            # into "skipped".
+            if missed and not rebuilt:
+                self.log.warn("storage node hostname(s) missing from the host map: "
+                              + ", ".join(sorted(set(missed))) + "; rebuilding it")
+                try:
+                    self.build_sbctl_host_map()
+                except Exception as e:  # noqa: BLE001
+                    self.log.warn(f"cannot rebuild the host map: {e}")
+                    return out
+                return resolve(rebuilt=True)
+            return out
+
+        return resolve()
 
     def _sbctl_node_of(self, pv: str) -> str:
         """Authoritative current primary storage-node UUID for a PV's volume, via sbctl.

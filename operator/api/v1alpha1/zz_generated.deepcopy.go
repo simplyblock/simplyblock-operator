@@ -2646,6 +2646,10 @@ func (in *VolumeMigrationStatus) DeepCopyInto(out *VolumeMigrationStatus) {
 		*out = make([]MigrationConnection, len(*in))
 		copy(*out, *in)
 	}
+	if in.DeferredSince != nil {
+		in, out := &in.DeferredSince, &out.DeferredSince
+		*out = (*in).DeepCopy()
+	}
 	if in.StartedAt != nil {
 		in, out := &in.StartedAt, &out.StartedAt
 		*out = (*in).DeepCopy()

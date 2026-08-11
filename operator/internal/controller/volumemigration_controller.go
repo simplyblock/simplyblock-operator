@@ -52,6 +52,24 @@ type VolumeMigrationReconciler struct {
 	apiReader client.Reader
 }
 
+// migrationDeferredRetryDelay is how long to wait before re-submitting a migration
+// the control plane deferred (webapi.ErrMigrationNotAcceptingYet). Long enough not to
+// hammer the API while a cluster-wide realignment runs, short enough that the
+// migration starts promptly once it finishes.
+const migrationDeferredRetryDelay = 30 * time.Second
+
+// maxMigrationDeferral bounds the retrying: a cluster that has not accepted the
+// migration within this window is not merely busy, and the migration fails with the
+// control plane's own reason.
+//
+// Without a bound, a condition that never clears — say a rebalancing task whose runner
+// is not running, which keeps _can_add_lvol_migration false indefinitely — would leave
+// the migration retrying forever in a non-terminal phase. Everything that waits on a
+// VolumeMigration (the rebalancer's tracking, StorageNodeOps, the PVC controller) waits
+// for a terminal phase, so such a migration would stall those flows silently instead of
+// reporting a failure they can act on.
+const maxMigrationDeferral = 10 * time.Minute
+
 // errConsumerNotReady indicates that a pod references the volume's PVC but is not
 // Running yet (e.g. Pending or scheduling). A consumer is coming, so validation
 // must NOT be skipped: the caller should wait and validate on the consumer's node
@@ -143,7 +161,10 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 		"target", vm.Spec.TargetNodeUUID)
 
 	migration, err := r.apiClient.CreateMigration(ctx, clusterUUID, volume.NQN, vm.Spec.TargetNodeUUID)
-	if err != nil {
+	switch {
+	case errors.Is(err, webapi.ErrMigrationNotAcceptingYet):
+		return r.deferMigration(ctx, vm, clusterUUID, err)
+	case err != nil:
 		return r.setFailed(ctx, vm, fmt.Sprintf("CreateMigration: %v", err))
 	}
 	if migration == nil {
@@ -172,6 +193,7 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 
 	patch := client.MergeFrom(vm.DeepCopy())
 	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseValidating
+	vm.Status.DeferredSince = nil // accepted; the deferral window no longer applies
 	vm.Status.MigrationUUID = migration.ID
 	vm.Status.ClusterUUID = clusterUUID
 	vm.Status.VolumeUUID = volumeUUID
@@ -191,6 +213,46 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 		"Migration %s created for subsystem %s (%d volume(s)): validating %d connection(s) to node %s",
 		migration.ID, volume.NQN, migration.MemberCount, len(conns), vm.Spec.TargetNodeUUID)
 	return ctrl.Result{Requeue: true}, nil
+}
+
+// deferMigration holds a migration the control plane refused because the cluster is
+// busy with work that ends on its own, and retries it — typically the data realignment
+// a previous migration triggered, which the control plane will not migrate through.
+//
+// The wait is bounded by maxMigrationDeferral, measured from the first refusal (which
+// is why it is recorded in status rather than kept in memory: the operator may restart,
+// and an observer needs to see that the migration is waiting and since when). Past that
+// window the migration fails with the control plane's own reason, so whatever is waiting
+// on this CR learns about it instead of hanging on a phase that never becomes terminal.
+func (r *VolumeMigrationReconciler) deferMigration(
+	ctx context.Context,
+	vm *simplyblockv1alpha1.VolumeMigration,
+	clusterUUID string,
+	cause error,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if vm.Status.DeferredSince == nil {
+		now := metav1.Now()
+		patch := client.MergeFrom(vm.DeepCopy())
+		vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhasePending
+		vm.Status.DeferredSince = &now
+		if err := r.Status().Patch(ctx, vm, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("patch status Pending (deferred): %w", err)
+		}
+	} else if waited := time.Since(vm.Status.DeferredSince.Time); waited > maxMigrationDeferral {
+		return r.setFailed(ctx, vm, fmt.Sprintf(
+			"cluster %s did not accept the migration within %s: %v", clusterUUID, maxMigrationDeferral, cause))
+	}
+
+	waited := time.Since(vm.Status.DeferredSince.Time).Round(time.Second)
+	log.Info("Cluster is not accepting migrations yet; retrying",
+		"cluster", clusterUUID, "waited", waited, "giveUpAfter", maxMigrationDeferral,
+		"reason", cause.Error())
+	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationDeferred", "MigrationDeferred",
+		"Cluster %s is not accepting migrations yet (waiting %s of at most %s); retrying in %s",
+		clusterUUID, waited, maxMigrationDeferral, migrationDeferredRetryDelay)
+	return ctrl.Result{RequeueAfter: migrationDeferredRetryDelay}, nil
 }
 
 // reconcileValidating creates a Job on the target worker node that:

@@ -107,6 +107,13 @@ type VolumeMigrationStatus struct {
 	// Set during the Validating phase; cleared when the phase advances to Running.
 	ValidationJobName string `json:"validationJobName,omitempty"`
 
+	// DeferredSince is when the storage API first refused to accept this migration
+	// because the cluster was busy with work that ends on its own (a data realignment
+	// or another node migration). While set, the migration is being retried and has
+	// not started. It bounds the retrying: past a fixed window the migration fails
+	// rather than waiting forever. Cleared once the migration is submitted.
+	DeferredSince *metav1.Time `json:"deferredSince,omitempty"`
+
 	// StartedAt is the time the migration was submitted to the storage API.
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 

@@ -138,6 +138,15 @@ spec:
                   - transport
                   type: object
                 type: array
+              deferredSince:
+                description: |-
+                  DeferredSince is when the storage API first refused to accept this migration
+                  because the cluster was busy with work that ends on its own (a data realignment
+                  or another node migration). While set, the migration is being retried and has
+                  not started. It bounds the retrying: past a fixed window the migration fails
+                  rather than waiting forever. Cleared once the migration is submitted.
+                format: date-time
+                type: string
               errorMessage:
                 description: ErrorMessage holds the failure reason when Phase is Failed.
                 type: string
