@@ -641,7 +641,7 @@ func effectiveNodeConfig(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1
 	eff := simplyblockv1alpha1.StorageNodeOverrides{
 		SpdkImage:             sns.Spec.SpdkImage,
 		SpdkProxyImage:        sns.Spec.SpdkProxyImage,
-		MaxLogicalVolumeCount: sns.Spec.MaxLogicalVolumeCount,
+		MaxSubsystemCount: sns.Spec.MaxSubsystemCount,
 		MaxSize:               sns.Spec.MaxSize,
 		CorePercentage:        sns.Spec.CorePercentage,
 		SpdkSystemMemory:      sns.Spec.SpdkSystemMemory,
@@ -666,8 +666,8 @@ func effectiveNodeConfig(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1
 	if o.SpdkProxyImage != "" {
 		eff.SpdkProxyImage = o.SpdkProxyImage
 	}
-	if o.MaxLogicalVolumeCount != nil {
-		eff.MaxLogicalVolumeCount = o.MaxLogicalVolumeCount
+	if o.MaxSubsystemCount != nil {
+		eff.MaxSubsystemCount = o.MaxSubsystemCount
 	}
 	if o.MaxSize != "" {
 		eff.MaxSize = o.MaxSize
