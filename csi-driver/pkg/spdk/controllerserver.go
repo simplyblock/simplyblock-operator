@@ -92,41 +92,37 @@ const (
 	topologyKeyStorageNodeUUIDPrefix = "simplyblock.io/storage-node-uuid."
 )
 
-// hardPinTopologyKeys matches the exact key rather than a shared prefix
-// because a node can belong to more than one DHCHAP pool; prefix-matching
-// would AND their labels together into one nodeAffinity.
-func hardPinTopologyKeys(params map[string]string) []string {
-	key := strings.TrimSpace(params[paramDHCHAPNodeLabel])
+// dhchapAllowedNodeSegment returns the DHCHAP allowed-node topology key/value
+// to pin PersistentVolume.spec.nodeAffinity to, or ("", "") for a plain,
+// ungated volume. Matches the exact key from paramDHCHAPNodeLabel rather than
+// a shared prefix, since a node can belong to more than one DHCHAP pool and
+// prefix-matching would AND their labels together into one nodeAffinity.
+func dhchapAllowedNodeSegment(req *csi.CreateVolumeRequest) (key, val string) {
+	key = strings.TrimSpace(req.GetParameters()[paramDHCHAPNodeLabel])
 	if key == "" {
-		return nil
-	}
-	return []string{key}
-}
-
-func hardPinTopologySegments(topoReq *csi.TopologyRequirement, keys []string) map[string]string {
-	if topoReq == nil || len(keys) == 0 {
-		return nil
+		return "", ""
 	}
 
-	extract := func(topologies []*csi.Topology) map[string]string {
-		segments := map[string]string{}
+	find := func(topologies []*csi.Topology) string {
 		for _, topo := range topologies {
-			for _, key := range keys {
-				if val, ok := topo.GetSegments()[key]; ok && val != "" {
-					segments[key] = val
-				}
+			if v, ok := topo.GetSegments()[key]; ok && v != "" {
+				return v
 			}
 		}
-		return segments
+		return ""
 	}
 
-	if segments := extract(topoReq.GetPreferred()); len(segments) > 0 {
-		return segments
+	topoReq := req.GetAccessibilityRequirements()
+	if topoReq == nil {
+		return "", ""
 	}
-	if segments := extract(topoReq.GetRequisite()); len(segments) > 0 {
-		return segments
+	if v := find(topoReq.GetPreferred()); v != "" {
+		return key, v
 	}
-	return nil
+	if v := find(topoReq.GetRequisite()); v != "" {
+		return key, v
+	}
+	return "", ""
 }
 
 type controllerServer struct {
@@ -501,8 +497,7 @@ func (cs *controllerServer) CreateVolume(
 	// Merge in DHCHAP's allowed-node segment so its PV gets nodeAffinity too
 	// (issue #403) — resolveClusterSelection only tracks zone/region.
 	topologySegments := copyTopologySegments(selection.topology)
-	pinKeys := hardPinTopologyKeys(req.GetParameters())
-	for key, val := range hardPinTopologySegments(req.GetAccessibilityRequirements(), pinKeys) {
+	if key, val := dhchapAllowedNodeSegment(req); key != "" {
 		if topologySegments == nil {
 			topologySegments = map[string]string{}
 		}
