@@ -41,7 +41,7 @@ import (
 //     the type — a built-in K8s RBAC limitation we document and want to make
 //     visible if it ever changes.
 //
-// The Pool same-namespace enforcement is exercised by the unit test
+// The StoragePool same-namespace enforcement is exercised by the unit test
 // TestPoolReconcileRejectsCrossNamespaceClusterReference, so we don't repeat
 // the full reconcile loop here; that keeps this suite independent of operator
 // pod readiness and runnable on just a Kind cluster with CRDs + RBAC applied.

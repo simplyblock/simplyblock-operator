@@ -1,6 +1,6 @@
 # Aggregates read-only access to storage.simplyblock.io CRs into the built-in
 # Kubernetes "view" ClusterRole. Anyone already bound to "view" in a namespace
-# (or cluster-wide) inherits get/list/watch on StorageClusters and Pools.
+# (or cluster-wide) inherits get/list/watch on StorageClusters and StoragePools.
 #
 # This role exists so that namespace tenants don't need extra bindings just to
 # see the simplyblock resources in their own namespace. Per-resource scoping
@@ -19,9 +19,9 @@ rules:
   - storage.simplyblock.io
   resources:
   - storageclusters
-  - pools
+  - storagepools
   - storageclusters/status
-  - pools/status
+  - storagepools/status
   verbs:
   - get
   - list

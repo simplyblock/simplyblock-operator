@@ -23,8 +23,8 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// PoolQoSThroughputSpec defines throughput QosSpec limits in MiB/s.
-type PoolQoSThroughputSpec struct {
+// StoragePoolQoSThroughputSpec defines throughput QosSpec limits in MiB/s.
+type StoragePoolQoSThroughputSpec struct {
 	// Read is the read throughput limit for the pool.
 	Read *int32 `json:"read,omitempty"`
 	// ReadWrite is the combined read/write throughput limit for the pool.
@@ -33,16 +33,16 @@ type PoolQoSThroughputSpec struct {
 	Write *int32 `json:"write,omitempty"`
 }
 
-// PoolQoSSpec defines pool QosSpec limits.
-type PoolQoSSpec struct {
+// StoragePoolQoSSpec defines pool QosSpec limits.
+type StoragePoolQoSSpec struct {
 	// IOPS is the IOPS limit for the pool.
 	IOPS *int32 `json:"iops,omitempty"`
 	// Throughput contains throughput limits for the pool.
-	Throughput *PoolQoSThroughputSpec `json:"throughput,omitempty"`
+	Throughput *StoragePoolQoSThroughputSpec `json:"throughput,omitempty"`
 }
 
-// PoolQoSThroughputStatus defines observed throughput QosSpec values in MiB/s.
-type PoolQoSThroughputStatus struct {
+// StoragePoolQoSThroughputStatus defines observed throughput QosSpec values in MiB/s.
+type StoragePoolQoSThroughputStatus struct {
 	// Read is the observed/configured read throughput value.
 	Read *int32 `json:"read,omitempty"`
 	// ReadWrite is the observed/configured combined read/write throughput value.
@@ -51,14 +51,14 @@ type PoolQoSThroughputStatus struct {
 	Write *int32 `json:"write,omitempty"`
 }
 
-// PoolQoSStatus defines observed pool QosSpec values.
-type PoolQoSStatus struct {
+// StoragePoolQoSStatus defines observed pool QosSpec values.
+type StoragePoolQoSStatus struct {
 	// Host is the backend host handling pool QosSpec enforcement.
 	Host string `json:"host,omitempty"`
 	// IOPS is the observed/configured IOPS value.
 	IOPS *int32 `json:"iops,omitempty"`
 	// Throughput contains observed/configured throughput values.
-	Throughput *PoolQoSThroughputStatus `json:"throughput,omitempty"`
+	Throughput *StoragePoolQoSThroughputStatus `json:"throughput,omitempty"`
 }
 
 // StorageClassParameters defines the default StorageClass parameter values for volumes in this pool.
@@ -116,8 +116,8 @@ type StorageClassParameters struct {
 	Filesystem string `json:"filesystem,omitempty"`
 }
 
-// PoolSpec defines the desired state of Pool
-type PoolSpec struct {
+// StoragePoolSpec defines the desired state of StoragePool
+type StoragePoolSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
 	// +k8s:immutable
@@ -151,7 +151,7 @@ type PoolSpec struct {
 	AllowedNodes []string `json:"allowedNodes,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="QoS"
 	// QosSpec defines QosSpec limits for the pool.
-	QosSpec *PoolQoSSpec `json:"qos,omitempty"`
+	QosSpec *StoragePoolQoSSpec `json:"qos,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
 	// Action triggers an imperative pool operation.
 	// FIXME: Unused for now
@@ -166,16 +166,16 @@ type PoolSpec struct {
 	StorageClassParameters *StorageClassParameters `json:"storageClassParameters,omitempty"`
 }
 
-// PoolStatus defines the observed state of Pool.
-type PoolStatus struct {
-	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Pool UUID"
+// StoragePoolStatus defines the observed state of StoragePool.
+type StoragePoolStatus struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Storage Pool UUID"
 	// UUID is the backend pool UUID.
 	UUID string `json:"uuid,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Status"
 	// Status is the backend lifecycle status.
 	Status string `json:"status,omitempty"`
 	// QoS contains observed/configured QoS values.
-	QoS *PoolQoSStatus `json:"qos,omitempty"`
+	QoS *StoragePoolQoSStatus `json:"qos,omitempty"`
 	// AllowedNodes lists the Kubernetes node names currently registered on the backend.
 	AllowedNodes []string `json:"allowedNodes,omitempty"`
 }
@@ -186,34 +186,34 @@ type PoolStatus struct {
 // +kubebuilder:printcolumn:name="UUID",type="string",JSONPath=".status.uuid",description="Backend pool UUID"
 // +kubebuilder:printcolumn:name="Capacity",type="string",JSONPath=".spec.capacityLimit",description="Configured capacity limit"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-// +operator-sdk:csv:customresourcedefinitions:displayName="Pool"
+// +operator-sdk:csv:customresourcedefinitions:displayName="Storage Pool"
 
-// Pool is the Schema for the pools API
-type Pool struct {
+// StoragePool is the Schema for the storagepools API
+type StoragePool struct {
 	metav1.TypeMeta `json:",inline"`
 
 	// metadata is a standard object metadata
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	// spec defines the desired state of Pool
+	// spec defines the desired state of StoragePool
 	// +required
-	Spec PoolSpec `json:"spec"`
+	Spec StoragePoolSpec `json:"spec"`
 
-	// status defines the observed state of Pool
+	// status defines the observed state of StoragePool
 	// +optional
-	Status PoolStatus `json:"status,omitzero"`
+	Status StoragePoolStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
 
-// PoolList contains a list of Pool
-type PoolList struct {
+// StoragePoolList contains a list of StoragePool
+type StoragePoolList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`
-	Items           []Pool `json:"items"`
+	Items           []StoragePool `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&Pool{}, &PoolList{})
+	SchemeBuilder.Register(&StoragePool{}, &StoragePoolList{})
 }
