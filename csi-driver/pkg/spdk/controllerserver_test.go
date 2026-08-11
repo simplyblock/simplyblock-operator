@@ -321,14 +321,8 @@ func TestHardPinTopologySegments(t *testing.T) {
 		}
 	})
 
-	// Documents a known, deliberately accepted limitation (see the comment on
-	// hardPinTopologyKeyPrefixes) rather than asserting correct behavior: a
-	// node registered in two DHCHAP-gated pools' AllowedNodes gets both pools'
-	// labels ANDed into one nodeAffinity, even though this CreateVolume call
-	// is only provisioning into poolKey's pool. If this ever bites a real
-	// deployment, fixing it precisely requires threading the exact per-pool
-	// label key through as a StorageClass parameter, since req.Parameters
-	// can't reconstruct it (see PR discussion on #403).
+	// Documents rather than asserts correctness — see the "known, accepted
+	// limitation" paragraph on hardPinTopologyKeyPrefixes.
 	t.Run("KNOWN LIMITATION: node in two DHCHAP pools gets both pools' labels ANDed together", func(t *testing.T) {
 		const otherPoolKey = "simplyblock.io/pool.ns.cluster-a.pool-b"
 		req := &csi.TopologyRequirement{

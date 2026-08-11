@@ -91,38 +91,45 @@ const (
 	topologyKeyStorageNodeUUIDPrefix = "simplyblock.io/storage-node-uuid."
 )
 
-// hardPinTopologyKeyPrefixes lists the topology-segment key prefixes that
-// represent a genuine per-node placement constraint, as opposed to a soft
-// hint or bookkeeping key. A volume gated by one of these needs its PV's
-// nodeAffinity locked to the node that satisfied the constraint at
-// CreateVolume time — otherwise a later reschedule (a plain pod delete and
-// recreate; no drain or node failure required) can land the pod on a node
-// that no longer satisfies it (see issue #403). topologyKeyStorageNodeUUIDPrefix
-// and the topology.simplyblock.io/hostname fallback are deliberately excluded:
-// the former only ever informs storage-side lvol co-location and the latter
-// exists solely so WaitForFirstConsumer has *a* topology key to work with when
-// no other one applies — pinning on either would wrongly lock plain
-// NVMe-oF-backed volumes (which behave identically from any node) to whichever
-// single node happened to create them.
+// hardPinTopologyKeyPrefixes lists topology-segment key prefixes that impose
+// a genuine per-node placement constraint — as opposed to a soft hint or
+// bookkeeping key.
 //
-// Known limitation, accepted for now: this matches by prefix, not by the
-// exact pool this CreateVolume call is provisioning into. buildAccessibleTopology
-// (nodeserver.go) puts every "simplyblock.io/pool.*=allowed" label the selected
-// node happens to carry into AccessibilityRequirements, and Pool.Spec.AllowedNodes
-// is set independently per Pool CR with nothing preventing the same node from
-// being listed in more than one DHCHAP-gated pool. If that ever happens, the
-// resulting PV's nodeAffinity ANDs both pools' labels together, wrongly
-// excluding nodes that satisfy this pool but not the other. Fixing that
-// precisely requires the CSI driver to learn the exact label key for this
-// specific pool — which req.Parameters can't reconstruct on its own (it only
-// carries pool_name and the cluster's UUID, not the Pool CR's
-// namespace/clusterName the key is built from) — so doing it properly means
-// plumbing a new StorageClass parameter through from the operator. Deferred
-// until a deployment actually hits node-overlap between DHCHAP pools.
+// Why this matters: external-provisioner turns AccessibleTopology directly
+// into the PV's nodeAffinity. A volume gated by one of these keys needs that
+// nodeAffinity locked to the node that satisfied the constraint at
+// CreateVolume time, or a later reschedule (a plain pod delete+recreate — no
+// drain or node failure needed) can land it on a node that no longer
+// satisfies the constraint (issue #403).
+//
+// Why topologyKeyStorageNodeUUIDPrefix and the bare
+// topology.simplyblock.io/hostname fallback are excluded: neither is a real
+// constraint on the volume.
+//   - storage-node-uuid only informs storage-side lvol co-location; it says
+//     nothing about where the pod itself must run.
+//   - the hostname key exists solely so WaitForFirstConsumer has *some*
+//     topology key to work with when no other one applies.
+//
+// Pinning on either would wrongly lock plain NVMe-oF-backed volumes — which
+// behave identically from any node — to whichever node happened to create
+// them.
+//
+// Known, accepted limitation: matching is by prefix, not the exact pool this
+// call is provisioning into. buildAccessibleTopology (nodeserver.go) puts
+// every "simplyblock.io/pool.*=allowed" label a node carries into
+// AccessibilityRequirements, and Pool.Spec.AllowedNodes is set independently
+// per Pool CR — nothing stops one node from being listed in two DHCHAP-gated
+// pools. If that happens, this ANDs both pools' labels into one PV's
+// nodeAffinity, which could wrongly exclude a node that satisfies this pool
+// but not the other. A precise fix needs the operator to hand the CSI driver
+// the exact per-pool label key (req.Parameters only ever carries pool_name
+// and the cluster's UUID, never the Pool CR's namespace/clusterName the key
+// is built from) — a bigger, cross-module change, deferred until a real
+// deployment hits node overlap between DHCHAP pools.
 var hardPinTopologyKeyPrefixes = []string{
-	// DHCHAP's per-pool allowed-node gate (see
+	// DHCHAP's per-pool allowed-node gate. See
 	// PoolReconciler.createStorageClassIfNotExists / poolNodeLabelKey in
-	// operator/internal/controller/simplyblockpool_controller.go).
+	// operator/internal/controller/simplyblockpool_controller.go.
 	"simplyblock.io/pool.",
 }
 
@@ -538,14 +545,14 @@ func (cs *controllerServer) CreateVolume(
 		csiVolume.VolumeContext["targetType"] = volType
 	}
 
-	// AccessibleTopology segments come from two independent sources: the
-	// zone/region key selection.topology already carries when the StorageClass
-	// used zone_cluster_map/region_cluster_map to pick a cluster (informational,
-	// cluster-routing only — no per-node constraint), and any hard-pin segments
-	// (e.g. DHCHAP's allowed-node gate) resolveClusterSelection doesn't track.
-	// external-provisioner turns AccessibleTopology directly into the PV's
-	// nodeAffinity, so omitting the latter left topology-gated volumes free to
-	// be scheduled onto any node after the PVC's first bind (issue #403).
+	// AccessibleTopology merges two independent kinds of segment:
+	//   - the zone/region key in selection.topology, set when the StorageClass
+	//     uses zone_cluster_map/region_cluster_map to pick a cluster — routing
+	//     information only, not a per-node constraint.
+	//   - any hard-pin segments (e.g. DHCHAP's allowed-node gate), which
+	//     resolveClusterSelection never sees.
+	// Dropping the hard-pin half left topology-gated volumes free to be
+	// rescheduled onto any node after the PVC's first bind (issue #403).
 	topologySegments := copyTopologySegments(selection.topology)
 	for key, val := range hardPinTopologySegments(req.GetAccessibilityRequirements()) {
 		if topologySegments == nil {
