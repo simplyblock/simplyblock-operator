@@ -238,6 +238,41 @@ func (c *Client) GetPoolVolumes(
 	return volumes, nil
 }
 
+// GetSubsystemVolumes returns every volume in the cluster that shares the NVMe
+// subsystem nqn — the set a migration of that subsystem moves as a unit. For a
+// single-namespace subsystem that is one volume; for a namespaced one it is the
+// volume and its siblings.
+//
+// The control plane has no volume-by-NQN lookup and its batch-migration DTO reports
+// only a member *count*, so membership is derived here by scanning the cluster's
+// pools. Pools are scanned rather than assuming the subsystem's members live in the
+// pool of any one member: a subsystem is scoped to a storage node, not to a pool.
+func (c *Client) GetSubsystemVolumes(
+	ctx context.Context,
+	clusterUUID, nqn string,
+) ([]VolumeInfo, error) {
+	if nqn == "" {
+		return nil, fmt.Errorf("list volumes of subsystem: empty NQN")
+	}
+	pools, err := c.GetStoragePools(ctx, clusterUUID)
+	if err != nil {
+		return nil, fmt.Errorf("list volumes of subsystem %s: %w", nqn, err)
+	}
+	var members []VolumeInfo
+	for _, p := range pools {
+		vols, err := c.GetPoolVolumes(ctx, clusterUUID, p.UUID)
+		if err != nil {
+			return nil, fmt.Errorf("list volumes of subsystem %s: pool %s: %w", nqn, p.UUID, err)
+		}
+		for _, v := range vols {
+			if v.NQN == nqn {
+				members = append(members, v)
+			}
+		}
+	}
+	return members, nil
+}
+
 // GetVolume fetches a single volume by its cluster/pool/volume UUIDs (all known
 // from the CSI volume handle). Returns (nil, nil) when the volume no longer exists.
 func (c *Client) GetVolume(

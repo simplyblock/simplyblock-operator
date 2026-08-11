@@ -39,7 +39,10 @@ func ValidateMigrationPaths(conns []Connection) error {
 	return validatePaths(conns)
 }
 
-func nvmeConnect(c Connection) error {
+// connectArgs builds the `nvme` argument list for one path. Optional tuning flags
+// are only passed when set, so a zero value means "leave the kernel default" rather
+// than "pass 0" — nvme-cli rejects some zeros and silently accepts others.
+func connectArgs(c Connection) []string {
 	args := []string{
 		"connect",
 		"-t", c.Transport,
@@ -62,6 +65,11 @@ func nvmeConnect(c Connection) error {
 	if c.KeepAliveTmo > 0 {
 		args = append(args, fmt.Sprintf("--keep-alive-tmo=%d", c.KeepAliveTmo))
 	}
+	return args
+}
+
+func nvmeConnect(c Connection) error {
+	args := connectArgs(c)
 	out, err := exec.Command("sudo", append([]string{"nvme"}, args...)...).CombinedOutput()
 	if err != nil && !strings.Contains(string(out), "already connected") {
 		return fmt.Errorf("nvme connect %s@%s:%d: %w: %s", c.NQN, c.IP, c.Port, err, strings.TrimSpace(string(out)))
@@ -97,8 +105,19 @@ func validatePaths(conns []Connection) error {
 	if err != nil {
 		return fmt.Errorf("nvme list: %w", err)
 	}
+	return checkPaths(out, conns)
+}
+
+// checkPaths verifies that `nvme list -v -ojson` output contains an inaccessible ANA
+// path for every expected (nqn, ip, port).
+//
+// Inaccessible is the point: before cutover the target's paths must exist but not yet
+// serve I/O. A path reported as optimized/live would mean the volume is already being
+// served from the target, and an absent one means the connect did not take effect —
+// either way continuing the migration would be wrong.
+func checkPaths(nvmeListJSON []byte, conns []Connection) error {
 	var list nvmeListOutput
-	if err := json.Unmarshal(out, &list); err != nil {
+	if err := json.Unmarshal(nvmeListJSON, &list); err != nil {
 		return fmt.Errorf("parse nvme list output: %w", err)
 	}
 

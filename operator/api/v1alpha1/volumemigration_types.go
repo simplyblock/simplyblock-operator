@@ -41,6 +41,17 @@ type MigrationConnection struct {
 	KeepAliveTmo   int    `json:"keepAliveTmo,omitempty"`
 }
 
+// ValidationJob is one NVMe path-validation Job and the worker node it runs on.
+// The node is a consumer of some volume in the migrated subsystem — the volume named
+// in the spec, or one of its siblings sharing the same NVMe subsystem.
+type ValidationJob struct {
+	// Node is the Kubernetes node name the Job is pinned to.
+	Node string `json:"node"`
+
+	// JobName is the name of the Job object in the VolumeMigration's namespace.
+	JobName string `json:"jobName"`
+}
+
 // VolumeMigrationSpec defines the desired state of a VolumeMigration.
 type VolumeMigrationSpec struct {
 	// PVName is the name of the PersistentVolume whose backing logical volume
@@ -102,10 +113,13 @@ type VolumeMigrationStatus struct {
 	// establish and verify the paths before calling ContinueMigration.
 	Connections []MigrationConnection `json:"connections,omitempty"`
 
-	// ValidationJobName is the name of the Job that runs `nvme connect` for each
-	// connection path and validates ANA state before ContinueMigration is called.
-	// Set during the Validating phase; cleared when the phase advances to Running.
-	ValidationJobName string `json:"validationJobName,omitempty"`
+	// ValidationJobs are the Jobs that run `nvme connect` for each connection path
+	// and validate ANA state before ContinueMigration is called — one per worker
+	// node that consumes a volume of the migrated subsystem. A subsystem migrates
+	// as a unit, so every consuming node must have the new paths before cutover;
+	// all of these Jobs must succeed. Set during the Validating phase; cleared when
+	// the phase advances to Running.
+	ValidationJobs []ValidationJob `json:"validationJobs,omitempty"`
 
 	// DeferredSince is when the storage API first refused to accept this migration
 	// because the cluster was busy with work that ends on its own (a data realignment

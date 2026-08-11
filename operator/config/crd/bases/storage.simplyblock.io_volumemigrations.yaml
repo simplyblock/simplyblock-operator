@@ -190,12 +190,33 @@ spec:
                   storage API when the migration is submitted. The migration is addressed by
                   it, and every volume sharing the subsystem moves with it.
                 type: string
-              validationJobName:
+              validationJobs:
                 description: |-
-                  ValidationJobName is the name of the Job that runs `nvme connect` for each
-                  connection path and validates ANA state before ContinueMigration is called.
-                  Set during the Validating phase; cleared when the phase advances to Running.
-                type: string
+                  ValidationJobs are the Jobs that run `nvme connect` for each connection path
+                  and validate ANA state before ContinueMigration is called — one per worker
+                  node that consumes a volume of the migrated subsystem. A subsystem migrates
+                  as a unit, so every consuming node must have the new paths before cutover;
+                  all of these Jobs must succeed. Set during the Validating phase; cleared when
+                  the phase advances to Running.
+                items:
+                  description: |-
+                    ValidationJob is one NVMe path-validation Job and the worker node it runs on.
+                    The node is a consumer of some volume in the migrated subsystem — the volume named
+                    in the spec, or one of its siblings sharing the same NVMe subsystem.
+                  properties:
+                    jobName:
+                      description: JobName is the name of the Job object in the VolumeMigration's
+                        namespace.
+                      type: string
+                    node:
+                      description: Node is the Kubernetes node name the Job is pinned
+                        to.
+                      type: string
+                  required:
+                  - jobName
+                  - node
+                  type: object
+                type: array
               volumeUUID:
                 description: VolumeUUID is the logical volume UUID resolved from the
                   PV's CSI volume handle.

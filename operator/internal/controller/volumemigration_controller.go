@@ -3,10 +3,14 @@ package controller
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -70,6 +74,28 @@ const migrationDeferredRetryDelay = 30 * time.Second
 // reporting a failure they can act on.
 const maxMigrationDeferral = 10 * time.Minute
 
+// Validation of the NVMe paths has to finish inside the window the control plane keeps
+// a created-but-unstarted migration open, so the whole Validating phase is bounded:
+// at most maxConsumerWait waiting for consumer pods, then at most
+// validationJobDeadline per Job (Jobs run in parallel, so that is not additive).
+const (
+	// maxConsumerWait bounds how long we wait for every consumer pod of the
+	// subsystem to be Running. Past it the migration is cancelled rather than
+	// continued with an unvalidated node — a consumer that starts mid-migration
+	// stages against the source and is stranded at cutover.
+	maxConsumerWait = 60 * time.Second
+
+	// consumerWaitRetryDelay is how often to re-check while waiting.
+	consumerWaitRetryDelay = 5 * time.Second
+
+	// validationJobDeadline caps a validation Job's total lifetime, scheduling and
+	// image pull included (activeDeadlineSeconds). Its purpose is to turn a Job that
+	// can never finish — an unschedulable pod, a NotReady node — into a failure
+	// instead of a migration parked in Validating forever. The validation itself
+	// needs seconds: three connect+list attempts, two seconds apart.
+	validationJobDeadline = 180 * time.Second
+)
+
 // errConsumerNotReady indicates that a pod references the volume's PVC but is not
 // Running yet (e.g. Pending or scheduling). A consumer is coming, so validation
 // must NOT be skipped: the caller should wait and validate on the consumer's node
@@ -93,13 +119,11 @@ func (r *VolumeMigrationReconciler) Reconcile(
 		return ctrl.Result{}, nil
 	}
 
-	// Abort is valid during Validating or Running.
+	// Abort applies to any migration that has not finished, including one still
+	// pending — a migration deferred by a busy cluster would otherwise keep retrying
+	// for the whole deferral window while the user has already asked it to stop.
 	if vm.Spec.Abort {
-		switch vm.Status.Phase {
-		case simplyblockv1alpha1.VolumeMigrationPhaseValidating,
-			simplyblockv1alpha1.VolumeMigrationPhaseRunning:
-			return r.reconcileAbort(ctx, vm)
-		}
+		return r.reconcileAbort(ctx, vm)
 	}
 
 	switch vm.Status.Phase {
@@ -255,13 +279,16 @@ func (r *VolumeMigrationReconciler) deferMigration(
 	return ctrl.Result{RequeueAfter: migrationDeferredRetryDelay}, nil
 }
 
-// reconcileValidating creates a Job on the target worker node that:
-//  1. Runs `nvme connect` for each connection returned by CreateMigration.
-//  2. Runs `nvme list --verbose` and verifies all new NQNs appear with ANA
+// reconcileValidating creates one Job per worker node that consumes a volume of the
+// migrated subsystem. Each Job:
+//  1. Checks whether this node has a host connection to the subsystem at all.
+//  2. If it does, runs `nvme connect` for each connection returned by CreateMigration.
+//  3. Runs `nvme list --verbose` and verifies all new NQNs appear with ANA
 //     state "inaccessible" (paths connected but volume not yet migrated).
 //
-// On Job success the controller calls ContinueMigration and advances to Running.
-// On Job failure the migration is cancelled.
+// Once every Job has succeeded the controller calls ContinueMigration and advances to
+// Running. Any Job failing cancels the migration: cutover is subsystem-wide, so
+// continuing with a subset of the consumers ready guarantees an outage for the rest.
 func (r *VolumeMigrationReconciler) reconcileValidating(
 	ctx context.Context,
 	vm *simplyblockv1alpha1.VolumeMigration,
@@ -272,38 +299,55 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 		return r.setFailed(ctx, vm, "migration UUID is empty in Validating phase; status was likely written before a failed CreateMigration")
 	}
 
-	// If the Job already exists, poll it.
-	if vm.Status.ValidationJobName != "" {
-		return r.pollValidationJob(ctx, vm)
+	// Jobs already created — poll them.
+	if len(vm.Status.ValidationJobs) > 0 {
+		return r.pollValidationJobs(ctx, vm)
 	}
 
-	// Resolve the k8s node name of the worker running the pod that uses the PVC.
-	// NVMe connections must be established from that node, not the storage target node.
-	hostname, err := r.resolveConsumerNodeName(ctx, vm.Spec.PVName)
+	nodes, err := r.resolveValidationNodes(ctx, vm)
 	switch {
 	case errors.Is(err, errConsumerNotReady):
-		// A consumer pod exists but is not Running yet. Do not skip validation:
-		// wait so we can connect and validate the new paths on the consumer's
-		// node once it is Running.
+		// A consumer pod exists but is not Running yet. Do not skip validation: wait
+		// so its node gets the new paths too. Bounded, because the control plane will
+		// not hold a created-but-unstarted migration open indefinitely.
+		if waited := r.timeInValidating(vm); waited > maxConsumerWait {
+			return r.cancelAndFail(ctx, vm, fmt.Sprintf(
+				"consumer pods of subsystem %s were not all Running within %s: %v",
+				vm.Status.SubsystemNQN, maxConsumerWait, err))
+		}
 		log.Info("Consumer pod not Running yet; waiting before NVMe path validation",
-			"pv", vm.Spec.PVName, "migration", vm.Status.MigrationUUID)
+			"migration", vm.Status.MigrationUUID, "reason", err.Error())
 		r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "WaitingForConsumer", "WaitingForConsumer",
-			"PV %s has a consumer pod that is not Running yet; waiting before validation", vm.Spec.PVName)
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+			"Waiting for all consumers of subsystem %s to be Running before validation: %v",
+			vm.Status.SubsystemNQN, err)
+		return ctrl.Result{RequeueAfter: consumerWaitRetryDelay}, nil
 	case err != nil:
-		// A genuine lookup error (PV get / pod list failed) — retry later.
-		log.Error(err, "Cannot resolve consumer node name; requeuing")
+		// A genuine lookup error (control-plane call, PV get, pod list) — retry later.
+		log.Error(err, "Cannot resolve the nodes to validate; requeuing")
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
-	case hostname == nil:
-		// The volume has no consumer at all (the PV is unbound, or no pod
-		// references the PVC), so there are no NVMe I/O paths to validate.
-		// Skip validation and continue the migration directly.
-		log.Info("No consumer for volume; skipping NVMe path validation",
-			"pv", vm.Spec.PVName, "migration", vm.Status.MigrationUUID)
+	case len(nodes) == 0:
+		// No volume of the subsystem has a consumer, so there are no NVMe I/O paths to
+		// validate anywhere. Skip validation and continue the migration directly.
+		log.Info("No consumer for any volume of the subsystem; skipping NVMe path validation",
+			"subsystem", vm.Status.SubsystemNQN, "migration", vm.Status.MigrationUUID)
 		r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "ValidationSkipped", "ValidationSkipped",
-			"No consumer for PV %s; skipping NVMe path validation", vm.Spec.PVName)
+			"No consumer for any volume of subsystem %s; skipping NVMe path validation",
+			vm.Status.SubsystemNQN)
 		return r.performMigration(ctx, vm)
 	}
+
+	return r.startValidationJobs(ctx, vm, nodes)
+}
+
+// startValidationJobs creates a validation Job on each node and records them in
+// status. Existing entries are kept, so it also serves to add nodes that appeared
+// after the first round (see performMigration's pre-cutover re-check).
+func (r *VolumeMigrationReconciler) startValidationJobs(
+	ctx context.Context,
+	vm *simplyblockv1alpha1.VolumeMigration,
+	nodes []string,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 
 	// Get the simplyblock-rebalancer image from the StorageCluster (it contains nvme-cli).
 	image, err := r.resolveRebalancerImage(ctx, vm.Namespace, vm.Status.ClusterUUID)
@@ -312,77 +356,203 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
-	job := r.buildValidationJob(vm, *hostname, image)
-	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
-		return ctrl.Result{}, fmt.Errorf("create validation job: %w", err)
+	have := make(map[string]struct{}, len(vm.Status.ValidationJobs))
+	for _, vj := range vm.Status.ValidationJobs {
+		have[vj.Node] = struct{}{}
+	}
+
+	added := make([]simplyblockv1alpha1.ValidationJob, 0, len(nodes))
+	for _, node := range nodes {
+		if _, ok := have[node]; ok {
+			continue
+		}
+		job := r.buildValidationJob(vm, node, image)
+		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+			return ctrl.Result{}, fmt.Errorf("create validation job for node %q: %w", node, err)
+		}
+		added = append(added, simplyblockv1alpha1.ValidationJob{Node: node, JobName: job.Name})
+	}
+	if len(added) == 0 {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
 	patch := client.MergeFrom(vm.DeepCopy())
-	vm.Status.ValidationJobName = job.Name
+	vm.Status.ValidationJobs = append(vm.Status.ValidationJobs, added...)
 	if err := r.Status().Patch(ctx, vm, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch ValidationJobName: %w", err)
+		return ctrl.Result{}, fmt.Errorf("patch ValidationJobs: %w", err)
 	}
 
-	log.Info("Validation job created", "job", job.Name, "node", hostname,
-		"connections", len(vm.Status.Connections))
+	for _, vj := range added {
+		log.Info("Validation job created", "job", vj.JobName, "node", vj.Node,
+			"subsystem", vm.Status.SubsystemNQN, "connections", len(vm.Status.Connections))
+	}
+	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "ValidationStarted", "ValidationStarted",
+		"Validating NVMe paths of subsystem %s on %d node(s): %s",
+		vm.Status.SubsystemNQN, len(vm.Status.ValidationJobs), strings.Join(nodes, ", "))
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
-func (r *VolumeMigrationReconciler) pollValidationJob(
+// timeInValidating is how long the migration has been in the Validating phase, i.e.
+// since it was submitted to the storage API.
+func (r *VolumeMigrationReconciler) timeInValidating(
+	vm *simplyblockv1alpha1.VolumeMigration,
+) time.Duration {
+	if vm.Status.StartedAt == nil {
+		return 0
+	}
+	return time.Since(vm.Status.StartedAt.Time)
+}
+
+// cancelAndFail cancels the backend migration and fails the CR with reason. Used
+// where the operator gives up on a migration it created: the target-side objects must
+// not be left behind.
+func (r *VolumeMigrationReconciler) cancelAndFail(
+	ctx context.Context,
+	vm *simplyblockv1alpha1.VolumeMigration,
+	reason string,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	if err := r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID); err != nil {
+		// Report the original reason regardless; a failed cancel only adds to it.
+		log.Error(err, "Cannot cancel migration; target-side objects may remain",
+			"migration", vm.Status.MigrationUUID, "subsystem", vm.Status.SubsystemNQN)
+		reason += fmt.Sprintf(" (cancelling the migration also failed: %v)", err)
+	}
+	return r.setFailed(ctx, vm, reason)
+}
+
+// pollValidationJobs waits for every node's validation Job. The migration continues
+// only once all of them have succeeded; the first failure cancels it. Each Job's pod
+// log is collected as it finishes, so the operator log shows per node whether paths
+// were connected and validated or the node turned out to have no connection.
+func (r *VolumeMigrationReconciler) pollValidationJobs(
 	ctx context.Context,
 	vm *simplyblockv1alpha1.VolumeMigration,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	job := &batchv1.Job{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: vm.Namespace, Name: vm.Status.ValidationJobName}, job); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("get validation job: %w", err)
+	pending := 0
+	for _, vj := range vm.Status.ValidationJobs {
+		job := &batchv1.Job{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: vm.Namespace, Name: vj.JobName}, job); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("get validation job %q: %w", vj.JobName, err)
+			}
+			// The Job vanished before we observed a terminal state (TTL controller,
+			// manual deletion, eviction, ...). Drop the entry and requeue so
+			// reconcileValidating rebuilds it instead of getting wedged in Validating.
+			log.Info("Validation job no longer exists; recreating",
+				"job", vj.JobName, "node", vj.Node, "migration", vm.Status.MigrationUUID)
+			return r.forgetValidationJob(ctx, vm, vj.JobName)
 		}
-		// The Job vanished before we observed a terminal state (TTL controller,
-		// manual deletion, eviction, ...). Clear the recorded name and requeue so
-		// reconcileValidating rebuilds it instead of getting wedged in Validating.
-		log.Info("Validation job no longer exists; recreating",
-			"job", vm.Status.ValidationJobName, "migration", vm.Status.MigrationUUID)
-		patch := client.MergeFrom(vm.DeepCopy())
-		vm.Status.ValidationJobName = ""
-		if err := r.Status().Patch(ctx, vm, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("clear ValidationJobName: %w", err)
+
+		// Determine terminal state from Job conditions (set by the Job controller).
+		var succeeded, failed bool
+		for _, c := range job.Status.Conditions {
+			if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+				succeeded = true
+			}
+			if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+				failed = true
+			}
 		}
-		return ctrl.Result{Requeue: true}, nil
+		switch {
+		case failed:
+			r.collectAndLogJobPodLogs(ctx, job)
+			_ = r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
+			log.Error(nil, "Validation job failed; cancelling migration",
+				"job", vj.JobName, "node", vj.Node, "migration", vm.Status.MigrationUUID)
+			return r.cancelAndFail(ctx, vm, fmt.Sprintf(
+				"NVMe path validation failed on node %s; migration cancelled", vj.Node))
+		case succeeded:
+			r.collectAndLogJobPodLogs(ctx, job)
+			_ = r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
+		default:
+			// Still in progress — we will be re-triggered via Owns(&batchv1.Job{}).
+			pending++
+		}
 	}
 
-	// Determine terminal state from Job conditions (set by the Job controller).
-	var succeeded, failed bool
-	for _, c := range job.Status.Conditions {
-		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
-			succeeded = true
-		}
-		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			failed = true
-		}
-	}
-	if !succeeded && !failed {
-		// Job still in progress — we will be re-triggered via Owns(&batchv1.Job{}).
+	if pending > 0 {
+		log.Info("Waiting for NVMe path validation", "pending", pending,
+			"nodes", len(vm.Status.ValidationJobs), "migration", vm.Status.MigrationUUID)
 		return ctrl.Result{}, nil
 	}
-	r.collectAndLogJobPodLogs(ctx, job)
-	_ = r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
 
-	if failed {
-		log.Error(nil, "Validation job failed; cancelling migration",
-			"job", vm.Status.ValidationJobName, "migration", vm.Status.MigrationUUID)
-		err := r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID)
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("cancelling migration: %w", err)
-		}
-		return r.setFailed(ctx, vm, "NVMe path validation failed; migration cancelled")
-	}
-
-	log.Info("Validation job succeeded; calling ContinueMigration",
-		"migration", vm.Status.MigrationUUID)
+	log.Info("All validation jobs succeeded; calling ContinueMigration",
+		"nodes", len(vm.Status.ValidationJobs), "migration", vm.Status.MigrationUUID)
 
 	return r.performMigration(ctx, vm)
+}
+
+// validateLateNodes re-resolves the consuming nodes and starts validation for any that
+// have no Job yet, returning wait=true while those Jobs run. It reports no error when
+// the node set cannot be re-derived: the already-validated set is what we have, and
+// blocking a migration that is otherwise ready to cut over on a transient listing
+// failure trades a certain delay for an uncertain gain.
+//
+// A node that disappeared from the set is left alone — its Job either already passed
+// (a connected path it no longer needs is harmless) or it never mattered.
+func (r *VolumeMigrationReconciler) validateLateNodes(
+	ctx context.Context,
+	vm *simplyblockv1alpha1.VolumeMigration,
+) (ctrl.Result, bool, error) {
+	log := logf.FromContext(ctx)
+
+	// Nothing was validated (idle subsystem) — nothing to re-check either.
+	if len(vm.Status.ValidationJobs) == 0 {
+		return ctrl.Result{}, false, nil
+	}
+
+	nodes, err := r.resolveValidationNodes(ctx, vm)
+	if err != nil {
+		log.Info("Cannot re-check the nodes to validate before cutover; continuing with the validated set",
+			"migration", vm.Status.MigrationUUID, "reason", err.Error())
+		return ctrl.Result{}, false, nil
+	}
+
+	validated := make(map[string]struct{}, len(vm.Status.ValidationJobs))
+	for _, vj := range vm.Status.ValidationJobs {
+		validated[vj.Node] = struct{}{}
+	}
+	var late []string
+	for _, node := range nodes {
+		if _, ok := validated[node]; !ok {
+			late = append(late, node)
+		}
+	}
+	if len(late) == 0 {
+		return ctrl.Result{}, false, nil
+	}
+
+	log.Info("New consuming node(s) appeared during validation; validating them before cutover",
+		"nodes", late, "subsystem", vm.Status.SubsystemNQN, "migration", vm.Status.MigrationUUID)
+	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "ValidationExtended", "ValidationExtended",
+		"Subsystem %s gained consumer(s) on %s during validation; validating before cutover",
+		vm.Status.SubsystemNQN, strings.Join(late, ", "))
+	res, err := r.startValidationJobs(ctx, vm, nodes)
+	return res, err == nil, err
+}
+
+// forgetValidationJob removes one Job from status and requeues, so the next
+// reconcile recreates it for that node.
+func (r *VolumeMigrationReconciler) forgetValidationJob(
+	ctx context.Context,
+	vm *simplyblockv1alpha1.VolumeMigration,
+	jobName string,
+) (ctrl.Result, error) {
+	kept := make([]simplyblockv1alpha1.ValidationJob, 0, len(vm.Status.ValidationJobs))
+	for _, vj := range vm.Status.ValidationJobs {
+		if vj.JobName != jobName {
+			kept = append(kept, vj)
+		}
+	}
+	patch := client.MergeFrom(vm.DeepCopy())
+	vm.Status.ValidationJobs = kept
+	if err := r.Status().Patch(ctx, vm, patch); err != nil {
+		return ctrl.Result{}, fmt.Errorf("drop validation job %q from status: %w", jobName, err)
+	}
+	return ctrl.Result{Requeue: true}, nil
 }
 
 // performMigration advances a validated (or validation-skipped) migration to
@@ -402,6 +572,16 @@ func (r *VolumeMigrationReconciler) performMigration(
 	vm *simplyblockv1alpha1.VolumeMigration,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+
+	// Re-derive the nodes that need paths, right before the point of no return. The
+	// control plane lets a new volume join the subsystem until the migration is
+	// activated, and a consumer pod can be rescheduled while we validate — either way
+	// a node can appear that was not validated. Validate it too before cutting over.
+	if res, wait, err := r.validateLateNodes(ctx, vm); err != nil {
+		return res, err
+	} else if wait {
+		return res, nil
+	}
 
 	m, err := r.apiClient.GetMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID)
 	if err != nil {
@@ -443,7 +623,7 @@ func (r *VolumeMigrationReconciler) performMigration(
 	patch := client.MergeFrom(vm.DeepCopy())
 	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseRunning
 	vm.Status.Connections = nil
-	vm.Status.ValidationJobName = ""
+	vm.Status.ValidationJobs = nil
 	if err := r.Status().Patch(ctx, vm, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch status Running: %w", err)
 	}
@@ -461,14 +641,17 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 	hostname, image string,
 ) *batchv1.Job {
 	privileged := true
+	readOnly := true
 	ttl := int32(3600)
 	backoffLimit := int32(0) // no retries — fail fast and cancel the migration
+	deadline := int64(validationJobDeadline.Seconds())
 
 	connsJSON, _ := json.Marshal(connectionsToValidation(vm.Status.Connections))
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "vmig-validate-" + safeNodeID(vm.Status.MigrationUUID),
+			// One Job per node, so the name carries both the migration and the node.
+			Name:      "vmig-validate-" + safeNodeID(vm.Status.MigrationUUID) + "-" + nodeSuffix(hostname),
 			Namespace: vm.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(vm, simplyblockv1alpha1.GroupVersion.WithKind("VolumeMigration")),
@@ -477,6 +660,7 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoffLimit,
 			TTLSecondsAfterFinished: &ttl,
+			ActiveDeadlineSeconds:   &deadline,
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
@@ -489,6 +673,15 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 								HostPath: &corev1.HostPathVolumeSource{Path: "/dev"},
 							},
 						},
+						{
+							// The subsystem presence check reads the host's NVMe sysfs
+							// (/sys/class/nvme-subsystem); the container's own /sys is
+							// not the host's.
+							Name: "host-sys",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{Path: "/sys"},
+							},
+						},
 					},
 					Containers: []corev1.Container{
 						{
@@ -498,10 +691,17 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 							Command:         []string{"simplyblock-rebalancer", "--mode=validate-migration"},
 							Env: []corev1.EnvVar{
 								{Name: "VMIG_CONNECTIONS", Value: string(connsJSON)},
+								// Which subsystem this node is expected to have a
+								// connection to; empty means "skip the check".
+								{Name: "VMIG_SUBSYSTEM_NQN", Value: vm.Status.SubsystemNQN},
+								// The host's sysfs, mounted below — the container's own
+								// /sys is not guaranteed to be it.
+								{Name: "VMIG_SYS_ROOT", Value: "/host/sys"},
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "host-dev", MountPath: "/dev"},
+								{Name: "host-sys", MountPath: "/host/sys", ReadOnly: readOnly},
 							},
 						},
 					},
@@ -510,6 +710,25 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 		},
 	}
 }
+
+// nodeSuffix produces a DNS-label-safe, collision-resistant suffix for a node name.
+// Node names can be long FQDNs and are not label-safe, so the short host part is kept
+// for readability and a hash of the full name for uniqueness.
+func nodeSuffix(nodeName string) string {
+	sum := sha256.Sum256([]byte(nodeName))
+	short := strings.ToLower(strings.SplitN(nodeName, ".", 2)[0])
+	short = nonLabelChars.ReplaceAllString(short, "")
+	if len(short) > 16 {
+		short = short[:16]
+	}
+	if short == "" {
+		return hex.EncodeToString(sum[:6])
+	}
+	return short + "-" + hex.EncodeToString(sum[:4])
+}
+
+// nonLabelChars matches everything not allowed inside a DNS-1123 label.
+var nonLabelChars = regexp.MustCompile(`[^a-z0-9-]`)
 
 // connectionsToValidation converts MigrationConnection status entries to the
 // vmigration.Connection type consumed by the simplyblock-rebalancer validate-migration mode.
@@ -555,6 +774,101 @@ func safeNodeID(nodeUUID string) string {
 // Any other non-nil error is a genuine, retryable failure (PV get or pod list
 // failed). Reads go through the uncached apiReader: a stale cache could otherwise
 // miss a running consumer and cause validation to be skipped for a live volume.
+// resolveValidationNodes returns every worker node that consumes a volume of the
+// migrated subsystem — the nodes whose NVMe paths must be switched to the target
+// before cutover. A subsystem moves as a unit, so validating only the node of the
+// volume named in the spec leaves every sibling's consumer pointing at the source:
+// at cutover those hosts lose their volume.
+//
+// Membership comes from the control plane (volumes sharing the subsystem's NQN) and
+// is mapped back to PVs through the CSI volume handle, then to consumers through the
+// PVC. Members whose PV or consumer cannot be found contribute no node; a member with
+// a not-yet-Running consumer propagates errConsumerNotReady so the caller waits,
+// because a pod that stages against the source mid-migration is stranded at cutover
+// exactly like an established one.
+//
+// The returned node list is sorted, so a Job set built from it is stable across
+// reconciles.
+func (r *VolumeMigrationReconciler) resolveValidationNodes(
+	ctx context.Context,
+	vm *simplyblockv1alpha1.VolumeMigration,
+) ([]string, error) {
+	log := logf.FromContext(ctx)
+
+	members, err := r.apiClient.GetSubsystemVolumes(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN)
+	if err != nil {
+		return nil, err
+	}
+	memberUUIDs := make(map[string]struct{}, len(members))
+	for _, m := range members {
+		memberUUIDs[m.UUID] = struct{}{}
+	}
+	// The migrated volume is always a member, even if the listing raced a change.
+	memberUUIDs[vm.Status.VolumeUUID] = struct{}{}
+
+	pvNames, err := r.pvNamesForVolumes(ctx, memberUUIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(pvNames) < len(memberUUIDs) {
+		// A member without a PV is not consumed through this cluster's CSI driver, so
+		// it has no host paths to validate — but it is worth saying out loud, since it
+		// also means we cannot vouch for whatever else uses it.
+		log.Info("Some subsystem members have no PersistentVolume in this cluster",
+			"subsystem", vm.Status.SubsystemNQN, "members", len(memberUUIDs), "pvs", len(pvNames))
+	}
+
+	nodes := make(map[string]string, len(pvNames)) // node -> the PV that put it in the set
+	for _, pvName := range pvNames {
+		node, err := r.resolveConsumerNodeName(ctx, pvName)
+		if err != nil {
+			// errConsumerNotReady included: wait for every member's consumer.
+			return nil, fmt.Errorf("resolve consumer of %s: %w", pvName, err)
+		}
+		if node == nil {
+			continue // genuinely idle member: no host paths to validate
+		}
+		if _, seen := nodes[*node]; !seen {
+			nodes[*node] = pvName
+		}
+	}
+
+	out := make([]string, 0, len(nodes))
+	for node := range nodes {
+		out = append(out, node)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// pvNamesForVolumes maps backend volume UUIDs to the PersistentVolumes that front
+// them, by parsing each PV's CSI volume handle ("<cluster>:<pool>:<volume>").
+func (r *VolumeMigrationReconciler) pvNamesForVolumes(
+	ctx context.Context,
+	volumeUUIDs map[string]struct{},
+) ([]string, error) {
+	var pvs corev1.PersistentVolumeList
+	if err := r.apiReader.List(ctx, &pvs); err != nil {
+		return nil, fmt.Errorf("list PersistentVolumes: %w", err)
+	}
+	var names []string
+	for i := range pvs.Items {
+		pv := &pvs.Items[i]
+		if pv.Spec.CSI == nil {
+			continue
+		}
+		parts := strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		if _, ok := volumeUUIDs[parts[2]]; ok {
+			names = append(names, pv.Name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 func (r *VolumeMigrationReconciler) resolveConsumerNodeName(
 	ctx context.Context,
 	pvName string,
@@ -794,7 +1108,12 @@ func (r *VolumeMigrationReconciler) reconcileAbort(
 	log := logf.FromContext(ctx)
 	log.Info("Aborting migration", "migration", vm.Status.MigrationUUID)
 
-	if err := r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID); err != nil {
+	// A migration that was never submitted — still pending, or deferred by a busy
+	// cluster — has nothing to cancel on the backend, and calling with an empty id
+	// would only produce errors to retry forever.
+	if vm.Status.MigrationUUID == "" {
+		log.Info("No backend migration was created yet; aborting the request only")
+	} else if err := r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID); err != nil {
 		log.Error(err, "CancelMigration failed; requeuing")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -802,13 +1121,15 @@ func (r *VolumeMigrationReconciler) reconcileAbort(
 	now := metav1.Now()
 	patch := client.MergeFrom(vm.DeepCopy())
 
-	// Best-effort cleanup of the validation Job when aborting during Validating.
-	if vm.Status.ValidationJobName != "" {
-		_ = r.Delete(ctx,
-			&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: vm.Status.ValidationJobName, Namespace: vm.Namespace}},
-			client.PropagationPolicy(metav1.DeletePropagationBackground),
-		)
-		vm.Status.ValidationJobName = ""
+	// Best-effort cleanup of the validation Jobs when aborting during Validating.
+	if len(vm.Status.ValidationJobs) > 0 {
+		for _, vj := range vm.Status.ValidationJobs {
+			_ = r.Delete(ctx,
+				&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: vj.JobName, Namespace: vm.Namespace}},
+				client.PropagationPolicy(metav1.DeletePropagationBackground),
+			)
+		}
+		vm.Status.ValidationJobs = nil
 		vm.Status.Connections = nil
 	}
 

@@ -3,8 +3,10 @@ package webapi
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -145,6 +147,263 @@ func TestCreateMigrationReportsDeferralSeparately(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Subsystem membership decides which nodes get their NVMe paths switched before
+// cutover, so both halves matter: every volume sharing the NQN must be found, and
+// nothing else may be.
+func TestGetSubsystemVolumes(t *testing.T) {
+	const otherNQN = "nqn.2014-08.io.simplyblock:cluster:lvol:vol-9"
+
+	t.Run("collects members across pools and filters by NQN", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/storage-pools/"):
+				_, _ = w.Write([]byte(`[{"id":"pool-a"},{"id":"pool-b"}]`))
+			case strings.Contains(r.URL.Path, "/storage-pools/pool-a/volumes/"):
+				_, _ = w.Write([]byte(`[
+					{"id":"vol-1","nqn":"` + testNQN + `"},
+					{"id":"vol-9","nqn":"` + otherNQN + `"}]`))
+			case strings.Contains(r.URL.Path, "/storage-pools/pool-b/volumes/"):
+				// A subsystem is scoped to a storage node, not a pool, so a member can
+				// sit in another pool than the one the migration was addressed from.
+				_, _ = w.Write([]byte(`[{"id":"vol-2","nqn":"` + testNQN + `"}]`))
+			default:
+				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer srv.Close()
+
+		vols, err := NewClient(srv.URL).GetSubsystemVolumes(context.Background(), "c1", testNQN)
+		if err != nil {
+			t.Fatalf("GetSubsystemVolumes: %v", err)
+		}
+		got := make([]string, 0, len(vols))
+		for _, v := range vols {
+			got = append(got, v.UUID)
+		}
+		slices.Sort(got)
+		if !slices.Equal(got, []string{"vol-1", "vol-2"}) {
+			t.Errorf("members = %v, want [vol-1 vol-2] (vol-9 belongs to another subsystem)", got)
+		}
+	})
+
+	t.Run("single-namespace subsystem has exactly one member", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/storage-pools/") {
+				_, _ = w.Write([]byte(`[{"id":"pool-a"}]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[{"id":"vol-1","nqn":"` + testNQN + `"},
+				{"id":"vol-9","nqn":"` + otherNQN + `"}]`))
+		}))
+		defer srv.Close()
+
+		vols, err := NewClient(srv.URL).GetSubsystemVolumes(context.Background(), "c1", testNQN)
+		if err != nil {
+			t.Fatalf("GetSubsystemVolumes: %v", err)
+		}
+		if len(vols) != 1 || vols[0].UUID != "vol-1" {
+			t.Errorf("members = %+v, want just vol-1", vols)
+		}
+	})
+
+	t.Run("no member matches", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/storage-pools/") {
+				_, _ = w.Write([]byte(`[{"id":"pool-a"}]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[{"id":"vol-9","nqn":"` + otherNQN + `"}]`))
+		}))
+		defer srv.Close()
+
+		vols, err := NewClient(srv.URL).GetSubsystemVolumes(context.Background(), "c1", testNQN)
+		if err != nil {
+			t.Fatalf("GetSubsystemVolumes: %v", err)
+		}
+		if len(vols) != 0 {
+			t.Errorf("members = %+v, want none", vols)
+		}
+	})
+
+	// The failures must surface rather than yield a short member list: a partial list
+	// means a node gets missed, which is exactly the outage this feeds.
+	t.Run("pool listing fails", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		if _, err := NewClient(srv.URL).GetSubsystemVolumes(context.Background(), "c1", testNQN); err == nil {
+			t.Errorf("expected the pool-listing failure to surface")
+		}
+	})
+
+	t.Run("one pool's volume listing fails", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/storage-pools/"):
+				_, _ = w.Write([]byte(`[{"id":"pool-a"},{"id":"pool-b"}]`))
+			case strings.Contains(r.URL.Path, "/pool-a/"):
+				_, _ = w.Write([]byte(`[{"id":"vol-1","nqn":"` + testNQN + `"}]`))
+			default:
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		}))
+		defer srv.Close()
+
+		_, err := NewClient(srv.URL).GetSubsystemVolumes(context.Background(), "c1", testNQN)
+		if err == nil {
+			t.Fatalf("expected a partial listing to be an error, not a truncated member set")
+		}
+		if !strings.Contains(err.Error(), "pool-b") {
+			t.Errorf("error = %q, want it to name the pool that failed", err)
+		}
+	})
+
+	t.Run("empty NQN is rejected before any call", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			t.Errorf("unexpected request %s %s for an empty NQN", r.Method, r.URL.Path)
+		}))
+		defer srv.Close()
+
+		if _, err := NewClient(srv.URL).GetSubsystemVolumes(context.Background(), "c1", ""); err == nil {
+			t.Errorf("expected an empty NQN to be rejected")
+		}
+	})
+}
+
+// The listing mixes shapes — batch groups and single-volume migrations of the same
+// subsystem — so normalization has to apply to every entry, not just a single GET.
+func TestGetMigrationsNormalizesEveryEntry(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"id":"mig-batch","target_nqn":"` + testNQN + `","member_count":3,"status":"running"},
+			{"id":"mig-solo","lvol_id":"vol-1","status":"new"}]`))
+	}))
+	defer srv.Close()
+
+	migs, err := NewClient(srv.URL).GetMigrations(context.Background(), "c1", testNQN)
+	if err != nil {
+		t.Fatalf("GetMigrations: %v", err)
+	}
+	if len(migs) != 2 {
+		t.Fatalf("got %d migrations, want 2", len(migs))
+	}
+	for _, m := range migs {
+		if m.TargetNQN != testNQN {
+			t.Errorf("%s: TargetNQN = %q, want the addressed subsystem", m.ID, m.TargetNQN)
+		}
+		if m.MemberCount < 1 {
+			t.Errorf("%s: MemberCount = %d, want at least 1", m.ID, m.MemberCount)
+		}
+	}
+	if migs[0].MemberCount != 3 {
+		t.Errorf("batch MemberCount = %d, want the reported 3", migs[0].MemberCount)
+	}
+	if migs[1].MemberCount != 1 {
+		t.Errorf("solo MemberCount = %d, want 1", migs[1].MemberCount)
+	}
+}
+
+// The conflict path cancels the migration that blocks a new one. With nothing
+// in flight there is nothing to cancel, and reporting that is better than
+// looping: the create failed for a reason we have not understood.
+func TestCreateMigrationConflictWithNothingInFlight(t *testing.T) {
+	collection := migrationsURL("cluster-1", testNQN)
+	cases := []struct {
+		name    string
+		listing string
+	}{
+		{"empty listing", `[]`},
+		{"only terminal migrations", `[{"id":"mig-old","status":"done"},{"id":"mig-x","status":"cancelled"}]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost:
+					w.WriteHeader(http.StatusConflict)
+					_, _ = w.Write([]byte(`{"detail":"a migration already exists. Cancel it first."}`))
+				case r.Method == http.MethodGet && r.URL.Path == collection:
+					_, _ = w.Write([]byte(tc.listing))
+				case r.Method == http.MethodDelete:
+					t.Errorf("nothing in flight, yet a cancel was attempted: %s", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+
+			m, err := NewClient(srv.URL).CreateMigration(context.Background(), "cluster-1", testNQN, "n1")
+			if err == nil {
+				t.Fatalf("expected an error, got migration %+v", m)
+			}
+			if !strings.Contains(err.Error(), "no in-flight migration") {
+				t.Errorf("error = %q, want it to say nothing was in flight", err)
+			}
+		})
+	}
+}
+
+// Continue and cancel are fire-and-forget calls whose only signal is the status code;
+// a non-2xx must not be mistaken for success, and continue carries an empty body so
+// the control plane applies its own defaults.
+func TestContinueAndCancelMigration(t *testing.T) {
+	t.Run("continue posts an empty parameter object", func(t *testing.T) {
+		var body string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			body = string(b)
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		if err := NewClient(srv.URL).ContinueMigration(context.Background(), "c1", testNQN, "mig-1"); err != nil {
+			t.Fatalf("ContinueMigration: %v", err)
+		}
+		if body != "{}" {
+			t.Errorf("continue body = %q, want {} so the control plane defaults apply", body)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		call func(c *Client) error
+	}{
+		{"continue", func(c *Client) error {
+			return c.ContinueMigration(context.Background(), "c1", testNQN, "mig-1")
+		}},
+		{"cancel", func(c *Client) error {
+			return c.CancelMigration(context.Background(), "c1", testNQN, "mig-1")
+		}},
+	} {
+		t.Run(tc.name+" reports a non-2xx", func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, `{"detail":"nope"}`, http.StatusBadRequest)
+			}))
+			defer srv.Close()
+
+			err := tc.call(NewClient(srv.URL))
+			if err == nil {
+				t.Fatalf("expected an error for a 400")
+			}
+			if !strings.Contains(err.Error(), "mig-1") || !strings.Contains(err.Error(), "nope") {
+				t.Errorf("error = %q, want the migration id and the API detail", err)
+			}
+		})
+	}
+
+	t.Run("cancel succeeds on 2xx", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"cancelled"}`))
+		}))
+		defer srv.Close()
+
+		if err := NewClient(srv.URL).CancelMigration(context.Background(), "c1", testNQN, "mig-1"); err != nil {
+			t.Errorf("CancelMigration: %v", err)
+		}
+	})
 }
 
 func TestIsExistingMigrationConflict(t *testing.T) {
