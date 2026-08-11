@@ -44,14 +44,6 @@ import (
 const (
 	poolStatusInvalidClusterReference = "InvalidClusterReference"
 	poolEventInvalidClusterReference  = "InvalidClusterReference"
-
-	// dhchapNodeLabelParam is the StorageClass Parameters key the CSI driver
-	// reads (csi-driver/pkg/spdk/controllerserver.go's paramDHCHAPNodeLabel) to
-	// learn the exact DHCHAP allowed-node label key it must pin
-	// PersistentVolume.spec.nodeAffinity to at CreateVolume time. Keep this in
-	// sync with that constant's string value — they are two ends of the same
-	// StorageClass parameter.
-	dhchapNodeLabelParam = "dhchap_node_label"
 )
 
 // PoolReconciler reconciles a Pool object
@@ -388,25 +380,16 @@ func (r *PoolReconciler) createStorageClassIfNotExists(ctx context.Context, pool
 	}
 
 	if poolCR.Spec.DHCHAP && len(poolCR.Spec.AllowedNodes) > 0 {
-		nodeLabelKey := poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name)
 		sc.AllowedTopologies = []corev1.TopologySelectorTerm{
 			{
 				MatchLabelExpressions: []corev1.TopologySelectorLabelRequirement{
 					{
-						Key:    nodeLabelKey,
+						Key:    poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name),
 						Values: []string{"allowed"},
 					},
 				},
 			},
 		}
-		// CreateVolume's req.Parameters otherwise only carries pool_name and the
-		// cluster's UUID — not this Pool CR's namespace/clusterName — so without
-		// this the CSI driver has no way to recover the exact label key above and
-		// tell it apart from another DHCHAP-gated pool's key that the same
-		// worker node might also carry (see issue #403). params is the same map
-		// referenced by sc.Parameters set above; mutating it here still lands in
-		// the StorageClass.
-		params[dhchapNodeLabelParam] = nodeLabelKey
 	}
 
 	if err := r.Create(ctx, sc); err != nil && !apierrors.IsAlreadyExists(err) {
