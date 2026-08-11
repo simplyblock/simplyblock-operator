@@ -212,6 +212,12 @@ spec:
                       description: Node is the Kubernetes node name the Job is pinned
                         to.
                       type: string
+                    succeeded:
+                      description: |-
+                        Succeeded records that this node's validation passed. It is kept because the
+                        Job's own existence is not a reliable record: Jobs are reaped, and re-reading a
+                        reaped Job would otherwise look like "never validated" and start it again.
+                      type: boolean
                   required:
                   - jobName
                   - node

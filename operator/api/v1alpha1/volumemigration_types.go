@@ -50,6 +50,12 @@ type ValidationJob struct {
 
 	// JobName is the name of the Job object in the VolumeMigration's namespace.
 	JobName string `json:"jobName"`
+
+	// Succeeded records that this node's validation passed. It is kept because the
+	// Job's own existence is not a reliable record: Jobs are reaped, and re-reading a
+	// reaped Job would otherwise look like "never validated" and start it again.
+	// +optional
+	Succeeded bool `json:"succeeded,omitempty"`
 }
 
 // VolumeMigrationSpec defines the desired state of a VolumeMigration.

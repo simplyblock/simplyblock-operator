@@ -431,16 +431,26 @@ func (r *VolumeMigrationReconciler) pollValidationJobs(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	pending := 0
-	for _, vj := range vm.Status.ValidationJobs {
+	patch := client.MergeFrom(vm.DeepCopy())
+	pending, newlyPassed := 0, false
+
+	for i := range vm.Status.ValidationJobs {
+		vj := &vm.Status.ValidationJobs[i]
+		// A node whose validation already passed is not looked at again. Its Job is
+		// left in place to be reaped by its TTL, and re-reading a reaped Job would
+		// otherwise look like "never validated" and start the whole node over.
+		if vj.Succeeded {
+			continue
+		}
+
 		job := &batchv1.Job{}
 		if err := r.Get(ctx, types.NamespacedName{Namespace: vm.Namespace, Name: vj.JobName}, job); err != nil {
 			if !apierrors.IsNotFound(err) {
 				return ctrl.Result{}, fmt.Errorf("get validation job %q: %w", vj.JobName, err)
 			}
-			// The Job vanished before we observed a terminal state (TTL controller,
-			// manual deletion, eviction, ...). Drop the entry and requeue so
-			// reconcileValidating rebuilds it instead of getting wedged in Validating.
+			// The Job vanished before we observed a terminal state (eviction, manual
+			// deletion, ...). Drop the entry and requeue so reconcileValidating rebuilds
+			// it instead of getting wedged in Validating.
 			log.Info("Validation job no longer exists; recreating",
 				"job", vj.JobName, "node", vj.Node, "migration", vm.Status.MigrationUUID)
 			return r.forgetValidationJob(ctx, vm, vj.JobName)
@@ -458,18 +468,29 @@ func (r *VolumeMigrationReconciler) pollValidationJobs(
 		}
 		switch {
 		case failed:
+			// The Job is left for post-mortem; its pod log is copied into the operator
+			// log here because the pod goes away with the Job's TTL.
 			r.collectAndLogJobPodLogs(ctx, job)
-			_ = r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
 			log.Error(nil, "Validation job failed; cancelling migration",
 				"job", vj.JobName, "node", vj.Node, "migration", vm.Status.MigrationUUID)
 			return r.cancelAndFail(ctx, vm, fmt.Sprintf(
 				"NVMe path validation failed on node %s; migration cancelled", vj.Node))
 		case succeeded:
 			r.collectAndLogJobPodLogs(ctx, job)
-			_ = r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
+			vj.Succeeded = true
+			newlyPassed = true
 		default:
 			// Still in progress — we will be re-triggered via Owns(&batchv1.Job{}).
 			pending++
+		}
+	}
+
+	// Persist the passes before acting on them: an operator restart must not re-run
+	// validation on nodes that already passed, and the count below must be the
+	// recorded one, not one this pass happens to have observed.
+	if newlyPassed {
+		if err := r.Status().Patch(ctx, vm, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("record validation passes: %w", err)
 		}
 	}
 
@@ -483,6 +504,21 @@ func (r *VolumeMigrationReconciler) pollValidationJobs(
 		"nodes", len(vm.Status.ValidationJobs), "migration", vm.Status.MigrationUUID)
 
 	return r.performMigration(ctx, vm)
+}
+
+// deleteValidationJobs removes the validation Jobs of a migration. Called when the
+// migration leaves the Validating phase — the Jobs have served their purpose and their
+// logs are already in the operator log.
+func (r *VolumeMigrationReconciler) deleteValidationJobs(
+	ctx context.Context,
+	vm *simplyblockv1alpha1.VolumeMigration,
+) {
+	for _, vj := range vm.Status.ValidationJobs {
+		_ = r.Delete(ctx,
+			&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: vj.JobName, Namespace: vm.Namespace}},
+			client.PropagationPolicy(metav1.DeletePropagationBackground),
+		)
+	}
 }
 
 // validateLateNodes re-resolves the consuming nodes and starts validation for any that
@@ -619,6 +655,10 @@ func (r *VolumeMigrationReconciler) performMigration(
 		log.Info("Migration already continued (past pre_created); skipping ContinueMigration",
 			"migration", vm.Status.MigrationUUID, "phase", m.Phase)
 	}
+
+	// The validation Jobs have served their purpose and their logs are already in the
+	// operator log; reap them as the migration leaves the Validating phase.
+	r.deleteValidationJobs(ctx, vm)
 
 	patch := client.MergeFrom(vm.DeepCopy())
 	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseRunning
@@ -1123,12 +1163,7 @@ func (r *VolumeMigrationReconciler) reconcileAbort(
 
 	// Best-effort cleanup of the validation Jobs when aborting during Validating.
 	if len(vm.Status.ValidationJobs) > 0 {
-		for _, vj := range vm.Status.ValidationJobs {
-			_ = r.Delete(ctx,
-				&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: vj.JobName, Namespace: vm.Namespace}},
-				client.PropagationPolicy(metav1.DeletePropagationBackground),
-			)
-		}
+		r.deleteValidationJobs(ctx, vm)
 		vm.Status.ValidationJobs = nil
 		vm.Status.Connections = nil
 	}

@@ -11,6 +11,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
@@ -335,4 +337,270 @@ func TestCollectAndLogJobPodLogs_NoPods(t *testing.T) {
 	r, _ := newVMReconciler(t, unreachableAPI)
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "vmig-validate-x", Namespace: testVMNamespace}}
 	r.collectAndLogJobPodLogs(context.Background(), job) // must not panic
+}
+
+// Regression test for a validation loop that never converged: each Job was deleted the
+// moment it passed while its status entry stayed, so the next pass read NotFound,
+// called the Job "vanished", dropped the entry and rebuilt it — endlessly. Worse, the
+// shrinking entry list let the gate declare "all validation jobs succeeded" for a
+// subset, cutting over with an unvalidated node.
+//
+// A node that passed must stay recorded as passed, its Job must not be recreated, and
+// the migration must not continue while another node is still pending.
+func TestPollValidationJobs_PassedNodeIsNotRevalidated(t *testing.T) {
+	srv := newAPIServer(t, func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request %s %s: one node is still pending", r.Method, r.URL.Path)
+	})
+
+	vm := validatingVM(testValidationJobName)
+	vm.Status.ValidationJobs = []simplyblockv1alpha1.ValidationJob{
+		{Node: testConsumerNode, JobName: testValidationJobName},
+		{Node: testSiblingNode, JobName: "vmig-validate-2"},
+	}
+	passed := validationJob(batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue})
+	pending := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "vmig-validate-2", Namespace: testVMNamespace},
+	}
+
+	r, cl := newVMReconciler(t, srv.URL, vm, passed, pending, migrationCluster())
+
+	// First pass: one node passes, the other is still running.
+	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	got := getVM(t, cl)
+	if len(got.Status.ValidationJobs) != 2 {
+		t.Fatalf("ValidationJobs = %+v, want both nodes still tracked", got.Status.ValidationJobs)
+	}
+	byNode := map[string]simplyblockv1alpha1.ValidationJob{}
+	for _, vj := range got.Status.ValidationJobs {
+		byNode[vj.Node] = vj
+	}
+	if !byNode[testConsumerNode].Succeeded {
+		t.Errorf("%s is not recorded as passed; its Job would be run again", testConsumerNode)
+	}
+	if byNode[testSiblingNode].Succeeded {
+		t.Errorf("%s recorded as passed while its Job is still running", testSiblingNode)
+	}
+	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseValidating {
+		t.Errorf("phase = %q, want still Validating with one node pending", got.Status.Phase)
+	}
+
+	// The passed node's Job is now reaped, as its TTL would do. A second pass must
+	// treat that node as done rather than "vanished", and must not create a new Job.
+	if err := cl.Delete(context.Background(), passed); err != nil {
+		t.Fatalf("delete the passed job: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	got = getVM(t, cl)
+	if len(got.Status.ValidationJobs) != 2 {
+		t.Errorf("ValidationJobs = %+v, want both entries kept after the Job was reaped",
+			got.Status.ValidationJobs)
+	}
+	var jobs batchv1.JobList
+	if err := cl.List(context.Background(), &jobs, client.InNamespace(testVMNamespace)); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 || jobs.Items[0].Name != "vmig-validate-2" {
+		names := make([]string, 0, len(jobs.Items))
+		for i := range jobs.Items {
+			names = append(names, jobs.Items[i].Name)
+		}
+		t.Errorf("jobs = %v, want only the still-pending one (no recreation)", names)
+	}
+	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseValidating {
+		t.Errorf("phase = %q, want still Validating", got.Status.Phase)
+	}
+}
+
+// The pre-cutover re-check must not mistake an already-passed node for a newly
+// appeared one — that was the second half of the loop, re-adding a node seconds after
+// validating it.
+func TestValidateLateNodes_PassedNodeIsNotTreatedAsNew(t *testing.T) {
+	var continueCalled bool
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if serveSubsystemMembers(w, r) {
+			return
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == migrationPath:
+			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
+		case r.Method == http.MethodPost && r.URL.Path == continuePath:
+			continueCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	// The consumer's node has already passed and its Job has been reaped.
+	vm := validatingVM(testValidationJobName)
+	vm.Status.ValidationJobs = []simplyblockv1alpha1.ValidationJob{
+		{Node: testConsumerNode, JobName: testValidationJobName, Succeeded: true},
+	}
+	pv := boundCSIPV(testClusterUUID+":"+testPoolUUID+":"+testVolumeUUID, "app-pvc")
+	pod := consumerPod("app-0", testConsumerNode, "app-pvc", corev1.PodRunning)
+
+	r, cl := newVMReconciler(t, srv.URL, vm, pv, pod, migrationCluster())
+
+	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !continueCalled {
+		t.Errorf("expected the migration to continue; the only consuming node had passed")
+	}
+	var jobs batchv1.JobList
+	if err := cl.List(context.Background(), &jobs, client.InNamespace(testVMNamespace)); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("created %d job(s), want none for an already-validated node", len(jobs.Items))
+	}
+	if got := getVM(t, cl); got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseRunning {
+		t.Errorf("phase = %q, want Running", got.Status.Phase)
+	}
+}
+
+// drainEvents returns the events recorded so far.
+func drainEvents(t *testing.T, r *VolumeMigrationReconciler) []string {
+	t.Helper()
+	rec, ok := r.Recorder.(*events.FakeRecorder)
+	if !ok {
+		t.Fatalf("recorder is %T, not a FakeRecorder", r.Recorder)
+	}
+	var out []string
+	for {
+		select {
+		case e := <-rec.Events:
+			out = append(out, e)
+		default:
+			return out
+		}
+	}
+}
+
+// Every other validation test asserts what one reconcile pass does. This one asserts
+// that the passes *converge*: driven repeatedly, with nodes finishing at different
+// times and finished Jobs being reaped underneath, the migration must reach Running
+// without ever restarting a node that already passed.
+//
+// That is the property the endless create/delete/recreate loop violated, and no
+// single-pass test could see it — which is why it reached a cluster.
+func TestReconcileValidating_ConvergesWithStaggeredCompletions(t *testing.T) {
+	const siblingVolumeUUID = "sibling-vol"
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if serveSubsystemMembers(w, r, siblingVolumeUUID) {
+			return
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == migrationPath:
+			_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"pre_created","status":"new"}`))
+		case r.Method == http.MethodPost && r.URL.Path == continuePath:
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	pv := boundCSIPV(testClusterUUID+":"+testPoolUUID+":"+testVolumeUUID, "app-pvc")
+	pod := consumerPod("app-0", testConsumerNode, "app-pvc", corev1.PodRunning)
+	siblingPV := boundCSIPV(testClusterUUID+":"+testPoolUUID+":"+siblingVolumeUUID, "sib-pvc")
+	siblingPV.Name = "pv-sibling"
+	siblingPod := consumerPod("sib-0", testSiblingNode, "sib-pvc", corev1.PodRunning)
+
+	r, cl := newVMReconciler(t, srv.URL, validatingVM(""), pv, pod, siblingPV, siblingPod,
+		migrationCluster())
+
+	ctx := context.Background()
+	passedOnce := map[string]bool{}
+	nodesSeen := map[string]bool{}
+	entriesSeen := 0
+	starts := 0
+	reached := false
+
+	for i := 0; i < 20 && !reached; i++ {
+		if _, err := r.Reconcile(ctx, vmRequest()); err != nil {
+			t.Fatalf("Reconcile (pass %d): %v", i, err)
+		}
+		for _, e := range drainEvents(t, r) {
+			if strings.Contains(e, "ValidationStarted") {
+				starts++
+			}
+		}
+
+		vm := getVM(t, cl)
+		if vm.Status.Phase == simplyblockv1alpha1.VolumeMigrationPhaseRunning {
+			reached = true
+			break
+		}
+		// A pass may never un-pass a node, nor lose one: dropping entries is how the
+		// gate came to declare success for a subset of the consuming nodes.
+		for _, vj := range vm.Status.ValidationJobs {
+			nodesSeen[vj.Node] = true
+			if vj.Succeeded {
+				passedOnce[vj.Node] = true
+			} else if passedOnce[vj.Node] {
+				t.Fatalf("pass %d: node %s went from passed back to pending", i, vj.Node)
+			}
+		}
+		if n := len(vm.Status.ValidationJobs); n < entriesSeen {
+			t.Fatalf("pass %d: tracked nodes shrank from %d to %d — the gate would pass on a subset",
+				i, entriesSeen, n)
+		} else if n > entriesSeen {
+			entriesSeen = n
+		}
+
+		// Finish one outstanding Job per pass, so the nodes complete at different
+		// times — the situation the single-pass tests never produce.
+		var jobs batchv1.JobList
+		if err := cl.List(ctx, &jobs, client.InNamespace(testVMNamespace)); err != nil {
+			t.Fatalf("list jobs: %v", err)
+		}
+		for j := range jobs.Items {
+			job := &jobs.Items[j]
+			if len(job.Status.Conditions) == 0 {
+				job.Status.Conditions = []batchv1.JobCondition{
+					{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+				}
+				if err := cl.Status().Update(ctx, job); err != nil {
+					t.Fatalf("complete job %s: %v", job.Name, err)
+				}
+				break
+			}
+		}
+		// Reap the Jobs of nodes already recorded as passed, as their TTL would.
+		for _, vj := range getVM(t, cl).Status.ValidationJobs {
+			if !vj.Succeeded {
+				continue
+			}
+			_ = cl.Delete(ctx, &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{Name: vj.JobName, Namespace: testVMNamespace},
+			})
+		}
+	}
+
+	if !reached {
+		vm := getVM(t, cl)
+		t.Fatalf("validation never converged: phase %q, jobs %+v after 20 passes",
+			vm.Status.Phase, vm.Status.ValidationJobs)
+	}
+	if len(nodesSeen) != 2 {
+		t.Errorf("nodes tracked = %v, want both consuming nodes", nodesSeen)
+	}
+	if entriesSeen != 2 {
+		t.Errorf("most nodes tracked at once = %d, want 2", entriesSeen)
+	}
+	// At least one node must have been observed passing while another was still
+	// pending — otherwise the completions were not actually staggered and the test
+	// would not exercise the case that broke.
+	if len(passedOnce) == 0 {
+		t.Errorf("no node was observed passing before the phase advanced; completions were not staggered")
+	}
+	// Validation is started once, for the two nodes together. More would mean a node
+	// was rebuilt after having been validated.
+	if starts != 1 {
+		t.Errorf("validation was started %d times, want once for the whole node set", starts)
+	}
 }
