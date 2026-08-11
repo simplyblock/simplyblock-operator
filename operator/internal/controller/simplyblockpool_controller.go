@@ -45,11 +45,7 @@ const (
 	poolStatusInvalidClusterReference = "InvalidClusterReference"
 	poolEventInvalidClusterReference  = "InvalidClusterReference"
 
-	// dhchapNodeLabelParam is the StorageClass Parameters key the CSI driver
-	// reads (paramDHCHAPNodeLabel in csi-driver/pkg/spdk/controllerserver.go)
-	// to learn the exact DHCHAP allowed-node label key to pin
-	// PersistentVolume.spec.nodeAffinity to at CreateVolume time.
-	dhchapNodeLabelParam = "dhchap_node_label"
+	dhchapNodeLabelParam = "dhchap_node_label" // read by paramDHCHAPNodeLabel in csi-driver/pkg/spdk/controllerserver.go
 )
 
 // PoolReconciler reconciles a Pool object
@@ -397,13 +393,7 @@ func (r *PoolReconciler) createStorageClassIfNotExists(ctx context.Context, pool
 				},
 			},
 		}
-		// The CSI driver's CreateVolume can't reconstruct nodeLabelKey on its
-		// own (req.Parameters only ever carries pool_name and the cluster's
-		// UUID, not this Pool CR's namespace/clusterName), so pass it through
-		// explicitly to pin PersistentVolume.spec.nodeAffinity correctly
-		// (issue #403). params is the same map already referenced by
-		// sc.Parameters above, so this still lands in the StorageClass.
-		params[dhchapNodeLabelParam] = nodeLabelKey
+		params[dhchapNodeLabelParam] = nodeLabelKey // CreateVolume can't derive this key on its own (#403)
 	}
 
 	if err := r.Create(ctx, sc); err != nil && !apierrors.IsAlreadyExists(err) {

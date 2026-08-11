@@ -64,17 +64,10 @@ const (
 	deprecatedAnnotationQoSRMBps    = "simplybk/qos-r-mbytes"
 	deprecatedAnnotationQoSWMBps    = "simplybk/qos-w-mbytes"
 
-	paramClusterID        = "cluster_id"
-	paramZoneClusterMap   = "zone_cluster_map"
-	paramRegionClusterMap = "region_cluster_map"
-	// paramDHCHAPNodeLabel carries the exact Kubernetes Node label key that
-	// this StorageClass's AllowedTopologies gates on when DHCHAP is enabled
-	// (poolNodeLabelKey in operator/internal/controller/simplyblockpool_controller.go).
-	// CreateVolume can't reconstruct that key on its own — req.Parameters only
-	// ever carries pool_name and the cluster's UUID, not the Pool CR's
-	// namespace/clusterName it's built from — so the operator writes it here
-	// too, right next to the AllowedTopologies term itself.
-	paramDHCHAPNodeLabel    = "dhchap_node_label"
+	paramClusterID          = "cluster_id"
+	paramZoneClusterMap     = "zone_cluster_map"
+	paramRegionClusterMap   = "region_cluster_map"
+	paramDHCHAPNodeLabel    = "dhchap_node_label" // exact DHCHAP allowed-node label key; see poolNodeLabelKey
 	topologyKeyZoneStable   = "topology.kubernetes.io/zone"
 	topologyKeyZoneBeta     = "failure-domain.beta.kubernetes.io/zone"
 	topologyKeyRegionStable = "topology.kubernetes.io/region"
@@ -99,20 +92,9 @@ const (
 	topologyKeyStorageNodeUUIDPrefix = "simplyblock.io/storage-node-uuid."
 )
 
-// hardPinTopologyKeys returns the exact DHCHAP allowed-node label key this
-// CreateVolume call must pin PersistentVolume.spec.nodeAffinity to, if the
-// StorageClass has DHCHAP's AllowedTopologies gate enabled — or nil for a
-// plain, ungated volume.
-//
-// Matching by exact key (rather than a shared prefix like
-// "simplyblock.io/pool.") matters because buildAccessibleTopology
-// (nodeserver.go) reports every DHCHAP allowed-node label a node carries, not
-// just the one for the pool being provisioned into: a node can be listed in
-// more than one Pool CR's AllowedNodes. A prefix match would AND unrelated
-// pools' labels into one PV's nodeAffinity, wrongly excluding nodes that
-// satisfy this pool but not the other — or pin a completely ungated volume
-// that merely happened to land on a node also hosting some other DHCHAP
-// pool. Matching the one key this request's own Parameters name avoids both.
+// hardPinTopologyKeys matches the exact key rather than a shared prefix
+// because a node can belong to more than one DHCHAP pool; prefix-matching
+// would AND their labels together into one nodeAffinity.
 func hardPinTopologyKeys(params map[string]string) []string {
 	key := strings.TrimSpace(params[paramDHCHAPNodeLabel])
 	if key == "" {
@@ -121,12 +103,6 @@ func hardPinTopologyKeys(params map[string]string) []string {
 	return []string{key}
 }
 
-// hardPinTopologySegments extracts, from the CSI topology requirement the
-// external-provisioner sent for this CreateVolume call, only the segments
-// whose key is in keys (see hardPinTopologyKeys). Preferred is checked first
-// since it reflects the specific node WaitForFirstConsumer actually chose;
-// Requisite is the fallback, matching coLocatedHostID's search order. Returns
-// nil if none of keys is present, so plain (ungated) volumes are unaffected.
 func hardPinTopologySegments(topoReq *csi.TopologyRequirement, keys []string) map[string]string {
 	if topoReq == nil || len(keys) == 0 {
 		return nil
@@ -522,14 +498,8 @@ func (cs *controllerServer) CreateVolume(
 		csiVolume.VolumeContext["targetType"] = volType
 	}
 
-	// AccessibleTopology merges two independent kinds of segment:
-	//   - the zone/region key in selection.topology, set when the StorageClass
-	//     uses zone_cluster_map/region_cluster_map to pick a cluster — routing
-	//     information only, not a per-node constraint.
-	//   - DHCHAP's allowed-node segment, which resolveClusterSelection never
-	//     sees (see hardPinTopologyKeys).
-	// Dropping the DHCHAP half left DHCHAP-gated volumes free to be
-	// rescheduled onto any node after the PVC's first bind (issue #403).
+	// Merge in DHCHAP's allowed-node segment so its PV gets nodeAffinity too
+	// (issue #403) — resolveClusterSelection only tracks zone/region.
 	topologySegments := copyTopologySegments(selection.topology)
 	pinKeys := hardPinTopologyKeys(req.GetParameters())
 	for key, val := range hardPinTopologySegments(req.GetAccessibilityRequirements(), pinKeys) {

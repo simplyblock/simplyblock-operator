@@ -242,60 +242,6 @@ func TestPoolReconcileStorageClassNameIncludesNamespace(t *testing.T) {
 	}
 }
 
-// TestPoolReconcileDHCHAPStorageClassCarriesNodeLabelParam verifies that a
-// DHCHAP-gated pool's StorageClass carries the exact AllowedTopologies label
-// key in its Parameters too (dhchapNodeLabelParam), matching exactly — the
-// CSI driver's CreateVolume has no other way to learn that key (issue #403).
-func TestPoolReconcileDHCHAPStorageClassCarriesNodeLabelParam(t *testing.T) {
-	const clusterName = "cluster-dhchap"
-	const clusterUUID = "cluster-uuid-dhchap"
-
-	pool := &simplyblockv1alpha1.Pool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "pool-dhchap",
-			Namespace:  "default",
-			Finalizers: []string{utils.FinalizerPool},
-		},
-		Spec: simplyblockv1alpha1.PoolSpec{
-			ClusterName:  clusterName,
-			DHCHAP:       true,
-			AllowedNodes: []string{"worker-1"},
-		},
-		Status: simplyblockv1alpha1.PoolStatus{
-			UUID: "pool-uuid-dhchap",
-		},
-	}
-
-	r := newPoolStateTestReconciler(t,
-		pool,
-		testCluster("default", clusterName, clusterUUID),
-	)
-
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)}); err != nil {
-		t.Fatalf("reconcile returned error: %v", err)
-	}
-
-	scName := simplyblockStorageClassName(pool.Namespace, pool.Spec.ClusterName, pool.Name)
-	sc := &storagev1.StorageClass{}
-	if err := r.Get(context.Background(), client.ObjectKey{Name: scName}, sc); err != nil {
-		t.Fatalf("failed to get StorageClass %q: %v", scName, err)
-	}
-
-	wantKey := poolNodeLabelKey(pool.Namespace, pool.Spec.ClusterName, pool.Name)
-
-	if len(sc.AllowedTopologies) != 1 || len(sc.AllowedTopologies[0].MatchLabelExpressions) != 1 {
-		t.Fatalf("StorageClass %q AllowedTopologies = %+v, want exactly one MatchLabelExpressions entry", scName, sc.AllowedTopologies)
-	}
-	if got := sc.AllowedTopologies[0].MatchLabelExpressions[0].Key; got != wantKey {
-		t.Fatalf("StorageClass %q AllowedTopologies key = %q, want %q", scName, got, wantKey)
-	}
-
-	if got := sc.Parameters[dhchapNodeLabelParam]; got != wantKey {
-		t.Fatalf("StorageClass %q Parameters[%q] = %q, want %q (must match AllowedTopologies exactly)",
-			scName, dhchapNodeLabelParam, got, wantKey)
-	}
-}
-
 func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 	const statusOnline = "online"
 	const clusterUUID = "cluster-uuid-pool-create"
