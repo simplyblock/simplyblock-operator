@@ -120,10 +120,14 @@ func hardPinTopologyKeys(params map[string]string) []string {
 	if key := strings.TrimSpace(params[paramDHCHAPNodeLabel]); key != "" {
 		keys = append(keys, key)
 	}
-	// Extend here as more topology-gated features land (e.g. the
-	// client-side-VDO "simplyblock.io/vdo-capable" gate from issue #277) —
-	// each new source should likewise resolve to the exact key(s) relevant to
-	// this specific volume, not a shared prefix.
+	// A future topology-gated feature only needs a new StorageClass Parameter
+	// like paramDHCHAPNodeLabel if its gate key is itself scoped per resource
+	// (e.g. per pool, like DHCHAP's). A feature gated on a single fixed,
+	// global key — such as the client-side-VDO "simplyblock.io/vdo-capable"
+	// gate from issue #277 — needs no new parameter at all: just add that
+	// literal key to keys below whenever the params this function already
+	// receives (e.g. client_compression/client_deduplication) indicate this
+	// volume actually needs it.
 	return keys
 }
 
