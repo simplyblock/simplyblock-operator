@@ -92,12 +92,6 @@ type StorageClassParameters struct {
 	// Replicate enables replication for logical volumes.
 	// +kubebuilder:default=false
 	Replicate *bool `json:"replicate,omitempty"`
-	// NumDataChunks is the number of data chunks (distr_ndcs).
-	// +kubebuilder:default="1"
-	NumDataChunks string `json:"numDataChunks,omitempty"`
-	// NumParityChunks is the number of parity chunks (distr_npcs).
-	// +kubebuilder:default="1"
-	NumParityChunks string `json:"numParityChunks,omitempty"`
 	// LvolPriorityClass sets the logical volume priority class.
 	// +kubebuilder:default="0"
 	LvolPriorityClass string `json:"lvolPriorityClass,omitempty"`
@@ -108,9 +102,18 @@ type StorageClassParameters struct {
 	// MaxNamespacePerSubsys limits namespaces per NVMf subsystem.
 	// +kubebuilder:default="1"
 	MaxNamespacePerSubsys string `json:"maxNamespacePerSubsys,omitempty"`
-	// Tune2fsReservedBlocks sets the ext4 reserved-blocks percentage.
-	// +kubebuilder:default="0"
+	// Tune2fsReservedBlocks sets the ext4 reserved-blocks percentage. Left unset, the node
+	// plugin skips tune2fs entirely and mkfs.ext4's own default reserve applies, matching a
+	// StorageClass that omits tune2fs_reserved_blocks. A default of "0" here would not be a
+	// no-op: it actively runs `tune2fs -m 0` on every volume, since the node plugin only skips
+	// the call when the parameter is empty (see stageVolume in the CSI driver), not when it's
+	// "0".
 	Tune2fsReservedBlocks string `json:"tune2fsReservedBlocks,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Filesystem"
+	// Filesystem is the filesystem used to format logical volumes of this pool.
+	// +kubebuilder:validation:Enum=ext4;xfs
+	// +kubebuilder:default=ext4
+	Filesystem string `json:"filesystem,omitempty"`
 }
 
 // PoolSpec defines the desired state of Pool

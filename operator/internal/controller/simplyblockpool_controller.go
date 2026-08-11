@@ -358,9 +358,8 @@ func (r *PoolReconciler) createStorageClassIfNotExists(ctx context.Context, pool
 	allowExpansion := true
 
 	params := map[string]string{
-		"cluster_id":                clusterUUID,
-		"pool_name":                 poolCR.Name,
-		"csi.storage.k8s.io/fstype": "ext4",
+		"cluster_id": clusterUUID,
+		"pool_name":  poolCR.Name,
 	}
 	mergeStorageClassParameters(params, poolCR.Spec.StorageClassParameters)
 
@@ -400,9 +399,10 @@ func (r *PoolReconciler) createStorageClassIfNotExists(ctx context.Context, pool
 }
 
 // mergeStorageClassParameters writes StorageClassParameters fields into dst using the CSI
-// driver's snake_case parameter names. Defaults are declared on the struct via
-// +kubebuilder:default markers and are applied by the API server before the CR is stored,
-// so p fields always carry their intended values here.
+// driver's well-known parameter names (csi.storage.k8s.io/fstype) and the CSI driver's own
+// snake_case names for the rest. Defaults are declared on the struct via +kubebuilder:default
+// markers and are applied by the API server before the CR is stored, so p fields always carry
+// their intended values here.
 func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.StorageClassParameters) {
 	if p == nil {
 		return
@@ -420,12 +420,11 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 	dst["compression"] = p.Compression
 	dst["encryption"] = boolStr(p.Encryption)
 	dst["replicate"] = boolStr(p.Replicate)
-	dst["distr_ndcs"] = p.NumDataChunks
-	dst["distr_npcs"] = p.NumParityChunks
 	dst["lvol_priority_class"] = p.LvolPriorityClass
 	dst["fabric"] = p.Fabric
 	dst["max_namespace_per_subsys"] = p.MaxNamespacePerSubsys
 	dst["tune2fs_reserved_blocks"] = p.Tune2fsReservedBlocks
+	dst["csi.storage.k8s.io/fstype"] = p.Filesystem
 }
 
 // syncPoolHosts reconciles the pool's allowed hosts: fetches the current host list from the

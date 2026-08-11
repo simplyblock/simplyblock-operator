@@ -919,6 +919,14 @@ spec:
                     default: tcp
                     description: Fabric is the transport fabric (e.g. tcp).
                     type: string
+                  filesystem:
+                    default: ext4
+                    description: Filesystem is the filesystem used to format logical
+                      volumes of this pool.
+                    enum:
+                    - ext4
+                    - xfs
+                    type: string
                   lvolPriorityClass:
                     default: "0"
                     description: LvolPriorityClass sets the logical volume priority
@@ -928,14 +936,6 @@ spec:
                     default: "1"
                     description: MaxNamespacePerSubsys limits namespaces per NVMf
                       subsystem.
-                    type: string
-                  numDataChunks:
-                    default: "1"
-                    description: NumDataChunks is the number of data chunks (distr_ndcs).
-                    type: string
-                  numParityChunks:
-                    default: "1"
-                    description: NumParityChunks is the number of parity chunks (distr_npcs).
                     type: string
                   qosRMbytes:
                     default: "0"
@@ -961,9 +961,13 @@ spec:
                     description: Replicate enables replication for logical volumes.
                     type: boolean
                   tune2fsReservedBlocks:
-                    default: "0"
-                    description: Tune2fsReservedBlocks sets the ext4 reserved-blocks
-                      percentage.
+                    description: |-
+                      Tune2fsReservedBlocks sets the ext4 reserved-blocks percentage. Left unset, the node
+                      plugin skips tune2fs entirely and mkfs.ext4's own default reserve applies, matching a
+                      StorageClass that omits tune2fs_reserved_blocks. A default of "0" here would not be a
+                      no-op: it actively runs `tune2fs -m 0` on every volume, since the node plugin only skips
+                      the call when the parameter is empty (see stageVolume in the CSI driver), not when it's
+                      "0".
                     type: string
                 type: object
                 x-kubernetes-validations:
