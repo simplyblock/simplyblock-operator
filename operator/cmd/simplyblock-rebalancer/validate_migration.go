@@ -34,11 +34,13 @@ const (
 // exercised without a real NVMe host. main wires in the real implementations.
 type validationRun struct {
 	hostHasSubsystem func(ctx context.Context, sysRoot, nqn string) (bool, error)
+	presentAddresses func(ctx context.Context, sysRoot, nqn string) (map[string]bool, error)
 	ensurePaths      func(conns []volumemigration.Connection) error
-	validatePaths    func(conns []volumemigration.Connection) error
-	sleep            func(time.Duration)
-	attempts         int
-	delay            time.Duration
+	verifyPaths      func(ctx context.Context, sysRoot, nqn string, conns []volumemigration.Connection,
+		preExisting map[string]bool) ([]volumemigration.PathState, error)
+	sleep    func(time.Duration)
+	attempts int
+	delay    time.Duration
 }
 
 // newValidationRun returns a run wired to the real host operations, with the retry
@@ -46,8 +48,9 @@ type validationRun struct {
 func newValidationRun() validationRun {
 	return validationRun{
 		hostHasSubsystem: volumemigration.HostHasSubsystem,
+		presentAddresses: volumemigration.PresentAddresses,
 		ensurePaths:      volumemigration.EnsureMigrationPaths,
-		validatePaths:    volumemigration.ValidateMigrationPaths,
+		verifyPaths:      volumemigration.VerifyMigrationPaths,
 		sleep:            time.Sleep,
 		attempts:         validateAttempts(),
 		delay:            validateRetryDelay(),
@@ -95,25 +98,43 @@ func (v validationRun) run(
 		log.Printf("host is connected to %s; validating the migration paths", nqn)
 	}
 
-	// The freshly-connected target path can lag behind: nvme connect may return
-	// before its controller is enumerated in `nvme list` and the ANA log page
-	// settles. Retry the connect+validate cycle a few times before giving up so
-	// a transient enumeration lag is not mistaken for a missing path. Already
-	// connected paths are a no-op in ensurePaths, so re-running it only re-attempts
-	// paths that are genuinely missing.
+	// Which of the expected addresses the host already had a controller for. A path
+	// that was there before proves nothing about our connect, and on an HA cluster the
+	// migration target may already be a listener for this subsystem — so the check has
+	// to know the difference rather than accept any matching path.
+	preExisting, err := v.presentAddresses(ctx, sysRoot, nqn)
+	if err != nil {
+		return outcomeValidated, fmt.Errorf("read the host's existing paths to %s: %w", nqn, err)
+	}
+	for addr := range preExisting {
+		log.Printf("path %s to %s already present before connecting", addr, nqn)
+	}
+
+	// The freshly-connected target path can lag behind: nvme connect may return before
+	// its controller is live and the ANA log page settles. Retry the connect+verify
+	// cycle a few times before giving up so a transient lag is not mistaken for a
+	// missing path. Already connected paths are a no-op in ensurePaths, so re-running
+	// it only re-attempts paths that are genuinely missing.
 	var lastErr error
 	for attempt := 1; attempt <= v.attempts; attempt++ {
+		paths, verifyErr := []volumemigration.PathState(nil), error(nil)
 		if err := v.ensurePaths(conns); err != nil {
 			lastErr = fmt.Errorf("ensure migration paths: %w", err)
-		} else if err := v.validatePaths(conns); err != nil {
-			lastErr = fmt.Errorf("validation: %w", err)
+		} else if paths, verifyErr = v.verifyPaths(ctx, sysRoot, nqn, conns, preExisting); verifyErr != nil {
+			lastErr = fmt.Errorf("verification: %w", verifyErr)
 		} else {
-			log.Printf("All paths validated: inaccessible paths present (attempt %d/%d)",
+			for _, p := range paths {
+				log.Printf("path %s", p)
+			}
+			log.Printf("All paths verified: established, live and parked (attempt %d/%d)",
 				attempt, v.attempts)
 			return outcomeValidated, nil
 		}
 
-		log.Printf("path validation attempt %d/%d failed: %v", attempt, v.attempts, lastErr)
+		for _, p := range paths {
+			log.Printf("path %s", p)
+		}
+		log.Printf("path verification attempt %d/%d failed: %v", attempt, v.attempts, lastErr)
 		if attempt < v.attempts {
 			v.sleep(v.delay)
 		}

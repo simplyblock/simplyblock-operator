@@ -111,6 +111,8 @@ type recorder struct {
 	lookupErr      error
 	ensureErrs     []error
 	validateErrs   []error
+	preExisting    map[string]bool
+	presentErr     error
 	ensureCallSeq  int
 	validateCallSq int
 }
@@ -127,11 +129,15 @@ func (rec *recorder) newRun(attempts int) validationRun {
 			rec.ensureCallSeq++
 			return err
 		},
-		validatePaths: func([]volumemigration.Connection) error {
+		presentAddresses: func(_ context.Context, _, _ string) (map[string]bool, error) {
+			return rec.preExisting, rec.presentErr
+		},
+		verifyPaths: func(_ context.Context, _, _ string, _ []volumemigration.Connection,
+			_ map[string]bool) ([]volumemigration.PathState, error) {
 			rec.validates++
 			err := errAt(rec.validateErrs, rec.validateCallSq)
 			rec.validateCallSq++
-			return err
+			return nil, err
 		},
 		sleep:    func(d time.Duration) { rec.sleeps = append(rec.sleeps, d) },
 		attempts: attempts,
@@ -295,4 +301,40 @@ func TestValidationRun_RetryLoop(t *testing.T) {
 			t.Errorf("run with no connections: %v", err)
 		}
 	})
+}
+
+// The pre-existing snapshot is taken before connecting, so verification can tell a path
+// we created from one that was already there. If that snapshot cannot be read, the run
+// must fail rather than verify against an unknown baseline.
+func TestValidationRun_PreExistingSnapshotFails(t *testing.T) {
+	rec := &recorder{present: true, presentErr: errors.New("sysfs unreadable")}
+	_, err := rec.newRun(3).run(context.Background(), "/host/sys", "nqn.x", conns)
+	if err == nil {
+		t.Fatalf("expected an error when the baseline cannot be read")
+	}
+	if !strings.Contains(err.Error(), "existing paths") {
+		t.Errorf("error = %q, want it to name the baseline read", err)
+	}
+	if rec.ensures != 0 {
+		t.Errorf("connected %d path(s) without a baseline", rec.ensures)
+	}
+}
+
+// The baseline is passed through to verification, which is what lets it report whether
+// our connect contributed anything on an HA cluster where the target already listens.
+func TestValidationRun_PassesPreExistingToVerification(t *testing.T) {
+	var got map[string]bool
+	rec := &recorder{present: true, preExisting: map[string]bool{"10.0.0.112:4428": true}}
+	run := rec.newRun(1)
+	run.verifyPaths = func(_ context.Context, _, _ string, _ []volumemigration.Connection,
+		pre map[string]bool) ([]volumemigration.PathState, error) {
+		got = pre
+		return nil, nil
+	}
+	if _, err := run.run(context.Background(), "/host/sys", "nqn.x", conns); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !got["10.0.0.112:4428"] {
+		t.Errorf("verification received %v, want the pre-existing baseline", got)
+	}
 }

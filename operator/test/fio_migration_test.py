@@ -46,6 +46,23 @@ What it does
    migration must not split a subsystem or move a volume into another one. The
    operator's own view is cross-checked too: `status.subsystemNQN` and
    `status.memberCount` on the CR must match the subsystem the test resolved via sbctl.
+6. Verifies the *host* side of every migration, not only the backend placement. For the
+   duration of each migration the NVMe state of the subsystem is sampled on every node
+   that consumes it — controller address, controller state and each namespace's ANA
+   state — read straight from that host's sysfs through its CSI node-plugin pod (which
+   already mounts the host /sys). From those samples three things must hold:
+     * the target must not start serving before cutover (a path that gains accessible
+       namespaces mid-migration lets reads land on a target that has not got the data),
+     * after a Completed migration the target must serve *every* namespace of the
+       subsystem on every consuming node — the half-moved batch, seen from the host,
+     * no namespace may be left without an accessible path for longer than
+       --ana-stall-crit seconds (an I/O stall the fio timeline shows but cannot explain).
+   The samples are written per migration to ana/<migration>.csv for correlation with the
+   per-second fio time series.
+7. Splits migrations by target discriminator (--target-policy): whether the node migrated
+   *to* also runs a pod consuming that subsystem. Both cases are exercised by default
+   (alternating), and the report accounts for each separately — a fault that only occurs
+   when the target hosts a consumer otherwise reads as intermittent.
 
 Failure criterion
 ------------------
@@ -74,6 +91,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -113,6 +131,37 @@ API_GROUP = "storage.simplyblock.io/v1alpha1"
 SNAPSHOT_APIVERSION = "snapshot.storage.k8s.io/v1"
 SNAPSHOTCLASS_NAME = "simplyblock-fio-migration-snapclass"
 SNAPSHOT_CHANCE = 0.15  # probability of snapshotting the volume before each migration
+
+# ANA-state sampling: the host's own view of a migrating subsystem, read from sysfs on
+# every node that consumes it. The CSI node plugin already mounts the host's /sys, so
+# its pods are used as the window onto each node — no extra privileged pod needed.
+CSI_NODE_MATCH = "csi-node"      # substring identifying the CSI node-plugin DaemonSet pods
+CSI_NODE_CONTAINER = "csi-node"  # container within them that has the host's /sys mounted
+# One line per controller of the subsystem: "<traddr>:<trsvcid>|<state>|<nsid>:<ana>,…".
+# Controllers are the subsystem's directory entries that carry a `state` file; the ANA
+# state lives per *path* (nvmeXcYnZ), which is why it is read from below the controller
+# rather than from the multipath head device (whose ana_state file does not exist).
+ANA_PROBE_SCRIPT = r'''
+for s in /sys/class/nvme-subsystem/nvme-subsys*; do
+  [ -r "$s/subsysnqn" ] || continue
+  [ "$(cat "$s/subsysnqn")" = "$NQN" ] || continue
+  for c in "$s"/nvme*; do
+    [ -r "$c/state" ] || continue
+    ad=$(cat "$c/address" 2>/dev/null)
+    tr=$(echo "$ad" | sed -n 's/.*traddr=\([^,]*\).*/\1/p')
+    sv=$(echo "$ad" | sed -n 's/.*trsvcid=\([^,]*\).*/\1/p')
+    ana=""
+    for p in "$c"/nvme*c*n*; do
+      [ -r "$p/ana_state" ] || continue
+      ana="$ana,$(cat "$p/nsid" 2>/dev/null):$(cat "$p/ana_state" 2>/dev/null)"
+    done
+    echo "$tr:$sv|$(cat "$c/state")|${ana#,}"
+  done
+done
+'''
+# ANA states the kernel will route I/O to. Everything else (inaccessible,
+# persistent-loss, change) parks the path.
+ANA_ACCESSIBLE = ("optimized", "non-optimized", "nonoptimized")
 
 
 def now_utc() -> datetime:
@@ -212,6 +261,39 @@ class MigrationRecord:
     cr_migration_uuid: str = ""
     cr_match_ok: bool | None = None
     cr_match_msg: str = ""
+    # Target-selection discriminator: whether the node this subsystem was migrated *to*
+    # also runs a pod consuming it. That case needs the consuming host to join the
+    # subsystem on a node that is simultaneously becoming its target, and is the one
+    # this run separates out on purpose (--target-policy).
+    target_has_consumer: bool | None = None
+    target_consumers: list[str] = field(default_factory=list)
+    target_policy: str = ""       # the policy in force for this pick
+    target_policy_ok: bool = True  # False when no candidate node satisfied it
+    # Host-side ANA sampling, taken on every consuming node for the duration of the
+    # migration (see AnaSampler). The samples are the evidence for whether the target
+    # started serving before cutover and whether it served everything afterwards.
+    ana_samples: list["AnaSample"] = field(default_factory=list)
+    ana_csv: str = ""
+    ana_ok: bool | None = None    # True=paths behaved, False=violation, None=not sampled
+    ana_msgs: list[str] = field(default_factory=list)
+    ana_stall_s: float = 0.0      # longest window with no accessible path for some namespace
+    # The CR phase as last polled, so each sample can be stamped with the phase in force
+    # when it was taken (`phase` itself is only set once the migration goes terminal).
+    live_phase: str = ""
+
+
+@dataclass
+class AnaSample:
+    """One controller's state on one consuming node at one instant, as the host sees it."""
+    ts: datetime
+    node: str            # Kubernetes node the sample was taken on
+    phase: str           # the migration CR's phase at that instant
+    address: str         # "<traddr>:<trsvcid>"
+    state: str           # controller state: live / connecting / resetting / …
+    ana: dict[int, str] = field(default_factory=dict)  # nsid -> ANA state
+
+    def accessible_nsids(self) -> set[int]:
+        return {n for n, a in self.ana.items() if a in ANA_ACCESSIBLE}
 
 
 @dataclass
@@ -245,6 +327,12 @@ class FioMigrationTest:
         self.nodes: list[str] = []
         self.node_host: dict[str, str] = {}    # node uuid -> k8s hostname (StorageNode CR)
         self.sbctl_host_to_node: dict[str, str] = {}  # sbctl Hostname (vmNN_PORT) -> node uuid
+        self.node_ip: dict[str, str] = {}      # node uuid -> management IP (== NVMe traddr)
+        self.csi_node_pod_of: dict[str, str] = {}  # k8s node -> CSI node-plugin pod
+        self._pod_node_of: dict[str, str] = {}    # fio pod -> k8s node
+        self._ana_probe_errors: int = 0
+        self._ana_stop: threading.Event = threading.Event()
+        self._ana_thread: threading.Thread | None = None
         self._webappapi_pod: str = ""
         self._cluster_uuid: str = ""
         self.migrations: list[MigrationRecord] = []
@@ -888,6 +976,10 @@ class FioMigrationTest:
             host, uuid = n.get("Hostname", ""), n.get("UUID", "")
             if host and uuid:
                 m[host] = uuid
+            # The management IP is the NVMe transport address the node's subsystems listen
+            # on, which is how a sampled path is attributed to source or target.
+            if uuid and n.get("Management IP"):
+                self.node_ip[uuid] = n["Management IP"]
         if not m:
             raise RuntimeError("sbctl storage-node list reported no Hostname/UUID pairs")
         self.sbctl_host_to_node = m
@@ -1065,13 +1157,315 @@ class FioMigrationTest:
             self.log.warn(f"SNAPSHOT VERIFY  {rec.pre_snapshot}: could not re-resolve "
                           "snapshot id after migration (inconclusive)")
 
-    def pick_target(self, pv: str) -> str:
-        # placement[pv] is refreshed from sbctl before each pick (see run_one_migration),
-        # so it reflects the real current node even when the auto-rebalancer has moved the
-        # volume out from under us. Pick any node other than where it currently lives.
+    # ---- host-side ANA sampling (through the CSI node-plugin pods) ---------------
+
+    def _refresh_csi_node_pods(self) -> None:
+        """Map each Kubernetes node to its CSI node-plugin pod. That pod already has the
+        host's /sys mounted, so it is the window onto the host's NVMe view — no extra
+        privileged pod of our own is needed."""
+        try:
+            pods = self._list_pods(SIMPLYBLOCK_NAMESPACE, [CSI_NODE_MATCH])
+        except Exception as e:  # noqa: BLE001
+            self.log.warn(f"cannot list CSI node pods: {e}")
+            return
+        self.csi_node_pod_of = {p["node"]: p["name"] for p in pods if p["node"]}
+        self.log.info("CSI node plugin pods (ANA sampling windows):")
+        for node, pod in sorted(self.csi_node_pod_of.items()):
+            self.log.info(f"    {node}  ->  {pod}")
+
+    def csi_node_pod(self, k8s_node: str) -> str:
+        if k8s_node not in self.csi_node_pod_of:
+            self._refresh_csi_node_pods()
+        return self.csi_node_pod_of.get(k8s_node, "")
+
+    def pod_nodes(self) -> dict[str, str]:
+        """Map each of the run's fio pods to the Kubernetes node it runs on.
+
+        Resolved once and cached: the workload is plain Pods, so they never move for the
+        lifetime of the run. A pod that is not scheduled yet is simply absent."""
+        if self._pod_node_of:
+            return self._pod_node_of
+        try:
+            pods = self._list_pods(NAMESPACE, [f"{self.run_id}-fio"])
+        except Exception as e:  # noqa: BLE001
+            self.log.warn(f"cannot resolve fio pod nodes: {e}")
+            return {}
+        self._pod_node_of = {p["name"]: p["node"] for p in pods if p["node"]}
+        return self._pod_node_of
+
+    def consumer_nodes(self, pvs: list[str]) -> dict[str, list[str]]:
+        """Kubernetes nodes consuming any of these PVs, each with the pods doing so.
+
+        This is the node set a shared subsystem is connected on, and therefore the set
+        the migration has to establish new paths on — the same resolution the operator
+        performs (via pods) to decide where to run its validation jobs."""
+        by_node: dict[str, list[str]] = {}
+        nodes = self.pod_nodes()
+        for pv in pvs:
+            pod = self.pod_of_pv(pv)
+            node = nodes.get(pod or "", "")
+            if node:
+                by_node.setdefault(node, []).append(pod)
+        return by_node
+
+    def _sample_ana_on(self, k8s_node: str, nqn: str, phase: str) -> list[AnaSample]:
+        """Read one host's view of the subsystem: every controller with its state and the
+        ANA state of each namespace path. An empty result means the host holds no
+        connection to that subsystem at all."""
+        pod = self.csi_node_pod(k8s_node)
+        if not pod:
+            return []
+        cp = subprocess.run(
+            ["kubectl", "-n", SIMPLYBLOCK_NAMESPACE, "exec", pod, "-c", CSI_NODE_CONTAINER,
+             "--", "env", f"NQN={nqn}", "sh", "-c", ANA_PROBE_SCRIPT],
+            capture_output=True, text=True, check=False, timeout=30)
+        if cp.returncode != 0:
+            self._ana_probe_errors += 1
+            if self._ana_probe_errors <= 3 or self._ana_probe_errors % 20 == 0:
+                self.log.warn(f"ANA probe on {k8s_node} failed "
+                              f"(#{self._ana_probe_errors}): {cp.stderr.strip()[:200]}")
+            return []
+        ts = now_utc()
+        out = []
+        for line in cp.stdout.splitlines():
+            parts = line.strip().split("|")
+            if len(parts) != 3:
+                continue
+            addr, state, ana = parts
+            states = {}
+            for item in ana.split(",") if ana else []:
+                nsid, _, a = item.partition(":")
+                if nsid.isdigit():
+                    states[int(nsid)] = a
+            out.append(AnaSample(ts=ts, node=k8s_node, phase=phase,
+                                 address=addr, state=state, ana=states))
+        return out
+
+    def _sample_ana_round(self, rec: "MigrationRecord", nodes: list[str]) -> list[AnaSample]:
+        """One sampling round across all consuming nodes, taken concurrently so the
+        samples describe one instant rather than a staircase across nodes."""
+        if not nodes:
+            return []
+        with ThreadPoolExecutor(max_workers=min(len(nodes), 8)) as pool:
+            futures = [pool.submit(self._sample_ana_on, n, rec.nqn, rec.live_phase)
+                       for n in nodes]
+            out = []
+            for f in futures:
+                try:
+                    out.extend(f.result())
+                except Exception as e:  # noqa: BLE001
+                    self.log.warn(f"ANA sampling round failed: {e}")
+            return out
+
+    def _start_ana_sampler(self, rec: "MigrationRecord", nodes: list[str]) -> None:
+        """Sample the host view on every consuming node for the duration of the migration.
+
+        The samples are what makes the verification state-aware rather than merely
+        positional: they show *when* the target began serving relative to cutover, and
+        whether every namespace was served afterwards."""
+        if self.a.ana_interval <= 0 or not rec.nqn or not nodes:
+            return
+        stop = threading.Event()
+
+        def loop() -> None:
+            while True:
+                rec.ana_samples.extend(self._sample_ana_round(rec, nodes))
+                if stop.wait(self.a.ana_interval):
+                    break
+            # A last round after the CR went terminal: the post-cutover state is the half
+            # of the evidence the in-flight rounds cannot capture.
+            rec.live_phase = rec.phase or rec.live_phase
+            rec.ana_samples.extend(self._sample_ana_round(rec, nodes))
+
+        thread = threading.Thread(target=loop, name=f"ana-{rec.name}", daemon=True)
+        self._ana_stop, self._ana_thread = stop, thread
+        thread.start()
+        self.log.info(f"ANA sampling started for {rec.name} on {len(nodes)} node(s) "
+                      f"every {self.a.ana_interval}s: {', '.join(nodes)}")
+
+    def _stop_ana_sampler(self, rec: "MigrationRecord") -> None:
+        if not self._ana_thread:
+            return
+        self._ana_stop.set()
+        self._ana_thread.join(timeout=90)
+        self._ana_thread = None
+        if rec.ana_samples:
+            rec.ana_csv = self._write_ana_csv(rec)
+            self.log.info(f"ANA samples for {rec.name}: {len(rec.ana_samples)} "
+                          f"-> {rec.ana_csv}")
+
+    def _write_ana_csv(self, rec: "MigrationRecord") -> str:
+        """One row per (instant, node, controller, namespace) — the raw host view, kept
+        alongside the fio time series so an I/O gap can be read against path state."""
+        d = os.path.join(self.outdir, "ana")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, f"{rec.name}.csv")
+        src_ip = self.node_ip.get(rec.source, "")
+        tgt_ip = self.node_ip.get(rec.target, "")
+        with open(path, "w") as fh:
+            fh.write("ts,node,phase,address,role,ctrl_state,nsid,ana_state\n")
+            for s in sorted(rec.ana_samples, key=lambda x: (x.ts, x.node, x.address)):
+                ip = s.address.rsplit(":", 1)[0]
+                role = "target" if ip == tgt_ip else "source" if ip == src_ip else "other"
+                if not s.ana:  # a controller with no namespace path at all is itself data
+                    fh.write(f"{iso(s.ts)},{s.node},{s.phase},{s.address},{role},"
+                             f"{s.state},,\n")
+                for nsid, ana in sorted(s.ana.items()):
+                    fh.write(f"{iso(s.ts)},{s.node},{s.phase},{s.address},{role},"
+                             f"{s.state},{nsid},{ana}\n")
+        return path
+
+    def _verify_ana_states(self, rec: "MigrationRecord") -> None:
+        """Verify the host-side path behaviour of one migration against its ANA samples.
+
+        Three things must hold, all of them invisible to the placement check:
+
+        * The target must not start serving before cutover. A path that grows accessible
+          namespaces while the migration is still running lets reads land on a target that
+          does not hold the data yet — the corruption signature. The baseline is each
+          node's *first* sample, so a target that was already an accessible HA listener
+          before we started is not mistaken for one that became accessible mid-flight.
+        * After a Completed migration the target must serve *every* namespace of the
+          subsystem on every consuming node. A batch migration that leaves one namespace
+          without a path on the target is exactly the half-moved case, seen from the host.
+        * No namespace may be left with no accessible path anywhere for long. That is an
+          I/O stall, which the fio timeline shows as a gap but cannot attribute.
+        """
+        if not rec.ana_samples:
+            return
+        tgt_ip = self.node_ip.get(rec.target, "")
+        if not tgt_ip:
+            self.log.warn(f"ANA VERIFY  {rec.name}: target {rec.target} has no known IP; "
+                          "cannot tell target paths from source paths")
+            return
+        expected = {self.ns_id_of[pv] for pv in (rec.group_pvs or [rec.pv])
+                    if pv in self.ns_id_of}
+
+        def is_target(s: AnaSample) -> bool:
+            return s.address.rsplit(":", 1)[0] == tgt_ip
+
+        problems: list[str] = []
+        by_node: dict[str, list[AnaSample]] = {}
+        for s in rec.ana_samples:
+            by_node.setdefault(s.node, []).append(s)
+
+        for node, samples in sorted(by_node.items()):
+            samples.sort(key=lambda x: x.ts)
+            first_ts = samples[0].ts
+            baseline = {n for s in samples if s.ts == first_ts and is_target(s)
+                        for n in s.accessible_nsids()}
+            # 1. served before cutover
+            early = {}
+            for s in samples:
+                if not is_target(s) or (rec.end and s.ts >= rec.end):
+                    continue
+                new = s.accessible_nsids() - baseline
+                if new:
+                    early.setdefault(s.ts, set()).update(new)
+            if early:
+                ts0 = min(early)
+                lead = (rec.end - ts0).total_seconds() if rec.end else -1
+                problems.append(
+                    f"{node}: target {tgt_ip} started serving namespace(s) "
+                    f"{sorted(early[ts0])} at {iso(ts0)}, {lead:.0f}s BEFORE cutover "
+                    f"(phase was {[s.phase for s in samples if s.ts == ts0][:1]})")
+
+            # 2. serves everything afterwards
+            if rec.phase == "Completed":
+                last_ts = samples[-1].ts
+                final = [s for s in samples if s.ts == last_ts and is_target(s)]
+                served = {n for s in final for n in s.accessible_nsids()}
+                dead = [s.address for s in final if s.state != "live"]
+                if not final:
+                    problems.append(f"{node}: no controller for the target {tgt_ip} after "
+                                    "a completed migration — the host never joined it")
+                elif dead:
+                    problems.append(f"{node}: target controller(s) {', '.join(dead)} not live "
+                                    "after cutover")
+                elif expected and expected - served:
+                    problems.append(
+                        f"{node}: target {tgt_ip} serves namespace(s) {sorted(served) or '-'} "
+                        f"but the subsystem has {sorted(expected)} — "
+                        f"{sorted(expected - served)} unserved after cutover")
+
+            # 3. stalls: some namespace with no accessible path anywhere on this node
+            per_ts: dict[datetime, set[int]] = {}
+            for s in samples:
+                per_ts.setdefault(s.ts, set()).update(s.accessible_nsids())
+            times = sorted(per_ts)
+            want = expected or {n for acc in per_ts.values() for n in acc}
+            stall_start = None
+            for i, t in enumerate(times):
+                missing = bool(want - per_ts[t])
+                if missing and stall_start is None:
+                    stall_start = t
+                elif not missing and stall_start is not None:
+                    rec.ana_stall_s = max(rec.ana_stall_s, (t - stall_start).total_seconds())
+                    stall_start = None
+            if stall_start is not None:
+                rec.ana_stall_s = max(rec.ana_stall_s,
+                                      (times[-1] - stall_start).total_seconds())
+
+        if rec.ana_stall_s > self.a.ana_stall_crit:
+            problems.append(f"some namespace had no accessible path for "
+                            f"{rec.ana_stall_s:.0f}s (> {self.a.ana_stall_crit}s)")
+
+        rec.ana_msgs = problems
+        rec.ana_ok = not problems
+        if problems:
+            self.log.crit(f"ANA VERIFY FAIL  {rec.name}:")
+            for p in problems:
+                self.log.crit(f"    {p}")
+        else:
+            self.log.event(
+                f"ANA VERIFY  {rec.name}  OK  nodes={len(by_node)}  "
+                f"samples={len(rec.ana_samples)}  namespaces={sorted(expected) or '?'}  "
+                f"max_stall={rec.ana_stall_s:.0f}s")
+
+    # ---- target selection --------------------------------------------------------
+
+    def pick_target(self, pv: str, group: list[str], idx: int,
+                    rec: "MigrationRecord | None" = None) -> str:
+        """Pick the node to migrate to, honouring --target-policy.
+
+        The policy is the discriminator: whether the target node also runs a pod consuming
+        this subsystem. That case is materially different — the consuming host has to join
+        a subsystem on the very node that is becoming its target — so which one a migration
+        exercised is recorded rather than left to chance.
+
+        placement[pv] is refreshed from sbctl before each pick (see run_one_migration), so
+        it reflects the real current node even when the auto-rebalancer has moved the
+        volume out from under us; the target is always some other node.
+        """
         current = self.placement.get(pv, "")
         candidates = [n for n in self.nodes if n != current] if current else list(self.nodes)
-        return random.choice(candidates)
+        policy = self.a.target_policy
+        if policy == "alternate":
+            # First idx is 1, so odd migrations put the target on a consuming node — the
+            # more demanding case, worth reaching first if a run is cut short.
+            policy = "consumer" if idx % 2 == 1 else "no-consumer"
+        consuming = self.consumer_nodes(group)  # k8s node -> consuming pods
+        want = None if policy == "random" else (policy == "consumer")
+
+        chosen_from = candidates
+        if want is not None:
+            matching = [n for n in candidates
+                        if (self.node_host.get(n, "") in consuming) == want]
+            if matching:
+                chosen_from = matching
+            elif rec is not None:
+                rec.target_policy_ok = False
+                self.log.warn(
+                    f"target policy {policy!r}: no candidate node "
+                    f"{'hosts' if want else 'is free of'} a consumer of this subsystem "
+                    f"(consumers on {', '.join(sorted(consuming)) or 'none'}); "
+                    "picking any other node")
+        target = random.choice(chosen_from)
+        if rec is not None:
+            rec.target_policy = policy
+            rec.target_consumers = sorted(consuming.get(self.node_host.get(target, ""), []))
+            rec.target_has_consumer = bool(rec.target_consumers)
+        return target
 
     def pick_pod(self, idx: int) -> str:
         """Pick the pod to migrate, alternating between single-namespace and namespaced
@@ -1113,9 +1507,9 @@ class FioMigrationTest:
         # target the node it already lives on (HTTP 400 "already on node").
         nodes = self._sbctl_nodes_of(group)
         self.placement.update(nodes)
-        target = self.pick_target(pv)
         name = f"{self.run_id}-mig-{idx}"
-        rec = MigrationRecord(name=name, pod=pod, pvc=pvc, pv=pv, target=target)
+        rec = MigrationRecord(name=name, pod=pod, pvc=pvc, pv=pv, target="")
+        rec.target = target = self.pick_target(pv, group, idx, rec)
         rec.vol = self.volume_uuid_of.get(pv, "")  # lvol UUID, as webappapi errors reference it
         rec.source = self.placement.get(pv, "")  # authoritative current node (sbctl)
         rec.nqn = self.nqn_of.get(pv, "")
@@ -1135,6 +1529,12 @@ class FioMigrationTest:
         # the snapshot (validated again after it finishes).
         self.maybe_snapshot(rec, idx)
 
+        # Sample the host view from before the CR exists: the pre-migration state is the
+        # baseline every "started serving too early" judgement is made against.
+        consuming = self.consumer_nodes(group)
+        rec.live_phase = "Pending"
+        self._start_ana_sampler(rec, sorted(consuming))
+
         kubectl_apply(self.migration_manifest(name, pv, target))
         siblings = [self.pod_of_pv(p) or p for p in group if p != pv]
         self.log.event(
@@ -1142,7 +1542,12 @@ class FioMigrationTest:
             f"vol={rec.vol or '?'}  subsystem={rec.nqn or '?'}  members={len(group)}"
             + (f" (moves along: {', '.join(siblings)})" if siblings else "")
             + f"  source={rec.source or '?'} ({self.node_host.get(rec.source,'?')})  "
-            f"target={target} ({self.node_host.get(target,'?')})")
+            f"target={target} ({self.node_host.get(target,'?')})  "
+            f"policy={rec.target_policy}"
+            + (f"  target hosts consumer(s): {', '.join(rec.target_consumers)}"
+               if rec.target_has_consumer else "  target hosts no consumer")
+            + f"  consumers on {len(consuming)} node(s): "
+            + ", ".join(f"{n}({len(p)})" for n, p in sorted(consuming.items())))
 
         # Bound the wait so a migration started late doesn't block long past fio's
         # end; hard_deadline already includes a grace window beyond the fio runtime.
@@ -1152,6 +1557,7 @@ class FioMigrationTest:
             cr = kubectl_json(["get", "volumemigration", name], check=False)
             status = cr.get("status", {}) if cr else {}
             phase = status.get("phase", "")
+            rec.live_phase = phase or rec.live_phase  # stamped onto concurrent ANA samples
             if status.get("sourceNodeUUID"):
                 rec.source = status["sourceNodeUUID"]
                 if not self.placement.get(pv):
@@ -1183,8 +1589,12 @@ class FioMigrationTest:
                 f"MIGRATION STOP   {name}  phase={rec.phase}  vol={rec.vol or '?'}  target={target}({tgt_h})  "
                 f"source={rec.source or '?'}  duration={dur:.0f}s  error={rec.error!r}")
 
+        # Stop sampling only after the CR is terminal, so the final round captures the
+        # post-cutover state, then judge the collected path behaviour.
+        self._stop_ana_sampler(rec)
         self._verify_cr_subsystem(rec)
         self._verify_migration(rec)
+        self._verify_ana_states(rec)
         self._verify_snapshot_after_migration(rec)
         return rec
 
@@ -1850,6 +2260,12 @@ class FioMigrationTest:
                 "pre_snapshot": m.pre_snapshot, "pre_snapshot_id": m.pre_snapshot_id,
                 "snapshot_created_ok": m.snapshot_created_ok, "snapshot_post_ok": m.snapshot_post_ok,
                 "snapshot_verify_msg": m.snapshot_verify_msg,
+                "target_policy": m.target_policy, "target_policy_ok": m.target_policy_ok,
+                "target_has_consumer": m.target_has_consumer,
+                "target_consumers": m.target_consumers,
+                "ana_ok": m.ana_ok, "ana_msgs": m.ana_msgs,
+                "ana_samples": len(m.ana_samples), "ana_csv": m.ana_csv,
+                "ana_max_stall_s": round(m.ana_stall_s, 1),
             })
 
         # The subsystem grouping the whole verification rests on, as last resolved.
@@ -1877,6 +2293,37 @@ class FioMigrationTest:
              "cr_subsystem_nqn": m.cr_nqn, "cr_member_count": m.cr_members,
              "msg": m.cr_match_msg}
             for m in cr_failures]
+
+        # Host-side path behaviour (ANA samples taken on every consuming node): the target
+        # must not serve before cutover, must serve every namespace after it, and no
+        # namespace may be left without an accessible path for long.
+        ana_failures = [m for m in self.migrations if m.ana_ok is False]
+        report["ana_failures"] = [
+            {"name": m.name, "pv": m.pv, "phase": m.phase, "subsystem_nqn": m.nqn,
+             "target_has_consumer": m.target_has_consumer,
+             "max_stall_s": round(m.ana_stall_s, 1), "csv": m.ana_csv, "msgs": m.ana_msgs}
+            for m in ana_failures]
+
+        # The target-selection discriminator: how the run split between migrating onto a
+        # node that already consumes the subsystem and onto one that does not. Without this
+        # split a failure that only occurs in one of the two cases reads as intermittent.
+        by_discriminator: dict[str, dict] = {}
+        for m in self.migrations:
+            key = ("target_hosts_consumer" if m.target_has_consumer
+                   else "target_hosts_no_consumer" if m.target_has_consumer is False
+                   else "unknown")
+            st = by_discriminator.setdefault(
+                key, {"attempted": 0, "completed": 0, "ana_failed": 0, "corrupted_pods": []})
+            st["attempted"] += 1
+            if m.phase == "Completed":
+                st["completed"] += 1
+            if m.ana_ok is False:
+                st["ana_failed"] += 1
+        report["migrations_by_target_policy"] = {
+            "policy": self.a.target_policy,
+            "unsatisfied_picks": len([m for m in self.migrations if not m.target_policy_ok]),
+            "split": by_discriminator,
+        }
 
         # Every kind that was attempted must have migrated successfully at least once. A
         # kind that fails *every* time (e.g. the backend rejecting that shape of request)
@@ -1952,6 +2399,13 @@ class FioMigrationTest:
             report["result"] = (f"FAIL — {len(cr_failures)} migration(s) where the operator's "
                                 "subsystem view disagreed with the backend")
             ok = False
+        elif ana_failures:
+            early = [m for m in ana_failures
+                     if any("BEFORE cutover" in x for x in m.ana_msgs)]
+            report["result"] = (
+                f"FAIL — {len(ana_failures)} migration(s) with misbehaving host paths"
+                + (f", {len(early)} where the target served before cutover" if early else ""))
+            ok = False
         elif never_completed:
             report["result"] = ("FAIL — no migration of "
                                 + " or ".join(f"{k} volume(s) ({st['attempted']} attempted)"
@@ -1994,6 +2448,15 @@ class FioMigrationTest:
                           "may have migrated a different set of volumes than it reported:")
             for m in cr_failures:
                 self.log.crit(f"    {m.name}: {m.cr_match_msg}")
+        if ana_failures:
+            self.log.crit(f"HOST PATH VERIFICATION: {len(ana_failures)} migration(s) where the "
+                          "consuming hosts' NVMe paths did not behave as a migration requires "
+                          "(sampled ANA states per node):")
+            for m in ana_failures:
+                for msg in m.ana_msgs:
+                    self.log.crit(f"    {m.name}: {msg}")
+                if m.ana_csv:
+                    self.log.crit(f"    {m.name}: samples -> {m.ana_csv}")
         if never_completed:
             for kind, st in never_completed.items():
                 self.log.crit(
@@ -2075,6 +2538,22 @@ class FioMigrationTest:
         crfail = len([m for m in self.migrations if m.cr_match_ok is False])
         self.log.info(f"subsystem view    : {crok} CR/backend agree / {crfail} disagree "
                       "(status.subsystemNQN + memberCount vs sbctl)")
+        pol = report.get("migrations_by_target_policy", {})
+        if pol:
+            self.log.info(f"target policy     : {pol.get('policy')} "
+                          f"({pol.get('unsatisfied_picks', 0)} pick(s) could not honour it)")
+            for key, st in sorted(pol.get("split", {}).items()):
+                self.log.info(f"  {key:>26}: {st['completed']} completed / "
+                              f"{st['attempted']} attempted / "
+                              f"{st['ana_failed']} with host-path violations")
+        sampled = [m for m in self.migrations if m.ana_samples]
+        if sampled:
+            aok = len([m for m in sampled if m.ana_ok is True])
+            afail = len([m for m in sampled if m.ana_ok is False])
+            worst = max((m.ana_stall_s for m in sampled), default=0.0)
+            self.log.info(f"host paths (ANA)  : {aok} ok / {afail} violated "
+                          f"/ {len(sampled)} sampled  "
+                          f"(worst namespace stall {worst:.0f}s; per-migration CSVs in ana/)")
         snapped = [m for m in self.migrations if m.pre_snapshot]
         if snapped:
             sok = len([m for m in snapped
@@ -2173,6 +2652,22 @@ class FioMigrationTest:
                     self.ensure_snapshot_class()
                     self.log.info(f"snapshots enabled: {self.a.snapshot_chance:.0%} chance "
                                   "to snapshot a volume before migrating it")
+                # Which node each fio pod runs on drives both the target-selection policy
+                # and the set of nodes the ANA sampler watches; the CSI node pods are the
+                # windows it samples through.
+                nodes_of_pods = self.pod_nodes()
+                self.log.info("fio pod placement (consumers per node):")
+                for node in sorted(set(nodes_of_pods.values())):
+                    pods_here = sorted(p for p, n in nodes_of_pods.items() if n == node)
+                    self.log.info(f"    {node}: {', '.join(pods_here)}")
+                if self.a.ana_interval > 0:
+                    self._refresh_csi_node_pods()
+                    missing = sorted(set(nodes_of_pods.values()) - set(self.csi_node_pod_of))
+                    if missing:
+                        self.log.warn("no CSI node pod found on " + ", ".join(missing)
+                                      + " — host paths on those nodes cannot be sampled")
+                else:
+                    self.log.info("ANA sampling disabled (--ana-interval 0)")
             self.wait_io_flowing()
             self._io_start_time = now_utc()
 
@@ -2260,6 +2755,18 @@ def parse_args():
                    help="extra seconds past fio runtime to let a late migration finish (default 120)")
     p.add_argument("--migration-poll", type=int, default=5,
                    help="migration status poll interval seconds (default 5)")
+    p.add_argument("--target-policy", default="alternate",
+                   choices=["alternate", "consumer", "no-consumer", "random"],
+                   help="whether the migration target node may also run a pod consuming the "
+                        "migrated subsystem: 'consumer' always picks such a node, "
+                        "'no-consumer' never does, 'alternate' (default) switches per "
+                        "migration, 'random' ignores the distinction")
+    p.add_argument("--ana-interval", type=float, default=2.0,
+                   help="seconds between host-side ANA samples taken on every consuming "
+                        "node through the CSI node pods (0 disables sampling)")
+    p.add_argument("--ana-stall-crit", type=float, default=60.0,
+                   help="fail a migration if some namespace had no accessible path on a "
+                        "consuming node for longer than this (seconds)")
     p.add_argument("--snapshot-chance", type=float, default=SNAPSHOT_CHANCE,
                    help="probability (0..1) of taking a VolumeSnapshot of a volume just "
                         "before migrating it, so the migration must carry the snapshot; the "
