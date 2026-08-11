@@ -66,7 +66,7 @@ type StorageNodeSetSpec struct {
     WorkerNodes    []string `json:"workerNodes"`
 
     // Fleet-wide defaults — apply to every StorageNode unless overridden by NodeConfigs.
-    MaxLogicalVolumeCount *int32              `json:"maxLogicalVolumeCount,omitempty"`
+    MaxSubsystemCount *int32              `json:"maxSubsystemCount,omitempty"`
     Partitions            *int32              `json:"partitions,omitempty"`
     JournalManagerSpec    *JournalManagerSpec `json:"journalManager,omitempty"`
     CorePercentage        *int32              `json:"corePercentage,omitempty"`
@@ -85,11 +85,11 @@ type StorageNodeSetSpec struct {
     // Example:
     //   nodeConfigs:
     //     vm02.simplyblock3.localdomain:
-    //       maxLogicalVolumeCount: 50
+    //       maxSubsystemCount: 50
     //       spdkSystemMemory: "8G"
     //       failureDomain: 1
     //     vm04.simplyblock3.localdomain:
-    //       maxLogicalVolumeCount: 10
+    //       maxSubsystemCount: 10
     //       failureDomain: 2
     // +optional
     NodeConfigs map[string]StorageNodeOverrides `json:"nodeConfigs,omitempty"`
@@ -149,7 +149,7 @@ type StorageNodeSpec struct {
 }
 
 type StorageNodeOverrides struct {
-    MaxLogicalVolumeCount *int32 `json:"maxLogicalVolumeCount,omitempty"`
+    MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
     SpdkSystemMemory      string `json:"spdkSystemMemory,omitempty"`
 
     // FailureDomain is the failure-domain group index (≥ 1) for this node.

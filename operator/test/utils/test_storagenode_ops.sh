@@ -156,8 +156,8 @@ if run_test 4; then
     if [[ -n "$overrides" && "$overrides" != "{}" ]]; then
       found_overrides=true
       max_lvol=$(kubectl -n "$NAMESPACE" get storagenode "$name" \
-        -o jsonpath='{.spec.overrides.maxLogicalVolumeCount}' 2>/dev/null)
-      info "$name: maxLogicalVolumeCount=$max_lvol"
+        -o jsonpath='{.spec.overrides.maxSubsystemCount}' 2>/dev/null)
+      info "$name: maxSubsystemCount=$max_lvol"
     fi
   done
   $found_overrides && pass "StorageNode.spec.overrides populated from nodeConfigs" \
@@ -406,7 +406,7 @@ spec:
   workerNode: $EXPAND_WORKER
   socketIndex: 0
   overrides:
-    maxLogicalVolumeCount: 15
+    maxSubsystemCount: 15
     spdkSystemMemory: "2G"
 EOF
 
@@ -438,7 +438,7 @@ EOF
     -o jsonpath="{.data['$EXPAND_WORKER']}" 2>/dev/null | \
     grep "^MAX_LVOL=" | cut -d= -f2 || true)
   [[ "$max_lvol" == "15" ]] \
-    && pass "Override maxLogicalVolumeCount=15 reflected in ConfigMap" \
+    && pass "Override maxSubsystemCount=15 reflected in ConfigMap" \
     || fail "Expected MAX_LVOL=15 in ConfigMap, got '$max_lvol'"
 
   # 4. StorageNodeReconciler picks it up and provisions it

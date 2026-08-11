@@ -19,7 +19,7 @@ package controller
 // reconcilePerNodeConfigMap creates or updates a single ConfigMap that holds
 // per-worker-node effective configuration values. The DaemonSet init container
 // mounts this ConfigMap and sources the file matching its hostname so that
-// fields like maxLogicalVolumeCount, corePercentage, deviceNames, etc. differ
+// fields like maxSubsystemCount, corePercentage, deviceNames, etc. differ
 // per node without requiring a separate DaemonSet per node.
 //
 // ConfigMap structure:
@@ -163,7 +163,7 @@ func (r *StorageNodeSetReconciler) reconcilePerNodeConfigMap(
 func buildPerNodeEnvFile(sns *simplyblockv1alpha1.StorageNodeSet, worker string) string {
 	// Start with fleet defaults.
 	eff := simplyblockv1alpha1.StorageNodeOverrides{
-		MaxLogicalVolumeCount: sns.Spec.MaxLogicalVolumeCount,
+		MaxSubsystemCount: sns.Spec.MaxSubsystemCount,
 		MaxSize:               sns.Spec.MaxSize,
 		CorePercentage:        sns.Spec.CorePercentage,
 		SpdkSystemMemory:      sns.Spec.SpdkSystemMemory,
@@ -179,8 +179,8 @@ func buildPerNodeEnvFile(sns *simplyblockv1alpha1.StorageNodeSet, worker string)
 
 	// Apply per-node overrides if present.
 	if o, ok := sns.Spec.NodeConfigs[worker]; ok {
-		if o.MaxLogicalVolumeCount != nil {
-			eff.MaxLogicalVolumeCount = o.MaxLogicalVolumeCount
+		if o.MaxSubsystemCount != nil {
+			eff.MaxSubsystemCount = o.MaxSubsystemCount
 		}
 		if o.MaxSize != "" {
 			eff.MaxSize = o.MaxSize
@@ -218,7 +218,7 @@ func buildPerNodeEnvFile(sns *simplyblockv1alpha1.StorageNodeSet, worker string)
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "MAX_LVOL=%s\n", ptr.StringOrDefault(eff.MaxLogicalVolumeCount, ""))
+	fmt.Fprintf(&b, "MAX_LVOL=%s\n", ptr.StringOrDefault(eff.MaxSubsystemCount, ""))
 	fmt.Fprintf(&b, "MAX_SIZE=%s\n", utils.ShellQuote(eff.MaxSize))
 	fmt.Fprintf(&b, "CORES_PERCENTAGE=%s\n", ptr.StringOrDefault(eff.CorePercentage, ""))
 	fmt.Fprintf(&b, "PCI_ALLOWED=%s\n", utils.ShellQuote(strings.Join(eff.PcieAllowList, ",")))

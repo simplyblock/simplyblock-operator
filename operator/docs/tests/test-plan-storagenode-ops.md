@@ -136,7 +136,7 @@ non-destructive), or **E2E** (live cluster, may remove/modify nodes).
 
 | Scenario | Expected | Classification |
 |---|---|---|
-| `nodeConfigs[worker].maxLogicalVolumeCount` differs per node | Per-node ConfigMap has correct `MAX_LVOL` per worker | Integration |
+| `nodeConfigs[worker].maxSubsystemCount` differs per node | Per-node ConfigMap has correct `MAX_LVOL` per worker | Integration |
 | `nodeConfigs[worker].spdkSystemMemory` differs per node | Init container receives correct `spdk_sys_mem` in POST | E2E |
 | `nodeConfigs[worker].deviceNames` set | `--nvme-devices` arg in init container uses override | Integration |
 | ConfigMap created before DaemonSet on fresh install | Init container finds non-empty env file; no `MAX_LVOL=0` failure | E2E |
