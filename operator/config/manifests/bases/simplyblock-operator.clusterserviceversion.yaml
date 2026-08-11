@@ -77,10 +77,10 @@ spec:
         displayName: Restored LVOL ID
         path: restoredLvolID
       version: v1alpha1
-    - description: Pool is the Schema for the pools API
-      displayName: Pool
-      kind: Pool
-      name: pools.storage.simplyblock.io
+    - description: StoragePool is the Schema for the storagepools API
+      displayName: Storage Pool
+      kind: StoragePool
+      name: storagepools.storage.simplyblock.io
       specDescriptors:
       - description: |-
           Action triggers an imperative pool operation.
@@ -131,7 +131,7 @@ spec:
         displayName: Status
         path: status
       - description: UUID is the backend pool UUID.
-        displayName: Pool UUID
+        displayName: Storage Pool UUID
         path: uuid
       version: v1alpha1
     - description: SnapshotReplication is the Schema for the snapshotreplications

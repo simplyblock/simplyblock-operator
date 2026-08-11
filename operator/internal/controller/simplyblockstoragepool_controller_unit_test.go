@@ -21,12 +21,12 @@ import (
 )
 
 func TestPoolReconcileAddsFinalizer(t *testing.T) {
-	pool := &simplyblockv1alpha1.Pool{
+	pool := &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "pool-a",
 			Namespace: "default",
 		},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			ClusterName: "cluster-a",
 		},
 	}
@@ -41,11 +41,11 @@ func TestPoolReconcileAddsFinalizer(t *testing.T) {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
-	current := &simplyblockv1alpha1.Pool{}
+	current := &simplyblockv1alpha1.StoragePool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
-	if !contains(current.Finalizers, utils.FinalizerPool) {
+	if !contains(current.Finalizers, utils.FinalizerStoragePool) {
 		t.Fatalf("expected pool finalizer to be added")
 	}
 }
@@ -55,13 +55,13 @@ func TestPoolReconcileAddsFinalizer(t *testing.T) {
 // patch failed after creation) immediately removes the finalizer rather than
 // leaving the object stuck in Terminating forever (#155).
 func TestPoolReconcileDeletionWithoutUUIDRemovesFinalizer(t *testing.T) {
-	pool := &simplyblockv1alpha1.Pool{
+	pool := &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-no-uuid",
 			Namespace:  "default",
-			Finalizers: []string{utils.FinalizerPool},
+			Finalizers: []string{utils.FinalizerStoragePool},
 		},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			ClusterName: "cluster-a",
 		},
 		// Status.UUID intentionally empty — pool was never created on the backend.
@@ -82,31 +82,31 @@ func TestPoolReconcileDeletionWithoutUUIDRemovesFinalizer(t *testing.T) {
 
 	// The finalizer must be gone — the object should either be fully deleted
 	// or have an empty finalizer list.
-	current := &simplyblockv1alpha1.Pool{}
+	current := &simplyblockv1alpha1.StoragePool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		if apierrors.IsNotFound(err) {
 			return // object fully deleted — correct
 		}
 		t.Fatalf("failed to get pool: %v", err)
 	}
-	if contains(current.Finalizers, utils.FinalizerPool) {
+	if contains(current.Finalizers, utils.FinalizerStoragePool) {
 		t.Fatal("finalizer was not removed for pool with empty Status.UUID — object would be stuck in Terminating")
 	}
 }
 
 func TestPoolReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
-	pool := &simplyblockv1alpha1.Pool{
+	pool := &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "pool-c",
 			Namespace: "default",
 			Finalizers: []string{
-				utils.FinalizerPool,
+				utils.FinalizerStoragePool,
 			},
 		},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			ClusterName: "cluster-missing",
 		},
-		Status: simplyblockv1alpha1.PoolStatus{
+		Status: simplyblockv1alpha1.StoragePoolStatus{
 			UUID:   "pool-uuid",
 			Status: "online",
 		},
@@ -122,7 +122,7 @@ func TestPoolReconcilePreventsStatusRegressionWhenClusterMissing(t *testing.T) {
 		t.Fatalf("expected requeue when cluster UUID is unresolved")
 	}
 
-	current := &simplyblockv1alpha1.Pool{}
+	current := &simplyblockv1alpha1.StoragePool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
@@ -136,12 +136,12 @@ func TestPoolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 	const clusterName = "cluster-b"
 	const clusterUUID = "cluster-uuid-tenant-b"
 
-	pool := &simplyblockv1alpha1.Pool{
+	pool := &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "pool-ns",
 			Namespace: ns,
 		},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			ClusterName: clusterName,
 		},
 	}
@@ -156,14 +156,14 @@ func TestPoolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 		t.Fatalf("reconcile returned error: %v", err)
 	}
 
-	current := &simplyblockv1alpha1.Pool{}
+	current := &simplyblockv1alpha1.StoragePool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
 	if current.Namespace != ns {
 		t.Fatalf("namespace changed unexpectedly: got %q want %q", current.Namespace, ns)
 	}
-	if !contains(current.Finalizers, utils.FinalizerPool) {
+	if !contains(current.Finalizers, utils.FinalizerStoragePool) {
 		t.Fatalf("expected pool finalizer to be added in non-default namespace")
 	}
 	if current.Spec.ClusterName != clusterName {
@@ -173,29 +173,29 @@ func TestPoolReconcileWorksInNonDefaultNamespace(t *testing.T) {
 
 func TestPoolReconcileStorageClassNameIncludesNamespace(t *testing.T) {
 	const clusterName = "simplyblock-cluster-a"
-	pool1 := &simplyblockv1alpha1.Pool{
+	pool1 := &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool1",
 			Namespace:  "cluster1",
-			Finalizers: []string{utils.FinalizerPool},
+			Finalizers: []string{utils.FinalizerStoragePool},
 		},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			ClusterName: clusterName,
 		},
-		Status: simplyblockv1alpha1.PoolStatus{
+		Status: simplyblockv1alpha1.StoragePoolStatus{
 			UUID: "pool-uuid-1",
 		},
 	}
-	pool2 := &simplyblockv1alpha1.Pool{
+	pool2 := &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool1",
 			Namespace:  "cluster2",
-			Finalizers: []string{utils.FinalizerPool},
+			Finalizers: []string{utils.FinalizerStoragePool},
 		},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			ClusterName: clusterName,
 		},
-		Status: simplyblockv1alpha1.PoolStatus{
+		Status: simplyblockv1alpha1.StoragePoolStatus{
 			UUID: "pool-uuid-2",
 		},
 	}
@@ -207,7 +207,7 @@ func TestPoolReconcileStorageClassNameIncludesNamespace(t *testing.T) {
 		testCluster("cluster2", clusterName, "cluster-uuid-2"),
 	)
 
-	for _, pool := range []*simplyblockv1alpha1.Pool{pool1, pool2} {
+	for _, pool := range []*simplyblockv1alpha1.StoragePool{pool1, pool2} {
 		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pool)}); err != nil {
 			t.Fatalf("reconcile %s/%s returned error: %v", pool.Namespace, pool.Name, err)
 		}
@@ -284,13 +284,13 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	pool := &simplyblockv1alpha1.Pool{
+	pool := &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-mock",
 			Namespace:  "default",
-			Finalizers: []string{utils.FinalizerPool},
+			Finalizers: []string{utils.FinalizerStoragePool},
 		},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			ClusterName:          "cluster-a",
 			LogicalVolumeMaxSize: "20G",
 		},
@@ -309,7 +309,7 @@ func TestPoolReconcileCreatesPoolViaOpenAPIMock(t *testing.T) {
 		t.Fatalf("expected terminal reconcile without delayed requeue after successful pool creation, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.Pool{}
+	current := &simplyblockv1alpha1.StoragePool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
@@ -367,13 +367,13 @@ func TestPoolReconcileCreatesPoolViaDTOFormat(t *testing.T) {
 
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	pool := &simplyblockv1alpha1.Pool{
+	pool := &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-mock-dto",
 			Namespace:  "default",
-			Finalizers: []string{utils.FinalizerPool},
+			Finalizers: []string{utils.FinalizerStoragePool},
 		},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			ClusterName: "cluster-a",
 		},
 	}
@@ -391,7 +391,7 @@ func TestPoolReconcileCreatesPoolViaDTOFormat(t *testing.T) {
 		t.Fatalf("expected terminal reconcile without delayed requeue after successful pool creation, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.Pool{}
+	current := &simplyblockv1alpha1.StoragePool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
@@ -420,13 +420,13 @@ func TestPoolReconcileCreatePoolNon2xxRequeues(t *testing.T) {
 
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	pool := &simplyblockv1alpha1.Pool{
+	pool := &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-mock-fail",
 			Namespace:  "default",
-			Finalizers: []string{utils.FinalizerPool},
+			Finalizers: []string{utils.FinalizerStoragePool},
 		},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			ClusterName: "cluster-a",
 		},
 	}
@@ -444,7 +444,7 @@ func TestPoolReconcileCreatePoolNon2xxRequeues(t *testing.T) {
 		t.Fatalf("expected delayed requeue after non-2xx pool create, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.Pool{}
+	current := &simplyblockv1alpha1.StoragePool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
@@ -474,16 +474,16 @@ func TestPoolReconcileDeleteNon2xxKeepsFinalizerAndRequeues(t *testing.T) {
 
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	pool := &simplyblockv1alpha1.Pool{
+	pool := &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-delete-fail",
 			Namespace:  "default",
-			Finalizers: []string{utils.FinalizerPool},
+			Finalizers: []string{utils.FinalizerStoragePool},
 		},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			ClusterName: "cluster-a",
 		},
-		Status: simplyblockv1alpha1.PoolStatus{
+		Status: simplyblockv1alpha1.StoragePoolStatus{
 			UUID: poolUUID,
 		},
 	}
@@ -504,25 +504,25 @@ func TestPoolReconcileDeleteNon2xxKeepsFinalizerAndRequeues(t *testing.T) {
 		t.Fatalf("expected delayed requeue after non-2xx pool delete, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.Pool{}
+	current := &simplyblockv1alpha1.StoragePool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
-	if !contains(current.Finalizers, utils.FinalizerPool) {
+	if !contains(current.Finalizers, utils.FinalizerStoragePool) {
 		t.Fatalf("expected finalizer to remain after failed delete")
 	}
 }
 
-func newPoolStateTestReconciler(t *testing.T, objects ...client.Object) *PoolReconciler {
+func newPoolStateTestReconciler(t *testing.T, objects ...client.Object) *StoragePoolReconciler {
 	t.Helper()
 
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme, storagev1.AddToScheme)
 	cl := newTestClient(t, scheme, []client.Object{
-		&simplyblockv1alpha1.Pool{},
+		&simplyblockv1alpha1.StoragePool{},
 		&simplyblockv1alpha1.StorageCluster{},
 	}, objects...)
 
-	return &PoolReconciler{
+	return &StoragePoolReconciler{
 		Client:   cl,
 		Scheme:   scheme,
 		Recorder: events.NewFakeRecorder(10),
@@ -538,18 +538,18 @@ func TestPoolReconcileRejectsCrossNamespaceClusterReference(t *testing.T) {
 	defer mock.Close()
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	pool := &simplyblockv1alpha1.Pool{
+	pool := &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-cross-ns",
 			Namespace:  poolNS,
-			Finalizers: []string{utils.FinalizerPool},
+			Finalizers: []string{utils.FinalizerStoragePool},
 		},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			ClusterName: clusterName,
 		},
 	}
 
-	// StorageCluster exists, but in a different namespace. The Pool controller
+	// StorageCluster exists, but in a different namespace. The StoragePool controller
 	// must refuse to reconcile against it and surface the misconfiguration.
 	r := newPoolStateTestReconciler(t,
 		pool,
@@ -564,7 +564,7 @@ func TestPoolReconcileRejectsCrossNamespaceClusterReference(t *testing.T) {
 		t.Fatalf("expected requeue when cluster reference is invalid, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.Pool{}
+	current := &simplyblockv1alpha1.StoragePool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}
@@ -598,13 +598,13 @@ func TestPoolReconcileDoesNotEmitEventWhenClusterUUIDNotReady(t *testing.T) {
 	defer mock.Close()
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
-	pool := &simplyblockv1alpha1.Pool{
+	pool := &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pool-pending-cluster",
 			Namespace:  ns,
-			Finalizers: []string{utils.FinalizerPool},
+			Finalizers: []string{utils.FinalizerStoragePool},
 		},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			ClusterName: clusterName,
 		},
 	}
@@ -624,7 +624,7 @@ func TestPoolReconcileDoesNotEmitEventWhenClusterUUIDNotReady(t *testing.T) {
 		t.Fatalf("expected requeue while waiting for cluster UUID, got %+v", res)
 	}
 
-	current := &simplyblockv1alpha1.Pool{}
+	current := &simplyblockv1alpha1.StoragePool{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(pool), current); err != nil {
 		t.Fatalf("failed to get pool: %v", err)
 	}

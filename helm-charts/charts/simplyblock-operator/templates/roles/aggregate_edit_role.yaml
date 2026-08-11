@@ -1,7 +1,7 @@
 # Aggregates full CRUD on storage.simplyblock.io CRs into the built-in
 # Kubernetes "edit" and "admin" ClusterRoles. With the namespace-per-cluster
 # tenancy convention enforced by the Pool controller, binding "edit" or "admin"
-# in a namespace gives a tenant full control over the StorageCluster and Pools
+# in a namespace gives a tenant full control over the StorageCluster and StoragePools
 # in that namespace and nothing outside it.
 #
 # Cluster admins who want finer-grained delegation (e.g. resourceNames-scoped
@@ -21,7 +21,7 @@ rules:
   - storage.simplyblock.io
   resources:
   - storageclusters
-  - pools
+  - storagepools
   verbs:
   - get
   - list
@@ -34,6 +34,6 @@ rules:
   - storage.simplyblock.io
   resources:
   - storageclusters/status
-  - pools/status
+  - storagepools/status
   verbs:
   - get
