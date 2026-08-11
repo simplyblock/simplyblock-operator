@@ -91,6 +91,71 @@ const (
 	topologyKeyStorageNodeUUIDPrefix = "simplyblock.io/storage-node-uuid."
 )
 
+// hardPinTopologyKeyPrefixes lists the topology-segment key prefixes that
+// represent a genuine per-node placement constraint, as opposed to a soft
+// hint or bookkeeping key. A volume gated by one of these needs its PV's
+// nodeAffinity locked to the node that satisfied the constraint at
+// CreateVolume time — otherwise a later reschedule (a plain pod delete and
+// recreate; no drain or node failure required) can land the pod on a node
+// that no longer satisfies it (see issue #403). topologyKeyStorageNodeUUIDPrefix
+// and the topology.simplyblock.io/hostname fallback are deliberately excluded:
+// the former only ever informs storage-side lvol co-location and the latter
+// exists solely so WaitForFirstConsumer has *a* topology key to work with when
+// no other one applies — pinning on either would wrongly lock plain
+// NVMe-oF-backed volumes (which behave identically from any node) to whichever
+// single node happened to create them.
+var hardPinTopologyKeyPrefixes = []string{
+	// DHCHAP's per-pool allowed-node gate (see
+	// PoolReconciler.createStorageClassIfNotExists / poolNodeLabelKey in
+	// operator/internal/controller/simplyblockpool_controller.go). Extend this
+	// list with new prefixes as more topology-gated features land (e.g. the
+	// client-side-VDO "simplyblock.io/vdo-capable" gate from issue #277).
+	"simplyblock.io/pool.",
+}
+
+// hardPinTopologySegments extracts, from the CSI topology requirement the
+// external-provisioner sent for this CreateVolume call, only the segments
+// that represent a hard node-placement constraint (see
+// hardPinTopologyKeyPrefixes). Preferred is checked first since it reflects
+// the specific node WaitForFirstConsumer actually chose; Requisite is the
+// fallback, matching coLocatedHostID's search order. Returns nil if no
+// hard-pin segment is present, so plain (ungated) volumes are unaffected.
+func hardPinTopologySegments(topoReq *csi.TopologyRequirement) map[string]string {
+	if topoReq == nil {
+		return nil
+	}
+
+	isHardPin := func(key string) bool {
+		for _, prefix := range hardPinTopologyKeyPrefixes {
+			if strings.HasPrefix(key, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+
+	extract := func(topologies []*csi.Topology) map[string]string {
+		segments := map[string]string{}
+		for _, topo := range topologies {
+			for key, val := range topo.GetSegments() {
+				if val == "" || !isHardPin(key) {
+					continue
+				}
+				segments[key] = val
+			}
+		}
+		return segments
+	}
+
+	if segments := extract(topoReq.GetPreferred()); len(segments) > 0 {
+		return segments
+	}
+	if segments := extract(topoReq.GetRequisite()); len(segments) > 0 {
+		return segments
+	}
+	return nil
+}
+
 type controllerServer struct {
 	*csicommon.DefaultControllerServer
 	volumeLocks *util.VolumeLocks
@@ -460,15 +525,30 @@ func (cs *controllerServer) CreateVolume(
 		csiVolume.VolumeContext["targetType"] = volType
 	}
 
-	if selection.topology != nil {
-		csiVolume.AccessibleTopology = []*csi.Topology{{Segments: copyTopologySegments(selection.topology)}}
+	// AccessibleTopology segments come from two independent sources: the
+	// zone/region key selection.topology already carries when the StorageClass
+	// used zone_cluster_map/region_cluster_map to pick a cluster (informational,
+	// cluster-routing only — no per-node constraint), and any hard-pin segments
+	// (e.g. DHCHAP's allowed-node gate) resolveClusterSelection doesn't track.
+	// external-provisioner turns AccessibleTopology directly into the PV's
+	// nodeAffinity, so omitting the latter left topology-gated volumes free to
+	// be scheduled onto any node after the PVC's first bind (issue #403).
+	topologySegments := copyTopologySegments(selection.topology)
+	for key, val := range hardPinTopologySegments(req.GetAccessibilityRequirements()) {
+		if topologySegments == nil {
+			topologySegments = map[string]string{}
+		}
+		topologySegments[key] = val
+	}
 
-		if zone := zoneFromSegments(selection.topology); zone != "" {
-			csiVolume.VolumeContext[topologyKeyZoneStable] = zone
-		}
-		if region := regionFromSegments(selection.topology); region != "" {
-			csiVolume.VolumeContext[topologyKeyRegionStable] = region
-		}
+	if len(topologySegments) > 0 {
+		csiVolume.AccessibleTopology = []*csi.Topology{{Segments: topologySegments}}
+	}
+	if zone := zoneFromSegments(selection.topology); zone != "" {
+		csiVolume.VolumeContext[topologyKeyZoneStable] = zone
+	}
+	if region := regionFromSegments(selection.topology); region != "" {
+		csiVolume.VolumeContext[topologyKeyRegionStable] = region
 	}
 
 	// placement-hint is a one-shot creation-time hint. Now that the volume is fully
