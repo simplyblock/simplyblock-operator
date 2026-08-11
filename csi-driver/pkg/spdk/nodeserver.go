@@ -262,18 +262,33 @@ func (ns *nodeServer) NodeStageVolume(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	if isStaged {
-		// A staged volume whose backing NVMe-oF device was lost leaves a dead
-		// (EIO) mount that isStaged still reports as staged. Repair it in place
-		// instead of short-circuiting.
-		if !ns.stagingMountDead(stagingTargetPath) {
+		if _, ctxErr := util.LookupVolumeContext(stagingParentPath); ctxErr != nil {
+			// Staging was interrupted after FormatAndMount but before StashVolumeContext
+			// (e.g. tune2fs aborting on an unrecognised filesystem feature). The mount is
+			// orphaned even though it can still look perfectly healthy to stagingMountDead
+			// (the backing device may still be connected at this point). Force-unmount and
+			// fall through to a fresh stage below, which rebuilds the VolumeContext from the
+			// request and writes the stash on success.
+			klog.Warningf(
+				"volume %s mount exists at %s but no stash found (%v); unmounting for re-stage",
+				volumeID, stagingTargetPath, ctxErr,
+			)
+			if umountErr := ns.forceUnmountStaging(stagingTargetPath); umountErr != nil {
+				klog.Warningf("failed to unmount orphaned staging path %s: %v", stagingTargetPath, umountErr)
+			}
+		} else if !ns.stagingMountDead(stagingTargetPath) {
+			// A staged volume whose backing NVMe-oF device was lost leaves a dead
+			// (EIO) mount that isStaged still reports as staged. Repair it in place
+			// instead of short-circuiting.
 			klog.Warning("volume already staged")
 			return &csi.NodeStageVolumeResponse{}, nil
+		} else {
+			klog.Warningf("volume %s already staged but its mount is dead; restaging", volumeID)
+			if err := ns.restageVolume(ctx, volumeID, stagingTargetPath, stagingParentPath, req.GetVolumeCapability()); err != nil { //nolint:lll // unwrappable string/log/signature
+				return nil, status.Errorf(codes.Internal, "restage volume %s: %v", volumeID, err)
+			}
+			return &csi.NodeStageVolumeResponse{}, nil
 		}
-		klog.Warningf("volume %s already staged but its mount is dead; restaging", volumeID)
-		if err := ns.restageVolume(ctx, volumeID, stagingTargetPath, stagingParentPath, req.GetVolumeCapability()); err != nil { //nolint:lll // unwrappable string/log/signature
-			return nil, status.Errorf(codes.Internal, "restage volume %s: %v", volumeID, err)
-		}
-		return &csi.NodeStageVolumeResponse{}, nil
 	}
 
 	var initiator util.SpdkCsiInitiator
