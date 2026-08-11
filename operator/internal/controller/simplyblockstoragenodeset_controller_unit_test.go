@@ -1963,6 +1963,99 @@ func TestReconcileSpdkProxyEndpointSlices(t *testing.T) {
 	}
 }
 
+// TestReconcileSpdkProxyEndpointSlices_TransientNotReadyKeepsSlice guards the
+// fix for the incident where a live, healthy pod's readiness condition
+// flickered false for a single reconcile pass (well short of what would
+// restart the container or emit an Unhealthy event) and the reconciler
+// deleted its EndpointSlice outright, breaking DNS resolution for that node's
+// SPDK-proxy hostname (used for TLS SNI/cert-hostname matching in
+// StorageNode.rpc_client) for however long it took the next reconcile to see
+// the pod ready again.
+func TestReconcileSpdkProxyEndpointSlices_TransientNotReadyKeepsSlice(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns", UID: "sn-uid"},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-a"},
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "snode-spdk-pod-9001-cid",
+			Namespace: "ns",
+			Labels:    map[string]string{"role": "simplyblock-storage-node"},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "node-a",
+			Containers: []corev1.Container{
+				{
+					Name: "spdk-proxy-container",
+					Env:  []corev1.EnvVar{{Name: "RPC_PORT", Value: "9001"}},
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: mgmtIP,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "spdk-proxy-container", Ready: true},
+			},
+		},
+	}
+
+	r := newStorageNodeSetStateTestReconciler(t, sn, pod)
+	ctx := context.Background()
+
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn); err != nil {
+		t.Fatalf("reconcileSpdkProxyEndpointSlices: %v", err)
+	}
+
+	listSlices := func() discoveryv1.EndpointSliceList {
+		var slices discoveryv1.EndpointSliceList
+		if err := r.List(ctx, &slices,
+			client.InNamespace("ns"),
+			client.MatchingLabels{"kubernetes.io/service-name": "simplyblock-spdk-proxy"},
+		); err != nil {
+			t.Fatalf("list slices: %v", err)
+		}
+		return slices
+	}
+
+	if slices := listSlices(); len(slices.Items) != 1 {
+		t.Fatalf("expected 1 EndpointSlice after first reconcile, got %d", len(slices.Items))
+	}
+
+	// Pod flips transiently not-ready (a single missed probe tick) but is
+	// still Running with the same IP -- must NOT be treated the same as a
+	// genuinely deleted pod.
+	pod.Status.ContainerStatuses[0].Ready = false
+	if err := r.Update(ctx, pod); err != nil {
+		t.Fatalf("update pod to not-ready: %v", err)
+	}
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn); err != nil {
+		t.Fatalf("second reconcileSpdkProxyEndpointSlices: %v", err)
+	}
+
+	slices := listSlices()
+	if len(slices.Items) != 1 || slices.Items[0].Name != "spdk-proxy-endpoints-9001" {
+		t.Fatalf("expected the EndpointSlice to survive a transient not-ready pod, got %v", sliceNames(slices.Items))
+	}
+	// The stale (last-known-good) endpoint must still be present -- DNS for
+	// node-a keeps resolving through the blip.
+	if len(slices.Items[0].Endpoints) != 1 || *slices.Items[0].Endpoints[0].Hostname != "node-a" {
+		t.Fatalf("expected node-a's endpoint to remain, got %#v", slices.Items[0].Endpoints)
+	}
+
+	// Now the pod is genuinely gone -- the slice must be deleted as before.
+	if err := r.Delete(ctx, pod); err != nil {
+		t.Fatalf("delete pod: %v", err)
+	}
+	if err := r.reconcileSpdkProxyEndpointSlices(ctx, sn); err != nil {
+		t.Fatalf("third reconcileSpdkProxyEndpointSlices: %v", err)
+	}
+	if slices := listSlices(); len(slices.Items) != 0 {
+		t.Fatalf("expected the slice to be deleted once the pod is genuinely gone, got %v", sliceNames(slices.Items))
+	}
+}
+
 func TestReconcileSpdkProxyEndpointSlices_DuplicateFirstSegment(t *testing.T) {
 	sn := &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns", UID: "sn-uid"},
