@@ -273,14 +273,49 @@ func TestCoLocatedHostID(t *testing.T) {
 	})
 }
 
+func TestHardPinTopologyKeys(t *testing.T) {
+	const poolKey = "simplyblock.io/pool.ns.cluster-a.pool-a"
+
+	t.Run("no dhchap param yields no keys", func(t *testing.T) {
+		if got := hardPinTopologyKeys(map[string]string{"pool_name": "pool-a"}); got != nil {
+			t.Errorf("got %v, want nil", got)
+		}
+	})
+
+	t.Run("dhchap param yields exactly that key", func(t *testing.T) {
+		got := hardPinTopologyKeys(map[string]string{paramDHCHAPNodeLabel: poolKey})
+		if len(got) != 1 || got[0] != poolKey {
+			t.Errorf("got %v, want [%s]", got, poolKey)
+		}
+	})
+
+	t.Run("blank dhchap param yields no keys", func(t *testing.T) {
+		if got := hardPinTopologyKeys(map[string]string{paramDHCHAPNodeLabel: "  "}); got != nil {
+			t.Errorf("got %v, want nil", got)
+		}
+	})
+}
+
 func TestHardPinTopologySegments(t *testing.T) {
 	const testZone = "us-east-1a"
 	const poolKey = "simplyblock.io/pool.ns.cluster-a.pool-a"
+	const otherPoolKey = "simplyblock.io/pool.ns.cluster-a.pool-b"
 	const storageNodeKey = topologyKeyStorageNodeUUIDPrefix + "cluster-a-uuid.0"
 
 	t.Run("nil requirements", func(t *testing.T) {
-		if got := hardPinTopologySegments(nil); got != nil {
+		if got := hardPinTopologySegments(nil, []string{poolKey}); got != nil {
 			t.Errorf("got %v, want nil", got)
+		}
+	})
+
+	t.Run("no keys to pin on", func(t *testing.T) {
+		req := &csi.TopologyRequirement{
+			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
+				poolKey: "allowed",
+			})},
+		}
+		if got := hardPinTopologySegments(req, nil); got != nil {
+			t.Errorf("got %v, want nil — an ungated volume names no keys and must not pin", got)
 		}
 	})
 
@@ -291,7 +326,7 @@ func TestHardPinTopologySegments(t *testing.T) {
 				storageNodeKey:        "some-uuid",
 			})},
 		}
-		if got := hardPinTopologySegments(req); got != nil {
+		if got := hardPinTopologySegments(req, []string{poolKey}); got != nil {
 			t.Errorf("got %v, want nil — zone/region and storage-node-uuid segments must not pin a plain volume", got)
 		}
 	})
@@ -302,7 +337,7 @@ func TestHardPinTopologySegments(t *testing.T) {
 				"topology.simplyblock.io/hostname": "worker-1",
 			})},
 		}
-		if got := hardPinTopologySegments(req); got != nil {
+		if got := hardPinTopologySegments(req, []string{poolKey}); got != nil {
 			t.Errorf("got %v, want nil — the bare hostname fallback must not pin a plain volume", got)
 		}
 	})
@@ -314,10 +349,33 @@ func TestHardPinTopologySegments(t *testing.T) {
 				poolKey:               "allowed",
 			})},
 		}
-		got := hardPinTopologySegments(req)
+		got := hardPinTopologySegments(req, []string{poolKey})
 		want := map[string]string{poolKey: "allowed"}
 		if len(got) != len(want) || got[poolKey] != want[poolKey] {
 			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("node also belongs to a second, unrelated DHCHAP pool: only this pool's key is pinned", func(t *testing.T) {
+		// Regression for the case a plain prefix match would get wrong: the
+		// selected node's registered topology carries labels for two distinct
+		// pools (Pool.Spec.AllowedNodes is set per-pool independently and can
+		// overlap), but this CreateVolume call is only provisioning into
+		// poolKey's pool. otherPoolKey must never end up in the resulting
+		// nodeAffinity — ANDing it in would exclude nodes that satisfy this
+		// pool but happen not to be in the other one.
+		req := &csi.TopologyRequirement{
+			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
+				poolKey:      "allowed",
+				otherPoolKey: "allowed",
+			})},
+		}
+		got := hardPinTopologySegments(req, []string{poolKey})
+		if _, ok := got[otherPoolKey]; ok {
+			t.Errorf("got %v, must not include the unrelated pool's key %s", got, otherPoolKey)
+		}
+		if len(got) != 1 || got[poolKey] != "allowed" {
+			t.Errorf("got %v, want only %s=allowed", got, poolKey)
 		}
 	})
 
@@ -330,7 +388,7 @@ func TestHardPinTopologySegments(t *testing.T) {
 				poolKey: "allowed",
 			})},
 		}
-		got := hardPinTopologySegments(req)
+		got := hardPinTopologySegments(req, []string{poolKey})
 		want := map[string]string{poolKey: "allowed"}
 		if len(got) != len(want) || got[poolKey] != want[poolKey] {
 			t.Errorf("got %v, want %v", got, want)
@@ -338,21 +396,17 @@ func TestHardPinTopologySegments(t *testing.T) {
 	})
 
 	t.Run("preferred takes precedence over requisite", func(t *testing.T) {
-		const otherPoolKey = "simplyblock.io/pool.ns.cluster-a.pool-b"
 		req := &csi.TopologyRequirement{
 			Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
 				poolKey: "allowed",
 			})},
 			Requisite: []*csi.Topology{topologyWithSegments(map[string]string{
-				otherPoolKey: "allowed",
+				poolKey: "denied-should-not-be-seen",
 			})},
 		}
-		got := hardPinTopologySegments(req)
-		if _, ok := got[otherPoolKey]; ok {
-			t.Errorf("got %v, requisite segment should have been ignored since preferred matched", got)
-		}
+		got := hardPinTopologySegments(req, []string{poolKey})
 		if got[poolKey] != "allowed" {
-			t.Errorf("got %v, want %s=allowed", got, poolKey)
+			t.Errorf("got %v, want %s=allowed (preferred should win)", got, poolKey)
 		}
 	})
 
@@ -362,7 +416,7 @@ func TestHardPinTopologySegments(t *testing.T) {
 				poolKey: "",
 			})},
 		}
-		if got := hardPinTopologySegments(req); got != nil {
+		if got := hardPinTopologySegments(req, []string{poolKey}); got != nil {
 			t.Errorf("got %v, want nil", got)
 		}
 	})

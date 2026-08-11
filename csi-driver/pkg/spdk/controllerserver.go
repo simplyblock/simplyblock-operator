@@ -64,9 +64,17 @@ const (
 	deprecatedAnnotationQoSRMBps    = "simplybk/qos-r-mbytes"
 	deprecatedAnnotationQoSWMBps    = "simplybk/qos-w-mbytes"
 
-	paramClusterID          = "cluster_id"
-	paramZoneClusterMap     = "zone_cluster_map"
-	paramRegionClusterMap   = "region_cluster_map"
+	paramClusterID        = "cluster_id"
+	paramZoneClusterMap   = "zone_cluster_map"
+	paramRegionClusterMap = "region_cluster_map"
+	// paramDHCHAPNodeLabel carries the exact Kubernetes Node label key
+	// (poolNodeLabelKey(namespace, clusterName, poolName) in
+	// operator/internal/controller/simplyblockpool_controller.go) that this
+	// StorageClass's AllowedTopologies gates on when DHCHAP is enabled.
+	// CreateVolume has no other way to learn it: req.Parameters only ever
+	// carries pool_name and the cluster's UUID, not the Pool CR's
+	// namespace/clusterName the label key is built from.
+	paramDHCHAPNodeLabel    = "dhchap_node_label"
 	topologyKeyZoneStable   = "topology.kubernetes.io/zone"
 	topologyKeyZoneBeta     = "failure-domain.beta.kubernetes.io/zone"
 	topologyKeyRegionStable = "topology.kubernetes.io/region"
@@ -91,57 +99,57 @@ const (
 	topologyKeyStorageNodeUUIDPrefix = "simplyblock.io/storage-node-uuid."
 )
 
-// hardPinTopologyKeyPrefixes lists the topology-segment key prefixes that
-// represent a genuine per-node placement constraint, as opposed to a soft
-// hint or bookkeeping key. A volume gated by one of these needs its PV's
-// nodeAffinity locked to the node that satisfied the constraint at
-// CreateVolume time — otherwise a later reschedule (a plain pod delete and
-// recreate; no drain or node failure required) can land the pod on a node
-// that no longer satisfies it (see issue #403). topologyKeyStorageNodeUUIDPrefix
-// and the topology.simplyblock.io/hostname fallback are deliberately excluded:
-// the former only ever informs storage-side lvol co-location and the latter
-// exists solely so WaitForFirstConsumer has *a* topology key to work with when
-// no other one applies — pinning on either would wrongly lock plain
-// NVMe-oF-backed volumes (which behave identically from any node) to whichever
-// single node happened to create them.
-var hardPinTopologyKeyPrefixes = []string{
-	// DHCHAP's per-pool allowed-node gate (see
-	// PoolReconciler.createStorageClassIfNotExists / poolNodeLabelKey in
-	// operator/internal/controller/simplyblockpool_controller.go). Extend this
-	// list with new prefixes as more topology-gated features land (e.g. the
-	// client-side-VDO "simplyblock.io/vdo-capable" gate from issue #277).
-	"simplyblock.io/pool.",
+// hardPinTopologyKeys returns the exact topology-segment keys that represent a
+// genuine per-node placement constraint for THIS CreateVolume call, derived
+// from its own StorageClass Parameters — never a shared prefix. This matters
+// because buildAccessibleTopology (nodeserver.go) puts every
+// "simplyblock.io/pool.*=allowed" label the selected node happens to carry
+// into AccessibilityRequirements, not just the one for the pool being
+// provisioned into: a node can belong to more than one DHCHAP-gated pool
+// (Pool.Spec.AllowedNodes is set independently per Pool CR, with nothing
+// preventing overlap), and external-provisioner never trims a node's
+// registered topology down to the requesting StorageClass's
+// AllowedTopologies. Prefix-matching would therefore either (a) AND together
+// unrelated pools' labels into the resulting PV's nodeAffinity, wrongly
+// excluding nodes that satisfy this pool but not the other, or (b) pin a
+// completely ungated volume just because it happened to land on a node that
+// also hosts some unrelated DHCHAP pool. Matching only the exact key this
+// request's own Parameters name avoids both.
+func hardPinTopologyKeys(params map[string]string) []string {
+	var keys []string
+	if key := strings.TrimSpace(params[paramDHCHAPNodeLabel]); key != "" {
+		keys = append(keys, key)
+	}
+	// Extend here as more topology-gated features land (e.g. the
+	// client-side-VDO "simplyblock.io/vdo-capable" gate from issue #277) —
+	// each new source should likewise resolve to the exact key(s) relevant to
+	// this specific volume, not a shared prefix.
+	return keys
 }
 
 // hardPinTopologySegments extracts, from the CSI topology requirement the
 // external-provisioner sent for this CreateVolume call, only the segments
-// that represent a hard node-placement constraint (see
-// hardPinTopologyKeyPrefixes). Preferred is checked first since it reflects
-// the specific node WaitForFirstConsumer actually chose; Requisite is the
-// fallback, matching coLocatedHostID's search order. Returns nil if no
-// hard-pin segment is present, so plain (ungated) volumes are unaffected.
-func hardPinTopologySegments(topoReq *csi.TopologyRequirement) map[string]string {
-	if topoReq == nil {
+// whose key is in keys (see hardPinTopologyKeys). Preferred is checked first
+// since it reflects the specific node WaitForFirstConsumer actually chose;
+// Requisite is the fallback, matching coLocatedHostID's search order. Returns
+// nil if none of keys is present, so plain (ungated) volumes are unaffected.
+func hardPinTopologySegments(topoReq *csi.TopologyRequirement, keys []string) map[string]string {
+	if topoReq == nil || len(keys) == 0 {
 		return nil
 	}
 
-	isHardPin := func(key string) bool {
-		for _, prefix := range hardPinTopologyKeyPrefixes {
-			if strings.HasPrefix(key, prefix) {
-				return true
-			}
-		}
-		return false
-	}
-
+	// A single Topology entry is all this driver's model ever registers per
+	// node (nodeserver.go's NodeGetInfo), so unioning across entries here is a
+	// no-op in practice. The CSI spec permits Preferred/Requisite to carry
+	// multiple ranked entries, so this doesn't try to pick a "best" one —
+	// revisit if a future topology source ever registers more than one.
 	extract := func(topologies []*csi.Topology) map[string]string {
 		segments := map[string]string{}
 		for _, topo := range topologies {
-			for key, val := range topo.GetSegments() {
-				if val == "" || !isHardPin(key) {
-					continue
+			for _, key := range keys {
+				if val, ok := topo.GetSegments()[key]; ok && val != "" {
+					segments[key] = val
 				}
-				segments[key] = val
 			}
 		}
 		return segments
@@ -534,7 +542,8 @@ func (cs *controllerServer) CreateVolume(
 	// nodeAffinity, so omitting the latter left topology-gated volumes free to
 	// be scheduled onto any node after the PVC's first bind (issue #403).
 	topologySegments := copyTopologySegments(selection.topology)
-	for key, val := range hardPinTopologySegments(req.GetAccessibilityRequirements()) {
+	pinKeys := hardPinTopologyKeys(req.GetParameters())
+	for key, val := range hardPinTopologySegments(req.GetAccessibilityRequirements(), pinKeys) {
 		if topologySegments == nil {
 			topologySegments = map[string]string{}
 		}
