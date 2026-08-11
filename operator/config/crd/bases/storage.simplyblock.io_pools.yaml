@@ -84,7 +84,9 @@ spec:
                 default: false
                 description: |-
                   DHCHAP enables DH-HMAC-CHAP key generation for the pool. Authentication is only
-                  enforced when allowedNodes is non-empty
+                  enforced when allowedNodes is non-empty. Also controls whether the Pool's StorageClass
+                  gets an allowedTopologies restriction, which — like StorageClass Parameters — is
+                  immutable in the Kubernetes API, hence this field is immutable too.
                 type: boolean
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -127,8 +129,11 @@ spec:
                 type: string
               storageClassParameters:
                 default: {}
-                description: StorageClassParameters sets default StorageClass parameter
-                  values for volumes in this pool.
+                description: |-
+                  StorageClassParameters sets default StorageClass parameter values for volumes in this pool.
+                  Immutable: the underlying StorageClass's Parameters/AllowedTopologies cannot be patched in
+                  the Kubernetes API once created, so there is no supported way to change these after the
+                  fact. Create a new Pool to provision volumes with different settings.
                 properties:
                   compression:
                     default: "False"
@@ -189,12 +194,17 @@ spec:
                       percentage.
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
             required:
             - clusterName
             type: object
             x-kubernetes-validations:
             - message: field dhchap is immutable once set
               rule: '!has(oldSelf.dhchap) || has(self.dhchap)'
+            - message: field storageClassParameters is immutable once set
+              rule: '!has(oldSelf.storageClassParameters) || has(self.storageClassParameters)'
           status:
             description: status defines the observed state of Pool
             properties:

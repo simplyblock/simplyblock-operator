@@ -203,7 +203,7 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return r.handlePoolCreation(ctx, poolCR, apiClient, clusterUUID)
 	}
 
-	if err := r.upsertStorageClass(ctx, poolCR, clusterUUID); err != nil {
+	if err := r.createStorageClassIfNotExists(ctx, poolCR, clusterUUID); err != nil {
 		log.Error(err, "Failed to create StorageClass for pool")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -346,10 +346,13 @@ func (r *PoolReconciler) deleteStorageClass(ctx context.Context, poolCR *simplyb
 	return client.IgnoreNotFound(r.Delete(ctx, sc))
 }
 
-// upsertStorageClass creates a StorageClass for the pool if one does not already exist.
-// StorageClass parameters are immutable in Kubernetes, so this is create-once: if the
-// StorageClass already exists it is left unchanged.
-func (r *PoolReconciler) upsertStorageClass(ctx context.Context, poolCR *simplyblockv1alpha1.Pool, clusterUUID string) error {
+// createStorageClassIfNotExists creates the StorageClass for the pool the first time it's
+// needed. It is intentionally create-only, not create-or-update: StorageClass Parameters and
+// AllowedTopologies are immutable in the Kubernetes API itself, so there is no "update" to
+// perform here. Pool.Spec.StorageClassParameters (and DHCHAP, which controls
+// AllowedTopologies) are marked +k8s:immutable for the same reason — the API server rejects
+// edits to them once set, so this function never needs to reconcile drift.
+func (r *PoolReconciler) createStorageClassIfNotExists(ctx context.Context, poolCR *simplyblockv1alpha1.Pool, clusterUUID string) error {
 	bindingMode := storagev1.VolumeBindingWaitForFirstConsumer
 	reclaimPolicy := corev1.PersistentVolumeReclaimDelete
 	allowExpansion := true
