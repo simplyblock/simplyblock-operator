@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -162,6 +163,31 @@ func (r *StorageClusterOpsReconciler) reconcileActivate(
 	cluster *simplyblockv1alpha1.StorageCluster,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+
+	// Failure-domain readiness gate: checked before the activate POST ever
+	// fires (ops.Status is left completely untouched on failure -- just
+	// requeue and re-check next pass). No-op for FD-disabled clusters.
+	// clusterFailureDomainHosts/fdActivationDomainCountViolation live in
+	// simplyblockstoragecluster_controller.go (pre-dating the #397
+	// ClusterOps split, kept there since maybeActivateCluster in
+	// simplyblockstoragenodeset_controller.go shares the same gate) and
+	// mirror simplyblock_core's fd_activation_domain_count_violation
+	// (Python side) so the two stay in lockstep.
+	if ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains) {
+		hostDomains, err := clusterFailureDomainHosts(ctx, r.Client, cluster.Namespace, cluster.Name)
+		if err != nil {
+			log.Error(err, "Failed to list StorageNodeSets for failure-domain readiness check",
+				"cluster", cluster.Name)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		npcs := stripeParityChunks(cluster.Spec.StripeSpec)
+		if reason := fdActivationDomainCountViolation(npcs, hostDomains); reason != "" {
+			log.Info("Cluster not ready for activation yet, waiting on failure-domain readiness",
+				"cluster", cluster.Name, "reason", reason)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+	}
+
 	apiClient := webapi.NewClient()
 
 	if !ops.Status.Triggered {

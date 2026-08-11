@@ -1642,8 +1642,9 @@ func maybeActivateCluster(
 	}
 
 	if utils.ShouldActivateCluster(requiredEc, onlineHealthy, snCR) {
-		// Failure-domain readiness gate: mirrors the one in reconcileActivate
-		// (simplyblockstoragecluster_controller.go). ShouldActivateCluster only
+		// Failure-domain readiness gate: mirrors the one in
+		// StorageClusterOpsReconciler.reconcileActivate
+		// (storageclusterops_controller.go). ShouldActivateCluster only
 		// counts online-healthy nodes against the erasure-coding scheme -- it
 		// has no notion of failure domains, so without this check a cluster
 		// with enough nodes but too few/unbalanced FDs gets POSTed to

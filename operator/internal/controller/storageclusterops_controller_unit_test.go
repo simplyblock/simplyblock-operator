@@ -11,6 +11,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -324,5 +325,99 @@ func TestStorageClusterOps_NodeRollingRestart_Initialises(t *testing.T) {
 	}
 	if updatedOps.Status.Phase != simplyblockv1alpha1.StorageClusterOpsPhaseRunning {
 		t.Errorf("ops phase: got %q want Running", updatedOps.Status.Phase)
+	}
+}
+
+// ── TestReconcileActivate_FailureDomainReadinessGate ─────────────────────────
+//
+// Ported from simplyblockstoragecluster_controller_unit_test.go's
+// TestReconcileActivateWaitsForFailureDomainReadiness /
+// TestReconcileActivateProceedsOnceFailureDomainsAreReady when reconcileActivate
+// moved here with the ClusterOps split (#397). clusterFailureDomainHosts /
+// fdActivationDomainCountViolation themselves still live in
+// simplyblockstoragecluster_controller.go and are exercised directly by
+// TestFdActivationDomainCountViolation / TestClusterFailureDomainHosts there;
+// these two only cover the gate's wiring into the new reconcileActivate.
+
+func TestReconcileActivateWaitsForFailureDomainReadiness(t *testing.T) {
+	fdv := func(v int32) *int32 { return &v }
+
+	cluster := newTestStorageCluster()
+	cluster.Spec.EnableFailureDomains = ptr.To(true)
+	cluster.Spec.StripeSpec = &simplyblockv1alpha1.StripeSpec{ParityChunks: ptr.To(int32(2))}
+
+	// Only 2 distinct domains for npcs=2 -- must NOT be allowed through
+	// (requires npcs+2 = 4).
+	nodeSet := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "set-fd-wait", Namespace: scopsTestNS},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: scopsTestClusterName},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "w0", MgmtIp: "10.0.0.1", FailureDomain: fdv(0)},
+				{Hostname: "w1", MgmtIp: "10.0.0.2", FailureDomain: fdv(1)},
+			},
+		},
+	}
+
+	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
+	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseRunning
+	r := newClusterOpsReconciler(t, cluster, ops, nodeSet)
+
+	res, err := r.reconcileActivate(context.Background(), ops, cluster)
+	if err != nil {
+		t.Fatalf("reconcileActivate returned error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected a requeue while waiting on failure-domain readiness")
+	}
+	if ops.Status.Triggered {
+		t.Fatalf("expected ops to stay untriggered while failure domains aren't ready")
+	}
+	if ops.Status.Phase == simplyblockv1alpha1.StorageClusterOpsPhaseFailed {
+		t.Fatalf("expected ops to stay out of Failed while waiting on failure-domain readiness")
+	}
+}
+
+func TestReconcileActivateProceedsOnceFailureDomainsAreReady(t *testing.T) {
+	fdv := func(v int32) *int32 { return &v }
+
+	cluster := newTestStorageCluster()
+	cluster.Spec.EnableFailureDomains = ptr.To(true)
+	cluster.Spec.StripeSpec = &simplyblockv1alpha1.StripeSpec{ParityChunks: ptr.To(int32(2))}
+
+	// 4 distinct, equally-sized domains for npcs=2 -- satisfies npcs+2 = 4,
+	// so the gate must let this through to the real activate attempt.
+	nodeSet := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "set-fd-ready", Namespace: scopsTestNS},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: scopsTestClusterName},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "w0", MgmtIp: "10.0.0.1", FailureDomain: fdv(0)},
+				{Hostname: "w1", MgmtIp: "10.0.0.2", FailureDomain: fdv(1)},
+				{Hostname: "w2", MgmtIp: "10.0.0.3", FailureDomain: fdv(2)},
+				{Hostname: "w3", MgmtIp: "10.0.0.4", FailureDomain: fdv(3)},
+			},
+		},
+	}
+
+	ops := newTestStorageClusterOps(scopsTestClusterName, "activate")
+	ops.Status.Phase = simplyblockv1alpha1.StorageClusterOpsPhaseRunning
+	r := newClusterOpsReconciler(t, cluster, ops, nodeSet)
+
+	// No real webapi backend is reachable from this unit test, so once the
+	// FD gate lets the call through it fails resolving the cluster UUID --
+	// same accepted pattern as TestStorageClusterOps_AcquiresLockAndTransitionsOutOfPending.
+	// What's under test here is that it got PAST the gate (Failed from the
+	// real attempt), not stuck re-requeuing on the readiness check.
+	_, err := r.reconcileActivate(context.Background(), ops, cluster)
+	if err != nil {
+		t.Fatalf("reconcileActivate returned error: %v", err)
+	}
+
+	var updatedOps simplyblockv1alpha1.StorageClusterOps
+	_ = r.Get(context.Background(), types.NamespacedName{Name: scopsTestOpsName, Namespace: scopsTestNS}, &updatedOps)
+	if updatedOps.Status.Phase != simplyblockv1alpha1.StorageClusterOpsPhaseFailed {
+		t.Fatalf("expected the call to proceed past the FD gate to the (failing, no backend) "+
+			"activate attempt, got phase %q", updatedOps.Status.Phase)
 	}
 }

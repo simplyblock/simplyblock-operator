@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
@@ -20,7 +19,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
-
 
 func TestFdActivationDomainCountViolation(t *testing.T) {
 	hosts := func(domainCounts ...int32) map[string]int32 {
