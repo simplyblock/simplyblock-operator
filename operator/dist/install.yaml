@@ -856,7 +856,9 @@ spec:
                 default: false
                 description: |-
                   DHCHAP enables DH-HMAC-CHAP key generation for the pool. Authentication is only
-                  enforced when allowedNodes is non-empty
+                  enforced when allowedNodes is non-empty. Also controls whether the Pool's StorageClass
+                  gets an allowedTopologies restriction, which — like StorageClass Parameters — is
+                  immutable in the Kubernetes API, hence this field is immutable too.
                 type: boolean
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -899,8 +901,11 @@ spec:
                 type: string
               storageClassParameters:
                 default: {}
-                description: StorageClassParameters sets default StorageClass parameter
-                  values for volumes in this pool.
+                description: |-
+                  StorageClassParameters sets default StorageClass parameter values for volumes in this pool.
+                  Immutable: the underlying StorageClass's Parameters/AllowedTopologies cannot be patched in
+                  the Kubernetes API once created, so there is no supported way to change these after the
+                  fact. Create a new Pool to provision volumes with different settings.
                 properties:
                   compression:
                     default: "False"
@@ -914,6 +919,14 @@ spec:
                     default: tcp
                     description: Fabric is the transport fabric (e.g. tcp).
                     type: string
+                  filesystem:
+                    default: ext4
+                    description: Filesystem is the filesystem used to format logical
+                      volumes of this pool.
+                    enum:
+                    - ext4
+                    - xfs
+                    type: string
                   lvolPriorityClass:
                     default: "0"
                     description: LvolPriorityClass sets the logical volume priority
@@ -923,14 +936,6 @@ spec:
                     default: "1"
                     description: MaxNamespacePerSubsys limits namespaces per NVMf
                       subsystem.
-                    type: string
-                  numDataChunks:
-                    default: "1"
-                    description: NumDataChunks is the number of data chunks (distr_ndcs).
-                    type: string
-                  numParityChunks:
-                    default: "1"
-                    description: NumParityChunks is the number of parity chunks (distr_npcs).
                     type: string
                   qosRMbytes:
                     default: "0"
@@ -956,17 +961,26 @@ spec:
                     description: Replicate enables replication for logical volumes.
                     type: boolean
                   tune2fsReservedBlocks:
-                    default: "0"
-                    description: Tune2fsReservedBlocks sets the ext4 reserved-blocks
-                      percentage.
+                    description: |-
+                      Tune2fsReservedBlocks sets the ext4 reserved-blocks percentage. Left unset, the node
+                      plugin skips tune2fs entirely and mkfs.ext4's own default reserve applies, matching a
+                      StorageClass that omits tune2fs_reserved_blocks. A default of "0" here would not be a
+                      no-op: it actively runs `tune2fs -m 0` on every volume, since the node plugin only skips
+                      the call when the parameter is empty (see stageVolume in the CSI driver), not when it's
+                      "0".
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
             required:
             - clusterName
             type: object
             x-kubernetes-validations:
             - message: field dhchap is immutable once set
               rule: '!has(oldSelf.dhchap) || has(self.dhchap)'
+            - message: field storageClassParameters is immutable once set
+              rule: '!has(oldSelf.storageClassParameters) || has(self.storageClassParameters)'
           status:
             description: status defines the observed state of Pool
             properties:

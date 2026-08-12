@@ -57,10 +57,9 @@ spec:
   #   compression: "False"
   #   encryption: false
   #   fabric: tcp
+  #   filesystem: ext4
   #   lvolPriorityClass: "0"
   #   maxNamespacePerSubsys: "1"
-  #   numDataChunks: "1"
-  #   numParityChunks: "1"
   #   qosRMbytes: "0"
   #   qosWMbytes: "0"
   #   qosRwMbytes: "0"
