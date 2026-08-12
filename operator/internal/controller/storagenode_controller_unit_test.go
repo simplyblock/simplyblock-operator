@@ -80,9 +80,9 @@ func newStorageNode(name, ns, snsRef, worker string) *simplyblockv1alpha1.Storag
 // ── TestSyncOverrides ─────────────────────────────────────────────────────────
 
 func TestSyncOverrides_PropagatesNodeConfigs(t *testing.T) {
-	maxLvol := int32(99)
+	maxSubsys := int32(99)
 	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, map[string]simplyblockv1alpha1.StorageNodeOverrides{
-		snTestWorker: {MaxSubsystemCount: &maxLvol, SpdkSystemMemory: "8G"},
+		snTestWorker: {MaxSubsystemCount: &maxSubsys, SpdkSystemMemory: "8G"},
 	})
 	sn := newStorageNode("sn-1", snTestNS, "sns", snTestWorker)
 	r := newSNReconciler(t, sns, sn)
