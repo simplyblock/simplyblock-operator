@@ -40,8 +40,23 @@ import (
 )
 
 const (
-	// DevDiskByID is the path to the device file under /dev/disk/by-id
-	DevDiskByID = "/dev/disk/by-id/*%s*"
+	// devByIDNamespacePattern matches the by-id symlink of one specific
+	// namespace of a subsystem, e.g. nvme-<model>_<serial>_<nsid>. The
+	// identifier is matched as a substring because udev prefixes the link
+	// with the transport ("nvme-") and appends the controller serial.
+	devByIDNamespacePattern = "*%s*_%d"
+	// devByIDAnyNamespacePattern matches the by-id symlinks of every
+	// namespace of a subsystem, whatever their nsid.
+	devByIDAnyNamespacePattern = "*%s*_[0-9]*"
+
+	// defaultDevDiskByID is the udev directory holding the persistent device
+	// symlinks scanned to find a namespace's block device.
+	defaultDevDiskByID = "/dev/disk/by-id"
+
+	// deviceReadyAttempts and deviceGoneAttempts bound how many times Connect
+	// and Disconnect rescan the by-id directory before giving up.
+	deviceReadyAttempts = 10
+	deviceGoneAttempts  = 20
 
 	// TargetTypeNVMf is the target type for NVMe over Fabrics
 	TargetTypeTCP  = "tcp"
@@ -336,7 +351,7 @@ func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
 		}
 	}
 
-	devicePath, err := nvmf.matchNvmeDevice(ctx)
+	devicePath, err := matchNamespaceDevice(ctx, defaultDevDiskByID, nvmf.model, nvmf.lvolID, nvmf.nsId, time.Second)
 	if err != nil {
 		return "", err
 	}
@@ -359,48 +374,100 @@ func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
 	return devicePath, nil
 }
 
-func (nvmf *initiatorNVMf) matchNvmeDevice(ctx context.Context) (string, error) {
-	deviceGlob := fmt.Sprintf(DevDiskByID, fmt.Sprintf("%s*_%d", nvmf.model, nvmf.nsId))
-	deviceGlobFallback := fmt.Sprintf(DevDiskByID, fmt.Sprintf("%s*_%d", nvmf.lvolID, nvmf.nsId))
-
-	devicePath, err := waitForDeviceReady(ctx, deviceGlob, 10)
-	if err != nil {
-		klog.Warningf("New device symlink not found (%s). Retrying fallback format: %s", deviceGlob, deviceGlobFallback)
-		devicePath, err = waitForDeviceReady(ctx, deviceGlobFallback, 10)
-		if err != nil {
-			return "", fmt.Errorf("device not found in both new (%s), and fallback (%s) formats: %w",
-				deviceGlob, deviceGlobFallback, err)
-		}
-	}
-	return devicePath, nil
-}
-
 func (nvmf *initiatorNVMf) Disconnect(ctx context.Context) error {
-	// deviceGlob := fmt.Sprintf(DevDiskByID, nvmf.model)
-	deviceGlob := fmt.Sprintf(DevDiskByID, fmt.Sprintf("%s*_[0-9]*", nvmf.model))
-	devicePath, err := filepath.Glob(deviceGlob)
+	deviceGlob := anyNamespaceDeviceGlob(defaultDevDiskByID, nvmf.model)
+	matches, err := filepath.Glob(deviceGlob)
 	if err != nil {
-		return fmt.Errorf("failed to find device paths matching %s: %v", deviceGlob, err)
+		return fmt.Errorf("failed to find device paths matching %s: %w", deviceGlob, err)
 	}
 
-	if len(devicePath) > 1 {
+	devicePath, shared := selectDisconnectTarget(matches)
+	if shared {
+		klog.Infof("Keeping subsystem of model %s connected, %d namespaces still in use", nvmf.model, len(matches))
 		return nil
-
-	} else if len(devicePath) == 1 {
-		err = disconnectDevicePath(ctx, devicePath[0])
-
-		if err != nil {
+	}
+	if devicePath != "" {
+		if err := disconnectDevicePath(ctx, devicePath); err != nil {
 			return err
 		}
 	}
 
-	return waitForDeviceGone(deviceGlob)
+	return waitForDeviceGone(ctx, deviceGlob, deviceGoneAttempts, time.Second)
 }
 
-// when timeout is set as 0, try to find the device file immediately
-// otherwise, wait for device file comes up or timeout.
-func waitForDeviceReady(ctx context.Context, deviceGlob string, seconds int) (string, error) {
-	for i := 0; i <= seconds; i++ {
+// selectDisconnectTarget decides which device a Disconnect tears down:
+//
+//   - no match: nothing to disconnect
+//   - one match: that device's controller can be torn down
+//   - several matches: further namespaces of the same subsystem are still
+//     connected on this host, and tearing down the controller would take their
+//     devices down with it, so the subsystem has to stay up (shared == true)
+func selectDisconnectTarget(matches []string) (devicePath string, shared bool) {
+	switch len(matches) {
+	case 0:
+		return "", false
+	case 1:
+		return matches[0], false
+	default:
+		return "", true
+	}
+}
+
+// namespaceDeviceGlob returns the glob matching the by-id symlink of namespace
+// nsID of the subsystem identified by id — a model or an lvol UUID. The
+// identifier is matched as a substring because udev prefixes the link with the
+// transport ("nvme-") and appends the controller serial before the nsid suffix.
+func namespaceDeviceGlob(byIDDir, id string, nsID int) string {
+	return filepath.Join(byIDDir, fmt.Sprintf(devByIDNamespacePattern, id, nsID))
+}
+
+// anyNamespaceDeviceGlob returns the glob matching the by-id symlinks of every
+// namespace of the subsystem identified by id, whatever their nsid.
+func anyNamespaceDeviceGlob(byIDDir, id string) string {
+	return filepath.Join(byIDDir, fmt.Sprintf(devByIDAnyNamespacePattern, id))
+}
+
+// matchNamespaceDevice waits in byIDDir for the block device of namespace nsID
+// to show up. It prefers the subsystem model, which every namespace link
+// carries, and falls back to the lvol UUID for volumes whose links are named
+// after the lvol itself.
+func matchNamespaceDevice(
+	ctx context.Context,
+	byIDDir, model, lvolID string,
+	nsID int,
+	pollInterval time.Duration,
+) (string, error) {
+	deviceGlob := namespaceDeviceGlob(byIDDir, model, nsID)
+	deviceGlobFallback := namespaceDeviceGlob(byIDDir, lvolID, nsID)
+
+	devicePath, primaryErr := waitForDeviceReady(ctx, deviceGlob, deviceReadyAttempts, pollInterval)
+	if primaryErr == nil {
+		return devicePath, nil
+	}
+
+	klog.Warningf("New device symlink not found (%s). Retrying fallback format: %s", deviceGlob, deviceGlobFallback)
+	devicePath, err := waitForDeviceReady(ctx, deviceGlobFallback, deviceReadyAttempts, pollInterval)
+	if err != nil {
+		// Both reasons are kept: the model glob failing for a different reason
+		// than the fallback glob (ambiguous match vs. nothing there at all) is
+		// what tells a stale symlink apart from a missing namespace.
+		return "", fmt.Errorf("device not found in both new (%s), and fallback (%s) formats: %w",
+			deviceGlob, deviceGlobFallback, errors.Join(primaryErr, err))
+	}
+	return devicePath, nil
+}
+
+// waitForDeviceReady rescans deviceGlob until it resolves to a single device,
+// waiting pollInterval between attempts. With attempts set to 0 it scans once
+// and returns immediately.
+func waitForDeviceReady(
+	ctx context.Context,
+	deviceGlob string,
+	attempts int,
+	pollInterval time.Duration,
+) (string, error) {
+	var lastErr error
+	for i := 0; ; i++ {
 		matches, err := filepath.Glob(deviceGlob)
 		if err != nil {
 			return "", err
@@ -412,20 +479,28 @@ func waitForDeviceReady(ctx context.Context, deviceGlob string, seconds int) (st
 			// Several links under /dev/disk/by-id/ usually point at the same
 			// device, which is fine. But a broken matcher may match multiple
 			// devices, which is not fine. Also, a dangling device from a
-			// previous connect may match.
+			// previous connect may match — that one goes away shortly, so keep
+			// scanning instead of failing the connect outright.
 			match, err := resolveToSameDevice(matches)
-			if err != nil {
-				return "", err
-			} else if err == nil {
+			if err == nil {
 				return match, nil
 			}
+			lastErr = err
 			klog.Warningf("device glob %s has not settled yet: %v", deviceGlob, err)
 		}
+		// Never sleep after the last scan: with attempts set to 0 the caller
+		// asked for a single immediate look.
+		if i >= attempts {
+			break
+		}
 		select {
-		case <-time.After(time.Second):
+		case <-time.After(pollInterval):
 		case <-ctx.Done():
 			return "", ctx.Err()
 		}
+	}
+	if lastErr != nil {
+		return "", fmt.Errorf("timed out waiting device ready: %s: %w", deviceGlob, lastErr)
 	}
 	return "", fmt.Errorf("timed out waiting device ready: %s", deviceGlob)
 }
@@ -452,9 +527,10 @@ func resolveToSameDevice(matches []string) (string, error) {
 	return matches[0], nil
 }
 
-// wait for device file gone or timeout
-func waitForDeviceGone(deviceGlob string) error {
-	for i := 0; i <= 20; i++ {
+// waitForDeviceGone rescans deviceGlob until it stops matching anything,
+// waiting pollInterval between attempts.
+func waitForDeviceGone(ctx context.Context, deviceGlob string, attempts int, pollInterval time.Duration) error {
+	for i := 0; i <= attempts; i++ {
 		matches, err := filepath.Glob(deviceGlob)
 		if err != nil {
 			return err
@@ -462,7 +538,11 @@ func waitForDeviceGone(deviceGlob string) error {
 		if len(matches) == 0 {
 			return nil
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-time.After(pollInterval):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return fmt.Errorf("timed out waiting device gone: %s", deviceGlob)
 }
