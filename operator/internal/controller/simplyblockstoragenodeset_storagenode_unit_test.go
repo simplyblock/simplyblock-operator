@@ -109,14 +109,14 @@ func TestSanitiseDNSLabel_StripsLeadingTrailingHyphens(t *testing.T) {
 // ── TestBuildPerNodeEnvFile ───────────────────────────────────────────────────
 
 func TestBuildPerNodeEnvFile_UsesFleetDefaults(t *testing.T) {
-	maxLvol := int32(20)
+	maxSubsys := int32(20)
 	corePercent := int32(50)
 	sns := &simplyblockv1alpha1.StorageNodeSet{
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
-			ClusterName:           snsTestCluster,
-			MaxLogicalVolumeCount: &maxLvol,
-			CorePercentage:        &corePercent,
-			SpdkSystemMemory:      "4G",
+			ClusterName:       snsTestCluster,
+			MaxSubsystemCount: &maxSubsys,
+			CorePercentage:    &corePercent,
+			SpdkSystemMemory:  "4G",
 		},
 	}
 	env := buildPerNodeEnvFile(sns, "worker-a.example.com")
@@ -133,10 +133,10 @@ func TestBuildPerNodeEnvFile_OverrideWinsOverFleet(t *testing.T) {
 	overrideMax := int32(99)
 	sns := &simplyblockv1alpha1.StorageNodeSet{
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
-			ClusterName:           snsTestCluster,
-			MaxLogicalVolumeCount: &fleetMax,
+			ClusterName:       snsTestCluster,
+			MaxSubsystemCount: &fleetMax,
 			NodeConfigs: map[string]simplyblockv1alpha1.StorageNodeOverrides{
-				"worker-b": {MaxLogicalVolumeCount: &overrideMax},
+				"worker-b": {MaxSubsystemCount: &overrideMax},
 			},
 		},
 	}
@@ -147,11 +147,11 @@ func TestBuildPerNodeEnvFile_OverrideWinsOverFleet(t *testing.T) {
 }
 
 func TestBuildPerNodeEnvFile_WorkerNotInNodeConfigs_UsesFleet(t *testing.T) {
-	maxLvol := int32(15)
+	maxSubsys := int32(15)
 	sns := &simplyblockv1alpha1.StorageNodeSet{
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
-			ClusterName:           snsTestCluster,
-			MaxLogicalVolumeCount: &maxLvol,
+			ClusterName:       snsTestCluster,
+			MaxSubsystemCount: &maxSubsys,
 		},
 	}
 	env := buildPerNodeEnvFile(sns, "worker-not-configured")
