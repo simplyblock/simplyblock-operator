@@ -44,9 +44,9 @@ type StorageNodeSetSpec struct {
 	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	ClusterImage string `json:"clusterImage,omitempty"`
 
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Logical Volume Count"
-	// MaxLogicalVolumeCount is the maximum number of logical volumes per node.
-	MaxLogicalVolumeCount *int32 `json:"maxLogicalVolumeCount,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Subsystem Count"
+	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per node.
+	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Size"
 	// MaxSize is the maximum allocatable size of huge pages.
 	MaxSize string `json:"maxSize,omitempty"`

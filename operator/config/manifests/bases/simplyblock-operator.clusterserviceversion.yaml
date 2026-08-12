@@ -394,13 +394,13 @@ spec:
       - description: JournalManagerSpec configures journal manager behavior.
         displayName: Journal Manager
         path: journalManager
-      - description: MaxLogicalVolumeCount is the maximum number of logical volumes
-          per node.
-        displayName: Max Logical Volume Count
-        path: maxLogicalVolumeCount
       - description: MaxSize is the maximum allocatable size of the storage node.
         displayName: Max Size
         path: maxSize
+      - description: MaxSubsystemCount is the maximum number of NVMe-oF subsystems
+          per node.
+        displayName: Max Subsystem Count
+        path: maxSubsystemCount
       - description: MgmtIfname is the management interface name used by storage nodes.
         displayName: Management Interface
         path: mgmtIfname

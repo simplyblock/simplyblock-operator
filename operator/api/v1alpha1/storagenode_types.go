@@ -30,9 +30,9 @@ import (
 // of StorageNodeSetSpec. When a field is set here it takes precedence over the
 // fleet default; when omitted the fleet default applies.
 type StorageNodeOverrides struct {
-	// MaxLogicalVolumeCount overrides the maximum number of logical volumes for this node.
+	// MaxSubsystemCount overrides the maximum number of NVMe-oF subsystems for this node.
 	// +optional
-	MaxLogicalVolumeCount *int32 `json:"maxLogicalVolumeCount,omitempty"`
+	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
 
 	// MaxSize overrides the maximum allocatable size of huge pages for this node.
 	// +optional
