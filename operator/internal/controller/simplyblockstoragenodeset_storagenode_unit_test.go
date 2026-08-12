@@ -109,12 +109,12 @@ func TestSanitiseDNSLabel_StripsLeadingTrailingHyphens(t *testing.T) {
 // ── TestBuildPerNodeEnvFile ───────────────────────────────────────────────────
 
 func TestBuildPerNodeEnvFile_UsesFleetDefaults(t *testing.T) {
-	maxLvol := int32(20)
+	maxSubsys := int32(20)
 	corePercent := int32(50)
 	sns := &simplyblockv1alpha1.StorageNodeSet{
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
 			ClusterName:       snsTestCluster,
-			MaxSubsystemCount: &maxLvol,
+			MaxSubsystemCount: &maxSubsys,
 			CorePercentage:    &corePercent,
 			SpdkSystemMemory:  "4G",
 		},
@@ -147,11 +147,11 @@ func TestBuildPerNodeEnvFile_OverrideWinsOverFleet(t *testing.T) {
 }
 
 func TestBuildPerNodeEnvFile_WorkerNotInNodeConfigs_UsesFleet(t *testing.T) {
-	maxLvol := int32(15)
+	maxSubsys := int32(15)
 	sns := &simplyblockv1alpha1.StorageNodeSet{
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
 			ClusterName:       snsTestCluster,
-			MaxSubsystemCount: &maxLvol,
+			MaxSubsystemCount: &maxSubsys,
 		},
 	}
 	env := buildPerNodeEnvFile(sns, "worker-not-configured")
