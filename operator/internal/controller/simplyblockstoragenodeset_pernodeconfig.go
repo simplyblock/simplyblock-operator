@@ -163,18 +163,18 @@ func (r *StorageNodeSetReconciler) reconcilePerNodeConfigMap(
 func buildPerNodeEnvFile(sns *simplyblockv1alpha1.StorageNodeSet, worker string) string {
 	// Start with fleet defaults.
 	eff := simplyblockv1alpha1.StorageNodeOverrides{
-		MaxSubsystemCount: sns.Spec.MaxSubsystemCount,
-		MaxSize:               sns.Spec.MaxSize,
-		CorePercentage:        sns.Spec.CorePercentage,
-		SpdkSystemMemory:      sns.Spec.SpdkSystemMemory,
-		JournalManagerSpec:    sns.Spec.JournalManagerSpec,
-		PcieAllowList:         sns.Spec.PcieAllowList,
-		PcieDenyList:          sns.Spec.PcieDenyList,
-		PcieModel:             sns.Spec.PcieModel,
-		DriveSizeRange:        sns.Spec.DriveSizeRange,
-		DeviceNames:           sns.Spec.DeviceNames,
-		EnableCpuTopology:     sns.Spec.EnableCpuTopology,
-		ReservedSystemCPU:     sns.Spec.ReservedSystemCPU,
+		MaxSubsystemCount:  sns.Spec.MaxSubsystemCount,
+		MaxSize:            sns.Spec.MaxSize,
+		CorePercentage:     sns.Spec.CorePercentage,
+		SpdkSystemMemory:   sns.Spec.SpdkSystemMemory,
+		JournalManagerSpec: sns.Spec.JournalManagerSpec,
+		PcieAllowList:      sns.Spec.PcieAllowList,
+		PcieDenyList:       sns.Spec.PcieDenyList,
+		PcieModel:          sns.Spec.PcieModel,
+		DriveSizeRange:     sns.Spec.DriveSizeRange,
+		DeviceNames:        sns.Spec.DeviceNames,
+		EnableCpuTopology:  sns.Spec.EnableCpuTopology,
+		ReservedSystemCPU:  sns.Spec.ReservedSystemCPU,
 	}
 
 	// Apply per-node overrides if present.
