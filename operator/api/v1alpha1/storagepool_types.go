@@ -66,8 +66,9 @@ type StoragePoolQoSStatus struct {
 // cluster_id and pool_name are always set automatically and cannot be overridden here.
 //
 // IMPORTANT: StorageClass Parameters are immutable in the Kubernetes API, so this whole field
-// is immutable once set (see PoolSpec.StorageClassParameters) — there's no supported way to
-// change a pool's StorageClass defaults after the pool is created. Create a new Pool instead.
+// is immutable once set (see StoragePoolSpec.StorageClassParameters) — there's no supported way
+// to change a pool's StorageClass defaults after the pool is created. Create a new StoragePool
+// instead.
 type StorageClassParameters struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Read/Write IOPS"
 	// QosRwIops sets the read/write IOPS limit (0 = unlimited).
@@ -137,7 +138,7 @@ type StoragePoolSpec struct {
 	LogicalVolumeMaxSize string `json:"logicalVolumeMaxSize,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="DHCHAP"
 	// DHCHAP enables DH-HMAC-CHAP key generation for the pool. Authentication is only
-	// enforced when allowedNodes is non-empty. Also controls whether the Pool's StorageClass
+	// enforced when allowedNodes is non-empty. Also controls whether the StoragePool's StorageClass
 	// gets an allowedTopologies restriction, which — like StorageClass Parameters — is
 	// immutable in the Kubernetes API, hence this field is immutable too.
 	// +kubebuilder:default=false
@@ -160,7 +161,7 @@ type StoragePoolSpec struct {
 	// StorageClassParameters sets default StorageClass parameter values for volumes in this pool.
 	// Immutable: the underlying StorageClass's Parameters/AllowedTopologies cannot be patched in
 	// the Kubernetes API once created, so there is no supported way to change these after the
-	// fact. Create a new Pool to provision volumes with different settings.
+	// fact. Create a new StoragePool to provision volumes with different settings.
 	// +kubebuilder:default={}
 	// +k8s:immutable
 	StorageClassParameters *StorageClassParameters `json:"storageClassParameters,omitempty"`
