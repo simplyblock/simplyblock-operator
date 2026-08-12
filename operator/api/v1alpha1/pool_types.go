@@ -64,6 +64,10 @@ type PoolQoSStatus struct {
 // StorageClassParameters defines the default StorageClass parameter values for volumes in this pool.
 // These are passed as-is to the CSI driver when the StorageClass is created.
 // cluster_id and pool_name are always set automatically and cannot be overridden here.
+//
+// IMPORTANT: StorageClass Parameters are immutable in the Kubernetes API, so this whole field
+// is immutable once set (see PoolSpec.StorageClassParameters) — there's no supported way to
+// change a pool's StorageClass defaults after the pool is created. Create a new Pool instead.
 type StorageClassParameters struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Read/Write IOPS"
 	// QosRwIops sets the read/write IOPS limit (0 = unlimited).
@@ -88,12 +92,6 @@ type StorageClassParameters struct {
 	// Replicate enables replication for logical volumes.
 	// +kubebuilder:default=false
 	Replicate *bool `json:"replicate,omitempty"`
-	// NumDataChunks is the number of data chunks (distr_ndcs).
-	// +kubebuilder:default="1"
-	NumDataChunks string `json:"numDataChunks,omitempty"`
-	// NumParityChunks is the number of parity chunks (distr_npcs).
-	// +kubebuilder:default="1"
-	NumParityChunks string `json:"numParityChunks,omitempty"`
 	// LvolPriorityClass sets the logical volume priority class.
 	// +kubebuilder:default="0"
 	LvolPriorityClass string `json:"lvolPriorityClass,omitempty"`
@@ -104,9 +102,18 @@ type StorageClassParameters struct {
 	// MaxNamespacePerSubsys limits namespaces per NVMf subsystem.
 	// +kubebuilder:default="1"
 	MaxNamespacePerSubsys string `json:"maxNamespacePerSubsys,omitempty"`
-	// Tune2fsReservedBlocks sets the ext4 reserved-blocks percentage.
-	// +kubebuilder:default="0"
+	// Tune2fsReservedBlocks sets the ext4 reserved-blocks percentage. Left unset, the node
+	// plugin skips tune2fs entirely and mkfs.ext4's own default reserve applies, matching a
+	// StorageClass that omits tune2fs_reserved_blocks. A default of "0" here would not be a
+	// no-op: it actively runs `tune2fs -m 0` on every volume, since the node plugin only skips
+	// the call when the parameter is empty (see stageVolume in the CSI driver), not when it's
+	// "0".
 	Tune2fsReservedBlocks string `json:"tune2fsReservedBlocks,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Filesystem"
+	// Filesystem is the filesystem used to format logical volumes of this pool.
+	// +kubebuilder:validation:Enum=ext4;xfs
+	// +kubebuilder:default=ext4
+	Filesystem string `json:"filesystem,omitempty"`
 }
 
 // PoolSpec defines the desired state of Pool
@@ -130,7 +137,9 @@ type PoolSpec struct {
 	LogicalVolumeMaxSize string `json:"logicalVolumeMaxSize,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="DHCHAP"
 	// DHCHAP enables DH-HMAC-CHAP key generation for the pool. Authentication is only
-	// enforced when allowedNodes is non-empty
+	// enforced when allowedNodes is non-empty. Also controls whether the Pool's StorageClass
+	// gets an allowedTopologies restriction, which — like StorageClass Parameters — is
+	// immutable in the Kubernetes API, hence this field is immutable too.
 	// +kubebuilder:default=false
 	// +k8s:immutable
 	DHCHAP bool `json:"dhchap,omitempty"`
@@ -149,7 +158,11 @@ type PoolSpec struct {
 	Action string `json:"action,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Storage Class Parameters"
 	// StorageClassParameters sets default StorageClass parameter values for volumes in this pool.
+	// Immutable: the underlying StorageClass's Parameters/AllowedTopologies cannot be patched in
+	// the Kubernetes API once created, so there is no supported way to change these after the
+	// fact. Create a new Pool to provision volumes with different settings.
 	// +kubebuilder:default={}
+	// +k8s:immutable
 	StorageClassParameters *StorageClassParameters `json:"storageClassParameters,omitempty"`
 }
 
