@@ -334,56 +334,116 @@ func (g *Guardian) loop(ctx context.Context) {
 
 //nolint:gocyclo // TODO: decompose tick() into smaller helpers to reduce complexity
 func (g *Guardian) tick(ctx context.Context) {
+	clusters, err := g.loadClusterSecret()
+	if err != nil || len(clusters.Clusters) == 0 {
+		return
+	}
+
+	brokenAt, podsByLvol, clusterByLvol := g.snapshotBrokenLvols()
+
+	earliestBroken := earliestBrokenPerCluster(brokenAt, clusterByLvol)
+	activeNow := g.evaluateClusterStatuses(clusters, earliestBroken)
+	if len(activeNow) == 0 {
+		return
+	}
+
+	actionable := g.actionableLvols(brokenAt, clusterByLvol, activeNow)
+	if len(actionable) == 0 {
+		return
+	}
+
+	uidToPod, err := g.podsByUID(ctx)
+	if err != nil {
+		klog.Errorf("Guardian: list pods failed: %v", err)
+		return
+	}
+
+	restarted := 0
+	for cid, lvolIDs := range actionable {
+		restarted += g.restartBrokenLvols(ctx, cid, lvolIDs, podsByLvol, uidToPod)
+	}
+
+	if restarted > 0 {
+		klog.Infof("Guardian: restart cycle complete. restarted=%d", restarted)
+	}
+
+	g.mu.Lock()
+	g.persistLocked()
+	g.mu.Unlock()
+}
+
+func (g *Guardian) loadClusterSecret() (ClustersInfo, error) {
 	secretFile := FromEnv("SPDKCSI_SECRET", "/etc/spdkcsi-secret/secret.json")
 	var clusters ClustersInfo
 	if err := ParseJSONFile(secretFile, &clusters); err != nil {
 		klog.Errorf("Guardian: parse clusters secret failed: %v", err)
-		return
+		return ClustersInfo{}, err
 	}
-	if len(clusters.Clusters) == 0 {
-		return
-	}
+	return clusters, nil
+}
 
-	// Snapshot current state under lock.
+// snapshotBrokenLvols copies the subset of g.lvols needed for a tick under
+// the mutex and returns three maps keyed by lvolID:
+//   - brokenAt:     only lvols whose BrokenAt is non-zero
+//   - podsByLvol:   all pod UIDs registered against each lvol
+//   - clusterByLvol: the cluster ID each lvol belongs to
+func (g *Guardian) snapshotBrokenLvols() (
+	brokenAt map[string]time.Time,
+	podsByLvol map[string][]string,
+	clusterByLvol map[string]string,
+) {
 	g.mu.Lock()
-	lvolBrokenAt := make(map[string]time.Time, len(g.lvols))
-	lvolPods := make(map[string][]string, len(g.lvols))
-	lvolCluster := make(map[string]string, len(g.lvols))
-	clusterWasInactive := make(map[string]bool, len(g.clusterWasInactive))
+	defer g.mu.Unlock()
+
+	brokenAt = make(map[string]time.Time, len(g.lvols))
+	podsByLvol = make(map[string][]string, len(g.lvols))
+	clusterByLvol = make(map[string]string, len(g.lvols))
 
 	for lvolID, st := range g.lvols {
 		if st == nil {
 			continue
 		}
-		lvolCluster[lvolID] = st.ClusterID
+		clusterByLvol[lvolID] = st.ClusterID
 		if !st.BrokenAt.IsZero() {
-			lvolBrokenAt[lvolID] = st.BrokenAt
+			brokenAt[lvolID] = st.BrokenAt
 		}
 		for podUID := range st.PodUIDs {
-			lvolPods[lvolID] = append(lvolPods[lvolID], podUID)
+			podsByLvol[lvolID] = append(podsByLvol[lvolID], podUID)
 		}
 	}
+	return
+}
+
+// earliestBrokenPerCluster returns the earliest BrokenAt timestamp seen
+// across all lvols for each cluster. Used to enforce BrokenLvolGracePeriod
+// before querying cluster status.
+func earliestBrokenPerCluster(brokenAt map[string]time.Time, clusterByLvol map[string]string) map[string]time.Time {
+	result := map[string]time.Time{}
+	for lvolID, ts := range brokenAt {
+		cid := clusterByLvol[lvolID]
+		if cid == "" {
+			continue
+		}
+		if t, ok := result[cid]; !ok || ts.Before(t) {
+			result[cid] = ts
+		}
+	}
+	return result
+}
+
+// evaluateClusterStatuses checks the live status of every cluster, honouring
+// the BrokenLvolGracePeriod before making API calls. It updates
+// g.clusterWasInactive to track active↔inactive transitions and returns the
+// set of cluster IDs that are currently active.
+func (g *Guardian) evaluateClusterStatuses(clusters ClustersInfo, earliestBroken map[string]time.Time) map[string]bool {
+	g.mu.Lock()
+	clusterWasInactive := make(map[string]bool, len(g.clusterWasInactive))
 	for cid, v := range g.clusterWasInactive {
 		clusterWasInactive[cid] = v
 	}
 	g.mu.Unlock()
 
-	// Build the earliest broken-lvol timestamp per cluster so we can enforce
-	// BrokenLvolGracePeriod before evaluating cluster status.
-	earliestLvolBrokenAt := map[string]time.Time{}
-	for lvolID, ts := range lvolBrokenAt {
-		cid := lvolCluster[lvolID]
-		if cid == "" {
-			continue
-		}
-		if t, ok := earliestLvolBrokenAt[cid]; !ok || ts.Before(t) {
-			earliestLvolBrokenAt[cid] = ts
-		}
-	}
-
 	activeNow := map[string]bool{}
-
-	justBecameActive := map[string]bool{} // clusterID -> true
 
 	for _, c := range clusters.Clusters {
 		cid := c.ClusterID
@@ -393,14 +453,11 @@ func (g *Guardian) tick(ctx context.Context) {
 
 		// If any lvol on this cluster broke recently, wait for the grace period
 		// before checking status — the cluster may still be transitioning to suspended.
-		if firstBroken, hasBroken := earliestLvolBrokenAt[cid]; hasBroken {
+		if firstBroken, hasBroken := earliestBroken[cid]; hasBroken {
 			if time.Since(firstBroken) < g.cfg.BrokenLvolGracePeriod {
 				klog.Infof(
 					"Guardian: cluster=%s has broken lvols detected %.0fs ago, waiting for grace period (%.0fs) before status check",
-					cid,
-					time.Since(firstBroken).Seconds(),
-					g.cfg.BrokenLvolGracePeriod.Seconds(),
-				)
+					cid, time.Since(firstBroken).Seconds(), g.cfg.BrokenLvolGracePeriod.Seconds())
 				continue
 			}
 		}
@@ -419,152 +476,161 @@ func (g *Guardian) tick(ctx context.Context) {
 		}
 
 		activeNow[cid] = true
-
 		if wasInactive {
-			justBecameActive[cid] = true
 			klog.Warningf("Guardian: cluster=%s transitioned to %s; will evaluate pod restarts", cid, realStatus)
 		}
 		clusterWasInactive[cid] = false
 	}
 
-	// Persist cluster transition updates back.
 	g.mu.Lock()
 	for cid, v := range clusterWasInactive {
 		g.clusterWasInactive[cid] = v
 	}
 	g.mu.Unlock()
 
-	if len(activeNow) == 0 {
-		return
-	}
+	return activeNow
+}
 
+// actionableLvols returns the broken lvol IDs grouped by cluster ID, filtered
+// to those that have been broken for at least MinBrokenFor and belong to a
+// currently active cluster.
+func (g *Guardian) actionableLvols(
+	brokenAt map[string]time.Time,
+	clusterByLvol map[string]string,
+	activeNow map[string]bool,
+) map[string][]string {
 	now := time.Now().UTC()
-	actionableByCluster := map[string][]string{} // clusterID -> []lvolID
-	for lvolID, ts := range lvolBrokenAt {
+	result := map[string][]string{}
+	for lvolID, ts := range brokenAt {
 		if now.Sub(ts) < g.cfg.MinBrokenFor {
 			continue
 		}
-		cid := lvolCluster[lvolID]
-		if cid == "" {
+		cid := clusterByLvol[lvolID]
+		if cid == "" || !activeNow[cid] {
 			continue
 		}
-		if !activeNow[cid] {
-			continue
-		}
-		actionableByCluster[cid] = append(actionableByCluster[cid], lvolID)
+		result[cid] = append(result[cid], lvolID)
 	}
+	return result
+}
 
-	if len(actionableByCluster) == 0 {
-		return
-	}
-
+// podsByUID lists all Running pods on this node and returns them indexed by UID.
+func (g *Guardian) podsByUID(ctx context.Context) (map[string]v1.Pod, error) {
 	pods, err := g.listRunningPodsOnNode(ctx, g.cfg.NodeName)
 	if err != nil {
-		klog.Errorf("Guardian: list pods failed: %v", err)
-		return
+		return nil, err
 	}
-	uidToPod := map[string]v1.Pod{}
+	m := make(map[string]v1.Pod, len(pods.Items))
 	for _, p := range pods.Items {
-		uidToPod[string(p.UID)] = p
+		m[string(p.UID)] = p
 	}
+	return m, nil
+}
+
+// restartBrokenLvols processes all actionable lvol IDs for one cluster.
+// Each lvol is routed to a coordinated restart (shared NQN) or individual
+// restart (single-member or not-yet-indexed NQN). Returns the number of pods
+// deleted this cycle.
+func (g *Guardian) restartBrokenLvols(
+	ctx context.Context,
+	cid string,
+	lvolIDs []string,
+	podsByLvol map[string][]string,
+	uidToPod map[string]v1.Pod,
+) int {
+	klog.Warningf("Guardian: cluster %s active; attempting restarts for broken lvols=%v", cid, lvolIDs)
 
 	restarted := 0
+	// handledLvols prevents double-processing lvols already covered by a
+	// coordinated subsystem restart (one coordinatedSubsystemRestart call
+	// handles all sibling lvolIDs at once).
+	handledLvols := map[string]bool{}
 
-	for cid, lvolIDs := range actionableByCluster {
-		klog.Warningf("Guardian: cluster %s active; attempting restarts for broken lvols=%v", cid, lvolIDs)
+	for _, lvolID := range lvolIDs {
+		if handledLvols[lvolID] {
+			continue
+		}
 
-		// handledLvols prevents double-processing lvolIDs already restarted
-		// as part of a coordinated subsystem restart.
-		handledLvols := map[string]bool{}
+		klog.Warningf("Guardian debug: lvol=%s podUIDs=%v", lvolID, podsByLvol[lvolID])
 
-		for _, lvolID := range lvolIDs {
-			if handledLvols[lvolID] {
+		// Route based on the NQN index:
+		//   nil      → not yet indexed; fall back to per-pod StorageClass check
+		//   len == 1 → single-member subsystem; individual restart is safe
+		//   len > 1  → shared subsystem; all pods must restart together
+		siblings := SubsystemLvolIDs(lvolID)
+		if len(siblings) > 1 {
+			restarted += g.coordinatedSubsystemRestart(ctx, cid, siblings, podsByLvol, uidToPod)
+			for _, s := range siblings {
+				handledLvols[s] = true
+			}
+			continue
+		}
+
+		for _, podUID := range podsByLvol[lvolID] {
+			pod, ok := uidToPod[podUID]
+			if !ok {
 				continue
 			}
-
-			klog.Warningf("Guardian debug: lvol=%s podUIDs=%v", lvolID, lvolPods[lvolID])
-
-			// Determine how to restart based on the NQN index:
-			//   nil        → lvolID not yet indexed; fall back to StorageClass check
-			//   len == 1   → known single-member subsystem; individual restart is safe
-			//   len > 1    → shared subsystem; coordinated restart required
-			siblings := SubsystemLvolIDs(lvolID)
-			if len(siblings) > 1 {
-				restarted += g.coordinatedSubsystemRestart(ctx, cid, siblings, lvolPods, uidToPod)
-				for _, s := range siblings {
-					handledLvols[s] = true
-				}
-				continue
-			}
-
-			for _, podUID := range lvolPods[lvolID] {
-				pod, ok := uidToPod[podUID]
-				if !ok {
-					continue
-				}
-
-				if !controllerManaged(&pod) {
-					continue
-				}
-
-				if !g.podOptedInForAutoRestart(ctx, &pod) {
-					continue
-				}
-
-				// NQN index not yet populated for this lvolID: suppress if the
-				// StorageClass indicates a shared subsystem, to avoid tearing
-				// down a shared NQN that siblings may still be using.
-				// Once reconnectSubsystems populates the index (next tick or
-				// sooner), siblings == 1 and the individual path fires.
-				if siblings == nil && g.podUsesNamespacedSubsystem(ctx, &pod) {
-					klog.Warningf("Guardian: suppressing auto-restart for pod %s/%s (uid=%s, lvol=%s): "+
-						"NVMe subsystem map not yet populated; coordinated restart unavailable this tick",
-						pod.Namespace, pod.Name, podUID, lvolID)
-					g.emitSharedSubsystemEvent(ctx, &pod)
-					continue
-				}
-
-				// if pod.Labels[g.cfg.OptOutLabelKey] == g.cfg.OptOutLabelValue {
-				// 	continue
-				// }
-				if last, ok := g.getLastRestart(podUID); ok && time.Since(last) < g.cfg.RestartBackoff {
-					continue
-				}
-
-				klog.Warningf("Guardian: restarting pod %s/%s (uid=%s) due to broken lvol=%s cluster=%s",
-					pod.Namespace, pod.Name, podUID, lvolID, cid)
-
-				deleted := false
-				if !g.cfg.DryRun {
-					err := g.cs.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
-						GracePeriodSeconds: &g.cfg.GraceSeconds,
-					})
-					if err != nil && !apierrors.IsNotFound(err) {
-						klog.Errorf("Guardian: delete pod %s/%s failed: %v", pod.Namespace, pod.Name, err)
-						continue
-					}
-					deleted = true
-				}
-
-				if deleted {
-					g.setLastRestart(podUID)
-					restarted++
-
-					g.mu.Lock()
-					g.removePodFromLvolLocked(lvolID, podUID)
-					g.mu.Unlock()
-				}
+			if g.restartIndividualPod(ctx, cid, lvolID, podUID, pod, siblings) {
+				g.setLastRestart(podUID)
+				restarted++
+				g.mu.Lock()
+				g.removePodFromLvolLocked(lvolID, podUID)
+				g.mu.Unlock()
 			}
 		}
 	}
 
-	if restarted > 0 {
-		klog.Infof("Guardian: restart cycle complete. restarted=%d", restarted)
+	return restarted
+}
+
+// restartIndividualPod runs all eligibility checks for a single pod and, if
+// they pass, deletes it. Returns true only when the pod was successfully
+// deleted (or was already gone), so the caller can update restart state.
+// siblings is the NQN index result for this pod's lvolID (nil = not indexed,
+// len 1 = single-member); callers must not pass siblings with len > 1.
+func (g *Guardian) restartIndividualPod(
+	ctx context.Context,
+	cid, lvolID, podUID string,
+	pod v1.Pod,
+	siblings []string,
+) bool {
+	if !controllerManaged(&pod) {
+		return false
+	}
+	if !g.podOptedInForAutoRestart(ctx, &pod) {
+		return false
+	}
+	// NQN index not yet populated: suppress if the StorageClass indicates a
+	// shared subsystem to avoid tearing down a shared NQN that siblings may
+	// still be using. Once reconnectSubsystems populates the index (next tick
+	// or sooner), siblings has len 1 and this guard is skipped.
+	if siblings == nil && g.podUsesNamespacedSubsystem(ctx, &pod) {
+		klog.Warningf("Guardian: suppressing auto-restart for pod %s/%s (uid=%s, lvol=%s): "+
+			"NVMe subsystem map not yet populated; coordinated restart unavailable this tick",
+			pod.Namespace, pod.Name, podUID, lvolID)
+		g.emitSharedSubsystemEvent(ctx, &pod)
+		return false
+	}
+	if last, ok := g.getLastRestart(podUID); ok && time.Since(last) < g.cfg.RestartBackoff {
+		return false
 	}
 
-	g.mu.Lock()
-	g.persistLocked()
-	g.mu.Unlock()
+	klog.Warningf("Guardian: restarting pod %s/%s (uid=%s) due to broken lvol=%s cluster=%s",
+		pod.Namespace, pod.Name, podUID, lvolID, cid)
+
+	if g.cfg.DryRun {
+		return false
+	}
+
+	err := g.cs.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
+		GracePeriodSeconds: &g.cfg.GraceSeconds,
+	})
+	if err != nil && !apierrors.IsNotFound(err) {
+		klog.Errorf("Guardian: delete pod %s/%s failed: %v", pod.Namespace, pod.Name, err)
+		return false
+	}
+	return true
 }
 
 // coordinatedSubsystemRestart restarts all pods that share an NVMe-oF
