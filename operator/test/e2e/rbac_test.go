@@ -41,7 +41,7 @@ import (
 //     the type — a built-in K8s RBAC limitation we document and want to make
 //     visible if it ever changes.
 //
-// The Pool same-namespace enforcement is exercised by the unit test
+// The StoragePool same-namespace enforcement is exercised by the unit test
 // TestPoolReconcileRejectsCrossNamespaceClusterReference, so we don't repeat
 // the full reconcile loop here; that keeps this suite independent of operator
 // pod readiness and runnable on just a Kind cluster with CRDs + RBAC applied.
@@ -151,12 +151,12 @@ subjects:
 		It("grants viewer SA get/list/watch on simplyblock CRs in its namespace", func() {
 			expectCanI(rbacFooNS, rbacViewerSA, "get", "storageclusters.storage.simplyblock.io", "", true)
 			expectCanI(rbacFooNS, rbacViewerSA, "list", "storageclusters.storage.simplyblock.io", "", true)
-			expectCanI(rbacFooNS, rbacViewerSA, "watch", "pools.storage.simplyblock.io", "", true)
+			expectCanI(rbacFooNS, rbacViewerSA, "watch", "storagepools.storage.simplyblock.io", "", true)
 		})
 
 		It("denies viewer SA mutations", func() {
 			expectCanI(rbacFooNS, rbacViewerSA, "create", "storageclusters.storage.simplyblock.io", "", false)
-			expectCanI(rbacFooNS, rbacViewerSA, "patch", "pools.storage.simplyblock.io", "", false)
+			expectCanI(rbacFooNS, rbacViewerSA, "patch", "storagepools.storage.simplyblock.io", "", false)
 		})
 
 		It("denies viewer SA access to other namespaces", func() {
@@ -166,17 +166,17 @@ subjects:
 		It("grants editor SA full CRUD on simplyblock CRs in its namespace", func() {
 			for _, verb := range []string{"get", "list", "create", "update", "patch", "delete"} {
 				expectCanI(rbacFooNS, rbacEditorSA, verb, "storageclusters.storage.simplyblock.io", "", true)
-				expectCanI(rbacFooNS, rbacEditorSA, verb, "pools.storage.simplyblock.io", "", true)
+				expectCanI(rbacFooNS, rbacEditorSA, verb, "storagepools.storage.simplyblock.io", "", true)
 			}
 		})
 
 		It("denies editor SA access to other namespaces", func() {
-			expectCanI(rbacBarNS, rbacEditorSA, "create", "pools.storage.simplyblock.io", "", false)
+			expectCanI(rbacBarNS, rbacEditorSA, "create", "storagepools.storage.simplyblock.io", "", false)
 		})
 
 		It("denies outsider SA all access", func() {
 			expectCanI(rbacFooNS, rbacOutsiderSA, "get", "storageclusters.storage.simplyblock.io", "", false)
-			expectCanI(rbacFooNS, rbacOutsiderSA, "list", "pools.storage.simplyblock.io", "", false)
+			expectCanI(rbacFooNS, rbacOutsiderSA, "list", "storagepools.storage.simplyblock.io", "", false)
 		})
 	})
 

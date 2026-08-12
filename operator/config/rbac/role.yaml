@@ -191,13 +191,13 @@ rules:
   - backuppolicies
   - backuprestores
   - controlplanes
-  - pools
   - snapshotreplications
   - storagebackups
   - storageclusters
   - storagenodeops
   - storagenodes
   - storagenodesets
+  - storagepools
   - tasks
   - volumemigrations
   verbs:
@@ -214,13 +214,13 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
-  - pools/finalizers
   - snapshotreplications/finalizers
   - storagebackups/finalizers
   - storageclusters/finalizers
   - storagenodeops/finalizers
   - storagenodes/finalizers
   - storagenodesets/finalizers
+  - storagepools/finalizers
   - tasks/finalizers
   - volumemigrations/finalizers
   verbs:
@@ -232,13 +232,13 @@ rules:
   - backuppolicies/status
   - backuprestores/status
   - controlplanes/status
-  - pools/status
   - snapshotreplications/status
   - storagebackups/status
   - storageclusters/status
   - storagenodeops/status
   - storagenodes/status
   - storagenodesets/status
+  - storagepools/status
   - tasks/status
   - volumemigrations/status
   verbs:

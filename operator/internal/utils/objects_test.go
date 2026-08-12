@@ -81,12 +81,12 @@ func TestResolveClusterAndPoolUUID(t *testing.T) {
 		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
 	}
 
-	poolA := &simplyblockv1alpha1.Pool{
+	poolA := &simplyblockv1alpha1.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{Name: "gold", Namespace: "ns1"},
-		Spec: simplyblockv1alpha1.PoolSpec{
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
 			ClusterName: "cluster-a",
 		},
-		Status: simplyblockv1alpha1.PoolStatus{UUID: "pool-uuid-a"},
+		Status: simplyblockv1alpha1.StoragePoolStatus{UUID: "pool-uuid-a"},
 	}
 
 	c := fake.NewClientBuilder().

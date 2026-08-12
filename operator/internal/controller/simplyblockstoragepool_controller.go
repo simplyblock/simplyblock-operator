@@ -46,8 +46,8 @@ const (
 	poolEventInvalidClusterReference  = "InvalidClusterReference"
 )
 
-// PoolReconciler reconciles a Pool object
-type PoolReconciler struct {
+// StoragePoolReconciler reconciles a StoragePool object
+type StoragePoolReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
@@ -128,9 +128,9 @@ type poolHostParams struct {
 	HostNQN string `json:"host_nqn"`
 }
 
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=pools/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagepools,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagepools/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagepools/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
@@ -138,86 +138,86 @@ type poolHostParams struct {
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the Pool object against the actual cluster state, and then
+// the StoragePool object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
-func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	// Fetch the Pool CR
-	poolCR := &simplyblockv1alpha1.Pool{}
-	if err := r.Get(ctx, req.NamespacedName, poolCR); err != nil {
+	// Fetch the StoragePool CR
+	storagePoolCR := &simplyblockv1alpha1.StoragePool{}
+	if err := r.Get(ctx, req.NamespacedName, storagePoolCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	clusterUUID, err := utils.ResolveClusterUUID(
 		ctx,
 		r.Client,
-		poolCR.Namespace,
-		poolCR.Spec.ClusterName,
+		storagePoolCR.Namespace,
+		storagePoolCR.Spec.ClusterName,
 	)
 
 	switch {
 	case errors.Is(err, utils.ErrClusterNotFound):
-		log.Error(err, "Pool references a StorageCluster that does not exist in its namespace",
-			"namespace", poolCR.Namespace,
-			"cluster", poolCR.Spec.ClusterName,
+		log.Error(err, "StoragePool references a StorageCluster that does not exist in its namespace",
+			"namespace", storagePoolCR.Namespace,
+			"cluster", storagePoolCR.Spec.ClusterName,
 		)
 		if r.Recorder != nil {
-			r.Recorder.Eventf(poolCR, nil, corev1.EventTypeWarning, poolEventInvalidClusterReference, poolEventInvalidClusterReference,
-				"StorageCluster %q not found in namespace %q; Pools must reside in the same namespace as their StorageCluster",
-				poolCR.Spec.ClusterName, poolCR.Namespace)
+			r.Recorder.Eventf(storagePoolCR, nil, corev1.EventTypeWarning, poolEventInvalidClusterReference, poolEventInvalidClusterReference,
+				"StorageCluster %q not found in namespace %q; StoragePools must reside in the same namespace as their StorageCluster",
+				storagePoolCR.Spec.ClusterName, storagePoolCR.Namespace)
 		}
-		if poolCR.Status.Status != poolStatusInvalidClusterReference {
-			poolCR.Status.Status = poolStatusInvalidClusterReference
-			if statusErr := r.Status().Update(ctx, poolCR); statusErr != nil {
+		if storagePoolCR.Status.Status != poolStatusInvalidClusterReference {
+			storagePoolCR.Status.Status = poolStatusInvalidClusterReference
+			if statusErr := r.Status().Update(ctx, storagePoolCR); statusErr != nil {
 				log.Error(statusErr, "Failed to update pool status to InvalidClusterReference")
 			}
 		}
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	case err != nil:
 		log.Info("Cluster UUID not ready yet, requeuing",
-			"cluster", poolCR.Spec.ClusterName,
+			"cluster", storagePoolCR.Spec.ClusterName,
 		)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	apiClient := webapi.NewClient()
 
-	if !poolCR.DeletionTimestamp.IsZero() {
-		return r.handlePoolDeletion(ctx, poolCR, apiClient, clusterUUID)
+	if !storagePoolCR.DeletionTimestamp.IsZero() {
+		return r.handleStoragePoolDeletion(ctx, storagePoolCR, apiClient, clusterUUID)
 	}
 
-	if !controllerutil.ContainsFinalizer(poolCR, utils.FinalizerPool) {
-		controllerutil.AddFinalizer(poolCR, utils.FinalizerPool)
-		if err := r.Update(ctx, poolCR); err != nil {
+	if !controllerutil.ContainsFinalizer(storagePoolCR, utils.FinalizerStoragePool) {
+		controllerutil.AddFinalizer(storagePoolCR, utils.FinalizerStoragePool)
+		if err := r.Update(ctx, storagePoolCR); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
 	}
 
-	if poolCR.Status.UUID == "" {
-		return r.handlePoolCreation(ctx, poolCR, apiClient, clusterUUID)
+	if storagePoolCR.Status.UUID == "" {
+		return r.handleStoragePoolCreation(ctx, storagePoolCR, apiClient, clusterUUID)
 	}
 
-	if err := r.createStorageClassIfNotExists(ctx, poolCR, clusterUUID); err != nil {
+	if err := r.createStorageClassIfNotExists(ctx, storagePoolCR, clusterUUID); err != nil {
 		log.Error(err, "Failed to create StorageClass for pool")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	if err := r.syncNodeLabels(ctx, poolCR); err != nil {
+	if err := r.syncNodeLabels(ctx, storagePoolCR); err != nil {
 		log.Error(err, "Failed to sync node labels for pool")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	if changed, err := r.syncPoolHosts(ctx, apiClient, clusterUUID, poolCR); err != nil {
+	if changed, err := r.syncStoragePoolHosts(ctx, apiClient, clusterUUID, storagePoolCR); err != nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	} else if changed {
-		poolCR.Status.AllowedNodes = poolCR.Spec.AllowedNodes
-		if err := r.Status().Update(ctx, poolCR); err != nil {
+		storagePoolCR.Status.AllowedNodes = storagePoolCR.Spec.AllowedNodes
+		if err := r.Status().Update(ctx, storagePoolCR); err != nil {
 			log.Error(err, "Failed to update pool status after host sync")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
@@ -225,32 +225,32 @@ func (r *PoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	// // --- Handle update ---
 	// updateParams := utils.PoolUpdateParams{
-	// 	Name:    poolCR.Name,
-	// 	PoolMax: utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
-	// 	// VolumeMaxSize: poolCR.Spec.CapacityLimitIntPtr(),
-	// 	MaxRwIOPS: utils.IntPtrOrDefault(poolCR.Spec.QoSIOPSLimit, 0),
-	// 	MaxRwMB:   utils.IntPtrOrDefault(poolCR.Spec.RWLimit, 0),
-	// 	MaxRMB:    utils.IntPtrOrDefault(poolCR.Spec.RLimit, 0),
-	// 	MaxWMB:    utils.IntPtrOrDefault(poolCR.Spec.WLimit, 0),
+	// 	Name:    storagePoolCR.Name,
+	// 	PoolMax: utils.IntPtrOrDefault(storagePoolCR.Spec.RWLimit, 0),
+	// 	// VolumeMaxSize: storagePoolCR.Spec.CapacityLimitIntPtr(),
+	// 	MaxRwIOPS: utils.IntPtrOrDefault(storagePoolCR.Spec.QoSIOPSLimit, 0),
+	// 	MaxRwMB:   utils.IntPtrOrDefault(storagePoolCR.Spec.RWLimit, 0),
+	// 	MaxRMB:    utils.IntPtrOrDefault(storagePoolCR.Spec.RLimit, 0),
+	// 	MaxWMB:    utils.IntPtrOrDefault(storagePoolCR.Spec.WLimit, 0),
 	// }
 
-	// endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
+	// endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, storagePoolCR.Status.UUID)
 	// body, status, err := apiClient.Do(ctx, http.MethodPut, endpoint, updateParams)
 	// if err != nil || status >= 300 {
-	// 	log.Error(err, "Pool update failed", "status", status, "response", string(body))
+	// 	log.Error(err, "StoragePool update failed", "status", status, "response", string(body))
 	// 	return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	// }
 
-	// log.Info("Pool updated successfully", "name", poolCR.Name)
+	// log.Info("StoragePool updated successfully", "name", storagePoolCR.Name)
 	return ctrl.Result{}, nil
 }
 
-func (r *PoolReconciler) handlePoolDeletion(ctx context.Context, poolCR *simplyblockv1alpha1.Pool, apiClient *webapi.Client, clusterUUID string) (ctrl.Result, error) {
+func (r *StoragePoolReconciler) handleStoragePoolDeletion(ctx context.Context, storagePoolCR *simplyblockv1alpha1.StoragePool, apiClient *webapi.Client, clusterUUID string) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	if utils.ContainsString(poolCR.Finalizers, utils.FinalizerPool) {
-		if poolCR.Status.UUID != "" {
+	if utils.ContainsString(storagePoolCR.Finalizers, utils.FinalizerStoragePool) {
+		if storagePoolCR.Status.UUID != "" {
 			// Backend pool exists — delete it first.
-			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, storagePoolCR.Status.UUID)
 			body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 			if err != nil || status >= 300 {
 				if err == nil {
@@ -259,24 +259,24 @@ func (r *PoolReconciler) handlePoolDeletion(ctx context.Context, poolCR *simplyb
 				log.Error(err, "Failed to delete pool", "status", status, "response", string(body))
 				return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 			}
-			if err := r.deleteStorageClass(ctx, poolCR); err != nil {
+			if err := r.deleteStorageClass(ctx, storagePoolCR); err != nil {
 				log.Error(err, "Failed to delete StorageClass for pool")
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
-			poolCR.Spec.AllowedNodes = nil
-			if err := r.syncNodeLabels(ctx, poolCR); err != nil {
+			storagePoolCR.Spec.AllowedNodes = nil
+			if err := r.syncNodeLabels(ctx, storagePoolCR); err != nil {
 				log.Error(err, "Failed to clear node labels on pool deletion")
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 			}
-			log.Info("Pool deleted successfully", "name", poolCR.Name)
+			log.Info("StoragePool deleted successfully", "name", storagePoolCR.Name)
 		} else {
 			// No backend pool was ever created (creation API never completed or
 			// status patch failed). Nothing to clean up on the backend — remove
 			// the finalizer immediately so the object is not stuck in Terminating.
-			log.Info("Pool has no backend UUID; removing finalizer without backend call", "name", poolCR.Name)
+			log.Info("StoragePool has no backend UUID; removing finalizer without backend call", "name", storagePoolCR.Name)
 		}
-		poolCR.Finalizers = utils.RemoveString(poolCR.Finalizers, utils.FinalizerPool)
-		if err := r.Update(ctx, poolCR); err != nil {
+		storagePoolCR.Finalizers = utils.RemoveString(storagePoolCR.Finalizers, utils.FinalizerStoragePool)
+		if err := r.Update(ctx, storagePoolCR); err != nil {
 			log.Error(err, "Failed to remove finalizer")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
@@ -284,24 +284,24 @@ func (r *PoolReconciler) handlePoolDeletion(ctx context.Context, poolCR *simplyb
 	return ctrl.Result{}, nil
 }
 
-func (r *PoolReconciler) handlePoolCreation(ctx context.Context, poolCR *simplyblockv1alpha1.Pool, apiClient *webapi.Client, clusterUUID string) (ctrl.Result, error) {
+func (r *StoragePoolReconciler) handleStoragePoolCreation(ctx context.Context, storagePoolCR *simplyblockv1alpha1.StoragePool, apiClient *webapi.Client, clusterUUID string) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	if existing, lookupErr := utils.GetPoolByName(ctx, apiClient, clusterUUID, poolCR.Name); lookupErr == nil && existing != nil {
-		log.Info("Pool already exists on backend, adopting", "name", poolCR.Name, "uuid", existing.UUID)
-		return r.adoptExistingPool(ctx, poolCR, existing)
+	if existing, lookupErr := utils.GetPoolByName(ctx, apiClient, clusterUUID, storagePoolCR.Name); lookupErr == nil && existing != nil {
+		log.Info("StoragePool already exists on backend, adopting", "name", storagePoolCR.Name, "uuid", existing.UUID)
+		return r.adoptExistingStoragePool(ctx, storagePoolCR, existing)
 	}
 	params := utils.PoolAddParams{
-		Name:          poolCR.Name,
-		PoolMax:       ptr.From(utils.ParseSize(poolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
-		VolumeMaxSize: ptr.From(utils.ParseSize(poolCR.Spec.LogicalVolumeMaxSize, "si/iec", "", false), 0),
-		MaxRwMB:       poolSpecQoSThroughputReadWrite(poolCR.Spec.QosSpec),
-		MaxRwIOPS:     poolSpecQoSIOPS(poolCR.Spec.QosSpec),
-		MaxRMB:        poolSpecQoSThroughputRead(poolCR.Spec.QosSpec),
-		MaxWMB:        poolSpecQoSThroughputWrite(poolCR.Spec.QosSpec),
-		DHCHAP:        poolCR.Spec.DHCHAP,
-		CRName:        poolCR.Name,
-		CRNameSpace:   poolCR.Namespace,
-		CRPlural:      "pools",
+		Name:          storagePoolCR.Name,
+		PoolMax:       ptr.From(utils.ParseSize(storagePoolCR.Spec.CapacityLimit, "si/iec", "", false), 0),
+		VolumeMaxSize: ptr.From(utils.ParseSize(storagePoolCR.Spec.LogicalVolumeMaxSize, "si/iec", "", false), 0),
+		MaxRwMB:       poolSpecQoSThroughputReadWrite(storagePoolCR.Spec.QosSpec),
+		MaxRwIOPS:     poolSpecQoSIOPS(storagePoolCR.Spec.QosSpec),
+		MaxRMB:        poolSpecQoSThroughputRead(storagePoolCR.Spec.QosSpec),
+		MaxWMB:        poolSpecQoSThroughputWrite(storagePoolCR.Spec.QosSpec),
+		DHCHAP:        storagePoolCR.Spec.DHCHAP,
+		CRName:        storagePoolCR.Name,
+		CRNameSpace:   storagePoolCR.Namespace,
+		CRPlural:      "storagepools",
 	}
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/", clusterUUID)
 	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, params)
@@ -309,7 +309,7 @@ func (r *PoolReconciler) handlePoolCreation(ctx context.Context, poolCR *simplyb
 		if err == nil {
 			err = fmt.Errorf("unexpected status %d", status)
 		}
-		log.Error(err, "Pool creation failed", "status", status, "response", string(body))
+		log.Error(err, "StoragePool creation failed", "status", status, "response", string(body))
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
 	}
 	log.Info("POOL API call", "endpoint", endpoint, "status", status, "response", string(body))
@@ -318,28 +318,28 @@ func (r *PoolReconciler) handlePoolCreation(ctx context.Context, poolCR *simplyb
 		log.Error(err, "Failed to parse pool creation response", "raw", string(body))
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	poolCR.Status.UUID = poolDTO.ID
-	poolCR.Status.Status = poolDTO.Status
-	poolCR.Status.QoS = &simplyblockv1alpha1.PoolQoSStatus{
+	storagePoolCR.Status.UUID = poolDTO.ID
+	storagePoolCR.Status.Status = poolDTO.Status
+	storagePoolCR.Status.QoS = &simplyblockv1alpha1.StoragePoolQoSStatus{
 		IOPS: ptr.To(int32(poolDTO.MaxRwIOPS)),
-		Throughput: &simplyblockv1alpha1.PoolQoSThroughputStatus{
+		Throughput: &simplyblockv1alpha1.StoragePoolQoSThroughputStatus{
 			Read:      ptr.To(int32(poolDTO.MaxRMbytes)),
 			ReadWrite: ptr.To(int32(poolDTO.MaxRwMbytes)),
 			Write:     ptr.To(int32(poolDTO.MaxWMbytes)),
 		},
 	}
-	if err := r.Status().Update(ctx, poolCR); err != nil {
+	if err := r.Status().Update(ctx, storagePoolCR); err != nil {
 		log.Error(err, "Failed to update pool status after creation")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	log.Info("Pool successfully created", "name", poolCR.Name)
+	log.Info("StoragePool successfully created", "name", storagePoolCR.Name)
 	return ctrl.Result{}, nil
 }
 
 // deleteStorageClass deletes the StorageClass associated with the pool, ignoring not-found errors.
-func (r *PoolReconciler) deleteStorageClass(ctx context.Context, poolCR *simplyblockv1alpha1.Pool) error {
+func (r *StoragePoolReconciler) deleteStorageClass(ctx context.Context, storagePoolCR *simplyblockv1alpha1.StoragePool) error {
 	sc := &storagev1.StorageClass{}
-	name := simplyblockStorageClassName(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name)
+	name := simplyblockStorageClassName(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name)
 	if err := r.Get(ctx, client.ObjectKey{Name: name}, sc); err != nil {
 		return client.IgnoreNotFound(err)
 	}
@@ -349,27 +349,27 @@ func (r *PoolReconciler) deleteStorageClass(ctx context.Context, poolCR *simplyb
 // createStorageClassIfNotExists creates the StorageClass for the pool the first time it's
 // needed. It is intentionally create-only, not create-or-update: StorageClass Parameters and
 // AllowedTopologies are immutable in the Kubernetes API itself, so there is no "update" to
-// perform here. Pool.Spec.StorageClassParameters (and DHCHAP, which controls
+// perform here. StoragePool.Spec.StorageClassParameters (and DHCHAP, which controls
 // AllowedTopologies) are marked +k8s:immutable for the same reason — the API server rejects
 // edits to them once set, so this function never needs to reconcile drift.
-func (r *PoolReconciler) createStorageClassIfNotExists(ctx context.Context, poolCR *simplyblockv1alpha1.Pool, clusterUUID string) error {
+func (r *StoragePoolReconciler) createStorageClassIfNotExists(ctx context.Context, storagePoolCR *simplyblockv1alpha1.StoragePool, clusterUUID string) error {
 	bindingMode := storagev1.VolumeBindingWaitForFirstConsumer
 	reclaimPolicy := corev1.PersistentVolumeReclaimDelete
 	allowExpansion := true
 
 	params := map[string]string{
 		"cluster_id": clusterUUID,
-		"pool_name":  poolCR.Name,
+		"pool_name":  storagePoolCR.Name,
 	}
-	mergeStorageClassParameters(params, poolCR.Spec.StorageClassParameters)
+	mergeStorageClassParameters(params, storagePoolCR.Spec.StorageClassParameters)
 
 	sc := &storagev1.StorageClass{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: simplyblockStorageClassName(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name),
+			Name: simplyblockStorageClassName(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name),
 			Labels: map[string]string{
-				"storage.simplyblock.io/namespace": poolCR.Namespace,
-				"storage.simplyblock.io/cluster":   poolCR.Spec.ClusterName,
-				"storage.simplyblock.io/pool":      poolCR.Name,
+				"storage.simplyblock.io/namespace": storagePoolCR.Namespace,
+				"storage.simplyblock.io/cluster":   storagePoolCR.Spec.ClusterName,
+				"storage.simplyblock.io/pool":      storagePoolCR.Name,
 			},
 		},
 		Provisioner:          utils.CSIProvisioner,
@@ -379,12 +379,12 @@ func (r *PoolReconciler) createStorageClassIfNotExists(ctx context.Context, pool
 		AllowVolumeExpansion: &allowExpansion,
 	}
 
-	if poolCR.Spec.DHCHAP && len(poolCR.Spec.AllowedNodes) > 0 {
+	if storagePoolCR.Spec.DHCHAP && len(storagePoolCR.Spec.AllowedNodes) > 0 {
 		sc.AllowedTopologies = []corev1.TopologySelectorTerm{
 			{
 				MatchLabelExpressions: []corev1.TopologySelectorLabelRequirement{
 					{
-						Key:    poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name),
+						Key:    poolNodeLabelKey(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name),
 						Values: []string{"allowed"},
 					},
 				},
@@ -427,7 +427,7 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 	dst["csi.storage.k8s.io/fstype"] = p.Filesystem
 }
 
-// syncPoolHosts reconciles the pool's allowed hosts: fetches the current host list from the
+// syncStoragePoolHosts reconciles the pool's allowed hosts: fetches the current host list from the
 // backend, adds hosts in spec but not on the backend, and removes hosts on the backend but
 // no longer in spec. Returns true if any change was made.
 func poolNodeLabelKey(namespace, clusterName, poolName string) string {
@@ -436,9 +436,9 @@ func poolNodeLabelKey(namespace, clusterName, poolName string) string {
 
 // syncNodeLabels ensures the label simplyblock.io/pool.<name>=allowed is present on every
 // node in spec.allowedNodes and absent from nodes no longer in the list.
-func (r *PoolReconciler) syncNodeLabels(ctx context.Context, poolCR *simplyblockv1alpha1.Pool) error {
+func (r *StoragePoolReconciler) syncNodeLabels(ctx context.Context, storagePoolCR *simplyblockv1alpha1.StoragePool) error {
 	log := logf.FromContext(ctx)
-	labelKey := poolNodeLabelKey(poolCR.Namespace, poolCR.Spec.ClusterName, poolCR.Name)
+	labelKey := poolNodeLabelKey(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name)
 
 	// Find all nodes currently carrying this pool's label.
 	nodeList := &corev1.NodeList{}
@@ -446,8 +446,8 @@ func (r *PoolReconciler) syncNodeLabels(ctx context.Context, poolCR *simplyblock
 		return fmt.Errorf("failed to list labeled nodes: %w", err)
 	}
 
-	desiredSet := make(map[string]struct{}, len(poolCR.Spec.AllowedNodes))
-	for _, n := range poolCR.Spec.AllowedNodes {
+	desiredSet := make(map[string]struct{}, len(storagePoolCR.Spec.AllowedNodes))
+	for _, n := range storagePoolCR.Spec.AllowedNodes {
 		desiredSet[n] = struct{}{}
 	}
 
@@ -470,7 +470,7 @@ func (r *PoolReconciler) syncNodeLabels(ctx context.Context, poolCR *simplyblock
 	for _, node := range nodeList.Items {
 		currentSet[node.Name] = struct{}{}
 	}
-	for _, nodeName := range poolCR.Spec.AllowedNodes {
+	for _, nodeName := range storagePoolCR.Spec.AllowedNodes {
 		if _, ok := currentSet[nodeName]; ok {
 			continue
 		}
@@ -492,16 +492,16 @@ func (r *PoolReconciler) syncNodeLabels(ctx context.Context, poolCR *simplyblock
 	return nil
 }
 
-func (r *PoolReconciler) syncPoolHosts(
+func (r *StoragePoolReconciler) syncStoragePoolHosts(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID string,
-	poolCR *simplyblockv1alpha1.Pool,
+	storagePoolCR *simplyblockv1alpha1.StoragePool,
 ) (bool, error) {
 	log := logf.FromContext(ctx)
-	desired := make([]string, 0, len(poolCR.Spec.AllowedNodes))
+	desired := make([]string, 0, len(storagePoolCR.Spec.AllowedNodes))
 
-	for _, nodeName := range poolCR.Spec.AllowedNodes {
+	for _, nodeName := range storagePoolCR.Spec.AllowedNodes {
 		var node corev1.Node
 		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
 			return false, fmt.Errorf("failed to get node %s: %w", nodeName, err)
@@ -510,7 +510,7 @@ func (r *PoolReconciler) syncPoolHosts(
 	}
 
 	// Fetch current backend state to use as applied list.
-	getEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, poolCR.Status.UUID)
+	getEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s", clusterUUID, storagePoolCR.Status.UUID)
 	body, status, err := apiClient.Do(ctx, http.MethodGet, getEndpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
@@ -539,7 +539,7 @@ func (r *PoolReconciler) syncPoolHosts(
 		appliedSet[h] = struct{}{}
 	}
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/host", clusterUUID, poolCR.Status.UUID)
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/host", clusterUUID, storagePoolCR.Status.UUID)
 	changed := false
 
 	for _, h := range desired {
@@ -578,63 +578,63 @@ func (r *PoolReconciler) syncPoolHosts(
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *PoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *StoragePoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&simplyblockv1alpha1.Pool{}).
-		Named("pool").
+		For(&simplyblockv1alpha1.StoragePool{}).
+		Named("storagepool").
 		Complete(r)
 }
 
-func poolSpecQoSIOPS(q *simplyblockv1alpha1.PoolQoSSpec) int {
+func poolSpecQoSIOPS(q *simplyblockv1alpha1.StoragePoolQoSSpec) int {
 	if q == nil {
 		return 0
 	}
 	return ptr.IntFrom(q.IOPS, 0)
 }
 
-func poolSpecQoSThroughputRead(q *simplyblockv1alpha1.PoolQoSSpec) int {
+func poolSpecQoSThroughputRead(q *simplyblockv1alpha1.StoragePoolQoSSpec) int {
 	if q == nil || q.Throughput == nil {
 		return 0
 	}
 	return ptr.IntFrom(q.Throughput.Read, 0)
 }
 
-func poolSpecQoSThroughputReadWrite(q *simplyblockv1alpha1.PoolQoSSpec) int {
+func poolSpecQoSThroughputReadWrite(q *simplyblockv1alpha1.StoragePoolQoSSpec) int {
 	if q == nil || q.Throughput == nil {
 		return 0
 	}
 	return ptr.IntFrom(q.Throughput.ReadWrite, 0)
 }
 
-func poolSpecQoSThroughputWrite(q *simplyblockv1alpha1.PoolQoSSpec) int {
+func poolSpecQoSThroughputWrite(q *simplyblockv1alpha1.StoragePoolQoSSpec) int {
 	if q == nil || q.Throughput == nil {
 		return 0
 	}
 	return ptr.IntFrom(q.Throughput.Write, 0)
 }
 
-func (r *PoolReconciler) adoptExistingPool(
+func (r *StoragePoolReconciler) adoptExistingStoragePool(
 	ctx context.Context,
-	poolCR *simplyblockv1alpha1.Pool,
+	storagePoolCR *simplyblockv1alpha1.StoragePool,
 	existing *utils.PoolListEntry,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	orig := poolCR.DeepCopy()
-	poolCR.Status.UUID = existing.UUID
-	poolCR.Status.Status = existing.Status
-	poolCR.Status.QoS = &simplyblockv1alpha1.PoolQoSStatus{
+	orig := storagePoolCR.DeepCopy()
+	storagePoolCR.Status.UUID = existing.UUID
+	storagePoolCR.Status.Status = existing.Status
+	storagePoolCR.Status.QoS = &simplyblockv1alpha1.StoragePoolQoSStatus{
 		Host: existing.QoSHost,
 		IOPS: ptr.To(int32(existing.MaxRwIOPS)),
-		Throughput: &simplyblockv1alpha1.PoolQoSThroughputStatus{
+		Throughput: &simplyblockv1alpha1.StoragePoolQoSThroughputStatus{
 			Read:      ptr.To(int32(existing.RLimit)),
 			ReadWrite: ptr.To(int32(existing.RWLimit)),
 			Write:     ptr.To(int32(existing.WLimit)),
 		},
 	}
-	if err := r.Status().Patch(ctx, poolCR, client.MergeFrom(orig)); err != nil {
+	if err := r.Status().Patch(ctx, storagePoolCR, client.MergeFrom(orig)); err != nil {
 		log.Error(err, "Failed to patch pool status after adoption")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	log.Info("Pool adopted from existing backend", "name", poolCR.Name, "uuid", existing.UUID)
+	log.Info("StoragePool adopted from existing backend", "name", storagePoolCR.Name, "uuid", existing.UUID)
 	return ctrl.Result{}, nil
 }
