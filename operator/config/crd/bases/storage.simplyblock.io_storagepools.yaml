@@ -4,14 +4,14 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: pools.storage.simplyblock.io
+  name: storagepools.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
   names:
-    kind: Pool
-    listKind: PoolList
-    plural: pools
-    singular: pool
+    kind: StoragePool
+    listKind: StoragePoolList
+    plural: storagepools
+    singular: storagepool
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -33,7 +33,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Pool is the Schema for the pools API
+        description: StoragePool is the Schema for the storagepools API
         properties:
           apiVersion:
             description: |-
@@ -53,7 +53,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of Pool
+            description: spec defines the desired state of StoragePool
             properties:
               action:
                 description: |-
@@ -84,7 +84,7 @@ spec:
                 default: false
                 description: |-
                   DHCHAP enables DH-HMAC-CHAP key generation for the pool. Authentication is only
-                  enforced when allowedNodes is non-empty. Also controls whether the Pool's StorageClass
+                  enforced when allowedNodes is non-empty. Also controls whether the StoragePool's StorageClass
                   gets an allowedTopologies restriction, which — like StorageClass Parameters — is
                   immutable in the Kubernetes API, hence this field is immutable too.
                 type: boolean
@@ -133,7 +133,7 @@ spec:
                   StorageClassParameters sets default StorageClass parameter values for volumes in this pool.
                   Immutable: the underlying StorageClass's Parameters/AllowedTopologies cannot be patched in
                   the Kubernetes API once created, so there is no supported way to change these after the
-                  fact. Create a new Pool to provision volumes with different settings.
+                  fact. Create a new StoragePool to provision volumes with different settings.
                 properties:
                   compression:
                     default: "False"
@@ -210,7 +210,7 @@ spec:
             - message: field storageClassParameters is immutable once set
               rule: '!has(oldSelf.storageClassParameters) || has(self.storageClassParameters)'
           status:
-            description: status defines the observed state of Pool
+            description: status defines the observed state of StoragePool
             properties:
               allowedNodes:
                 description: AllowedNodes lists the Kubernetes node names currently
