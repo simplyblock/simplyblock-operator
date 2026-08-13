@@ -648,7 +648,7 @@ func (g *Guardian) isPodRestartable(ctx context.Context, pod *v1.Pod, podUID str
 	if last, ok := g.getLastRestart(podUID); ok && time.Since(last) < g.cfg.RestartBackoff {
 		klog.Infof("Guardian: pod %s/%s (uid=%s) not restartable: in backoff (%.0fs remaining)",
 			pod.Namespace, pod.Name, podUID,
-			(g.cfg.RestartBackoff-time.Since(last)).Seconds())
+			(g.cfg.RestartBackoff - time.Since(last)).Seconds())
 		return false
 	}
 	return true
