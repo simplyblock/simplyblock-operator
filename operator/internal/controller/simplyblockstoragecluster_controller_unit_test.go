@@ -67,7 +67,8 @@ func TestClusterFailureDomainHosts(t *testing.T) {
 			Nodes: []simplyblockv1alpha1.NodeStatus{
 				{Hostname: "w0", MgmtIp: "10.0.0.1", FailureDomain: fd(0)},
 				{Hostname: "w1", MgmtIp: "10.0.0.2", FailureDomain: fd(1)},
-				{Hostname: "w2", MgmtIp: "10.0.0.3"}, // no domain yet, must be skipped
+				{Hostname: "w2", MgmtIp: "10.0.0.3"},                                                        // no domain yet, must be skipped
+				{Hostname: "w4", MgmtIp: "10.0.0.5", FailureDomain: fd(0), Status: utils.NodeStatusRemoved}, // removed, must be skipped
 			},
 		},
 	}
@@ -104,6 +105,57 @@ func TestClusterFailureDomainHosts(t *testing.T) {
 		if got[ip] != fdVal {
 			t.Fatalf("expected %s -> domain %d, got %v", ip, fdVal, got)
 		}
+	}
+}
+
+func TestFdRemovalBalanceViolation(t *testing.T) {
+	tests := []struct {
+		name        string
+		hostDomains map[string]int32
+		wantBlocked bool
+	}{
+		{
+			name:        "empty (feature unused) is fine",
+			hostDomains: map[string]int32{},
+			wantBlocked: false,
+		},
+		{
+			name: "balanced 2/2/3 stays within +/-1",
+			hostDomains: map[string]int32{
+				"h1": 0, "h2": 0,
+				"h3": 1, "h4": 1,
+				"h5": 2, "h6": 2, "h7": 2,
+			},
+			wantBlocked: false,
+		},
+		{
+			name: "1/2/3 exceeds +/-1 spread",
+			hostDomains: map[string]int32{
+				"h1": 0,
+				"h2": 1, "h3": 1,
+				"h4": 2, "h5": 2, "h6": 2,
+			},
+			wantBlocked: true,
+		},
+		{
+			name: "single host in a domain violates the 2-per-domain floor even within +/-1",
+			hostDomains: map[string]int32{
+				"h1": 0,
+				"h2": 1, "h3": 1,
+			},
+			wantBlocked: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason := fdRemovalBalanceViolation(tt.hostDomains)
+			if tt.wantBlocked && reason == "" {
+				t.Errorf("expected a violation reason, got none")
+			}
+			if !tt.wantBlocked && reason != "" {
+				t.Errorf("expected no violation, got %q", reason)
+			}
+		})
 	}
 }
 
