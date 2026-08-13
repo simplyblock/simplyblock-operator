@@ -793,7 +793,13 @@ func (r *StorageClusterReconciler) failExpand(
 // clusterFailureDomainHosts aggregates each host's (by management IP)
 // failure domain across every StorageNodeSet belonging to clusterName in
 // namespace. Hosts with no failure-domain assignment reported to status
-// yet are skipped, not treated as domain 0.
+// yet are skipped, not treated as domain 0. Nodes already removed are
+// skipped too -- mirroring simplyblock_core's failure_domain_host_map
+// (Python side), which excludes StorageNode.STATUS_REMOVED for the same
+// reason: a removed node's stale domain assignment must not inflate that
+// domain's apparent host count for either the activation-readiness gate
+// below or the removal-balance gate in drainValidate
+// (storagenodeops_controller.go).
 func clusterFailureDomainHosts(
 	ctx context.Context, c client.Client, namespace, clusterName string,
 ) (map[string]int32, error) {
@@ -807,13 +813,59 @@ func clusterFailureDomainHosts(
 			continue
 		}
 		for _, ns := range sn.Status.Nodes {
-			if ns.FailureDomain == nil || ns.MgmtIp == "" {
+			if ns.FailureDomain == nil || ns.MgmtIp == "" || ns.Status == utils.NodeStatusRemoved {
 				continue
 			}
 			hostDomains[ns.MgmtIp] = *ns.FailureDomain
 		}
 	}
 	return hostDomains, nil
+}
+
+// fdRemovalBalanceViolation validates the post-removal per-domain host
+// counts against the same +/-1 balance rule and per-domain floor enforced
+// on the backend side (simplyblock_core's fd_balance_violation, called from
+// check_fd_admission_for_remove) -- mirrored here so the operator's drain
+// reconciler can refuse to even suspend a node whose removal is already
+// known to violate it, rather than discovering that only after suspending
+// the node and having the backend's own admission check reject the
+// DELETE call made much later in the drain (2026-08-13 incident: the node
+// sat suspended while the reconciler retried a permanently-doomed DELETE).
+//
+// hostDomains must have the node being removed already excluded. Returns
+// a human-readable reason on violation, "" when the counts are acceptable.
+func fdRemovalBalanceViolation(hostDomains map[string]int32) string {
+	if len(hostDomains) == 0 {
+		return ""
+	}
+	const maxDelta = 1
+	const minHostsPerFD = 2
+	counts := map[int32]int{}
+	for _, fd := range hostDomains {
+		counts[fd]++
+	}
+	lo, hi := -1, -1
+	for _, c := range counts {
+		if lo == -1 || c < lo {
+			lo = c
+		}
+		if hi == -1 || c > hi {
+			hi = c
+		}
+	}
+	if hi-lo > maxDelta {
+		return fmt.Sprintf(
+			"failure domains would be unbalanced by %d hosts (allowed: %d); populations: %v",
+			hi-lo, maxDelta, counts)
+	}
+	for fd, c := range counts {
+		if c < minHostsPerFD {
+			return fmt.Sprintf(
+				"failure domain %d would drop to %d host(s); at least %d are required per domain",
+				fd, c, minHostsPerFD)
+		}
+	}
+	return ""
 }
 
 // fdActivationDomainCountViolation validates the number of distinct failure

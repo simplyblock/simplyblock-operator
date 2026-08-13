@@ -65,6 +65,7 @@ const (
 	NodeStatusInShutdown  = "in_shutdown"
 	NodeStatusInRestart   = "in_restart"
 	NodeStatusUnreachable = "unreachable"
+	NodeStatusRemoved     = "removed"
 
 	ENDPOINT       = "http://simplyblock-webappapi:5000"
 	CSIProvisioner = "csi.simplyblock.io"
