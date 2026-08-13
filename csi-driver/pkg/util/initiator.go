@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,6 +74,10 @@ const (
 	// process's life.
 	nvmeQueryTimeoutSeconds = 10
 )
+
+// devByIDPartitionSuffix matches the partition suffix udev appends to the by-id
+// link of the whole device it was derived from, e.g. "..._ha_1-part1".
+var devByIDPartitionSuffix = regexp.MustCompile(`[-_]part[0-9]+$`)
 
 // SpdkCsiInitiator defines interface for NVMeoF/iSCSI initiator
 //   - Connect initiates target connection and returns local block device filename
@@ -376,7 +381,7 @@ func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
 
 func (nvmf *initiatorNVMf) Disconnect(ctx context.Context) error {
 	deviceGlob := anyNamespaceDeviceGlob(defaultDevDiskByID, nvmf.model)
-	matches, err := filepath.Glob(deviceGlob)
+	matches, err := listNamespaceDevices(deviceGlob)
 	if err != nil {
 		return fmt.Errorf("failed to find device paths matching %s: %w", deviceGlob, err)
 	}
@@ -425,6 +430,27 @@ func namespaceDeviceGlob(byIDDir, id string, nsID int) string {
 // namespace of the subsystem identified by id, whatever their nsid.
 func anyNamespaceDeviceGlob(byIDDir, id string) string {
 	return filepath.Join(byIDDir, fmt.Sprintf(devByIDAnyNamespacePattern, id))
+}
+
+// listNamespaceDevices returns the whole-namespace links matching deviceGlob,
+// dropping the partition links derived from them.
+//
+// The glob cannot do this alone: "_[0-9]*" ends in a wildcard, so a partitioned
+// namespace matches twice. Counting the partition would make a single-namespace
+// subsystem look like it still carries siblings, and its controller would never
+// be torn down.
+func listNamespaceDevices(deviceGlob string) ([]string, error) {
+	matches, err := filepath.Glob(deviceGlob)
+	if err != nil {
+		return nil, err
+	}
+	devices := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if !devByIDPartitionSuffix.MatchString(filepath.Base(match)) {
+			devices = append(devices, match)
+		}
+	}
+	return devices, nil
 }
 
 // matchNamespaceDevice waits in byIDDir for the block device of namespace nsID
@@ -527,16 +553,22 @@ func resolveToSameDevice(matches []string) (string, error) {
 	return matches[0], nil
 }
 
-// waitForDeviceGone rescans deviceGlob until it stops matching anything,
-// waiting pollInterval between attempts.
+// waitForDeviceGone rescans deviceGlob until no namespace device is left,
+// waiting pollInterval between attempts. Partition links are ignored for the
+// same reason Disconnect ignores them: they go away with their parent device.
 func waitForDeviceGone(ctx context.Context, deviceGlob string, attempts int, pollInterval time.Duration) error {
-	for i := 0; i <= attempts; i++ {
-		matches, err := filepath.Glob(deviceGlob)
+	for i := 0; ; i++ {
+		matches, err := listNamespaceDevices(deviceGlob)
 		if err != nil {
 			return err
 		}
 		if len(matches) == 0 {
 			return nil
+		}
+		// Never sleep after the last scan; attempts set to 0 means a single
+		// immediate look, as in waitForDeviceReady.
+		if i >= attempts {
+			break
 		}
 		select {
 		case <-time.After(pollInterval):

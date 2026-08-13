@@ -299,13 +299,6 @@ func newRealNodeFixture(t *testing.T) *deviceFixture {
 	return f
 }
 
-// brokenDisconnectGlob reproduces the pattern Disconnect built before the fix:
-// the format arguments were swapped, so the model landed in the nsid position
-// and the "%s" verb survived into the pattern itself.
-func brokenDisconnectGlob(byIDDir, model string) string {
-	return filepath.Join(byIDDir, fmt.Sprintf("*%s*_%s", "%s*_[0-9]*", model))
-}
-
 // --- the real node ---------------------------------------------------------
 
 // TestMatchNamespaceDeviceOnRealNode sweeps every namespace of every subsystem
@@ -529,37 +522,6 @@ func TestDisconnectGlobOnLastNamespace(t *testing.T) {
 	}
 	if want := filepath.Join(f.byIDDir, sub.namespaceLink(3)); got != want {
 		t.Errorf("selected %q for disconnect, want %q", got, want)
-	}
-}
-
-// TestBrokenDisconnectGlobOnRealNode is the regression itself: against the real
-// layout the pre-fix pattern matched nothing at all, so Disconnect never tore
-// down a controller and the host stayed connected to the volume.
-func TestBrokenDisconnectGlobOnRealNode(t *testing.T) {
-	f := newRealNodeFixture(t)
-	sub := realNodeSubsystems[1]
-
-	broken := brokenDisconnectGlob(f.byIDDir, sub.model)
-	if !strings.Contains(broken, "%s") {
-		t.Fatalf("helper no longer reproduces the broken pattern: %q", broken)
-	}
-	matches, err := filepath.Glob(broken)
-	if err != nil {
-		t.Fatalf("glob: %v", err)
-	}
-	if len(matches) != 0 {
-		t.Errorf("broken glob matched %v, expected it to be inert", matches)
-	}
-	if path, shared := selectDisconnectTarget(matches); path != "" || shared {
-		t.Errorf("an empty match set must select nothing, got (%q, %v)", path, shared)
-	}
-
-	fixed, err := filepath.Glob(anyNamespaceDeviceGlob(f.byIDDir, sub.model))
-	if err != nil {
-		t.Fatalf("glob: %v", err)
-	}
-	if len(fixed) != len(sub.lvolIDs) {
-		t.Errorf("fixed glob matched %d links, want %d", len(fixed), len(sub.lvolIDs))
 	}
 }
 
@@ -842,10 +804,10 @@ func TestDeviceGlobsMatchLinkNames(t *testing.T) {
 			want: false,
 		},
 		{
-			// Known limitation, kept explicit: "_[0-9]*" cannot be anchored at
-			// the end of the name, so a partition link counts as an extra match
-			// and makes Disconnect treat the subsystem as still shared.
-			name: "any namespace glob also matches partition links",
+			// The glob itself cannot exclude these — "_[0-9]*" ends in a
+			// wildcard — so listNamespaceDevices filters them out afterwards.
+			// See TestListNamespaceDevicesDropsPartitions.
+			name: "any namespace glob still matches partition links",
 			glob: anyNamespaceDeviceGlob(dir, sub.model),
 			link: sub.namespaceLink(1) + "-part1",
 			want: true,
@@ -1086,6 +1048,31 @@ func TestSelectDisconnectTarget(t *testing.T) {
 	}
 }
 
+// scanGraceTime is how long a scan that must not sleep is given to return.
+const scanGraceTime = time.Second
+
+// mustReturnPromptly runs scan in the background and fails if it has not
+// returned within scanGraceTime, reporting err once it has. The wait loops are
+// handed an hour-long poll interval wherever a test asserts "this must not
+// sleep", so a regression that sleeps once shows up as a quick failure instead
+// of stalling the whole suite until its timeout.
+func mustReturnPromptly(t *testing.T, scan func() error) error {
+	t.Helper()
+	var err error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		err = scan()
+	}()
+	select {
+	case <-done:
+		return err
+	case <-time.After(scanGraceTime):
+		t.Fatalf("scan did not return within %s", scanGraceTime)
+		return nil
+	}
+}
+
 // --- wait loops ------------------------------------------------------------
 
 func TestWaitForDeviceReadyNoAttemptsScansOnce(t *testing.T) {
@@ -1102,12 +1089,12 @@ func TestWaitForDeviceReadyNoAttemptsScansOnce(t *testing.T) {
 	}
 
 	// A single scan must not wait out the interval when nothing matches.
-	start := time.Now()
-	if _, err := waitForDeviceReady(context.Background(), glob+"-absent", 0, time.Hour); err == nil {
+	err = mustReturnPromptly(t, func() error {
+		_, err := waitForDeviceReady(context.Background(), glob+"-absent", 0, time.Hour)
+		return err
+	})
+	if err == nil {
 		t.Fatal("expected a timeout error")
-	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Errorf("a zero attempt scan waited %s", elapsed)
 	}
 }
 
@@ -1137,16 +1124,108 @@ func TestWaitForDeviceReadyBadPattern(t *testing.T) {
 	}
 }
 
+// TestListNamespaceDevicesDropsPartitions covers the partition links udev
+// derives from a namespace. The glob cannot exclude them, and counting them
+// would make a partitioned single-namespace subsystem look like it still carries
+// siblings, so its controller would never be torn down.
+func TestListNamespaceDevicesDropsPartitions(t *testing.T) {
+	f := newDeviceFixture(t)
+	sub := realSubsystem{model: testModel, infix: "ha", controller: "nvme0"}
+	want := f.addDevice(sub.namespaceLink(1), "nvme0n1")
+	f.addDevice(sub.namespaceLink(1)+"-part1", "nvme0n1p1")
+	f.addDevice(sub.namespaceLink(1)+"-part2", "nvme0n1p2")
+
+	glob := anyNamespaceDeviceGlob(f.byIDDir, sub.model)
+	if raw, err := filepath.Glob(glob); err != nil {
+		t.Fatalf("glob: %v", err)
+	} else if len(raw) != 3 {
+		t.Fatalf("fixture changed: glob matched %v, want the namespace and its two partitions", raw)
+	}
+
+	devices, err := listNamespaceDevices(glob)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(devices) != 1 || devices[0] != want {
+		t.Fatalf("listNamespaceDevices returned %v, want exactly [%s]", devices, want)
+	}
+
+	// A partitioned volume is the last namespace of its subsystem, so it has to
+	// be torn down rather than mistaken for a shared one.
+	got, shared := selectDisconnectTarget(devices)
+	if shared {
+		t.Error("a partitioned single-namespace subsystem must not count as shared")
+	}
+	if got != want {
+		t.Errorf("selected %q for disconnect, want %q", got, want)
+	}
+}
+
+// TestListNamespaceDevicesKeepsNamespaces guards the filter against the other
+// mistake: it must not drop a real namespace link, whatever its nsid.
+func TestListNamespaceDevicesKeepsNamespaces(t *testing.T) {
+	f := newRealNodeFixture(t)
+
+	for _, sub := range fixtureSubsystems {
+		devices, err := listNamespaceDevices(anyNamespaceDeviceGlob(f.byIDDir, sub.model))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(devices) != len(sub.lvolIDs) {
+			t.Errorf("%s: kept %d of %d namespace links: %v",
+				sub.controller, len(devices), len(sub.lvolIDs), devices)
+		}
+	}
+}
+
+// TestListNamespaceDevicesBadPattern keeps the glob error reaching the caller
+// instead of being swallowed into an empty match set.
+func TestListNamespaceDevicesBadPattern(t *testing.T) {
+	if _, err := listNamespaceDevices("/dev/disk/by-id/["); !errors.Is(err, filepath.ErrBadPattern) {
+		t.Errorf("error %v is not filepath.ErrBadPattern", err)
+	}
+}
+
+// TestWaitForDeviceGoneIgnoresPartitions pins that the gone-wait uses the same
+// filter: a lingering partition link must not keep it spinning until timeout.
+func TestWaitForDeviceGoneIgnoresPartitions(t *testing.T) {
+	f := newDeviceFixture(t)
+	sub := realSubsystem{model: testModel, infix: "ha", controller: "nvme0"}
+	f.addDevice(sub.namespaceLink(1)+"-part1", "nvme0n1p1")
+
+	glob := anyNamespaceDeviceGlob(f.byIDDir, sub.model)
+	err := mustReturnPromptly(t, func() error {
+		return waitForDeviceGone(context.Background(), glob, deviceGoneAttempts, time.Hour)
+	})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestWaitForDeviceGoneNoAttemptsScansOnce covers attempts set to 0: a single
+// immediate look, without waiting out an interval first.
+func TestWaitForDeviceGoneNoAttemptsScansOnce(t *testing.T) {
+	f := newDeviceFixture(t)
+	f.addDevice(testLink(testModel, 2), "nvme0n2")
+	glob := anyNamespaceDeviceGlob(f.byIDDir, testModel)
+
+	err := mustReturnPromptly(t, func() error {
+		return waitForDeviceGone(context.Background(), glob, 0, time.Hour)
+	})
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+}
+
 func TestWaitForDeviceGoneAlreadyGone(t *testing.T) {
 	f := newDeviceFixture(t)
 	glob := anyNamespaceDeviceGlob(f.byIDDir, testModel)
 
-	start := time.Now()
-	if err := waitForDeviceGone(context.Background(), glob, deviceGoneAttempts, time.Hour); err != nil {
+	err := mustReturnPromptly(t, func() error {
+		return waitForDeviceGone(context.Background(), glob, deviceGoneAttempts, time.Hour)
+	})
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Errorf("waited %s for an already empty glob", elapsed)
 	}
 }
 
