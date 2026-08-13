@@ -41,7 +41,7 @@ import (
 
 const (
 	// DevDiskByID is the path to the device file under /dev/disk/by-id
-	DevDiskByID = "/dev/disk/by-id/*%s*"
+	DevDiskByID = "/dev/disk/by-id/*%s"
 
 	// TargetTypeNVMf is the target type for NVMe over Fabrics
 	TargetTypeTCP  = "tcp"
