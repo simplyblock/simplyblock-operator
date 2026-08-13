@@ -203,6 +203,10 @@ spec:
           {{- $accounts = append $accounts (printf "system:serviceaccount:%s:simplyblock-csi-node-sa" .Release.Namespace) }}
           {{- end }}
           value: {{ $accounts | join "," | quote }}
+        {{- if .Values.prometheus.server.enabled }}
+        - name: SB_K8S_METRICS_SERVICE_ACCOUNTS
+          value: {{ printf "system:serviceaccount:%s:simplyblock-prometheus" .Release.Namespace | quote }}
+        {{- end }}
         volumeMounts:
         - name: fdb-cluster-file
           mountPath: /etc/foundationdb/fdb.cluster
