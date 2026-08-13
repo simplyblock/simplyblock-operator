@@ -94,12 +94,13 @@ import glob
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
 # ── configuration / constants ───────────────────────────────────────────────────
@@ -114,6 +115,13 @@ XFS_STORAGECLASS = SOURCE_STORAGECLASS + "-xfs"
 NS_STORAGECLASS = XFS_STORAGECLASS + "-ns"
 PARAM_MAX_NS_PER_SUBSYS = "max_namespace_per_subsys"
 NS_PER_SUBSYS = 3
+# XFS stripe geometry, passed straight through the StorageClass parameters into the
+# volume context (controllerserver.go: VolumeContext = req.GetParameters()) and turned
+# into `mkfs.xfs -d su=<su>,sw=<sw> -l su=<su>` by the CSI node plugin
+# (nodeserver.go::xfsStripeOptions). Both must be set together or the plugin ignores
+# them and falls back to its own defaults (su=16k, sw=1).
+PARAM_XFS_SU = "xfs_su"
+PARAM_XFS_SW = "xfs_sw"
 STORAGENODE_CR = "simplyblock-node"  # StorageNodeSet CR in `default`
 FIO_IMAGE = "alpine:3"
 
@@ -428,15 +436,29 @@ class FioMigrationTest:
         # the mix could silently be namespaced too and the test would compare like
         # with like.
         base.pop(PARAM_MAX_NS_PER_SUBSYS, None)
+        # Both kinds get the same geometry: the single-vs-batch comparison is only
+        # meaningful if the filesystems underneath are formatted identically.
+        geom = ""
+        if self.a.xfs_su:
+            base[PARAM_XFS_SU] = self.a.xfs_su
+            base[PARAM_XFS_SW] = self.a.xfs_sw
+            geom = (", stripe alignment OFF (mkfs.xfs defaults, sunit=swidth=0)"
+                    if self.a.xfs_sw == "0"
+                    else f", {PARAM_XFS_SU}={self.a.xfs_su}, {PARAM_XFS_SW}={self.a.xfs_sw}")
+        else:
+            # Inherited values would silently differ between runs; drop them so an
+            # unset --xfs-su always means "whatever the CSI plugin defaults to".
+            base.pop(PARAM_XFS_SU, None)
+            base.pop(PARAM_XFS_SW, None)
 
         self._apply_storageclass(src, XFS_STORAGECLASS, dict(base, **{PARAM_MAX_NS_PER_SUBSYS: "1"}))
         self.log.info(f"(re)created single-namespace StorageClass {XFS_STORAGECLASS} "
-                      f"(fstype=xfs, {PARAM_MAX_NS_PER_SUBSYS}=1, cluster_id={cluster_uuid})")
+                      f"(fstype=xfs, {PARAM_MAX_NS_PER_SUBSYS}=1{geom}, cluster_id={cluster_uuid})")
         if self.a.ns_pods > 0:
             self._apply_storageclass(src, NS_STORAGECLASS,
                                      dict(base, **{PARAM_MAX_NS_PER_SUBSYS: str(self.a.ns_per_subsys)}))
             self.log.info(f"(re)created namespaced StorageClass {NS_STORAGECLASS} "
-                          f"(fstype=xfs, {PARAM_MAX_NS_PER_SUBSYS}={self.a.ns_per_subsys}, "
+                          f"(fstype=xfs, {PARAM_MAX_NS_PER_SUBSYS}={self.a.ns_per_subsys}{geom}, "
                           f"cluster_id={cluster_uuid})")
 
     @staticmethod
@@ -521,11 +543,15 @@ class FioMigrationTest:
             "--output=/logs/result.json",
             "--output-format=json",
         ]
-        # Data-integrity verification is only sound with a single in-flight writer:
-        # with iodepth>1 or numjobs>1 multiple I/Os target overlapping blocks
-        # concurrently, so verify races the writes and reports spurious md5 mismatches.
-        # Only enable verify when both are 1; otherwise run a pure load test.
-        if self.a.iodepth == 1 and self.a.numjobs == 1:
+        # Data-integrity verification needs writes that cannot overlap: two concurrent
+        # I/Os to the same block would race the verify and report spurious md5
+        # mismatches. With one job that is achievable at any queue depth via
+        # --serialize_overlap (fio holds back an I/O that overlaps one in flight), which
+        # is what makes the queue-depth experiment possible: more writes in flight at the
+        # migration's freeze point without giving up corruption detection. Across
+        # processes (numjobs>1) fio cannot serialize overlaps without io_submit_mode
+        # =offload, so verify stays off there.
+        if self.a.numjobs == 1:
             fio_args += [
                 # md5 header per block. verify_backlog re-verifies recently-written blocks
                 # continuously during the run, so corruption is caught while the volume is
@@ -545,11 +571,17 @@ class FioMigrationTest:
                 # bound of 1 and says nothing about the size of the window.
                 f"--verify_fatal={1 if self.a.verify_fatal else 0}",
             ]
+            if self.a.iodepth > 1:
+                # Without this, two in-flight I/Os can touch the same block and the
+                # verify reads a block mid-rewrite — reported as corruption that never
+                # happened. fio holds back the overlapping I/O instead.
+                fio_args.append("--serialize_overlap=1")
         else:
             self.log.warn(
-                f"data-integrity verification DISABLED: iodepth={self.a.iodepth} "
-                f"numjobs={self.a.numjobs} (>1 races the verify and yields false "
-                f"corruption); this run measures I/O only, not data integrity")
+                f"data-integrity verification DISABLED: numjobs={self.a.numjobs} "
+                "(>1 cannot serialize overlapping writes without io_submit_mode=offload, "
+                "so verify would report false corruption); this run measures I/O only, "
+                "not data integrity. Use --iodepth to add concurrency instead")
         fio = " ".join(fio_args)
         return (
             "set -u\n"
@@ -2095,12 +2127,33 @@ class FioMigrationTest:
         return timeline
 
     def _parse_result_json(self, pod_dir: str) -> dict:
+        """fio's --output file is not pure JSON when the job hit verify errors: fio
+        prepends every `verify: bad magic header …` line to it. That means the pods that
+        found corruption — the ones whose numbers matter most — are exactly the ones whose
+        report fails to parse, so skip any preamble and start at the first '{'."""
         for path in glob.glob(os.path.join(pod_dir, "**", "result.json"), recursive=True):
             try:
                 with open(path) as fh:
-                    return json.load(fh)
-            except (OSError, json.JSONDecodeError):
+                    raw = fh.read()
+            except OSError:
                 continue
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                pass
+            brace = raw.find("{")
+            if brace > 0:
+                try:
+                    parsed = json.loads(raw[brace:])
+                except json.JSONDecodeError:
+                    pass
+                else:
+                    self.log.warn(f"{os.path.basename(pod_dir)}: result.json carried "
+                                  f"{raw[:brace].count(chr(10))} line(s) of fio verify output "
+                                  "before the JSON; parsed the JSON body")
+                    return parsed
+            self.log.warn(f"{os.path.basename(pod_dir)}: result.json is unparseable "
+                          "— pod stats will be missing from the report")
         return {}
 
     def _detect_outages(self, timeline: dict[int, dict]) -> list[dict]:
@@ -2214,6 +2267,150 @@ class FioMigrationTest:
                 return m
         return None
 
+    # ---- offline re-analysis ------------------------------------------------------
+    # analyze() reads the per-pod artifacts from disk but needs the run's own bookkeeping
+    # (which pod holds which PV, the migration records, the subsystem grouping) that only
+    # exists in memory. Dumping it next to the artifacts makes the analysis re-runnable
+    # against a finished directory — worth it because analysis is the last step of a
+    # 20-minute run and the most likely to need a rerun after a harness fix.
+    STATE_FILE = "state.json"
+
+    def save_state(self) -> None:
+        state = {
+            "run_id": self.run_id,
+            "args": vars(self.a),
+            "pods": self.pods,
+            "pv_of": self.pv_of,
+            "kind_of": self.kind_of,
+            "nqn_of": self.nqn_of,
+            "ns_id_of": self.ns_id_of,
+            "subsystem_pvs": self.subsystem_pvs,
+            "node_host": self.node_host,
+            # ana_samples are already persisted per migration in ana/*.csv and only their
+            # count is reported, so keep the count instead of thousands of dicts.
+            "migrations": [dict(asdict(m), ana_samples=[], ana_sample_count=len(m.ana_samples))
+                           for m in self.migrations],
+            "health_events": [asdict(e) for e in self.health_events],
+        }
+        path = os.path.join(self.outdir, self.STATE_FILE)
+        try:
+            with open(path, "w") as fh:
+                json.dump(state, fh, indent=1, default=str)
+            self.log.info(f"run state saved -> {path} (re-run the analysis with "
+                          f"--analyze-dir {self.outdir})")
+        except (OSError, TypeError) as e:
+            self.log.warn(f"could not save run state (analysis will not be re-runnable): {e}")
+
+    @classmethod
+    def from_state(cls, outdir: str, log: "Logger", args) -> "FioMigrationTest":
+        """Rebuild just enough of a test object to re-run analyze() over an existing
+        artifact directory. Anything that would touch the cluster stays untouched."""
+        path = os.path.join(outdir, cls.STATE_FILE)
+        if os.path.exists(path):
+            with open(path) as fh:
+                state = json.load(fh)
+        else:
+            log.warn(f"{cls.STATE_FILE} not found — reconstructing the run from test.log "
+                     "(best-effort: fields the log does not carry stay empty)")
+            state = cls._state_from_test_log(outdir)
+        # Start from this invocation's args so every option exists with its default, then
+        # overlay whatever the original run recorded — a reconstructed state carries none,
+        # in which case the analysis simply runs with today's defaults.
+        saved = argparse.Namespace(**vars(args))
+        for k, v in state.get("args", {}).items():
+            if k not in ("analyze_dir", "outdir"):
+                setattr(saved, k, v)
+        self = cls(saved, log, outdir)
+        self.run_id = state["run_id"]
+        self.pods = state["pods"]
+        self.pv_of = state["pv_of"]
+        self.kind_of = state["kind_of"]
+        self.nqn_of = state["nqn_of"]
+        self.ns_id_of = {k: int(v) for k, v in state.get("ns_id_of", {}).items()}
+        self.subsystem_pvs = state["subsystem_pvs"]
+        self.node_host = state.get("node_host", {})
+        def _dt(v):
+            if not v or isinstance(v, datetime):
+                return v
+            return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+
+        self.migrations = []
+        for m in state["migrations"]:
+            m = dict(m)
+            n_samples = m.pop("ana_sample_count", 0)
+            m["start"], m["end"] = _dt(m.get("start")) or now_utc(), _dt(m.get("end"))
+            # only the sample count is ever read back; the samples themselves live in ana/*.csv
+            m["ana_samples"] = [None] * n_samples
+            self.migrations.append(MigrationRecord(**m))
+        self.health_events = [PodHealthEvent(ts=_dt(e["ts"]), pod=e["pod"], detail=e["detail"])
+                              for e in state.get("health_events", [])]
+        self._fio_finished.set()
+        return self
+
+    @staticmethod
+    def _state_from_test_log(outdir: str) -> dict:
+        """Rebuild the run bookkeeping from a directory written before state.json existed.
+        Only the fields the EVENT log actually carries are recovered — enough for the
+        corruption attribution and the per-pod/per-migration report, not for the
+        placement/CR/snapshot verdicts, which were computed live and are not re-derivable."""
+        log_path = os.path.join(outdir, "test.log")
+        if not os.path.exists(log_path):
+            raise SystemExit(f"{log_path} not found — nothing to re-analyse")
+        text = open(log_path, errors="ignore").read()
+
+        m = re.search(r"run_id=(\S+)", text)
+        run_id = m.group(1) if m else os.path.basename(outdir.rstrip("/"))
+        pods = sorted(d for d in os.listdir(outdir)
+                      if d.startswith(run_id) and os.path.isdir(os.path.join(outdir, d)))
+
+        pv_of, kind_of, nqn_of, ns_id_of, subsystem_pvs = {}, {}, {}, {}, {}
+        for pod, pv in re.findall(rf"({run_id}-fio-\d+)\s+(pvc-[0-9a-f-]+)\s+on\s+", text):
+            pv_of[pod] = pv
+        # "<nqn>  [N member(s)]  <pod>(nsN), <pod>(nsN), …"
+        for nqn, members in re.findall(r"(nqn\.\S+)\s+\[\d+ member\(s\)\]\s+(.+)", text):
+            pvs = []
+            for pod, nsid in re.findall(rf"({run_id}-fio-\d+)\(ns(\d+)\)", members):
+                pv = pv_of.get(pod)
+                if not pv:
+                    continue
+                pvs.append(pv)
+                nqn_of[pv] = nqn
+                ns_id_of[pv] = int(nsid)
+            if pvs:
+                subsystem_pvs[nqn] = pvs
+
+        migs = {}
+        for line in text.splitlines():
+            m = re.search(rf"(\S+Z) \[EVENT   \] MIGRATION START  ({run_id}-mig-\d+)  "
+                          r"kind=(\S+)  pod=(\S+)  pv=(\S+)  vol=(\S+)  subsystem=(\S+)  "
+                          r"members=(\d+)(?: \(moves along: ([^)]*)\))?  source=(\S+) .*?"
+                          r"target=(\S+) ", line)
+            if m:
+                ts, name, kind, pod, pv, vol, nqn, _n, along, src, tgt = m.groups()
+                kind_of[pod] = kind
+                group = [pv] + [pv_of[p.strip()] for p in (along or "").split(",")
+                                if p.strip() in pv_of]
+                migs[name] = {"name": name, "pod": pod, "pvc": pv, "pv": pv, "vol": vol,
+                              "target": tgt, "source": src, "nqn": nqn, "group_pvs": group,
+                              "start": ts, "end": None, "phase": "",
+                              "ana_csv": f"ana/{name}.csv", "ana_cutover": {}}
+                continue
+            m = re.search(rf"(\S+Z) \[EVENT   \] MIGRATION STOP   ({run_id}-mig-\d+)  "
+                          r"phase=(\S+)", line)
+            if m and m.group(2) in migs:
+                migs[m.group(2)].update(end=m.group(1), phase=m.group(3))
+                continue
+            m = re.search(rf"ANA VERIFY  ({run_id}-mig-\d+)  \w+ .*cutover=(\S.*?)(?:  \(|$)", line)
+            if m and m.group(1) in migs and "@" in m.group(2):
+                migs[m.group(1)]["ana_cutover"] = dict(
+                    part.rsplit("@", 1) for part in
+                    [p.strip() for p in m.group(2).split(",")] if "@" in part)
+
+        return {"run_id": run_id, "args": {}, "pods": pods, "pv_of": pv_of,
+                "kind_of": kind_of, "nqn_of": nqn_of, "ns_id_of": ns_id_of,
+                "subsystem_pvs": subsystem_pvs, "node_host": {},
+                "migrations": list(migs.values()), "health_events": []}
+
     def analyze(self) -> bool:
         """Returns True if I/O was continuous (PASS), False on any I/O loss (FAIL)."""
         self.log.info("=" * 78)
@@ -2222,7 +2419,13 @@ class FioMigrationTest:
 
         io_lost = False
         corruption_pods: list[str] = []  # pods where fio md5 verify detected data corruption
-        report: dict = {"run_id": self.run_id, "pods": {}, "migrations": [], "health_events": []}
+        report: dict = {"run_id": self.run_id, "pods": {}, "migrations": [], "health_events": [],
+                        # Geometry the volumes were formatted with, so runs stay comparable
+                        # after the fact. None = StorageClass carried no xfs_su/xfs_sw and the
+                        # CSI node plugin's defaults (su=16k, sw=1) applied.
+                        "xfs_stripe": ({"su": self.a.xfs_su, "sw": self.a.xfs_sw,
+                                        "alignment": "off" if self.a.xfs_sw == "0" else "on"}
+                                       if self.a.xfs_su else None)}
 
         completed_migs = [m for m in self.migrations if m.end is not None]
 
@@ -2558,7 +2761,10 @@ class FioMigrationTest:
             mig = next((m for m in self.migrations if m.name == key), None)
             # Writes per second summed over the affected pods, so blocks/rate ≈ the width of
             # the lossy interval if every write in it was lost.
-            rate = sum(report["pods"].get(p, {}).get("jobs", [{}])[0]
+            # jobs may be present but empty when fio died before writing its JSON
+            # report (or was still running at collection time) — a missing rate must
+            # not take the whole analysis down with it.
+            rate = sum((report["pods"].get(p, {}).get("jobs") or [{}])[0]
                        .get("write", {}).get("iops", 0.0) for p in st["pods"])
             st["write_iops_affected_pods"] = round(rate, 1)
             st["implied_lossy_window_s"] = round(st["blocks"] / rate, 3) if rate else None
@@ -2823,7 +3029,11 @@ class FioMigrationTest:
         self.log.info(f"=== fio migration test  run_id={self.run_id} ===")
         self.log.info(f"pods={self.a.pods} single-namespace + {self.a.ns_pods} namespaced "
                       f"({PARAM_MAX_NS_PER_SUBSYS}={self.a.ns_per_subsys})  "
-                      f"volume={self.a.volume_size_gb}Gi xfs runtime={self.a.runtime}s "
+                      f"volume={self.a.volume_size_gb}Gi xfs"
+                      + ("(no stripe alignment)" if self.a.xfs_sw == "0" else
+                         f"(su={self.a.xfs_su},sw={self.a.xfs_sw})" if self.a.xfs_su else
+                         "(csi defaults su=16k,sw=1)")
+                      + f" runtime={self.a.runtime}s "
                       f"fio(direct={FIO_DIRECT},ioengine={FIO_IOENGINE},"
                       f"iodepth={self.a.iodepth},numjobs={self.a.numjobs})")
         try:
@@ -2898,6 +3108,7 @@ class FioMigrationTest:
         try:
             self.collect_logs()
             self.collect_cluster_logs()
+            self.save_state()
             ok = self.analyze()
         finally:
             self.cleanup()
@@ -2938,6 +3149,20 @@ def parse_args():
                         f"many volumes may share one subsystem (default {NS_PER_SUBSYS}). The "
                         "control plane decides the actual packing; the test discovers it from "
                         "the backend")
+    p.add_argument("--xfs-su", default=None, metavar="SIZE",
+                   help=f"XFS stripe unit for both StorageClasses ({PARAM_XFS_SU} parameter, e.g. "
+                        "'4k', '64k', '1m'). The CSI node plugin turns it into "
+                        "`mkfs.xfs -d su=<su>,sw=<sw> -l su=<su>`. Requires --xfs-sw. Unset "
+                        "(default) leaves the parameter off the StorageClass, so the plugin's "
+                        "own defaults apply (su=16k, sw=1)")
+    p.add_argument("--xfs-sw", default=None, metavar="N",
+                   help=f"XFS stripe width for both StorageClasses ({PARAM_XFS_SW} parameter, a "
+                        "positive integer = number of stripe units per stripe). Requires --xfs-su; "
+                        "the plugin ignores either one alone. Pass 0 to switch stripe alignment "
+                        "OFF entirely: the plugin then emits no -d/-l options at all, so mkfs.xfs "
+                        "uses its own defaults (sunit=swidth=0 unless the device advertises a "
+                        "geometry) — which is what a plain `mkfs.xfs /dev/nvmeXnY` outside "
+                        "Kubernetes gives you")
     p.add_argument("--volume-size-gb", type=int, default=10, help="volume size in GiB (default 10)")
     p.add_argument("--file-size-gb", type=int, default=1,
                    help="fio data file size in GiB; kept small so the up-front layout is "
@@ -2991,11 +3216,42 @@ def parse_args():
     p.add_argument("--keep", action="store_true",
                    help="do not delete pods/PVCs/migrations after the run")
     p.add_argument("--outdir", default=None, help="artifact directory (default ./fio-mig-<ts>)")
-    return p.parse_args()
+    p.add_argument("--analyze-dir", default=None, metavar="DIR",
+                   help="do not run anything: re-run the analysis over an existing run "
+                        "directory and rewrite its report.json. Requires the state.json "
+                        "that runs write on completion. Useful after a harness fix, or "
+                        "when the analysis step itself failed")
+    a = p.parse_args()
+    if a.xfs_sw is not None and not a.xfs_sw.isdigit():
+        p.error(f"--xfs-sw must be a non-negative integer, got {a.xfs_sw!r}")
+    # `--xfs-sw 0` means "no stripe alignment". The plugin reaches that path only when
+    # BOTH keys are non-empty (an empty xfs_su makes it fall back to su=16k,sw=1 instead),
+    # so supply a placeholder su it will discard before ever reading it.
+    if a.xfs_sw == "0" and not a.xfs_su:
+        a.xfs_su = "4k"
+    # Any other single-sided combination would silently format with the plugin's defaults
+    # while the run claims a geometry it never used.
+    if bool(a.xfs_su) != bool(a.xfs_sw):
+        p.error("--xfs-su and --xfs-sw must be given together (the CSI node plugin ignores "
+                "either one on its own and falls back to su=16k,sw=1). To turn stripe "
+                "alignment off entirely, pass --xfs-sw 0")
+    return a
 
 
 def main() -> int:
     args = parse_args()
+    if args.analyze_dir:
+        # Re-run only the analysis over a finished run: no cluster access, no pods, no
+        # migrations. Appends to that run's test.log and rewrites its report.json.
+        outdir = os.path.abspath(args.analyze_dir)
+        log = Logger(os.path.join(outdir, "test.log"))
+        log.info(f"=== re-analysing {outdir} (no cluster access) ===")
+        try:
+            test = FioMigrationTest.from_state(outdir, log, args)
+            return 0 if test.analyze() else 1
+        except SystemExit as e:
+            log.error(f"aborting: {e}")
+            return 2
     outdir = args.outdir or os.path.abspath(f"fio-mig-{int(time.time())}")
     os.makedirs(outdir, exist_ok=True)
     log = Logger(os.path.join(outdir, "test.log"))
