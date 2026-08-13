@@ -19,3 +19,6 @@ ignore:
   - vulnerability: ELSA-2025-20606   # fixed only in 3.8.3-6.el9_6.2_fips
   - vulnerability: ELSA-2024-12364   # fixed only in 3.8.3-4.el9_4_fips
   - vulnerability: ELSA-2026-50149   # fixed only in 3.8.3-10.el9_7_fips
+
+  # libgcrypt
+  - vulnerability: ELSA-2026-500145  # fixed only in 10:1.10.0-13.el9_8_fips
