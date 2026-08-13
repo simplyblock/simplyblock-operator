@@ -129,7 +129,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_size_total{cluster=\"$Cluster\"}",
+                        "expr": "simplyblock_cluster_size_total_bytes{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -222,7 +222,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_size_free{cluster=\"$Cluster\"}",
+                        "expr": "simplyblock_cluster_size_free_bytes{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -315,7 +315,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_size_used{cluster=\"$Cluster\"}",
+                        "expr": "simplyblock_cluster_size_used_bytes{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -408,7 +408,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_size_prov{cluster=\"$Cluster\"}",
+                        "expr": "simplyblock_cluster_size_provisioned_bytes{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -501,7 +501,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_size_prov_util{cluster=\"$Cluster\"}",
+                        "expr": "100 * simplyblock_cluster_size_provisioned_bytes{cluster=\"$Cluster\"} / simplyblock_cluster_size_total_bytes{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -594,7 +594,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_size_util{cluster=\"$Cluster\"}",
+                        "expr": "100 * simplyblock_cluster_size_used_bytes{cluster=\"$Cluster\"} / simplyblock_cluster_size_total_bytes{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -699,7 +699,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_write_bytes{cluster=\"$Cluster\"}",
+                        "expr": "simplyblock_cluster_write_bytes_total{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -791,7 +791,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_write_bytes_ps{cluster=\"$Cluster\"}",
+                        "expr": "rate(simplyblock_cluster_write_bytes_total{cluster=\"$Cluster\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -853,7 +853,7 @@ data:
                                 }
                             ]
                         },
-                        "unit": "µs"
+                        "unit": "\u00b5s"
                     },
                     "overrides": []
                 },
@@ -883,7 +883,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_write_latency_ps{cluster=\"$Cluster\"} / 1000",
+                        "expr": "rate(simplyblock_cluster_write_latency_ticks_total{cluster=\"$Cluster\"}[$__rate_interval]) / 1000",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -974,7 +974,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_write_io{cluster=\"$Cluster\"}",
+                        "expr": "simplyblock_cluster_write_operations_total{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -1065,7 +1065,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_write_io_ps{cluster=\"$Cluster\"}",
+                        "expr": "rate(simplyblock_cluster_write_operations_total{cluster=\"$Cluster\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -1156,7 +1156,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_write_latency_ticks{cluster=\"$Cluster\"}",
+                        "expr": "simplyblock_cluster_write_latency_ticks_total{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -1261,7 +1261,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_read_bytes{cluster=\"$Cluster\"}",
+                        "expr": "simplyblock_cluster_read_bytes_total{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -1353,7 +1353,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_read_bytes_ps{cluster=\"$Cluster\"}",
+                        "expr": "rate(simplyblock_cluster_read_bytes_total{cluster=\"$Cluster\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -1415,7 +1415,7 @@ data:
                                 }
                             ]
                         },
-                        "unit": "µs"
+                        "unit": "\u00b5s"
                     },
                     "overrides": []
                 },
@@ -1445,7 +1445,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_read_latency_ps{cluster=\"$Cluster\"}",
+                        "expr": "rate(simplyblock_cluster_read_latency_ticks_total{cluster=\"$Cluster\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -1536,7 +1536,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_read_io{cluster=\"$Cluster\"}",
+                        "expr": "simplyblock_cluster_read_operations_total{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -1627,7 +1627,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_read_io_ps{cluster=\"$Cluster\"}",
+                        "expr": "rate(simplyblock_cluster_read_operations_total{cluster=\"$Cluster\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -1718,7 +1718,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_read_latency_ticks{cluster=\"$Cluster\"}",
+                        "expr": "simplyblock_cluster_read_latency_ticks_total{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -1822,7 +1822,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_unmap_latency_ticks{cluster=\"$Cluster\"}",
+                        "expr": "simplyblock_cluster_unmap_latency_ticks_total{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -1914,7 +1914,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_unmap_bytes_ps{cluster=\"$Cluster\"}",
+                        "expr": "rate(simplyblock_cluster_unmap_bytes_total{cluster=\"$Cluster\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -1977,7 +1977,7 @@ data:
                                 }
                             ]
                         },
-                        "unit": "µs"
+                        "unit": "\u00b5s"
                     },
                     "overrides": []
                 },
@@ -2007,7 +2007,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_unmap_latency_ps{cluster=\"$Cluster\"}",
+                        "expr": "rate(simplyblock_cluster_unmap_latency_ticks_total{cluster=\"$Cluster\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -2123,7 +2123,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_unmap_io_ps{cluster=\"$Cluster\"}",
+                        "expr": "rate(simplyblock_cluster_unmap_operations_total{cluster=\"$Cluster\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -2214,7 +2214,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_unmap_io{cluster=\"$Cluster\"}",
+                        "expr": "simplyblock_cluster_unmap_operations_total{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -2306,7 +2306,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "builder",
-                        "expr": "cluster_unmap_bytes{cluster=\"$Cluster\"}",
+                        "expr": "simplyblock_cluster_unmap_bytes_total{cluster=\"$Cluster\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -2341,7 +2341,7 @@ data:
                     "name": "Cluster",
                     "options": [],
                     "query": {
-                        "query": "query_result((cluster_read_io{cluster=~\".*\"}  and on() (absent(_{_=\"admin\"}) and absent(_{_=\"${__user.login}\"}))) or on() (cluster_read_io{cluster=\"${__user.login}\"}  unless on() (absent(_{_!=\"admin\"}) and absent(_{_=\"${user.login}\"}))))",
+                        "query": "query_result((simplyblock_cluster_read_operations_total{cluster=~\".*\"}  and on() (absent(_{_=\"admin\"}) and absent(_{_=\"${__user.login}\"}))) or on() (simplyblock_cluster_read_operations_total{cluster=\"${__user.login}\"}  unless on() (absent(_{_!=\"admin\"}) and absent(_{_=\"${user.login}\"}))))",
                         "refId": "PrometheusVariableQueryEditor-VariableQuery"
                     },
                     "refresh": 1,
@@ -2350,7 +2350,6 @@ data:
                     "sort": 1,
                     "type": "query"
                 }
-    
             ]
         },
         "time": {
@@ -2495,7 +2494,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_size_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "simplyblock_device_size_total_bytes{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -2588,7 +2587,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_size_free{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "simplyblock_device_size_free_bytes{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -2681,199 +2680,13 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_size_used{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "simplyblock_device_size_used_bytes{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
                     }
                 ],
                 "title": "device_size_used",
-                "type": "timeseries"
-            },
-            {
-                "datasource": {
-                    "type": "prometheus",
-                    "uid": "PBFA97CFB590B2093"
-                },
-                "fieldConfig": {
-                    "defaults": {
-                        "color": {
-                            "mode": "palette-classic"
-                        },
-                        "custom": {
-                            "axisCenteredZero": false,
-                            "axisColorMode": "text",
-                            "axisLabel": "",
-                            "axisPlacement": "auto",
-                            "barAlignment": 0,
-                            "drawStyle": "line",
-                            "fillOpacity": 0,
-                            "gradientMode": "none",
-                            "hideFrom": {
-                                "legend": false,
-                                "tooltip": false,
-                                "viz": false
-                            },
-                            "lineInterpolation": "linear",
-                            "lineWidth": 1,
-                            "pointSize": 5,
-                            "scaleDistribution": {
-                                "type": "linear"
-                            },
-                            "showPoints": "auto",
-                            "spanNulls": false,
-                            "stacking": {
-                                "group": "A",
-                                "mode": "none"
-                            },
-                            "thresholdsStyle": {
-                                "mode": "off"
-                            }
-                        },
-                        "mappings": [],
-                        "thresholds": {
-                            "mode": "absolute",
-                            "steps": [
-                                {
-                                    "color": "green",
-                                    "value": null
-                                },
-                                {
-                                    "color": "red",
-                                    "value": 80
-                                }
-                            ]
-                        },
-                        "unit": "bytes"
-                    },
-                    "overrides": []
-                },
-                "gridPos": {
-                    "h": 7,
-                    "w": 7,
-                    "x": 0,
-                    "y": 8
-                },
-                "id": 11,
-                "options": {
-                    "legend": {
-                        "calcs": [],
-                        "displayMode": "list",
-                        "placement": "bottom",
-                        "showLegend": true
-                    },
-                    "tooltip": {
-                        "mode": "single",
-                        "sort": "none"
-                    }
-                },
-                "targets": [
-                    {
-                        "datasource": {
-                            "type": "prometheus",
-                            "uid": "PBFA97CFB590B2093"
-                        },
-                        "editorMode": "code",
-                        "expr": "device_size_prov{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
-                        "legendFormat": "__auto",
-                        "range": true,
-                        "refId": "A"
-                    }
-                ],
-                "title": "device_size_prov",
-                "type": "timeseries"
-            },
-            {
-                "datasource": {
-                    "type": "prometheus",
-                    "uid": "PBFA97CFB590B2093"
-                },
-                "fieldConfig": {
-                    "defaults": {
-                        "color": {
-                            "mode": "palette-classic"
-                        },
-                        "custom": {
-                            "axisCenteredZero": false,
-                            "axisColorMode": "text",
-                            "axisLabel": "",
-                            "axisPlacement": "auto",
-                            "barAlignment": 0,
-                            "drawStyle": "line",
-                            "fillOpacity": 0,
-                            "gradientMode": "none",
-                            "hideFrom": {
-                                "legend": false,
-                                "tooltip": false,
-                                "viz": false
-                            },
-                            "lineInterpolation": "linear",
-                            "lineWidth": 1,
-                            "pointSize": 5,
-                            "scaleDistribution": {
-                                "type": "linear"
-                            },
-                            "showPoints": "auto",
-                            "spanNulls": false,
-                            "stacking": {
-                                "group": "A",
-                                "mode": "none"
-                            },
-                            "thresholdsStyle": {
-                                "mode": "off"
-                            }
-                        },
-                        "mappings": [],
-                        "thresholds": {
-                            "mode": "absolute",
-                            "steps": [
-                                {
-                                    "color": "green",
-                                    "value": null
-                                },
-                                {
-                                    "color": "red",
-                                    "value": 80
-                                }
-                            ]
-                        },
-                        "unit": "percent"
-                    },
-                    "overrides": []
-                },
-                "gridPos": {
-                    "h": 7,
-                    "w": 7,
-                    "x": 7,
-                    "y": 8
-                },
-                "id": 12,
-                "options": {
-                    "legend": {
-                        "calcs": [],
-                        "displayMode": "list",
-                        "placement": "bottom",
-                        "showLegend": true
-                    },
-                    "tooltip": {
-                        "mode": "single",
-                        "sort": "none"
-                    }
-                },
-                "targets": [
-                    {
-                        "datasource": {
-                            "type": "prometheus",
-                            "uid": "PBFA97CFB590B2093"
-                        },
-                        "editorMode": "code",
-                        "expr": "device_size_prov_util{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
-                        "legendFormat": "__auto",
-                        "range": true,
-                        "refId": "A"
-                    }
-                ],
-                "title": "device_size_prov_util",
                 "type": "timeseries"
             },
             {
@@ -2960,7 +2773,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_size_util{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "100 * simplyblock_device_size_used_bytes{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"} / simplyblock_device_size_total_bytes{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -3066,7 +2879,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_write_bytes{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "simplyblock_device_write_bytes_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -3159,7 +2972,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_write_bytes_ps{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "rate(simplyblock_device_write_bytes_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -3223,7 +3036,7 @@ data:
                                 }
                             ]
                         },
-                        "unit": "µs"
+                        "unit": "\u00b5s"
                     },
                     "overrides": []
                 },
@@ -3253,7 +3066,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_write_latency_ps{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"} / 1000",
+                        "expr": "rate(simplyblock_device_write_latency_ticks_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}[$__rate_interval]) / 1000",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -3345,7 +3158,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_write_io{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "simplyblock_device_write_operations_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -3437,7 +3250,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_write_io_ps{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "rate(simplyblock_device_write_operations_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -3529,7 +3342,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_write_latency_ticks{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "simplyblock_device_write_latency_ticks_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -3635,7 +3448,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_read_bytes{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "simplyblock_device_read_bytes_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -3728,7 +3541,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_read_bytes_ps{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "rate(simplyblock_device_read_bytes_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -3791,7 +3604,7 @@ data:
                                 }
                             ]
                         },
-                        "unit": "µs"
+                        "unit": "\u00b5s"
                     },
                     "overrides": []
                 },
@@ -3821,7 +3634,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_read_latency_ps{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "rate(simplyblock_device_read_latency_ticks_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -3913,7 +3726,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_read_io{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "simplyblock_device_read_operations_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -4005,7 +3818,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_read_io_ps{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "rate(simplyblock_device_read_operations_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -4097,7 +3910,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_read_latency_ticks{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "simplyblock_device_read_latency_ticks_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -4202,7 +4015,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_unmap_latency_ticks{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "simplyblock_device_unmap_latency_ticks_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -4295,7 +4108,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_unmap_bytes_ps{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "rate(simplyblock_device_unmap_bytes_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -4359,7 +4172,7 @@ data:
                                 }
                             ]
                         },
-                        "unit": "µs"
+                        "unit": "\u00b5s"
                     },
                     "overrides": []
                 },
@@ -4389,7 +4202,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_unmap_latency_ps{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "rate(simplyblock_device_unmap_latency_ticks_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -4506,7 +4319,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_unmap_io_ps{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "rate(simplyblock_device_unmap_operations_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -4598,7 +4411,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_unmap_io{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "simplyblock_device_unmap_operations_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -4691,7 +4504,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "device_unmap_bytes{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
+                        "expr": "simplyblock_device_unmap_bytes_total{cluster=~\"$cluster\",snode=~\"$node\",device=~\"$device\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -4726,7 +4539,7 @@ data:
                     "name": "cluster",
                     "options": [],
                     "query": {
-                        "query": "query_result((cluster_read_io{cluster=~\".*\"}  and on() (absent(_{_=\"admin\"}) and absent(_{_=\"${__user.login}\"}))) or on() (cluster_read_io{cluster=\"${__user.login}\"}  unless on() (absent(_{_!=\"admin\"}) and absent(_{_=\"${user.login}\"}))))",
+                        "query": "query_result((simplyblock_cluster_read_operations_total{cluster=~\".*\"}  and on() (absent(_{_=\"admin\"}) and absent(_{_=\"${__user.login}\"}))) or on() (simplyblock_cluster_read_operations_total{cluster=\"${__user.login}\"}  unless on() (absent(_{_!=\"admin\"}) and absent(_{_=\"${user.login}\"}))))",
                         "refId": "PrometheusVariableQueryEditor-VariableQuery"
                     },
                     "refresh": 1,
@@ -4758,7 +4571,7 @@ data:
                     "name": "node",
                     "options": [],
                     "query": {
-                        "query": "query_result(device_size_total{cluster=~\"$cluster\"})",
+                        "query": "query_result(simplyblock_device_size_total_bytes{cluster=~\"$cluster\"})",
                         "refId": "PrometheusVariableQueryEditor-VariableQuery"
                     },
                     "refresh": 1,
@@ -4785,7 +4598,7 @@ data:
                     "name": "device",
                     "options": [],
                     "query": {
-                        "query": "query_result(device_size_total{cluster=~\"$cluster\",snode=~\"$node\"})",
+                        "query": "query_result(simplyblock_device_size_total_bytes{cluster=~\"$cluster\",snode=~\"$node\"})",
                         "refId": "PrometheusVariableQueryEditor-VariableQuery"
                     },
                     "refresh": 1,
@@ -4807,7 +4620,6 @@ data:
         "version": 5,
         "weekStart": ""
     }
-
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -4939,7 +4751,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_size_total{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "simplyblock_lvol_size_total_bytes{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -5032,7 +4844,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_size_free{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "simplyblock_lvol_size_free_bytes{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -5125,199 +4937,13 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_size_used{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "simplyblock_lvol_size_used_bytes{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
                     }
                 ],
                 "title": "lvol_size_used",
-                "type": "timeseries"
-            },
-            {
-                "datasource": {
-                    "type": "prometheus",
-                    "uid": "PBFA97CFB590B2093"
-                },
-                "fieldConfig": {
-                    "defaults": {
-                        "color": {
-                            "mode": "palette-classic"
-                        },
-                        "custom": {
-                            "axisCenteredZero": false,
-                            "axisColorMode": "text",
-                            "axisLabel": "",
-                            "axisPlacement": "auto",
-                            "barAlignment": 0,
-                            "drawStyle": "line",
-                            "fillOpacity": 0,
-                            "gradientMode": "none",
-                            "hideFrom": {
-                                "legend": false,
-                                "tooltip": false,
-                                "viz": false
-                            },
-                            "lineInterpolation": "linear",
-                            "lineWidth": 1,
-                            "pointSize": 5,
-                            "scaleDistribution": {
-                                "type": "linear"
-                            },
-                            "showPoints": "auto",
-                            "spanNulls": false,
-                            "stacking": {
-                                "group": "A",
-                                "mode": "none"
-                            },
-                            "thresholdsStyle": {
-                                "mode": "off"
-                            }
-                        },
-                        "mappings": [],
-                        "thresholds": {
-                            "mode": "absolute",
-                            "steps": [
-                                {
-                                    "color": "green",
-                                    "value": null
-                                },
-                                {
-                                    "color": "red",
-                                    "value": 80
-                                }
-                            ]
-                        },
-                        "unit": "bytes"
-                    },
-                    "overrides": []
-                },
-                "gridPos": {
-                    "h": 7,
-                    "w": 7,
-                    "x": 0,
-                    "y": 8
-                },
-                "id": 11,
-                "options": {
-                    "legend": {
-                        "calcs": [],
-                        "displayMode": "list",
-                        "placement": "bottom",
-                        "showLegend": true
-                    },
-                    "tooltip": {
-                        "mode": "single",
-                        "sort": "none"
-                    }
-                },
-                "targets": [
-                    {
-                        "datasource": {
-                            "type": "prometheus",
-                            "uid": "PBFA97CFB590B2093"
-                        },
-                        "editorMode": "code",
-                        "expr": "lvol_size_prov{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
-                        "legendFormat": "__auto",
-                        "range": true,
-                        "refId": "A"
-                    }
-                ],
-                "title": "lvol_size_prov",
-                "type": "timeseries"
-            },
-            {
-                "datasource": {
-                    "type": "prometheus",
-                    "uid": "PBFA97CFB590B2093"
-                },
-                "fieldConfig": {
-                    "defaults": {
-                        "color": {
-                            "mode": "palette-classic"
-                        },
-                        "custom": {
-                            "axisCenteredZero": false,
-                            "axisColorMode": "text",
-                            "axisLabel": "",
-                            "axisPlacement": "auto",
-                            "barAlignment": 0,
-                            "drawStyle": "line",
-                            "fillOpacity": 0,
-                            "gradientMode": "none",
-                            "hideFrom": {
-                                "legend": false,
-                                "tooltip": false,
-                                "viz": false
-                            },
-                            "lineInterpolation": "linear",
-                            "lineWidth": 1,
-                            "pointSize": 5,
-                            "scaleDistribution": {
-                                "type": "linear"
-                            },
-                            "showPoints": "auto",
-                            "spanNulls": false,
-                            "stacking": {
-                                "group": "A",
-                                "mode": "none"
-                            },
-                            "thresholdsStyle": {
-                                "mode": "off"
-                            }
-                        },
-                        "mappings": [],
-                        "thresholds": {
-                            "mode": "absolute",
-                            "steps": [
-                                {
-                                    "color": "green",
-                                    "value": null
-                                },
-                                {
-                                    "color": "red",
-                                    "value": 80
-                                }
-                            ]
-                        },
-                        "unit": "percent"
-                    },
-                    "overrides": []
-                },
-                "gridPos": {
-                    "h": 7,
-                    "w": 7,
-                    "x": 7,
-                    "y": 8
-                },
-                "id": 12,
-                "options": {
-                    "legend": {
-                        "calcs": [],
-                        "displayMode": "list",
-                        "placement": "bottom",
-                        "showLegend": true
-                    },
-                    "tooltip": {
-                        "mode": "single",
-                        "sort": "none"
-                    }
-                },
-                "targets": [
-                    {
-                        "datasource": {
-                            "type": "prometheus",
-                            "uid": "PBFA97CFB590B2093"
-                        },
-                        "editorMode": "code",
-                        "expr": "lvol_size_prov_util{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
-                        "legendFormat": "__auto",
-                        "range": true,
-                        "refId": "A"
-                    }
-                ],
-                "title": "lvol_size_prov_util",
                 "type": "timeseries"
             },
             {
@@ -5404,7 +5030,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_size_util{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "100 * simplyblock_lvol_size_used_bytes{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"} / simplyblock_lvol_size_total_bytes{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -5510,7 +5136,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_write_bytes{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "simplyblock_lvol_write_bytes_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -5602,7 +5228,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_write_io_ps{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "rate(simplyblock_lvol_write_operations_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -5694,7 +5320,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_write_latency_ticks{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "simplyblock_lvol_write_latency_ticks_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -5786,7 +5412,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_write_io{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "simplyblock_lvol_write_operations_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -5879,7 +5505,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_write_bytes_ps{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "rate(simplyblock_lvol_write_bytes_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -5942,7 +5568,7 @@ data:
                                 }
                             ]
                         },
-                        "unit": "µs"
+                        "unit": "\u00b5s"
                     },
                     "overrides": []
                 },
@@ -5972,7 +5598,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_write_latency_ps{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"} / 1000",
+                        "expr": "rate(simplyblock_lvol_write_latency_ticks_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}[$__rate_interval]) / 1000",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -6078,7 +5704,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_read_bytes{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "simplyblock_lvol_read_bytes_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -6171,7 +5797,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_read_bytes_ps{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "rate(simplyblock_lvol_read_bytes_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -6234,7 +5860,7 @@ data:
                                 }
                             ]
                         },
-                        "unit": "µs"
+                        "unit": "\u00b5s"
                     },
                     "overrides": []
                 },
@@ -6264,7 +5890,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_read_latency_ps{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "rate(simplyblock_lvol_read_latency_ticks_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -6356,7 +5982,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_read_io{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "simplyblock_lvol_read_operations_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -6448,7 +6074,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_read_io_ps{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "rate(simplyblock_lvol_read_operations_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -6540,7 +6166,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_read_latency_ticks{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "simplyblock_lvol_read_latency_ticks_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -6645,7 +6271,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_unmap_latency_ticks{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "simplyblock_lvol_unmap_latency_ticks_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -6738,7 +6364,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_unmap_bytes_ps{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "rate(simplyblock_lvol_unmap_bytes_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -6802,7 +6428,7 @@ data:
                                 }
                             ]
                         },
-                        "unit": "µs"
+                        "unit": "\u00b5s"
                     },
                     "overrides": []
                 },
@@ -6832,7 +6458,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_unmap_latency_ps{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "rate(simplyblock_lvol_unmap_latency_ticks_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -6949,7 +6575,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_unmap_io_ps{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "rate(simplyblock_lvol_unmap_operations_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -7041,7 +6667,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_unmap_io{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "simplyblock_lvol_unmap_operations_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -7134,7 +6760,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_unmap_bytes{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "simplyblock_lvol_unmap_bytes_total{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -7239,7 +6865,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "lvol_health_check{cluster=~\"$cluster\",pool=~\"$pool\",lvol=~\"$lvol\"}",
+                        "expr": "simplyblock_lvol_health_check{cluster=~\"$cluster\",pool_name=~\"$pool\",lvol=~\"$lvol\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -7274,7 +6900,7 @@ data:
                     "name": "cluster",
                     "options": [],
                     "query": {
-                        "query": "query_result((cluster_read_io{cluster=~\".*\"}  and on() (absent(_{_=\"admin\"}) and absent(_{_=\"${__user.login}\"}))) or on() (cluster_read_io{cluster=\"${__user.login}\"}  unless on() (absent(_{_!=\"admin\"}) and absent(_{_=\"${user.login}\"}))))",
+                        "query": "query_result((simplyblock_cluster_read_operations_total{cluster=~\".*\"}  and on() (absent(_{_=\"admin\"}) and absent(_{_=\"${__user.login}\"}))) or on() (simplyblock_cluster_read_operations_total{cluster=\"${__user.login}\"}  unless on() (absent(_{_!=\"admin\"}) and absent(_{_=\"${user.login}\"}))))",
                         "refId": "PrometheusVariableQueryEditor-VariableQuery"
                     },
                     "refresh": 1,
@@ -7306,11 +6932,11 @@ data:
                     "name": "pool",
                     "options": [],
                     "query": {
-                        "query": "query_result(lvol_size_total{cluster=~\"$cluster\"})",
+                        "query": "query_result(simplyblock_lvol_size_total_bytes{cluster=~\"$cluster\"})",
                         "refId": "PrometheusVariableQueryEditor-VariableQuery"
                     },
                     "refresh": 1,
-                    "regex": ".*pool=\"(.*?)\".*",
+                    "regex": ".*pool_name=\"(.*?)\".*",
                     "skipUrlSync": false,
                     "sort": 0,
                     "type": "query"
@@ -7338,7 +6964,7 @@ data:
                     "name": "lvol",
                     "options": [],
                     "query": {
-                        "query": "query_result(lvol_size_total{cluster=~\"$cluster\",pool=~\"$pool\"})",
+                        "query": "query_result(simplyblock_lvol_size_total_bytes{cluster=~\"$cluster\",pool_name=~\"$pool\"})",
                         "refId": "PrometheusVariableQueryEditor-VariableQuery"
                     },
                     "refresh": 1,
@@ -7516,7 +7142,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_size_total{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_size_total_bytes{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -7609,7 +7235,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_size_free{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_size_free_bytes{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -7702,7 +7328,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_size_used{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_size_used_bytes{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -7795,7 +7421,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_size_prov{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_size_provisioned_bytes{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -7888,7 +7514,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_size_prov_util{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "100 * simplyblock_snode_size_provisioned_bytes{cluster=~\"$cluster\",snode=~\"$node\"} / simplyblock_snode_size_total_bytes{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -7981,7 +7607,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_size_util{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "100 * simplyblock_snode_size_used_bytes{cluster=~\"$cluster\",snode=~\"$node\"} / simplyblock_snode_size_total_bytes{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -8087,7 +7713,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_write_bytes{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_write_bytes_total{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -8180,7 +7806,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_write_bytes_ps{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "rate(simplyblock_snode_write_bytes_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -8272,7 +7898,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_write_latency_ticks{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_write_latency_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -8364,7 +7990,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_write_io{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_write_operations_total{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -8456,7 +8082,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_write_io_ps{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "rate(simplyblock_snode_write_operations_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -8519,7 +8145,7 @@ data:
                                 }
                             ]
                         },
-                        "unit": "µs"
+                        "unit": "\u00b5s"
                     },
                     "overrides": []
                 },
@@ -8549,7 +8175,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_write_latency_ps{cluster=~\"$cluster\",snode=~\"$node\"} / 1000",
+                        "expr": "rate(simplyblock_snode_write_latency_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval]) / 1000",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -8655,7 +8281,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_read_bytes{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_read_bytes_total{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -8748,7 +8374,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_read_bytes_ps{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "rate(simplyblock_snode_read_bytes_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -8811,7 +8437,7 @@ data:
                                 }
                             ]
                         },
-                        "unit": "µs"
+                        "unit": "\u00b5s"
                     },
                     "overrides": []
                 },
@@ -8841,7 +8467,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_read_latency_ps{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "rate(simplyblock_snode_read_latency_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -8933,7 +8559,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_read_io{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_read_operations_total{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -9025,7 +8651,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_read_io_ps{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "rate(simplyblock_snode_read_operations_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -9117,7 +8743,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_read_latency_ticks{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_read_latency_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -9222,7 +8848,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_unmap_latency_ticks{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_unmap_latency_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -9315,7 +8941,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_unmap_bytes_ps{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "rate(simplyblock_snode_unmap_bytes_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -9379,7 +9005,7 @@ data:
                                 }
                             ]
                         },
-                        "unit": "µs"
+                        "unit": "\u00b5s"
                     },
                     "overrides": []
                 },
@@ -9409,7 +9035,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_unmap_latency_ps{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "rate(simplyblock_snode_unmap_latency_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -9526,7 +9152,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_unmap_io_ps{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "rate(simplyblock_snode_unmap_operations_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -9618,7 +9244,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_unmap_io{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_unmap_operations_total{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -9711,7 +9337,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_unmap_bytes{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_unmap_bytes_total{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -9816,7 +9442,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_health_check{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "simplyblock_snode_health_check{cluster=~\"$cluster\",snode=~\"$node\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -9921,7 +9547,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_cpu_busy_percentage{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "100 * rate(simplyblock_snode_thread_busy_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval]) / on(cluster,cluster_name,snode,hostname,core_id) group_left(thread_name) (rate(simplyblock_snode_reactor_busy_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval]) + rate(simplyblock_snode_reactor_idle_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval]))",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -10013,7 +9639,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "snode_cpu_core_utilization{cluster=~\"$cluster\",snode=~\"$node\"}",
+                        "expr": "100 * (rate(simplyblock_snode_reactor_busy_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval]) + rate(simplyblock_snode_reactor_irq_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval]) + rate(simplyblock_snode_reactor_sys_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval])) / ((rate(simplyblock_snode_reactor_busy_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval]) + rate(simplyblock_snode_reactor_irq_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval]) + rate(simplyblock_snode_reactor_sys_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval])) + rate(simplyblock_snode_reactor_idle_ticks_total{cluster=~\"$cluster\",snode=~\"$node\"}[$__rate_interval]))",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -10048,7 +9674,7 @@ data:
                     "name": "cluster",
                     "options": [],
                     "query": {
-                        "query": "query_result((cluster_read_io{cluster=~\".*\"}  and on() (absent(_{_=\"admin\"}) and absent(_{_=\"${__user.login}\"}))) or on() (cluster_read_io{cluster=\"${__user.login}\"}  unless on() (absent(_{_!=\"admin\"}) and absent(_{_=\"${user.login}\"}))))",
+                        "query": "query_result((simplyblock_cluster_read_operations_total{cluster=~\".*\"}  and on() (absent(_{_=\"admin\"}) and absent(_{_=\"${__user.login}\"}))) or on() (simplyblock_cluster_read_operations_total{cluster=\"${__user.login}\"}  unless on() (absent(_{_!=\"admin\"}) and absent(_{_=\"${user.login}\"}))))",
                         "refId": "PrometheusVariableQueryEditor-VariableQuery"
                     },
                     "refresh": 1,
@@ -10080,7 +9706,7 @@ data:
                     "name": "node",
                     "options": [],
                     "query": {
-                        "query": "query_result(device_size_total{cluster=~\"$cluster\"})",
+                        "query": "query_result(simplyblock_device_size_total_bytes{cluster=~\"$cluster\"})",
                         "refId": "PrometheusVariableQueryEditor-VariableQuery"
                     },
                     "refresh": 1,
@@ -10233,7 +9859,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_size_total{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "simplyblock_pool_size_total_bytes{cluster=\"$cluster\",pool=\"$pool\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -10326,7 +9952,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_size_free{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "simplyblock_pool_size_free_bytes{cluster=\"$cluster\",pool=\"$pool\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -10419,199 +10045,13 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_size_used{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "simplyblock_pool_size_used_bytes{cluster=\"$cluster\",pool=\"$pool\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
                     }
                 ],
                 "title": "pool_size_used",
-                "type": "timeseries"
-            },
-            {
-                "datasource": {
-                    "type": "prometheus",
-                    "uid": "PBFA97CFB590B2093"
-                },
-                "fieldConfig": {
-                    "defaults": {
-                        "color": {
-                            "mode": "palette-classic"
-                        },
-                        "custom": {
-                            "axisCenteredZero": false,
-                            "axisColorMode": "text",
-                            "axisLabel": "",
-                            "axisPlacement": "auto",
-                            "barAlignment": 0,
-                            "drawStyle": "line",
-                            "fillOpacity": 0,
-                            "gradientMode": "none",
-                            "hideFrom": {
-                                "legend": false,
-                                "tooltip": false,
-                                "viz": false
-                            },
-                            "lineInterpolation": "linear",
-                            "lineWidth": 1,
-                            "pointSize": 5,
-                            "scaleDistribution": {
-                                "type": "linear"
-                            },
-                            "showPoints": "auto",
-                            "spanNulls": false,
-                            "stacking": {
-                                "group": "A",
-                                "mode": "none"
-                            },
-                            "thresholdsStyle": {
-                                "mode": "off"
-                            }
-                        },
-                        "mappings": [],
-                        "thresholds": {
-                            "mode": "absolute",
-                            "steps": [
-                                {
-                                    "color": "green",
-                                    "value": null
-                                },
-                                {
-                                    "color": "red",
-                                    "value": 80
-                                }
-                            ]
-                        },
-                        "unit": "decbytes"
-                    },
-                    "overrides": []
-                },
-                "gridPos": {
-                    "h": 7,
-                    "w": 7,
-                    "x": 0,
-                    "y": 8
-                },
-                "id": 11,
-                "options": {
-                    "legend": {
-                        "calcs": [],
-                        "displayMode": "list",
-                        "placement": "bottom",
-                        "showLegend": true
-                    },
-                    "tooltip": {
-                        "mode": "single",
-                        "sort": "none"
-                    }
-                },
-                "targets": [
-                    {
-                        "datasource": {
-                            "type": "prometheus",
-                            "uid": "PBFA97CFB590B2093"
-                        },
-                        "editorMode": "code",
-                        "expr": "pool_size_prov{cluster=\"$cluster\",pool=\"$pool\"}",
-                        "legendFormat": "__auto",
-                        "range": true,
-                        "refId": "A"
-                    }
-                ],
-                "title": "pool_size_prov",
-                "type": "timeseries"
-            },
-            {
-                "datasource": {
-                    "type": "prometheus",
-                    "uid": "PBFA97CFB590B2093"
-                },
-                "fieldConfig": {
-                    "defaults": {
-                        "color": {
-                            "mode": "palette-classic"
-                        },
-                        "custom": {
-                            "axisCenteredZero": false,
-                            "axisColorMode": "text",
-                            "axisLabel": "",
-                            "axisPlacement": "auto",
-                            "barAlignment": 0,
-                            "drawStyle": "line",
-                            "fillOpacity": 0,
-                            "gradientMode": "none",
-                            "hideFrom": {
-                                "legend": false,
-                                "tooltip": false,
-                                "viz": false
-                            },
-                            "lineInterpolation": "linear",
-                            "lineWidth": 1,
-                            "pointSize": 5,
-                            "scaleDistribution": {
-                                "type": "linear"
-                            },
-                            "showPoints": "auto",
-                            "spanNulls": false,
-                            "stacking": {
-                                "group": "A",
-                                "mode": "none"
-                            },
-                            "thresholdsStyle": {
-                                "mode": "off"
-                            }
-                        },
-                        "mappings": [],
-                        "thresholds": {
-                            "mode": "absolute",
-                            "steps": [
-                                {
-                                    "color": "green",
-                                    "value": null
-                                },
-                                {
-                                    "color": "red",
-                                    "value": 80
-                                }
-                            ]
-                        },
-                        "unit": "decbytes"
-                    },
-                    "overrides": []
-                },
-                "gridPos": {
-                    "h": 7,
-                    "w": 7,
-                    "x": 7,
-                    "y": 8
-                },
-                "id": 12,
-                "options": {
-                    "legend": {
-                        "calcs": [],
-                        "displayMode": "list",
-                        "placement": "bottom",
-                        "showLegend": true
-                    },
-                    "tooltip": {
-                        "mode": "single",
-                        "sort": "none"
-                    }
-                },
-                "targets": [
-                    {
-                        "datasource": {
-                            "type": "prometheus",
-                            "uid": "PBFA97CFB590B2093"
-                        },
-                        "editorMode": "code",
-                        "expr": "pool_size_prov_util{cluster=\"$cluster\",pool=\"$pool\"}",
-                        "legendFormat": "__auto",
-                        "range": true,
-                        "refId": "A"
-                    }
-                ],
-                "title": "pool_size_prov_util",
                 "type": "timeseries"
             },
             {
@@ -10698,7 +10138,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_size_util{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "100 * simplyblock_pool_size_used_bytes{cluster=\"$cluster\",pool=\"$pool\"} / simplyblock_pool_size_total_bytes{cluster=\"$cluster\",pool=\"$pool\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -10804,7 +10244,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_write_bytes{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "simplyblock_pool_write_bytes_total{cluster=\"$cluster\",pool=\"$pool\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -10897,7 +10337,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_write_bytes_ps{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "rate(simplyblock_pool_write_bytes_total{cluster=\"$cluster\",pool=\"$pool\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -10989,7 +10429,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_write_latency_ticks{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "simplyblock_pool_write_latency_ticks_total{cluster=\"$cluster\",pool=\"$pool\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -11081,7 +10521,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_write_io{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "simplyblock_pool_write_operations_total{cluster=\"$cluster\",pool=\"$pool\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -11173,7 +10613,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_write_io_ps{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "rate(simplyblock_pool_write_operations_total{cluster=\"$cluster\",pool=\"$pool\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -11266,7 +10706,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_write_latency_ps{cluster=\"$cluster\",pool=\"$pool\"} / 1000",
+                        "expr": "rate(simplyblock_pool_write_latency_ticks_total{cluster=\"$cluster\",pool=\"$pool\"}[$__rate_interval]) / 1000",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -11372,7 +10812,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_read_bytes{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "simplyblock_pool_read_bytes_total{cluster=\"$cluster\",pool=\"$pool\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -11465,7 +10905,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_read_bytes_ps{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "rate(simplyblock_pool_read_bytes_total{cluster=\"$cluster\",pool=\"$pool\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -11557,7 +10997,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_read_latency_ps{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "rate(simplyblock_pool_read_latency_ticks_total{cluster=\"$cluster\",pool=\"$pool\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -11649,7 +11089,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_read_io{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "simplyblock_pool_read_operations_total{cluster=\"$cluster\",pool=\"$pool\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -11741,7 +11181,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_read_io_ps{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "rate(simplyblock_pool_read_operations_total{cluster=\"$cluster\",pool=\"$pool\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -11833,7 +11273,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_read_latency_ticks{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "simplyblock_pool_read_latency_ticks_total{cluster=\"$cluster\",pool=\"$pool\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -11938,7 +11378,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_unmap_latency_ticks{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "simplyblock_pool_unmap_latency_ticks_total{cluster=\"$cluster\",pool=\"$pool\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -12031,7 +11471,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_unmap_bytes_ps{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "rate(simplyblock_pool_unmap_bytes_total{cluster=\"$cluster\",pool=\"$pool\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -12124,7 +11564,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_unmap_latency_ps{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "rate(simplyblock_pool_unmap_latency_ticks_total{cluster=\"$cluster\",pool=\"$pool\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -12241,7 +11681,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_unmap_io_ps{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "rate(simplyblock_pool_unmap_operations_total{cluster=\"$cluster\",pool=\"$pool\"}[$__rate_interval])",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -12333,7 +11773,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_unmap_io{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "simplyblock_pool_unmap_operations_total{cluster=\"$cluster\",pool=\"$pool\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -12426,7 +11866,7 @@ data:
                             "uid": "PBFA97CFB590B2093"
                         },
                         "editorMode": "code",
-                        "expr": "pool_unmap_bytes{cluster=\"$cluster\",pool=\"$pool\"}",
+                        "expr": "simplyblock_pool_unmap_bytes_total{cluster=\"$cluster\",pool=\"$pool\"}",
                         "legendFormat": "__auto",
                         "range": true,
                         "refId": "A"
@@ -12461,7 +11901,7 @@ data:
                     "name": "cluster",
                     "options": [],
                     "query": {
-                        "query": "query_result((cluster_read_io{cluster=~\".*\"}  and on() (absent(_{_=\"admin\"}) and absent(_{_=\"${__user.login}\"}))) or on() (cluster_read_io{cluster=\"${__user.login}\"}  unless on() (absent(_{_!=\"admin\"}) and absent(_{_=\"${user.login}\"}))))",
+                        "query": "query_result((simplyblock_cluster_read_operations_total{cluster=~\".*\"}  and on() (absent(_{_=\"admin\"}) and absent(_{_=\"${__user.login}\"}))) or on() (simplyblock_cluster_read_operations_total{cluster=\"${__user.login}\"}  unless on() (absent(_{_!=\"admin\"}) and absent(_{_=\"${user.login}\"}))))",
                         "refId": "PrometheusVariableQueryEditor-VariableQuery"
                     },
                     "refresh": 1,
@@ -12489,7 +11929,7 @@ data:
                     "name": "pool",
                     "options": [],
                     "query": {
-                        "query": "query_result(pool_size_total{cluster=~\"$cluster\"})",
+                        "query": "query_result(simplyblock_pool_size_total_bytes{cluster=~\"$cluster\"})",
                         "refId": "PrometheusVariableQueryEditor-VariableQuery"
                     },
                     "refresh": 1,
