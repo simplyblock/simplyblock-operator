@@ -123,6 +123,72 @@ func TestAcquireLock_RequeuesWhenAnotherOpsActive(t *testing.T) {
 	}
 }
 
+// ── TestFdRemovalBalanceCheck ────────────────────────────────────────────────
+//
+// Mirrors the live 2026-08-13 incident's exact topology: 7 nodes split
+// FD1=2/FD2=2/FD3=3. Removing a node from the already-smallest domain (FD1)
+// drops it to 1 while FD3 stays at 3 -- a spread the backend's own
+// check_fd_admission_for_remove correctly refuses (populations {1,2,3}).
+// Removing instead from the domain with slack (FD3) leaves 2/2/2, which is
+// fine. This is the gate that must fire in drainValidate BEFORE Suspending,
+// so an infeasible removal never suspends the node in the first place.
+
+func newTestStorageNodeSet(name, ns, clusterName string, nodes ...simplyblockv1alpha1.NodeStatus) *simplyblockv1alpha1.StorageNodeSet {
+	return &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: clusterName},
+		Status:     simplyblockv1alpha1.StorageNodeSetStatus{Nodes: nodes},
+	}
+}
+
+func TestFdRemovalBalanceCheck_RemovingFromSlackDomainAllowed(t *testing.T) {
+	fd := func(v int32) *int32 { return &v }
+	sn := newTestStorageNode("sn-1", opsTestNS, "sns", opsTestWorker, opsTestNodeUUID)
+	sn.Status.Ports = &simplyblockv1alpha1.StorageNodePorts{Management: "10.0.0.7"}
+	sns := newTestStorageNodeSet("sns", opsTestNS, opsTestCluster,
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.1", FailureDomain: fd(1)},
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.2", FailureDomain: fd(1)},
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.3", FailureDomain: fd(2)},
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.4", FailureDomain: fd(2)},
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.5", FailureDomain: fd(3)},
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.6", FailureDomain: fd(3)},
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.7", FailureDomain: fd(3)}, // sn-1 itself
+	)
+	r := newOpsReconciler(t, sn, sns)
+
+	reason, err := r.fdRemovalBalanceCheck(context.Background(), sn)
+	if err != nil {
+		t.Fatalf("fdRemovalBalanceCheck returned error: %v", err)
+	}
+	if reason != "" {
+		t.Errorf("expected removal from FD3 (2/2/3 -> 2/2/2) to be allowed, got blocked: %q", reason)
+	}
+}
+
+func TestFdRemovalBalanceCheck_RemovingFromThinDomainBlocked(t *testing.T) {
+	fd := func(v int32) *int32 { return &v }
+	sn := newTestStorageNode("sn-1", opsTestNS, "sns", opsTestWorker, opsTestNodeUUID)
+	sn.Status.Ports = &simplyblockv1alpha1.StorageNodePorts{Management: "10.0.0.2"}
+	sns := newTestStorageNodeSet("sns", opsTestNS, opsTestCluster,
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.1", FailureDomain: fd(1)},
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.2", FailureDomain: fd(1)}, // sn-1 itself
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.3", FailureDomain: fd(2)},
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.4", FailureDomain: fd(2)},
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.5", FailureDomain: fd(3)},
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.6", FailureDomain: fd(3)},
+		simplyblockv1alpha1.NodeStatus{MgmtIp: "10.0.0.7", FailureDomain: fd(3)},
+	)
+	r := newOpsReconciler(t, sn, sns)
+
+	reason, err := r.fdRemovalBalanceCheck(context.Background(), sn)
+	if err != nil {
+		t.Fatalf("fdRemovalBalanceCheck returned error: %v", err)
+	}
+	if reason == "" {
+		t.Error("expected removal from FD1 (2/2/3 -> 1/2/3) to be blocked, got none")
+	}
+}
+
 func TestAcquireLock_RemoveDrainSetsValidatingSubPhase(t *testing.T) {
 	sn := newTestStorageNode("sn-1", opsTestNS, "sns", opsTestWorker, opsTestNodeUUID)
 	ops := newTestStorageNodeOps("ops-drain", opsTestNS, "sn-1", "remove")

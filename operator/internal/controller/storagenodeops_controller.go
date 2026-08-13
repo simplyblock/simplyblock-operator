@@ -1054,7 +1054,57 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 
+	// Failure-domain balance gate: the backend's own admission check
+	// (check_fd_admission_for_remove) will refuse the DELETE call later in
+	// this drain if removing this node would violate the +/-1 balance rule
+	// -- but by then the node has already been suspended (Suspending runs
+	// before Removing), and that suspension has no path back on its own.
+	// Checking it here, before Suspending, means an infeasible removal
+	// never suspends the node in the first place.
+	reason, err := r.fdRemovalBalanceCheck(ctx, sn)
+	if err != nil {
+		log.Error(err, "drain: failed to check failure-domain balance for removal")
+		return ctrl.Result{RequeueAfter: drainRequeueImmediate}, nil
+	}
+	if reason != "" {
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "FailureDomainBalanceBlocking", "FailureDomainBalanceBlocking",
+			"drain blocked: removing node %s would violate failure-domain balance: %s", nodeUUID, reason)
+		r.emitOnStorageNode(ctx, ops, corev1.EventTypeWarning, "FailureDomainBalanceBlocking", fmt.Sprintf("drain blocked: removing node %s would violate failure-domain balance: %s", nodeUUID, reason))
+		patch := client.MergeFrom(ops.DeepCopy())
+		ops.Status.Message = fmt.Sprintf("blocked: failure-domain balance: %s", reason)
+		_ = r.Status().Patch(ctx, ops, patch)
+		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+	}
+
 	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseSuspending)
+}
+
+// fdRemovalBalanceCheck reports whether removing sn would violate the
+// cluster's failure-domain balance rule, mirroring the backend's
+// check_fd_admission_for_remove (simplyblock_core). Re-fetches the parent
+// StorageNodeSet rather than threading it through runDrain's whole dispatch
+// chain -- Validating is the only sub-phase that needs it. Returns ("", nil)
+// when removal is fine (including when FD data isn't populated yet, same as
+// the backend's own early-outs); a non-empty reason means drainValidate must
+// block rather than advance to Suspending.
+func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
+	ctx context.Context, sn *simplyblockv1alpha1.StorageNode,
+) (string, error) {
+	var sns simplyblockv1alpha1.StorageNodeSet
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      sn.Spec.StorageNodeSetRef,
+		Namespace: sn.Namespace,
+	}, &sns); err != nil {
+		return "", fmt.Errorf("fetching StorageNodeSet %s: %w", sn.Spec.StorageNodeSetRef, err)
+	}
+	hostDomains, err := clusterFailureDomainHosts(ctx, r.Client, sn.Namespace, sns.Spec.ClusterName)
+	if err != nil {
+		return "", fmt.Errorf("computing failure-domain host map: %w", err)
+	}
+	if sn.Status.Ports != nil {
+		delete(hostDomains, sn.Status.Ports.Management)
+	}
+	return fdRemovalBalanceViolation(hostDomains), nil
 }
 
 func (r *StorageNodeOpsReconciler) drainSuspend(
