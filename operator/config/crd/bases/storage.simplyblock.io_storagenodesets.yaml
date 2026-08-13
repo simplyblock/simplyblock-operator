@@ -256,11 +256,6 @@ spec:
                     format: int32
                     type: integer
                 type: object
-              maxLogicalVolumeCount:
-                description: MaxLogicalVolumeCount is the maximum number of logical
-                  volumes per node.
-                format: int32
-                type: integer
               maxParallelNodeAdds:
                 default: 1
                 description: |-
@@ -273,6 +268,11 @@ spec:
               maxSize:
                 description: MaxSize is the maximum allocatable size of huge pages.
                 type: string
+              maxSubsystemCount:
+                description: MaxSubsystemCount is the maximum number of NVMe-oF subsystems
+                  per node.
+                format: int32
+                type: integer
               mgmtIfname:
                 description: MgmtIfname is the management interface name used by storage
                   nodes.
@@ -342,15 +342,15 @@ spec:
                           format: int32
                           type: integer
                       type: object
-                    maxLogicalVolumeCount:
-                      description: MaxLogicalVolumeCount overrides the maximum number
-                        of logical volumes for this node.
-                      format: int32
-                      type: integer
                     maxSize:
                       description: MaxSize overrides the maximum allocatable size
                         of huge pages for this node.
                       type: string
+                    maxSubsystemCount:
+                      description: MaxSubsystemCount overrides the maximum number
+                        of NVMe-oF subsystems for this node.
+                      format: int32
+                      type: integer
                     pcieAllowList:
                       description: PcieAllowList overrides the list of PCI addresses
                         allowed for use on this node.

@@ -35,7 +35,7 @@ spec:
 
 ---
 apiVersion: storage.simplyblock.io/v1alpha1
-kind: Pool
+kind: StoragePool
 metadata:
   name: simplyblock-pool
   namespace: simplyblock
@@ -58,10 +58,9 @@ spec:
   #   compression: "False"
   #   encryption: false
   #   fabric: tcp
+  #   filesystem: ext4
   #   lvolPriorityClass: "0"
   #   maxNamespacePerSubsys: "1"
-  #   numDataChunks: "1"
-  #   numParityChunks: "1"
   #   qosRMbytes: "0"
   #   qosWMbytes: "0"
   #   qosRwMbytes: "0"
@@ -88,7 +87,7 @@ spec:
     # - worker-node-1
     # - worker-node-2
     # - worker-node-3
-  maxLogicalVolumeCount: 100
+  maxSubsystemCount: 100
   partitions: 1
   corePercentage: 25
   nodesPerSocket: 1

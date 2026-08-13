@@ -23,8 +23,8 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// PoolQoSThroughputSpec defines throughput QosSpec limits in MiB/s.
-type PoolQoSThroughputSpec struct {
+// StoragePoolQoSThroughputSpec defines throughput QosSpec limits in MiB/s.
+type StoragePoolQoSThroughputSpec struct {
 	// Read is the read throughput limit for the pool.
 	Read *int32 `json:"read,omitempty"`
 	// ReadWrite is the combined read/write throughput limit for the pool.
@@ -33,16 +33,16 @@ type PoolQoSThroughputSpec struct {
 	Write *int32 `json:"write,omitempty"`
 }
 
-// PoolQoSSpec defines pool QosSpec limits.
-type PoolQoSSpec struct {
+// StoragePoolQoSSpec defines pool QosSpec limits.
+type StoragePoolQoSSpec struct {
 	// IOPS is the IOPS limit for the pool.
 	IOPS *int32 `json:"iops,omitempty"`
 	// Throughput contains throughput limits for the pool.
-	Throughput *PoolQoSThroughputSpec `json:"throughput,omitempty"`
+	Throughput *StoragePoolQoSThroughputSpec `json:"throughput,omitempty"`
 }
 
-// PoolQoSThroughputStatus defines observed throughput QosSpec values in MiB/s.
-type PoolQoSThroughputStatus struct {
+// StoragePoolQoSThroughputStatus defines observed throughput QosSpec values in MiB/s.
+type StoragePoolQoSThroughputStatus struct {
 	// Read is the observed/configured read throughput value.
 	Read *int32 `json:"read,omitempty"`
 	// ReadWrite is the observed/configured combined read/write throughput value.
@@ -51,19 +51,24 @@ type PoolQoSThroughputStatus struct {
 	Write *int32 `json:"write,omitempty"`
 }
 
-// PoolQoSStatus defines observed pool QosSpec values.
-type PoolQoSStatus struct {
+// StoragePoolQoSStatus defines observed pool QosSpec values.
+type StoragePoolQoSStatus struct {
 	// Host is the backend host handling pool QosSpec enforcement.
 	Host string `json:"host,omitempty"`
 	// IOPS is the observed/configured IOPS value.
 	IOPS *int32 `json:"iops,omitempty"`
 	// Throughput contains observed/configured throughput values.
-	Throughput *PoolQoSThroughputStatus `json:"throughput,omitempty"`
+	Throughput *StoragePoolQoSThroughputStatus `json:"throughput,omitempty"`
 }
 
 // StorageClassParameters defines the default StorageClass parameter values for volumes in this pool.
 // These are passed as-is to the CSI driver when the StorageClass is created.
 // cluster_id and pool_name are always set automatically and cannot be overridden here.
+//
+// IMPORTANT: StorageClass Parameters are immutable in the Kubernetes API, so this whole field
+// is immutable once set (see StoragePoolSpec.StorageClassParameters) — there's no supported way
+// to change a pool's StorageClass defaults after the pool is created. Create a new StoragePool
+// instead.
 type StorageClassParameters struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Read/Write IOPS"
 	// QosRwIops sets the read/write IOPS limit (0 = unlimited).
@@ -88,12 +93,6 @@ type StorageClassParameters struct {
 	// Replicate enables replication for logical volumes.
 	// +kubebuilder:default=false
 	Replicate *bool `json:"replicate,omitempty"`
-	// NumDataChunks is the number of data chunks (distr_ndcs).
-	// +kubebuilder:default="1"
-	NumDataChunks string `json:"numDataChunks,omitempty"`
-	// NumParityChunks is the number of parity chunks (distr_npcs).
-	// +kubebuilder:default="1"
-	NumParityChunks string `json:"numParityChunks,omitempty"`
 	// LvolPriorityClass sets the logical volume priority class.
 	// +kubebuilder:default="0"
 	LvolPriorityClass string `json:"lvolPriorityClass,omitempty"`
@@ -104,13 +103,22 @@ type StorageClassParameters struct {
 	// MaxNamespacePerSubsys limits namespaces per NVMf subsystem.
 	// +kubebuilder:default="1"
 	MaxNamespacePerSubsys string `json:"maxNamespacePerSubsys,omitempty"`
-	// Tune2fsReservedBlocks sets the ext4 reserved-blocks percentage.
-	// +kubebuilder:default="0"
+	// Tune2fsReservedBlocks sets the ext4 reserved-blocks percentage. Left unset, the node
+	// plugin skips tune2fs entirely and mkfs.ext4's own default reserve applies, matching a
+	// StorageClass that omits tune2fs_reserved_blocks. A default of "0" here would not be a
+	// no-op: it actively runs `tune2fs -m 0` on every volume, since the node plugin only skips
+	// the call when the parameter is empty (see stageVolume in the CSI driver), not when it's
+	// "0".
 	Tune2fsReservedBlocks string `json:"tune2fsReservedBlocks,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Filesystem"
+	// Filesystem is the filesystem used to format logical volumes of this pool.
+	// +kubebuilder:validation:Enum=ext4;xfs
+	// +kubebuilder:default=ext4
+	Filesystem string `json:"filesystem,omitempty"`
 }
 
-// PoolSpec defines the desired state of Pool
-type PoolSpec struct {
+// StoragePoolSpec defines the desired state of StoragePool
+type StoragePoolSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
 	// +k8s:immutable
@@ -130,7 +138,9 @@ type PoolSpec struct {
 	LogicalVolumeMaxSize string `json:"logicalVolumeMaxSize,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="DHCHAP"
 	// DHCHAP enables DH-HMAC-CHAP key generation for the pool. Authentication is only
-	// enforced when allowedNodes is non-empty
+	// enforced when allowedNodes is non-empty. Also controls whether the StoragePool's StorageClass
+	// gets an allowedTopologies restriction, which — like StorageClass Parameters — is
+	// immutable in the Kubernetes API, hence this field is immutable too.
 	// +kubebuilder:default=false
 	// +k8s:immutable
 	DHCHAP bool `json:"dhchap,omitempty"`
@@ -142,27 +152,31 @@ type PoolSpec struct {
 	AllowedNodes []string `json:"allowedNodes,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="QoS"
 	// QosSpec defines QosSpec limits for the pool.
-	QosSpec *PoolQoSSpec `json:"qos,omitempty"`
+	QosSpec *StoragePoolQoSSpec `json:"qos,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
 	// Action triggers an imperative pool operation.
 	// FIXME: Unused for now
 	Action string `json:"action,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Storage Class Parameters"
 	// StorageClassParameters sets default StorageClass parameter values for volumes in this pool.
+	// Immutable: the underlying StorageClass's Parameters/AllowedTopologies cannot be patched in
+	// the Kubernetes API once created, so there is no supported way to change these after the
+	// fact. Create a new StoragePool to provision volumes with different settings.
 	// +kubebuilder:default={}
+	// +k8s:immutable
 	StorageClassParameters *StorageClassParameters `json:"storageClassParameters,omitempty"`
 }
 
-// PoolStatus defines the observed state of Pool.
-type PoolStatus struct {
-	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Pool UUID"
+// StoragePoolStatus defines the observed state of StoragePool.
+type StoragePoolStatus struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Storage Pool UUID"
 	// UUID is the backend pool UUID.
 	UUID string `json:"uuid,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Status"
 	// Status is the backend lifecycle status.
 	Status string `json:"status,omitempty"`
 	// QoS contains observed/configured QoS values.
-	QoS *PoolQoSStatus `json:"qos,omitempty"`
+	QoS *StoragePoolQoSStatus `json:"qos,omitempty"`
 	// AllowedNodes lists the Kubernetes node names currently registered on the backend.
 	AllowedNodes []string `json:"allowedNodes,omitempty"`
 }
@@ -173,34 +187,34 @@ type PoolStatus struct {
 // +kubebuilder:printcolumn:name="UUID",type="string",JSONPath=".status.uuid",description="Backend pool UUID"
 // +kubebuilder:printcolumn:name="Capacity",type="string",JSONPath=".spec.capacityLimit",description="Configured capacity limit"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-// +operator-sdk:csv:customresourcedefinitions:displayName="Pool"
+// +operator-sdk:csv:customresourcedefinitions:displayName="Storage Pool"
 
-// Pool is the Schema for the pools API
-type Pool struct {
+// StoragePool is the Schema for the storagepools API
+type StoragePool struct {
 	metav1.TypeMeta `json:",inline"`
 
 	// metadata is a standard object metadata
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	// spec defines the desired state of Pool
+	// spec defines the desired state of StoragePool
 	// +required
-	Spec PoolSpec `json:"spec"`
+	Spec StoragePoolSpec `json:"spec"`
 
-	// status defines the observed state of Pool
+	// status defines the observed state of StoragePool
 	// +optional
-	Status PoolStatus `json:"status,omitzero"`
+	Status StoragePoolStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
 
-// PoolList contains a list of Pool
-type PoolList struct {
+// StoragePoolList contains a list of StoragePool
+type StoragePoolList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`
-	Items           []Pool `json:"items"`
+	Items           []StoragePool `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&Pool{}, &PoolList{})
+	SchemeBuilder.Register(&StoragePool{}, &StoragePoolList{})
 }
