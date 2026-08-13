@@ -272,3 +272,44 @@ func TestCoLocatedHostID(t *testing.T) {
 		}
 	})
 }
+
+func TestDHCHAPAllowedNodeSegment(t *testing.T) {
+	const labelKey = "storage.simplyblock.io/pool.my-pool"
+
+	t.Run("no dhchap_node_label parameter", func(t *testing.T) {
+		req := &csi.CreateVolumeRequest{Parameters: map[string]string{}}
+		if key, val := dhchapAllowedNodeSegment(req); key != "" || val != "" {
+			t.Errorf("got (%q, %q), want (\"\", \"\")", key, val)
+		}
+	})
+
+	t.Run("returns the fixed value with no AccessibilityRequirements at all", func(t *testing.T) {
+		// The whole point: this must not depend on AccessibilityRequirements,
+		// which external-provisioner only populates for topology keys already
+		// registered in the node's CSINode object. A brand new pool's label key
+		// won't be registered there yet, so a nil/empty requirement here must
+		// still produce the segment.
+		req := &csi.CreateVolumeRequest{
+			Parameters: map[string]string{paramDHCHAPNodeLabel: labelKey},
+		}
+		key, val := dhchapAllowedNodeSegment(req)
+		if key != labelKey || val != dhchapAllowedNodeLabelValue {
+			t.Errorf("got (%q, %q), want (%q, %q)", key, val, labelKey, dhchapAllowedNodeLabelValue)
+		}
+	})
+
+	t.Run("ignores AccessibilityRequirements entirely", func(t *testing.T) {
+		req := &csi.CreateVolumeRequest{
+			Parameters: map[string]string{paramDHCHAPNodeLabel: labelKey},
+			AccessibilityRequirements: &csi.TopologyRequirement{
+				Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
+					labelKey: "some-other-value",
+				})},
+			},
+		}
+		key, val := dhchapAllowedNodeSegment(req)
+		if key != labelKey || val != dhchapAllowedNodeLabelValue {
+			t.Errorf("got (%q, %q), want (%q, %q)", key, val, labelKey, dhchapAllowedNodeLabelValue)
+		}
+	})
+}

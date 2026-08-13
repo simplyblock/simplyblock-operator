@@ -80,7 +80,7 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT-UNMANAGED", func() {
 			})
 
 			ginkgo.By("confirm the volume is connected as multipath")
-			sub := waitForSubsystem(f, pluginPod, pluginContainer, volID, time.Minute)
+			sub := waitForSubsystem(f, pluginPod, pluginContainer, volID)
 			origLive := liveControllers(sub)
 			framework.Logf("unmanaged volume %s subsystem %s has live paths: %v", volID, sub.NQN, origLive)
 			if len(origLive) < 2 {

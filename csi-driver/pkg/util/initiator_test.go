@@ -19,10 +19,18 @@ package util
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clienttesting "k8s.io/client-go/testing"
+
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestExecWithTimeoutPositive(t *testing.T) {
@@ -201,4 +209,101 @@ func TestCredentialAPITokenFileEmptyFallsBackToClusterSecret(t *testing.T) {
 	if node.API.Credential != testStaticSecret {
 		t.Errorf("expected fallback to cluster_secret %q, got %q", testStaticSecret, node.API.Credential)
 	}
+}
+
+// TestDHCHAPAuthArgsExtractsHostIdentityAndSecrets verifies that the host
+// identity and DHCHAP/TLS flags are pulled out of the control-plane-supplied
+// connect command line, that a --hostid matching the hostnqn's own UUID is
+// synthesized (so it can never collide with the node's file-based default
+// hostid, which is paired with a different hostnqn), and that unrelated
+// flags (already covered by connectViaNVMe's own args) are ignored.
+func TestDHCHAPAuthArgsExtractsHostIdentityAndSecrets(t *testing.T) {
+	connect := "sudo nvme connect --reconnect-delay=2 --ctrl-loss-tmo=3600 " +
+		"--transport=tcp --traddr=1.2.3.4 --trsvcid=4420 --nqn=nqn.test " +
+		"--hostnqn=nqn.2014-08.io.simplyblock:uuid:node-uid " +
+		"--dhchap-secret=DHHC-1:00:secret: --dhchap-ctrl-secret=DHHC-1:00:ctrlsecret: --tls"
+
+	got := dhchapAuthArgs(connect)
+	want := []string{
+		"--hostnqn=nqn.2014-08.io.simplyblock:uuid:node-uid",
+		"--dhchap-secret=DHHC-1:00:secret:",
+		"--dhchap-ctrl-secret=DHHC-1:00:ctrlsecret:",
+		"--tls",
+		"--hostid=node-uid",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("dhchapAuthArgs(%q) = %v, want %v", connect, got, want)
+	}
+}
+
+// TestDHCHAPAuthArgsNoAuthWhenUnneeded verifies that a connect command with no
+// host identity or secrets (the common case for a pool without allowed_hosts)
+// yields no extra flags.
+func TestDHCHAPAuthArgsNoAuthWhenUnneeded(t *testing.T) {
+	connect := "sudo nvme connect --transport=tcp --traddr=1.2.3.4 --trsvcid=4420 --nqn=nqn.test"
+	if got := dhchapAuthArgs(connect); len(got) != 0 {
+		t.Errorf("dhchapAuthArgs(%q) = %v, want empty", connect, got)
+	}
+}
+
+// TestNodeHostNQNComputesAndCaches verifies NodeHostNQN derives the
+// simplyblock-format host NQN from the Node's own UID, and that it's the
+// same value on a second call even from a client that would now error (i.e.
+// it's actually cached, not recomputed every time).
+func TestNodeHostNQNComputesAndCaches(t *testing.T) {
+	resetNodeHostNQNCache(t)
+
+	const nodeName = "node-under-test"
+	client := fake.NewSimpleClientset(&corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: nodeName, UID: "node-uid-1234"},
+	})
+
+	got := NodeHostNQN(context.Background(), client, nodeName)
+	want := "nqn.2014-08.io.simplyblock:uuid:node-uid-1234"
+	if got != want {
+		t.Fatalf("NodeHostNQN = %q, want %q", got, want)
+	}
+
+	// A client that would now error on any call proves the second call used
+	// the cache instead of hitting the API again.
+	erroringClient := fake.NewSimpleClientset()
+	erroringClient.PrependReactor("get", "nodes", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("client should not be called again")
+	})
+	if got := NodeHostNQN(context.Background(), erroringClient, nodeName); got != want {
+		t.Errorf("second NodeHostNQN call = %q, want cached %q", got, want)
+	}
+}
+
+// TestNodeHostNQNRetriesAfterFailure verifies a failed lookup is not cached,
+// so a later call with a working client still succeeds.
+func TestNodeHostNQNRetriesAfterFailure(t *testing.T) {
+	resetNodeHostNQNCache(t)
+
+	const nodeName = "node-under-test"
+	if got := NodeHostNQN(context.Background(), fake.NewSimpleClientset(), nodeName); got != "" {
+		t.Fatalf("NodeHostNQN with no such node = %q, want empty", got)
+	}
+
+	client := fake.NewSimpleClientset(&corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: nodeName, UID: "node-uid-5678"},
+	})
+	const want = "nqn.2014-08.io.simplyblock:uuid:node-uid-5678"
+	if got := NodeHostNQN(context.Background(), client, nodeName); got != want {
+		t.Errorf("NodeHostNQN after a working client = %q, want %q", got, want)
+	}
+}
+
+// resetNodeHostNQNCache clears NodeHostNQN's process-lifetime cache so tests
+// don't leak state into each other.
+func resetNodeHostNQNCache(t *testing.T) {
+	t.Helper()
+	nodeHostNQNMu.Lock()
+	nodeHostNQNVal = ""
+	nodeHostNQNMu.Unlock()
+	t.Cleanup(func() {
+		nodeHostNQNMu.Lock()
+		nodeHostNQNVal = ""
+		nodeHostNQNMu.Unlock()
+	})
 }

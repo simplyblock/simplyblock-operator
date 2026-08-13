@@ -35,6 +35,8 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog"
 
 	sbkube "github.com/spdk/spdk-csi/pkg/kubernetes"
@@ -145,7 +147,42 @@ var (
 	// without querying the API on every cycle.
 	maxSeenPathsMap = make(map[string]int)
 	maxSeenMu       sync.Mutex
+
+	// nodeHostNQNMu guards nodeHostNQNVal, this process's cached result of
+	// NodeHostNQN.
+	nodeHostNQNMu  sync.Mutex
+	nodeHostNQNVal string
 )
+
+// NodeHostNQN returns this Kubernetes node's simplyblock-format host NQN
+// (nqn.2014-08.io.simplyblock:uuid:<node.UID>) — the identity DHCHAP/
+// allowed_hosts pools authorize, and that the CSI driver must present on
+// every connect to that node's volumes (see NodeStageVolume, which computes
+// the same formula). It is a per-NODE constant, not a per-volume one: every
+// lvol staged on this node shares the exact same value, since it depends
+// only on this node's own UID. That makes it safe to cache indefinitely for
+// the process's lifetime rather than tracking it per-lvolID — a per-lvolID
+// cache would need eviction and, worse, would be silently wiped by any
+// process restart (a csi-node pod restart, node reboot, OOM) for lvols that
+// stay connected at the kernel level across it, reintroducing the very
+// "reconnect drops the host identity" bug this exists to fix, just
+// triggered by a different event. Recomputing this per-node value fresh on
+// every process start has no such failure mode. A failed lookup is not
+// cached, so the next call retries rather than getting stuck returning "".
+func NodeHostNQN(ctx context.Context, client kubernetes.Interface, nodeName string) string {
+	nodeHostNQNMu.Lock()
+	defer nodeHostNQNMu.Unlock()
+	if nodeHostNQNVal != "" {
+		return nodeHostNQNVal
+	}
+	node, err := client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+	if err != nil {
+		klog.Warningf("failed to resolve node %s for hostNQN: %v", nodeName, err)
+		return ""
+	}
+	nodeHostNQNVal = fmt.Sprintf("nqn.2014-08.io.simplyblock:uuid:%s", node.UID)
+	return nodeHostNQNVal
+}
 
 // clusterConfig represents the Kubernetes secret structure
 type ClusterConfig struct {
@@ -813,8 +850,14 @@ func isManagedLvol(manager *sbkube.Manager, lvolID, driver string) bool {
 	return pv.Spec.CSI != nil && pv.Spec.CSI.Driver == driver
 }
 
-func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager, driver string) error {
+func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager, driver, nodeName string) error {
 	ctx := context.Background()
+
+	// Resolved once per tick rather than once per degraded subsystem: it's
+	// the same value for every lvol on this node (see NodeHostNQN), and this
+	// keeps the guardian's poll loop from hitting the K8s API more than once
+	// a cycle even when several subsystems need recovery at once.
+	hostNQN := NodeHostNQN(ctx, manager.Client(), nodeName)
 
 	devices, err := getNVMeDeviceInfos(ctx)
 	if err != nil {
@@ -867,7 +910,7 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 					continue
 				}
 
-				expected := resolveExpectedPathCount(subsystem.NQN, clusterID, lvolID, numActive)
+				expected := resolveExpectedPathCount(subsystem.NQN, clusterID, lvolID, numActive, hostNQN)
 
 				needsRecovery := numActive < expected ||
 					(expected > 1 && hasConnectingPath(subsystem.Paths))
@@ -883,7 +926,7 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 				klog.Infof("Degraded subsystem: NQN=%s active=%d expected=%d device=%s",
 					subsystem.NQN, numActive, expected, device.devicePath)
 
-				if err := recoverPathsWithANA(clusterID, lvolID, device.devicePath, subsystem.Paths); err != nil {
+				if err := recoverPathsWithANA(clusterID, lvolID, device.devicePath, subsystem.Paths, hostNQN); err != nil {
 					klog.Errorf("failed to recover paths for lvolID %s: %v", lvolID, err)
 				}
 			}
@@ -976,6 +1019,58 @@ func isNodeOnline(ctx context.Context, client *ClusterClient, nodeID, ip string,
 	return true
 }
 
+// dhchapAuthArgs extracts the --hostnqn, --dhchap-secret, --dhchap-ctrl-secret,
+// and --tls flags from the control-plane-supplied nvme-connect command line.
+// The control plane is the only party that resolves the connecting host's
+// DHCHAP secret (pool-shared or per-host key material); it bakes these flags
+// into LvolConnectResp.Connect rather than exposing them as separate fields
+// (see build_nvme_connect_entry/HostConnectAuth in sbcli), so this is the only
+// channel the CSI driver has for them today.
+//
+// Whenever --hostnqn is present, this also adds a --hostid derived from that
+// same NQN's UUID. Without an explicit --hostid, nvme-cli falls back to the
+// node's static /etc/nvme/hostid (written once, node-wide, by the CSI
+// DaemonSet's postStart hook) — shared by every connect on that node
+// regardless of --hostnqn. The kernel refuses to associate one hostid with
+// two different hostnqns ("found same hostid ... but different hostnqn"), so
+// a node with even one pre-existing default-hostnqn connection (the common
+// case: any plain, non-gated volume) would reject every later connect that
+// names an explicit, different hostnqn — exactly what allowed_hosts/DHCHAP
+// volumes need. Deriving hostid from hostnqn's own UUID keeps the pair
+// internally consistent and never collides with the node's random
+// file-based default.
+func dhchapAuthArgs(connectCmd string) []string {
+	var args []string
+	var hostNQN string
+	for _, field := range strings.Fields(connectCmd) {
+		switch {
+		case strings.HasPrefix(field, "--hostnqn="):
+			hostNQN = strings.TrimPrefix(field, "--hostnqn=")
+			args = append(args, field)
+		case strings.HasPrefix(field, "--dhchap-secret="),
+			strings.HasPrefix(field, "--dhchap-ctrl-secret="),
+			field == "--tls":
+			args = append(args, field)
+		}
+	}
+	if hostID := hostIDFromHostNQN(hostNQN); hostID != "" {
+		args = append(args, "--hostid="+hostID)
+	}
+	return args
+}
+
+// hostIDFromHostNQN derives a --hostid from an
+// nqn.2014-08.io.simplyblock:uuid:<uuid>-style host NQN by taking its UUID
+// suffix, or "" if hostNQN doesn't carry one (e.g. empty, or some other NQN
+// format not built by this codebase).
+func hostIDFromHostNQN(hostNQN string) string {
+	i := strings.LastIndex(hostNQN, ":")
+	if i < 0 || i == len(hostNQN)-1 {
+		return ""
+	}
+	return hostNQN[i+1:]
+}
+
 func fetchLvolConnection(
 	ctx context.Context,
 	client *ClusterClient,
@@ -1008,6 +1103,11 @@ func connectViaNVMe(ctx context.Context, conn *LvolConnectResp, ctrlLossTmo int,
 	if conn.HostIface != "" {
 		cmd = append(cmd, "-f", conn.HostIface)
 	}
+	// conn.Connect is the full "nvme connect ..." line the control plane
+	// built for this exact host NQN — the only source of the DHCHAP/host
+	// identity flags below, since LvolConnectResp carries no separate fields
+	// for them.
+	cmd = append(cmd, dhchapAuthArgs(conn.Connect)...)
 	if err := execWithTimeoutRetry(ctx, cmd, 40, retries); err != nil {
 		if strings.Contains(err.Error(), "already connected") {
 			return nil
@@ -1067,14 +1167,14 @@ const (
 	monitorCircuitCooldown = 30 * time.Second
 )
 
-func MonitorConnection(markBroken func(lvolID string), manager *sbkube.Manager, driver string) {
+func MonitorConnection(markBroken func(lvolID string), manager *sbkube.Manager, driver, nodeName string) {
 	var (
 		consecutiveErrors int
 		backoff           = monitorBaseInterval
 	)
 
 	for {
-		err := reconnectSubsystems(markBroken, manager, driver)
+		err := reconnectSubsystems(markBroken, manager, driver, nodeName)
 		if err != nil {
 			consecutiveErrors++
 			klog.Errorf("MonitorConnection error (%d consecutive): %v", consecutiveErrors, err)
@@ -1120,7 +1220,7 @@ func hasConnectingPath(paths []path) bool {
 // given NQN. On first encounter it queries the API once to seed the cache so the
 // monitor works correctly even if started while a volume is already degraded.
 // Subsequent calls use the in-memory cache, which only grows upward.
-func resolveExpectedPathCount(nqn, clusterID, lvolID string, currentActive int) int {
+func resolveExpectedPathCount(nqn, clusterID, lvolID string, currentActive int, hostNQN string) int {
 	maxSeenMu.Lock()
 	cached, exists := maxSeenPathsMap[nqn]
 	if currentActive > cached {
@@ -1138,7 +1238,7 @@ func resolveExpectedPathCount(nqn, clusterID, lvolID string, currentActive int) 
 		klog.Warningf("resolveExpectedPathCount: client error for NQN %s: %v", nqn, err)
 		return cached
 	}
-	conns, err := fetchLvolConnection(context.Background(), sbcClient, lvolID, "")
+	conns, err := fetchLvolConnection(context.Background(), sbcClient, lvolID, hostNQN)
 	if err != nil {
 		klog.Warningf("resolveExpectedPathCount: fetch error for NQN %s: %v", nqn, err)
 		return cached
@@ -1154,7 +1254,7 @@ func resolveExpectedPathCount(nqn, clusterID, lvolID string, currentActive int) 
 	return cached
 }
 
-func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []path) error {
+func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []path, hostNQN string) error {
 	sbcClient, err := NewsimplyBlockClient(context.Background(), clusterID, "")
 	if err != nil {
 		return fmt.Errorf("failed to create SimplyBlock client: %w", err)
@@ -1165,7 +1265,7 @@ func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []pat
 		return fmt.Errorf("failed to fetch node info for lvol %s: %w", lvolID, err)
 	}
 
-	expectedConns, err := fetchLvolConnection(context.Background(), sbcClient, lvolID, "")
+	expectedConns, err := fetchLvolConnection(context.Background(), sbcClient, lvolID, hostNQN)
 	if err != nil {
 		return fmt.Errorf("failed to fetch connections for lvol %s: %w", lvolID, err)
 	}
