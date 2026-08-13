@@ -17,6 +17,12 @@ rules:
     resources: ["pods", "deployments", "statefulsets", "daemonsets"]
     verbs: ["get", "list", "watch", "patch", "update"]
   - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch", "patch", "update"]
   {{- if .Values.operator.openShiftCluster }}
