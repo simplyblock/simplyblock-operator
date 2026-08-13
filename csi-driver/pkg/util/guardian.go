@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/simplyblock/atlas/errs"
+	"github.com/simplyblock/atlas/locks"
 	atlasnvme "github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/ptr"
 	v1 "k8s.io/api/core/v1"
@@ -386,7 +387,7 @@ func (g *Guardian) tick(ctx context.Context) {
 		klog.Infof("Guardian: restart cycle complete. restarted=%d", restarted)
 	}
 
-	withLock(&g.mu, g.persistLocked)
+	locks.ViaLock(&g.mu, g.persistLocked)
 }
 
 func (g *Guardian) loadClusterSecret() (ClustersInfo, error) {
@@ -454,7 +455,7 @@ func earliestBrokenPerCluster(brokenAt map[string]time.Time, clusterByLvol map[s
 // set of cluster IDs that are currently active.
 func (g *Guardian) evaluateClusterStatuses(clusters ClustersInfo, earliestBroken map[string]time.Time) map[string]bool {
 	var clusterWasInactive map[string]bool
-	withLock(&g.mu, func() {
+	locks.ViaLock(&g.mu, func() {
 		clusterWasInactive = make(map[string]bool, len(g.clusterWasInactive))
 		for cid, v := range g.clusterWasInactive {
 			clusterWasInactive[cid] = v
@@ -500,7 +501,7 @@ func (g *Guardian) evaluateClusterStatuses(clusters ClustersInfo, earliestBroken
 		clusterWasInactive[cid] = false
 	}
 
-	withLock(&g.mu, func() {
+	locks.ViaLock(&g.mu, func() {
 		for cid, v := range clusterWasInactive {
 			g.clusterWasInactive[cid] = v
 		}
@@ -621,7 +622,7 @@ func (g *Guardian) restartBrokenLvols(
 			if g.restartIndividualPod(ctx, cid, lvolID, podUID, pod, siblings) {
 				g.setLastRestart(podUID)
 				restarted++
-				withLock(&g.mu, func() { g.removePodFromLvolLocked(lvolID, podUID) })
+				locks.ViaLock(&g.mu, func() { g.removePodFromLvolLocked(lvolID, podUID) })
 			}
 		}
 	}
@@ -761,7 +762,7 @@ func (g *Guardian) coordinatedSubsystemRestart(
 		}
 		g.setLastRestart(podUID)
 		deleted++
-		withLock(&g.mu, func() { g.removePodFromLvolLocked(c.lvolID, podUID) })
+		locks.ViaLock(&g.mu, func() { g.removePodFromLvolLocked(c.lvolID, podUID) })
 	}
 
 	if deleted > 0 {
