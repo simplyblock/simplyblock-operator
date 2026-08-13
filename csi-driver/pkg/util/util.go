@@ -178,6 +178,7 @@ func GetNvmeDeviceName(ctx context.Context, nvmeModel, bdf string) (string, erro
 			ctx,
 			fmt.Sprintf("/sys/bus/pci/devices/%s/nvme/nvme*/nvme*n*/uuid", bdf),
 			20,
+			time.Second,
 		)
 		if err != nil {
 			return "", fmt.Errorf("failed find device at %s: %w", uuidFilePath, err)
@@ -193,7 +194,7 @@ func GetNvmeDeviceName(ctx context.Context, nvmeModel, bdf string) (string, erro
 
 	deviceGlob := "/dev/" + deviceName
 
-	return waitForDeviceReady(ctx, deviceGlob, 20)
+	return waitForDeviceReady(ctx, deviceGlob, 20, time.Second)
 }
 
 // GetVirtioBlkDevice returns a block device available at the
@@ -206,9 +207,9 @@ func GetVirtioBlkDeviceName(ctx context.Context, bdf string, wait bool) (string,
 	var deviceParentDirPath string
 	var err error
 	if wait {
-		deviceParentDirPath, err = waitForDeviceReady(ctx, sysBusGlob, 20)
+		deviceParentDirPath, err = waitForDeviceReady(ctx, sysBusGlob, 20, time.Second)
 	} else {
-		deviceParentDirPath, err = waitForDeviceReady(ctx, sysBusGlob, 0)
+		deviceParentDirPath, err = waitForDeviceReady(ctx, sysBusGlob, 0, time.Second)
 	}
 	if err != nil {
 		klog.Errorf("could not find the deviceParentDirPath (%s): %s", sysBusGlob, err)
@@ -229,7 +230,7 @@ func GetVirtioBlkDeviceName(ctx context.Context, bdf string, wait bool) (string,
 	// wait for the block device ready for VirtioBlk, eg, in the form of "/dev/vda"
 	deviceGlob := "/dev/" + deviceName[0].Name()
 
-	return waitForDeviceReady(ctx, deviceGlob, 20)
+	return waitForDeviceReady(ctx, deviceGlob, 20, time.Second)
 }
 
 // GetAvailablePhysicalFunction returns next available Pf and Vf by checking
