@@ -2152,7 +2152,7 @@ class FioMigrationTest:
                                   f"{raw[:brace].count(chr(10))} line(s) of fio verify output "
                                   "before the JSON; parsed the JSON body")
                     return parsed
-            self.log.warn(f"{os.path.basename(pod_dir)}: result.json is unparseable "
+            self.log.warn(f"{os.path.basename(pod_dir)}: result.json is unparsable "
                           "— pod stats will be missing from the report")
         return {}
 
