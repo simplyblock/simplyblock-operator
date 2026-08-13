@@ -426,3 +426,146 @@ func TestConnectMultipathDevice(t *testing.T) {
 		}
 	})
 }
+
+// liveDevs is a nvme.DeviceResolver whose answer is computed per call, so a
+// test can tie what the kernel shows to what the connector did to it.
+type liveDevs struct{ list func() []nvme.Device }
+
+func (l liveDevs) List(context.Context) ([]nvme.Device, error) { return l.list(), nil }
+
+func (l liveDevs) ListWithSelector(_ context.Context, sel nvme.DeviceSelector) ([]nvme.Device, error) {
+	return sel.Filter(l.list()), nil
+}
+
+func (l liveDevs) ByUUID(context.Context, string) (nvme.Device, error) { return nvme.Device{}, nil }
+func (l liveDevs) ByDevicePath(context.Context, string) (nvme.Device, error) {
+	return nvme.Device{}, nil
+}
+func (l liveDevs) ByNamespace(context.Context, string, nvme.NamespaceID) (nvme.Device, error) {
+	return nvme.Device{}, nil
+}
+
+// stubConnector is a Connector that only counts what was asked of it: the
+// reconcile is about the order of connect, disconnect and connect again, not
+// about how any of them reach the kernel.
+type stubConnector struct {
+	connects    int
+	disconnects int
+}
+
+func (s *stubConnector) Connect(context.Context, Target) error { s.connects++; return nil }
+
+func (s *stubConnector) ConnectPaths(_ context.Context, targets []Target) ([]PathResult, error) {
+	s.connects++
+	out := make([]PathResult, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, PathResult{Target: t, Live: true})
+	}
+	return out, nil
+}
+
+func (s *stubConnector) Disconnect(context.Context, string) error { s.disconnects++; return nil }
+
+func (s *stubConnector) IsConnected(context.Context, string) (bool, error) { return true, nil }
+
+// shortDeviceTimeout shrinks the bound on the first device wait so a test
+// reaches the stale reconcile in test time rather than in half a minute.
+func shortDeviceTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := deviceTimeout
+	deviceTimeout = d
+	t.Cleanup(func() { deviceTimeout = prev })
+}
+
+// A subsystem that attaches with live controllers but exports no namespace is
+// the state a plain wait can never leave: the retry short-circuits on "already
+// attached" and waits for a device that never appears. Tearing it down and
+// connecting again is what makes the kernel re-enumerate namespaces.
+func TestConnectDevice_ReconcilesSubsystemWithoutNamespaceDevice(t *testing.T) {
+	shortDeviceTimeout(t, 50*time.Millisecond)
+
+	c := &stubConnector{}
+	d := dev("nvme-subsys0", "nqn.x", "nvme0n1", "259:1", 1)
+	devs := liveDevs{list: func() []nvme.Device {
+		// The device only exists once the stale subsystem was torn down and
+		// connected again.
+		if c.disconnects == 0 {
+			return nil
+		}
+		return []nvme.Device{d}
+	}}
+
+	got, err := ConnectDevice(waitCtx(t), c, devs, Target{NQN: "nqn.x", Address: "10.0.0.1"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Namespace.DevicePath != "/dev/nvme0n1" {
+		t.Errorf("device = %q, want /dev/nvme0n1", got.Namespace.DevicePath)
+	}
+	if c.disconnects != 1 || c.connects != 2 {
+		t.Errorf("disconnects=%d connects=%d, want one teardown and a reconnect", c.disconnects, c.connects)
+	}
+}
+
+// A subsystem that still exports nothing after the reconcile is a target-side
+// problem: it is reported, not churned.
+func TestConnectDevice_ReconcilesAtMostOnce(t *testing.T) {
+	shortDeviceTimeout(t, 20*time.Millisecond)
+
+	c := &stubConnector{}
+	devs := liveDevs{list: func() []nvme.Device { return nil }}
+
+	if _, err := ConnectDevice(waitCtx(t), c, devs, Target{NQN: "nqn.x", Address: "10.0.0.1"}, 0); err == nil {
+		t.Fatal("err = nil, want the device wait to fail")
+	}
+	if c.disconnects != 1 {
+		t.Errorf("disconnects = %d, want exactly one teardown", c.disconnects)
+	}
+}
+
+// The caller's own deadline running out says nothing about the subsystem, so it
+// must not cost a live data path its controllers.
+func TestConnectDevice_CallerDeadlineDoesNotTearDown(t *testing.T) {
+	shortDeviceTimeout(t, time.Minute)
+
+	c := &stubConnector{}
+	devs := liveDevs{list: func() []nvme.Device { return nil }}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	if _, err := ConnectDevice(ctx, c, devs, Target{NQN: "nqn.x", Address: "10.0.0.1"}, 0); err == nil {
+		t.Fatal("err = nil, want the caller's deadline to surface")
+	}
+	if c.disconnects != 0 {
+		t.Errorf("disconnects = %d, want none: the caller ran out of time, not the subsystem", c.disconnects)
+	}
+}
+
+// The multipath form reconciles the same way, and the results it returns
+// describe the paths that are actually attached afterwards.
+func TestConnectMultipathDevice_ReconcilesSubsystemWithoutNamespaceDevice(t *testing.T) {
+	shortDeviceTimeout(t, 50*time.Millisecond)
+
+	c := &stubConnector{}
+	d := dev("nvme-subsys0", testNQN, "nvme0n1", "259:1", 1)
+	devs := liveDevs{list: func() []nvme.Device {
+		if c.disconnects == 0 {
+			return nil
+		}
+		return []nvme.Device{d}
+	}}
+
+	got, results, err := ConnectMultipathDevice(waitCtx(t), c, devs, targets("10.0.0.1", "10.0.0.2"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Namespace.DevicePath != "/dev/nvme0n1" {
+		t.Errorf("device = %q, want /dev/nvme0n1", got.Namespace.DevicePath)
+	}
+	if len(results) != 2 || !results[0].Live || !results[1].Live {
+		t.Errorf("results = %+v, want both paths live after the reconcile", results)
+	}
+	if c.disconnects != 1 || c.connects != 2 {
+		t.Errorf("disconnects=%d connects=%d, want one teardown and a reconnect", c.disconnects, c.connects)
+	}
+}
