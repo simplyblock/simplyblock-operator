@@ -311,6 +311,85 @@ func TestHandleDeletion_RemovesFinalizerWhenNeverProvisioned(t *testing.T) {
 	}
 }
 
+// TestHandleDeletion_FailedRemoveOpsBlocksFinalizerRemoval guards the gap
+// found live 2026-08-13: a Failed remove ops clears ActiveOpsRef exactly
+// like a Succeeded one (releaseLock, storagenodeops_controller.go), but
+// Failed means the backend node was never actually removed -- blocked by a
+// precondition, or resumed instead of removed after a rejected DELETE.
+// Letting the finalizer come off here would delete this StorageNode CR
+// from Kubernetes while the backend node is still alive and online, with
+// nothing left to track it.
+func TestHandleDeletion_FailedRemoveOpsBlocksFinalizerRemoval(t *testing.T) {
+	sn := newStorageNode("sn-1", snTestNS, "sns", snTestWorker)
+	sn.Finalizers = []string{storageNodeFinalizer}
+	sn.Status.UUID = "node-uuid-1"
+	sn.Status.Status = utils.NodeStatusOnline
+	// ActiveOpsRef already cleared by releaseLock when the ops failed.
+	sn.Status.ActiveOpsRef = ""
+	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, nil)
+	ops := &simplyblockv1alpha1.StorageNodeOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-1-remove", Namespace: snTestNS},
+		Spec:       simplyblockv1alpha1.StorageNodeOpsSpec{StorageNodeRef: "sn-1", Action: utils.NodeActionRemove},
+		Status: simplyblockv1alpha1.StorageNodeOpsStatus{
+			Phase:   simplyblockv1alpha1.StorageNodeOpsPhaseFailed,
+			Message: "blocked: failure-domain balance: ...",
+		},
+	}
+	r := newSNReconciler(t, sn, sns, ops)
+
+	result, err := r.handleDeletion(context.Background(), sn, sns)
+	if err != nil {
+		t.Fatalf("handleDeletion returned error: %v", err)
+	}
+	if result.RequeueAfter == 0 {
+		t.Error("expected a requeue, not a one-shot pass-through")
+	}
+
+	var updated simplyblockv1alpha1.StorageNode
+	_ = r.Get(context.Background(), types.NamespacedName{Name: "sn-1", Namespace: snTestNS}, &updated)
+	found := false
+	for _, f := range updated.Finalizers {
+		if f == storageNodeFinalizer {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("finalizer must NOT be removed while the remove ops is Failed -- " +
+			"the backend node was never actually removed")
+	}
+}
+
+// TestHandleDeletion_SucceededRemoveOpsAllowsFinalizerRemoval is the
+// contrasting happy path: once the remove ops actually Succeeded, deletion
+// must proceed exactly as before this fix.
+func TestHandleDeletion_SucceededRemoveOpsAllowsFinalizerRemoval(t *testing.T) {
+	sn := newStorageNode("sn-1", snTestNS, "sns", snTestWorker)
+	sn.Finalizers = []string{storageNodeFinalizer}
+	sn.Status.UUID = "node-uuid-1"
+	sn.Status.Status = utils.NodeStatusOnline
+	sn.Status.ActiveOpsRef = ""
+	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, nil)
+	ops := &simplyblockv1alpha1.StorageNodeOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-1-remove", Namespace: snTestNS},
+		Spec:       simplyblockv1alpha1.StorageNodeOpsSpec{StorageNodeRef: "sn-1", Action: utils.NodeActionRemove},
+		Status:     simplyblockv1alpha1.StorageNodeOpsStatus{Phase: simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded},
+	}
+	r := newSNReconciler(t, sn, sns, ops)
+
+	_, err := r.handleDeletion(context.Background(), sn, sns)
+	if err != nil {
+		t.Fatalf("handleDeletion returned error: %v", err)
+	}
+
+	var updated simplyblockv1alpha1.StorageNode
+	_ = r.Get(context.Background(), types.NamespacedName{Name: "sn-1", Namespace: snTestNS}, &updated)
+	for _, f := range updated.Finalizers {
+		if f == storageNodeFinalizer {
+			t.Error("finalizer should have been removed once the remove ops succeeded")
+		}
+	}
+}
+
 // TestCountInFlightNodes_DeduplicatesByWorker verifies that countInFlightNodes
 // counts distinct physical hosts (WorkerNode), not individual StorageNode CRs.
 // With nodesPerSocket=2 each host has two CRs; both get PostedAt stamped
