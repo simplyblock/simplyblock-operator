@@ -1,0 +1,31 @@
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: persist-write
+  labels:
+    app: persist-write
+spec:
+  restartPolicy: Never
+  containers:
+  - name: fio
+    image: nixery.dev/fio
+    imagePullPolicy: IfNotPresent
+    command: ["fio"]
+    args:
+    - --name=write
+    - --rw=write
+    - --bs=128k
+    - --numjobs=1
+    - --size=1g
+    - --filename=/data/fio.dat
+    - --ioengine=sync
+    - --verify=md5
+    - --end_fsync=1
+    volumeMounts:
+    - mountPath: /data
+      name: vol
+  volumes:
+  - name: vol
+    persistentVolumeClaim:
+      claimName: persist-pvc
