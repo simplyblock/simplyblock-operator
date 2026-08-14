@@ -9,7 +9,7 @@ spec:
   restartPolicy: Never
   containers:
   - name: fio
-    image: nixery.dev/fio
+    image: dockerpinata/fio:2.1
     imagePullPolicy: IfNotPresent
     command: ["fio"]
     args:
@@ -19,8 +19,13 @@ spec:
     - --numjobs=1
     - --size=1g
     - --filename=/data/fio.dat
-    - --ioengine=sync
+    - --ioengine=libaio
+    - --iodepth=32
+    - --direct=1
     - --verify=md5
+    - --verify_only
+    - --verify_fatal=1
+    - --verify_dump=1
     volumeMounts:
     - mountPath: /data
       name: vol
