@@ -612,6 +612,17 @@ func (g *Guardian) subsystemNQN(ctx context.Context, lvolID string) string {
 func (g *Guardian) lvolsOnSubsystem(ctx context.Context, nqn string) []string {
 	devs, err := g.devices.ListWithSelector(ctx, atlasnvme.DeviceSelector{NQN: nqn})
 	if err == nil && len(devs) > 0 {
+		// FIXME: the kernel may temporarily hold two sysfs entries for the same
+		// NQN — a stale subsystem awaiting reaping alongside a freshly connected
+		// one (see atlas/nvme sysfs_scan.go: subsystemControllers). DeviceSelector
+		// matches on NQN alone, so ListWithSelector returns namespaces from both.
+		// For coordinated restart this is safe (we over-count siblings, worst case
+		// an extra pod restarts). For individual restart routed through
+		// restartIndividualPod the stale UUID won't be in g.lvols so it is silently
+		// dropped, but the routing decision in restartBrokenLvols sees len > 1 and
+		// forces a coordinated path unnecessarily. The fix is to filter devs to only
+		// those whose controller state is "live" (atlas nvme.Controller.State) before
+		// collecting UUIDs, discarding namespaces that belong to a dead controller.
 		seen := make(map[string]bool, len(devs))
 		ids := make([]string, 0, len(devs))
 		for _, d := range devs {
