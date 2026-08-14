@@ -462,6 +462,25 @@ func RequiredNodesFromErasureCodingScheme(scheme string) (int, error) {
 	return ndcs + npcs, nil
 }
 
+// ParityChunksFromErasureCodingScheme returns just npcs (the parity-chunk
+// count, e.g. "2x1" -> 1) from a StorageCluster's erasureCodingScheme. This
+// is the failure-domain risk budget the drain coordinator's fdDrainGate
+// spends against — see RequiredNodesFromErasureCodingScheme for the sibling
+// ndcs+npcs total.
+func ParityChunksFromErasureCodingScheme(scheme string) (int, error) {
+	parts := strings.Split(scheme, "x")
+	if len(parts) != 2 {
+		return 0, fmt.Errorf("invalid erasureCodingScheme format: expected <dataChunks>x<parityChunks> like %q, got %q", "2x1", scheme)
+	}
+
+	npcs, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, err
+	}
+
+	return npcs, nil
+}
+
 // PoolListEntry represents a single pool entry returned by the backend list API.
 type PoolListEntry struct {
 	UUID      string `json:"id"`

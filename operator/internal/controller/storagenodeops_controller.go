@@ -40,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -1054,7 +1055,78 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 
+	// Failure-domain balance gate: the backend's own admission check
+	// (check_fd_admission_for_remove) will refuse the DELETE call later in
+	// this drain if removing this node would violate the +/-1 balance rule
+	// -- but by then the node has already been suspended (Suspending runs
+	// before Removing), and that suspension has no path back on its own.
+	// Checking it here, before Suspending, means an infeasible removal
+	// never suspends the node in the first place.
+	//
+	// Fails outright rather than blocking-and-requeuing like the
+	// pinned/unmanaged-volume checks above: those resolve by acting ON THIS
+	// NODE (drop the annotation, delete the volume), so the same ops can
+	// just notice and proceed. Restoring failure-domain balance never does
+	// -- it needs a deliberate cluster-wide change (add a host, or remove a
+	// different node instead) that this ops has no way to detect on its
+	// own, so silently polling every 60s would leave a permanently-stuck
+	// Running ops easy to miss in `kubectl get storagenodeops`. Failing is
+	// safe here specifically because handleDeletion (storagenode_controller.go)
+	// now refuses to remove the StorageNode's finalizer while its remove
+	// ops is Failed -- the CR stays, nothing gets orphaned, and a human
+	// must either fix the imbalance and delete this ops to retry, or
+	// restore the worker to spec.workerNodes to keep it.
+	reason, err := r.fdRemovalBalanceCheck(ctx, sn)
+	if err != nil {
+		log.Error(err, "drain: failed to check failure-domain balance for removal")
+		return ctrl.Result{RequeueAfter: drainRequeueImmediate}, nil
+	}
+	if reason != "" {
+		return r.failOps(ctx, ops, fmt.Sprintf(
+			"removing node %s would violate failure-domain balance: %s", nodeUUID, reason))
+	}
+
 	return r.advanceSubPhase(ctx, ops, simplyblockv1alpha1.StorageNodeOpsSubPhaseSuspending)
+}
+
+// fdRemovalBalanceCheck reports whether removing sn would violate the
+// cluster's failure-domain balance rule, mirroring the backend's
+// check_fd_admission_for_remove (simplyblock_core), including its very
+// first early-out: a no-op when the cluster doesn't have failure domains
+// enabled at all. Re-fetches the parent StorageNodeSet (and StorageCluster)
+// rather than threading them through runDrain's whole dispatch chain --
+// Validating is the only sub-phase that needs them. Returns ("", nil) when
+// removal is fine (including when FD data isn't populated yet, same as the
+// backend's own early-outs); a non-empty reason means drainValidate must
+// fail rather than advance to Suspending.
+func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
+	ctx context.Context, sn *simplyblockv1alpha1.StorageNode,
+) (string, error) {
+	var sns simplyblockv1alpha1.StorageNodeSet
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      sn.Spec.StorageNodeSetRef,
+		Namespace: sn.Namespace,
+	}, &sns); err != nil {
+		return "", fmt.Errorf("fetching StorageNodeSet %s: %w", sn.Spec.StorageNodeSetRef, err)
+	}
+	var cluster simplyblockv1alpha1.StorageCluster
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      sns.Spec.ClusterName,
+		Namespace: sn.Namespace,
+	}, &cluster); err != nil {
+		return "", fmt.Errorf("fetching StorageCluster %s: %w", sns.Spec.ClusterName, err)
+	}
+	if !ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains) {
+		return "", nil
+	}
+	hostDomains, err := clusterFailureDomainHosts(ctx, r.Client, sn.Namespace, sns.Spec.ClusterName)
+	if err != nil {
+		return "", fmt.Errorf("computing failure-domain host map: %w", err)
+	}
+	if sn.Status.Ports != nil {
+		delete(hostDomains, sn.Status.Ports.Management)
+	}
+	return fdRemovalBalanceViolation(hostDomains), nil
 }
 
 func (r *StorageNodeOpsReconciler) drainSuspend(

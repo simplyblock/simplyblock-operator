@@ -767,6 +767,31 @@ func (r *StorageNodeReconciler) handleDeletion(
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
+	// A Failed remove ops clears ActiveOpsRef (releaseLock, in
+	// storagenodeops_controller.go) exactly like a Succeeded one -- but
+	// Failed means the backend node was never actually removed (blocked by
+	// a precondition, or a rejected DELETE that resumed the node instead of
+	// removing it). Removing the finalizer here would let Kubernetes delete
+	// this StorageNode CR anyway, orphaning a live, healthy backend node
+	// the operator no longer tracks at all. Block deletion and surface it
+	// instead: a human must either fix whatever blocked the removal and
+	// delete the failed ops to retry, or restore the worker to
+	// spec.workerNodes to keep it.
+	opsName := sn.Name + "-remove"
+	var removeOps simplyblockv1alpha1.StorageNodeOps
+	if err := r.Get(ctx, types.NamespacedName{Name: opsName, Namespace: sn.Namespace}, &removeOps); err == nil {
+		if removeOps.Status.Phase == simplyblockv1alpha1.StorageNodeOpsPhaseFailed {
+			r.Recorder.Eventf(sn, nil, "Warning", "RemoveOpsFailed", "RemoveOpsFailed",
+				"node removal failed (%s); the node was NOT removed and this StorageNode "+
+					"will not be deleted -- delete StorageNodeOps/%s to retry, or restore "+
+					"%s to spec.workerNodes to keep it",
+				removeOps.Status.Message, opsName, sn.Spec.WorkerNode)
+			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, err
+	}
+
 	controllerutil.RemoveFinalizer(sn, storageNodeFinalizer)
 	return ctrl.Result{}, r.Update(ctx, sn)
 }
