@@ -136,6 +136,7 @@ func TestAcquireLock_RequeuesWhenAnotherOpsActive(t *testing.T) {
 // fine. This is the gate that must fire in drainValidate BEFORE Suspending,
 // so an infeasible removal never suspends the node in the first place.
 
+//nolint:unparam
 func newTestStorageNodeSet(name, ns, clusterName string, nodes ...simplyblockv1alpha1.NodeStatus) *simplyblockv1alpha1.StorageNodeSet {
 	return &simplyblockv1alpha1.StorageNodeSet{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -144,6 +145,7 @@ func newTestStorageNodeSet(name, ns, clusterName string, nodes ...simplyblockv1a
 	}
 }
 
+//nolint:unparam
 func newTestStorageClusterWithFD(name, ns string, enableFD bool) *simplyblockv1alpha1.StorageCluster {
 	return &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
