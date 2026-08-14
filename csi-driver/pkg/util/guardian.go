@@ -85,9 +85,10 @@ func NewDefaultGuardianConfig(nodeName string) GuardianConfig {
 }
 
 type persistedLvolState struct {
-	PodUIDs   []string  `json:"podUIDs,omitempty"`
-	ClusterID string    `json:"clusterID,omitempty"`
-	BrokenAt  time.Time `json:"brokenAt,omitempty"`
+	PodUIDs      []string  `json:"podUIDs,omitempty"`
+	ClusterID    string    `json:"clusterID,omitempty"`
+	BrokenAt     time.Time `json:"brokenAt,omitempty"`
+	SubsystemNQN string    `json:"subsystemNQN,omitempty"`
 }
 
 type guardianState struct {
@@ -105,6 +106,11 @@ type LvolState struct {
 
 	// zero value means "not broken"
 	BrokenAt time.Time `json:"brokenAt,omitempty"`
+
+	// SubsystemNQN is cached by cacheSubsystemNQN at RegisterPublish time so
+	// that subsystemLvolIDs can identify siblings even after the NVMe path
+	// drops and the device disappears from sysfs.
+	SubsystemNQN string `json:"subsystemNQN,omitempty"`
 }
 
 // Guardian tracks which pod uses which lvol and restarts affected pods
@@ -172,9 +178,10 @@ func (g *Guardian) loadState() {
 				set[uid] = struct{}{}
 			}
 			g.lvols[lvolID] = &LvolState{
-				PodUIDs:   set,
-				ClusterID: pls.ClusterID,
-				BrokenAt:  pls.BrokenAt,
+				PodUIDs:      set,
+				ClusterID:    pls.ClusterID,
+				BrokenAt:     pls.BrokenAt,
+				SubsystemNQN: pls.SubsystemNQN,
 			}
 		}
 	}
@@ -277,6 +284,12 @@ func (g *Guardian) RegisterPublish(clusterID, lvolID, targetPath string) {
 	}
 
 	g.persistLocked()
+
+	// Cache the subsystem NQN in the background. The NVMe path is live right
+	// now (we just published), so ByUUID will succeed. Having the NQN stored
+	// means subsystemLvolIDs can still identify siblings if the path later
+	// drops and the device disappears from sysfs before the next tick.
+	go g.cacheSubsystemNQN(lvolID)
 }
 
 // RegisterUnpublish removes mapping. Call from NodeUnpublishVolume.
@@ -546,33 +559,96 @@ func (g *Guardian) podsByUID(ctx context.Context) (map[string]v1.Pod, error) {
 	return m, nil
 }
 
-// subsystemLvolIDs returns all lvolIDs that share the same NVMe-oF subsystem
-// as lvolID by reading live sysfs via the atlas device resolver — no cached
-// state. Returns nil when the device is not yet attached (treat the same as
-// "not yet indexed": suppress individual restart, retry next tick). Returns a
-// single-element slice for private subsystems (individual restart is safe) and
-// multiple elements for shared ones (coordinated restart required).
-func (g *Guardian) subsystemLvolIDs(ctx context.Context, lvolID string) []string {
+// cacheSubsystemNQN performs a live sysfs scan for lvolID and, if found,
+// writes the subsystem NQN into LvolState so that subsystemLvolIDs can still
+// identify siblings after the NVMe path drops and the device disappears from
+// sysfs. Safe to call concurrently; holds the mutex only for the write.
+func (g *Guardian) cacheSubsystemNQN(lvolID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	dev, err := g.devices.ByUUID(ctx, lvolID)
 	if err != nil {
-		if !errors.Is(err, errs.ErrNotFound) {
-			klog.Warningf("Guardian: subsystem lookup for lvol=%s failed: %v", lvolID, err)
+		return // path not visible yet; RegisterPublish may call us again on next publish
+	}
+	nqn := dev.Subsystem.NQN
+	if nqn == "" {
+		return
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if st := g.lvols[lvolID]; st != nil && st.SubsystemNQN != nqn {
+		st.SubsystemNQN = nqn
+		g.persistLocked()
+	}
+}
+
+// subsystemNQN returns the NQN of the subsystem the given lvol belongs to.
+// It tries a live atlas sysfs scan first; if the device is not in sysfs
+// (path already broken), it falls back to the NQN cached by cacheSubsystemNQN
+// at RegisterPublish time. Returns "" when neither source is available.
+func (g *Guardian) subsystemNQN(ctx context.Context, lvolID string) string {
+	dev, err := g.devices.ByUUID(ctx, lvolID)
+	if err == nil {
+		return dev.Subsystem.NQN
+	}
+	if !errors.Is(err, errs.ErrNotFound) {
+		klog.Warningf("Guardian: subsystem NQN lookup for lvol=%s failed: %v", lvolID, err)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if st := g.lvols[lvolID]; st != nil {
+		return st.SubsystemNQN
+	}
+	return ""
+}
+
+// lvolsOnSubsystem returns all lvolIDs that share the subsystem identified by
+// nqn. It first tries atlas ListWithSelector on the live sysfs (most accurate,
+// picks up volumes joined since last publish); when the subsystem is not in
+// sysfs (broken path), it falls back to the guardian's own registration map,
+// which was populated at RegisterPublish time.
+func (g *Guardian) lvolsOnSubsystem(ctx context.Context, nqn string) []string {
+	devs, err := g.devices.ListWithSelector(ctx, atlasnvme.DeviceSelector{NQN: nqn})
+	if err == nil && len(devs) > 0 {
+		seen := make(map[string]bool, len(devs))
+		ids := make([]string, 0, len(devs))
+		for _, d := range devs {
+			if d.Namespace.UUID != "" && !seen[d.Namespace.UUID] {
+				seen[d.Namespace.UUID] = true
+				ids = append(ids, d.Namespace.UUID)
+			}
 		}
-		return nil
+		return ids
 	}
-	cotenants, err := dev.CoTenants(ctx)
-	if err != nil {
-		klog.Warningf("Guardian: CoTenants lookup for lvol=%s failed: %v", lvolID, err)
-		return nil
-	}
-	ids := make([]string, 0, len(cotenants)+1)
-	ids = append(ids, lvolID)
-	for _, ct := range cotenants {
-		if ct.Namespace.UUID != "" {
-			ids = append(ids, ct.Namespace.UUID)
+
+	// Subsystem not in sysfs (broken path). Use the NQNs cached at publish
+	// time to find all registered lvols on the same subsystem.
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var ids []string
+	for id, st := range g.lvols {
+		if st != nil && st.SubsystemNQN == nqn {
+			ids = append(ids, id)
 		}
 	}
 	return ids
+}
+
+// subsystemLvolIDs returns all lvolIDs that share the same NVMe-oF subsystem
+// as lvolID. It resolves the subsystem NQN via subsystemNQN (live sysfs with
+// cached fallback) then enumerates siblings via lvolsOnSubsystem (live sysfs
+// with registered-lvol fallback). Returns nil only when the NQN is unknown
+// (volume was published before NQN caching was introduced, or cacheSubsystemNQN
+// goroutine has not run yet). Returns a single-element slice for private
+// subsystems and multiple elements for shared ones.
+func (g *Guardian) subsystemLvolIDs(ctx context.Context, lvolID string) []string {
+	nqn := g.subsystemNQN(ctx, lvolID)
+	if nqn == "" {
+		return nil
+	}
+	return g.lvolsOnSubsystem(ctx, nqn)
 }
 
 // restartBrokenLvols processes all actionable lvol IDs for one cluster.
@@ -857,8 +933,9 @@ func (g *Guardian) persistLocked() {
 			continue
 		}
 		pls := persistedLvolState{
-			ClusterID: lvs.ClusterID,
-			BrokenAt:  lvs.BrokenAt,
+			ClusterID:    lvs.ClusterID,
+			BrokenAt:     lvs.BrokenAt,
+			SubsystemNQN: lvs.SubsystemNQN,
 		}
 		for uid := range lvs.PodUIDs {
 			pls.PodUIDs = append(pls.PodUIDs, uid)
