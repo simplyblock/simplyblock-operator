@@ -9,10 +9,11 @@ import (
 	"github.com/simplyblock/atlas/nvme"
 )
 
-// recordingConnector records the NQNs it was asked to disconnect. Only
-// Disconnect is exercised here.
+// recordingConnector records the NQNs and controllers it was asked to
+// disconnect.
 type recordingConnector struct {
 	disconnected []string
+	controllers  []nvme.ControllerID
 	err          error
 }
 
@@ -25,6 +26,14 @@ func (c *recordingConnector) Disconnect(_ context.Context, nqn string) error {
 		return c.err
 	}
 	c.disconnected = append(c.disconnected, nqn)
+	return nil
+}
+
+func (c *recordingConnector) DisconnectController(_ context.Context, ctrl nvme.Controller) error {
+	if c.err != nil {
+		return c.err
+	}
+	c.controllers = append(c.controllers, ctrl.ID)
 	return nil
 }
 func (c *recordingConnector) IsConnected(context.Context, string) (bool, error) { return true, nil }
