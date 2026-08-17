@@ -7,6 +7,11 @@
 //
 // Talos has no shell and no SSH. Work that has to touch a node — writing nvmet
 // configfs — goes through a privileged pod; see package fabric.
+//
+// talosctl's QEMU provisioner needs root, for the CNI bridge it builds and for
+// the accelerator. Only talosctl is elevated, not the test process: a test
+// running as root would write its build cache and artifacts as root and leave
+// them for whatever runs next.
 package cluster
 
 import (
@@ -43,6 +48,11 @@ type Config struct {
 	// TalosctlPath overrides the binary; empty means $PATH.
 	TalosctlPath string
 
+	// Sudo elevates talosctl. Nil auto-detects: false when already root, true
+	// otherwise. Passwordless sudo is required either way — CI has it, and a
+	// developer will be prompted.
+	Sudo *bool
+
 	// WorkDir holds the kubeconfig and talosconfig. Empty means a temp dir
 	// removed with the cluster.
 	WorkDir string
@@ -66,6 +76,10 @@ func (c *Config) applyDefaults() {
 	}
 	if c.TalosctlPath == "" {
 		c.TalosctlPath = "talosctl"
+	}
+	if c.Sudo == nil {
+		needed := os.Geteuid() != 0
+		c.Sudo = &needed
 	}
 }
 
@@ -110,6 +124,11 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 
 	if _, err := exec.LookPath(cfg.TalosctlPath); err != nil {
 		return nil, fmt.Errorf("talosctl not found (%s): %w", cfg.TalosctlPath, err)
+	}
+	if *cfg.Sudo {
+		if _, err := exec.LookPath("sudo"); err != nil {
+			return nil, fmt.Errorf("sudo not found, and the QEMU provisioner needs root: %w", err)
+		}
 	}
 	if _, err := exec.LookPath("qemu-img"); err != nil {
 		return nil, fmt.Errorf("qemu-img not found; the QEMU provisioner needs QEMU: %w", err)
@@ -165,6 +184,13 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 		_ = c.Destroy(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("fetch kubeconfig for %s: %w\n%s", cfg.Name, err, out)
 	}
+
+	// talosctl ran as root, so everything it wrote is root-owned; the test and
+	// kubectl run unprivileged and have to be able to read it.
+	if err := c.reclaimWorkDir(ctx); err != nil {
+		_ = c.Destroy(context.WithoutCancel(ctx))
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -191,13 +217,37 @@ func (c *Cluster) Talosconfig() string { return c.talosconfig }
 // WorkDir holds the kubeconfig, talosconfig and cluster state.
 func (c *Cluster) WorkDir() string { return c.workDir }
 
+// reclaimWorkDir hands the work dir back to the current user so the unprivileged
+// side of the harness can read the kubeconfig talosctl wrote as root.
+func (c *Cluster) reclaimWorkDir(ctx context.Context) error {
+	if !*c.cfg.Sudo {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+
+	owner := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
+	cmd := exec.CommandContext(ctx, "sudo", "chown", "-R", owner, c.workDir) //nolint:gosec // fixed binary
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("reclaim %s: %w: %s", c.workDir, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // run invokes talosctl, returning combined output because talosctl explains its
 // failures there.
+//
+// -E preserves the environment: talosctl reads HOME for its image cache, and
+// losing it would re-download the image on every run.
 func (c *Cluster) run(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, c.cfg.TalosctlPath, args...) //nolint:gosec // fixed binary, structured args
+	bin, full := c.cfg.TalosctlPath, args
+	if *c.cfg.Sudo {
+		bin, full = "sudo", append([]string{"-E", c.cfg.TalosctlPath}, args...)
+	}
+	cmd := exec.CommandContext(ctx, bin, full...) //nolint:gosec // fixed binary, structured args
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

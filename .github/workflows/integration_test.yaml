@@ -37,17 +37,15 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq qemu-system-x86 qemu-utils
 
-      # /dev/kvm exists on ubuntu-latest but the runner user is not in the kvm
-      # group, and a group added here does not apply to the shell that added it.
-      # Every step that ends up spawning QEMU therefore runs under `sg kvm -c`.
       # Without acceleration QEMU falls back to emulation, where a Talos boot
-      # takes minutes and the suite times out looking like a hang.
+      # takes minutes and the suite times out looking like a hang rather than a
+      # misconfiguration. talosctl itself runs as root (it builds a CNI bridge),
+      # so group membership is not the issue — only that the device is there.
       - name: Check hardware virtualization
         run: |
           test -e /dev/kvm || { echo "::error::/dev/kvm absent; this runner cannot accelerate QEMU"; exit 1; }
-          sudo usermod -aG kvm "$USER"
-          sg kvm -c 'qemu-system-x86_64 -accel help' | grep -q '^kvm$' \
-            || { echo "::error::kvm accelerator unavailable to the runner user"; exit 1; }
+          sudo qemu-system-x86_64 -accel help | grep -q '^kvm$' \
+            || { echo "::error::kvm accelerator unavailable"; exit 1; }
 
       - name: Install talosctl
         run: |
@@ -74,21 +72,27 @@ jobs:
           # Without this the suite skips itself and the job reports green having
           # booted nothing.
           SB_INTEGRATION: "1"
-        # sg re-executes under the kvm group; without it the QEMU processes
-        # talosctl spawns get no acceleration.
-        run: sg kvm -c 'go test -v -timeout 40m ./...'
+        # The test itself stays unprivileged; it elevates talosctl on its own, so
+        # the Go build cache and artifacts are not left root-owned.
+        run: go test -v -timeout 40m ./...
 
       # Cluster state and serial logs are the only way to read a boot failure
       # after the fact, and a failed run is exactly when they are wanted.
       - name: Collect cluster diagnostics
         if: failure()
         run: |
-          talosctl cluster show --name sb-integration 2>&1 | head -50 || true
+          sudo -E talosctl cluster show --name sb-integration 2>&1 | head -50 || true
           find /tmp -maxdepth 3 -name "*.log" -path "*sb-integration*" -exec sh -c \
             'echo "=== $1 ==="; tail -100 "$1"' _ {} \; 2>/dev/null || true
+
+      # talosctl ran as root, so its image cache is root-owned and the cache
+      # action cannot save it.
+      - name: Reclaim the Talos cache
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" ~/.talos 2>/dev/null || true
 
       # A leaked cluster holds memory and a bridge for the life of the runner.
       # Cheap insurance even though the harness tears down in its own cleanup.
       - name: Destroy any surviving cluster
         if: always()
-        run: talosctl cluster destroy --name sb-integration 2>/dev/null || true
+        run: sudo -E talosctl cluster destroy --name sb-integration 2>/dev/null || true
