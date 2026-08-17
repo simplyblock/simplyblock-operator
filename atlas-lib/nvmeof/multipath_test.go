@@ -474,6 +474,33 @@ func TestTargets_CarriesPerPathConnectParameters(t *testing.T) {
 	}
 }
 
+// The DHCHAP secrets come from the control plane with the rest of the path and
+// have to reach the Target, since they are the only key material the connect
+// can authenticate with — and no option may rewrite them, because each was
+// issued for the host the connection was resolved for.
+func TestTargets_CarriesDHCHAPSecrets(t *testing.T) {
+	conn := lvol.Connection{NQN: testNQN, Endpoints: []lvol.Endpoint{{
+		Transport: "tcp", Address: "10.0.0.1", Port: 4420,
+		DHCHAPSecret: "DHHC-1:00:host-secret:", DHCHAPCtrlSecret: "DHHC-1:00:ctrl-secret:",
+	}}}
+	got := Targets(conn, WithHostNQN(sbHostNQN))[0]
+
+	if got.DHCHAPSecret != "DHHC-1:00:host-secret:" || got.DHCHAPCtrlSecret != "DHHC-1:00:ctrl-secret:" {
+		t.Errorf("dhchap secrets = %q/%q, want the control plane's",
+			got.DHCHAPSecret, got.DHCHAPCtrlSecret)
+	}
+	// And they render, under the host identity they belong to.
+	opts := mustOptions(t, got, "node-nqn", "node-id")
+	for _, want := range []string{
+		"hostnqn=" + sbHostNQN, "hostid=" + sbHostID,
+		"dhchap_secret=DHHC-1:00:host-secret:", "dhchap_ctrl_secret=DHHC-1:00:ctrl-secret:",
+	} {
+		if !strings.Contains(opts, want) {
+			t.Errorf("options missing %q\n  got: %s", want, opts)
+		}
+	}
+}
+
 // A caller with a local policy overrides what the control plane suggested.
 func TestTargets_OptionsOverrideEndpointTunables(t *testing.T) {
 	cpTMO, cpFastIOFail := 10, 15
@@ -515,7 +542,7 @@ func TestTargets_ZeroOptionClearsControlPlaneValue(t *testing.T) {
 	conn := lvol.Connection{NQN: testNQN, Endpoints: []lvol.Endpoint{{
 		Transport: "tcp", Address: "10.0.0.1", Port: 4420, NrIOQueues: 8,
 	}}}
-	opts := fabricsOptions(Targets(conn, WithNrIOQueues(0))[0], "", "")
+	opts := mustOptions(t, Targets(conn, WithNrIOQueues(0))[0], "", "")
 	if strings.Contains(opts, "nr_io_queues") {
 		t.Errorf("options = %q, want no nr_io_queues", opts)
 	}
@@ -529,7 +556,7 @@ func TestTargets_RenderIntoConnectOptions(t *testing.T) {
 		NrIOQueues: 8, ReconnectDelaySec: 2, KeepAliveTMOSec: 5,
 		CtrlLossTMOSec: &clt, FastIOFailTMOSec: &fiof, HostIface: "eth1", TLS: true,
 	}}}
-	opts := fabricsOptions(Targets(conn)[0], "nqn.host", "host-id")
+	opts := mustOptions(t, Targets(conn)[0], "nqn.host", "host-id")
 	want := "transport=tcp,traddr=10.0.0.1,trsvcid=4420,nqn=" + testNQN +
 		",hostnqn=nqn.host,hostid=host-id,host_iface=eth1,nr_io_queues=8," +
 		"reconnect_delay=2,keep_alive_tmo=5,ctrl_loss_tmo=60,fast_io_fail_tmo=0,tls"

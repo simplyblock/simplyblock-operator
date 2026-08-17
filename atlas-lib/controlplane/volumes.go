@@ -37,14 +37,25 @@ func (c *Client) Volume(ctx context.Context, h lvol.VolumeHandle) (lvol.Volume, 
 }
 
 // Connection fetches how to reach a logical volume over NVMe-oF.
-func (c *Client) Connection(ctx context.Context, h lvol.VolumeHandle) (lvol.Connection, error) {
+//
+// Pass lvol.ForHost to resolve the connection for a specific initiator NQN.
+// The control plane needs it for an access-controlled volume: it authorizes the
+// named host against the subsystem's allowed-hosts list — answering 404 with
+// "Host NQN ... not found in allowed hosts" for one that is not on it — and
+// resolves that host's DHCHAP secret. Without it, such a volume either is
+// refused or comes back with no key material, and the connect then fails
+// authentication at the target.
+func (c *Client) Connection(ctx context.Context, h lvol.VolumeHandle, opts ...lvol.ConnectionOption) (lvol.Connection, error) {
 	cluster, pool, volume, err := h.Split()
 	if err != nil {
 		return lvol.Connection{}, err
 	}
+	params := &cpapi.ClustersStoragePoolsVolumesConnectApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdConnectGetParams{}
+	if hostNQN := lvol.ConnectionOptions(opts...).HostNQN; hostNQN != "" {
+		params.HostNqn = ptr.To(hostNQN)
+	}
 	resp, err := c.api.ClustersStoragePoolsVolumesConnectApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdConnectGetWithResponse(
-		ctx, cluster, pool, volume,
-		&cpapi.ClustersStoragePoolsVolumesConnectApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdConnectGetParams{},
+		ctx, cluster, pool, volume, params,
 	)
 	if err != nil {
 		return lvol.Connection{}, fmt.Errorf("connect %s: %w", h, err)
@@ -81,9 +92,35 @@ func (c *Client) Connection(ctx context.Context, h lvol.VolumeHandle) (lvol.Conn
 			FastIOFailTMOSec: ptr.To(e.FastIoFailTmo),
 			HostIface:        ptr.From(e.HostIface, ""),
 			TLS:              ptr.BoolFromOrFalse(e.Tls),
+			// The secrets have no fields of their own in the response; the
+			// prebuilt command line is where the control plane puts them.
+			DHCHAPSecret:     connectFlag(e.Connect, "--dhchap-secret"),
+			DHCHAPCtrlSecret: connectFlag(e.Connect, "--dhchap-ctrl-secret"),
 		})
 	}
 	return conn, nil
+}
+
+// connectFlag pulls one --flag's value out of the prebuilt "nvme connect ..."
+// command line the control plane returns alongside each path, and is how the
+// DHCHAP secrets are read: the control plane resolves them per (host,
+// subsystem) while building that line and exposes them through no other field
+// of the response (see build_nvme_connect_entry/HostConnectAuth in sbcli), so
+// parsing its own rendering back out is the only channel there is.
+//
+// Only the "--flag=value" spelling is recognized, which is the one that line
+// uses; a bare "--flag value" is not, since it cannot be told apart from a flag
+// followed by an unrelated positional without knowing every flag's arity.
+// Missing means empty — an ungated volume's line simply carries no such flag,
+// which is not an error.
+func connectFlag(connectCmd, flag string) string {
+	prefix := flag + "="
+	for _, field := range strings.Fields(connectCmd) {
+		if v, ok := strings.CutPrefix(field, prefix); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 // ListVolumes returns every volume in the given cluster's pool.
