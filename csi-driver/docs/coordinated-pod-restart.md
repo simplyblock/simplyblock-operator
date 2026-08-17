@@ -11,8 +11,18 @@ simplyblock, a subsystem is identified by its NQN (NVMe Qualified Name). If two
 pods — call them A and B — both have volumes on the same NQN, they share one
 physical connection to the storage node.
 
-Restarting pod A alone tears down that shared NVMe-oF connection. Pod B, which
-was healthy, loses its storage mid-flight. This is worse than doing nothing.
+When the NVMe-oF path breaks, **both pod A and pod B are broken** — they share
+the same physical connection, so neither can do I/O. The Guardian would only
+consider restarting pod A because pod A's lvol is marked broken; pod B may not
+yet appear broken in the Guardian's view.
+
+Restarting pod A alone triggers NodeUnpublish → NodeUnstage → NodeStage →
+NodePublish for the replacement pod. The NodeStage step reconnects the shared
+NVMe-oF subsystem. From the kernel's perspective the NQN is now live again —
+but **pod B's mount was established before the disconnect/reconnect cycle**. Pod
+B's kernel mount is stale: the NVMe path looks connected but the mount context
+is no longer valid. The Guardian sees the NQN as healthy and never restarts pod
+B, leaving it silently broken.
 
 ## What "Shared Subsystem" Means
 
@@ -93,9 +103,17 @@ Gate pass?  YES for all  →  delete pod A, delete pod B, delete pod C  (togethe
 Gate pass?  NO  for any  →  delete nobody, retry next tick
 ```
 
-This prevents the "partial teardown" failure mode where pod A is restarted,
-the shared NVMe connection drops, and pod B crashes with I/O errors even though
-it was healthy.
+This ensures a **clean disconnect → reconnect cycle** for the shared NVMe-oF
+subsystem. The reason is mechanical, not protective: `Disconnect` in
+`initiator.go` uses `selectDisconnectTarget`, which returns `shared=true` and
+issues **no `nvme disconnect`** when more than one namespace of the subsystem is
+still present on the node. As long as pod B holds its namespace symlink, deleting
+pod A alone can never tear down the broken subsystem. Pod A's replacement then
+tries to `Connect` on top of a still-broken kernel subsystem object, which may
+fail or leave the connection in an inconsistent state. Deleting all pods together
+lets the namespace count drop to one before the last `Disconnect` fires,
+producing a genuine teardown followed by a clean `nvme connect` from the
+replacement pods.
 
 ## Edge Cases
 
@@ -125,8 +143,36 @@ that share a subsystem, or none of them will receive automatic restarts.
 ## Observability
 
 - Every suppression and every restart is logged at `klog.Warning` level.
-- When the NQN index is not yet populated, a Kubernetes Event is emitted on the
-  pod (`reason: SharedSubsystemRestartSuppressed`) so it appears in `kubectl
-  describe pod`.
 - Dry-run mode (`DryRun: true`) runs all checks and logs what would have been
   deleted without actually deleting anything.
+
+Kubernetes Events are emitted so problems are visible via `kubectl describe pod`
+without needing to dig through CSI node logs:
+
+| Situation | Event reason | Emitted on |
+|---|---|---|
+| NQN index not yet populated | `AutoRestartSuppressed` | the suppressed pod |
+| Non-opted-in pod blocks the group | `CoordinatedRestartBlocked` | the **blocking** pod |
+| Opted-in pod held back by a peer | `CoordinatedRestartPending` | each **blocked** pod |
+
+**Example — non-opted-in pod blocking the group:**
+
+```
+kubectl describe pod <opted-in-pod>
+...
+Events:
+  Warning  CoordinatedRestartPending  guardian  Auto-restart of this pod is pending.
+           It shares an NVMe-oF subsystem with pod simplyblock/worker-job-xyz,
+           which did not pass restartability checks (not opted in, no owner
+           controller, or in backoff). All pods in the shared-subsystem group
+           must be restartable before any are restarted.
+
+kubectl describe pod <blocking-pod>
+...
+Events:
+  Warning  CoordinatedRestartBlocked  guardian  This pod is blocking coordinated
+           auto-restart of a shared NVMe-oF subsystem group (3 pods). It did not
+           pass restartability checks. Add label
+           simplyblock.io/auto-restart-on-pathloss=true to this pod's controller,
+           or set it on its StorageClass, to unblock the group.
+```

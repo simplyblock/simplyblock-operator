@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog"
 
+	atlaskube "github.com/simplyblock/atlas/kube"
 	sbkube "github.com/spdk/spdk-csi/pkg/kubernetes"
 )
 
@@ -815,7 +816,8 @@ func (g *Guardian) coordinatedSubsystemRestart(
 	}
 
 	// Gate: every candidate must pass all checks before any pod is deleted.
-	// isPodRestartable logs the pod-level reason; we log the group consequence.
+	// isPodRestartable logs the pod-level reason; we log the group consequence
+	// and emit events so the situation is visible via kubectl describe pod.
 	for _, c := range candidates {
 		pod := c.pod
 		podUID := string(pod.UID)
@@ -824,6 +826,17 @@ func (g *Guardian) coordinatedSubsystemRestart(
 				"Guardian: coordinated restart suppressed (cluster=%s, lvols=%v): "+
 					"pod %s/%s did not pass restartability checks",
 				cid, siblings, pod.Namespace, pod.Name)
+			// Emit an event on the blocking pod so operators can see it is
+			// holding back the whole shared-subsystem group.
+			g.emitGroupBlockedByPodEvent(ctx, &pod, len(candidates))
+			// Emit an event on every other candidate so opted-in pods have a
+			// visible signal explaining why they have not been restarted.
+			for _, other := range candidates {
+				if string(other.pod.UID) == podUID {
+					continue
+				}
+				g.emitRestartBlockedByPeerEvent(ctx, &other.pod, &pod)
+			}
 			return 0
 		}
 	}
@@ -1171,11 +1184,8 @@ func (g *Guardian) podUsesNamespacedSubsystem(ctx context.Context, pod *v1.Pod) 
 			continue
 		}
 
-		if v, ok := sc.Parameters["max_namespace_per_subsys"]; ok {
-			n := 0
-			if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n > 1 {
-				return true
-			}
+		if props, err := atlaskube.PropertiesFromStorageClass(sc); err == nil && props.IsMultiNamespace() {
+			return true
 		}
 	}
 	return false
@@ -1210,5 +1220,80 @@ func (g *Guardian) emitSharedSubsystemEvent(ctx context.Context, pod *v1.Pod) {
 	if _, err := g.cs.CoreV1().Events(pod.Namespace).Create(ctx, event, metav1.CreateOptions{}); err != nil {
 		klog.Warningf("Guardian: failed to emit AutoRestartSuppressed event for pod %s/%s: %v",
 			pod.Namespace, pod.Name, err)
+	}
+}
+
+// emitGroupBlockedByPodEvent records a Warning event on the blocking pod
+// explaining that it is preventing coordinated restart of its sibling group.
+// This makes the problem visible via kubectl describe pod <blocking-pod>.
+func (g *Guardian) emitGroupBlockedByPodEvent(ctx context.Context, blockingPod *v1.Pod, groupSize int) {
+	now := metav1.Now()
+	event := &v1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "guardian-group-blocked-",
+			Namespace:    blockingPod.Namespace,
+		},
+		InvolvedObject: v1.ObjectReference{
+			Kind:       "Pod",
+			Namespace:  blockingPod.Namespace,
+			Name:       blockingPod.Name,
+			UID:        blockingPod.UID,
+			APIVersion: "v1",
+		},
+		Reason: "CoordinatedRestartBlocked",
+		Message: fmt.Sprintf(
+			"Guardian: this pod is blocking coordinated auto-restart of a shared NVMe-oF subsystem group (%d pods). "+
+				"It did not pass restartability checks (not opted in, no owner controller, or in backoff). "+
+				"Add label %q to this pod's controller, or set it on its StorageClass, to unblock the group.",
+			groupSize, g.cfg.OptInLabelKey+"=true"),
+		Type: v1.EventTypeWarning,
+		Source: v1.EventSource{
+			Component: "guardian",
+		},
+		FirstTimestamp: now,
+		LastTimestamp:  now,
+		Count:          1,
+	}
+	if _, err := g.cs.CoreV1().Events(blockingPod.Namespace).Create(ctx, event, metav1.CreateOptions{}); err != nil {
+		klog.Warningf("Guardian: failed to emit CoordinatedRestartBlocked event for pod %s/%s: %v",
+			blockingPod.Namespace, blockingPod.Name, err)
+	}
+}
+
+// emitRestartBlockedByPeerEvent records a Warning event on a pod that is
+// waiting for coordinated restart but is being held back by a peer that does
+// not pass restartability checks. This makes the blockage visible via
+// kubectl describe pod <blocked-pod>.
+func (g *Guardian) emitRestartBlockedByPeerEvent(ctx context.Context, blockedPod, blockingPod *v1.Pod) {
+	now := metav1.Now()
+	event := &v1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "guardian-restart-blocked-",
+			Namespace:    blockedPod.Namespace,
+		},
+		InvolvedObject: v1.ObjectReference{
+			Kind:       "Pod",
+			Namespace:  blockedPod.Namespace,
+			Name:       blockedPod.Name,
+			UID:        blockedPod.UID,
+			APIVersion: "v1",
+		},
+		Reason: "CoordinatedRestartPending",
+		Message: fmt.Sprintf(
+			"Guardian: auto-restart of this pod is pending. It shares an NVMe-oF subsystem with pod %s/%s, "+
+				"which did not pass restartability checks (not opted in, no owner controller, or in backoff). "+
+				"All pods in the shared-subsystem group must be restartable before any are restarted.",
+			blockingPod.Namespace, blockingPod.Name),
+		Type: v1.EventTypeWarning,
+		Source: v1.EventSource{
+			Component: "guardian",
+		},
+		FirstTimestamp: now,
+		LastTimestamp:  now,
+		Count:          1,
+	}
+	if _, err := g.cs.CoreV1().Events(blockedPod.Namespace).Create(ctx, event, metav1.CreateOptions{}); err != nil {
+		klog.Warningf("Guardian: failed to emit CoordinatedRestartPending event for pod %s/%s: %v",
+			blockedPod.Namespace, blockedPod.Name, err)
 	}
 }
