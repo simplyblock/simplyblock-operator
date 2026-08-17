@@ -73,8 +73,8 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT-GUARDIAN", func() {
 			ginkgo.By("create an opt-in StorageClass (individual NQN per volume)")
 			scName := fmt.Sprintf("%s-%s", appLabel, ns)
 			scParams := map[string]string{
-				"cluster_id":               liveClusterID(f),
-				"max_namespace_per_subsys": "1",
+				"cluster_id":                liveClusterID(f),
+				"max_namespace_per_subsys":  "1",
 				"csi.storage.k8s.io/fstype": m.fsType,
 			}
 			createStorageClassWithParamsAndLabels(f.ClientSet, scName, scParams,
