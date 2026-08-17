@@ -55,7 +55,7 @@ func TestSmoke_NodeCanHostATarget(t *testing.T) {
 	// The machine config asks for these at boot. Reading /proc/modules rather
 	// than modprobing proves the patch worked, not merely that the modules exist.
 	t.Run("machine config loaded the target modules", func(t *testing.T) {
-		out, err := sh.Run(ctx, "cat /proc/modules")
+		out, err := sh.LoadedModules(ctx)
 		if err != nil {
 			t.Fatalf("read /proc/modules: %v", err)
 		}
@@ -66,26 +66,26 @@ func TestSmoke_NodeCanHostATarget(t *testing.T) {
 		}
 	})
 
-	// Talos does not mount configfs, so the pod does it. Without this a target
-	// cannot be configured at all.
+	// Talos does not mount configfs, so the pod does. Without it a target cannot
+	// be configured at all.
+	var nvmet string
 	t.Run("configfs is reachable and writable", func(t *testing.T) {
-		out, err := sh.RunOnHost(ctx,
-			"mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config; "+
-				"ls -d /sys/kernel/config/nvmet/subsystems")
-		if err != nil {
-			t.Fatalf("mount configfs: %v\n%s", err, out)
+		var err error
+		if nvmet, err = sh.EnsureConfigFS(ctx); err != nil {
+			t.Fatalf("%v", err)
 		}
-		if !strings.Contains(out, "/sys/kernel/config/nvmet/subsystems") {
-			t.Fatalf("nvmet configfs absent after mount: %s", out)
-		}
+		t.Logf("nvmet at %s", nvmet)
 	})
 
 	// attr_cntlid_min decides whether a same-NQN target pair is possible at all:
 	// without it the host rejects the second controller as a duplicate cntlid,
 	// and controller-not-contributing cannot be produced.
 	t.Run("nvmet supports a same-NQN target pair", func(t *testing.T) {
-		const probe = "/sys/kernel/config/nvmet/subsystems/nqn.integration.probe"
-		out, err := sh.RunOnHost(ctx,
+		if nvmet == "" {
+			t.Skip("configfs unavailable")
+		}
+		probe := nvmet + "/subsystems/nqn.integration.probe"
+		out, err := sh.Run(ctx,
 			"mkdir -p "+probe+" && ls "+probe+"/attr_cntlid_min; rmdir "+probe)
 		if err != nil {
 			t.Fatalf("probe subsystem: %v\n%s", err, out)

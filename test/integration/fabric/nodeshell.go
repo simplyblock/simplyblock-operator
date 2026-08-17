@@ -1,9 +1,15 @@
 // Package fabric drives the NVMe-oF fabric inside the cluster: loading modules,
 // standing up nvmet targets, and reading back what the kernel made of them.
 //
-// Talos has no shell and no SSH, so everything here goes through a privileged pod
-// pinned to a node. That is the same access the CSI driver itself has, which makes
-// it a fair way to reach a node rather than a workaround.
+// Talos has no shell and no SSH, so this works through a privileged pod pinned to
+// a node — the same access the CSI driver has.
+//
+// The pod does not enter the node's namespaces, and does not need to. Loading a
+// module is not namespaced, so modprobe from a privileged container with the
+// node's /lib/modules affects the node's kernel. nvmet's configfs objects are
+// kernel-global for the same reason: mounting configfs inside the pod exposes the
+// node's nvmet tree, not a private copy. Entering the host mount namespace would
+// in fact be worse than unnecessary — there is no /bin/sh on the other side of it.
 package fabric
 
 import (
@@ -13,9 +19,19 @@ import (
 	"time"
 )
 
-// Namespace holds the harness's own pods, kept out of the namespaces a test
-// creates for workloads.
-const Namespace = "sb-integration"
+const (
+	// Namespace holds the harness's own pods, away from workload namespaces.
+	Namespace = "sb-integration"
+
+	// ConfigFS is where the shell mounts configfs. A path of its own rather than
+	// /sys/kernel/config: /sys is a bind mount from the node and mounting onto a
+	// subdirectory of it invites propagation questions that this does not need to
+	// answer.
+	ConfigFS = "/configfs"
+
+	// NvmetRoot is the nvmet tree once configfs is mounted.
+	NvmetRoot = ConfigFS + "/nvmet"
+)
 
 // Shell is command execution on one node.
 type Shell struct {
@@ -24,7 +40,7 @@ type Shell struct {
 	pod     string
 }
 
-// Cluster is the part of *cluster.Cluster this package needs. An interface so
+// Cluster is the part of *cluster.Cluster this package needs, as an interface so
 // fabric does not depend on how the cluster was created.
 type Cluster interface {
 	Apply(ctx context.Context, manifest string) error
@@ -33,16 +49,20 @@ type Cluster interface {
 	WaitPodReady(ctx context.Context, namespace, name string, timeout time.Duration) error
 }
 
-// hostPID and the host mounts are what make this useful: modprobe has to affect
-// the node's kernel, and nvmet's configfs tree is the node's, not the pod's.
+// The namespace carries pod-security labels because Talos enforces the baseline
+// profile by default, which allows none of what this pod needs: host namespaces,
+// hostPath volumes, or a privileged container.
 //
-// /lib/modules is mounted from the host because Talos keeps modules there and a
-// container image has none. nsenter into PID 1's mount namespace is what lets
-// modprobe and mount take effect on the node rather than inside the pod.
+// util-linux is installed at start for nvme-cli's dependencies and for tooling
+// the base image omits.
 const shellPodManifest = `apiVersion: v1
 kind: Namespace
 metadata:
   name: ` + Namespace + `
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged
+    pod-security.kubernetes.io/audit: privileged
 ---
 apiVersion: v1
 kind: Pod
@@ -61,7 +81,7 @@ spec:
   containers:
     - name: shell
       image: alpine:3.20
-      command: ["sleep", "infinity"]
+      command: ["/bin/sh", "-c", "apk add --no-cache nvme-cli util-linux >/dev/null 2>&1; exec sleep infinity"]
       securityContext:
         privileged: true
       volumeMounts:
@@ -97,22 +117,36 @@ func (s *Shell) manifest() string {
 	return fmt.Sprintf(shellPodManifest, s.pod, s.node)
 }
 
-// Close removes the pod. The namespace is left, since other shells may share it.
+// Close removes the pod, leaving the namespace since other shells may share it.
 func (s *Shell) Close(ctx context.Context) error {
 	return s.cluster.Delete(ctx, s.manifest())
 }
 
-// Run executes a command inside the pod — the pod's own namespaces, which is
-// enough for anything reading /sys or /dev.
+// Run executes a command in the pod.
 func (s *Shell) Run(ctx context.Context, script string) (string, error) {
 	return s.cluster.Exec(ctx, Namespace, s.pod, script)
 }
 
-// RunOnHost executes a command in the node's namespaces via PID 1, which is what
-// modprobe and mount need to affect the node rather than the container.
-func (s *Shell) RunOnHost(ctx context.Context, script string) (string, error) {
-	return s.Run(ctx, fmt.Sprintf(
-		"nsenter --target 1 --mount --uts --ipc --net --pid -- /bin/sh -c %s", shellQuote(script)))
+// EnsureConfigFS mounts configfs and returns the nvmet root. Talos does not mount
+// configfs, and nvmet cannot be configured without it. Idempotent.
+func (s *Shell) EnsureConfigFS(ctx context.Context) (string, error) {
+	out, err := s.Run(ctx, fmt.Sprintf(
+		"mkdir -p %[1]s && (mountpoint -q %[1]s || mount -t configfs none %[1]s) && ls -d %[2]s",
+		ConfigFS, NvmetRoot))
+	if err != nil {
+		return "", fmt.Errorf("mount configfs on %s: %w\n%s", s.node, err, out)
+	}
+	if !strings.Contains(out, NvmetRoot) {
+		return "", fmt.Errorf("nvmet absent under %s on %s; is the nvmet module loaded?\n%s",
+			ConfigFS, s.node, out)
+	}
+	return NvmetRoot, nil
+}
+
+// LoadedModules is the node's loaded kernel modules. Module state is not
+// namespaced, so the pod's /proc/modules is the node's.
+func (s *Shell) LoadedModules(ctx context.Context) (string, error) {
+	return s.Run(ctx, "cat /proc/modules")
 }
 
 // Node is the node this shell runs on.
@@ -121,9 +155,4 @@ func (s *Shell) Node() string { return s.node }
 // sanitize turns a node name into something usable as a pod name.
 func sanitize(node string) string {
 	return strings.ToLower(strings.NewReplacer(".", "-", "_", "-", ":", "-").Replace(node))
-}
-
-// shellQuote wraps a script as a single-quoted shell word.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
