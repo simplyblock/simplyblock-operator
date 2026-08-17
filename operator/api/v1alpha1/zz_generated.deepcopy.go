@@ -1647,6 +1647,31 @@ func (in *StorageNodeOverrides) DeepCopyInto(out *StorageNodeOverrides) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.EnableLblk != nil {
+		in, out := &in.EnableLblk, &out.EnableLblk
+		*out = new(bool)
+		**out = **in
+	}
+	if in.BlkNames != nil {
+		in, out := &in.BlkNames, &out.BlkNames
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.BlkNamesExclude != nil {
+		in, out := &in.BlkNamesExclude, &out.BlkNamesExclude
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.BlkSerials != nil {
+		in, out := &in.BlkSerials, &out.BlkSerials
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.LblkJournalPercent != nil {
+		in, out := &in.LblkJournalPercent, &out.LblkJournalPercent
+		*out = new(int32)
+		**out = **in
+	}
 	if in.EnableCpuTopology != nil {
 		in, out := &in.EnableCpuTopology, &out.EnableCpuTopology
 		*out = new(bool)
@@ -1850,6 +1875,31 @@ func (in *StorageNodeSetSpec) DeepCopyInto(out *StorageNodeSetSpec) {
 		in, out := &in.DeviceNames, &out.DeviceNames
 		*out = make([]string, len(*in))
 		copy(*out, *in)
+	}
+	if in.EnableLblk != nil {
+		in, out := &in.EnableLblk, &out.EnableLblk
+		*out = new(bool)
+		**out = **in
+	}
+	if in.BlkNames != nil {
+		in, out := &in.BlkNames, &out.BlkNames
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.BlkNamesExclude != nil {
+		in, out := &in.BlkNamesExclude, &out.BlkNamesExclude
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.BlkSerials != nil {
+		in, out := &in.BlkSerials, &out.BlkSerials
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.LblkJournalPercent != nil {
+		in, out := &in.LblkJournalPercent, &out.LblkJournalPercent
+		*out = new(int32)
+		**out = **in
 	}
 	if in.UbuntuHost != nil {
 		in, out := &in.UbuntuHost, &out.UbuntuHost

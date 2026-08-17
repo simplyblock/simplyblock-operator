@@ -253,6 +253,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		BackupConfig:           backupConfig,
 		HashicorpVaultSettings: vaultConfig,
 		EnableFailureDomain:    ptr.BoolFromOrFalse(clusterCR.Spec.EnableFailureDomains),
+		DeviceMode:             clusterCR.Spec.DeviceMode,
 	}
 
 	endpoint = "/api/v2/clusters/"
