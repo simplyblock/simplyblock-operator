@@ -40,4 +40,33 @@
 // hack/nvmet holds the tooling for exercising either against a real fabric. The
 // kernel's own NVMe-oF target, driven through configfs, needs no storage backend
 // and no control plane, which makes it the cheapest honest test of a connector.
+// # A connect that succeeds is not a fabric that works
+//
+// The states that cause outages are the ones where a connect is satisfied at one
+// layer of the NVMe object tree while the layer below it is unusable — and the
+// check that gates the retry sits at the higher layer, so nothing looks missing
+// and the retry spins. A subsystem whose controllers are live but which exports
+// no namespace; a live controller at a published endpoint that serves no path to
+// the namespace, so the volume runs below its published redundancy while every
+// connect answers "already connected". Neither is visible to Connect,
+// IsConnected or a wait for a device.
+//
+// Three pieces address that, layered so the judgement is separable from the
+// mechanism:
+//
+//   - Inspect (inspect.go) diagnoses. It reads only, names each defect
+//     positively from state the kernel publishes, and reports how much would
+//     have to be torn down to fix it and whose volumes that would disturb.
+//   - Repair (repair.go) acts, on one diagnosed defect, with no policy of its
+//     own — for callers that make the decision themselves. It takes a
+//     ControllerDetacher, so a caller whose connect path lives elsewhere need
+//     not supply a whole Connector.
+//   - Repairer.Attach (repair.go) is the two together under a policy: connect
+//     every path, diagnose, and repair the narrowest defect it is permitted to,
+//     never at the cost of another volume's block device and never in a loop.
+//     It is what a CSI NodeStage and a node-side guardian both want.
+//
+// Teardown has its own asymmetry, for the same reason: DetachDevice (detach.go)
+// will not disconnect a subsystem that can be shared, because doing so on one
+// volume's behalf destroys data that is not the caller's.
 package nvmeof
