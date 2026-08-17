@@ -293,26 +293,27 @@ func (g *Guardian) RegisterPublish(clusterID, lvolID, targetPath string) {
 	go g.cacheSubsystemNQN(lvolID)
 }
 
-// RegisterUnpublish removes mapping. Call from NodeUnpublishVolume.
-func (g *Guardian) RegisterUnpublishByTargetPath(targetPath string) {
+// RegisterUnpublish removes the pod→lvol mapping for the specific volume being
+// unpublished. Scoping removal to the exact lvolID ensures that sibling volumes
+// mounted by the same pod are not dropped from Guardian's tracking — a bug that
+// would cause a later break on an untouched volume to be silently ignored.
+// Call from NodeUnpublishVolume with the lvolID parsed from req.GetVolumeId().
+func (g *Guardian) RegisterUnpublish(lvolID, targetPath string) {
 	podUID := podUIDFromTargetPath(targetPath)
-	if podUID == "" {
+	if lvolID == "" || podUID == "" {
 		return
 	}
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	for lvolID, st := range g.lvols {
-		if st == nil || st.PodUIDs == nil {
-			continue
-		}
-		delete(st.PodUIDs, podUID)
-
-		// If no pods remain, drop the lvol entry entirely (and its BrokenAt).
-		if len(st.PodUIDs) == 0 {
-			delete(g.lvols, lvolID)
-		}
+	st, ok := g.lvols[lvolID]
+	if !ok || st == nil || st.PodUIDs == nil {
+		return
+	}
+	delete(st.PodUIDs, podUID)
+	if len(st.PodUIDs) == 0 {
+		delete(g.lvols, lvolID)
 	}
 
 	g.persistLocked()
@@ -998,8 +999,27 @@ func (g *Guardian) removePodFromLvolLocked(lvolID, podUID string) {
 	delete(st.PodUIDs, podUID)
 	if len(st.PodUIDs) == 0 {
 		delete(g.lvols, lvolID)
+	}
+	// Clear the per-pod backoff record only after the pod has been removed from
+	// every lvol it was tracking. Clearing it while the pod still appears on a
+	// second broken lvol would allow the same tick to bypass the backoff and
+	// restart the pod a second time.
+	if !g.podTrackedByAnyLvolLocked(podUID) {
 		delete(g.lastRestart, podUID)
 	}
+}
+
+// podTrackedByAnyLvolLocked reports whether podUID still appears in at least one
+// lvol's PodUIDs map. Must be called with g.mu held.
+func (g *Guardian) podTrackedByAnyLvolLocked(podUID string) bool {
+	for _, st := range g.lvols {
+		if st != nil && st.PodUIDs != nil {
+			if _, ok := st.PodUIDs[podUID]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func hasOptInMetadata(labels map[string]string, annotations map[string]string, key, want string) bool {
