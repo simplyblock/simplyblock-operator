@@ -34,7 +34,7 @@ RUN set -eu; \
 # Fail the build if this image would write an on-disk format the oldest supported
 # host kernel cannot mount, or if the ext4 tool aliases disagree on version. Both
 # mkfs implementations work on a plain file, so this needs no privileges and no
-# block device. This matters because base_image is a floating tag rebuilt nightly:
+# block device. This matters because base_image is a floating tag rebuilt daily:
 # without an assertion here, a base or xfsprogs/e2fsprogs update could change the
 # on-disk format with no accompanying code change.
 RUN set -eu; \
