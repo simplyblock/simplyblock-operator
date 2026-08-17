@@ -3224,7 +3224,7 @@ spec:
                     description: Fabric is the transport fabric (e.g. tcp).
                     type: string
                   filesystem:
-                    default: ext4
+                    default: xfs
                     description: Filesystem is the filesystem used to format logical
                       volumes of this pool.
                     enum:
