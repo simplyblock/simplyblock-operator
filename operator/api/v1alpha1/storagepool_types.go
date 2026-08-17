@@ -113,7 +113,7 @@ type StorageClassParameters struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Filesystem"
 	// Filesystem is the filesystem used to format logical volumes of this pool.
 	// +kubebuilder:validation:Enum=ext4;xfs
-	// +kubebuilder:default=ext4
+	// +kubebuilder:default=xfs
 	Filesystem string `json:"filesystem,omitempty"`
 }
 
