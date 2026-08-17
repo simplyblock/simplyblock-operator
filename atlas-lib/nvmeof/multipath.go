@@ -55,7 +55,7 @@ type PathResult struct {
 // established — with one live path the subsystem is attached and usable, and
 // per-path failures are reported through the results. All targets must name
 // the same subsystem NQN.
-func (c *FabricsConnector) ConnectPaths(ctx context.Context, targets []Target) ([]PathResult, error) {
+func (c *connector) ConnectPaths(ctx context.Context, targets []Target) ([]PathResult, error) {
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("connect: no targets")
 	}
@@ -101,7 +101,7 @@ func (c *FabricsConnector) ConnectPaths(ctx context.Context, targets []Target) (
 // per-path timeout covers the whole attempt — the controller-state lookups,
 // the connect write and the wait for live — so no single step can hold up the
 // paths behind this one, whichever one is slow.
-func (c *FabricsConnector) connectPath(parent context.Context, t Target) PathResult {
+func (c *connector) connectPath(parent context.Context, t Target) PathResult {
 	r := PathResult{Target: t}
 
 	ctx := parent
@@ -126,7 +126,7 @@ func (c *FabricsConnector) connectPath(parent context.Context, t Target) PathRes
 		// would add a second controller for the same endpoint, so only wait.
 		r.AlreadyPresent = true
 	default:
-		if _, err := c.connect(ctx, c.options(t)); err != nil {
+		if _, err := c.attach(ctx, t); err != nil {
 			r.Err = fmt.Errorf("connect %s via %s: %w", t.NQN, endpoint(t), err)
 			return r
 		}
@@ -143,7 +143,7 @@ func (c *FabricsConnector) connectPath(parent context.Context, t Target) PathRes
 // waitPathLive polls until the controller for t is live. ctx carries the
 // per-path deadline set by connectPath, and every lookup runs under it, so a
 // resolver that blocks is bounded by the same deadline as the polling.
-func (c *FabricsConnector) waitPathLive(ctx context.Context, t Target) error {
+func (c *connector) waitPathLive(ctx context.Context, t Target) error {
 	ticker := time.NewTicker(c.pollInterval())
 	defer ticker.Stop()
 	for {
@@ -164,7 +164,7 @@ func (c *FabricsConnector) waitPathLive(ctx context.Context, t Target) error {
 
 // findPath returns the controller fronting t's subsystem over t's endpoint.
 // A subsystem that is not attached at all is not an error.
-func (c *FabricsConnector) findPath(ctx context.Context, t Target) (nvme.Controller, bool, error) {
+func (c *connector) findPath(ctx context.Context, t Target) (nvme.Controller, bool, error) {
 	s, err := c.subs.ByNQN(ctx, t.NQN)
 	if errors.Is(err, errs.ErrNotFound) {
 		return nvme.Controller{}, false, nil

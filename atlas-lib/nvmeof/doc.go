@@ -27,4 +27,17 @@
 // moment after the controller goes live. WaitForDevice (and ConnectDevice,
 // which connects and then waits) bridges that gap and refuses to guess when
 // several namespaces match — see wait.go.
+// # Two mechanisms, one set of rules
+//
+// Attaching can be done two ways, and which one a caller needs is a property of
+// the caller rather than of the fabric: FabricsConnector writes the kernel's
+// fabrics device directly, CLIConnector shells out to nvme-cli. Only those two
+// operations differ — establishing a path, and tearing a controller down — and
+// everything above them, the path order above included, is shared. A caller that
+// has to speak nvme-cli today therefore gets the same behaviour as one that does
+// not, and can change mechanism later without changing what it asks for.
+//
+// hack/nvmet holds the tooling for exercising either against a real fabric. The
+// kernel's own NVMe-oF target, driven through configfs, needs no storage backend
+// and no control plane, which makes it the cheapest honest test of a connector.
 package nvmeof

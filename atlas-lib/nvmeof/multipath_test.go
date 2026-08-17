@@ -27,8 +27,8 @@ type fabric struct {
 	inst  int
 }
 
-func (f *fabric) connect(_ context.Context, opts string) (string, error) {
-	addr := optValue(opts, "traddr")
+func (f *fabric) attach(_ context.Context, t Target) (string, error) {
+	addr := t.Address
 	f.order = append(f.order, addr)
 	if err := f.fail[addr]; err != nil {
 		return "", err
@@ -50,22 +50,11 @@ func (f *fabric) byNQN(_ context.Context, nqn string) (nvme.Subsystem, error) {
 }
 
 func (f *fabric) connector() *FabricsConnector {
-	return &FabricsConnector{
+	return &FabricsConnector{connector: connector{
 		subs:        fakeSubs{byNQN: f.byNQN},
 		poll:        time.Millisecond,
 		pathTimeout: 50 * time.Millisecond,
-		connect:     f.connect,
-	}
-}
-
-// optValue pulls one option out of a connect options line.
-func optValue(opts, key string) string {
-	for kv := range strings.SplitSeq(opts, ",") {
-		if k, v, ok := strings.Cut(kv, "="); ok && k == key {
-			return v
-		}
-	}
-	return ""
+		attach:      f.attach}}
 }
 
 // targets builds the ordered path list the control plane would return:
@@ -137,7 +126,7 @@ func TestConnectPaths_PathThatNeverGoesLiveTimesOut(t *testing.T) {
 // rather than fails, because the fake only returns once its context is done.
 func TestConnectPaths_BlockingResolverIsBoundedByPathTimeout(t *testing.T) {
 	calls := 0
-	c := &FabricsConnector{
+	c := &FabricsConnector{connector: connector{
 		poll:        time.Millisecond,
 		pathTimeout: 20 * time.Millisecond,
 		subs: fakeSubs{byNQN: func(ctx context.Context, nqn string) (nvme.Subsystem, error) {
@@ -148,8 +137,7 @@ func TestConnectPaths_BlockingResolverIsBoundedByPathTimeout(t *testing.T) {
 			}
 			return nvme.Subsystem{NQN: nqn, Controllers: []nvme.Controller{ctrl("nvme0", "10.0.0.2", "live")}}, nil
 		}},
-		connect: func(context.Context, string) (string, error) { return "instance=0,cntlid=1", nil },
-	}
+		attach: func(context.Context, Target) (string, error) { return "instance=0,cntlid=1", nil }}}
 
 	res, err := c.ConnectPaths(context.Background(), targets("10.0.0.1", "10.0.0.2"))
 	if err != nil {
@@ -197,7 +185,7 @@ func TestConnectPaths_LeavesExistingPathsAlone(t *testing.T) {
 // connected again — a second write would add a duplicate path.
 func TestConnectPaths_WaitsForConnectingPathWithoutReconnecting(t *testing.T) {
 	looks := 0
-	c := &FabricsConnector{
+	c := &FabricsConnector{connector: connector{
 		poll:        time.Millisecond,
 		pathTimeout: time.Second,
 		subs: fakeSubs{byNQN: func(_ context.Context, nqn string) (nvme.Subsystem, error) {
@@ -208,10 +196,9 @@ func TestConnectPaths_WaitsForConnectingPathWithoutReconnecting(t *testing.T) {
 			}
 			return nvme.Subsystem{NQN: nqn, Controllers: []nvme.Controller{ctrl("nvme0", "10.0.0.1", state)}}, nil
 		}},
-		connect: func(context.Context, string) (string, error) {
+		attach: func(context.Context, Target) (string, error) {
 			return "", errors.New("connect must not be re-issued for a connecting path")
-		},
-	}
+		}}}
 	res, err := c.ConnectPaths(context.Background(), targets("10.0.0.1"))
 	if err != nil {
 		t.Fatal(err)
@@ -227,9 +214,9 @@ func TestConnectPaths_StopsOnCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &fabric{fail: map[string]error{"10.0.0.1": errors.New("refused")}}
 	c := f.connector()
-	c.connect = func(ctx context.Context, opts string) (string, error) {
+	c.attach = func(ctx context.Context, tgt Target) (string, error) {
 		cancel()
-		return f.connect(ctx, opts)
+		return f.attach(ctx, tgt)
 	}
 	res, err := c.ConnectPaths(ctx, targets("10.0.0.1", "10.0.0.2"))
 	if err == nil {
@@ -380,13 +367,12 @@ func TestDisconnect_ReleasesOptimizedPathLast(t *testing.T) {
 	}, "nvme0", "nvme1", "nvme2")
 
 	var released []string
-	c := &FabricsConnector{
+	c := &FabricsConnector{connector: connector{
 		subs: fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) { return s, nil }},
-		deleteCtrl: func(p string) error {
-			released = append(released, filepath.Base(p))
+		deleteCtrl: func(ctrl nvme.Controller) error {
+			released = append(released, string(ctrl.ID))
 			return nil
-		},
-	}
+		}}}
 	if err := c.Disconnect(context.Background(), testNQN); err != nil {
 		t.Fatal(err)
 	}
@@ -403,16 +389,15 @@ func TestDisconnect_ContinuesPastAFailedRelease(t *testing.T) {
 	}, "nvme0", "nvme1")
 
 	var released []string
-	c := &FabricsConnector{
+	c := &FabricsConnector{connector: connector{
 		subs: fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) { return s, nil }},
-		deleteCtrl: func(p string) error {
-			released = append(released, filepath.Base(p))
-			if filepath.Base(p) == "nvme1" {
+		deleteCtrl: func(ctrl nvme.Controller) error {
+			released = append(released, string(ctrl.ID))
+			if ctrl.ID == "nvme1" {
 				return errors.New("device busy")
 			}
 			return nil
-		},
-	}
+		}}}
 	err := c.Disconnect(context.Background(), testNQN)
 	if err == nil || !strings.Contains(err.Error(), "device busy") {
 		t.Errorf("Disconnect = %v, want it to report the failed release", err)
@@ -530,8 +515,7 @@ func TestTargets_ZeroOptionClearsControlPlaneValue(t *testing.T) {
 	conn := lvol.Connection{NQN: testNQN, Endpoints: []lvol.Endpoint{{
 		Transport: "tcp", Address: "10.0.0.1", Port: 4420, NrIOQueues: 8,
 	}}}
-	c := &FabricsConnector{}
-	opts := c.options(Targets(conn, WithNrIOQueues(0))[0])
+	opts := fabricsOptions(Targets(conn, WithNrIOQueues(0))[0], "", "")
 	if strings.Contains(opts, "nr_io_queues") {
 		t.Errorf("options = %q, want no nr_io_queues", opts)
 	}
@@ -545,8 +529,7 @@ func TestTargets_RenderIntoConnectOptions(t *testing.T) {
 		NrIOQueues: 8, ReconnectDelaySec: 2, KeepAliveTMOSec: 5,
 		CtrlLossTMOSec: &clt, FastIOFailTMOSec: &fiof, HostIface: "eth1", TLS: true,
 	}}}
-	c := &FabricsConnector{hostNQN: "nqn.host", hostID: "host-id"}
-	opts := c.options(Targets(conn)[0])
+	opts := fabricsOptions(Targets(conn)[0], "nqn.host", "host-id")
 	want := "transport=tcp,traddr=10.0.0.1,trsvcid=4420,nqn=" + testNQN +
 		",hostnqn=nqn.host,hostid=host-id,host_iface=eth1,nr_io_queues=8," +
 		"reconnect_delay=2,keep_alive_tmo=5,ctrl_loss_tmo=60,fast_io_fail_tmo=0,tls"
