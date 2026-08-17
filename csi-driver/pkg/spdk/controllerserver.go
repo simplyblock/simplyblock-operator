@@ -67,6 +67,7 @@ const (
 	paramClusterID          = "cluster_id"
 	paramZoneClusterMap     = "zone_cluster_map"
 	paramRegionClusterMap   = "region_cluster_map"
+	paramDHCHAPNodeLabel    = "dhchap_node_label" // exact DHCHAP allowed-node label key; see poolNodeLabelKey
 	topologyKeyZoneStable   = "topology.kubernetes.io/zone"
 	topologyKeyZoneBeta     = "failure-domain.beta.kubernetes.io/zone"
 	topologyKeyRegionStable = "topology.kubernetes.io/region"
@@ -90,6 +91,36 @@ const (
 	// wherever the consuming Pod's Kubernetes node/pod affinity schedules it.
 	topologyKeyStorageNodeUUIDPrefix = "simplyblock.io/storage-node-uuid."
 )
+
+// dhchapAllowedNodeLabelValue must match the literal value the operator's
+// syncNodeLabels writes onto every node in a pool's AllowedNodes
+// (simplyblockstoragepool_controller.go) — see dhchapAllowedNodeSegment.
+const dhchapAllowedNodeLabelValue = "allowed"
+
+// dhchapAllowedNodeSegment returns the DHCHAP allowed-node topology key/value
+// to pin PersistentVolume.spec.nodeAffinity to, or ("", "") for a plain,
+// ungated volume. Matches the exact key from paramDHCHAPNodeLabel rather than
+// a shared prefix, since a node can belong to more than one DHCHAP pool and
+// prefix-matching would AND their labels together into one nodeAffinity.
+//
+// Deliberately does not consult req.GetAccessibilityRequirements(): unlike
+// the zone/region segments below, which genuinely depend on which node a
+// specific volume/pod landed on, this constraint is node-independent ("any
+// node currently allowed for this pool") and its value is always the same
+// fixed constant, so there's nothing to look up. That matters because
+// AccessibilityRequirements is populated by external-provisioner only for
+// topology keys already registered in the node's CSINode object — fixed at
+// CSI plugin registration time — so a pool's label key would silently be
+// missing from it the first time a node is added to that pool, until the
+// plugin happens to re-register. Building the segment straight from the
+// StorageClass parameter sidesteps that registration-timing gap entirely.
+func dhchapAllowedNodeSegment(req *csi.CreateVolumeRequest) (key, val string) {
+	key = strings.TrimSpace(req.GetParameters()[paramDHCHAPNodeLabel])
+	if key == "" {
+		return "", ""
+	}
+	return key, dhchapAllowedNodeLabelValue
+}
 
 type controllerServer struct {
 	*csicommon.DefaultControllerServer
@@ -460,15 +491,29 @@ func (cs *controllerServer) CreateVolume(
 		csiVolume.VolumeContext["targetType"] = volType
 	}
 
-	if selection.topology != nil {
-		csiVolume.AccessibleTopology = []*csi.Topology{{Segments: copyTopologySegments(selection.topology)}}
+	// Merge in DHCHAP's allowed-node segment so its PV gets nodeAffinity too
+	// (issue #403) — resolveClusterSelection only tracks zone/region.
+	topologySegments := copyTopologySegments(selection.topology)
+	if key, val := dhchapAllowedNodeSegment(req); key != "" {
+		if topologySegments == nil {
+			topologySegments = map[string]string{}
+		}
+		topologySegments[key] = val
+	}
 
-		if zone := zoneFromSegments(selection.topology); zone != "" {
-			csiVolume.VolumeContext[topologyKeyZoneStable] = zone
-		}
-		if region := regionFromSegments(selection.topology); region != "" {
-			csiVolume.VolumeContext[topologyKeyRegionStable] = region
-		}
+	if len(topologySegments) > 0 {
+		csiVolume.AccessibleTopology = []*csi.Topology{{Segments: topologySegments}}
+	}
+	// selection.topology is nil for a StorageClass that selects its cluster
+	// directly via cluster_id (no zone/region routing configured) — the
+	// DHCHAP-gated case #403 added support for above. zoneFromSegments/
+	// regionFromSegments nil-check internally, so this stays a no-op rather
+	// than needing a guard here too.
+	if zone := zoneFromSegments(selection.topology); zone != "" {
+		csiVolume.VolumeContext[topologyKeyZoneStable] = zone
+	}
+	if region := regionFromSegments(selection.topology); region != "" {
+		csiVolume.VolumeContext[topologyKeyRegionStable] = region
 	}
 
 	// placement-hint is a one-shot creation-time hint. Now that the volume is fully
