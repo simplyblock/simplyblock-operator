@@ -41,6 +41,19 @@ const (
 	// trueStr is the literal "true" used for env-var / kubectl output comparisons.
 	trueStr = "true"
 
+	// scParamClusterID is the StorageClass parameter key tests use to pin a
+	// test-owned StorageClass to the live cluster rather than a possibly
+	// stale operator-created one.
+	scParamClusterID = "cluster_id"
+
+	// scParamMaxNamespacePerSubsys, set to "1", gives a volume its own
+	// NVMe-oF subsystem so its NQN (and PV "model" attribute) carry its own
+	// lvol id instead of a shared subsystem's master lvol id.
+	scParamMaxNamespacePerSubsys = "max_namespace_per_subsys"
+
+	// shPath is the shell used to run commands inside test/plugin pods.
+	shPath = "/bin/sh"
+
 	// Template YAML paths (relative to the e2e/ directory).
 	pvcPath                  = "templates/pvc.yaml"
 	cachepvcPath             = "templates/pvc-cache.yaml"
@@ -229,6 +242,8 @@ func deleteMultiPvcsAndTestPodWithMultiPvcs(ns string) {
 // waitForControllerReady and waitForNodeServerReady check system-level
 // components, not test resources, so they use the global nameSpace /
 // systemNamespace rather than a per-It namespace.
+//
+//nolint:unparam // e2e helper; timeout kept for call-site readability
 func waitForControllerReady(c kubernetes.Interface, timeout time.Duration) error {
 	ns := nameSpace
 	if operatorMode {
@@ -533,7 +548,7 @@ func execCommandInPodE(f *framework.Framework, cmd, ns string, opt *metav1.ListO
 		}
 	}
 	return e2epod.ExecWithOptions(f, e2epod.ExecOptions{
-		Command:            []string{"/bin/sh", "-c", cmd},
+		Command:            []string{shPath, "-c", cmd},
 		PodName:            pod.Name,
 		Namespace:          ns,
 		ContainerName:      pod.Spec.Containers[0].Name,
@@ -549,7 +564,7 @@ func getCommandInPodOpts(f *framework.Framework, cmd, ns string, opt *metav1.Lis
 	gomega.Expect(podList.Items).NotTo(gomega.BeEmpty(), "no pods matched selector %q", opt.LabelSelector)
 
 	return e2epod.ExecOptions{
-		Command:            []string{"/bin/sh", "-c", cmd},
+		Command:            []string{shPath, "-c", cmd},
 		PodName:            podList.Items[0].Name,
 		Namespace:          ns,
 		ContainerName:      podList.Items[0].Spec.Containers[0].Name,
@@ -960,8 +975,8 @@ func setupManagedWorkload(f *framework.Framework, m fullLossMode, appLabel strin
 	// disconnect affects only this volume (no cross-spec interference under
 	// parallelism), and staging never races a sibling's "already connected" path.
 	scParams := map[string]string{
-		"cluster_id":               liveClusterID(f),
-		"max_namespace_per_subsys": "1",
+		scParamClusterID:             liveClusterID(f),
+		scParamMaxNamespacePerSubsys: "1",
 	}
 	if !m.block {
 		scParams["csi.storage.k8s.io/fstype"] = m.fsType
@@ -991,7 +1006,7 @@ func setupManagedWorkload(f *framework.Framework, m fullLossMode, appLabel strin
 	ginkgo.By("locate the csi-node pod and the volume's NVMe subsystem")
 	pluginPod, pluginContainer := nodePluginPodOnNode(f.ClientSet, workerNode)
 	lvolID := lvolIDForPVC(f.ClientSet, ns, pvcName)
-	sub := waitForSubsystem(f, pluginPod, pluginContainer, lvolID, time.Minute)
+	sub := waitForSubsystem(f, pluginPod, pluginContainer, lvolID)
 
 	return managedWorkload{
 		ns:              ns,

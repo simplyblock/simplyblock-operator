@@ -44,6 +44,8 @@ import (
 const (
 	poolStatusInvalidClusterReference = "InvalidClusterReference"
 	poolEventInvalidClusterReference  = "InvalidClusterReference"
+
+	dhchapNodeLabelParam = "dhchap_node_label" // read by paramDHCHAPNodeLabel in csi-driver/pkg/spdk/controllerserver.go
 )
 
 // StoragePoolReconciler reconciles a StoragePool object
@@ -380,16 +382,18 @@ func (r *StoragePoolReconciler) createStorageClassIfNotExists(ctx context.Contex
 	}
 
 	if storagePoolCR.Spec.DHCHAP && len(storagePoolCR.Spec.AllowedNodes) > 0 {
+		nodeLabelKey := poolNodeLabelKey(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name)
 		sc.AllowedTopologies = []corev1.TopologySelectorTerm{
 			{
 				MatchLabelExpressions: []corev1.TopologySelectorLabelRequirement{
 					{
-						Key:    poolNodeLabelKey(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name),
+						Key:    nodeLabelKey,
 						Values: []string{"allowed"},
 					},
 				},
 			},
 		}
+		params[dhchapNodeLabelParam] = nodeLabelKey // CreateVolume can't derive this key on its own (#403)
 	}
 
 	if err := r.Create(ctx, sc); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -471,22 +475,21 @@ func (r *StoragePoolReconciler) syncNodeLabels(ctx context.Context, storagePoolC
 		currentSet[node.Name] = struct{}{}
 	}
 	for _, nodeName := range storagePoolCR.Spec.AllowedNodes {
-		if _, ok := currentSet[nodeName]; ok {
-			continue
+		if _, ok := currentSet[nodeName]; !ok {
+			var node corev1.Node
+			if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
+				return fmt.Errorf("failed to get node %s: %w", nodeName, err)
+			}
+			patch := client.MergeFrom(node.DeepCopy())
+			if node.Labels == nil {
+				node.Labels = make(map[string]string)
+			}
+			node.Labels[labelKey] = "allowed"
+			if err := r.Patch(ctx, &node, patch); err != nil {
+				return fmt.Errorf("failed to label node %s: %w", nodeName, err)
+			}
+			log.Info("Added pool label to node", "node", nodeName, "label", labelKey)
 		}
-		var node corev1.Node
-		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &node); err != nil {
-			return fmt.Errorf("failed to get node %s: %w", nodeName, err)
-		}
-		patch := client.MergeFrom(node.DeepCopy())
-		if node.Labels == nil {
-			node.Labels = make(map[string]string)
-		}
-		node.Labels[labelKey] = "allowed"
-		if err := r.Patch(ctx, &node, patch); err != nil {
-			return fmt.Errorf("failed to label node %s: %w", nodeName, err)
-		}
-		log.Info("Added pool label to node", "node", nodeName, "label", labelKey)
 	}
 
 	return nil

@@ -86,7 +86,7 @@ func newNodeServer(d *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*no
 		if ns.guardian != nil {
 			ns.guardian.MarkBrokenLvol(lvolID)
 		}
-	}, manager, ns.Driver.GetName())
+	}, manager, ns.Driver.GetName(), nodeName)
 
 	return ns, nil
 }

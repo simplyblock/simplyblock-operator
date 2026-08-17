@@ -65,8 +65,8 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT", func() {
 			// max_namespace_per_subsys=1 keeps each volume in its own NVMe-oF
 			// subsystem so its NQN carries this volume's own lvol id.
 			createStorageClassWithParams(f.ClientSet, scName, map[string]string{
-				"cluster_id":               liveClusterID(f),
-				"max_namespace_per_subsys": "1",
+				scParamClusterID:             liveClusterID(f),
+				scParamMaxNamespacePerSubsys: "1",
 			})
 			ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 			framework.ExpectNoError(createModePVC(f.ClientSet, ns, "spdkcsi-pvc", scName, false), "create PVC")
@@ -92,7 +92,7 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT", func() {
 			lvolID := lvolIDForPVC(f.ClientSet, ns, "spdkcsi-pvc")
 
 			ginkgo.By("find the NVMe subsystem and its live paths on the node")
-			sub := waitForSubsystem(f, pluginPod, pluginContainer, lvolID, time.Minute)
+			sub := waitForSubsystem(f, pluginPod, pluginContainer, lvolID)
 			origLive := liveControllers(sub)
 			framework.Logf("lvol %s subsystem %s has live paths: %v", lvolID, sub.NQN, origLive)
 
@@ -196,7 +196,7 @@ func lvolIDForPVC(c kubernetes.Interface, ns, pvcName string) string {
 // execInPod runs cmd in a specific pod/container and returns stdout.
 func execInPod(f *framework.Framework, ns, podName, container, cmd string) string {
 	opts := e2epod.ExecOptions{
-		Command:            []string{"/bin/sh", "-c", cmd},
+		Command:            []string{shPath, "-c", cmd},
 		PodName:            podName,
 		Namespace:          ns,
 		ContainerName:      container,
@@ -246,8 +246,9 @@ func subsystemForLvol(subs []nvmeSubsystem, lvolID string) *nvmeSubsystem {
 	return nil
 }
 
-// waitForSubsystem polls until the subsystem for lvolID appears on the node.
-func waitForSubsystem(f *framework.Framework, podName, container, lvolID string, timeout time.Duration) *nvmeSubsystem {
+// waitForSubsystem polls for up to a minute until the subsystem for lvolID
+// appears on the node.
+func waitForSubsystem(f *framework.Framework, podName, container, lvolID string) *nvmeSubsystem {
 	var found *nvmeSubsystem
 	var lastSubsys, lastList string
 	gomega.Eventually(func() *nvmeSubsystem {
@@ -256,7 +257,7 @@ func waitForSubsystem(f *framework.Framework, podName, container, lvolID string,
 		subs, _ := parseSubsystems(lastSubsys) // ignore parse errors here; raw is logged on timeout
 		found = subsystemForLvol(subs, lvolID)
 		return found
-	}, timeout, 3*time.Second).ShouldNot(gomega.BeNil(),
+	}, time.Minute, 3*time.Second).ShouldNot(gomega.BeNil(),
 		"NVMe subsystem for lvol %s never appeared on node (via %s).\nlast `nvme list-subsys -o json`:\n%s\nlast `nvme list`:\n%s", //nolint:lll // unwrappable string/log/signature
 		lvolID, podName, lastSubsys, lastList)
 	return found
