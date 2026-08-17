@@ -70,9 +70,13 @@ jobs:
 
       - name: Test
         working-directory: test/integration
+        env:
+          # Without this the suite skips itself and the job reports green having
+          # booted nothing.
+          SB_INTEGRATION: "1"
         # sg re-executes under the kvm group; without it the QEMU processes
         # talosctl spawns get no acceleration.
-        run: sg kvm -c 'go test -timeout 40m ./...'
+        run: sg kvm -c 'go test -v -timeout 40m ./...'
 
       # Cluster state and serial logs are the only way to read a boot failure
       # after the fact, and a failed run is exactly when they are wanted.
