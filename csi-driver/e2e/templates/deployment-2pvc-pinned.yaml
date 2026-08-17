@@ -1,0 +1,41 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: DEPLOY_NAME
+  namespace: DEPLOY_NS
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: DEPLOY_LABEL
+  template:
+    metadata:
+      labels:
+        app: DEPLOY_LABEL
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchFields:
+              - key: metadata.name
+                operator: In
+                values:
+                - NODE_NAME
+      containers:
+      - name: alpine
+        image: alpine:3
+        command: ["sleep", "365d"]
+        volumeMounts:
+        - name: vol1
+          mountPath: /spdkvol
+        - name: vol2
+          mountPath: /spdkvol2
+      volumes:
+      - name: vol1
+        persistentVolumeClaim:
+          claimName: PVC1_NAME
+      - name: vol2
+        persistentVolumeClaim:
+          claimName: PVC2_NAME
