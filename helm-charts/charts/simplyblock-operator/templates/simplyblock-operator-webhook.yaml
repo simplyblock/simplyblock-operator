@@ -93,6 +93,26 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: {{ .Release.Namespace }}
+      path: /validate-storage-simplyblock-io-v1alpha1-storagecluster
+  failurePolicy: Fail
+  name: vstoragecluster.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - storageclusters
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
       path: /validate-storage-simplyblock-io-v1alpha1-storagenode
   failurePolicy: Fail
   name: vstoragenode.simplyblock.io

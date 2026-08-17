@@ -424,10 +424,16 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			t.Fatalf("expected dto coding tuple to map to erasureCodingScheme, got %#v", current.Status)
 		}
 	})
+}
 
-	t.Run("create sends inline checksum and atomic 4k to backend", func(t *testing.T) {
+// TestStorageClusterReconcileCreationSendsChecksumValidation covers
+// spec.checkSumValidation threading into the POST /api/v2/clusters/ payload.
+// Kept separate from TestStorageClusterReconcileCreationPaths to stay under
+// the linter's cyclomatic-complexity limit for that (already large) table.
+func TestStorageClusterReconcileCreationSendsChecksumValidation(t *testing.T) {
+	newCreateMock := func(t *testing.T, respBody string) *webapimock.SpecServer {
+		t.Helper()
 		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
-		defer mock.Close()
 		mock.Register(
 			http.MethodGet,
 			"/api/v2/_meta/ready",
@@ -437,20 +443,50 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			http.MethodPost,
 			"/api/v2/clusters/",
 			webapimock.RouteResponse{
-				Status: http.StatusOK,
-				Body: `{
-					"id":"cluster-checksum-uuid",
-					"secret":"cluster-checksum-secret",
-					"nqn":"nqn.2026-04.io.simplyblock:cluster-checksum",
-					"distr_ndcs":1,
-					"distr_npcs":1,
-					"is_re_balancing":false,
-					"status":"online"
-				}`,
+				Status:  http.StatusOK,
+				Body:    respBody,
 				Headers: map[string]string{"Content-Type": "application/json"},
 			},
 		)
 		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+		return mock
+	}
+
+	createPayload := func(t *testing.T, mock *webapimock.SpecServer, cluster *simplyblockv1alpha1.StorageCluster) map[string]any {
+		t.Helper()
+		r := newClusterStateTestReconciler(t, cluster)
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)}); err != nil {
+			t.Fatalf("reconcile returned error: %v", err)
+		}
+
+		requests := mock.Requests()
+		var createReq *webapimock.RecordedRequest
+		for i := range requests {
+			if requests[i].Method == http.MethodPost && strings.HasPrefix(requests[i].Path, "/api/v2/clusters") {
+				createReq = &requests[i]
+			}
+		}
+		if createReq == nil {
+			t.Fatalf("expected a POST /api/v2/clusters/ request, got %#v", requests)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(createReq.Body, &body); err != nil {
+			t.Fatalf("failed to unmarshal create request body: %v", err)
+		}
+		return body
+	}
+
+	t.Run("sends inline checksum and atomic 4k to backend", func(t *testing.T) {
+		mock := newCreateMock(t, `{
+			"id":"cluster-checksum-uuid",
+			"secret":"cluster-checksum-secret",
+			"nqn":"nqn.2026-04.io.simplyblock:cluster-checksum",
+			"distr_ndcs":1,
+			"distr_npcs":1,
+			"is_re_balancing":false,
+			"status":"online"
+		}`)
+		defer mock.Close()
 
 		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
@@ -465,25 +501,8 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 				},
 			},
 		}
-		r := newClusterStateTestReconciler(t, cluster)
-		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)}); err != nil {
-			t.Fatalf("reconcile returned error: %v", err)
-		}
+		body := createPayload(t, mock, cluster)
 
-		requests := mock.Requests()
-		var createReq *webapimock.RecordedRequest
-		for i := range requests {
-			if requests[i].Method == http.MethodPost && strings.HasPrefix(requests[i].Path, "/api/v2/clusters") {
-				createReq = &requests[i]
-			}
-		}
-		if createReq == nil {
-			t.Fatalf("expected a POST /api/v2/clusters/ request, got %#v", requests)
-		}
-		var body map[string]any
-		if err := json.Unmarshal(createReq.Body, &body); err != nil {
-			t.Fatalf("failed to unmarshal create request body: %v", err)
-		}
 		if body["inline_checksum"] != true {
 			t.Fatalf("expected inline_checksum=true in create payload, got %#v", body["inline_checksum"])
 		}
@@ -492,32 +511,17 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("create omits inline checksum and atomic 4k by default", func(t *testing.T) {
-		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
+	t.Run("omits inline checksum and atomic 4k by default", func(t *testing.T) {
+		mock := newCreateMock(t, `{
+			"id":"cluster-no-checksum-uuid",
+			"secret":"cluster-no-checksum-secret",
+			"nqn":"nqn.2026-04.io.simplyblock:cluster-no-checksum",
+			"distr_ndcs":1,
+			"distr_npcs":1,
+			"is_re_balancing":false,
+			"status":"online"
+		}`)
 		defer mock.Close()
-		mock.Register(
-			http.MethodGet,
-			"/api/v2/_meta/ready",
-			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
-		)
-		mock.Register(
-			http.MethodPost,
-			"/api/v2/clusters/",
-			webapimock.RouteResponse{
-				Status: http.StatusOK,
-				Body: `{
-					"id":"cluster-no-checksum-uuid",
-					"secret":"cluster-no-checksum-secret",
-					"nqn":"nqn.2026-04.io.simplyblock:cluster-no-checksum",
-					"distr_ndcs":1,
-					"distr_npcs":1,
-					"is_re_balancing":false,
-					"status":"online"
-				}`,
-				Headers: map[string]string{"Content-Type": "application/json"},
-			},
-		)
-		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
 
 		cluster := &simplyblockv1alpha1.StorageCluster{
 			ObjectMeta: metav1.ObjectMeta{
@@ -527,25 +531,8 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 			},
 			Spec: simplyblockv1alpha1.StorageClusterSpec{},
 		}
-		r := newClusterStateTestReconciler(t, cluster)
-		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)}); err != nil {
-			t.Fatalf("reconcile returned error: %v", err)
-		}
+		body := createPayload(t, mock, cluster)
 
-		requests := mock.Requests()
-		var createReq *webapimock.RecordedRequest
-		for i := range requests {
-			if requests[i].Method == http.MethodPost && strings.HasPrefix(requests[i].Path, "/api/v2/clusters") {
-				createReq = &requests[i]
-			}
-		}
-		if createReq == nil {
-			t.Fatalf("expected a POST /api/v2/clusters/ request, got %#v", requests)
-		}
-		var body map[string]any
-		if err := json.Unmarshal(createReq.Body, &body); err != nil {
-			t.Fatalf("failed to unmarshal create request body: %v", err)
-		}
 		if _, present := body["inline_checksum"]; present {
 			t.Fatalf("expected inline_checksum to be omitted when unset, got %#v", body["inline_checksum"])
 		}
