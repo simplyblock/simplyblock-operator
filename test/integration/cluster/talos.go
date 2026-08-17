@@ -16,6 +16,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -91,6 +92,7 @@ type Cluster struct {
 	kubeconfig  string
 	talosconfig string
 	stateDir    string
+	addresses   []string
 }
 
 // nvmetPatch makes a node able to host a target.
@@ -177,10 +179,18 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 		_ = c.Destroy(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("create cluster %s: %w\n%s", cfg.Name, err, out)
 	}
-	// cluster create writes no kubeconfig; it is a separate command, reading the
-	// endpoints from the talosconfig just written.
-	if out, err := c.run(ctx, 2*time.Minute,
-		"--talosconfig", c.talosconfig, "kubeconfig", c.kubeconfig, "--force"); err != nil {
+	// cluster create writes no kubeconfig; it is a separate command, and it needs
+	// to be told which node to ask — cluster create leaves endpoints in the
+	// talosconfig but no nodes, so the address has to be read back out.
+	nodes, err := c.controlplaneAddresses(ctx)
+	if err != nil {
+		_ = c.Destroy(context.WithoutCancel(ctx))
+		return nil, err
+	}
+	c.addresses = nodes
+
+	if out, err := c.run(ctx, 2*time.Minute, "--talosconfig", c.talosconfig,
+		"kubeconfig", c.kubeconfig, "--nodes", nodes[0], "--force"); err != nil {
 		_ = c.Destroy(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("fetch kubeconfig for %s: %w\n%s", cfg.Name, err, out)
 	}
@@ -216,6 +226,39 @@ func (c *Cluster) Talosconfig() string { return c.talosconfig }
 
 // WorkDir holds the kubeconfig, talosconfig and cluster state.
 func (c *Cluster) WorkDir() string { return c.workDir }
+
+// controlplaneAddresses returns the Talos API addresses of the control plane,
+// which is what talosctl commands need as --nodes.
+//
+// The shape of `config info` output is read defensively: both fields are tried
+// and an unrecognised shape reports the raw output, so a format change says what
+// it changed to instead of failing as an empty list.
+func (c *Cluster) controlplaneAddresses(ctx context.Context) ([]string, error) {
+	out, err := c.run(ctx, time.Minute,
+		"--talosconfig", c.talosconfig, "config", "info", "--output", "json")
+	if err != nil {
+		return nil, fmt.Errorf("read talos context: %w\n%s", err, out)
+	}
+
+	var info struct {
+		Nodes     []string `json:"nodes"`
+		Endpoints []string `json:"endpoints"`
+	}
+	if err := json.Unmarshal([]byte(out), &info); err != nil {
+		return nil, fmt.Errorf("parse talos context: %w\nraw output:\n%s", err, out)
+	}
+	if len(info.Nodes) > 0 {
+		return info.Nodes, nil
+	}
+	if len(info.Endpoints) > 0 {
+		return info.Endpoints, nil
+	}
+	return nil, fmt.Errorf("talos context names neither nodes nor endpoints\nraw output:\n%s", out)
+}
+
+// Addresses are the cluster's Talos API addresses. They are also what an nvmet
+// target on a node advertises as its traddr.
+func (c *Cluster) Addresses() []string { return c.addresses }
 
 // reclaimWorkDir hands the work dir back to the current user so the unprivileged
 // side of the harness can read the kubeconfig talosctl wrote as root.
