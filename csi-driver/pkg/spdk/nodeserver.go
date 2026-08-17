@@ -600,20 +600,39 @@ const xfsFormatConfigPath = "/usr/share/xfsprogs/mkfs/lts_5.15.conf"
 // xfsStripeOptions: stripe geometry lives in sb_unit/sb_width/sb_logsunit and is
 // independent of the feature words.
 //
-// A missing config file is a warning rather than an error: mkfs.xfs treats an
+// An unusable config file is a warning rather than an error: mkfs.xfs treats an
 // unreadable -c options= path as fatal, so failing open keeps an image that predates
 // this pin able to format volumes at all, which is the safer failure for the el9
 // image whose built-in defaults already produce 0xb.
 func xfsFeatureOptions() []string {
-	if _, err := os.Stat(xfsFormatConfigPath); err != nil {
+	if err := checkXFSFormatConfig(); err != nil {
 		klog.Warningf(
-			"xfsFeatureOptions: %s not readable (%v); formatting with mkfs.xfs built-in defaults, which on a newer xfsprogs may produce a filesystem this kernel cannot mount", //nolint:lll // unwrappable string/log/signature
+			"xfsFeatureOptions: %s unusable (%v); formatting with mkfs.xfs built-in defaults, which on a newer xfsprogs may produce a filesystem this kernel cannot mount", //nolint:lll // unwrappable string/log/signature
 			xfsFormatConfigPath,
 			err,
 		)
 		return nil
 	}
 	return []string{"-c", "options=" + xfsFormatConfigPath}
+}
+
+// checkXFSFormatConfig reports whether mkfs.xfs will actually be able to consume the
+// pinned config.
+func checkXFSFormatConfig() error {
+	f, err := os.Open(xfsFormatConfigPath)
+	if err != nil {
+		return err
+	}
+	defer deferrers.Close(f)
+
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("not a regular file (mode %s)", info.Mode())
+	}
+	return nil
 }
 
 // must be idempotent
