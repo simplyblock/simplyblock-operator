@@ -106,8 +106,8 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT-GUARDIAN", func() {
 			ginkgo.By("locate both NVMe subsystems")
 			lvolID1 := lvolIDForPVC(f.ClientSet, ns, pvc1)
 			lvolID2 := lvolIDForPVC(f.ClientSet, ns, pvc2)
-			sub1 := waitForSubsystem(f, pluginPod, pluginContainer, lvolID1, time.Minute)
-			sub2 := waitForSubsystem(f, pluginPod, pluginContainer, lvolID2, time.Minute)
+			sub1 := waitForSubsystem(f, pluginPod, pluginContainer, lvolID1)
+			sub2 := waitForSubsystem(f, pluginPod, pluginContainer, lvolID2)
 
 			managedWorkload{pluginPod: pluginPod, pluginContainer: pluginContainer, sub: sub1}.induceTotalPathLoss(f)
 			managedWorkload{pluginPod: pluginPod, pluginContainer: pluginContainer, sub: sub2}.induceTotalPathLoss(f)
