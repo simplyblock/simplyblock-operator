@@ -571,6 +571,51 @@ func xfsStripeOptions(volumeContext map[string]string) []string {
 	return []string{"-d", fmt.Sprintf("su=%s,sw=%s", su, sw), "-l", fmt.Sprintf("su=%s", su)}
 }
 
+// xfsFormatConfigPath is the mkfs.xfs config file that pins which on-disk features
+// new xfs volumes are created with. xfsprogs ships it; the container image only has
+// to contain a matching xfsprogs. Kept in sync with the assertion in
+// deploy/image/Dockerfile_base.
+const xfsFormatConfigPath = "/usr/share/xfsprogs/mkfs/lts_5.15.conf"
+
+// xfsFeatureOptions returns the mkfs.xfs option that pins the on-disk feature set to
+// what the oldest supported host kernel can mount.
+//
+// mkfs.xfs derives feature bits from its own defaults and never asks the running
+// kernel what it supports, so a newer xfsprogs happily writes a filesystem that the
+// host then refuses to mount. The el10 base defaults to parent=1 (parent pointers),
+// which implies EXCHRANGE and yields sb_features_incompat=0xeb, while RHEL/Rocky 9
+// kernels accept only 0xb:
+//
+//	XFS (nvme0n1): Superblock has unknown incompatible features (0xc0) enabled.
+//	XFS (nvme0n1): Filesystem cannot be safely mounted by this kernel.
+//	XFS (nvme0n1): SB validate failed with error -22.
+//
+// Unlike the ext4 equivalent there is no repair path: xfs features can only be added,
+// never removed, and such a filesystem cannot be mounted even read-only. Prevention
+// is the only option.
+//
+// lts_5.15.conf is chosen over the closer lts_6.x baselines because it sits below the
+// floor of every el9 minor instead of tracking vendor backports -- 9.5 accepts 0xb
+// while 9.8 additionally accepts EXCHRANGE and NREXT64. The options compose with
+// xfsStripeOptions: stripe geometry lives in sb_unit/sb_width/sb_logsunit and is
+// independent of the feature words.
+//
+// A missing config file is a warning rather than an error: mkfs.xfs treats an
+// unreadable -c options= path as fatal, so failing open keeps an image that predates
+// this pin able to format volumes at all, which is the safer failure for the el9
+// image whose built-in defaults already produce 0xb.
+func xfsFeatureOptions() []string {
+	if _, err := os.Stat(xfsFormatConfigPath); err != nil {
+		klog.Warningf(
+			"xfsFeatureOptions: %s not readable (%v); formatting with mkfs.xfs built-in defaults, which on a newer xfsprogs may produce a filesystem this kernel cannot mount", //nolint:lll // unwrappable string/log/signature
+			xfsFormatConfigPath,
+			err,
+		)
+		return nil
+	}
+	return []string{"-c", "options=" + xfsFormatConfigPath}
+}
+
 // must be idempotent
 //
 //nolint:cyclop // many cases in switch increases complexity
@@ -599,6 +644,7 @@ func (ns *nodeServer) stageVolume(
 	formatOptions := []string{}
 
 	if fsType == "xfs" {
+		formatOptions = append(formatOptions, xfsFeatureOptions()...)
 		formatOptions = append(formatOptions, xfsStripeOptions(volumeContext)...)
 	}
 

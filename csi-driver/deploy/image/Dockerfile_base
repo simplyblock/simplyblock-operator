@@ -1,15 +1,4 @@
-FROM registry.access.redhat.com/ubi9/ubi:9.8 AS e2fsprogs-builder
-RUN dnf install -y gcc make gzip tar wget --nogpgcheck && \
-    wget -q https://www.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v1.47.0/e2fsprogs-1.47.0.tar.gz \
-        -O /tmp/e2fsprogs.tar.gz && \
-    echo "0b4fe723d779b0927fb83c9ae709bc7b40f66d7df36433bef143e41c54257084  /tmp/e2fsprogs.tar.gz" | sha256sum -c - && \
-    tar -xzf /tmp/e2fsprogs.tar.gz -C /tmp && \
-    cd /tmp/e2fsprogs-1.47.0 && \
-    ./configure --prefix=/usr --sbindir=/usr/sbin --disable-elf-shlibs && \
-    make -j$(nproc) && \
-    make install DESTDIR=/e2fsprogs-dist
-
-FROM registry.access.redhat.com/ubi9/ubi:9.8
+FROM registry.access.redhat.com/ubi10/ubi:10.2
 LABEL name="simplyblock"
 LABEL vendor="Simplyblock"
 LABEL version="1.0.0"
@@ -22,22 +11,62 @@ COPY LICENSE /licenses/LICENSE
 ARG TARGETPLATFORM
 RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
         echo "ARM64 version"; \
-        dnf install -y https://yum.oracle.com/repo/OracleLinux/OL9/baseos/latest/aarch64/getPackage/oraclelinux-release-el9-1.0-26.el9.aarch64.rpm ; \
+        dnf install -y https://yum.oracle.com/repo/OracleLinux/OL10/baseos/latest/aarch64/getPackage/oraclelinux-release-el10-1.0-17.el10.aarch64.rpm ; \
     else \
         echo "AMD64 version"; \
-        dnf install -y https://yum.oracle.com/repo/OracleLinux/OL9/baseos/latest/x86_64/getPackage/oraclelinux-release-el9-1.0-26.el9.x86_64.rpm ; \
+        dnf install -y https://yum.oracle.com/repo/OracleLinux/OL10/baseos/latest/x86_64/getPackage/oraclelinux-release-el10-1.0-17.el10.x86_64.rpm ; \
     fi
 
 RUN dnf update -y  --nogpgcheck
+
 RUN dnf install -y nvme-cli iscsi-initiator-utils e2fsprogs xfsprogs util-linux kmod wget sudo rpm --nogpgcheck && \
-    dnf remove -y python3-urllib3 python3-requests python3-idna vim-minimal --nogpgcheck && \
     dnf clean all
 
-# overwrite e2fsprogs 1.47.0 binaries (statically linked) over the OL9-packaged 1.46.5 version.
-# --disable-elf-shlibs builds against static internal libs so no .so files need copying.
-COPY --from=e2fsprogs-builder /e2fsprogs-dist/usr/sbin/tune2fs /usr/sbin/tune2fs
-COPY --from=e2fsprogs-builder /e2fsprogs-dist/usr/sbin/mke2fs  /usr/sbin/mke2fs
-COPY --from=e2fsprogs-builder /e2fsprogs-dist/usr/sbin/e2fsck  /usr/sbin/e2fsck
+# Trimmed to reduce the CVE surface picked up by the security scan. Guarded with
+# rpm -q so the build does not depend on whether the base still ships them, while a
+# package that IS present and fails to uninstall still fails the build.
+RUN set -eu; \
+    for p in python3-urllib3 python3-requests python3-idna vim-minimal; do \
+        if rpm -q "$p" >/dev/null 2>&1; then dnf remove -y --nogpgcheck "$p"; fi; \
+    done; \
+    dnf clean all
+
+# Fail the build if this image would write an on-disk format the oldest supported
+# host kernel cannot mount, or if the ext4 tool aliases disagree on version. Both
+# mkfs implementations work on a plain file, so this needs no privileges and no
+# block device. This matters because base_image is a floating tag rebuilt nightly:
+# without an assertion here, a base or xfsprogs/e2fsprogs update could change the
+# on-disk format with no accompanying code change.
+RUN set -eu; \
+    cd /tmp; \
+    xfsconf=/usr/share/xfsprogs/mkfs/lts_5.15.conf; \
+    [ -f "$xfsconf" ] || { echo "FATAL: $xfsconf missing; xfsprogs no longer ships the LTS baseline configs" >&2; exit 1; }; \
+    truncate -s 256M assert-ext4.img; \
+    mkfs.ext4 -F -q assert-ext4.img; \
+    feats="$(dumpe2fs -h assert-ext4.img 2>/dev/null | sed -n 's/^Filesystem features: *//p')"; \
+    echo "ASSERT ext4 features: $feats"; \
+    for bad in orphan_file FEATURE_C12; do \
+        case " $feats " in \
+        *" $bad "*) \
+            echo "FATAL: mkfs.ext4 enables $bad; e2fsprogs 1.46.5 (RHEL 9) cannot fsck or resize such a filesystem" >&2; \
+            exit 1;; \
+        esac; \
+    done; \
+    for pair in "mkfs.ext4 mke2fs" "fsck.ext4 e2fsck"; do \
+        set -- $pair; \
+        a="$($1 -V 2>&1 | head -1 | awk '{print $2}')"; \
+        b="$($2 -V 2>&1 | head -1 | awk '{print $2}')"; \
+        echo "ASSERT $1=$a $2=$b"; \
+        [ "$a" = "$b" ] || { echo "FATAL: $1 ($a) and $2 ($b) differ -- broken hardlink alias" >&2; exit 1; }; \
+    done; \
+    truncate -s 1G assert-xfs.img; \
+    mkfs.xfs -f -c "options=$xfsconf" -d su=16k,sw=1 -l su=16k assert-xfs.img >/dev/null; \
+    inc="$(xfs_db -r -c 'sb 0' -c 'p features_incompat' assert-xfs.img | awk '{print $3}')"; \
+    ro="$(xfs_db -r -c 'sb 0' -c 'p features_ro_compat' assert-xfs.img | awk '{print $3}')"; \
+    echo "ASSERT xfs features_incompat=$inc features_ro_compat=$ro"; \
+    [ "$inc" = "0xb" ] || { echo "FATAL: xfs features_incompat=$inc, want 0xb; RHEL/Rocky 9 kernels reject anything more" >&2; exit 1; }; \
+    [ "$ro" = "0xd" ] || { echo "FATAL: xfs features_ro_compat=$ro, want 0xd" >&2; exit 1; }; \
+    rm -f assert-ext4.img assert-xfs.img
 
 RUN useradd -ms /bin/bash simplyblock
 RUN echo "simplyblock  ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
