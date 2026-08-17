@@ -303,7 +303,7 @@ func TestConnectDevice(t *testing.T) {
 
 	t.Run("connects then returns the device", func(t *testing.T) {
 		connected := false
-		c := &FabricsConnector{
+		c := &FabricsConnector{connector: connector{
 			poll: time.Millisecond,
 			subs: fakeSubs{byNQN: func(_ context.Context, nqn string) (nvme.Subsystem, error) {
 				if !connected {
@@ -311,8 +311,7 @@ func TestConnectDevice(t *testing.T) {
 				}
 				return liveSub(nqn, "10.0.0.1")
 			}},
-			connect: func(context.Context, string) (string, error) { connected = true; return "", nil },
-		}
+			attach: func(context.Context, Target) (string, error) { connected = true; return "", nil }}}
 		devs := &fakeDevs{snapshots: [][]nvme.Device{{}, {d}}}
 
 		got, err := ConnectDevice(waitCtx(t), c, devs, Target{NQN: "nqn.x", Address: "10.0.0.1"}, 0)
@@ -325,13 +324,12 @@ func TestConnectDevice(t *testing.T) {
 	})
 
 	t.Run("connect failure is not waited out", func(t *testing.T) {
-		c := &FabricsConnector{
+		c := &FabricsConnector{connector: connector{
 			poll: time.Millisecond,
 			subs: fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) { return notFound() }},
-			connect: func(context.Context, string) (string, error) {
+			attach: func(context.Context, Target) (string, error) {
 				return "", errors.New("connection refused")
-			},
-		}
+			}}}
 		devs := &fakeDevs{snapshots: [][]nvme.Device{{d}}}
 
 		_, err := ConnectDevice(waitCtx(t), c, devs, Target{NQN: "nqn.x", Address: "a"}, 0)
