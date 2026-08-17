@@ -41,6 +41,10 @@ type ClusterAddParams struct {
 	SpdkVcpuCount       int   `json:"spdk_vcpu_count,omitempty"`
 	HugepagesMem        int64 `json:"hugepages_mem,omitempty"`
 	MaxSubsys           uint  `json:"max_subsys,omitempty"`
+	// DeviceMode selects "nvme" (default) or "lblk" device attachment for the whole
+	// cluster. Requires sbcli with lblk support (simplyblock/sbcli#1224) — sending
+	// "lblk" against an unpatched backend is rejected.
+	DeviceMode string `json:"device_mode,omitempty"`
 }
 
 type ClusterUpdateParams struct {

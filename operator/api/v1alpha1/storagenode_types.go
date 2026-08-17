@@ -69,6 +69,30 @@ type StorageNodeOverrides struct {
 	// +optional
 	DeviceNames []string `json:"deviceNames,omitempty"`
 
+	// EnableLblk overrides whether this node uses Linux block devices (SPDK AIO bdevs)
+	// instead of NVMe PCIe devices. Only meaningful when the parent StorageCluster's
+	// spec.deviceMode is "lblk".
+	// +optional
+	EnableLblk *bool `json:"enableLblk,omitempty"`
+
+	// BlkNames overrides the block-device kernel-name selector for this node.
+	// +optional
+	BlkNames []string `json:"blkNames,omitempty"`
+
+	// BlkNamesExclude overrides the block-device kernel-name exclusion selector for
+	// this node.
+	// +optional
+	BlkNamesExclude []string `json:"blkNamesExclude,omitempty"`
+
+	// BlkSerials overrides the block-device serial/WWN selector for this node.
+	// +optional
+	BlkSerials []string `json:"blkSerials,omitempty"`
+
+	// LblkJournalPercent overrides the lblk journal-partition capacity percentage for
+	// this node.
+	// +optional
+	LblkJournalPercent *int32 `json:"lblkJournalPercent,omitempty"`
+
 	// EnableCpuTopology overrides topology-aware CPU handling for this node.
 	// +optional
 	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`

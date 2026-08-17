@@ -106,6 +106,39 @@ type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Device Names"
 	// DeviceNames explicitly defines a comma separated list of nvme namespace names like nvme0n1,nvme1n1...
 	DeviceNames []string `json:"deviceNames,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Linux Block Devices"
+	// EnableLblk selects Linux block devices (via SPDK AIO bdevs) instead of NVMe PCIe
+	// devices for this fleet. Only meaningful when the parent StorageCluster's
+	// spec.deviceMode is "lblk"; mutually exclusive with PcieAllowList/PcieDenyList/
+	// PcieModel/DriveSizeRange/DeviceNames — the backend rejects a node configured with
+	// both NVMe and lblk selection.
+	// +k8s:immutable
+	// +optional
+	EnableLblk *bool `json:"enableLblk,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Block Device Names"
+	// BlkNames selects block devices by kernel name (e.g. "sdb","sdc") when EnableLblk is
+	// set. Without a selector (BlkNames/BlkNamesExclude/BlkSerials all empty), every
+	// eligible whole disk on the node is used. At most one of BlkNames, BlkNamesExclude,
+	// BlkSerials may be set.
+	// +optional
+	BlkNames []string `json:"blkNames,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Block Device Names Exclude"
+	// BlkNamesExclude excludes block devices by kernel name when EnableLblk is set; all
+	// other eligible whole disks are used.
+	// +optional
+	BlkNamesExclude []string `json:"blkNamesExclude,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Block Device Serials"
+	// BlkSerials selects block devices by serial number or WWN when EnableLblk is set —
+	// stable across kernel device-name changes/reboots, the recommended selector for
+	// cloud/virtualized disks whose /dev/sdX name is not guaranteed stable.
+	// +optional
+	BlkSerials []string `json:"blkSerials,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Lblk Journal Percent"
+	// LblkJournalPercent is the percentage of a selected partition's capacity carved out
+	// for the journal when the smallest selected lblk device is a partition rather than a
+	// whole disk. Ignored for whole-disk selections. Backend default is 3 when unset.
+	// +optional
+	LblkJournalPercent *int32 `json:"lblkJournalPercent,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Ubuntu Host"
 	// UbuntuHost indicates the node host OS is Ubuntu.
 	UbuntuHost *bool `json:"ubuntuHost,omitempty"`

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -420,6 +421,113 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		}
 		if current.Status.ErasureCodingScheme != "4x2" {
 			t.Fatalf("expected dto coding tuple to map to erasureCodingScheme, got %#v", current.Status)
+		}
+	})
+}
+
+// TestStorageClusterReconcileCreationSendsDeviceMode verifies spec.deviceMode reaches
+// the backend create payload, and that "nvme" (the implicit default) is omitted so
+// older backends without lblk support (simplyblock/sbcli#1224) see no change in
+// behavior.
+func TestStorageClusterReconcileCreationSendsDeviceMode(t *testing.T) {
+	newCreateMock := func(t *testing.T, respBody string) *webapimock.SpecServer {
+		t.Helper()
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
+		mock.Register(
+			http.MethodGet,
+			"/api/v2/_meta/ready",
+			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+		)
+		mock.Register(
+			http.MethodPost,
+			"/api/v2/clusters/",
+			webapimock.RouteResponse{
+				Status:  http.StatusOK,
+				Body:    respBody,
+				Headers: map[string]string{"Content-Type": "application/json"},
+			},
+		)
+		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+		return mock
+	}
+
+	createPayload := func(t *testing.T, mock *webapimock.SpecServer, cluster *simplyblockv1alpha1.StorageCluster) map[string]any {
+		t.Helper()
+		r := newClusterStateTestReconciler(t, cluster)
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)}); err != nil {
+			t.Fatalf("reconcile returned error: %v", err)
+		}
+
+		requests := mock.Requests()
+		var createReq *webapimock.RecordedRequest
+		for i := range requests {
+			if requests[i].Method == http.MethodPost && strings.HasPrefix(requests[i].Path, "/api/v2/clusters") {
+				createReq = &requests[i]
+			}
+		}
+		if createReq == nil {
+			t.Fatalf("expected a POST /api/v2/clusters/ request, got %#v", requests)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(createReq.Body, &body); err != nil {
+			t.Fatalf("failed to unmarshal create request body: %v", err)
+		}
+		return body
+	}
+
+	t.Run("sends lblk device mode to backend", func(t *testing.T) {
+		mock := newCreateMock(t, `{
+			"id":"cluster-lblk-uuid",
+			"secret":"cluster-lblk-secret",
+			"nqn":"nqn.2026-04.io.simplyblock:cluster-lblk",
+			"distr_ndcs":1,
+			"distr_npcs":1,
+			"is_re_balancing":false,
+			"status":"online"
+		}`)
+		defer mock.Close()
+
+		cluster := &simplyblockv1alpha1.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "cluster-lblk",
+				Namespace:  "default",
+				Finalizers: []string{utils.FinalizerStorageCluster},
+			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
+				DeviceMode: "lblk",
+			},
+		}
+		body := createPayload(t, mock, cluster)
+
+		if body["device_mode"] != "lblk" {
+			t.Fatalf("expected device_mode=lblk in create payload, got %#v", body["device_mode"])
+		}
+	})
+
+	t.Run("omits device mode by default", func(t *testing.T) {
+		mock := newCreateMock(t, `{
+			"id":"cluster-no-devicemode-uuid",
+			"secret":"cluster-no-devicemode-secret",
+			"nqn":"nqn.2026-04.io.simplyblock:cluster-no-devicemode",
+			"distr_ndcs":1,
+			"distr_npcs":1,
+			"is_re_balancing":false,
+			"status":"online"
+		}`)
+		defer mock.Close()
+
+		cluster := &simplyblockv1alpha1.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "cluster-no-devicemode",
+				Namespace:  "default",
+				Finalizers: []string{utils.FinalizerStorageCluster},
+			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
+		}
+		body := createPayload(t, mock, cluster)
+
+		if _, present := body["device_mode"]; present {
+			t.Fatalf("expected device_mode to be omitted when unset, got %#v", body["device_mode"])
 		}
 	})
 }
