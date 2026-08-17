@@ -853,6 +853,10 @@ func reconnectSubsystems(markBroken func(lvolID string), manager *sbkube.Manager
 
 				// Only mark the device present once we have a confirmed lvolID,
 				// so the cleanup loop never sees a device without a mapping.
+				// TODO: replace devicePresentMap/deviceToLvolIDMap with a live
+				// sysfs scan via atlas nvme.SysfsDeviceResolver once the atlas
+				// connector is sufficiently tested — these maps duplicate what
+				// atlas already reads from /sys.
 				mu.Lock()
 				devicePresentMap[device.devicePath] = true
 				deviceToLvolIDMap[device.devicePath] = lvolID
@@ -1005,6 +1009,9 @@ func connectViaNVMe(ctx context.Context, conn *LvolConnectResp, ctrlLossTmo int,
 		cmd = append(cmd, "-f", conn.HostIface)
 	}
 	if err := execWithTimeoutRetry(ctx, cmd, 40, retries); err != nil {
+		if strings.Contains(err.Error(), "already connected") {
+			return nil
+		}
 		klog.Errorf("nvme connect failed: %v", err)
 		return err
 	}
