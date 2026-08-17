@@ -116,7 +116,7 @@ type StorageNodeSetAddParams struct {
 	CRNameSpace         string   `json:"cr_namespace,omitempty"`
 	CRPlural            string   `json:"cr_plural,omitempty"`
 	Format4K            bool     `json:"format_4k,omitempty"`
-	EnableTestDevice    bool     `json:"enable_test_device,omitempty"`
+	EnableTestDevice    bool     `json:"test_device,omitempty"`
 	SpdkSystemMemory    string   `json:"spdk_sys_mem,omitempty"`
 	// FailureDomain assigns this node to a failure-domain group (integer ≥ 1).
 	// Required when the cluster has EnableFailureDomain=true; omit (zero value) otherwise.
