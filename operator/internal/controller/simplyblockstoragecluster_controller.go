@@ -253,6 +253,8 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		BackupConfig:           backupConfig,
 		HashicorpVaultSettings: vaultConfig,
 		EnableFailureDomain:    ptr.BoolFromOrFalse(clusterCR.Spec.EnableFailureDomains),
+		InlineChecksum:         inlineChecksumEnabled(clusterCR.Spec.CheckSumValidation),
+		Atomic4k:               atomic4kEnabled(clusterCR.Spec.CheckSumValidation),
 	}
 
 	endpoint = "/api/v2/clusters/"
@@ -706,4 +708,18 @@ func stripeParityChunks(s *simplyblockv1alpha1.StripeSpec) int {
 		return 1
 	}
 	return ptr.IntFrom(s.ParityChunks, 1)
+}
+
+func inlineChecksumEnabled(c *simplyblockv1alpha1.CheckSumValidationSpec) bool {
+	if c == nil {
+		return false
+	}
+	return ptr.BoolFromOrFalse(c.InlineChecksum)
+}
+
+func atomic4kEnabled(c *simplyblockv1alpha1.CheckSumValidationSpec) bool {
+	if c == nil {
+		return false
+	}
+	return ptr.BoolFromOrFalse(c.Atomic4k)
 }

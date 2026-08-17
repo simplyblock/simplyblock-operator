@@ -41,6 +41,13 @@ type ClusterAddParams struct {
 	SpdkVcpuCount       int   `json:"spdk_vcpu_count,omitempty"`
 	HugepagesMem        int64 `json:"hugepages_mem,omitempty"`
 	MaxSubsys           uint  `json:"max_subsys,omitempty"`
+	// InlineChecksum enables inline CRC checksum validation for silent-data-error protection.
+	// Requires backend support on the /api/v2/clusters/ endpoint (sbcli PR #1250, not merged
+	// as of this writing) — sending it against an unpatched backend is a silent no-op.
+	InlineChecksum bool `json:"inline_checksum,omitempty"`
+	// Atomic4k declares 4K write atomicity on devices with a <4K logical block size. Only
+	// meaningful when InlineChecksum is true. Same backend-support caveat as InlineChecksum.
+	Atomic4k bool `json:"atomic_4k,omitempty"`
 }
 
 type ClusterUpdateParams struct {

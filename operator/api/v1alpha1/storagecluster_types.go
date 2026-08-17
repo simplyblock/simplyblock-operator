@@ -77,6 +77,26 @@ type DataRealignmentSettings struct {
 	Interval *metav1.Duration `json:"interval,omitempty"`
 }
 
+// CheckSumValidationSpec configures inline CRC checksum validation for silent-data-error
+// protection (backend design ref TD.100226.1). The backend bakes the checksum method into
+// each device's bdev_alceml_create call at cluster-create time and never re-applies it, so
+// this whole struct is frozen once the cluster exists — there is no supported way to change
+// it after the fact.
+type CheckSumValidationSpec struct {
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Inline Checksum"
+	// InlineChecksum enables inline CRC checksum validation on every IO for silent-data-error
+	// protection. Cannot be enabled or disabled after cluster creation.
+	// +kubebuilder:default=false
+	InlineChecksum *bool `json:"inlineChecksum,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="4K Atomic Writes"
+	// Atomic4k declares that devices guarantee 4K write atomicity even with a <4K logical
+	// block size (e.g. AWS NVMe is 512B but atomic at 4K), letting checksum fallback mode run
+	// on them despite the data plane's normal >=4K block-size requirement. Only meaningful
+	// when InlineChecksum is true. Cannot be changed after cluster creation.
+	// +kubebuilder:default=false
+	Atomic4k *bool `json:"atomic4k,omitempty"`
+}
+
 // MetricsBackend selects the NodeMetricsProvider implementation.
 // +kubebuilder:validation:Enum=controlplane;prometheus;uniform
 type MetricsBackend string
@@ -208,6 +228,7 @@ type BackupSpec struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.nvmfBasePort) || self.nvmfBasePort == oldSelf.nvmfBasePort",message="nvmfBasePort is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.rpcBasePort) || self.rpcBasePort == oldSelf.rpcBasePort",message="rpcBasePort is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.snodeApiPort) || self.snodeApiPort == oldSelf.snodeApiPort",message="snodeApiPort is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.checkSumValidation) || self.checkSumValidation == oldSelf.checkSumValidation",message="checkSumValidation is immutable once set"
 type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Node Affinity"
 	// EnableNodeAffinity enables node-affinity placement for storage components.
@@ -304,6 +325,14 @@ type StorageClusterSpec struct {
 	// +k8s:immutable
 	// +optional
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
+
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Checksum Validation"
+	// CheckSumValidation configures inline CRC checksum validation for silent-data-error
+	// protection. Immutable once set — frozen at cluster-create time on the backend, with no
+	// upgrade path for existing clusters.
+	// +k8s:immutable
+	// +optional
+	CheckSumValidation *CheckSumValidationSpec `json:"checkSumValidation,omitempty"`
 }
 
 // StorageClusterStatus defines the observed state of StorageCluster.
