@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/simplyblock/atlas/errs"
+	atlasnvme "github.com/simplyblock/atlas/nvme"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -14,6 +16,27 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
+
+// nullDeviceResolver satisfies atlasnvme.DeviceResolver for unit tests.
+// All lookups return ErrNotFound so subsystemNQN falls back to the cached NQN
+// stored in LvolState.SubsystemNQN (empty in most tests → individual restart path).
+type nullDeviceResolver struct{}
+
+func (nullDeviceResolver) List(_ context.Context) ([]atlasnvme.Device, error) {
+	return nil, nil
+}
+func (nullDeviceResolver) ListWithSelector(_ context.Context, _ atlasnvme.DeviceSelector) ([]atlasnvme.Device, error) {
+	return nil, nil
+}
+func (nullDeviceResolver) ByUUID(_ context.Context, _ string) (atlasnvme.Device, error) {
+	return atlasnvme.Device{}, errs.ErrNotFound
+}
+func (nullDeviceResolver) ByDevicePath(_ context.Context, _ string) (atlasnvme.Device, error) {
+	return atlasnvme.Device{}, errs.ErrNotFound
+}
+func (nullDeviceResolver) ByNamespace(_ context.Context, _ string, _ atlasnvme.NamespaceID) (atlasnvme.Device, error) {
+	return atlasnvme.Device{}, errs.ErrNotFound
+}
 
 const (
 	testOptInKey   = "simplyblock.io/auto-restart-on-pathloss"
@@ -35,6 +58,7 @@ func newTestGuardian(cs *fake.Clientset) *Guardian {
 			StatePath:       "", // disable on-disk persistence
 		},
 		cs:                 cs,
+		devices:            nullDeviceResolver{},
 		lastRestart:        make(map[string]time.Time),
 		lvols:              make(map[string]*LvolState),
 		clusterWasInactive: make(map[string]bool),
@@ -322,6 +346,71 @@ func TestCoordinatedSubsystemRestart_DeleteNotFound_CountedAsDeleted(t *testing.
 	)
 	if got != 1 {
 		t.Fatalf("NotFound should be treated as deleted; expected 1, got %d", got)
+	}
+}
+
+// ─── issue #423 regression tests ─────────────────────────────────────────────
+
+// Manifestation A: a pod tracked on two lvols must be restarted exactly once
+// per tick. Before the fix, removePodFromLvolLocked deleted lastRestart[podUID]
+// as soon as the first lvol's PodUIDs set emptied, even though the pod was still
+// present on the second lvol. The second lvol then saw no backoff record and
+// issued a second delete call for the same already-terminating pod.
+func TestRestartBrokenLvols_MultiLvol_PodRestartedOnce(t *testing.T) {
+	pod := controlledOptInPod("pod-a", "uid-1")
+	g := newTestGuardian(fake.NewSimpleClientset(&pod))
+
+	// Pod is tracked on two individual-subsystem lvols (simulates 2 PVCs).
+	g.lvols["lvol-a"] = &LvolState{ClusterID: "cid", PodUIDs: map[string]struct{}{"uid-1": {}}}
+	g.lvols["lvol-b"] = &LvolState{ClusterID: "cid", PodUIDs: map[string]struct{}{"uid-1": {}}}
+
+	podsByLvol := map[string][]string{
+		"lvol-a": {"uid-1"},
+		"lvol-b": {"uid-1"},
+	}
+
+	restarted := g.restartBrokenLvols(
+		context.Background(), "cid",
+		[]string{"lvol-a", "lvol-b"},
+		podsByLvol, buildUIDToPod(pod),
+	)
+
+	// Pod must be deleted exactly once — the second lvol must see the active backoff.
+	if restarted != 1 {
+		t.Errorf("expected 1 restart, got %d — double-delete bug #423-A", restarted)
+	}
+	// lastRestart must still be set after the tick; the bug cleared it prematurely.
+	if _, ok := g.lastRestart["uid-1"]; !ok {
+		t.Error("lastRestart[uid-1] was erased while pod still tracked on lvol-b (bug #423-A)")
+	}
+}
+
+// Manifestation B: RegisterUnpublish must only remove the pod from the specific
+// lvolID being unpublished, not from every lvol in g.lvols. Before the fix,
+// unpublishing vol-A silently wiped vol-B from tracking — a subsequent break on
+// vol-B would hit MarkBrokenLvol, find an unknown lvol, and silently skip it.
+func TestRegisterUnpublish_OnlyRemovesTargetLvol(t *testing.T) {
+	g := newTestGuardian(fake.NewSimpleClientset())
+
+	// Pod is tracking two lvols (two mounted PVCs).
+	g.lvols["lvol-a"] = &LvolState{ClusterID: "cid", PodUIDs: map[string]struct{}{"uid-1": {}}}
+	g.lvols["lvol-b"] = &LvolState{ClusterID: "cid", PodUIDs: map[string]struct{}{"uid-1": {}}}
+
+	// Unpublish only lvol-a. Target path encodes the pod UID in the standard kubelet format.
+	g.RegisterUnpublish("lvol-a", "/var/lib/kubelet/pods/uid-1/volumes/kubernetes.io~csi/pvc-a/mount")
+
+	// lvol-a must be removed.
+	if _, ok := g.lvols["lvol-a"]; ok {
+		t.Error("lvol-a should have been removed from g.lvols after unpublish")
+	}
+
+	// lvol-b must still be tracked — the old bug wiped it alongside lvol-a.
+	st, ok := g.lvols["lvol-b"]
+	if !ok {
+		t.Fatal("lvol-b was incorrectly wiped from g.lvols by unpublish of lvol-a (bug #423-B)")
+	}
+	if _, tracked := st.PodUIDs["uid-1"]; !tracked {
+		t.Error("uid-1 was incorrectly removed from lvol-b.PodUIDs (bug #423-B)")
 	}
 }
 
