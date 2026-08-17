@@ -273,6 +273,57 @@ func TestCLIConnectPaths_InheritsThePathHandling(t *testing.T) {
 	}
 }
 
+// nvme-cli against an unreachable target blocks for as long as it likes, so
+// every invocation needs a deadline. The per-path one normally supplies it, but
+// WithPathTimeout(0) turns that off by design, and a caller context need not
+// carry one either — so the connector has to guarantee it itself.
+func TestCLIConnect_BoundsEveryInvocation(t *testing.T) {
+	t.Run("no per-path bound and no caller deadline", func(t *testing.T) {
+		var deadline time.Time
+		var hadDeadline bool
+		c := NewCLIConnector(fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) {
+			return notFound()
+		}}, WithPathTimeout(0), WithPollInterval(time.Millisecond))
+		c.attach = c.connect
+		c.run = func(ctx context.Context, _ ...string) ([]byte, error) {
+			deadline, hadDeadline = ctx.Deadline()
+			// Fail so connectPath returns instead of waiting for a controller
+			// that will never appear on a context with no deadline.
+			return nil, errors.New("exit status 1")
+		}
+
+		start := time.Now()
+		_ = c.Connect(context.Background(), Target{NQN: "nqn.x", Address: "10.0.0.1"})
+		if !hadDeadline {
+			t.Fatal("nvme-cli was run on a context with no deadline; an unreachable target would hang it")
+		}
+		if left := deadline.Sub(start); left > cliTimeout+time.Second {
+			t.Errorf("deadline is %v out, want no more than the %v backstop", left, cliTimeout)
+		}
+	})
+
+	// The backstop must not loosen a tighter bound the caller already set.
+	t.Run("a tighter caller deadline still wins", func(t *testing.T) {
+		var deadline time.Time
+		c := NewCLIConnector(fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) {
+			return notFound()
+		}}, WithPathTimeout(0), WithPollInterval(time.Millisecond))
+		c.attach = c.connect
+		c.run = func(ctx context.Context, _ ...string) ([]byte, error) {
+			deadline, _ = ctx.Deadline()
+			return nil, errors.New("exit status 1")
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		_ = c.Connect(ctx, Target{NQN: "nqn.x", Address: "10.0.0.1"})
+		if left := deadline.Sub(start); left > time.Second {
+			t.Errorf("deadline is %v out; the caller asked for 250ms and that must win", left)
+		}
+	})
+}
+
 // Options are the shared ones and must reach the embedded base, or a caller
 // switching connectors silently loses its timeouts.
 func TestNewCLIConnector_AppliesSharedOptions(t *testing.T) {

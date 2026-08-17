@@ -44,9 +44,13 @@ type CLIConnector struct {
 
 var _ Connector = (*CLIConnector)(nil)
 
-// cliTimeout bounds a single nvme-cli invocation. nvme-cli can block on an
-// unreachable target for far longer than a caller's per-path budget, and the
-// point of that budget is that one dead node must not consume the whole attach.
+// cliTimeout is a backstop on a single nvme-cli invocation, not the normal
+// bound. Ordinarily connectPath's per-path deadline is much tighter and wins,
+// since context.WithTimeout keeps the earlier of the two; this exists for the
+// case where there is no tighter one — WithPathTimeout(0) and a caller context
+// carrying no deadline of its own. Without it, nvme-cli against an unreachable
+// target would block for as long as it likes, which is what the per-path budget
+// exists to prevent.
 const cliTimeout = 40 * time.Second
 
 // NewCLIConnector returns a connector that drives nvme-cli, reading controller
@@ -73,6 +77,11 @@ func NewCLIConnector(subs nvme.SubsystemResolver, opts ...Option) *CLIConnector 
 // the two is what made the original incident unreadable: the connect looked
 // fine, so nothing looked wrong.
 func (c *CLIConnector) connect(ctx context.Context, t Target) (string, error) {
+	// The caller's deadline still wins when it is the earlier one; this only
+	// ensures there is one at all.
+	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
+	defer cancel()
+
 	out, err := c.run(ctx, c.connectArgs(t)...)
 	if err == nil {
 		return string(out), nil
