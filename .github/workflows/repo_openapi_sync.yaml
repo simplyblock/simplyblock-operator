@@ -165,7 +165,7 @@ jobs:
         run: |
           {
             echo "Exported from [simplyblock-io/sbcli@${SBCLI_SHA:0:12}](https://github.com/simplyblock-io/sbcli/commit/$SBCLI_SHA)"
-            echo "by \`.github/workflows/openapi_sync.yaml\`."
+            echo "by \`.github/workflows/repo_openapi_sync.yaml\`."
             echo
             [ -f "$RUNNER_TEMP/summary.md" ] && cat "$RUNNER_TEMP/summary.md"
             echo
