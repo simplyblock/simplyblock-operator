@@ -65,6 +65,9 @@ func TestSmoke_NodeCanHostATarget(t *testing.T) {
 				t.Errorf("module %s not loaded; the machine-config patch did not take effect", mod)
 			}
 		}
+		// The initiator side is compiled into Talos' kernel rather than built as
+		// modules, so it is absent from /proc/modules and present all the same.
+		// Asserting on it here would fail for the wrong reason.
 	})
 
 	// Talos does not mount configfs, so the pod does. Without it a target cannot

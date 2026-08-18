@@ -96,9 +96,13 @@ type Cluster struct {
 
 // nvmetPatch makes a node able to host a target.
 //
+// Only the target side is listed, and that is deliberate: Talos builds
+// NVME_TARGET and NVME_TARGET_TCP as modules, but NVME_TCP, NVME_FABRICS and
+// NVME_CORE are compiled in. Asking Talos to load a built-in leaves it looking
+// for a .ko that was never built. Do not add the initiator modules back — they
+// are already there.
+//
 // Module names are the kernel's, not the package's: nvmet_tcp, not nvmet-tcp.
-// nvme_tcp and nvme_fabrics are the initiator side, since these nodes also
-// attach volumes.
 //
 // configfs is absent on purpose. Talos does not mount it and the machine config
 // has no knob for it, so the pod that writes nvmet configfs mounts it — the
@@ -108,8 +112,6 @@ const nvmetPatch = `machine:
     modules:
       - name: nvmet
       - name: nvmet_tcp
-      - name: nvme_tcp
-      - name: nvme_fabrics
 `
 
 // schedulablePatch lets pods run on the control plane, which a single-node
@@ -186,8 +188,11 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 	}
 
 	if out, err := c.run(ctx, 20*time.Minute, args...); err != nil {
+		// Capture what the cluster looked like before tearing it down: destroy
+		// removes the only evidence of why create failed.
+		diag := c.diagnose(context.WithoutCancel(ctx))
 		_ = c.Destroy(context.WithoutCancel(ctx))
-		return nil, fmt.Errorf("create cluster %s: %w\n%s", cfg.Name, err, out)
+		return nil, fmt.Errorf("create cluster %s: %w\n%s%s", cfg.Name, err, out, diag)
 	}
 	// cluster create writes no kubeconfig; it is a separate command, and it needs
 	// to be told which node to ask — cluster create leaves endpoints in the
@@ -268,6 +273,46 @@ func (c *Cluster) controlplaneAddresses(ctx context.Context) ([]string, error) {
 // Addresses are the cluster's Talos API addresses. They are also what an nvmet
 // target on a node advertises as its traddr.
 func (c *Cluster) Addresses() []string { return c.addresses }
+
+// diagnose collects what can still be read from a cluster that failed to come
+// up. Best effort by design: it runs on a path where something is already wrong,
+// and must not turn one failure into two.
+func (c *Cluster) diagnose(ctx context.Context) string {
+	var b strings.Builder
+	if out, err := c.run(ctx, time.Minute, "cluster", "show", "--name", c.cfg.Name); err == nil {
+		b.WriteString("\n--- cluster show ---\n" + out)
+	}
+	// Node logs are where a boot or bootstrap failure explains itself, and the
+	// addresses are known even when the API never answered.
+	for _, addr := range c.addressesOrGuess() {
+		if out, err := c.run(ctx, time.Minute,
+			"--talosconfig", c.talosconfig, "-n", addr, "dmesg", "--tail"); err == nil {
+			b.WriteString(fmt.Sprintf("\n--- dmesg %s (tail) ---\n%s", addr, lastLines(out, 40)))
+		}
+	}
+	return b.String()
+}
+
+// addressesOrGuess returns the node addresses, falling back to reading them back
+// out of the talosconfig when create failed before they were recorded.
+func (c *Cluster) addressesOrGuess() []string {
+	if len(c.addresses) > 0 {
+		return c.addresses
+	}
+	addrs, err := c.controlplaneAddresses(context.Background())
+	if err != nil {
+		return nil
+	}
+	return addrs
+}
+
+func lastLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
+}
 
 // reclaimWorkDir hands the work dir back to the current user so the unprivileged
 // side of the harness can read the kubeconfig talosctl wrote as root.
