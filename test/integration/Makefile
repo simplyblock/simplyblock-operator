@@ -9,7 +9,11 @@
 SHELL := /bin/bash
 GO ?= go
 TIMEOUT ?= 40m
-TEST_FLAGS ?= -v
+# -count=1 defeats the test cache. Go caches a passing package result and replays
+# its whole transcript, so a run that booted nothing prints the same green output
+# as one that did — with only "(cached)" to tell them apart. For a suite whose
+# entire purpose is to exercise a real kernel, that is worse than no result.
+TEST_FLAGS ?= -v -count=1
 
 # Unset by default: the suite derives a per-process cluster name so two runs on
 # one machine cannot fight over the same network. Set it to pin a name when a run

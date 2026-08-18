@@ -74,7 +74,7 @@ jobs:
           SB_INTEGRATION: "1"
         # The test itself stays unprivileged; it elevates talosctl on its own, so
         # the Go build cache and artifacts are not left root-owned.
-        run: go test -v -timeout 40m ./...
+        run: go test -v -count=1 -timeout 40m ./...
 
       # Cluster state and serial logs are the only way to read a boot failure
       # after the fact, and a failed run is exactly when they are wanted.
