@@ -287,7 +287,7 @@ func (c *Cluster) diagnose(ctx context.Context) string {
 	for _, addr := range c.addressesOrGuess() {
 		if out, err := c.run(ctx, time.Minute,
 			"--talosconfig", c.talosconfig, "-n", addr, "dmesg", "--tail"); err == nil {
-			b.WriteString(fmt.Sprintf("\n--- dmesg %s (tail) ---\n%s", addr, lastLines(out, 40)))
+			fmt.Fprintf(&b, "\n--- dmesg %s (tail) ---\n%s", addr, lastLines(out, 40))
 		}
 	}
 	return b.String()

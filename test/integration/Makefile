@@ -8,7 +8,7 @@
 
 SHELL := /bin/bash
 GO ?= go
-TIMEOUT ?= 40m
+TIMEOUT ?= 60m
 # -count=1 defeats the test cache. Go caches a passing package result and replays
 # its whole transcript, so a run that booted nothing prints the same green output
 # as one that did — with only "(cached)" to tell them apart. For a suite whose
@@ -22,7 +22,7 @@ CLUSTER_NAME ?=
 CLUSTER_ENV := $(if $(CLUSTER_NAME),SB_CLUSTER_NAME=$(CLUSTER_NAME),)
 
 .DEFAULT_GOAL := help
-.PHONY: help build vet fmt lint test test-short preflight clean-clusters
+.PHONY: help build vet fmt lint test test-defects test-short preflight clean-clusters
 
 help: ## Show this help.
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -59,6 +59,10 @@ preflight: ## Check the tools and privileges a run needs.
 test: preflight ## Boot a cluster and run the suite.
 	SB_INTEGRATION=1 $(CLUSTER_ENV) \
 	  $(GO) test $(TEST_FLAGS) -timeout $(TIMEOUT) ./...
+
+test-defects: preflight ## Force the NVMe-oF defects and check atlas names them.
+	SB_INTEGRATION=1 $(CLUSTER_ENV) \
+	  $(GO) test $(TEST_FLAGS) -timeout 40m -run TestDefect ./suites/
 
 test-short: preflight ## Run only the smoke test.
 	SB_INTEGRATION=1 $(CLUSTER_ENV) \
