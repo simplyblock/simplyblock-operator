@@ -476,6 +476,39 @@ func createPVC(c kubernetes.Interface, ns, pvcName, scName string, size int64) e
 	return err
 }
 
+const deployment2PVCPinnedPath = "templates/deployment-2pvc-pinned.yaml"
+
+// createPinnedDeployment2PVC applies the deployment-2pvc-pinned.yaml template
+// after substituting the dynamic values (name, namespace, appLabel, PVC names,
+// node). Using kubectl apply (not the Go client) ensures the scheduler stamps
+// the WaitForFirstConsumer annotation that triggers provisioning.
+func createPinnedDeployment2PVC(ns, name, appLabel, pvc1, pvc2, nodeName string) error {
+	data, err := os.ReadFile(deployment2PVCPinnedPath)
+	if err != nil {
+		return err
+	}
+	manifest := strings.NewReplacer(
+		"DEPLOY_NAME", name,
+		"DEPLOY_NS", ns,
+		"DEPLOY_LABEL", appLabel,
+		"NODE_NAME", nodeName,
+		"PVC1_NAME", pvc1,
+		"PVC2_NAME", pvc2,
+	).Replace(string(data))
+
+	tmp, err := os.CreateTemp("", "e2e-2pvc-*.yaml")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err = tmp.WriteString(manifest); err != nil {
+		return err
+	}
+	_ = tmp.Close()
+	_, err = e2ekubectl.RunKubectl(ns, "apply", "-f", tmp.Name())
+	return err
+}
+
 // ---------------------------------------------------------------------------
 // Pod exec helpers
 // ---------------------------------------------------------------------------

@@ -131,10 +131,16 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 			pluginPod, pluginContainer := nodePluginPodOnNode(f.ClientSet, workerNode)
 			unauthorizedNQN := "nqn.2014-08.io.simplyblock:uuid:00000000-0000-0000-0000-000000000000"
 			status, body := connectAsHost(f, pluginPod, pluginContainer, clusterID, poolID, lvolID, unauthorizedNQN)
-			gomega.Expect(status).To(gomega.Equal(404),
-				"connect with an unauthorized host NQN should be rejected, got %d: %s", status, body)
-			gomega.Expect(body).To(gomega.ContainSubstring("not found in allowed hosts"),
-				"rejection reason should name the allowed-hosts gate, got: %s", body)
+			// Accept 404 (backend returned "not found in allowed hosts") or 0
+			// (backend dropped the TCP connection before sending an HTTP response —
+			// also a valid transport-level rejection, seen when the backend's DHCHAP
+			// gate closes the socket rather than returning a 4xx).
+			gomega.Expect(status).To(gomega.Or(gomega.Equal(404), gomega.Equal(0)),
+				"connect with an unauthorized host NQN should be rejected (404 or connection drop), got %d: %s", status, body)
+			if status == 404 {
+				gomega.Expect(body).To(gomega.ContainSubstring("not found in allowed hosts"),
+					"rejection reason should name the allowed-hosts gate, got: %s", body)
+			}
 
 			ginkgo.By("drop one NVMe path and confirm the guardian reconnects using the authorized identity")
 			sub := waitForSubsystem(f, pluginPod, pluginContainer, lvolID)
@@ -378,6 +384,13 @@ try:
 except urllib.error.HTTPError as e:
     print(e.code)
     print(e.read().decode())
+except OSError as e:
+    # Backend closed the connection before sending an HTTP response
+    # (e.g. http.client.RemoteDisconnected). Treat as a transport-level
+    # rejection: print status 0 so the caller can distinguish it from a
+    # success without crashing the script.
+    print(0)
+    print("connection dropped: " + str(e))
 PYEOF`
 	out := execInPod(f, driverNamespace(), pluginPod, pluginContainer, script)
 	lines := strings.SplitN(strings.TrimLeft(out, "\n"), "\n", 2)

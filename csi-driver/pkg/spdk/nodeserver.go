@@ -432,7 +432,11 @@ func (ns *nodeServer) NodeUnpublishVolume(
 	}
 
 	if ns.guardian != nil {
-		ns.guardian.RegisterUnpublishByTargetPath(req.TargetPath)
+		if spdkVol, err := parseVolumeID(volumeID); err == nil {
+			ns.guardian.RegisterUnpublish(spdkVol.lvolID, req.TargetPath)
+		} else {
+			klog.Warningf("NodeUnpublishVolume: could not parse volume ID %q for Guardian tracking: %v", volumeID, err)
+		}
 	}
 
 	return &csi.NodeUnpublishVolumeResponse{}, nil
