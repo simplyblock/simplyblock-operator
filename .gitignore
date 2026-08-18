@@ -3,3 +3,7 @@ bundle/
 cover.out
 bin/
 build/
+
+# A local checkout of sbcli, for shared/export-openapi.py. The OpenAPI sync
+# workflow puts one here too.
+.sbcli/
