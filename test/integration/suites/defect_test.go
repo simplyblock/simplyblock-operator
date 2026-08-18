@@ -157,7 +157,7 @@ func TestDefect_ControllerNotContributing(t *testing.T) {
 	t.Run("the two targets present as one subsystem with two controllers", func(t *testing.T) {
 		if got := len(liveIDs(sub)); got != 2 {
 			t.Fatalf("want 2 live controllers under %s, got %d\n%s\n%s",
-				testNQN, got, describe(sub), init.ListSubsys(ctx))
+				testNQN, got, describe(sub), init.Describe(ctx))
 		}
 		if got := len(sub.Namespaces); got != 1 {
 			t.Fatalf("want 1 namespace, got %d\n%s", got, describe(sub))
@@ -213,10 +213,8 @@ func TestDefect_ControllerNotContributing(t *testing.T) {
 		if err := tSilent.AddNamespace(ctx, 1, 64, volumeUUID); err != nil {
 			t.Fatalf("add namespace to the formerly silent target: %v", err)
 		}
-		// The host rescans on the AEN the target sends; nvme ns-rescan is the
-		// nudge for a kernel that has not got to it yet.
-		if _, err := shServing.Run(ctx, "for c in /dev/nvme[0-9]*; do nvme ns-rescan $c 2>/dev/null || true; done"); err != nil {
-			t.Logf("ns-rescan: %v", err)
+		if err := init.Rescan(ctx, testNQN); err != nil {
+			t.Logf("rescan: %v", err)
 		}
 
 		root := filepath.Join(t.TempDir(), "healthy")

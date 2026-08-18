@@ -53,8 +53,8 @@ type Cluster interface {
 // profile by default, which allows none of what this pod needs: host namespaces,
 // hostPath volumes, or a privileged container.
 //
-// util-linux is installed at start for nvme-cli's dependencies and for tooling
-// the base image omits.
+// The container installs nothing, so this package uses only what BusyBox and the
+// kernel provide. Anything else would make a test depend on a package mirror.
 const shellPodManifest = `apiVersion: v1
 kind: Namespace
 metadata:
@@ -81,7 +81,7 @@ spec:
   containers:
     - name: shell
       image: alpine:3.20
-      command: ["/bin/sh", "-c", "apk add --no-cache nvme-cli util-linux >/dev/null 2>&1; exec sleep infinity"]
+      command: ["/bin/sh", "-c", "exec sleep infinity"]
       securityContext:
         privileged: true
       volumeMounts:

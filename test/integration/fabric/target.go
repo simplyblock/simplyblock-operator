@@ -127,11 +127,15 @@ func (t *Target) AddNamespace(ctx context.Context, nsid, sizeMB int, uuid string
 		"IMG=" + quote(img),
 		"N=" + quote(nsDir),
 		"mkdir -p \"$(dirname \"$IMG\")\"",
-		fmt.Sprintf("[ -f \"$IMG\" ] || truncate -s %dM \"$IMG\"", sizeMB),
-		// losetup -j first so a retry reuses the device instead of stacking a
-		// second one on the same file.
-		"DEV=$(losetup -j \"$IMG\" | cut -d: -f1 | head -1)",
-		"[ -n \"$DEV\" ] || DEV=$(losetup -f --show \"$IMG\")",
+		fmt.Sprintf("[ -f \"$IMG\" ] || truncate -s %dM \"$IMG\" 2>/dev/null || "+
+			"dd if=/dev/zero of=\"$IMG\" bs=1M count=0 seek=%d 2>/dev/null", sizeMB, sizeMB),
+		// BusyBox losetup syntax only: -a to list, -f for the next free device,
+		// and the two-argument form to associate. It has no -j and no --show.
+		// The list is checked first so a retry reuses the existing device
+		// instead of stacking a second one on the same file.
+		"DEV=$(losetup -a 2>/dev/null | grep -F \"$IMG\" | cut -d: -f1 | head -1)",
+		"if [ -z \"$DEV\" ]; then DEV=$(losetup -f) && losetup \"$DEV\" \"$IMG\"; fi",
+		"[ -n \"$DEV\" ] || { echo 'no loop device available' >&2; exit 1; }",
 		"mkdir -p \"$N\"",
 		"printf %s \"$DEV\" > \"$N\"/device_path",
 		uuidLine,

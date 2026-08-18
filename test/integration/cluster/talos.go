@@ -130,15 +130,13 @@ const sunPathMax = 104
 const longestNodeSuffix = len("-controlplane-10.monitor")
 
 // checkNameFits rejects a cluster name whose QEMU monitor socket path would
-// exceed sun_path.
+// exceed sun_path. talosctl builds that path as
+// <state>/<cluster>/<cluster>-controlplane-N.monitor — the name appears twice —
+// and QEMU refuses to start when it is too long.
 //
-// talosctl builds that path as <state>/<cluster>/<cluster>-controlplane-N.monitor
-// — the name appears twice — and QEMU refuses to start when it is too long. The
-// failure that produces is worth pre-empting rather than debugging: the QEMU
-// error lands in a per-node log file inside the state directory, the node never
-// boots, so the bridge it would have created never appears, and talosctl reports
-// a one-minute timeout waiting for that bridge. Nothing in what reaches the test
-// mentions a path length.
+// Checked up front because the resulting failure names something else entirely:
+// the node never boots, so the bridge it would create never appears, and
+// talosctl reports a timeout waiting for that bridge.
 func checkNameFits(state, name string) error {
 	full := len(filepath.Join(state, name, name)) + longestNodeSuffix
 	if full <= sunPathMax {
@@ -272,9 +270,9 @@ func (c *Cluster) Destroy(ctx context.Context) error {
 		return fmt.Errorf("destroy cluster %s: %w\n%s", c.cfg.Name, err, out)
 	}
 	// talosctl removes the state directory itself, but only when it could read
-	// state.yaml. A create that died before writing it leaves the directory,
-	// root-owned, holding the nodes' sparse disk images — and every later destroy
-	// fails on the same missing file, so nothing ever collects it.
+	// state.yaml. A create that died before writing one leaves the directory
+	// behind, root-owned and holding the nodes' disk images, and every later
+	// destroy fails on the same missing file.
 	if err := c.removeStateDir(ctx); err != nil {
 		return err
 	}

@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// The failure this guards against cost an investigation: a two-node spec whose
-// cluster name was four characters longer than the smoke test's could not boot a
-// single VM, and what the test saw was a one-minute timeout waiting for a network
-// bridge. The QEMU error naming the real cause was in a log file inside the
-// state directory.
 func TestCheckNameFits(t *testing.T) {
 	// A real macOS home, since the budget depends on it.
 	const state = "/Users/noctarius/.talos/clusters"
@@ -19,8 +14,8 @@ func TestCheckNameFits(t *testing.T) {
 		cluster string
 		wantErr bool
 	}{
-		{"the name that failed", "sb-integration-98062-cnc", true},
-		{"the name that worked", "sb-integration-98062", false},
+		{"four characters too long", "sb-integration-98062-cnc", true},
+		{"the same name without the suffix", "sb-integration-98062", false},
 		{"the short scheme, with a suffix", "sbi-98062-cnc", false},
 		// 58 + 2N bytes with this state directory, against a 104-byte limit.
 		{"the longest name that fits", strings.Repeat("x", 23), false},
@@ -36,7 +31,7 @@ func TestCheckNameFits(t *testing.T) {
 			if !tc.wantErr && err != nil {
 				t.Fatalf("checkNameFits(%q) = %v, want it accepted", tc.cluster, err)
 			}
-			// The message has to name the cause, or it is no better than the
+			// The message has to name the cause to be worth more than the
 			// timeout it replaces.
 			if err != nil && !strings.Contains(err.Error(), "twice") {
 				t.Errorf("rejection does not explain why: %v", err)
