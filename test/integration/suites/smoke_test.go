@@ -2,6 +2,7 @@ package suites
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -106,10 +107,15 @@ func requireIntegration(t *testing.T) {
 	}
 }
 
-// clusterName keeps concurrent runs from colliding on talosctl's cluster names.
+// clusterName keeps concurrent runs from colliding. talosctl names a cluster
+// globally and its network with it, so two runs sharing a name fight over the
+// same bridge and the second fails describing an interface it does not own.
+// The pid suffix makes that impossible by accident; SB_CLUSTER_NAME pins it when
+// a run has to be found again from outside, which is what `make
+// integration-clean` needs.
 func clusterName() string {
 	if n := os.Getenv("SB_CLUSTER_NAME"); n != "" {
 		return n
 	}
-	return "sb-integration"
+	return fmt.Sprintf("sb-integration-%d", os.Getpid())
 }

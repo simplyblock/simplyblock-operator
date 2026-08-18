@@ -91,7 +91,6 @@ type Cluster struct {
 	ownWorkDir  bool
 	kubeconfig  string
 	talosconfig string
-	stateDir    string
 	addresses   []string
 }
 
@@ -146,7 +145,15 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 	}
 	c.kubeconfig = filepath.Join(c.workDir, "kubeconfig")
 	c.talosconfig = filepath.Join(c.workDir, "talosconfig")
-	c.stateDir = filepath.Join(c.workDir, "state")
+
+	// An interrupted run leaves the cluster, its network and its root-owned
+	// helper processes behind. Creating over the top of that fails confusingly —
+	// the network exists but belongs to nobody — so clear it first. Destroying a
+	// cluster that is not there is not an error.
+	if out, err := c.run(ctx, 5*time.Minute, "cluster", "destroy", "--name", cfg.Name); err != nil &&
+		!strings.Contains(out, "not found") {
+		return nil, fmt.Errorf("clear a previous %s: %w\n%s", cfg.Name, err, out)
+	}
 
 	patches := nvmetPatch
 	if cfg.Workers == 0 {
@@ -169,10 +176,12 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 		// is iso, which needs more host plumbing.
 		"--presets", "disk-image",
 		"--config-patch", "@" + patch,
-		// State and the talosconfig go to the work dir. The kubeconfig has no
-		// such flag — cluster create merges it into $KUBECONFIG, which run()
-		// sets — see the note there.
-		"--state", c.stateDir,
+		// The talosconfig and kubeconfig are redirected because they disturb the
+		// developer's own; cluster state deliberately is not. It stays where
+		// talosctl looks for it by default, so `talosctl cluster destroy --name`
+		// can find and clean a cluster left behind by an interrupted run. State
+		// in a per-run temp directory makes that impossible, which turns a
+		// killed test into root-owned processes nobody can reach.
 		"--talosconfig-destination", c.talosconfig,
 	}
 
@@ -208,8 +217,7 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 // Destroy tears the cluster down. Safe to call twice, and on a cluster that
 // failed to come up, so it works from a deferred cleanup.
 func (c *Cluster) Destroy(ctx context.Context) error {
-	out, err := c.run(ctx, 5*time.Minute,
-		"cluster", "destroy", "--name", c.cfg.Name, "--state", c.stateDir)
+	out, err := c.run(ctx, 5*time.Minute, "cluster", "destroy", "--name", c.cfg.Name)
 	if err != nil && !strings.Contains(out, "not found") {
 		return fmt.Errorf("destroy cluster %s: %w\n%s", c.cfg.Name, err, out)
 	}

@@ -11,8 +11,11 @@ GO ?= go
 TIMEOUT ?= 40m
 TEST_FLAGS ?= -v
 
-# Overridable so concurrent runs on one machine do not collide on the name.
-CLUSTER_NAME ?= sb-integration
+# Unset by default: the suite derives a per-process cluster name so two runs on
+# one machine cannot fight over the same network. Set it to pin a name when a run
+# has to be identifiable from outside.
+CLUSTER_NAME ?=
+CLUSTER_ENV := $(if $(CLUSTER_NAME),SB_CLUSTER_NAME=$(CLUSTER_NAME),)
 
 .DEFAULT_GOAL := help
 .PHONY: help build vet fmt lint test test-short preflight clean-clusters
@@ -50,13 +53,28 @@ preflight: ## Check the tools and privileges a run needs.
 	sudo -v
 
 test: preflight ## Boot a cluster and run the suite.
-	SB_INTEGRATION=1 SB_CLUSTER_NAME=$(CLUSTER_NAME) \
+	SB_INTEGRATION=1 $(CLUSTER_ENV) \
 	  $(GO) test $(TEST_FLAGS) -timeout $(TIMEOUT) ./...
 
 test-short: preflight ## Run only the smoke test.
-	SB_INTEGRATION=1 SB_CLUSTER_NAME=$(CLUSTER_NAME) \
+	SB_INTEGRATION=1 $(CLUSTER_ENV) \
 	  $(GO) test $(TEST_FLAGS) -timeout 15m -run TestSmoke ./suites/
 
-# A run killed part-way leaves the cluster behind, holding memory and a network.
-clean-clusters: ## Destroy a cluster left behind by an interrupted run.
-	-sudo -E talosctl cluster destroy --name $(CLUSTER_NAME)
+# A run killed part-way leaves the cluster behind holding memory and a network,
+# and its root-owned helper processes reparented to init — sudo's children outlive
+# the sudo the test killed. Cluster state is kept in talosctl's default location
+# precisely so this can find them by name afterwards.
+clean-clusters: ## Destroy clusters and helpers left by interrupted runs.
+	@found=0; \
+	for d in $$HOME/.talos/clusters/sb-integration*; do \
+	  [ -d "$$d" ] || continue; \
+	  found=1; n=$$(basename $$d); \
+	  echo "destroying $$n"; \
+	  sudo -E talosctl cluster destroy --name "$$n" || true; \
+	done; \
+	pids=$$(pgrep -f "talosctl (cluster create|loadbalancer-launch|.*sb-integration)" 2>/dev/null || true); \
+	if [ -n "$$pids" ]; then \
+	  echo "killing orphaned helpers: $$pids"; \
+	  sudo kill $$pids || true; \
+	fi; \
+	test $$found -eq 1 || echo "no leftover clusters found"

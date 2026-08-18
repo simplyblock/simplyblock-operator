@@ -81,7 +81,10 @@ jobs:
       - name: Collect cluster diagnostics
         if: failure()
         run: |
-          sudo -E talosctl cluster show --name sb-integration 2>&1 | head -50 || true
+          for d in "$HOME"/.talos/clusters/sb-integration*; do
+            [ -d "$d" ] || continue
+            sudo -E talosctl cluster show --name "$(basename "$d")" 2>&1 | head -40 || true
+          done
           find /tmp -maxdepth 3 -name "*.log" -path "*sb-integration*" -exec sh -c \
             'echo "=== $1 ==="; tail -100 "$1"' _ {} \; 2>/dev/null || true
 
@@ -95,4 +98,10 @@ jobs:
       # Cheap insurance even though the harness tears down in its own cleanup.
       - name: Destroy any surviving cluster
         if: always()
-        run: sudo -E talosctl cluster destroy --name sb-integration 2>/dev/null || true
+        # The suite names clusters per process, so there is no single name to
+        # destroy; anything left is a run that did not clean up after itself.
+        run: |
+          for d in "$HOME"/.talos/clusters/sb-integration*; do
+            [ -d "$d" ] || continue
+            sudo -E talosctl cluster destroy --name "$(basename "$d")" 2>/dev/null || true
+          done
