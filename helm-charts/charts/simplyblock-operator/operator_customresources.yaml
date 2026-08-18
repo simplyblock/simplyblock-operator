@@ -5,15 +5,11 @@ metadata:
   namespace: simplyblock
 spec:
   fabricType: tcp
-  haType: ha
-  # isSingleNode: false
   # enableNodeAffinity: false
   # clientDataIfname: eth1
-  # clientQpairCount: 4
   # nvmfBasePort: 4420
   # rpcBasePort: 9502
   # snodeApiPort: 8090
-  # maxFaultTolerance: 1
   # enableFailureDomains: false
   stripe:
     dataChunks: 1

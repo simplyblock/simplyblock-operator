@@ -1309,16 +1309,6 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		*out = new(StripeSpec)
 		(*in).DeepCopyInto(*out)
 	}
-	if in.IsSingleNode != nil {
-		in, out := &in.IsSingleNode, &out.IsSingleNode
-		*out = new(bool)
-		**out = **in
-	}
-	if in.MaxFaultTolerance != nil {
-		in, out := &in.MaxFaultTolerance, &out.MaxFaultTolerance
-		*out = new(int32)
-		**out = **in
-	}
 	if in.NvmfBasePort != nil {
 		in, out := &in.NvmfBasePort, &out.NvmfBasePort
 		*out = new(int32)
@@ -1343,11 +1333,6 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		in, out := &in.CriticalThresholdSpec, &out.CriticalThresholdSpec
 		*out = new(CapacityThresholdSpec)
 		(*in).DeepCopyInto(*out)
-	}
-	if in.ClientQpairCount != nil {
-		in, out := &in.ClientQpairCount, &out.ClientQpairCount
-		*out = new(int32)
-		**out = **in
 	}
 	if in.Backup != nil {
 		in, out := &in.Backup, &out.Backup

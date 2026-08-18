@@ -87,10 +87,6 @@ spec:
               clientDataIfname:
                 description: ClientDataIfname defines the client data network interface.
                 type: string
-              clientQpairCount:
-                description: ClientQpairCount defines client-side queue-pair count.
-                format: int32
-                type: integer
               criticalThreshold:
                 description: CriticalThresholdSpec defines critical-level capacity
                   thresholds.
@@ -123,9 +119,6 @@ spec:
               fabricType:
                 description: FabricType defines the storage fabric type.
                 type: string
-              haType:
-                description: HAType defines the backend high-availability mode.
-                type: string
               hashicorpVaultSettings:
                 description: HashicorpVaultSettings configures the Vault endpoint
                   used by the cluster for key storage.
@@ -135,14 +128,6 @@ spec:
                     pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                     type: string
                 type: object
-              isSingleNode:
-                description: IsSingleNode enables single-node cluster mode.
-                type: boolean
-              maxFaultTolerance:
-                description: MaxFaultTolerance defines the maximum tolerated concurrent
-                  faults.
-                format: int32
-                type: integer
               nvmfBasePort:
                 description: NvmfBasePort defines the base NVMf service port.
                 format: int32
@@ -309,8 +294,6 @@ spec:
             x-kubernetes-validations:
             - message: field enableFailureDomains is immutable once set
               rule: '!has(oldSelf.enableFailureDomains) || has(self.enableFailureDomains)'
-            - message: haType is immutable once set
-              rule: '!has(oldSelf.haType) || self.haType == oldSelf.haType'
             - message: fabricType is immutable once set
               rule: '!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType'
             - message: hashicorpVaultSettings is immutable once set
@@ -318,8 +301,6 @@ spec:
                 == oldSelf.hashicorpVaultSettings'
             - message: stripe is immutable once set
               rule: '!has(oldSelf.stripe) || self.stripe == oldSelf.stripe'
-            - message: isSingleNode is immutable once set
-              rule: '!has(oldSelf.isSingleNode) || self.isSingleNode == oldSelf.isSingleNode'
             - message: nvmfBasePort is immutable once set
               rule: '!has(oldSelf.nvmfBasePort) || self.nvmfBasePort == oldSelf.nvmfBasePort'
             - message: rpcBasePort is immutable once set

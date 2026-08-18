@@ -24,16 +24,12 @@ type ClusterAddParams struct {
 	DistrNpcs              int                   `json:"distr_npcs,omitempty"`
 	DistrBs                int                   `json:"distr_bs,omitempty"`
 	DistrChunkBs           int                   `json:"distr_chunk_bs,omitempty"`
-	HAType                 string                `json:"ha_type,omitempty"`
-	ClientQpairCount       int                   `json:"client_qpair_count,omitempty"`
 	EnableNodeAffinity     bool                  `json:"enable_node_affinity,omitempty"`
-	IsSingleNode           bool                  `json:"is_single_node,omitempty"`
 	Fabric                 string                `json:"fabric,omitempty"`
 	CRName                 string                `json:"cr_name,omitempty"`
 	CRNameSpace            string                `json:"cr_namespace,omitempty"`
 	CRPlural               string                `json:"cr_plural,omitempty"`
 	ClientDataIfname       string                `json:"client_data_ifname,omitempty"`
-	MaxFaultTolerance      int                   `json:"max_fault_tolerance,omitempty"`
 	NvmfBasePort           int                   `json:"nvmf_base_port,omitempty"`
 	RpcBasePort            int                   `json:"rpc_base_port,omitempty"`
 	SnodeApiPort           int                   `json:"snode_api_port,omitempty"`

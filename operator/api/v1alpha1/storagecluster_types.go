@@ -202,11 +202,9 @@ type BackupSpec struct {
 }
 
 // StorageClusterSpec defines the desired state of StorageCluster
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.haType) || self.haType == oldSelf.haType",message="haType is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType",message="fabricType is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.hashicorpVaultSettings) || self.hashicorpVaultSettings == oldSelf.hashicorpVaultSettings",message="hashicorpVaultSettings is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.stripe) || self.stripe == oldSelf.stripe",message="stripe is immutable once set"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.isSingleNode) || self.isSingleNode == oldSelf.isSingleNode",message="isSingleNode is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.nvmfBasePort) || self.nvmfBasePort == oldSelf.nvmfBasePort",message="nvmfBasePort is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.rpcBasePort) || self.rpcBasePort == oldSelf.rpcBasePort",message="rpcBasePort is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.snodeApiPort) || self.snodeApiPort == oldSelf.snodeApiPort",message="snodeApiPort is immutable once set"
@@ -217,21 +215,12 @@ type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Stripe"
 	// StripeSpec configures erasure-coding data/parity chunk counts.
 	StripeSpec *StripeSpec `json:"stripe,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="HA Type"
-	// HAType defines the backend high-availability mode.
-	HAType string `json:"haType,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Single Node"
-	// IsSingleNode enables single-node cluster mode.
-	IsSingleNode *bool `json:"isSingleNode,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Fabric Type"
 	// FabricType defines the storage fabric type.
 	FabricType string `json:"fabricType,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Client Data Interface"
 	// ClientDataIfname defines the client data network interface.
 	ClientDataIfname string `json:"clientDataIfname,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Fault Tolerance"
-	// MaxFaultTolerance defines the maximum tolerated concurrent faults.
-	MaxFaultTolerance *int32 `json:"maxFaultTolerance,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="NVMf Base Port"
 	// NvmfBasePort defines the base NVMf service port.
 	NvmfBasePort *int32 `json:"nvmfBasePort,omitempty"`
@@ -241,16 +230,13 @@ type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Storage Node API Port"
 	// SnodeApiPort defines the storage-node API port.
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
-
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Warning Threshold"
 	// WarningThresholdSpec defines warning-level capacity thresholds.
 	WarningThresholdSpec *CapacityThresholdSpec `json:"warningThreshold,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Critical Threshold"
 	// CriticalThresholdSpec defines critical-level capacity thresholds.
 	CriticalThresholdSpec *CapacityThresholdSpec `json:"criticalThreshold,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Client Queue Pair Count"
-	// ClientQpairCount defines client-side queue-pair count.
-	ClientQpairCount *int32 `json:"clientQpairCount,omitempty"`
+
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup"
 	// Backup specifies the specification for backup to S3 configuration
 	Backup *BackupSpec `json:"backup,omitempty"`
