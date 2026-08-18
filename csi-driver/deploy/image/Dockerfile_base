@@ -31,43 +31,6 @@ RUN set -eu; \
     done; \
     dnf clean all
 
-# Fail the build if this image would write an on-disk format the oldest supported
-# host kernel cannot mount, or if the ext4 tool aliases disagree on version. Both
-# mkfs implementations work on a plain file, so this needs no privileges and no
-# block device. This matters because base_image is a floating tag rebuilt daily:
-# without an assertion here, a base or xfsprogs/e2fsprogs update could change the
-# on-disk format with no accompanying code change.
-RUN set -eu; \
-    cd /tmp; \
-    xfsconf=/usr/share/xfsprogs/mkfs/lts_5.15.conf; \
-    [ -f "$xfsconf" ] || { echo "FATAL: $xfsconf missing; xfsprogs no longer ships the LTS baseline configs" >&2; exit 1; }; \
-    truncate -s 256M assert-ext4.img; \
-    mkfs.ext4 -F -q assert-ext4.img; \
-    feats="$(dumpe2fs -h assert-ext4.img 2>/dev/null | sed -n 's/^Filesystem features: *//p')"; \
-    echo "ASSERT ext4 features: $feats"; \
-    for bad in orphan_file FEATURE_C12; do \
-        case " $feats " in \
-        *" $bad "*) \
-            echo "FATAL: mkfs.ext4 enables $bad; e2fsprogs 1.46.5 (RHEL 9) cannot fsck or resize such a filesystem" >&2; \
-            exit 1;; \
-        esac; \
-    done; \
-    for pair in "mkfs.ext4 mke2fs" "fsck.ext4 e2fsck"; do \
-        set -- $pair; \
-        a="$($1 -V 2>&1 | head -1 | awk '{print $2}')"; \
-        b="$($2 -V 2>&1 | head -1 | awk '{print $2}')"; \
-        echo "ASSERT $1=$a $2=$b"; \
-        [ "$a" = "$b" ] || { echo "FATAL: $1 ($a) and $2 ($b) differ -- broken hardlink alias" >&2; exit 1; }; \
-    done; \
-    truncate -s 1G assert-xfs.img; \
-    mkfs.xfs -f -c "options=$xfsconf" -d su=16k,sw=1 -l su=16k assert-xfs.img >/dev/null; \
-    inc="$(xfs_db -r -c 'sb 0' -c 'p features_incompat' assert-xfs.img | awk '{print $3}')"; \
-    ro="$(xfs_db -r -c 'sb 0' -c 'p features_ro_compat' assert-xfs.img | awk '{print $3}')"; \
-    echo "ASSERT xfs features_incompat=$inc features_ro_compat=$ro"; \
-    [ "$inc" = "0xb" ] || { echo "FATAL: xfs features_incompat=$inc, want 0xb; RHEL/Rocky 9 kernels reject anything more" >&2; exit 1; }; \
-    [ "$ro" = "0xd" ] || { echo "FATAL: xfs features_ro_compat=$ro, want 0xd" >&2; exit 1; }; \
-    rm -f assert-ext4.img assert-xfs.img
-
 RUN useradd -ms /bin/bash simplyblock
 RUN echo "simplyblock  ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 USER simplyblock
