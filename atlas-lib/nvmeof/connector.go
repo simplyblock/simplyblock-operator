@@ -10,6 +10,7 @@ import (
 
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/ptr"
 )
@@ -45,6 +46,19 @@ type Target struct {
 	// key for the host/subsystem NQN pair in its keyring; the connect fails
 	// if none is installed.
 	TLS bool // tls
+
+	// DHCHAPSecret and DHCHAPCtrlSecret authenticate the connect: the first
+	// proves the host to the target, the second the target back to the host
+	// (bidirectional DHCHAP). Both are empty for an unauthenticated subsystem.
+	//
+	// A secret belongs to one (host, subsystem) pair, so it is only valid
+	// together with the HostNQN it was issued for — see lvol.ForHost, which is
+	// how the control plane is told which host to answer for.
+	//
+	// These are credentials: they must not be logged, and no error in this
+	// package renders a Target.
+	DHCHAPSecret     string // dhchap_secret
+	DHCHAPCtrlSecret string // dhchap_ctrl_secret
 }
 
 // TargetOption overrides one connect parameter on every target Targets
@@ -53,14 +67,25 @@ type Target struct {
 // something other than what the control plane answered.
 type TargetOption func(*Target)
 
-// WithHostNQN sets the initiator NQN presented to the target. Unset, the
-// connector falls back to /etc/nvme/hostnqn.
+// WithHostNQN sets the initiator NQN presented to the target, which an
+// access-controlled volume needs: the control plane authorizes this NQN, not
+// the node's /etc/nvme/hostnqn. Unset, the connector falls back to that file.
+//
+// Setting it also settles the host id, which the kernel keeps strictly 1:1 with
+// the host NQN: it is derived from this NQN's own UUID unless WithHostID names
+// one, never taken from /etc/nvme/hostid. See hostIdentity for why pairing them
+// any other way fails, and only on some nodes.
 func WithHostNQN(nqn string) TargetOption {
 	return func(t *Target) { t.HostNQN = nqn }
 }
 
-// WithHostID sets the initiator host id. Unset, the connector falls back to
+// WithHostID sets the initiator host id explicitly. Unset, it is derived from
+// the host NQN when WithHostNQN named one, and otherwise falls back to
 // /etc/nvme/hostid.
+//
+// It is rarely the right knob: the kernel requires one host id per host NQN, so
+// an id that does not belong to the NQN alongside it is refused for every
+// connect on the node from then on.
 func WithHostID(id string) TargetOption {
 	return func(t *Target) { t.HostID = id }
 }
@@ -124,6 +149,12 @@ func WithTLS(enabled bool) TargetOption {
 // plane cannot know — this node's host identity, or a local policy such as a
 // fixed ctrl_loss_tmo. With no options the control plane's parameters are used
 // as they are, and the connector falls back to the node's /etc/nvme identity.
+//
+// The DHCHAP secrets ride along with the rest of the connection and are not
+// overridable, because they are not this caller's to choose: each was issued
+// for the host the connection was resolved for (lvol.ForHost). Pass that same
+// NQN to WithHostNQN here, or the connect presents one host's identity with
+// another's key material.
 func Targets(conn lvol.Connection, opts ...TargetOption) []Target {
 	out := make([]Target, 0, len(conn.Endpoints))
 	for _, e := range conn.Endpoints {
@@ -139,6 +170,8 @@ func Targets(conn lvol.Connection, opts ...TargetOption) []Target {
 			CtrlLossTMOSec:    e.CtrlLossTMOSec,
 			FastIOFailTMOSec:  e.FastIOFailTMOSec,
 			TLS:               e.TLS,
+			DHCHAPSecret:      e.DHCHAPSecret,
+			DHCHAPCtrlSecret:  e.DHCHAPCtrlSecret,
 		}
 		for _, opt := range opts {
 			opt(&t)
@@ -367,6 +400,51 @@ func port(t Target) int {
 // endpoint renders t's fabric endpoint for error messages.
 func endpoint(t Target) string {
 	return fmt.Sprintf("%s:%d", t.Address, port(t))
+}
+
+// hostIdentity resolves the (hostnqn, hostid) a connect presents, from the
+// target's identity and the node's file-seeded default. Either may come back
+// empty, which means "send neither, and let the mechanism take the node's".
+//
+// The two are resolved together rather than field by field, and that is the
+// whole point of this function. The kernel enforces a strict 1:1 between them:
+// once a hostid is associated with a hostnqn it refuses any later connect
+// pairing that same hostid with a different one ("found same hostid ... but
+// different hostnqn"). Falling back per field breaks that as soon as a target
+// names its own hostnqn — the common case for an access-controlled volume,
+// whose host NQN is derived per node rather than read from /etc/nvme/hostnqn.
+// The hostid would still come from /etc/nvme/hostid, which any plain volume on
+// that node has already bound to the node's default hostnqn, and the kernel
+// rejects the pair. The failure is also order-dependent, so it shows up as an
+// access-controlled volume that mounts on a fresh node and stops mounting once
+// anything else is attached there.
+//
+// So an explicitly named host NQN takes its id from itself, derived from the
+// NQN's own UUID unless the caller supplied one. The derived pair is
+// internally consistent by construction and cannot collide with the node's
+// random file-based default. Only when the target names no host NQN at all
+// does the node's identity apply, and then as a pair.
+//
+// A host NQN naming no UUID, with no explicit HostID beside it, is an error
+// rather than a connect with the hostid left off. Leaving it off does not mean
+// "no hostid": nvme-cli then reads /etc/nvme/hostid and the kernel writes its
+// own default into the fabrics connect, which is the mismatched pairing above
+// — so the quiet path is the broken one, and it breaks later, on a different
+// volume, in a message naming neither this target nor this NQN.
+func hostIdentity(t Target, fileNQN, fileID string) (hostNQN, hostID string, err error) {
+	if t.HostNQN == "" {
+		return fileNQN, orElse(t.HostID, fileID), nil
+	}
+	if t.HostID != "" {
+		return t.HostNQN, t.HostID, nil
+	}
+	id, ok := nqn.HostUUID(t.HostNQN)
+	if !ok {
+		return "", "", fmt.Errorf(
+			"host NQN %q carries no UUID to derive a host id from: set HostID explicitly",
+			t.HostNQN)
+	}
+	return t.HostNQN, id, nil
 }
 
 // readTrim reads a one-line file, e.g. /etc/nvme/hostnqn, and returns "" when

@@ -1,0 +1,170 @@
+/sys/class/nvme-subsystem/nvme-subsys0/uevent	
+/sys/class/nvme-subsystem/nvme-subsys0/ng0n2/uevent	MAJOR=237
+/sys/class/nvme-subsystem/nvme-subsys0/ng0n2/dev	237:1
+/sys/class/nvme-subsystem/nvme-subsys0/subsysnqn	nqn.2023-02.io.simplyblock:nvmetlab:lvol:00000001-0000-4000-8000-000000000001
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/delete_controller	
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/uevent	MAJOR=238
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/cntlid	1000
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/address	traddr=10.0.0.1,trsvcid=14420,src_addr=10.0.0.2
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/reset_controller	
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/sqsize	127
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/hostnqn	nqn.2014-08.org.nvmexpress:uuid:00000002-0000-4000-8000-000000000002
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/passthru_err_log_enabled	off
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/hostid	00000002-0000-4000-8000-000000000002
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/queue_count	9
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/transport	tcp
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/subsysnqn	nqn.2023-02.io.simplyblock:nvmetlab:lvol:00000001-0000-4000-8000-000000000001
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/reconnect_delay	10
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/rescan_controller	
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/numa_node	-1
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/model	00000001-0000-4000-8000-000000000001    
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/dev	238:1
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/fast_io_fail_tmo	off
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/dhchap_secret	none
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/firmware_rev	5.14.0-6
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/dctype	none
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/cntrltype	io
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/state	live
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/kato	5
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/tls_key	
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/serial	ha                  
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/ctrl_loss_tmo	600
+/sys/class/nvme-subsystem/nvme-subsys0/nvme1/dhchap_ctrl_secret	none
+/sys/class/nvme-subsystem/nvme-subsys0/iopolicy	numa
+/sys/class/nvme-subsystem/nvme-subsys0/model	00000001-0000-4000-8000-000000000001    
+/sys/class/nvme-subsystem/nvme-subsys0/subsystype	nvm
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/uevent	MAJOR=259
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/ext_range	256
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/metadata_bytes	0
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/range	0
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/passthru_err_log_enabled	off
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/alignment_offset	0
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/diskseq	156
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/wwid	uuid.00000003-0000-4000-8000-000000000003
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/dev	259:3
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/csi	0
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/ro	0
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/stat	      49        0     2096        3        0        0        0        0        0        3        3        0        0        0        0        0        0
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/events_poll_msecs	-1
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/events_async	
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/size	131072
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/discard_alignment	0
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/uuid	00000003-0000-4000-8000-000000000003
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/capability	0
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/hidden	0
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/removable	0
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/events	
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/inflight	       0        0
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/nsid	2
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0n2/nuse	131072
+/sys/class/nvme-subsystem/nvme-subsys0/firmware_rev	5.14.0-6
+/sys/class/nvme-subsystem/nvme-subsys0/serial	ha                  
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/delete_controller	
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/uevent	MAJOR=238
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/cntlid	1
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/address	traddr=127.0.0.1,trsvcid=14420,src_addr=127.0.0.1
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/reset_controller	
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/sqsize	127
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/hostnqn	nqn.2014-08.org.nvmexpress:uuid:00000002-0000-4000-8000-000000000002
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/passthru_err_log_enabled	off
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/hostid	00000002-0000-4000-8000-000000000002
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/queue_count	9
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/transport	tcp
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/subsysnqn	nqn.2023-02.io.simplyblock:nvmetlab:lvol:00000001-0000-4000-8000-000000000001
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/reconnect_delay	10
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/rescan_controller	
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/numa_node	-1
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/model	00000001-0000-4000-8000-000000000001    
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/dev	238:0
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/fast_io_fail_tmo	off
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/dhchap_secret	none
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/firmware_rev	5.14.0-6
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/dctype	none
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/cntrltype	io
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/state	live
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/kato	5
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/tls_key	
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/serial	ha                  
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/ctrl_loss_tmo	600
+/sys/class/nvme-subsystem/nvme-subsys0/nvme0/dhchap_ctrl_secret	none
+/sys/class/nvme/nvme1/delete_controller	
+/sys/class/nvme/nvme1/uevent	MAJOR=238
+/sys/class/nvme/nvme1/cntlid	1000
+/sys/class/nvme/nvme1/address	traddr=10.0.0.1,trsvcid=14420,src_addr=10.0.0.2
+/sys/class/nvme/nvme1/reset_controller	
+/sys/class/nvme/nvme1/sqsize	127
+/sys/class/nvme/nvme1/hostnqn	nqn.2014-08.org.nvmexpress:uuid:00000002-0000-4000-8000-000000000002
+/sys/class/nvme/nvme1/passthru_err_log_enabled	off
+/sys/class/nvme/nvme1/hostid	00000002-0000-4000-8000-000000000002
+/sys/class/nvme/nvme1/queue_count	9
+/sys/class/nvme/nvme1/transport	tcp
+/sys/class/nvme/nvme1/subsysnqn	nqn.2023-02.io.simplyblock:nvmetlab:lvol:00000001-0000-4000-8000-000000000001
+/sys/class/nvme/nvme1/reconnect_delay	10
+/sys/class/nvme/nvme1/rescan_controller	
+/sys/class/nvme/nvme1/numa_node	-1
+/sys/class/nvme/nvme1/model	00000001-0000-4000-8000-000000000001    
+/sys/class/nvme/nvme1/dev	238:1
+/sys/class/nvme/nvme1/fast_io_fail_tmo	off
+/sys/class/nvme/nvme1/dhchap_secret	none
+/sys/class/nvme/nvme1/firmware_rev	5.14.0-6
+/sys/class/nvme/nvme1/dctype	none
+/sys/class/nvme/nvme1/cntrltype	io
+/sys/class/nvme/nvme1/state	live
+/sys/class/nvme/nvme1/kato	5
+/sys/class/nvme/nvme1/tls_key	
+/sys/class/nvme/nvme1/serial	ha                  
+/sys/class/nvme/nvme1/ctrl_loss_tmo	600
+/sys/class/nvme/nvme1/dhchap_ctrl_secret	none
+/sys/class/nvme/nvme0/delete_controller	
+/sys/class/nvme/nvme0/uevent	MAJOR=238
+/sys/class/nvme/nvme0/cntlid	1
+/sys/class/nvme/nvme0/address	traddr=127.0.0.1,trsvcid=14420,src_addr=127.0.0.1
+/sys/class/nvme/nvme0/reset_controller	
+/sys/class/nvme/nvme0/sqsize	127
+/sys/class/nvme/nvme0/hostnqn	nqn.2014-08.org.nvmexpress:uuid:00000002-0000-4000-8000-000000000002
+/sys/class/nvme/nvme0/passthru_err_log_enabled	off
+/sys/class/nvme/nvme0/hostid	00000002-0000-4000-8000-000000000002
+/sys/class/nvme/nvme0/queue_count	9
+/sys/class/nvme/nvme0/transport	tcp
+/sys/class/nvme/nvme0/subsysnqn	nqn.2023-02.io.simplyblock:nvmetlab:lvol:00000001-0000-4000-8000-000000000001
+/sys/class/nvme/nvme0/reconnect_delay	10
+/sys/class/nvme/nvme0/rescan_controller	
+/sys/class/nvme/nvme0/numa_node	-1
+/sys/class/nvme/nvme0/model	00000001-0000-4000-8000-000000000001    
+/sys/class/nvme/nvme0/dev	238:0
+/sys/class/nvme/nvme0/fast_io_fail_tmo	off
+/sys/class/nvme/nvme0/dhchap_secret	none
+/sys/class/nvme/nvme0/firmware_rev	5.14.0-6
+/sys/class/nvme/nvme0/nvme0c0n2/uevent	DEVTYPE=disk
+/sys/class/nvme/nvme0/nvme0c0n2/ext_range	256
+/sys/class/nvme/nvme0/nvme0c0n2/ana_state	optimized
+/sys/class/nvme/nvme0/nvme0c0n2/metadata_bytes	0
+/sys/class/nvme/nvme0/nvme0c0n2/range	0
+/sys/class/nvme/nvme0/nvme0c0n2/passthru_err_log_enabled	off
+/sys/class/nvme/nvme0/nvme0c0n2/alignment_offset	0
+/sys/class/nvme/nvme0/nvme0c0n2/diskseq	155
+/sys/class/nvme/nvme0/nvme0c0n2/ana_grpid	1
+/sys/class/nvme/nvme0/nvme0c0n2/wwid	uuid.00000003-0000-4000-8000-000000000003
+/sys/class/nvme/nvme0/nvme0c0n2/csi	0
+/sys/class/nvme/nvme0/nvme0c0n2/ro	0
+/sys/class/nvme/nvme0/nvme0c0n2/stat	      49        0     2096        4        0        0        0        0        0        3        4        0        0        0        0        0        0
+/sys/class/nvme/nvme0/nvme0c0n2/events_poll_msecs	-1
+/sys/class/nvme/nvme0/nvme0c0n2/events_async	
+/sys/class/nvme/nvme0/nvme0c0n2/size	131072
+/sys/class/nvme/nvme0/nvme0c0n2/discard_alignment	0
+/sys/class/nvme/nvme0/nvme0c0n2/uuid	00000003-0000-4000-8000-000000000003
+/sys/class/nvme/nvme0/nvme0c0n2/capability	0
+/sys/class/nvme/nvme0/nvme0c0n2/hidden	1
+/sys/class/nvme/nvme0/nvme0c0n2/removable	0
+/sys/class/nvme/nvme0/nvme0c0n2/events	
+/sys/class/nvme/nvme0/nvme0c0n2/inflight	       0        0
+/sys/class/nvme/nvme0/nvme0c0n2/nsid	2
+/sys/class/nvme/nvme0/nvme0c0n2/nuse	131072
+/sys/class/nvme/nvme0/dctype	none
+/sys/class/nvme/nvme0/cntrltype	io
+/sys/class/nvme/nvme0/state	live
+/sys/class/nvme/nvme0/kato	5
+/sys/class/nvme/nvme0/tls_key	
+/sys/class/nvme/nvme0/serial	ha                  
+/sys/class/nvme/nvme0/ctrl_loss_tmo	600
+/sys/class/nvme/nvme0/dhchap_ctrl_secret	none

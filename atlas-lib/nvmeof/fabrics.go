@@ -52,7 +52,11 @@ var _ Connector = (*FabricsConnector)(nil)
 func NewFabricsConnector(subs nvme.SubsystemResolver, opts ...Option) *FabricsConnector {
 	c := &FabricsConnector{connector: newConnector(subs, opts...)}
 	c.attach = func(ctx context.Context, t Target) (string, error) {
-		return writeFabricsDevice(ctx, fabricsOptions(t, c.hostNQN, c.hostID))
+		opts, err := fabricsOptions(t, c.hostNQN, c.hostID)
+		if err != nil {
+			return "", err
+		}
+		return writeFabricsDevice(ctx, opts)
 	}
 	c.deleteCtrl = func(ctrl nvme.Controller) error {
 		return writeSysfs(filepath.Join(ctrl.SysfsPath, deleteControllerAttr), "1")
@@ -60,16 +64,21 @@ func NewFabricsConnector(subs nvme.SubsystemResolver, opts ...Option) *FabricsCo
 	return c
 }
 
-// options renders the comma-separated NVMe-oF connect string the kernel
-// fabrics device expects. Empty/zero fields are omitted.
-func fabricsOptions(t Target, cHostNQN, cHostID string) string {
+// fabricsOptions renders the comma-separated NVMe-oF connect string the kernel
+// fabrics device expects. Empty/zero fields are omitted. It errors only on a
+// host identity that cannot be made self-consistent (see hostIdentity).
+func fabricsOptions(t Target, cHostNQN, cHostID string) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "transport=%s,traddr=%s,trsvcid=%d,nqn=%s", transport(t), t.Address, port(t), t.NQN)
 
-	if hostNQN := orElse(t.HostNQN, cHostNQN); hostNQN != "" {
+	hostNQN, hostID, err := hostIdentity(t, cHostNQN, cHostID)
+	if err != nil {
+		return "", err
+	}
+	if hostNQN != "" {
 		fmt.Fprintf(&b, ",hostnqn=%s", hostNQN)
 	}
-	if hostID := orElse(t.HostID, cHostID); hostID != "" {
+	if hostID != "" {
 		fmt.Fprintf(&b, ",hostid=%s", hostID)
 	}
 	if t.HostIface != "" {
@@ -94,7 +103,16 @@ func fabricsOptions(t Target, cHostNQN, cHostID string) string {
 	if t.TLS {
 		b.WriteString(",tls")
 	}
-	return b.String()
+	// The kernel takes the secrets in the options line itself, so this string
+	// carries credentials from here on: it goes to the fabrics device and
+	// nowhere else, and no error renders it.
+	if t.DHCHAPSecret != "" {
+		fmt.Fprintf(&b, ",dhchap_secret=%s", t.DHCHAPSecret)
+	}
+	if t.DHCHAPCtrlSecret != "" {
+		fmt.Fprintf(&b, ",dhchap_ctrl_secret=%s", t.DHCHAPCtrlSecret)
+	}
+	return b.String(), nil
 }
 
 // writeFabricsDevice opens /dev/nvme-fabrics, writes the connect options, and
