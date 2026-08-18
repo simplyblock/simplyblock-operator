@@ -35,7 +35,7 @@ const (
 type validationRun struct {
 	hostHasSubsystem func(ctx context.Context, sysRoot, nqn string) (bool, error)
 	presentAddresses func(ctx context.Context, sysRoot, nqn string) (map[string]bool, error)
-	ensurePaths      func(conns []volumemigration.Connection) error
+	ensurePaths      func(ctx context.Context, sysRoot string, conns []volumemigration.Connection) error
 	verifyPaths      func(ctx context.Context, sysRoot, nqn string, conns []volumemigration.Connection,
 		preExisting map[string]bool) ([]volumemigration.PathState, error)
 	sleep    func(time.Duration)
@@ -118,7 +118,7 @@ func (v validationRun) run(
 	var lastErr error
 	for attempt := 1; attempt <= v.attempts; attempt++ {
 		paths, verifyErr := []volumemigration.PathState(nil), error(nil)
-		if err := v.ensurePaths(conns); err != nil {
+		if err := v.ensurePaths(ctx, sysRoot, conns); err != nil {
 			lastErr = fmt.Errorf("ensure migration paths: %w", err)
 		} else if paths, verifyErr = v.verifyPaths(ctx, sysRoot, nqn, conns, preExisting); verifyErr != nil {
 			lastErr = fmt.Errorf("verification: %w", verifyErr)

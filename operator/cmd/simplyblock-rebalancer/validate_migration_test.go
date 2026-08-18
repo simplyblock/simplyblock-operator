@@ -123,7 +123,7 @@ func (rec *recorder) newRun(attempts int) validationRun {
 			rec.lookups++
 			return rec.present, rec.lookupErr
 		},
-		ensurePaths: func([]volumemigration.Connection) error {
+		ensurePaths: func(context.Context, string, []volumemigration.Connection) error {
 			rec.ensures++
 			err := errAt(rec.ensureErrs, rec.ensureCallSeq)
 			rec.ensureCallSeq++

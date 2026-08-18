@@ -3,8 +3,6 @@ package volumemigration
 import (
 	"context"
 	"fmt"
-
-	"github.com/simplyblock/atlas/nvme"
 )
 
 // HostHasSubsystem reports whether this host holds an NVMe connection to the
@@ -25,8 +23,7 @@ func HostHasSubsystem(ctx context.Context, sysRoot, nqn string) (bool, error) {
 	if nqn == "" {
 		return false, fmt.Errorf("host subsystem lookup: empty NQN")
 	}
-	resolver := nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{SysRoot: sysRoot})
-	subs, err := resolver.List(ctx)
+	subs, err := resolver(sysRoot).List(ctx)
 	if err != nil {
 		return false, fmt.Errorf("list host NVMe subsystems: %w", err)
 	}
