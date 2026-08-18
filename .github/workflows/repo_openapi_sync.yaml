@@ -1,4 +1,4 @@
-name: "Shared: Sync OpenAPI Spec"
+name: "Repo: Sync OpenAPI Spec"
 
 # shared/openapi.json is the contract atlas-lib's client, the integration suite's
 # control-plane simulator and the operator's spec-backed mock are all generated or
@@ -23,6 +23,12 @@ on:
 permissions:
   contents: write
   pull-requests: write
+
+env:
+  # One branch, so there is one pull request that gets updated rather than a new
+  # one every night. See the "Check whether this is already proposed" step for
+  # what keeps an unchanged export from touching it at all.
+  SYNC_BRANCH: chore/openapi-sync
 
 jobs:
   sync:
@@ -69,8 +75,41 @@ jobs:
 
           echo "sbcli_sha=$(git -C .sbcli rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Summarize the change
+      # The pull-request action reuses one branch, so it updates the open pull
+      # request rather than opening another — but it rewrites the title and body on
+      # every run where the branch differs from the base, and the body names the
+      # sbcli commit it was exported from. That alone would rewrite the pull
+      # request nightly and keep bumping its timestamp while nothing about the
+      # spec had changed.
+      #
+      # So compare against what is already on the branch, not only against the
+      # base, and stop here when they match: the change has been proposed and is
+      # waiting for a review, which is not news. A later export that differs from
+      # the branch does go through, and a branch closed without merging keeps this
+      # quiet about that exact change while still reporting the next one.
+      - name: Check whether this is already proposed
+        id: proposed
         if: steps.export.outputs.changed == 'true'
+        run: |
+          if ! git fetch --depth=1 origin "$SYNC_BRANCH" 2>/dev/null; then
+            echo "already=false" >> "$GITHUB_OUTPUT"
+            echo "No $SYNC_BRANCH branch yet." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git show "FETCH_HEAD:shared/openapi.json" > "$RUNNER_TEMP/openapi.branch.json"
+          if cmp -s shared/openapi.json "$RUNNER_TEMP/openapi.branch.json"; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "This export is already on \`$SYNC_BRANCH\`; leaving the open pull request alone." \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+            echo "\`$SYNC_BRANCH\` exists but carries a different export; updating it." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Summarize the change
+        if: steps.export.outputs.changed == 'true' && steps.proposed.outputs.already != 'true'
         run: |
           python shared/export-openapi.py summarize \
             --old "$RUNNER_TEMP/openapi.old.json" \
@@ -78,7 +117,7 @@ jobs:
           cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-go@v5
-        if: steps.export.outputs.changed == 'true'
+        if: steps.export.outputs.changed == 'true' && steps.proposed.outputs.already != 'true'
         with:
           go-version: stable
 
@@ -93,14 +132,17 @@ jobs:
       # so, because a visible broken change beats an invisible stale one.
       - name: Regenerate what the spec feeds
         id: regenerate
-        if: steps.export.outputs.changed == 'true'
+        if: steps.export.outputs.changed == 'true' && steps.proposed.outputs.already != 'true'
         continue-on-error: true
         run: |
           make -C atlas-lib generate
           make -C test/integration generate
 
       - name: Note that regeneration needs a human
-        if: steps.export.outputs.changed == 'true' && steps.regenerate.outcome == 'failure'
+        if: |
+          steps.export.outputs.changed == 'true' &&
+          steps.proposed.outputs.already != 'true' &&
+          steps.regenerate.outcome == 'failure'
         run: |
           {
             echo
@@ -114,14 +156,18 @@ jobs:
           } >> "$RUNNER_TEMP/summary.md"
           cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
 
+      # Unconditionally, so the step below can run on a day with no change too: an
+      # empty body is never read in that case, and running the action anyway is
+      # what retires a proposal that has gone stale — the spec having landed some
+      # other way, or been reverted upstream — instead of leaving a pull request
+      # open against a diff that no longer exists.
       - name: Assemble the pull-request body
-        if: steps.export.outputs.changed == 'true'
         run: |
           {
             echo "Exported from [simplyblock-io/sbcli@${SBCLI_SHA:0:12}](https://github.com/simplyblock-io/sbcli/commit/$SBCLI_SHA)"
             echo "by \`.github/workflows/openapi_sync.yaml\`."
             echo
-            cat "$RUNNER_TEMP/summary.md"
+            [ -f "$RUNNER_TEMP/summary.md" ] && cat "$RUNNER_TEMP/summary.md"
             echo
             echo "Regenerate locally with:"
             echo
@@ -133,11 +179,17 @@ jobs:
         env:
           SBCLI_SHA: ${{ steps.export.outputs.sbcli_sha }}
 
-      - name: Open a pull request
-        if: steps.export.outputs.changed == 'true'
+      # Not gated on the spec having changed: with no changes the action either does
+      # nothing or, when an open pull request no longer differs from the base,
+      # closes it and deletes the branch. It is gated on the export not already
+      # being the one on the branch, which is the case where touching the pull
+      # request would be pure noise.
+      - name: Open, update or retire the pull request
+        id: pr
+        if: steps.proposed.outputs.already != 'true'
         uses: peter-evans/create-pull-request@v8
         with:
-          branch: chore/openapi-sync
+          branch: ${{ env.SYNC_BRANCH }}
           # One branch, reused: a nightly job that opened a new pull request per
           # run would bury the one a reviewer is looking at.
           delete-branch: true
@@ -156,3 +208,13 @@ jobs:
           labels: |
             dependencies
             openapi
+
+      - name: Report what happened
+        if: always()
+        run: |
+          case "${{ steps.pr.outputs.pull-request-operation }}" in
+            created) echo "Opened #${{ steps.pr.outputs.pull-request-number }}." ;;
+            updated) echo "Updated #${{ steps.pr.outputs.pull-request-number }}." ;;
+            closed)  echo "Retired the proposal: it no longer differs from the base branch." ;;
+            *)       echo "No change to any pull request." ;;
+          esac >> "$GITHUB_STEP_SUMMARY"
