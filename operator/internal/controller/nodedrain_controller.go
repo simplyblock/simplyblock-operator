@@ -126,7 +126,7 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 		r.cleanupManagerPDBIfStale(ctx, snCR)
 	}
 
-	// MaxFaultTolerance caps how many nodes can be simultaneously in the drain window.
+	// MaxConcurrentWorkerRestarts caps how many nodes can be simultaneously in the drain window.
 	clusterCR, err := utils.ResolveClusterCR(ctx, r.Client, snCR.Namespace, snCR.Spec.ClusterName)
 	if err != nil {
 		log.Info("Cluster CR not ready, requeuing", "cluster", snCR.Spec.ClusterName)
@@ -144,8 +144,8 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	maxFaultTolerance := 1
-	if clusterCR.Status.MaxFaultTolerance != nil && *clusterCR.Status.MaxFaultTolerance > 0 {
-		maxFaultTolerance = int(*clusterCR.Status.MaxFaultTolerance)
+	if clusterCR.Status.MaxConcurrentWorkerRestarts != nil && *clusterCR.Status.MaxConcurrentWorkerRestarts > 0 {
+		maxFaultTolerance = int(*clusterCR.Status.MaxConcurrentWorkerRestarts)
 	}
 
 	apiClient := webapi.NewClient()

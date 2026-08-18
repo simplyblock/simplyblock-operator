@@ -643,6 +643,7 @@ func (r *StorageClusterReconciler) syncStatus(
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
 	mftSync := int32(resp.MaxFaultTolerance)
 	clusterCR.Status.MaxFaultTolerance = &mftSync
+	clusterCR.Status.MaxConcurrentWorkerRestarts = effectiveConcurrentRestarts(clusterCR.Spec.MaxConcurrentWorkerRestarts, &mftSync)
 
 	if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
 		log.Error(err, "syncStatus: failed to patch cluster status", "name", clusterCR.Name)
@@ -651,6 +652,19 @@ func (r *StorageClusterReconciler) syncStatus(
 
 	log.Info("syncStatus: cluster status updated", "name", clusterCR.Name, "status", resp.Status)
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+// effectiveConcurrentRestarts returns min(specVal, ftt), defaulting to 1 when
+// specVal is nil. Both inputs may be nil (ftt comes from the backend response).
+func effectiveConcurrentRestarts(specVal, ftt *int32) *int32 {
+	effective := int32(1)
+	if specVal != nil && *specVal > 0 {
+		effective = *specVal
+	}
+	if ftt != nil && *ftt > 0 && *ftt < effective {
+		effective = *ftt
+	}
+	return &effective
 }
 
 func capacityThreshold(t *simplyblockv1alpha1.CapacityThresholdSpec) int {

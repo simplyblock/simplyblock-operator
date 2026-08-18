@@ -1324,6 +1324,11 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.MaxConcurrentWorkerRestarts != nil {
+		in, out := &in.MaxConcurrentWorkerRestarts, &out.MaxConcurrentWorkerRestarts
+		*out = new(int32)
+		**out = **in
+	}
 	if in.WarningThresholdSpec != nil {
 		in, out := &in.WarningThresholdSpec, &out.WarningThresholdSpec
 		*out = new(CapacityThresholdSpec)
@@ -1408,6 +1413,11 @@ func (in *StorageClusterStatus) DeepCopyInto(out *StorageClusterStatus) {
 	}
 	if in.MaxFaultTolerance != nil {
 		in, out := &in.MaxFaultTolerance, &out.MaxFaultTolerance
+		*out = new(int32)
+		**out = **in
+	}
+	if in.MaxConcurrentWorkerRestarts != nil {
+		in, out := &in.MaxConcurrentWorkerRestarts, &out.MaxConcurrentWorkerRestarts
 		*out = new(int32)
 		**out = **in
 	}

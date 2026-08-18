@@ -230,6 +230,16 @@ type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Storage Node API Port"
 	// SnodeApiPort defines the storage-node API port.
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Concurrent Worker Restarts"
+	// MaxConcurrentWorkerRestarts caps how many storage worker nodes the operator
+	// may shut down and restart simultaneously during a rolling drain (e.g. an OS
+	// upgrade). It is an operational limit that may be set lower than the cluster's
+	// fault-tolerance level (FTT) when other workloads further constrain capacity.
+	// The effective concurrency is min(MaxConcurrentWorkerRestarts, FTT).
+	// Defaults to 1 when unset.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	MaxConcurrentWorkerRestarts *int32 `json:"maxConcurrentWorkerRestarts,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Warning Threshold"
 	// WarningThresholdSpec defines warning-level capacity thresholds.
 	WarningThresholdSpec *CapacityThresholdSpec `json:"warningThreshold,omitempty"`
@@ -316,6 +326,12 @@ type StorageClusterStatus struct {
 	// be simultaneously offline (failed, drained, or restarted) without violating
 	// the cluster's redundancy guarantees.
 	MaxFaultTolerance *int32 `json:"maxFaultTolerance,omitempty"`
+	// MaxConcurrentWorkerRestarts is the effective concurrent-restart limit applied
+	// by the drain coordinator: min(spec.MaxConcurrentWorkerRestarts, MaxFaultTolerance).
+	// Defaults to 1. Exposed here so controllers and tooling can read a single
+	// authoritative value without re-computing it.
+	// +optional
+	MaxConcurrentWorkerRestarts *int32 `json:"maxConcurrentWorkerRestarts,omitempty"`
 	// ActiveOpsRef is the name of the currently active ClusterOps on this cluster.
 	// Empty when no operation is in progress.
 	// +optional

@@ -128,6 +128,17 @@ spec:
                     pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                     type: string
                 type: object
+              maxConcurrentWorkerRestarts:
+                description: |-
+                  MaxConcurrentWorkerRestarts caps how many storage worker nodes the operator
+                  may shut down and restart simultaneously during a rolling drain (e.g. an OS
+                  upgrade). It is an operational limit that may be set lower than the cluster's
+                  fault-tolerance level (FTT) when other workloads further constrain capacity.
+                  The effective concurrency is min(MaxConcurrentWorkerRestarts, FTT).
+                  Defaults to 1 when unset.
+                format: int32
+                minimum: 1
+                type: integer
               nvmfBasePort:
                 description: NvmfBasePort defines the base NVMf service port.
                 format: int32
@@ -344,6 +355,14 @@ spec:
                   FIXME: Unused for now (API update required?)
                 format: date-time
                 type: string
+              maxConcurrentWorkerRestarts:
+                description: |-
+                  MaxConcurrentWorkerRestarts is the effective concurrent-restart limit applied
+                  by the drain coordinator: min(spec.MaxConcurrentWorkerRestarts, MaxFaultTolerance).
+                  Defaults to 1. Exposed here so controllers and tooling can read a single
+                  authoritative value without re-computing it.
+                format: int32
+                type: integer
               maxFaultTolerance:
                 description: |-
                   MaxFaultTolerance is the backend-reported maximum number of nodes that can
