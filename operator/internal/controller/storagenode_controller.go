@@ -386,7 +386,6 @@ func (r *StorageNodeReconciler) provisionNode(
 		CRNameSpace:      sns.Namespace,
 		CRPlural:         "storagenodesets",
 		Format4K:         ptr.BoolFromOrFalse(sns.Spec.ForceFormat4K),
-		EnableTestDevice: ptr.BoolFromOrFalse(sns.Spec.EnableTestDevice),
 		SpdkSystemMemory: eff.SpdkSystemMemory,
 		FailureDomain:    effectiveFailureDomain(sn, sns),
 		Expand:           ptr.BoolFromOrFalse(eff.Expand),

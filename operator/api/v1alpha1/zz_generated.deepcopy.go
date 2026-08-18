@@ -1896,11 +1896,6 @@ func (in *StorageNodeSetSpec) DeepCopyInto(out *StorageNodeSetSpec) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.EnableTestDevice != nil {
-		in, out := &in.EnableTestDevice, &out.EnableTestDevice
-		*out = new(bool)
-		**out = **in
-	}
 	if in.EnableCpuTopology != nil {
 		in, out := &in.EnableCpuTopology, &out.EnableCpuTopology
 		*out = new(bool)

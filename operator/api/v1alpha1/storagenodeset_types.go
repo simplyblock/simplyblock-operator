@@ -116,20 +116,6 @@ type StorageNodeSetSpec struct {
 	// ForceFormat4K forces 4K blocksize formatting of the NVMe device where supported.
 	// +k8s:immutable
 	ForceFormat4K *bool `json:"forceFormat4K,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Test Device"
-	// EnableTestDevice inserts a passtest bdev between each device's raw NVMe bdev and its
-	// alceml, letting `sbcli sn device-testing-mode` inject faults (IO errors, corruption) for
-	// testing. Adds a layer to the IO path on every device, so leave this off outside test
-	// clusters. Only takes effect for devices added while this is set — like ForceFormat4K,
-	// the passtest bdev is only inserted at initial device-stack creation.
-	//
-	// TEMPORARY: no production safeguard exists yet for this field (tracked separately --
-	// e.g. an admission webhook restricted to an allow-listed test-runner ServiceAccount,
-	// mirroring StorageNodeValidator's spec.workerNode gate). Until that lands, any caller
-	// able to create/edit a StorageNodeSet can enable this. Do not use on production clusters.
-	// +k8s:immutable
-	// +optional
-	EnableTestDevice *bool `json:"enableTestDevice,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable CPU Topology"
 	// EnableCpuTopology enables topology-aware CPU handling.
 	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
