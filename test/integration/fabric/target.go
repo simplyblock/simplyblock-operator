@@ -9,26 +9,32 @@ import (
 
 // TargetSpec describes one nvmet subsystem and the port it listens on.
 //
-// A pair of targets that share NQN, Model and Serial is what the host merges
-// into a single multipath subsystem with two controllers. The merge is not
-// optional and not configurable: the host keys on the NQN, and rejects a second
-// controller whose model or serial disagrees with the first. So the fields that
-// look like cosmetic identity are load-bearing, and the fields that differ have
-// to be exactly CntlIDMin/CntlIDMax and the address.
+// A pair of targets sharing an NQN is what the host merges into a single
+// multipath subsystem with two controllers. The NQN is the only key: the kernel
+// looks a subsystem up by subsysnqn alone, and copies the model and serial from
+// whichever controller got there first without comparing them again
+// (nvme_init_subsystem). What it does reject is a second controller whose cntlid
+// it has already seen, or one that does not advertise multi-controller support.
+//
+// So Model and Serial are not what makes the merge happen. They are set anyway
+// because the detection reads them — a simplyblock volume's model is its master
+// lvol UUID — and a pair that disagreed would be a fabric no cluster produces.
 type TargetSpec struct {
 	// NQN is the subsystem NQN, and also its configfs directory name.
 	NQN string
 
 	// Model and Serial are reported in Identify Controller. Two targets under
-	// one NQN must agree on both.
+	// one NQN should agree on both — the kernel will not object if they do not,
+	// but a real cluster's pair always does.
 	Model  string
 	Serial string
 
 	// CntlIDMin and CntlIDMax bound the controller IDs this target hands out.
-	// Two targets sharing an NQN need disjoint ranges: controller IDs are
-	// unique per subsystem, not per target, and the host drops a controller
-	// whose ID it has already seen. nvmet's default range is the whole space,
-	// so leaving these at zero is what makes the second connect fail.
+	// Two targets sharing an NQN need disjoint ranges: controller IDs are unique
+	// per subsystem rather than per target, and the kernel rejects a controller
+	// whose ID it has already seen ("Duplicate cntlid %u ... rejecting"). This is
+	// the field the merge actually depends on; nvmet's default range is the whole
+	// space, so leaving these at zero is what makes the second connect fail.
 	CntlIDMin int
 	CntlIDMax int
 
