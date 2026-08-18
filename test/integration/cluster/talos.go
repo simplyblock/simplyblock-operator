@@ -41,8 +41,13 @@ type Config struct {
 	// advertises as its traddr.
 	CIDR string
 
-	// Talos wants 2 GiB for a control plane and 1 GiB for a worker; the
-	// talosctl default is 2 GiB for both, which overpays for workers.
+	// Memory per node, 2 GiB each by default, as talosctl gives them.
+	//
+	// Not less for workers: Talos health-checks usable memory against 874 MiB,
+	// and 1 GiB allocated leaves 853 MiB of that on amd64 — enough to boot, and
+	// enough to make `cluster create` loop on the check until it is killed. How
+	// much firmware and kernel take is architecture-dependent, so the margin has
+	// to cover the worst case, not the host in front of you.
 	ControlplaneMemoryMB int
 	WorkerMemoryMB       int
 
@@ -73,7 +78,7 @@ func (c *Config) applyDefaults() {
 		c.ControlplaneMemoryMB = 2048
 	}
 	if c.WorkerMemoryMB == 0 {
-		c.WorkerMemoryMB = 1024
+		c.WorkerMemoryMB = 2048
 	}
 	if c.TalosctlPath == "" {
 		c.TalosctlPath = "talosctl"
@@ -357,7 +362,8 @@ func (c *Cluster) Addresses() []string { return c.addresses }
 // and must not turn one failure into two.
 func (c *Cluster) diagnose(ctx context.Context) string {
 	var b strings.Builder
-	if out, err := c.run(ctx, time.Minute, "cluster", "show", "--name", c.cfg.Name); err == nil {
+	if out, err := c.run(ctx, time.Minute,
+		"cluster", "show", "--provisioner", "qemu", "--name", c.cfg.Name); err == nil {
 		b.WriteString("\n--- cluster show ---\n" + out)
 	}
 	// Node logs are where a boot or bootstrap failure explains itself, and the
@@ -424,5 +430,11 @@ func (c *Cluster) run(ctx context.Context, timeout time.Duration, args ...string
 	}
 	cmd := exec.CommandContext(ctx, bin, full...) //nolint:gosec // fixed binary, structured args
 	out, err := cmd.CombinedOutput()
+	// CommandContext kills on deadline, and what surfaces is "signal: killed" —
+	// which reads as a crash rather than as the timeout it is.
+	if err != nil && ctx.Err() != nil {
+		return string(out), fmt.Errorf("talosctl %s did not finish within %s: %w",
+			args[0], timeout, ctx.Err())
+	}
 	return string(out), err
 }

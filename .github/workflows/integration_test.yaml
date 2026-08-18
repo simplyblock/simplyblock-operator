@@ -81,12 +81,17 @@ jobs:
       - name: Collect cluster diagnostics
         if: failure()
         run: |
-          for d in "$HOME"/.talos/clusters/sb-integration*; do
+          for d in "$HOME"/.talos/clusters/sbi-* "$HOME"/.talos/clusters/sb-integration*; do
             [ -d "$d" ] || continue
-            sudo -E talosctl cluster show --name "$(basename "$d")" 2>&1 | head -40 || true
+            sudo -E talosctl cluster show --provisioner qemu --name "$(basename "$d")" 2>&1 | head -40 || true
+            # QEMU writes one log per node here, and a VM that never started says
+            # so only in that file.
+            sudo sh -c 'for f in "$0"/*.log; do
+              [ -f "$f" ] || continue
+              echo "=== $f ==="
+              tail -60 "$f"
+            done' "$d" || true
           done
-          find /tmp -maxdepth 3 -name "*.log" -path "*sb-integration*" -exec sh -c \
-            'echo "=== $1 ==="; tail -100 "$1"' _ {} \; 2>/dev/null || true
 
       # talosctl ran as root, so its image cache is root-owned and the cache
       # action cannot save it.
@@ -101,7 +106,10 @@ jobs:
         # The suite names clusters per process, so there is no single name to
         # destroy; anything left is a run that did not clean up after itself.
         run: |
-          for d in "$HOME"/.talos/clusters/sb-integration*; do
+          for d in "$HOME"/.talos/clusters/sbi-* "$HOME"/.talos/clusters/sb-integration*; do
             [ -d "$d" ] || continue
             sudo -E talosctl cluster destroy --name "$(basename "$d")" 2>/dev/null || true
+            # A create that died before writing state.yaml cannot be destroyed,
+            # and its disk images would go into the runner's cache.
+            sudo rm -rf "$d" || true
           done
