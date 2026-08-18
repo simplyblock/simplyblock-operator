@@ -169,8 +169,9 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 		// is iso, which needs more host plumbing.
 		"--presets", "disk-image",
 		"--config-patch", "@" + patch,
-		// State and configs stay in the work dir rather than ~/.talos and
-		// ~/.kube, so a test never disturbs what the person running it uses.
+		// State and the talosconfig go to the work dir. The kubeconfig has no
+		// such flag — cluster create merges it into $KUBECONFIG, which run()
+		// sets — see the note there.
 		"--state", c.stateDir,
 		"--talosconfig-destination", c.talosconfig,
 	}
