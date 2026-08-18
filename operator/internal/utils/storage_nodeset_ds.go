@@ -214,6 +214,12 @@ fi`
 		{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
 		{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
 		{Name: "host-mnt", MountPath: "/mnt"},
+		// dev-vol/host-sys: node_configure.py's lblk device-eligibility check
+		// (--lblk/--blk-names/--blk-serials) inspects host block devices via
+		// /dev and /sys/block eagerly at config-generation time, unlike NVMe
+		// PCIe discovery which defers to the main container's SPDK startup.
+		{Name: "dev-vol", MountPath: "/dev"},
+		{Name: "host-sys", MountPath: "/sys"},
 		nodeEnvMount,
 	}
 
