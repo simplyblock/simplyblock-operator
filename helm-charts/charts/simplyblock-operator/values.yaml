@@ -242,6 +242,12 @@ controlplane:
     secret: "sWbpOgba1bKnCfcPkVQi"
     deletionInterval: "3d"
     level: "DEBUG"
+    # Parser used by fluent-bit to read /var/log/containers/*.log.
+    # "cri" is correct for every CRI runtime (containerd and CRI-O), which covers
+    # OpenShift, vanilla Kubernetes >= 1.24, k3s/RKE2, Talos, kind and the managed
+    # clouds. Only set this to "docker" on legacy dockershim clusters (k8s <= 1.23),
+    # which write Docker JSON log files instead.
+    logParser: "cri"
     graylog:
       repository: quay.io/simplyblock-io/graylog
       tag: "5.0"

@@ -33,7 +33,7 @@ data:
     [INPUT]
         Name              tail
         Path              /var/log/containers/*.log
-        Parser            docker
+        Parser            {{ .Values.controlplane.observability.logParser | default "cri" }}
         Tag               kube.*
         Exclude_Path      /var/log/containers/*fluent-bit*.log
         Refresh_Interval  5
@@ -68,6 +68,7 @@ data:
         Port          12201
         Mode          tcp
         Gelf_Short_Message_Key log
+        Gelf_Host_Key host
 
   parsers.conf: |
     [PARSER]
@@ -77,11 +78,33 @@ data:
         Time_Format %Y-%m-%dT%H:%M:%S.%L
         Time_Keep   On
 
+    # CRI log line: "<time> <stream> <logtag> <message>". The message is captured
+    # as "log" (rather than the upstream "message") so that the kubernetes filter's
+    # Merge_Log and the GELF output's Gelf_Short_Message_Key keep working unchanged.
+    [PARSER]
+        Name        cri
+        Format      regex
+        Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) ?(?<log>.*)$
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+        Time_Keep   On
+
   filter.lua: |
     function filter_tagged_pods(tag, timestamp, record)
         if record["kubernetes"] ~= nil then
             local annotations = record["kubernetes"]["annotations"]
             if annotations ~= nil and annotations["log-collector/enabled"] == "true" then
+                -- GELF requires a top-level "host" field. Without it Graylog logs a
+                -- warning per message and falls back to the fluent-bit pod IP as the
+                -- message source, which makes logs impossible to attribute to a node.
+                record["host"] = record["kubernetes"]["host"] or record["kubernetes"]["pod_name"]
+                -- GELF rejects an empty short_message, so blank log lines would be
+                -- dropped by the output with an "error encoding to GELF" per line.
+                -- They carry no information, so drop them here quietly instead.
+                local msg = record["log"]
+                if msg == nil or (type(msg) == "string" and msg:match("^%s*$") ~= nil) then
+                    return -1, timestamp, record
+                end
                 return 1, timestamp, record
             end
         end
