@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -36,8 +37,10 @@ const (
 	// failure.
 	monitorTimeout = 10 * time.Second
 
-	// defaultNetdev is the id talosctl gives a node's network device.
-	defaultNetdev = "net0"
+	// monitorDialTimeout bounds the wait for a monitor to accept a connection.
+	// QEMU binds the socket at startup, but a node that has just been created may
+	// not have got there yet.
+	monitorDialTimeout = 10 * time.Second
 )
 
 // Monitor is a connection to one node's QEMU monitor.
@@ -48,6 +51,10 @@ type Monitor struct {
 	conn net.Conn
 	node string
 	buf  bytes.Buffer
+
+	// netdevID is the network backend's id, discovered once. set_link needs it and
+	// talosctl owns the command line that names it.
+	netdevID string
 }
 
 // MonitorPath is where talosctl's QEMU provisioner puts a node's monitor socket.
@@ -64,8 +71,7 @@ func (c *Cluster) Monitor(ctx context.Context, node string) (*Monitor, error) {
 		return nil, fmt.Errorf("no monitor socket for %s at %s: %w", node, path, err)
 	}
 
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", path)
+	conn, err := dialMonitor(ctx, path)
 	if err != nil {
 		// Connecting to a unix socket needs write permission on it, and QEMU
 		// created this one as root. Create hands the sockets over; a cluster
@@ -82,6 +88,30 @@ func (c *Cluster) Monitor(ctx context.Context, node string) (*Monitor, error) {
 		return nil, fmt.Errorf("read monitor banner for %s: %w", node, err)
 	}
 	return m, nil
+}
+
+// dialMonitor connects, retrying while the socket exists but is not yet accepting.
+func dialMonitor(ctx context.Context, path string) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, monitorDialTimeout)
+	defer cancel()
+
+	var d net.Dialer
+	for {
+		conn, err := d.DialContext(ctx, "unix", path)
+		if err == nil {
+			return conn, nil
+		}
+		// A refused connection is a monitor that has not finished starting;
+		// anything else will not improve by waiting.
+		if !errors.Is(err, syscall.ECONNREFUSED) || ctx.Err() != nil {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // Close releases the monitor.
@@ -163,17 +193,68 @@ func (c *Cluster) Thaw(ctx context.Context, node string) error {
 	return c.monitorCommand(ctx, node, "cont")
 }
 
+// Netdev is the id of the node's network backend, as QEMU knows it.
+//
+// Discovered rather than assumed: set_link takes this name, and the command line
+// that sets it belongs to talosctl. Hardcoding today's value would turn a change
+// there into a link fault that reports success and disconnects nothing.
+func (m *Monitor) Netdev(ctx context.Context) (string, error) {
+	if m.netdevID != "" {
+		return m.netdevID, nil
+	}
+	out, err := m.Command(ctx, "info network")
+	if err != nil {
+		return "", err
+	}
+	id := parseNetdev(out)
+	if id == "" {
+		return "", fmt.Errorf("no network backend in %s's monitor output:\n%s", m.node, out)
+	}
+	m.netdevID = id
+	return id, nil
+}
+
+// parseNetdev takes the first backend from `info network`. Backends start a line;
+// the devices attached to them are indented under it.
+func parseNetdev(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" || line[0] == ' ' || line[0] == '\t' || strings.HasPrefix(line, "hub ") {
+			continue
+		}
+		name, _, ok := strings.Cut(line, ":")
+		if ok && name != "" {
+			return strings.TrimSpace(name)
+		}
+	}
+	return ""
+}
+
 // LinkDown detaches the node's virtual network cable, which is a partition rather
 // than an outage: the host keeps running and keeps its state, and its peers see
 // their connections fail. Distinguishable from Freeze, where the host is not
 // running either.
 func (c *Cluster) LinkDown(ctx context.Context, node string) error {
-	return c.monitorCommand(ctx, node, "set_link "+defaultNetdev+" off")
+	return c.setLink(ctx, node, "off")
 }
 
 // LinkUp reattaches it.
 func (c *Cluster) LinkUp(ctx context.Context, node string) error {
-	return c.monitorCommand(ctx, node, "set_link "+defaultNetdev+" on")
+	return c.setLink(ctx, node, "on")
+}
+
+func (c *Cluster) setLink(ctx context.Context, node, state string) error {
+	m, err := c.Monitor(ctx, node)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = m.Close() }()
+
+	netdev, err := m.Netdev(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = m.Command(ctx, fmt.Sprintf("set_link %s %s", netdev, state))
+	return err
 }
 
 // Shutdown asks the guest to power off, as an ACPI request it can act on. The

@@ -199,6 +199,89 @@ func TestMonitor_QuitLosesTheConnection(t *testing.T) {
 	}
 }
 
+// set_link takes the network backend's name, and talosctl owns the command line
+// that sets it. Discovery is what keeps a change there from turning a link fault
+// into a no-op that reports success.
+func TestMonitor_DiscoversTheNetdevID(t *testing.T) {
+	// The shape QEMU prints for a -netdev/-device pair: the backend starts a line,
+	// the device attached to it is indented beneath.
+	f := &fakeMonitor{reply: map[string]string{
+		"info network": "net0: index=0,type=vmnet-shared,start-address=10.5.0.1\n" +
+			" \\ virtio-net-pci.0: index=0,type=nic,model=virtio-net-pci,macaddr=1e:9e:d5:d5:72:39",
+		"set_link net0 off": "",
+	}}
+	startFakeMonitor(t, f)
+	m := dialFake(t, f)
+
+	ctx := context.Background()
+	id, err := m.Netdev(ctx)
+	if err != nil {
+		t.Fatalf("Netdev: %v", err)
+	}
+	if id != "net0" {
+		t.Errorf("Netdev = %q, want net0", id)
+	}
+
+	// Once, then cached: a second call must not cost another round trip.
+	if _, err := m.Netdev(ctx); err != nil {
+		t.Fatalf("Netdev again: %v", err)
+	}
+	infoCalls := 0
+	for _, c := range f.commands() {
+		if c == "info network" {
+			infoCalls++
+		}
+	}
+	if infoCalls != 1 {
+		t.Errorf("info network ran %d times, want 1", infoCalls)
+	}
+}
+
+func TestParseNetdev(t *testing.T) {
+	tests := []struct {
+		name string
+		out  string
+		want string
+	}{
+		{
+			name: "a netdev with a device under it",
+			out:  "net0: index=0,type=vmnet-shared\n \\ virtio-net-pci.0: index=0,type=nic",
+			want: "net0",
+		},
+		{
+			// The user-mode backend QEMU falls back to, attached to a hub.
+			name: "a hub",
+			out:  "hub 0\n \\ hub0port0: user.0: index=0,type=user,net=10.0.2.0",
+			want: "",
+		},
+		{
+			name: "an id that is not net0",
+			out:  "mynet: index=0,type=tap",
+			want: "mynet",
+		},
+		{name: "nothing", out: "", want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseNetdev(tc.out); got != tc.want {
+				t.Errorf("parseNetdev = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A backend that cannot be found must fail rather than guess, because guessing
+// wrong means set_link succeeds against a device that is not the data path.
+func TestMonitor_NoNetdevIsAnError(t *testing.T) {
+	f := &fakeMonitor{reply: map[string]string{"info network": ""}}
+	startFakeMonitor(t, f)
+	m := dialFake(t, f)
+
+	if _, err := m.Netdev(context.Background()); err == nil {
+		t.Fatal("Netdev succeeded with no network backend reported")
+	}
+}
+
 func TestMonitorPath_IsDerivedFromTheNodeName(t *testing.T) {
 	c := &Cluster{cfg: Config{Name: "sbi-1234"}}
 
