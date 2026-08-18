@@ -8,18 +8,12 @@ spec:
   haType: ha
   # isSingleNode: false
   # enableNodeAffinity: false
-  # strictNodeAntiAffinity: false
-  # blockSize: 4096
   # clientDataIfname: eth1
   # clientQpairCount: 4
-  # qpairCount: 4
   # nvmfBasePort: 4420
   # rpcBasePort: 9502
   # snodeApiPort: 8090
-  # pageSizeInBlocks: 128
-  # maxQueueSize: 64
   # maxFaultTolerance: 1
-  # inflightIOThreshold: 128
   # enableFailureDomains: false
   stripe:
     dataChunks: 1

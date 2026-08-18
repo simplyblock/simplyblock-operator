@@ -16,8 +16,6 @@ type HashicorpVaultConfig struct {
 
 type ClusterAddParams struct {
 	Name                   string                `json:"name"`
-	BlkSize                int                   `json:"blk_size,omitempty"` // 512 or 4096
-	PageSizeInBlocks       int                   `json:"page_size_in_blocks,omitempty"`
 	CapWarn                int                   `json:"cap_warn,omitempty"`
 	CapCrit                int                   `json:"cap_crit,omitempty"`
 	ProvCapWarn            int                   `json:"prov_cap_warn,omitempty"`
@@ -27,12 +25,8 @@ type ClusterAddParams struct {
 	DistrBs                int                   `json:"distr_bs,omitempty"`
 	DistrChunkBs           int                   `json:"distr_chunk_bs,omitempty"`
 	HAType                 string                `json:"ha_type,omitempty"`
-	QpairCount             int                   `json:"qpair_count,omitempty"`
 	ClientQpairCount       int                   `json:"client_qpair_count,omitempty"`
-	MaxQueueSize           int                   `json:"max_queue_size,omitempty"`
-	InflightIOThreshold    int                   `json:"inflight_io_threshold,omitempty"`
 	EnableNodeAffinity     bool                  `json:"enable_node_affinity,omitempty"`
-	StrictNodeAntiAffinity bool                  `json:"strict_node_anti_affinity,omitempty"`
 	IsSingleNode           bool                  `json:"is_single_node,omitempty"`
 	Fabric                 string                `json:"fabric,omitempty"`
 	CRName                 string                `json:"cr_name,omitempty"`

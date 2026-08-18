@@ -222,8 +222,6 @@ func (r *StorageClusterReconciler) reconcileCreate(
 
 	params := utils.ClusterAddParams{
 		Name:                   clusterCR.Name,
-		BlkSize:                ptr.IntFrom(clusterCR.Spec.BlockSize, 512),
-		PageSizeInBlocks:       ptr.IntFrom(clusterCR.Spec.PageSizeInBlocks, 2097152),
 		CapWarn:                capacityThreshold(clusterCR.Spec.WarningThresholdSpec),
 		CapCrit:                capacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
 		ProvCapWarn:            provisionedCapacityThreshold(clusterCR.Spec.WarningThresholdSpec),
@@ -231,12 +229,8 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		DistrNdcs:              stripeDataChunks(clusterCR.Spec.StripeSpec),
 		DistrNpcs:              stripeParityChunks(clusterCR.Spec.StripeSpec),
 		HAType:                 clusterCR.Spec.HAType,
-		QpairCount:             ptr.IntFrom(clusterCR.Spec.QpairCount, 256),
 		ClientQpairCount:       ptr.IntFrom(clusterCR.Spec.ClientQpairCount, 3),
-		MaxQueueSize:           ptr.IntFrom(clusterCR.Spec.MaxQueueSize, 128),
-		InflightIOThreshold:    ptr.IntFrom(clusterCR.Spec.InflightIOThreshold, 4),
 		EnableNodeAffinity:     ptr.BoolFromOrFalse(clusterCR.Spec.EnableNodeAffinity),
-		StrictNodeAntiAffinity: ptr.BoolFromOrFalse(clusterCR.Spec.StrictNodeAntiAffinity),
 		IsSingleNode:           ptr.BoolFromOrFalse(clusterCR.Spec.IsSingleNode),
 		Fabric:                 clusterCR.Spec.FabricType,
 		CRName:                 clusterCR.Name,

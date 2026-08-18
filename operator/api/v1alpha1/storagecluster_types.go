@@ -202,12 +202,10 @@ type BackupSpec struct {
 }
 
 // StorageClusterSpec defines the desired state of StorageCluster
-//
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.haType) || self.haType == oldSelf.haType",message="haType is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType",message="fabricType is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.hashicorpVaultSettings) || self.hashicorpVaultSettings == oldSelf.hashicorpVaultSettings",message="hashicorpVaultSettings is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.stripe) || self.stripe == oldSelf.stripe",message="stripe is immutable once set"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.blockSize) || self.blockSize == oldSelf.blockSize",message="blockSize is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.isSingleNode) || self.isSingleNode == oldSelf.isSingleNode",message="isSingleNode is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.nvmfBasePort) || self.nvmfBasePort == oldSelf.nvmfBasePort",message="nvmfBasePort is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.rpcBasePort) || self.rpcBasePort == oldSelf.rpcBasePort",message="rpcBasePort is immutable once set"
@@ -225,24 +223,6 @@ type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Single Node"
 	// IsSingleNode enables single-node cluster mode.
 	IsSingleNode *bool `json:"isSingleNode,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Strict Node Anti-Affinity"
-	// StrictNodeAntiAffinity enforces strict anti-affinity between storage nodes.
-	StrictNodeAntiAffinity *bool `json:"strictNodeAntiAffinity,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Queue Pair Count"
-	// QpairCount defines the NVMe queue-pair count used by the cluster.
-	QpairCount *int32 `json:"qpairCount,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Block Size"
-	// BlockSize defines the logical block size in bytes.
-	BlockSize *int32 `json:"blockSize,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Page Size In Blocks"
-	// PageSizeInBlocks defines page size expressed in blocks.
-	PageSizeInBlocks *int32 `json:"pageSizeInBlocks,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Queue Size"
-	// MaxQueueSize defines the maximum backend queue size.
-	MaxQueueSize *int32 `json:"maxQueueSize,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Inflight IO Threshold"
-	// InflightIOThreshold defines the inflight I/O threshold.
-	InflightIOThreshold *int32 `json:"inflightIOThreshold,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Fabric Type"
 	// FabricType defines the storage fabric type.
 	FabricType string `json:"fabricType,omitempty"`

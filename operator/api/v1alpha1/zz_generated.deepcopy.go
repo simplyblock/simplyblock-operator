@@ -1314,36 +1314,6 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.StrictNodeAntiAffinity != nil {
-		in, out := &in.StrictNodeAntiAffinity, &out.StrictNodeAntiAffinity
-		*out = new(bool)
-		**out = **in
-	}
-	if in.QpairCount != nil {
-		in, out := &in.QpairCount, &out.QpairCount
-		*out = new(int32)
-		**out = **in
-	}
-	if in.BlockSize != nil {
-		in, out := &in.BlockSize, &out.BlockSize
-		*out = new(int32)
-		**out = **in
-	}
-	if in.PageSizeInBlocks != nil {
-		in, out := &in.PageSizeInBlocks, &out.PageSizeInBlocks
-		*out = new(int32)
-		**out = **in
-	}
-	if in.MaxQueueSize != nil {
-		in, out := &in.MaxQueueSize, &out.MaxQueueSize
-		*out = new(int32)
-		**out = **in
-	}
-	if in.InflightIOThreshold != nil {
-		in, out := &in.InflightIOThreshold, &out.InflightIOThreshold
-		*out = new(int32)
-		**out = **in
-	}
 	if in.MaxFaultTolerance != nil {
 		in, out := &in.MaxFaultTolerance, &out.MaxFaultTolerance
 		*out = new(int32)

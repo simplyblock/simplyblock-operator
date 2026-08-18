@@ -1447,10 +1447,6 @@ spec:
                 required:
                 - credentialsSecretRef
                 type: object
-              blockSize:
-                description: BlockSize defines the logical block size in bytes.
-                format: int32
-                type: integer
               clientDataIfname:
                 description: ClientDataIfname defines the client data network interface.
                 type: string
@@ -1502,10 +1498,6 @@ spec:
                     pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                     type: string
                 type: object
-              inflightIOThreshold:
-                description: InflightIOThreshold defines the inflight I/O threshold.
-                format: int32
-                type: integer
               isSingleNode:
                 description: IsSingleNode enables single-node cluster mode.
                 type: boolean
@@ -1514,21 +1506,8 @@ spec:
                   faults.
                 format: int32
                 type: integer
-              maxQueueSize:
-                description: MaxQueueSize defines the maximum backend queue size.
-                format: int32
-                type: integer
               nvmfBasePort:
                 description: NvmfBasePort defines the base NVMf service port.
-                format: int32
-                type: integer
-              pageSizeInBlocks:
-                description: PageSizeInBlocks defines page size expressed in blocks.
-                format: int32
-                type: integer
-              qpairCount:
-                description: QpairCount defines the NVMe queue-pair count used by
-                  the cluster.
                 format: int32
                 type: integer
               rpcBasePort:
@@ -1539,10 +1518,6 @@ spec:
                 description: SnodeApiPort defines the storage-node API port.
                 format: int32
                 type: integer
-              strictNodeAntiAffinity:
-                description: StrictNodeAntiAffinity enforces strict anti-affinity
-                  between storage nodes.
-                type: boolean
               stripe:
                 description: StripeSpec configures erasure-coding data/parity chunk
                   counts.
@@ -1706,8 +1681,6 @@ spec:
                 == oldSelf.hashicorpVaultSettings'
             - message: stripe is immutable once set
               rule: '!has(oldSelf.stripe) || self.stripe == oldSelf.stripe'
-            - message: blockSize is immutable once set
-              rule: '!has(oldSelf.blockSize) || self.blockSize == oldSelf.blockSize'
             - message: isSingleNode is immutable once set
               rule: '!has(oldSelf.isSingleNode) || self.isSingleNode == oldSelf.isSingleNode'
             - message: nvmfBasePort is immutable once set
