@@ -98,6 +98,52 @@ func TestSmoke_NodeCanHostATarget(t *testing.T) {
 			t.Fatalf("nvmet lacks attr_cntlid_min; this kernel cannot host a same-NQN pair:\n%s", out)
 		}
 	})
+
+	// Faulting a host means talking to its QEMU monitor, which is the one thing
+	// the protocol's own tests cannot check: they answer from a stand-in. This
+	// asks a real QEMU, and freezes the node it is running on to prove the fault
+	// takes effect rather than merely being accepted.
+	t.Run("the node's QEMU monitor answers and can freeze it", func(t *testing.T) {
+		m, err := c.Monitor(ctx, nodes[0])
+		if err != nil {
+			t.Fatalf("monitor for %s: %v", nodes[0], err)
+		}
+		defer func() { _ = m.Close() }()
+
+		status, err := m.Command(ctx, "info status")
+		if err != nil {
+			t.Fatalf("info status: %v", err)
+		}
+		if !strings.Contains(status, "running") {
+			t.Fatalf("info status = %q, want a running virtual machine", status)
+		}
+		t.Logf("monitor: %s", status)
+
+		// Freeze and thaw, checking the state in between: a monitor that accepts
+		// `stop` without stopping anything would pass a test that only looked at
+		// the command's error.
+		if err := c.Freeze(ctx, nodes[0]); err != nil {
+			t.Fatalf("freeze %s: %v", nodes[0], err)
+		}
+		frozen, err := m.Command(ctx, "info status")
+		if err != nil {
+			t.Errorf("info status while frozen: %v", err)
+		}
+		if err := c.Thaw(ctx, nodes[0]); err != nil {
+			t.Fatalf("thaw %s: %v — the node is left frozen", nodes[0], err)
+		}
+		if !strings.Contains(frozen, "paused") {
+			t.Errorf("info status while frozen = %q, want paused", frozen)
+		}
+
+		resumed, err := m.Command(ctx, "info status")
+		if err != nil {
+			t.Errorf("info status after thaw: %v", err)
+		}
+		if !strings.Contains(resumed, "running") {
+			t.Errorf("info status after thaw = %q, want running again", resumed)
+		}
+	})
 }
 
 // requireIntegration skips unless the suite was asked for. These tests boot

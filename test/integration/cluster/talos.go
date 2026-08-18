@@ -264,6 +264,12 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 		_ = c.Destroy(context.WithoutCancel(ctx))
 		return nil, err
 	}
+	// The QEMU monitors are root-owned for the same reason, and faulting a host
+	// means connecting to one. See monitor.go.
+	if err := c.reclaimMonitors(ctx); err != nil {
+		_ = c.Destroy(context.WithoutCancel(ctx))
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -408,11 +414,17 @@ func (c *Cluster) reclaimWorkDir(ctx context.Context) error {
 	defer cancel()
 
 	owner := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
-	cmd := exec.CommandContext(ctx, "sudo", "chown", "-R", owner, c.workDir) //nolint:gosec // fixed binary
+	cmd := sudoCommand(ctx, "chown", "-R", owner, c.workDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("reclaim %s: %w: %s", c.workDir, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// sudoCommand runs a command as root. Only talosctl is meant to need this, but
+// what it writes as root has to be handed back afterwards, which needs root too.
+func sudoCommand(ctx context.Context, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, "sudo", args...) //nolint:gosec // fixed binary, structured args
 }
 
 // run invokes talosctl, returning combined output because talosctl explains its
