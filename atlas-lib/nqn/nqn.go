@@ -3,6 +3,8 @@ package nqn
 import (
 	"fmt"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // DefaultPrefix is the simplyblock NQN naming-authority prefix, as observed
@@ -12,6 +14,52 @@ const DefaultPrefix = "nqn.2023-02.io.simplyblock"
 // lvolMarker is the literal segment separating the cluster id from the lvol
 // id in a logical-volume subsystem NQN.
 const lvolMarker = "lvol"
+
+// HostPrefix is the naming-authority prefix of a simplyblock *host* NQN — the
+// initiator identity, not a subsystem. It differs from DefaultPrefix in its
+// date segment because the two were coined at different times and both are
+// on-wire values now; neither can be derived from the other.
+const HostPrefix = "nqn.2014-08.io.simplyblock"
+
+// uuidMarker is the literal segment introducing the UUID of a UUID-based host
+// NQN, in both the simplyblock and the NVMe-spec (nqn.2014-08.org.nvmexpress)
+// forms.
+const uuidMarker = "uuid"
+
+// Host composes the host NQN for a Kubernetes node from its UID:
+//
+//	nqn.2014-08.io.simplyblock:uuid:<nodeUID>
+//
+// This is the identity an access-controlled pool authorizes. The operator
+// registers exactly this string in the pool's allowed_hosts for every allowed
+// node, and the CSI driver on that node must present exactly this string on
+// connect and when asking the control plane to resolve a connection
+// (lvol.ForHost) — so the two derive it here rather than each spelling out the
+// format, which is what makes them agree.
+//
+// The node's UID is the right seed and the node name is not: a node rebuilt
+// under the same name is a different host, and its old authorization should
+// not carry over to it.
+func Host(nodeUID string) string {
+	return HostPrefix + ":" + uuidMarker + ":" + nodeUID
+}
+
+// HostUUID returns the UUID a UUID-based host NQN names, for both the
+// simplyblock form Host builds and the NVMe-spec nqn.2014-08.org.nvmexpress
+// one, and reports whether the NQN carried one at all.
+//
+// It is prefix-agnostic on purpose: what a caller needs from a host NQN is the
+// UUID identifying the host, and an NQN in either form identifies it the same
+// way. The UUID is returned exactly as spelled, since it must match what the
+// NQN says character for character — the kernel pairs hostid with hostnqn by
+// comparison, not by parsing.
+func HostUUID(hostNQN string) (string, bool) {
+	_, id, found := cutLast(hostNQN, ":"+uuidMarker+":")
+	if !found || uuid.Validate(id) != nil {
+		return "", false
+	}
+	return id, true
+}
 
 // Subsystem identifies a simplyblock logical-volume subsystem. The on-wire
 // NQN is formed as:

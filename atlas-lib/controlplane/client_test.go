@@ -126,6 +126,61 @@ func TestClientConnectionCarriesConnectParameters(t *testing.T) {
 	}
 }
 
+// An access-controlled volume is resolved for one host: the control plane
+// authorizes that NQN and answers with the secret it issued to it, so the NQN
+// has to reach the query string.
+func TestClientConnectionForHost(t *testing.T) {
+	var gotQuery string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("host_nqn")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"transport":"tcp","ip":"10.10.10.1","port":4420,"nqn":"nqn.x","ns-id":1,` +
+			`"connect":"nvme connect --transport=tcp --traddr=10.10.10.1 ` +
+			`--hostnqn=nqn.host --dhchap-secret=DHHC-1:00:host-secret: ` +
+			`--dhchap-ctrl-secret=DHHC-1:00:ctrl-secret:"}]`))
+	})
+
+	conn, err := c.Connection(context.Background(), testHandle, lvol.ForHost("nqn.host"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotQuery != "nqn.host" {
+		t.Errorf("host_nqn = %q, want it forwarded to the control plane", gotQuery)
+	}
+	// The secrets live in the prebuilt connect line and nowhere else.
+	e := conn.Endpoints[0]
+	if e.DHCHAPSecret != "DHHC-1:00:host-secret:" {
+		t.Errorf("DHCHAPSecret = %q, want it from the connect line", e.DHCHAPSecret)
+	}
+	if e.DHCHAPCtrlSecret != "DHHC-1:00:ctrl-secret:" {
+		t.Errorf("DHCHAPCtrlSecret = %q, want it from the connect line", e.DHCHAPCtrlSecret)
+	}
+}
+
+// Without ForHost the query stays clean rather than carrying an empty host_nqn,
+// which the control plane would have to tell apart from an absent one.
+func TestClientConnectionWithoutHostOmitsTheParameter(t *testing.T) {
+	var hadParam bool
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, hadParam = r.URL.Query()["host_nqn"]
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"transport":"tcp","ip":"10.10.10.1","port":4420,"nqn":"nqn.x","ns-id":1,` +
+			`"connect":"nvme connect --transport=tcp --traddr=10.10.10.1"}]`))
+	})
+
+	conn, err := c.Connection(context.Background(), testHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hadParam {
+		t.Error("host_nqn present in the query, want it omitted when no host was named")
+	}
+	// An ungated volume's connect line carries no secrets, which is not an error.
+	if e := conn.Endpoints[0]; e.DHCHAPSecret != "" || e.DHCHAPCtrlSecret != "" {
+		t.Errorf("dhchap secrets = %q/%q, want none", e.DHCHAPSecret, e.DHCHAPCtrlSecret)
+	}
+}
+
 func TestClientListVolumes(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/storage-pools/"+testPool+"/volumes/") {

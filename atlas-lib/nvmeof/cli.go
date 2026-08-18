@@ -82,7 +82,11 @@ func (c *CLIConnector) connect(ctx context.Context, t Target) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
 	defer cancel()
 
-	out, err := c.run(ctx, c.connectArgs(t)...)
+	args, err := c.connectArgs(t)
+	if err != nil {
+		return "", fmt.Errorf("nvme connect %s via %s: %w", t.NQN, endpoint(t), err)
+	}
+	out, err := c.run(ctx, args...)
 	if err == nil {
 		return string(out), nil
 	}
@@ -93,10 +97,11 @@ func (c *CLIConnector) connect(ctx context.Context, t Target) (string, error) {
 		t.NQN, endpoint(t), err, strings.TrimSpace(string(out)))
 }
 
-// connectArgs renders the flags for one target. It mirrors options() field for
-// field, so the two mechanisms ask the kernel for the same thing; a value the
-// fabrics-device line omits is omitted here too, leaving the kernel default.
-func (c *CLIConnector) connectArgs(t Target) []string {
+// connectArgs renders the flags for one target. It mirrors fabricsOptions field
+// for field, so the two mechanisms ask the kernel for the same thing; a value
+// the fabrics-device line omits is omitted here too, leaving the kernel
+// default.
+func (c *CLIConnector) connectArgs(t Target) ([]string, error) {
 	args := []string{
 		"connect",
 		"-t", string(transport(t)),
@@ -104,10 +109,14 @@ func (c *CLIConnector) connectArgs(t Target) []string {
 		"-s", strconv.Itoa(port(t)),
 		"-n", t.NQN,
 	}
-	if hostNQN := orElse(t.HostNQN, c.hostNQN); hostNQN != "" {
+	hostNQN, hostID, err := hostIdentity(t, c.hostNQN, c.hostID)
+	if err != nil {
+		return nil, err
+	}
+	if hostNQN != "" {
 		args = append(args, "--hostnqn", hostNQN)
 	}
-	if hostID := orElse(t.HostID, c.hostID); hostID != "" {
+	if hostID != "" {
 		args = append(args, "--hostid", hostID)
 	}
 	if t.HostIface != "" {
@@ -131,7 +140,15 @@ func (c *CLIConnector) connectArgs(t Target) []string {
 	if t.TLS {
 		args = append(args, "--tls")
 	}
-	return args
+	// nvme-cli reads a secret straight from the argument, so it stands in this
+	// command line — which is why nothing here logs one.
+	if t.DHCHAPSecret != "" {
+		args = append(args, "--dhchap-secret", t.DHCHAPSecret)
+	}
+	if t.DHCHAPCtrlSecret != "" {
+		args = append(args, "--dhchap-ctrl-secret", t.DHCHAPCtrlSecret)
+	}
+	return args, nil
 }
 
 // disconnectController releases one controller with `nvme disconnect -d`, which

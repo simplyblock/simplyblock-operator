@@ -39,6 +39,18 @@ func ctrl(id, addr, state string) nvme.Controller {
 	}
 }
 
+// mustOptions renders a target's connect options, failing the test if the host
+// identity cannot be resolved. Tests that care about that error call
+// fabricsOptions directly.
+func mustOptions(t *testing.T, tgt Target, hostNQN, hostID string) string {
+	t.Helper()
+	opts, err := fabricsOptions(tgt, hostNQN, hostID)
+	if err != nil {
+		t.Fatalf("fabricsOptions: %v", err)
+	}
+	return opts
+}
+
 // liveSub is a single-path subsystem whose controller fronts addr and is live.
 func liveSub(nqn, addr string) (nvme.Subsystem, error) {
 	return nvme.Subsystem{NQN: nqn, Controllers: []nvme.Controller{ctrl("nvme0", addr, "live")}}, nil
@@ -46,7 +58,7 @@ func liveSub(nqn, addr string) (nvme.Subsystem, error) {
 
 func TestOptions(t *testing.T) {
 	clt := 0
-	opts := fabricsOptions(Target{
+	opts := mustOptions(t, Target{
 		NQN:               "nqn.test:vol",
 		Address:           "10.0.0.1",
 		NrIOQueues:        3,
@@ -63,11 +75,36 @@ func TestOptions(t *testing.T) {
 }
 
 func TestOptions_TargetOverridesHostIdentity(t *testing.T) {
-	opts := fabricsOptions(
+	opts := mustOptions(t,
 		Target{NQN: "n", Address: "a", Port: 4438, HostNQN: "t-nqn", HostID: "t-id"}, "node-nqn", "node-id")
 	want := "transport=tcp,traddr=a,trsvcid=4438,nqn=n,hostnqn=t-nqn,hostid=t-id"
 	if opts != want {
 		t.Errorf("options = %q, want %q", opts, want)
+	}
+}
+
+// The kernel takes the DHCHAP secrets in the options line itself, and takes the
+// host identity as a pair: a target naming its own host NQN keeps the node's
+// hostid out of the line entirely.
+func TestOptions_CarriesDHCHAPAuth(t *testing.T) {
+	opts := mustOptions(t, Target{
+		NQN: "n", Address: "a",
+		HostNQN:          sbHostNQN,
+		DHCHAPSecret:     "DHHC-1:00:host-secret:",
+		DHCHAPCtrlSecret: "DHHC-1:00:ctrl-secret:",
+	}, "node-nqn", "node-id")
+	want := "transport=tcp,traddr=a,trsvcid=4420,nqn=n," +
+		"hostnqn=" + sbHostNQN + ",hostid=" + sbHostID +
+		",dhchap_secret=DHHC-1:00:host-secret:,dhchap_ctrl_secret=DHHC-1:00:ctrl-secret:"
+	if opts != want {
+		t.Errorf("options =\n  %q\nwant\n  %q", opts, want)
+	}
+}
+
+func TestOptions_OmitsDHCHAPWhenUnset(t *testing.T) {
+	opts := mustOptions(t, Target{NQN: "n", Address: "a"}, "", "")
+	if strings.Contains(opts, "dhchap") {
+		t.Errorf("options = %q, want no dhchap options for an ungated volume", opts)
 	}
 }
 

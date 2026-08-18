@@ -68,6 +68,10 @@ const (
 	// DefaultCtrlLossTmo is the NVMe-oF controller loss timeout in seconds.
 	DefaultCtrlLossTmo = 60
 
+	// anaStateOptimized is the ANA state nvme-cli reports for the path the
+	// kernel prefers for I/O.
+	anaStateOptimized = "optimized"
+
 	// nvmeQueryTimeoutSeconds bounds read-only "nvme list"/"nvme list-subsys"
 	// queries. MonitorConnection is a single, sequential loop with no
 	// concurrency of its own; without this timeout, a stuck nvme-cli/kernel
@@ -346,7 +350,31 @@ func execWithTimeoutRetry(ctx context.Context, cmdLine []string, timeout, retry 
 	return err
 }
 
+// Connect attaches the volume's subsystem and returns its block device.
+//
+// A connected subsystem is not the same thing as a usable one: it can be attached
+// with live controllers and export no namespace at all, in which case waiting can
+// never produce a device — every retry short-circuits on the existing connection
+// and times out on device discovery, and kubelet retries NodeStageVolume forever.
+// So a failed device lookup is diagnosed rather than simply returned, and if the
+// fabric could be repaired the attach is tried once more. See nvmerepair.go.
 func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
+	devicePath, err := nvmf.connectOnce(ctx)
+	if err != nil && nvmf.repairFabric(ctx) {
+		klog.Infof("Connect: retrying attach of %s after a fabric repair", nvmf.nqn)
+		devicePath, err = nvmf.connectOnce(ctx)
+	}
+	if err != nil {
+		return "", err
+	}
+
+	nvmf.registerDevicePresence(devicePath)
+	return devicePath, nil
+}
+
+// connectOnce establishes the volume's paths if they are not up and looks up its
+// block device, without repairing anything.
+func (nvmf *initiatorNVMf) connectOnce(ctx context.Context) (string, error) {
 	alreadyConnected, err := isNqnConnected(ctx, nvmf.nqn)
 	if err != nil {
 		klog.Errorf("Failed to check existing connections: %v", err)
@@ -393,27 +421,25 @@ func (nvmf *initiatorNVMf) Connect(ctx context.Context) (string, error) {
 		}
 	}
 
-	devicePath, err := matchNamespaceDevice(ctx, defaultDevDiskByID, nvmf.model, nvmf.lvolID, nvmf.nsId, time.Second)
+	return matchNamespaceDevice(ctx, defaultDevDiskByID, nvmf.model, nvmf.lvolID, nvmf.nsId, time.Second)
+}
+
+// registerDevicePresence records a freshly connected device in the shared
+// presence maps instead of waiting for the next MonitorConnection poll to
+// discover it. Without this, a device that connects and then loses all paths
+// faster than one poll interval (~3s+jitter) is never seen as "present", so the
+// guardian's gone-device detection in reconnectSubsystems has nothing to diff
+// against and can silently miss the loss forever.
+func (nvmf *initiatorNVMf) registerDevicePresence(devicePath string) {
+	realPath, err := filepath.EvalSymlinks(devicePath)
 	if err != nil {
-		return "", err
-	}
-
-	// Register presence synchronously instead of waiting for the next
-	// MonitorConnection poll to discover it. Without this, a device that
-	// connects and then loses all paths faster than one poll interval
-	// (~3s+jitter) is never seen as "present", so the guardian's gone-device
-	// detection in reconnectSubsystems has nothing to diff against and can
-	// silently miss the loss forever.
-	if realPath, err := filepath.EvalSymlinks(devicePath); err == nil {
-		mu.Lock()
-		devicePresentMap[realPath] = true
-		deviceToLvolIDMap[realPath] = nvmf.lvolID
-		mu.Unlock()
-	} else {
 		klog.Warningf("Connect: failed to resolve device path %s for lvol %s: %v", devicePath, nvmf.lvolID, err)
+		return
 	}
-
-	return devicePath, nil
+	mu.Lock()
+	devicePresentMap[realPath] = true
+	deviceToLvolIDMap[realPath] = nvmf.lvolID
+	mu.Unlock()
 }
 
 func (nvmf *initiatorNVMf) Disconnect(ctx context.Context) error {
@@ -683,7 +709,7 @@ func disconnectDevicePath(ctx context.Context, devicePath string) error {
 	}
 
 	sort.Slice(paths, func(i, j int) bool {
-		if paths[i].ANAState == "optimized" && paths[j].ANAState != "optimized" {
+		if paths[i].ANAState == anaStateOptimized && paths[j].ANAState != anaStateOptimized {
 			return false
 		}
 		return true
@@ -1285,7 +1311,7 @@ func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []pat
 	optConn := expectedConns[0]
 	nonOptConns := expectedConns[1:]
 
-	activeOpt := filterByANA(activePaths, "optimized")
+	activeOpt := filterByANA(activePaths, anaStateOptimized)
 
 	var activeNonOpt []path
 	for _, p := range activePaths {
@@ -1296,6 +1322,14 @@ func recoverPathsWithANA(clusterID, lvolID, devicePath string, activePaths []pat
 
 	reconcileOptimizedPath(sbcClient, nodeInfo, devicePath, optConn, activeOpt, ctrlLossTmo)
 	reconcileNonOptimizedPaths(sbcClient, nodeInfo, devicePath, nonOptConns, activeNonOpt, ctrlLossTmo)
+
+	// The reconciles above can only connect what is missing, and the failure that
+	// matters most is not a missing controller: it is a controller that exists,
+	// is live, and contributes no path to this namespace. `nvme connect` refuses
+	// it with "already connected", so the reconcile re-issues a connect that never
+	// reaches the target and the volume stays below its published redundancy
+	// indefinitely. Repairing that needs a teardown, which is what this does.
+	healMonitoredVolume(context.Background(), nqn, lvolID, expectedConns)
 
 	return nil
 }

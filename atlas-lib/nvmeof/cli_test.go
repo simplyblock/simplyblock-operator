@@ -50,6 +50,18 @@ func cliConnector(t *testing.T, run *cliRun, subs nvme.SubsystemResolver) *CLICo
 	return c
 }
 
+// mustArgs renders a target's nvme-cli flags, failing the test if the host
+// identity cannot be resolved. Tests that care about that error call
+// connectArgs directly.
+func mustArgs(t *testing.T, c *CLIConnector, tgt Target) []string {
+	t.Helper()
+	args, err := c.connectArgs(tgt)
+	if err != nil {
+		t.Fatalf("connectArgs: %v", err)
+	}
+	return args
+}
+
 // flagValue pulls the value of a flag out of a rendered command line.
 func flagValue(args []string, flag string) string {
 	for i, a := range args {
@@ -83,7 +95,7 @@ func TestCLIConnectArgs_MirrorTheFabricsOptions(t *testing.T) {
 		return notFound()
 	}})
 
-	args := strings.Join(c.connectArgs(tgt), " ")
+	args := strings.Join(mustArgs(t, c, tgt), " ")
 	for _, want := range []string{
 		"-t tcp", "-a 10.0.0.1", "-s 4438", "-n nqn.test:vol",
 		"--hostnqn h-nqn", "--hostid h-id", "--host-iface eth1",
@@ -96,13 +108,55 @@ func TestCLIConnectArgs_MirrorTheFabricsOptions(t *testing.T) {
 	}
 }
 
+// A DHCHAP-gated volume connects only when the key material reaches nvme-cli,
+// and only under the host identity the secret was issued for.
+func TestCLIConnectArgs_CarriesDHCHAPAuth(t *testing.T) {
+	c := cliConnector(t, &cliRun{}, fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) {
+		return notFound()
+	}})
+	// The node's own identity is set, and must not be the one that goes out:
+	// the target names its own host NQN, so the hostid follows that NQN.
+	c.hostNQN, c.hostID = "node-nqn", "node-id"
+
+	args := mustArgs(t, c, Target{
+		NQN: "nqn.test:vol", Address: "10.0.0.1",
+		HostNQN:          sbHostNQN,
+		DHCHAPSecret:     "DHHC-1:00:host-secret:",
+		DHCHAPCtrlSecret: "DHHC-1:00:ctrl-secret:",
+	})
+	if got := flagValue(args, "--dhchap-secret"); got != "DHHC-1:00:host-secret:" {
+		t.Errorf("--dhchap-secret = %q, want the host secret", got)
+	}
+	if got := flagValue(args, "--dhchap-ctrl-secret"); got != "DHHC-1:00:ctrl-secret:" {
+		t.Errorf("--dhchap-ctrl-secret = %q, want the ctrl secret", got)
+	}
+	if got := flagValue(args, "--hostnqn"); got != sbHostNQN {
+		t.Errorf("--hostnqn = %q, want the target's %q", got, sbHostNQN)
+	}
+	if got := flagValue(args, "--hostid"); got != sbHostID {
+		t.Errorf("--hostid = %q, want %q derived from the host NQN, not the node's", got, sbHostID)
+	}
+}
+
+// An unauthenticated subsystem gets no DHCHAP flags: nvme-cli rejects an empty
+// secret rather than treating it as "none".
+func TestCLIConnectArgs_OmitsDHCHAPWhenUnset(t *testing.T) {
+	c := cliConnector(t, &cliRun{}, fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) {
+		return notFound()
+	}})
+	args := strings.Join(mustArgs(t, c, Target{NQN: "n", Address: "a"}), " ")
+	if strings.Contains(args, "dhchap") {
+		t.Errorf("connect args carry DHCHAP flags for an ungated volume\n  got: %s", args)
+	}
+}
+
 // A zero value means "leave the kernel default", exactly as the fabrics-device
 // line omits it — not "send zero".
 func TestCLIConnectArgs_OmitsUnsetTunables(t *testing.T) {
 	c := cliConnector(t, &cliRun{}, fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) {
 		return notFound()
 	}})
-	args := strings.Join(c.connectArgs(Target{NQN: "n", Address: "a"}), " ")
+	args := strings.Join(mustArgs(t, c, Target{NQN: "n", Address: "a"}), " ")
 	for _, absent := range []string{
 		"--nr-io-queues", "--reconnect-delay", "--keep-alive-tmo",
 		"--ctrl-loss-tmo", "--fast_io_fail_tmo", "--tls", "--host-iface",
@@ -345,7 +399,7 @@ func TestCLIConnector_NeverRendersFabricsOptions(t *testing.T) {
 	c := cliConnector(t, &cliRun{}, fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) {
 		return notFound()
 	}})
-	args := c.connectArgs(Target{NQN: "n", Address: "a", CtrlLossTMOSec: ptr.To(1)})
+	args := mustArgs(t, c, Target{NQN: "n", Address: "a", CtrlLossTMOSec: ptr.To(1)})
 	for _, a := range args {
 		if strings.Contains(a, "transport=") || strings.Contains(a, "traddr=") {
 			t.Errorf("arg %q is fabrics-device syntax, not an nvme-cli flag", a)
