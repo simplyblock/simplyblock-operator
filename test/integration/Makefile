@@ -72,15 +72,20 @@ test-short: preflight ## Run only the smoke test.
 # and its root-owned helper processes reparented to init — sudo's children outlive
 # the sudo the test killed. Cluster state is kept in talosctl's default location
 # precisely so this can find them by name afterwards.
+#
+# A create that died before writing state.yaml is the harder case: talosctl
+# cannot destroy what it cannot read, and the directory still holds the nodes'
+# sparse disk images, so it is removed directly once destroy has had its turn.
 clean-clusters: ## Destroy clusters and helpers left by interrupted runs.
 	@found=0; \
-	for d in $$HOME/.talos/clusters/sb-integration*; do \
+	for d in $$HOME/.talos/clusters/sbi-* $$HOME/.talos/clusters/sb-integration*; do \
 	  [ -d "$$d" ] || continue; \
 	  found=1; n=$$(basename $$d); \
 	  echo "destroying $$n"; \
 	  sudo -E talosctl cluster destroy --name "$$n" || true; \
+	  [ -d "$$d" ] && { echo "  removing leftover state $$d"; sudo rm -rf "$$d"; } || true; \
 	done; \
-	pids=$$(pgrep -f "talosctl (cluster create|loadbalancer-launch|.*sb-integration)" 2>/dev/null || true); \
+	pids=$$(pgrep -f "talosctl (cluster create|loadbalancer-launch|dhcpd-launch|.*sbi-|.*sb-integration)" 2>/dev/null || true); \
 	if [ -n "$$pids" ]; then \
 	  echo "killing orphaned helpers: $$pids"; \
 	  sudo kill $$pids || true; \

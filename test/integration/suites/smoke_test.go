@@ -120,5 +120,7 @@ func clusterName() string {
 	if n := os.Getenv("SB_CLUSTER_NAME"); n != "" {
 		return n
 	}
-	return fmt.Sprintf("sb-integration-%d", os.Getpid())
+	// Short on purpose. talosctl puts the name in the QEMU monitor socket path
+	// twice, and that path has 104 bytes to live in; see cluster.checkNameFits.
+	return fmt.Sprintf("sbi-%d", os.Getpid())
 }

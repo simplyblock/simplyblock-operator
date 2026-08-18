@@ -120,10 +120,55 @@ const schedulablePatch = `cluster:
   allowSchedulingOnControlPlanes: true
 `
 
+// sunPathMax is the size of sockaddr_un.sun_path. macOS gives 104 bytes,
+// Linux 108; the smaller is used everywhere so a name that works on one host
+// works on the other.
+const sunPathMax = 104
+
+// longestNodeSuffix is the worst case talosctl appends to a node name for the
+// QEMU monitor socket: "-controlplane-10.monitor".
+const longestNodeSuffix = len("-controlplane-10.monitor")
+
+// checkNameFits rejects a cluster name whose QEMU monitor socket path would
+// exceed sun_path.
+//
+// talosctl builds that path as <state>/<cluster>/<cluster>-controlplane-N.monitor
+// — the name appears twice — and QEMU refuses to start when it is too long. The
+// failure that produces is worth pre-empting rather than debugging: the QEMU
+// error lands in a per-node log file inside the state directory, the node never
+// boots, so the bridge it would have created never appears, and talosctl reports
+// a one-minute timeout waiting for that bridge. Nothing in what reaches the test
+// mentions a path length.
+func checkNameFits(state, name string) error {
+	full := len(filepath.Join(state, name, name)) + longestNodeSuffix
+	if full <= sunPathMax {
+		return nil
+	}
+	return fmt.Errorf(
+		"cluster name %q makes a QEMU monitor socket path of %d bytes, over the %d-byte limit: "+
+			"talosctl puts the name in the path twice (%s), so it must lose %d character(s)",
+		name, full, sunPathMax, filepath.Join(state, name, name+"-controlplane-1.monitor"),
+		full-sunPathMax)
+}
+
+// stateDir is where talosctl keeps cluster state, which is deliberately its
+// default location; see the create arguments.
+func stateDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "/root/.talos/clusters"
+	}
+	return filepath.Join(home, ".talos", "clusters")
+}
+
 // Create brings up the cluster and returns once the Kubernetes API answers.
 // Minutes, mostly image download on a cold cache: call it once per suite.
 func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 	cfg.applyDefaults()
+
+	if err := checkNameFits(stateDir(), cfg.Name); err != nil {
+		return nil, err
+	}
 
 	if _, err := exec.LookPath(cfg.TalosctlPath); err != nil {
 		return nil, fmt.Errorf("talosctl not found (%s): %w", cfg.TalosctlPath, err)
@@ -153,7 +198,7 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 	// the network exists but belongs to nobody — so clear it first. Destroying a
 	// cluster that is not there is not an error.
 	if out, err := c.run(ctx, 5*time.Minute, "cluster", "destroy", "--name", cfg.Name); err != nil &&
-		!strings.Contains(out, "not found") {
+		!destroyedOrAbsent(out) {
 		return nil, fmt.Errorf("clear a previous %s: %w\n%s", cfg.Name, err, out)
 	}
 
@@ -223,11 +268,46 @@ func Create(ctx context.Context, cfg Config) (*Cluster, error) {
 // failed to come up, so it works from a deferred cleanup.
 func (c *Cluster) Destroy(ctx context.Context) error {
 	out, err := c.run(ctx, 5*time.Minute, "cluster", "destroy", "--name", c.cfg.Name)
-	if err != nil && !strings.Contains(out, "not found") {
+	if err != nil && !destroyedOrAbsent(out) {
 		return fmt.Errorf("destroy cluster %s: %w\n%s", c.cfg.Name, err, out)
+	}
+	// talosctl removes the state directory itself, but only when it could read
+	// state.yaml. A create that died before writing it leaves the directory,
+	// root-owned, holding the nodes' sparse disk images — and every later destroy
+	// fails on the same missing file, so nothing ever collects it.
+	if err := c.removeStateDir(ctx); err != nil {
+		return err
 	}
 	if c.ownWorkDir {
 		return os.RemoveAll(c.workDir)
+	}
+	return nil
+}
+
+// destroyedOrAbsent reports whether a failed destroy left nothing to destroy.
+// An unknown cluster is "not found"; one whose create died early has a state
+// directory but no state.yaml, which talosctl reports as a read failure.
+func destroyedOrAbsent(out string) bool {
+	return strings.Contains(out, "not found") ||
+		strings.Contains(out, "failed to read cluster state")
+}
+
+// removeStateDir deletes this cluster's state directory if talosctl left it.
+// Root-owned, hence sudo; scoped to the one directory named after the cluster.
+func (c *Cluster) removeStateDir(ctx context.Context) error {
+	if c.cfg.Name == "" {
+		return nil
+	}
+	dir := filepath.Join(stateDir(), c.cfg.Name)
+	if _, err := os.Stat(dir); err != nil {
+		return nil //nolint:nilerr // absent is the desired state
+	}
+	if err := os.RemoveAll(dir); err == nil {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, "sudo", "-n", "rm", "-rf", dir) //nolint:gosec // dir is stateDir()/<name>
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("remove leftover state %s: %w\n%s", dir, err, out)
 	}
 	return nil
 }
