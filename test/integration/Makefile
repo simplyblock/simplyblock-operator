@@ -22,7 +22,8 @@ CLUSTER_NAME ?=
 CLUSTER_ENV := $(if $(CLUSTER_NAME),SB_CLUSTER_NAME=$(CLUSTER_NAME),)
 
 .DEFAULT_GOAL := help
-.PHONY: help build vet fmt lint test test-defects test-short preflight clean-clusters
+.PHONY: help build vet fmt lint test test-defects test-short preflight clean-clusters \
+	generate generate-check
 
 help: ## Show this help.
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -39,6 +40,16 @@ fmt: ## Format the harness.
 
 lint: ## Lint the harness.
 	golangci-lint run ./...
+
+generate: ## Regenerate the control-plane simulator from the OpenAPI spec.
+	$(GO) generate ./...
+
+# The generated files are committed, so a spec change nobody regenerated would
+# leave the simulator answering the previous revision's endpoints. This makes
+# that a failure rather than a surprise.
+generate-check: generate ## Fail if the committed generated files are stale.
+	@git diff --exit-code -- . \
+	  || { echo "generated files are stale: run 'make generate' and commit the result"; exit 1; }
 
 preflight: ## Check the tools and privileges a run needs.
 	@fail=0; \
