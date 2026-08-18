@@ -119,4 +119,20 @@ func TestResolveClusterAndPoolUUID(t *testing.T) {
 	if _, err := ResolvePoolUUID(ctx, c, "ns1", "cluster-a", "silver"); err == nil {
 		t.Fatalf("ResolvePoolUUID should fail for missing pool")
 	}
+
+	found, err := ResolveClusterCRByUUID(ctx, c, "ns1", "uuid-a")
+	if err != nil {
+		t.Fatalf("ResolveClusterCRByUUID unexpected error: %v", err)
+	}
+	if found.Name != "cluster-a" {
+		t.Fatalf("ResolveClusterCRByUUID got %q want cluster-a", found.Name)
+	}
+
+	if _, err := ResolveClusterCRByUUID(ctx, c, "ns1", "no-such-uuid"); err == nil {
+		t.Fatalf("ResolveClusterCRByUUID should fail for an unknown UUID")
+	}
+
+	if _, err := ResolveClusterCRByUUID(ctx, c, "ns2", "uuid-a"); err == nil {
+		t.Fatalf("ResolveClusterCRByUUID should not find a cluster from a different namespace")
+	}
 }
