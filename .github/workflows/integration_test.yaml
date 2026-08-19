@@ -1,0 +1,115 @@
+name: "Integration: Tests"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "test/integration/**"
+      - ".github/workflows/integration_test.yaml"
+  pull_request:
+    paths:
+      - "test/integration/**"
+      - ".github/workflows/integration_test.yaml"
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  # Pinned so a cluster failure is never a version-skew mystery. Bump
+  # deliberately; the machine-config schema and the QEMU provisioner both move.
+  TALOSCTL_VERSION: v1.13.8
+
+jobs:
+  # Boots a Talos cluster in QEMU and runs the suite against it. Separate from
+  # the unit-test workflows because it needs hardware virtualisation and takes
+  # minutes rather than seconds.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils
+
+      # Without acceleration QEMU falls back to emulation, where a Talos boot
+      # takes minutes and the suite times out looking like a hang rather than a
+      # misconfiguration. talosctl itself runs as root (it builds a CNI bridge),
+      # so group membership is not the issue — only that the device is there.
+      - name: Check hardware virtualization
+        run: |
+          test -e /dev/kvm || { echo "::error::/dev/kvm absent; this runner cannot accelerate QEMU"; exit 1; }
+          sudo qemu-system-x86_64 -accel help | grep -q '^kvm$' \
+            || { echo "::error::kvm accelerator unavailable"; exit 1; }
+
+      - name: Install talosctl
+        run: |
+          curl -sfL -o /tmp/talosctl \
+            "https://github.com/siderolabs/talos/releases/download/${TALOSCTL_VERSION}/talosctl-linux-amd64"
+          sudo install -m 0755 /tmp/talosctl /usr/local/bin/talosctl
+          talosctl version --client
+
+      # The Image Factory disk image is the bulk of a cold run. Keyed on the
+      # talosctl version because the image is fetched per Talos release.
+      - name: Cache Talos images
+        uses: actions/cache@v4
+        with:
+          path: ~/.talos/cache
+          key: talos-images-${{ env.TALOSCTL_VERSION }}-amd64
+
+      - name: Vet
+        working-directory: test/integration
+        run: go vet ./...
+
+      - name: Test
+        working-directory: test/integration
+        env:
+          # Without this the suite skips itself and the job reports green having
+          # booted nothing.
+          SB_INTEGRATION: "1"
+        # The test itself stays unprivileged; it elevates talosctl on its own, so
+        # the Go build cache and artifacts are not left root-owned.
+        run: go test -v -count=1 -timeout 60m ./...
+
+      # Cluster state and serial logs are the only way to read a boot failure
+      # after the fact, and a failed run is exactly when they are wanted.
+      - name: Collect cluster diagnostics
+        if: failure()
+        run: |
+          for d in "$HOME"/.talos/clusters/sbi-* "$HOME"/.talos/clusters/sb-integration*; do
+            [ -d "$d" ] || continue
+            sudo -E talosctl cluster show --provisioner qemu --name "$(basename "$d")" 2>&1 | head -40 || true
+            # QEMU writes one log per node here, and a VM that never started says
+            # so only in that file.
+            sudo sh -c 'for f in "$0"/*.log; do
+              [ -f "$f" ] || continue
+              echo "=== $f ==="
+              tail -60 "$f"
+            done' "$d" || true
+          done
+
+      # talosctl ran as root, so its image cache is root-owned and the cache
+      # action cannot save it.
+      - name: Reclaim the Talos cache
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" ~/.talos 2>/dev/null || true
+
+      # A leaked cluster holds memory and a bridge for the life of the runner.
+      # Cheap insurance even though the harness tears down in its own cleanup.
+      - name: Destroy any surviving cluster
+        if: always()
+        # The suite names clusters per process, so there is no single name to
+        # destroy; anything left is a run that did not clean up after itself.
+        run: |
+          for d in "$HOME"/.talos/clusters/sbi-* "$HOME"/.talos/clusters/sb-integration*; do
+            [ -d "$d" ] || continue
+            sudo -E talosctl cluster destroy --name "$(basename "$d")" 2>/dev/null || true
+            # A create that died before writing state.yaml cannot be destroyed,
+            # and its disk images would go into the runner's cache.
+            sudo rm -rf "$d" || true
+          done

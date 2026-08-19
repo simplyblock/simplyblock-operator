@@ -1,0 +1,8 @@
+# talosctl writes the generated machine configs into its working directory.
+# cluster.run pins that to the run's temp dir, but a talosctl invoked by hand
+# from here would drop them in the source tree — and they carry the cluster's
+# PKI, bootstrap token and secretbox key.
+controlplane.yaml
+worker.yaml
+talosconfig
+kubeconfig
