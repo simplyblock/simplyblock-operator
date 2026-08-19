@@ -42,12 +42,14 @@ func newPVCWatcherReconciler(t *testing.T, objects ...client.Object) (*PVCAnnota
 	return &PVCAnnotationWatcher{Client: cl, Scheme: scheme}, cl
 }
 
+const testSCName = "fast"
+
 func pvcRequest(name string) ctrl.Request {
 	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: name}}
 }
 
-func boundPVC(pvName string, annotations map[string]string) *corev1.PersistentVolumeClaim {
-	scPtr := "fast"
+func boundPVC(annotations map[string]string) *corev1.PersistentVolumeClaim {
+	scPtr := testSCName
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "pvc1",
@@ -56,7 +58,7 @@ func boundPVC(pvName string, annotations map[string]string) *corev1.PersistentVo
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			StorageClassName: &scPtr,
-			VolumeName:       pvName,
+			VolumeName:       "pv1",
 		},
 		Status: corev1.PersistentVolumeClaimStatus{
 			Phase: corev1.ClaimBound,
@@ -102,7 +104,7 @@ func TestPVCWatcher_IgnoreNotFound(t *testing.T) {
 // ---------- no policy, no pair — nothing to do ----------
 
 func TestPVCWatcher_NoPolicyNoPair_NoOp(t *testing.T) {
-	scName := "fast"
+	scName := testSCName
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: "pvc1", Namespace: "default"},
 		Spec: corev1.PersistentVolumeClaimSpec{
@@ -111,7 +113,7 @@ func TestPVCWatcher_NoPolicyNoPair_NoOp(t *testing.T) {
 		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
 	}
 	sc := &storagev1.StorageClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "fast"},
+		ObjectMeta: metav1.ObjectMeta{Name: testSCName},
 	}
 	r, _ := newPVCWatcherReconciler(t, pvc, sc)
 
@@ -149,8 +151,7 @@ func TestPVCWatcher_PVCAnnotation_UnboundRequeue(t *testing.T) {
 // ---------- creates pair when PVC is bound ----------
 
 func TestPVCWatcher_CreatesPairWhenBound(t *testing.T) {
-	pvc := boundPVC("pv1",
-		map[string]string{utils.AnnotationReplicationPolicy: "pol"})
+	pvc := boundPVC(map[string]string{utils.AnnotationReplicationPolicy: "pol"})
 	pv := testCSIPV("cluster-uuid:pool-uuid:vol-uuid")
 	pol := readyPolicy("pol")
 
@@ -183,8 +184,8 @@ func TestPVCWatcher_CreatesPairWhenBound(t *testing.T) {
 // ---------- StorageClass annotation propagates ----------
 
 func TestPVCWatcher_SCAnnotation_CreatesPair(t *testing.T) {
-	scName := "fast"
-	pvc := boundPVC("pv1", nil)
+	scName := testSCName
+	pvc := boundPVC(nil)
 	pv := testCSIPV("c:p:v")
 	sc := &storagev1.StorageClass{
 		ObjectMeta: metav1.ObjectMeta{
@@ -213,8 +214,7 @@ func TestPVCWatcher_SCAnnotation_CreatesPair(t *testing.T) {
 // ---------- policy changed — delete old pair, wait ----------
 
 func TestPVCWatcher_PolicyChanged_DeletesOldPair(t *testing.T) {
-	pvc := boundPVC("pv1",
-		map[string]string{utils.AnnotationReplicationPolicy: "pol-new"})
+	pvc := boundPVC(map[string]string{utils.AnnotationReplicationPolicy: "pol-new"})
 	pv := testCSIPV("c:p:v")
 	existingPair := &simplyblockv1alpha1.ReplicationPair{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol-old-pvc1", Namespace: "default"},
@@ -250,7 +250,7 @@ func TestPVCWatcher_PolicyChanged_DeletesOldPair(t *testing.T) {
 
 func TestPVCWatcher_PolicyRemoved_DeletesPair(t *testing.T) {
 	// No annotation on PVC.
-	pvc := boundPVC("pv1", nil)
+	pvc := boundPVC(nil)
 	existingPair := &simplyblockv1alpha1.ReplicationPair{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol-pvc1", Namespace: "default"},
 		Spec: simplyblockv1alpha1.ReplicationPairSpec{
@@ -284,8 +284,7 @@ func TestPVCWatcher_PolicyRemoved_DeletesPair(t *testing.T) {
 
 func TestPVCWatcher_PairPendingDeletion_Waits(t *testing.T) {
 	now := metav1.Now()
-	pvc := boundPVC("pv1",
-		map[string]string{utils.AnnotationReplicationPolicy: "pol"})
+	pvc := boundPVC(map[string]string{utils.AnnotationReplicationPolicy: "pol"})
 	existingPair := &simplyblockv1alpha1.ReplicationPair{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "pol-pvc1", Namespace: "default",
@@ -310,8 +309,7 @@ func TestPVCWatcher_PairPendingDeletion_Waits(t *testing.T) {
 // ---------- policy not found — requeue ----------
 
 func TestPVCWatcher_PolicyNotFound_Requeues(t *testing.T) {
-	pvc := boundPVC("pv1",
-		map[string]string{utils.AnnotationReplicationPolicy: "pol"})
+	pvc := boundPVC(map[string]string{utils.AnnotationReplicationPolicy: "pol"})
 	pv := testCSIPV("c:p:v")
 	r, _ := newPVCWatcherReconciler(t, pvc, pv)
 
@@ -327,8 +325,7 @@ func TestPVCWatcher_PolicyNotFound_Requeues(t *testing.T) {
 // ---------- policy not ready — requeue ----------
 
 func TestPVCWatcher_PolicyNotReady_Requeues(t *testing.T) {
-	pvc := boundPVC("pv1",
-		map[string]string{utils.AnnotationReplicationPolicy: "pol"})
+	pvc := boundPVC(map[string]string{utils.AnnotationReplicationPolicy: "pol"})
 	pv := testCSIPV("c:p:v")
 	pol := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: "default"},
