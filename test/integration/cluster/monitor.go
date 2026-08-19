@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -144,13 +145,56 @@ func (m *Monitor) Command(ctx context.Context, cmd string) (string, error) {
 		return out, fmt.Errorf("read reply to %q from %s's monitor: %w", cmd, m.node, err)
 	}
 
-	// The monitor echoes nothing, but it does repeat the command on some builds
-	// when the chardev is in line mode; drop it so callers see only output.
-	out = strings.TrimPrefix(strings.TrimSpace(out), cmd)
+	out = cleanMonitorOutput(out, cmd)
 	if strings.Contains(out, "unknown command") || strings.Contains(out, "Error:") {
 		return out, fmt.Errorf("monitor rejected %q on %s: %s", cmd, m.node, strings.TrimSpace(out))
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// ansiEscape matches the terminal control sequences HMP's readline emits.
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
+
+// cleanMonitorOutput turns a raw HMP reply into just the command's output.
+//
+// The monitor runs its input through readline even over a socket, so it echoes
+// what it was sent one character at a time, interleaved with cursor movements
+// and erase-to-end-of-line. A reply arrives looking like
+//
+//	i^[[K^[[Din^[[K^[[D^[[Dinf... info block
+//	sh0 (#block184): /shared.img (raw)
+//
+// Left in place, the echo is indistinguishable from output: a parser looking for
+// the first line of `info network` finds the echo instead and reports it as the
+// network backend's name.
+func cleanMonitorOutput(raw, cmd string) string {
+	s := ansiEscape.ReplaceAllString(raw, "")
+	s = strings.ReplaceAll(s, "\r", "")
+
+	// Apply the backspaces readline used to redraw the line.
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		if r == '\b' {
+			if len(out) > 0 {
+				out = out[:len(out)-1]
+			}
+			continue
+		}
+		out = append(out, r)
+	}
+	s = string(out)
+
+	// The echo is the first line: readline redraws the command as it is typed, and
+	// the newline is the Enter that submitted it. Cutting there rather than at the
+	// command's text matters because HMP quotes what it is complaining about —
+	// "Error: Bus 'pcie.0' does not support hotplugging" — so searching for the
+	// command would cut into the very message worth reading.
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[i+1:]
+	} else if j := strings.LastIndex(s, cmd); j >= 0 {
+		s = s[j+len(cmd):]
+	}
+	return strings.TrimSpace(s)
 }
 
 // read consumes bytes up to and including the next prompt.

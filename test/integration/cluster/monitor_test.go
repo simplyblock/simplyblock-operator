@@ -23,6 +23,22 @@ import (
 // a command's output is not confused with the banner or the prompt, and that a
 // monitor which dies mid-command says so.
 
+// qemuEcho reproduces how HMP echoes a command back. The monitor runs its input
+// through readline even over a socket: after each character it redraws the line,
+// erases to end of line, and walks the cursor back. Captured from a real monitor —
+// a stand-in that answers cleanly hides the only hard part of reading a reply.
+func qemuEcho(cmd string) string {
+	var b strings.Builder
+	for i := 1; i <= len(cmd); i++ {
+		b.WriteString(cmd[:i])
+		b.WriteString("\x1b[K")
+		for j := 0; j < i; j++ {
+			b.WriteString("\x1b[D")
+		}
+	}
+	return b.String()
+}
+
 // fakeMonitor is a unix socket that answers like QEMU's human monitor.
 type fakeMonitor struct {
 	path string
@@ -86,11 +102,8 @@ func (f *fakeMonitor) serve(conn net.Conn) {
 		if f.dieOn != "" && cmd == f.dieOn {
 			return
 		}
-		if reply, ok := f.reply[cmd]; ok {
-			_, _ = conn.Write([]byte(reply + "\n(qemu) "))
-			continue
-		}
-		_, _ = conn.Write([]byte("\n(qemu) "))
+		reply := f.reply[cmd]
+		_, _ = conn.Write([]byte(qemuEcho(cmd) + "\n" + reply + "\n(qemu) "))
 	}
 }
 
@@ -172,13 +185,22 @@ func TestMonitor_SendsTheCommandAndKeepsRepliesSeparate(t *testing.T) {
 // would let a test that faults nothing pass.
 func TestMonitor_ReportsARejectedCommand(t *testing.T) {
 	f := &fakeMonitor{reply: map[string]string{
-		"nonsense": "unknown command: 'nonsense'",
+		// Both shapes HMP uses, and both quote the command back — which is why
+		// the echo cannot be stripped by searching for the command's text.
+		"nonsense":                            "unknown command: 'nonsense'",
+		"device_add nvme,drive=sh0,id=shnvme": "Error: Bus 'pcie.0' does not support hotplugging",
 	}}
 	startFakeMonitor(t, f)
 	m := dialFake(t, f)
 
-	if _, err := m.Command(context.Background(), "nonsense"); err == nil {
-		t.Fatal("Command reported success for a command the monitor rejected")
+	for _, cmd := range []string{"nonsense", "device_add nvme,drive=sh0,id=shnvme"} {
+		out, err := m.Command(context.Background(), cmd)
+		if err == nil {
+			t.Errorf("Command(%q) reported success for a command the monitor rejected", cmd)
+		}
+		if !strings.Contains(out, f.reply[cmd]) {
+			t.Errorf("Command(%q) output = %q, want the monitor's message intact", cmd, out)
+		}
 	}
 }
 
@@ -279,6 +301,26 @@ func TestMonitor_NoNetdevIsAnError(t *testing.T) {
 
 	if _, err := m.Netdev(context.Background()); err == nil {
 		t.Fatal("Netdev succeeded with no network backend reported")
+	}
+}
+
+// The echo is indistinguishable from output until it is stripped, and the field
+// that breaks first is the one parsed positionally: the first line of
+// `info network` would be the echo, and set_link would be handed it as the name
+// of the network backend.
+func TestCleanMonitorOutput_StripsTheEcho(t *testing.T) {
+	const cmd = "info network"
+	raw := qemuEcho(cmd) + "\nnet0: index=0,type=vmnet-shared\n \\ virtio-net-pci.0: index=0,type=nic"
+
+	got := cleanMonitorOutput(raw, cmd)
+	if strings.Contains(got, "\x1b") {
+		t.Errorf("output still carries escape sequences: %q", got)
+	}
+	if !strings.HasPrefix(got, "net0:") {
+		t.Fatalf("output = %q, want it to start at the reply", got)
+	}
+	if id := parseNetdev(got); id != "net0" {
+		t.Errorf("parseNetdev after cleaning = %q, want net0", id)
 	}
 }
 
