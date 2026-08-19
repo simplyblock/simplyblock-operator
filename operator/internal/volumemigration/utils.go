@@ -110,14 +110,14 @@ type PollMigrationResult struct {
 func PollMigration(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterUUID, poolUUID, volumeUUID, migrationID string,
+	clusterUUID, nqn, migrationID string,
 	migrationStart time.Time,
 ) (PollMigrationResult, error) {
 	if time.Now().Before(migrationStart.Add(MigrationInitialDelay)) {
 		return PollMigrationResult{}, nil
 	}
 
-	m, err := apiClient.GetMigration(ctx, clusterUUID, poolUUID, volumeUUID, migrationID)
+	m, err := apiClient.GetMigration(ctx, clusterUUID, nqn, migrationID)
 	if err != nil {
 		return PollMigrationResult{}, err
 	}

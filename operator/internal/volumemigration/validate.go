@@ -1,15 +1,17 @@
 package volumemigration
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"log"
-	"os/exec"
-	"strconv"
-	"strings"
+
+	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/nvmeof"
+	"github.com/simplyblock/atlas/ptr"
 )
 
-// Connection describes one NVMe-oF target path to connect and validate.
+// Connection describes one NVMe-oF target path to connect and validate. It is the
+// wire format between the operator and the validation Job (VMIG_CONNECTIONS), so
+// its JSON tags are part of that contract and outlive any one connect mechanism.
 type Connection struct {
 	NQN            string `json:"nqn"`
 	IP             string `json:"ip"`
@@ -22,140 +24,96 @@ type Connection struct {
 	KeepAliveTmo   int    `json:"keepAliveTmo,omitempty"`
 }
 
-// EnsureMigrationPaths connects each NVMe-oF path. An "already connected"
-// response from nvme-cli is treated as success.
-func EnsureMigrationPaths(conns []Connection) error {
-	for _, c := range conns {
-		if err := nvmeConnect(c); err != nil {
+// Address is the "<ip>:<port>" form the host reports a controller at, which is how
+// an expected path is matched against an attached one.
+func (c Connection) Address() string {
+	return fmt.Sprintf("%s:%d", c.IP, c.Port)
+}
+
+// target renders one connection as an atlas connect target.
+//
+// A zero tunable is left off rather than sent as 0, matching what the operator
+// asked for: the control plane only fills the fields it has an opinion about, and
+// the kernel default is the right answer for the rest. The two timeouts are
+// pointers in atlas because 0 is meaningful for them (fail I/O immediately), so
+// "unset" has to be expressible as something other than zero.
+func (c Connection) target() nvmeof.Target {
+	t := nvmeof.Target{
+		NQN:               c.NQN,
+		Transport:         nvmeof.Transport(c.Transport),
+		Address:           c.IP,
+		Port:              c.Port,
+		NrIOQueues:        c.NrIoQueues,
+		ReconnectDelaySec: c.ReconnectDelay,
+		KeepAliveTMOSec:   c.KeepAliveTmo,
+	}
+	if c.CtrlLossTmo > 0 {
+		t.CtrlLossTMOSec = ptr.To(c.CtrlLossTmo)
+	}
+	if c.FastIOFailTmo > 0 {
+		t.FastIOFailTMOSec = ptr.To(c.FastIOFailTmo)
+	}
+	return t
+}
+
+// connector builds the nvme-cli connector the validation Job attaches through,
+// reading controller state under sysRoot — the host's /sys, mounted into the Job,
+// rather than the container's own.
+//
+// nvme-cli runs through sudo because the rebalancer image runs as an unprivileged
+// uid to satisfy the OpenShift SCC and Red Hat certification requirements, and its
+// sudoers rule is what gets the fabrics device open. The container being privileged
+// is not enough on its own: those capabilities are dropped on the way to a non-root
+// uid.
+func connector(sysRoot string) *nvmeof.CLIConnector {
+	return nvmeof.NewCLIConnectorWithRunner(
+		nvme.NewSysfsSubsystemResolver(nvme.SysfsConfig{SysRoot: sysRoot}),
+		nvmeof.SudoRunner,
+	)
+}
+
+// EnsureMigrationPaths connects each NVMe-oF path and returns what became of it.
+//
+// Attaching goes through atlas rather than a `nvme connect` per connection, and the
+// difference that matters here is idempotence: a path whose controller already
+// exists is left alone instead of connected again. Re-issuing the connect — which
+// is what the retry loop above this does — otherwise adds a second controller for
+// the same endpoint each time round, and a subsystem carrying duplicate controllers
+// for one address is precisely the state the validation is meant to rule out.
+// Paths are attached one at a time, in the order the control plane returned them,
+// and each is given a bounded wait to reach a live state.
+//
+// The connect's own success is still not proof that the path is usable: a
+// controller can be live and serve no namespace. VerifyMigrationPaths establishes
+// that, by reading the host's own view afterwards rather than trusting this report.
+//
+// Connections are grouped by NQN because atlas attaches one subsystem at a time. A
+// migration moves a single subsystem, so in practice there is one group.
+func EnsureMigrationPaths(ctx context.Context, sysRoot string, conns []Connection) error {
+	c := connector(sysRoot)
+	for _, nqn := range subsystemOrder(conns) {
+		targets := make([]nvmeof.Target, 0, len(conns))
+		for _, conn := range conns {
+			if conn.NQN == nqn {
+				targets = append(targets, conn.target())
+			}
+		}
+		if _, err := c.ConnectPaths(ctx, targets); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// ValidateMigrationPaths validates that an inaccessible ANA path exists for every
-// expected (nqn, ip, port).
-func ValidateMigrationPaths(conns []Connection) error {
-	return validatePaths(conns)
-}
-
-func nvmeConnect(c Connection) error {
-	args := []string{
-		"connect",
-		"-t", c.Transport,
-		"-a", c.IP,
-		"-s", strconv.Itoa(c.Port),
-		"-n", c.NQN,
-	}
-	if c.NrIoQueues > 0 {
-		args = append(args, fmt.Sprintf("--nr-io-queues=%d", c.NrIoQueues))
-	}
-	if c.ReconnectDelay > 0 {
-		args = append(args, fmt.Sprintf("--reconnect-delay=%d", c.ReconnectDelay))
-	}
-	if c.CtrlLossTmo > 0 {
-		args = append(args, fmt.Sprintf("--ctrl-loss-tmo=%d", c.CtrlLossTmo))
-	}
-	if c.FastIOFailTmo > 0 {
-		args = append(args, fmt.Sprintf("--fast_io_fail_tmo=%d", c.FastIOFailTmo))
-	}
-	if c.KeepAliveTmo > 0 {
-		args = append(args, fmt.Sprintf("--keep-alive-tmo=%d", c.KeepAliveTmo))
-	}
-	out, err := exec.Command("sudo", append([]string{"nvme"}, args...)...).CombinedOutput()
-	if err != nil && !strings.Contains(string(out), "already connected") {
-		return fmt.Errorf("nvme connect %s@%s:%d: %w: %s", c.NQN, c.IP, c.Port, err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// nvme list -v -ojson output structures.
-type nvmeListOutput struct {
-	Devices []nvmeDevice `json:"Devices"`
-}
-
-type nvmeDevice struct {
-	Subsystems []nvmeSubsystem `json:"Subsystems"`
-}
-
-type nvmeSubsystem struct {
-	SubsystemNQN string           `json:"SubsystemNQN"`
-	Controllers  []nvmeController `json:"Controllers"`
-}
-
-type nvmeController struct {
-	Address string     `json:"Address"`
-	Paths   []nvmePath `json:"Paths"`
-}
-
-type nvmePath struct {
-	ANAState string `json:"ANAState"`
-}
-
-func validatePaths(conns []Connection) error {
-	out, err := exec.Command("sudo", "nvme", "list", "-v", "-ojson").Output()
-	if err != nil {
-		return fmt.Errorf("nvme list: %w", err)
-	}
-	var list nvmeListOutput
-	if err := json.Unmarshal(out, &list); err != nil {
-		return fmt.Errorf("parse nvme list output: %w", err)
-	}
-
-	type connKey struct {
-		NQN  string
-		IP   string
-		Port int
-	}
-
-	expected := make(map[connKey]struct{}, len(conns))
+// subsystemOrder returns the distinct NQNs of conns, in first-seen order.
+func subsystemOrder(conns []Connection) []string {
+	seen := make(map[string]bool, len(conns))
+	order := make([]string, 0, 1)
 	for _, c := range conns {
-		expected[connKey{c.NQN, c.IP, c.Port}] = struct{}{}
-	}
-
-	found := make(map[connKey]struct{})
-	for _, dev := range list.Devices {
-		for _, sub := range dev.Subsystems {
-			for _, ctrl := range sub.Controllers {
-				ip, port := parseAddress(ctrl.Address)
-				k := connKey{sub.SubsystemNQN, ip, port}
-				if _, ok := expected[k]; !ok {
-					continue
-				}
-				for _, p := range ctrl.Paths {
-					log.Printf("connection nqn=%s addr=%s:%d ana_state=%s", k.NQN, ip, port, p.ANAState)
-					if p.ANAState == "inaccessible" {
-						found[k] = struct{}{}
-					}
-				}
-			}
+		if !seen[c.NQN] {
+			seen[c.NQN] = true
+			order = append(order, c.NQN)
 		}
 	}
-
-	var missing []string
-	for k := range expected {
-		if _, ok := found[k]; !ok {
-			missing = append(missing, fmt.Sprintf("%s@%s:%d", k.NQN, k.IP, k.Port))
-		}
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("no inaccessible path found for: %s", strings.Join(missing, "; "))
-	}
-	return nil
-}
-
-func parseAddress(addr string) (ip string, port int) {
-	for _, part := range strings.Split(addr, ",") {
-		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-		switch kv[0] {
-		case "traddr":
-			ip = kv[1]
-		case "trsvcid":
-			port, _ = strconv.Atoi(kv[1])
-		}
-	}
-	return
+	return order
 }
