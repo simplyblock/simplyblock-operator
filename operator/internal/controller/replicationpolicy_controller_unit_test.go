@@ -43,10 +43,10 @@ func policyRequest(name string) ctrl.Request {
 	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: name}}
 }
 
-func getPolicy(t *testing.T, cl client.Client, name string) *simplyblockv1alpha1.ReplicationPolicy {
+func getPolicy(t *testing.T, cl client.Client) *simplyblockv1alpha1.ReplicationPolicy {
 	t.Helper()
 	p := &simplyblockv1alpha1.ReplicationPolicy{}
-	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: name}, p); err != nil {
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pol"}, p); err != nil {
 		t.Fatalf("get ReplicationPolicy: %v", err)
 	}
 	return p
@@ -78,7 +78,7 @@ func TestPolicy_AddsFinalizer(t *testing.T) {
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 	_, _ = r.Reconcile(context.Background(), policyRequest("pol"))
 
-	got := getPolicy(t, cl, "pol")
+	got := getPolicy(t, cl)
 	if !containsString(got.Finalizers, utils.FinalizerReplicationPolicy) {
 		t.Errorf("finalizer not added; finalizers = %v", got.Finalizers)
 	}
@@ -118,7 +118,7 @@ func TestPolicy_CreatesTargetWhenAbsent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := getPolicy(t, cl, "pol")
+	got := getPolicy(t, cl)
 	if got.Status.BackendTargetID != "tgt-uuid" {
 		t.Errorf("BackendTargetID = %q, want tgt-uuid", got.Status.BackendTargetID)
 	}
@@ -162,7 +162,7 @@ func TestPolicy_ReusesExistingTarget(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := getPolicy(t, cl, "pol")
+	got := getPolicy(t, cl)
 	if got.Status.BackendTargetID != "existing-tgt" {
 		t.Errorf("BackendTargetID = %q, want existing-tgt", got.Status.BackendTargetID)
 	}
@@ -193,7 +193,7 @@ func TestPolicy_MarksReadyAfterBothIDsPresent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := getPolicy(t, cl, "pol")
+	got := getPolicy(t, cl)
 	if !got.Status.Ready {
 		t.Errorf("status.ready = false, want true")
 	}
@@ -233,7 +233,7 @@ func TestPolicy_DeletionBlockedWhilePairsExist(t *testing.T) {
 	}
 
 	// Finalizer must NOT be removed while pair exists.
-	got := getPolicy(t, cl, "pol")
+	got := getPolicy(t, cl)
 	if !containsString(got.Finalizers, utils.FinalizerReplicationPolicy) {
 		t.Errorf("finalizer was removed prematurely")
 	}

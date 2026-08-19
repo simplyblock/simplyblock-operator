@@ -37,18 +37,18 @@ func pairRequest(name string) ctrl.Request {
 	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: name}}
 }
 
-func getPair(t *testing.T, cl client.Client, name string) *simplyblockv1alpha1.ReplicationPair {
+func getPair(t *testing.T, cl client.Client) *simplyblockv1alpha1.ReplicationPair {
 	t.Helper()
 	p := &simplyblockv1alpha1.ReplicationPair{}
-	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: name}, p); err != nil {
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pair1"}, p); err != nil {
 		t.Fatalf("get ReplicationPair: %v", err)
 	}
 	return p
 }
 
-func readyPolicyWithIDs(ns string) *simplyblockv1alpha1.ReplicationPolicy {
+func readyPolicyWithIDs() *simplyblockv1alpha1.ReplicationPolicy {
 	return &simplyblockv1alpha1.ReplicationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: "default"},
 		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
 		Status: simplyblockv1alpha1.ReplicationPolicyStatus{
 			Ready:           true,
@@ -58,11 +58,11 @@ func readyPolicyWithIDs(ns string) *simplyblockv1alpha1.ReplicationPolicy {
 	}
 }
 
-func newPair(ns, policyRef, volumeID string) *simplyblockv1alpha1.ReplicationPair {
+func newPair(policyRef, volumeID string) *simplyblockv1alpha1.ReplicationPair {
 	return &simplyblockv1alpha1.ReplicationPair{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pair1",
-			Namespace:  ns,
+			Namespace:  "default",
 			Finalizers: []string{utils.FinalizerReplicationPair},
 		},
 		Spec: simplyblockv1alpha1.ReplicationPairSpec{
@@ -89,7 +89,7 @@ func TestPair_IgnoreNotFound(t *testing.T) {
 // ---------- finalizer ----------
 
 func TestPair_AddsFinalizer(t *testing.T) {
-	pol := readyPolicyWithIDs("default")
+	pol := readyPolicyWithIDs()
 	pair := &simplyblockv1alpha1.ReplicationPair{
 		ObjectMeta: metav1.ObjectMeta{Name: "pair1", Namespace: "default"},
 		Spec: simplyblockv1alpha1.ReplicationPairSpec{
@@ -104,7 +104,7 @@ func TestPair_AddsFinalizer(t *testing.T) {
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 	_, _ = r.Reconcile(context.Background(), pairRequest("pair1"))
 
-	got := getPair(t, cl, "pair1")
+	got := getPair(t, cl)
 	if !containsString(got.Finalizers, utils.FinalizerReplicationPair) {
 		t.Errorf("finalizer not added; finalizers = %v", got.Finalizers)
 	}
@@ -113,7 +113,7 @@ func TestPair_AddsFinalizer(t *testing.T) {
 // ---------- policy not found → error state ----------
 
 func TestPair_PolicyNotFound_SetsError(t *testing.T) {
-	pair := newPair("default", "pol", "c:p:v")
+	pair := newPair("pol", "c:p:v")
 	r, cl := newPairReconciler(t, pair)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
@@ -124,7 +124,7 @@ func TestPair_PolicyNotFound_SetsError(t *testing.T) {
 	if res.RequeueAfter != replPairRequeueError {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueError)
 	}
-	got := getPair(t, cl, "pair1")
+	got := getPair(t, cl)
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateError) {
 		t.Errorf("state = %q, want error", got.Status.State)
 	}
@@ -138,7 +138,7 @@ func TestPair_PolicyNotReady_Waits(t *testing.T) {
 		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
 		Status:     simplyblockv1alpha1.ReplicationPolicyStatus{Ready: false},
 	}
-	pair := newPair("default", "pol", "c:p:v")
+	pair := newPair("pol", "c:p:v")
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
 		t.Fatalf("pre-set policy status: %v", err)
@@ -157,8 +157,8 @@ func TestPair_PolicyNotReady_Waits(t *testing.T) {
 // ---------- invalid volume handle → error state ----------
 
 func TestPair_InvalidVolumeHandle_SetsError(t *testing.T) {
-	pol := readyPolicyWithIDs("default")
-	pair := newPair("default", "pol", "bad-handle")
+	pol := readyPolicyWithIDs()
+	pair := newPair("pol", "bad-handle")
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
 		t.Fatalf("pre-set policy status: %v", err)
@@ -172,7 +172,7 @@ func TestPair_InvalidVolumeHandle_SetsError(t *testing.T) {
 	if res.RequeueAfter != replPairRequeueError {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueError)
 	}
-	got := getPair(t, cl, "pair1")
+	got := getPair(t, cl)
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateError) {
 		t.Errorf("state = %q, want error", got.Status.State)
 	}
@@ -181,8 +181,8 @@ func TestPair_InvalidVolumeHandle_SetsError(t *testing.T) {
 // ---------- attach success → state = attaching ----------
 
 func TestPair_Attach_Success(t *testing.T) {
-	pol := readyPolicyWithIDs("default")
-	pair := newPair("default", "pol", "cluster-u:pool-u:vol-u")
+	pol := readyPolicyWithIDs()
+	pair := newPair("pol", "cluster-u:pool-u:vol-u")
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
 		t.Fatalf("pre-set policy status: %v", err)
@@ -205,7 +205,7 @@ func TestPair_Attach_Success(t *testing.T) {
 	if res.RequeueAfter != replPairRequeueAttaching {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueAttaching)
 	}
-	got := getPair(t, cl, "pair1")
+	got := getPair(t, cl)
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateAttaching) {
 		t.Errorf("state = %q, want attaching", got.Status.State)
 	}
@@ -214,8 +214,8 @@ func TestPair_Attach_Success(t *testing.T) {
 // ---------- attach backend error → error state ----------
 
 func TestPair_Attach_BackendError(t *testing.T) {
-	pol := readyPolicyWithIDs("default")
-	pair := newPair("default", "pol", "cluster-u:pool-u:vol-u")
+	pol := readyPolicyWithIDs()
+	pair := newPair("pol", "cluster-u:pool-u:vol-u")
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
 		t.Fatalf("pre-set policy status: %v", err)
@@ -231,7 +231,7 @@ func TestPair_Attach_BackendError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := getPair(t, cl, "pair1")
+	got := getPair(t, cl)
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateError) {
 		t.Errorf("state = %q, want error", got.Status.State)
 	}
@@ -240,8 +240,8 @@ func TestPair_Attach_BackendError(t *testing.T) {
 // ---------- poll attach: not yet replicating → stays attaching ----------
 
 func TestPair_PollAttach_WaitsIfNotReplicating(t *testing.T) {
-	pol := readyPolicyWithIDs("default")
-	pair := newPair("default", "pol", "cluster-u:pool-u:vol-u")
+	pol := readyPolicyWithIDs()
+	pair := newPair("pol", "cluster-u:pool-u:vol-u")
 	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateAttaching)
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
@@ -264,7 +264,7 @@ func TestPair_PollAttach_WaitsIfNotReplicating(t *testing.T) {
 	if res.RequeueAfter != replPairRequeueAttaching {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueAttaching)
 	}
-	got := getPair(t, cl, "pair1")
+	got := getPair(t, cl)
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateAttaching) {
 		t.Errorf("state = %q, want still attaching", got.Status.State)
 	}
@@ -273,8 +273,8 @@ func TestPair_PollAttach_WaitsIfNotReplicating(t *testing.T) {
 // ---------- poll attach: backend reaches replicating → advances ----------
 
 func TestPair_PollAttach_AdvancesToReplicating(t *testing.T) {
-	pol := readyPolicyWithIDs("default")
-	pair := newPair("default", "pol", "cluster-u:pool-u:vol-u")
+	pol := readyPolicyWithIDs()
+	pair := newPair("pol", "cluster-u:pool-u:vol-u")
 	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateAttaching)
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
@@ -301,7 +301,7 @@ func TestPair_PollAttach_AdvancesToReplicating(t *testing.T) {
 	if res.RequeueAfter != replPairRequeueReplicating {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueReplicating)
 	}
-	got := getPair(t, cl, "pair1")
+	got := getPair(t, cl)
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateReplicating) {
 		t.Errorf("state = %q, want replicating", got.Status.State)
 	}
@@ -415,7 +415,7 @@ func TestPair_Detach_Conflict_Waits(t *testing.T) {
 	}
 
 	// Finalizer must still be present.
-	got := getPair(t, cl, "pair1")
+	got := getPair(t, cl)
 	if !containsString(got.Finalizers, utils.FinalizerReplicationPair) {
 		t.Errorf("finalizer was removed on 409 conflict")
 	}
