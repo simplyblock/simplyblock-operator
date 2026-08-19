@@ -72,11 +72,11 @@ func readyPolicyForOps(name string) *simplyblockv1alpha1.ReplicationPolicy {
 }
 
 // pairForPolicy creates a pair that belongs to a policy with a valid volume handle.
-func pairForPolicy(policyRef string) *simplyblockv1alpha1.ReplicationPair {
+func pairForPolicy() *simplyblockv1alpha1.ReplicationPair {
 	return &simplyblockv1alpha1.ReplicationPair{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol-pvc1", Namespace: "default"},
 		Spec: simplyblockv1alpha1.ReplicationPairSpec{
-			PolicyRef: policyRef,
+			PolicyRef: "pol",
 			PVCRef:    "pvc1",
 			VolumeID:  "cluster-u:pool-u:vol-u",
 		},
@@ -275,7 +275,7 @@ func TestOps_UnknownAction_Fails(t *testing.T) {
 
 func TestOps_Failover_ScopePolicy_Success(t *testing.T) {
 	pol := readyPolicyForOps("pol")
-	pair := pairForPolicy("pol")
+	pair := pairForPolicy()
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "ops1", Namespace: "default",
@@ -316,7 +316,7 @@ func TestOps_Failover_ScopePolicy_Success(t *testing.T) {
 
 func TestOps_Failover_ScopeTarget_Success(t *testing.T) {
 	pol := readyPolicyForOps("pol")
-	pair := pairForPolicy("pol")
+	pair := pairForPolicy()
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "ops1", Namespace: "default",
@@ -354,7 +354,7 @@ func TestOps_Failover_ScopeTarget_Success(t *testing.T) {
 
 func TestOps_Failover_ScopeVolume_Success(t *testing.T) {
 	pol := readyPolicyForOps("pol")
-	pair := pairForPolicy("pol")
+	pair := pairForPolicy()
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "ops1", Namespace: "default",
@@ -408,7 +408,7 @@ func TestOps_Failover_ScopeVolume_Success(t *testing.T) {
 
 func TestOps_Failback_Success(t *testing.T) {
 	pol := readyPolicyForOps("pol")
-	pair := pairForPolicy("pol")
+	pair := pairForPolicy()
 	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateFailedOver)
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
@@ -459,7 +459,7 @@ func TestOps_Failback_Success(t *testing.T) {
 
 func TestOps_Failback_PartialFailure(t *testing.T) {
 	pol := readyPolicyForOps("pol")
-	pair := pairForPolicy("pol")
+	pair := pairForPolicy()
 	// Use an invalid VolumeID so the pair fails during failback.
 	pair.Spec.VolumeID = "bad-handle"
 	ops := &simplyblockv1alpha1.ReplicationOps{

@@ -58,7 +58,7 @@ func readyPolicyWithIDs() *simplyblockv1alpha1.ReplicationPolicy {
 	}
 }
 
-func newPair(policyRef, volumeID string) *simplyblockv1alpha1.ReplicationPair {
+func newPair(volumeID string) *simplyblockv1alpha1.ReplicationPair {
 	return &simplyblockv1alpha1.ReplicationPair{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "pair1",
@@ -66,7 +66,7 @@ func newPair(policyRef, volumeID string) *simplyblockv1alpha1.ReplicationPair {
 			Finalizers: []string{utils.FinalizerReplicationPair},
 		},
 		Spec: simplyblockv1alpha1.ReplicationPairSpec{
-			PolicyRef: policyRef,
+			PolicyRef: "pol",
 			PVCRef:    "pvc1",
 			VolumeID:  volumeID,
 		},
@@ -113,7 +113,7 @@ func TestPair_AddsFinalizer(t *testing.T) {
 // ---------- policy not found → error state ----------
 
 func TestPair_PolicyNotFound_SetsError(t *testing.T) {
-	pair := newPair("pol", "c:p:v")
+	pair := newPair("c:p:v")
 	r, cl := newPairReconciler(t, pair)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
@@ -138,7 +138,7 @@ func TestPair_PolicyNotReady_Waits(t *testing.T) {
 		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
 		Status:     simplyblockv1alpha1.ReplicationPolicyStatus{Ready: false},
 	}
-	pair := newPair("pol", "c:p:v")
+	pair := newPair("c:p:v")
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
 		t.Fatalf("pre-set policy status: %v", err)
@@ -158,7 +158,7 @@ func TestPair_PolicyNotReady_Waits(t *testing.T) {
 
 func TestPair_InvalidVolumeHandle_SetsError(t *testing.T) {
 	pol := readyPolicyWithIDs()
-	pair := newPair("pol", "bad-handle")
+	pair := newPair("bad-handle")
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
 		t.Fatalf("pre-set policy status: %v", err)
@@ -182,7 +182,7 @@ func TestPair_InvalidVolumeHandle_SetsError(t *testing.T) {
 
 func TestPair_Attach_Success(t *testing.T) {
 	pol := readyPolicyWithIDs()
-	pair := newPair("pol", "cluster-u:pool-u:vol-u")
+	pair := newPair("cluster-u:pool-u:vol-u")
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
 		t.Fatalf("pre-set policy status: %v", err)
@@ -215,7 +215,7 @@ func TestPair_Attach_Success(t *testing.T) {
 
 func TestPair_Attach_BackendError(t *testing.T) {
 	pol := readyPolicyWithIDs()
-	pair := newPair("pol", "cluster-u:pool-u:vol-u")
+	pair := newPair("cluster-u:pool-u:vol-u")
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
 		t.Fatalf("pre-set policy status: %v", err)
@@ -241,7 +241,7 @@ func TestPair_Attach_BackendError(t *testing.T) {
 
 func TestPair_PollAttach_WaitsIfNotReplicating(t *testing.T) {
 	pol := readyPolicyWithIDs()
-	pair := newPair("pol", "cluster-u:pool-u:vol-u")
+	pair := newPair("cluster-u:pool-u:vol-u")
 	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateAttaching)
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
@@ -274,7 +274,7 @@ func TestPair_PollAttach_WaitsIfNotReplicating(t *testing.T) {
 
 func TestPair_PollAttach_AdvancesToReplicating(t *testing.T) {
 	pol := readyPolicyWithIDs()
-	pair := newPair("pol", "cluster-u:pool-u:vol-u")
+	pair := newPair("cluster-u:pool-u:vol-u")
 	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateAttaching)
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
