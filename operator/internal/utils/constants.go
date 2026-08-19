@@ -4,8 +4,8 @@ const (
 	FinalizerStoragePool       = "storage.simplyblock.io/storagepool-finalizer"
 	FinalizerTask              = "storage.simplyblock.io/task-finalizer"
 	FinalizerStorageNodeSet    = "storage.simplyblock.io/storagenodeset-finalizer"
-	FinalizerStorageCluster      = "storage.simplyblock.io/cluster-finalizer"
-	FinalizerStorageClusterOps   = "storage.simplyblock.io/storageclusterops-finalizer"
+	FinalizerStorageCluster    = "storage.simplyblock.io/cluster-finalizer"
+	FinalizerStorageClusterOps = "storage.simplyblock.io/storageclusterops-finalizer"
 
 	ClusterActionActivate           = "activate"
 	ClusterActionExpand             = "expand"

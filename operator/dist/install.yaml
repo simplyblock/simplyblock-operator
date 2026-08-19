@@ -3927,7 +3927,6 @@ rules:
   - backuppolicies
   - backuprestores
   - controlplanes
-  - snapshotreplications
   - storagebackups
   - storageclusterops
   - storageclusters
@@ -3951,7 +3950,6 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
-  - snapshotreplications/finalizers
   - storagebackups/finalizers
   - storageclusterops/finalizers
   - storageclusters/finalizers
@@ -3970,7 +3968,6 @@ rules:
   - backuppolicies/status
   - backuprestores/status
   - controlplanes/status
-  - snapshotreplications/status
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status
