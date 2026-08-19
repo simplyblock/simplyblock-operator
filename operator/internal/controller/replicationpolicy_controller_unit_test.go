@@ -78,7 +78,7 @@ func TestPolicy_AddsFinalizer(t *testing.T) {
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 	_, _ = r.Reconcile(context.Background(), policyRequest("pol"))
 
-	got := getPolicy(t, cl,"pol")
+	got := getPolicy(t, cl, "pol")
 	if !containsString(got.Finalizers, utils.FinalizerReplicationPolicy) {
 		t.Errorf("finalizer not added; finalizers = %v", got.Finalizers)
 	}
@@ -99,13 +99,13 @@ func TestPolicy_CreatesTargetWhenAbsent(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		switch {
 		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationTargets:
-			writeJSON(w,map[string]interface{}{"results": []interface{}{}})
+			writeJSON(w, map[string]interface{}{"results": []interface{}{}})
 		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationTargets:
-			writeJSON(w,map[string]string{"id": "tgt-uuid"})
+			writeJSON(w, map[string]string{"id": "tgt-uuid"})
 		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
-			writeJSON(w,map[string]interface{}{"results": []interface{}{}})
+			writeJSON(w, map[string]interface{}{"results": []interface{}{}})
 		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationPolicies:
-			writeJSON(w,map[string]string{"id": "pol-uuid"})
+			writeJSON(w, map[string]string{"id": "pol-uuid"})
 		default:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("{}"))
@@ -118,7 +118,7 @@ func TestPolicy_CreatesTargetWhenAbsent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := getPolicy(t, cl,"pol")
+	got := getPolicy(t, cl, "pol")
 	if got.Status.BackendTargetID != "tgt-uuid" {
 		t.Errorf("BackendTargetID = %q, want tgt-uuid", got.Status.BackendTargetID)
 	}
@@ -142,14 +142,14 @@ func TestPolicy_ReusesExistingTarget(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		switch {
 		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationTargets:
-			writeJSON(w,existingTargets)
+			writeJSON(w, existingTargets)
 		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationTargets:
 			t.Error("POST replication-targets should not be called when target already exists")
 			w.WriteHeader(http.StatusInternalServerError)
 		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
-			writeJSON(w,map[string]interface{}{"results": []interface{}{}})
+			writeJSON(w, map[string]interface{}{"results": []interface{}{}})
 		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationPolicies:
-			writeJSON(w,map[string]string{"id": "pol-uuid"})
+			writeJSON(w, map[string]string{"id": "pol-uuid"})
 		default:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("{}"))
@@ -162,7 +162,7 @@ func TestPolicy_ReusesExistingTarget(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := getPolicy(t, cl,"pol")
+	got := getPolicy(t, cl, "pol")
 	if got.Status.BackendTargetID != "existing-tgt" {
 		t.Errorf("BackendTargetID = %q, want existing-tgt", got.Status.BackendTargetID)
 	}
@@ -193,7 +193,7 @@ func TestPolicy_MarksReadyAfterBothIDsPresent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := getPolicy(t, cl,"pol")
+	got := getPolicy(t, cl, "pol")
 	if !got.Status.Ready {
 		t.Errorf("status.ready = false, want true")
 	}
@@ -233,7 +233,7 @@ func TestPolicy_DeletionBlockedWhilePairsExist(t *testing.T) {
 	}
 
 	// Finalizer must NOT be removed while pair exists.
-	got := getPolicy(t, cl,"pol")
+	got := getPolicy(t, cl, "pol")
 	if !containsString(got.Finalizers, utils.FinalizerReplicationPolicy) {
 		t.Errorf("finalizer was removed prematurely")
 	}

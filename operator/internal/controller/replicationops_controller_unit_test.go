@@ -117,7 +117,7 @@ func TestOps_AddsFinalizer(t *testing.T) {
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 	_, _ = r.Reconcile(context.Background(), opsRequest("ops1"))
 
-	got := getOps(t, cl,"ops1")
+	got := getOps(t, cl, "ops1")
 	if !containsString(got.Finalizers, finalizerReplicationOps) {
 		t.Errorf("finalizer not added; finalizers = %v", got.Finalizers)
 	}
@@ -201,7 +201,7 @@ func TestOps_PolicyNotFound_Fails(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := getOps(t, cl,"ops1")
+	got := getOps(t, cl, "ops1")
 	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseFailed) {
 		t.Errorf("phase = %q, want Failed", got.Status.Phase)
 	}
@@ -236,7 +236,7 @@ func TestOps_MutualExclusion_WaitsIfLocked(t *testing.T) {
 		t.Errorf("expected requeue while policy lock is held by another ops")
 	}
 	// Phase must not advance.
-	got := getOps(t, cl,"ops1")
+	got := getOps(t, cl, "ops1")
 	if got.Status.Phase == string(simplyblockv1alpha1.ReplicationOpsPhaseRunning) {
 		t.Errorf("ops phase advanced to Running while lock was held by another")
 	}
@@ -265,7 +265,7 @@ func TestOps_UnknownAction_Fails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := getOps(t, cl,"ops1")
+	got := getOps(t, cl, "ops1")
 	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseFailed) {
 		t.Errorf("phase = %q, want Failed", got.Status.Phase)
 	}
@@ -303,7 +303,7 @@ func TestOps_Failover_ScopePolicy_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := getOps(t, cl,"ops1")
+	got := getOps(t, cl, "ops1")
 	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseSucceeded) {
 		t.Errorf("phase = %q, want Succeeded", got.Status.Phase)
 	}
@@ -344,7 +344,7 @@ func TestOps_Failover_ScopeTarget_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := getOps(t, cl,"ops1")
+	got := getOps(t, cl, "ops1")
 	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseSucceeded) {
 		t.Errorf("phase = %q, want Succeeded", got.Status.Phase)
 	}
@@ -398,7 +398,7 @@ func TestOps_Failover_ScopeVolume_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := getOps(t, cl,"ops1")
+	got := getOps(t, cl, "ops1")
 	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseSucceeded) {
 		t.Errorf("phase = %q, want Succeeded", got.Status.Phase)
 	}
@@ -437,7 +437,7 @@ func TestOps_Failback_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := getOps(t, cl,"ops1")
+	got := getOps(t, cl, "ops1")
 	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseSucceeded) {
 		t.Errorf("phase = %q, want Succeeded", got.Status.Phase)
 	}
@@ -484,7 +484,7 @@ func TestOps_Failback_PartialFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := getOps(t, cl,"ops1")
+	got := getOps(t, cl, "ops1")
 	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseFailed) {
 		t.Errorf("phase = %q, want Failed when a pair's VolumeID is invalid", got.Status.Phase)
 	}
@@ -562,7 +562,7 @@ func TestOps_FailOps_ReleasesLock(t *testing.T) {
 		t.Errorf("activeOpsRef = %q, want empty after failOps", p.Status.ActiveOpsRef)
 	}
 
-	got := getOps(t, cl,"ops1")
+	got := getOps(t, cl, "ops1")
 	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseFailed) {
 		t.Errorf("ops phase = %q, want Failed", got.Status.Phase)
 	}

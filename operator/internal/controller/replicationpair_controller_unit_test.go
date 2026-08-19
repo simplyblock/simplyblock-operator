@@ -104,7 +104,7 @@ func TestPair_AddsFinalizer(t *testing.T) {
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 	_, _ = r.Reconcile(context.Background(), pairRequest("pair1"))
 
-	got := getPair(t, cl,"pair1")
+	got := getPair(t, cl, "pair1")
 	if !containsString(got.Finalizers, utils.FinalizerReplicationPair) {
 		t.Errorf("finalizer not added; finalizers = %v", got.Finalizers)
 	}
@@ -124,7 +124,7 @@ func TestPair_PolicyNotFound_SetsError(t *testing.T) {
 	if res.RequeueAfter != replPairRequeueError {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueError)
 	}
-	got := getPair(t, cl,"pair1")
+	got := getPair(t, cl, "pair1")
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateError) {
 		t.Errorf("state = %q, want error", got.Status.State)
 	}
@@ -172,7 +172,7 @@ func TestPair_InvalidVolumeHandle_SetsError(t *testing.T) {
 	if res.RequeueAfter != replPairRequeueError {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueError)
 	}
-	got := getPair(t, cl,"pair1")
+	got := getPair(t, cl, "pair1")
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateError) {
 		t.Errorf("state = %q, want error", got.Status.State)
 	}
@@ -205,7 +205,7 @@ func TestPair_Attach_Success(t *testing.T) {
 	if res.RequeueAfter != replPairRequeueAttaching {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueAttaching)
 	}
-	got := getPair(t, cl,"pair1")
+	got := getPair(t, cl, "pair1")
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateAttaching) {
 		t.Errorf("state = %q, want attaching", got.Status.State)
 	}
@@ -231,7 +231,7 @@ func TestPair_Attach_BackendError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := getPair(t, cl,"pair1")
+	got := getPair(t, cl, "pair1")
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateError) {
 		t.Errorf("state = %q, want error", got.Status.State)
 	}
@@ -253,7 +253,7 @@ func TestPair_PollAttach_WaitsIfNotReplicating(t *testing.T) {
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		// Backend still in "attaching" state.
-		writeJSON(w,replVolumeReplicationStatus{State: "attaching"})
+		writeJSON(w, replVolumeReplicationStatus{State: "attaching"})
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
@@ -264,7 +264,7 @@ func TestPair_PollAttach_WaitsIfNotReplicating(t *testing.T) {
 	if res.RequeueAfter != replPairRequeueAttaching {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueAttaching)
 	}
-	got := getPair(t, cl,"pair1")
+	got := getPair(t, cl, "pair1")
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateAttaching) {
 		t.Errorf("state = %q, want still attaching", got.Status.State)
 	}
@@ -285,7 +285,7 @@ func TestPair_PollAttach_AdvancesToReplicating(t *testing.T) {
 	}
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w,replVolumeReplicationStatus{
+		writeJSON(w, replVolumeReplicationStatus{
 			State:        utils.ReplicationBackendStateReplicating,
 			SourceLvolID: "src-lvol",
 			TargetLvolID: "tgt-lvol",
@@ -301,7 +301,7 @@ func TestPair_PollAttach_AdvancesToReplicating(t *testing.T) {
 	if res.RequeueAfter != replPairRequeueReplicating {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueReplicating)
 	}
-	got := getPair(t, cl,"pair1")
+	got := getPair(t, cl, "pair1")
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateReplicating) {
 		t.Errorf("state = %q, want replicating", got.Status.State)
 	}
@@ -415,7 +415,7 @@ func TestPair_Detach_Conflict_Waits(t *testing.T) {
 	}
 
 	// Finalizer must still be present.
-	got := getPair(t, cl,"pair1")
+	got := getPair(t, cl, "pair1")
 	if !containsString(got.Finalizers, utils.FinalizerReplicationPair) {
 		t.Errorf("finalizer was removed on 409 conflict")
 	}
