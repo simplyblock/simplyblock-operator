@@ -1309,46 +1309,6 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		*out = new(StripeSpec)
 		(*in).DeepCopyInto(*out)
 	}
-	if in.IsSingleNode != nil {
-		in, out := &in.IsSingleNode, &out.IsSingleNode
-		*out = new(bool)
-		**out = **in
-	}
-	if in.StrictNodeAntiAffinity != nil {
-		in, out := &in.StrictNodeAntiAffinity, &out.StrictNodeAntiAffinity
-		*out = new(bool)
-		**out = **in
-	}
-	if in.QpairCount != nil {
-		in, out := &in.QpairCount, &out.QpairCount
-		*out = new(int32)
-		**out = **in
-	}
-	if in.BlockSize != nil {
-		in, out := &in.BlockSize, &out.BlockSize
-		*out = new(int32)
-		**out = **in
-	}
-	if in.PageSizeInBlocks != nil {
-		in, out := &in.PageSizeInBlocks, &out.PageSizeInBlocks
-		*out = new(int32)
-		**out = **in
-	}
-	if in.MaxQueueSize != nil {
-		in, out := &in.MaxQueueSize, &out.MaxQueueSize
-		*out = new(int32)
-		**out = **in
-	}
-	if in.InflightIOThreshold != nil {
-		in, out := &in.InflightIOThreshold, &out.InflightIOThreshold
-		*out = new(int32)
-		**out = **in
-	}
-	if in.MaxFaultTolerance != nil {
-		in, out := &in.MaxFaultTolerance, &out.MaxFaultTolerance
-		*out = new(int32)
-		**out = **in
-	}
 	if in.NvmfBasePort != nil {
 		in, out := &in.NvmfBasePort, &out.NvmfBasePort
 		*out = new(int32)
@@ -1364,6 +1324,11 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.MaxConcurrentWorkerRestarts != nil {
+		in, out := &in.MaxConcurrentWorkerRestarts, &out.MaxConcurrentWorkerRestarts
+		*out = new(int32)
+		**out = **in
+	}
 	if in.WarningThresholdSpec != nil {
 		in, out := &in.WarningThresholdSpec, &out.WarningThresholdSpec
 		*out = new(CapacityThresholdSpec)
@@ -1373,11 +1338,6 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		in, out := &in.CriticalThresholdSpec, &out.CriticalThresholdSpec
 		*out = new(CapacityThresholdSpec)
 		(*in).DeepCopyInto(*out)
-	}
-	if in.ClientQpairCount != nil {
-		in, out := &in.ClientQpairCount, &out.ClientQpairCount
-		*out = new(int32)
-		**out = **in
 	}
 	if in.Backup != nil {
 		in, out := &in.Backup, &out.Backup
@@ -1453,6 +1413,11 @@ func (in *StorageClusterStatus) DeepCopyInto(out *StorageClusterStatus) {
 	}
 	if in.MaxFaultTolerance != nil {
 		in, out := &in.MaxFaultTolerance, &out.MaxFaultTolerance
+		*out = new(int32)
+		**out = **in
+	}
+	if in.MaxConcurrentWorkerRestarts != nil {
+		in, out := &in.MaxConcurrentWorkerRestarts, &out.MaxConcurrentWorkerRestarts
 		*out = new(int32)
 		**out = **in
 	}

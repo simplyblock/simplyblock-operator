@@ -221,29 +221,20 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	}
 
 	params := utils.ClusterAddParams{
-		Name:                   clusterCR.Name,
-		BlkSize:                ptr.IntFrom(clusterCR.Spec.BlockSize, 512),
-		PageSizeInBlocks:       ptr.IntFrom(clusterCR.Spec.PageSizeInBlocks, 2097152),
-		CapWarn:                capacityThreshold(clusterCR.Spec.WarningThresholdSpec),
-		CapCrit:                capacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
-		ProvCapWarn:            provisionedCapacityThreshold(clusterCR.Spec.WarningThresholdSpec),
-		ProvCapCrit:            provisionedCapacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
-		DistrNdcs:              stripeDataChunks(clusterCR.Spec.StripeSpec),
-		DistrNpcs:              stripeParityChunks(clusterCR.Spec.StripeSpec),
-		HAType:                 clusterCR.Spec.HAType,
-		QpairCount:             ptr.IntFrom(clusterCR.Spec.QpairCount, 256),
-		ClientQpairCount:       ptr.IntFrom(clusterCR.Spec.ClientQpairCount, 3),
-		MaxQueueSize:           ptr.IntFrom(clusterCR.Spec.MaxQueueSize, 128),
-		InflightIOThreshold:    ptr.IntFrom(clusterCR.Spec.InflightIOThreshold, 4),
+		Name:        clusterCR.Name,
+		CapWarn:     capacityThreshold(clusterCR.Spec.WarningThresholdSpec),
+		CapCrit:     capacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
+		ProvCapWarn: provisionedCapacityThreshold(clusterCR.Spec.WarningThresholdSpec),
+		ProvCapCrit: provisionedCapacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
+		DistrNdcs:   stripeDataChunks(clusterCR.Spec.StripeSpec),
+		DistrNpcs:   stripeParityChunks(clusterCR.Spec.StripeSpec),
+
 		EnableNodeAffinity:     ptr.BoolFromOrFalse(clusterCR.Spec.EnableNodeAffinity),
-		StrictNodeAntiAffinity: ptr.BoolFromOrFalse(clusterCR.Spec.StrictNodeAntiAffinity),
-		IsSingleNode:           ptr.BoolFromOrFalse(clusterCR.Spec.IsSingleNode),
 		Fabric:                 clusterCR.Spec.FabricType,
 		CRName:                 clusterCR.Name,
 		CRNameSpace:            clusterCR.Namespace,
 		CRPlural:               "storageclusters",
 		ClientDataIfname:       clusterCR.Spec.ClientDataIfname,
-		MaxFaultTolerance:      ptr.IntFrom(clusterCR.Spec.MaxFaultTolerance, 1),
 		NvmfBasePort:           ptr.IntFrom(clusterCR.Spec.NvmfBasePort, 4420),
 		RpcBasePort:            ptr.IntFrom(clusterCR.Spec.RpcBasePort, 8080),
 		SnodeApiPort:           ptr.IntFrom(clusterCR.Spec.SnodeApiPort, 50001),
@@ -303,6 +294,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
 	mft := int32(apiResp.MaxFaultTolerance)
 	clusterCR.Status.MaxFaultTolerance = &mft
+	clusterCR.Status.MaxConcurrentWorkerRestarts = effectiveConcurrentRestarts(clusterCR.Spec.MaxConcurrentWorkerRestarts, &mft)
 
 	clusterCR.Status.ClusterName = clusterCR.Name
 	clusterCR.Status.Configured = true
@@ -652,6 +644,7 @@ func (r *StorageClusterReconciler) syncStatus(
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
 	mftSync := int32(resp.MaxFaultTolerance)
 	clusterCR.Status.MaxFaultTolerance = &mftSync
+	clusterCR.Status.MaxConcurrentWorkerRestarts = effectiveConcurrentRestarts(clusterCR.Spec.MaxConcurrentWorkerRestarts, &mftSync)
 
 	if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
 		log.Error(err, "syncStatus: failed to patch cluster status", "name", clusterCR.Name)
@@ -660,6 +653,19 @@ func (r *StorageClusterReconciler) syncStatus(
 
 	log.Info("syncStatus: cluster status updated", "name", clusterCR.Name, "status", resp.Status)
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+// effectiveConcurrentRestarts returns min(specVal, ftt), defaulting to 1 when
+// specVal is nil. Both inputs may be nil (ftt comes from the backend response).
+func effectiveConcurrentRestarts(specVal, ftt *int32) *int32 {
+	effective := int32(1)
+	if specVal != nil && *specVal > 0 {
+		effective = *specVal
+	}
+	if ftt != nil && *ftt > 0 && *ftt < effective {
+		effective = *ftt
+	}
+	return &effective
 }
 
 func capacityThreshold(t *simplyblockv1alpha1.CapacityThresholdSpec) int {
