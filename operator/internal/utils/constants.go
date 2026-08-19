@@ -13,6 +13,15 @@ const (
 	// opts volumes into a named ReplicationPolicy CR.
 	AnnotationReplicationPolicy = "replication.simplyblock.io/policy"
 
+	// ReplicationOps scope values.
+	ReplicationOpsScopeTarget = "target"
+	ReplicationOpsScopePolicy = "policy"
+	ReplicationOpsScopeVolume = "volume"
+
+	// ReplicationBackendStateReplicating is the backend API state string for a
+	// volume that is actively replicating snapshots to the target cluster.
+	ReplicationBackendStateReplicating = "replicating"
+
 	ClusterActionActivate           = "activate"
 	ClusterActionExpand             = "expand"
 	ClusterActionShutdown           = "shutdown"

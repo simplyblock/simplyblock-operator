@@ -35,14 +35,12 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const (
 	finalizerReplicationOps = "storage.simplyblock.io/replicationops-finalizer"
-
-	replOpsRequeueFailover = 10 * time.Second
-	replOpsRequeueFailback = 10 * time.Second
 )
 
 // ReplicationOpsReconciler reconciles ReplicationOps resources.
@@ -102,7 +100,7 @@ func (r *ReplicationOpsReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	var policy simplyblockv1alpha1.ReplicationPolicy
 	if err := r.Get(ctx, types.NamespacedName{Name: policyName, Namespace: ops.Namespace}, &policy); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.failOps(ctx, &ops, nil, fmt.Sprintf("ReplicationPolicy %q not found", policyName))
+			return r.failOps(ctx, &ops, fmt.Sprintf("ReplicationPolicy %q not found", policyName))
 		}
 		return ctrl.Result{}, fmt.Errorf("get ReplicationPolicy %q: %w", policyName, err)
 	}
@@ -144,7 +142,7 @@ func (r *ReplicationOpsReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	case "failback":
 		return r.reconcileFailback(ctx, &ops, &policy, apiClient)
 	default:
-		return r.failOps(ctx, &ops, &policy, fmt.Sprintf("unknown action %q", ops.Spec.Action))
+		return r.failOps(ctx, &ops, fmt.Sprintf("unknown action %q", ops.Spec.Action))
 	}
 }
 
@@ -164,7 +162,7 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 	}
 
 	switch ops.Spec.Scope {
-	case "target":
+	case utils.ReplicationOpsScopeTarget:
 		// POST /replication-targets/{id}/failover — atomically fails over all volumes.
 		endpoint := fmt.Sprintf("/api/v2/replication-targets/%s/failover", policy.Status.BackendTargetID)
 		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
@@ -173,10 +171,10 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 				err = fmt.Errorf("status %d: %s", status, string(body))
 			}
 			log.Error(err, "POST target failover failed")
-			return r.failOps(ctx, ops, policy, fmt.Sprintf("target failover failed: %v", err))
+			return r.failOps(ctx, ops, fmt.Sprintf("target failover failed: %v", err))
 		}
 
-	case "policy":
+	case utils.ReplicationOpsScopePolicy:
 		// POST /replication-policies/{id}/failover — atomically fails over all volumes in policy.
 		endpoint := fmt.Sprintf("/api/v2/replication-policies/%s/failover", policy.Status.BackendPolicyID)
 		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
@@ -185,18 +183,18 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 				err = fmt.Errorf("status %d: %s", status, string(body))
 			}
 			log.Error(err, "POST policy failover failed")
-			return r.failOps(ctx, ops, policy, fmt.Sprintf("policy failover failed: %v", err))
+			return r.failOps(ctx, ops, fmt.Sprintf("policy failover failed: %v", err))
 		}
 
-	case "volume":
+	case utils.ReplicationOpsScopeVolume:
 		// POST /{vol}/replicate_lvol — per-volume unplanned failover.
 		if len(pairs) != 1 {
-			return r.failOps(ctx, ops, policy, fmt.Sprintf("scope=volume requires exactly 1 pair; got %d", len(pairs)))
+			return r.failOps(ctx, ops, fmt.Sprintf("scope=volume requires exactly 1 pair; got %d", len(pairs)))
 		}
 		pair := &pairs[0]
 		clusterID, poolID, volumeID, ok := splitVolumeHandle(pair.Spec.VolumeID)
 		if !ok {
-			return r.failOps(ctx, ops, policy, fmt.Sprintf("invalid VolumeID on pair %s", pair.Name))
+			return r.failOps(ctx, ops, fmt.Sprintf("invalid VolumeID on pair %s", pair.Name))
 		}
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replicate_lvol",
 			clusterID, poolID, volumeID)
@@ -206,11 +204,11 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 				err = fmt.Errorf("status %d: %s", status, string(body))
 			}
 			log.Error(err, "POST replicate_lvol failed", "pair", pair.Name)
-			return r.failOps(ctx, ops, policy, fmt.Sprintf("volume failover failed: %v", err))
+			return r.failOps(ctx, ops, fmt.Sprintf("volume failover failed: %v", err))
 		}
 
 	default:
-		return r.failOps(ctx, ops, policy, fmt.Sprintf("unknown scope %q", ops.Spec.Scope))
+		return r.failOps(ctx, ops, fmt.Sprintf("unknown scope %q", ops.Spec.Scope))
 	}
 
 	// Update pair statuses to failed_over.
@@ -233,7 +231,7 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "FailoverSucceeded", "FailoverSucceeded",
 		"Failover completed for policy %s (%d volumes)", policy.Name, len(pairs))
-	return r.succeedOps(ctx, ops, policy, "Failover completed successfully", results)
+	return r.succeedOps(ctx, ops, "Failover completed successfully", results)
 }
 
 // reconcileFailback drives a failback (reverse replication then commit) to completion.
@@ -317,11 +315,11 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 	}
 
 	if anyFailed {
-		return r.failOps(ctx, ops, policy, "Failback completed with errors; see results for details")
+		return r.failOps(ctx, ops, "Failback completed with errors; see results for details")
 	}
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "FailbackSucceeded", "FailbackSucceeded",
 		"Failback completed for policy %s (%d volumes)", policy.Name, len(pairs))
-	return r.succeedOps(ctx, ops, policy, "Failback completed successfully", results)
+	return r.succeedOps(ctx, ops, "Failback completed successfully", results)
 }
 
 // collectAffectedPairs resolves the list of ReplicationPairs targeted by ops.
@@ -331,7 +329,7 @@ func (r *ReplicationOpsReconciler) collectAffectedPairs(
 	policy *simplyblockv1alpha1.ReplicationPolicy,
 ) ([]simplyblockv1alpha1.ReplicationPair, error) {
 	switch ops.Spec.Scope {
-	case "volume":
+	case utils.ReplicationOpsScopeVolume:
 		// spec.ref is the name of a single ReplicationPair.
 		var pair simplyblockv1alpha1.ReplicationPair
 		if err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.Ref, Namespace: ops.Namespace}, &pair); err != nil {
@@ -339,7 +337,7 @@ func (r *ReplicationOpsReconciler) collectAffectedPairs(
 		}
 		return []simplyblockv1alpha1.ReplicationPair{pair}, nil
 
-	case "policy", "target":
+	case utils.ReplicationOpsScopePolicy, utils.ReplicationOpsScopeTarget:
 		// All pairs belonging to the policy.
 		var list simplyblockv1alpha1.ReplicationPairList
 		if err := r.List(ctx, &list,
@@ -359,7 +357,7 @@ func (r *ReplicationOpsReconciler) collectAffectedPairs(
 // For scope=volume, spec.ref is a pair name — we look up the pair to get its policyRef.
 // For scope=policy and scope=target, spec.ref IS the policy name.
 func (r *ReplicationOpsReconciler) resolveAffectedPolicyName(ops *simplyblockv1alpha1.ReplicationOps) string {
-	if ops.Spec.Scope == "volume" {
+	if ops.Spec.Scope == utils.ReplicationOpsScopeVolume {
 		// We can't look up the pair without a client call; rely on the pair's policyRef
 		// being available. The ops ref for scope=volume is a pair name — try a best-effort
 		// parse by returning the pair name as the policy name first.  The policy lookup
@@ -378,7 +376,6 @@ func (r *ReplicationOpsReconciler) resolveAffectedPolicyName(ops *simplyblockv1a
 func (r *ReplicationOpsReconciler) succeedOps(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.ReplicationOps,
-	policy *simplyblockv1alpha1.ReplicationPolicy,
 	message string,
 	results []simplyblockv1alpha1.ReplicationOpsResult,
 ) (ctrl.Result, error) {
@@ -399,7 +396,6 @@ func (r *ReplicationOpsReconciler) succeedOps(
 func (r *ReplicationOpsReconciler) failOps(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.ReplicationOps,
-	policy *simplyblockv1alpha1.ReplicationPolicy,
 	reason string,
 ) (ctrl.Result, error) {
 	now := metav1.Now()

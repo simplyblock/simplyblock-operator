@@ -204,7 +204,7 @@ func (r *ReplicationPairReconciler) reconcilePollAttach(
 		return ctrl.Result{RequeueAfter: replPairRequeueAttaching}, nil
 	}
 
-	if status.State != "replicating" {
+	if status.State != utils.ReplicationBackendStateReplicating {
 		log.Info("Waiting for replication to reach replicating state",
 			"pair", pair.Name, "backendState", status.State)
 		return ctrl.Result{RequeueAfter: replPairRequeueAttaching}, nil
@@ -257,7 +257,7 @@ func (r *ReplicationPairReconciler) reconcileReplicating(
 
 	// Reflect externally-triggered state transitions.
 	switch status.State {
-	case "replicating":
+	case utils.ReplicationBackendStateReplicating:
 		// Steady state — update timestamp.
 	case "cutover_pending":
 		pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateCutoverPending)
@@ -319,7 +319,7 @@ func (r *ReplicationPairReconciler) reconcileSyncStatus(
 	pair.Status.TargetLvolID = status.TargetLvolID
 
 	// If the backend moved back to replicating (e.g. after failback), follow it.
-	if status.State == "replicating" {
+	if status.State == utils.ReplicationBackendStateReplicating {
 		pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateReplicating)
 		direction := "source"
 		if !status.IsSource {
