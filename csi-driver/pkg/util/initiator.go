@@ -1388,25 +1388,7 @@ func reconcileNonOptimizedPaths(
 		return
 	}
 
-	activeIPMap := make(map[string]path)
-	for _, p := range active {
-		if ip := parseAddress(p.Address); ip != "" {
-			activeIPMap[ip] = p
-		}
-	}
-
-	// Build expected IP set.
-	expectedIPSet := make(map[string]bool)
-	for _, conn := range conns {
-		expectedIPSet[conn.IP] = true
-	}
-
-	// Step 1: disconnect stale paths (IP no longer expected → node IP changed).
-	for ip := range activeIPMap {
-		if !expectedIPSet[ip] {
-			delete(activeIPMap, ip)
-		}
-	}
+	missing := missingEndpoints(conns, active)
 
 	onlineSecondaries := 0
 	totalSecondaries := 0
@@ -1429,19 +1411,71 @@ func reconcileNonOptimizedPaths(
 		return
 	}
 
-	for _, conn := range conns {
-		if _, exists := activeIPMap[conn.IP]; exists {
-			continue
-		}
+	for _, conn := range missing {
 		if !isTCPReachable(context.Background(), conn.IP, conn.Port) {
 			klog.Infof("reconcileNonOptimizedPaths: %s:%d not TCP-reachable, skipping", conn.IP, conn.Port)
 			continue
 		}
-		klog.Infof("reconcileNonOptimizedPaths: connecting missing path ip=%s", conn.IP)
+		klog.Infof("reconcileNonOptimizedPaths: connecting missing path %s:%d", conn.IP, conn.Port)
 		if err := connectViaNVMe(context.Background(), conn, ctrlLossTmo, 1); err != nil {
-			klog.Errorf("reconcileNonOptimizedPaths: connect to %s failed: %v", conn.IP, err)
+			klog.Errorf("reconcileNonOptimizedPaths: connect to %s:%d failed: %v", conn.IP, conn.Port, err)
 		}
 	}
+}
+
+// missingEndpoints returns the published connections that have no controller attached,
+// matching an expected endpoint against an attached one by address *and* port.
+//
+// The port is the whole point. A storage node listens for one subsystem on several ports,
+// so 10.0.0.112:4426 and 10.0.0.112:4428 are different endpoints on one node — and
+// matching on the address alone let any controller on a node stand in for every endpoint
+// on it. A stale controller left at a port the control plane no longer publishes then
+// read as "this node is already connected", and the endpoint it does publish was never
+// connected at all: the volume sat below its published redundancy for as long as the
+// stale controller survived, with a reconcile running every tick and finding nothing to
+// do.
+//
+// An attached endpoint the control plane no longer publishes is ignored rather than
+// disconnected. An endpoint missing from the current answer is not necessarily gone — a
+// node in restart looks exactly the same — and tearing down a live data path on that
+// evidence is not a decision to make from here; atlas diagnoses these as
+// DefectStaleEndpoint and refuses to repair them unattended for the same reason. What
+// bounds them is ctrl_loss_tmo, which is why DefaultCtrlLossTmo is a minute.
+//
+// A controller that is attached but cannot serve — stuck connecting, or live and
+// exporting no namespace — still counts as attached here, and deliberately: connecting
+// its endpoint again would add a second controller for one endpoint rather than replace
+// the broken one. Those are repaired by tearing them down, which healMonitoredVolume does
+// through atlas, and reconnected by the tick after that.
+func missingEndpoints(conns []*LvolConnectResp, active []path) []*LvolConnectResp {
+	attached := make(map[string]bool, len(active))
+	for _, p := range active {
+		if ip, port := parseEndpoint(p.Address); ip != "" && port != "" {
+			attached[net.JoinHostPort(ip, port)] = true
+		}
+	}
+
+	missing := make([]*LvolConnectResp, 0, len(conns))
+	for _, conn := range conns {
+		if !attached[net.JoinHostPort(conn.IP, strconv.Itoa(conn.Port))] {
+			missing = append(missing, conn)
+		}
+	}
+	return missing
+}
+
+// parseEndpoint splits an NVMe controller address attribute into its target address and
+// port — the two halves that together identify one endpoint.
+func parseEndpoint(address string) (ip, port string) {
+	for _, part := range strings.Split(address, ",") {
+		switch {
+		case strings.HasPrefix(part, "traddr="):
+			ip = strings.TrimPrefix(part, "traddr=")
+		case strings.HasPrefix(part, "trsvcid="):
+			port = strings.TrimPrefix(part, "trsvcid=")
+		}
+	}
+	return ip, port
 }
 
 // filterByANA returns the subset of paths whose ANAState matches anaState.

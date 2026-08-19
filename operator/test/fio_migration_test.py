@@ -199,6 +199,28 @@ done
 # persistent-loss, change) parks the path.
 ANA_ACCESSIBLE = ("optimized", "non-optimized", "nonoptimized")
 
+# How long the control plane deliberately leaves every path of a migrated subsystem
+# inaccessible while it moves the volume. This window is by design, so the check bounds it
+# rather than forbidding it — but it is also the window the application has to survive, so
+# the bound has to be tight enough that a regression in it is a failure and not a footnote.
+CUTOVER_PAUSE_DESIGN_S = 2.0
+
+# The window a migration is allowed to show, in seconds.
+#
+# It is the design window plus a sampling interval and a little slack, because that is the
+# widest a well-behaved pause can be *measured* as: at the default --ana-interval of 2.0s, a
+# pause that starts just after one sample and ends just before the sample after next is
+# observed as design + interval. Anything past that is longer than intended rather than
+# merely observed coarsely. Lower --ana-interval to tighten the bound.
+#
+# The previous default was 60s, which is the reason run fiomig-1787159565 reported "OK" for
+# the two migrations that killed eight of its ten fio pods: both were measured correctly, at
+# 6s and 8s of *every* path inaccessible, and both passed a threshold an order of magnitude
+# looser than anything an application survives. fio aborts on the first EREMOTEIO, so the
+# duration past the first failed I/O buys nothing — the threshold's job is to catch a pause
+# that ran long, and 60s could not.
+CUTOVER_PAUSE_CRIT_S = CUTOVER_PAUSE_DESIGN_S + 3.0
+
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -1405,8 +1427,13 @@ class FioMigrationTest:
           Non-live controllers at the target address are reported but do not fail the
           check: the old instance's controllers are torn down at the same address while
           the new one takes over.
-        * No namespace may be left with no accessible path anywhere for long. That is an
-          I/O stall, which the fio timeline shows as a gap but cannot attribute.
+        * No namespace may be left with no accessible path anywhere for longer than the
+          cutover pause allows. A pause is expected: the control plane drives every path of
+          the subsystem inaccessible for about CUTOVER_PAUSE_DESIGN_S while it moves the
+          volume, so the check bounds that window at CUTOVER_PAUSE_CRIT_S rather than
+          forbidding it. The bound matters because this window is what the application has
+          to survive — an I/O that fails inside it is an error the fio timeline shows as a
+          gap but cannot attribute, so the pause is the only place it can be attributed to.
         """
         if not rec.ana_samples:
             return
@@ -1504,8 +1531,11 @@ class FioMigrationTest:
                                       (times[-1] - stall_start).total_seconds())
 
         if rec.ana_stall_s > self.a.ana_stall_crit:
-            problems.append(f"some namespace had no accessible path for "
-                            f"{rec.ana_stall_s:.0f}s (> {self.a.ana_stall_crit}s)")
+            problems.append(
+                f"every path to some namespace was inaccessible for {rec.ana_stall_s:.0f}s "
+                f"(> {self.a.ana_stall_crit}s); the cutover pause is meant to last about "
+                f"{CUTOVER_PAUSE_DESIGN_S:.0f}s, and an application that sees an I/O error "
+                f"does so inside this window")
 
         rec.ana_msgs = problems
         rec.ana_ok = not problems
@@ -1517,7 +1547,7 @@ class FioMigrationTest:
             self.log.event(
                 f"ANA VERIFY  {rec.name}  OK  nodes={len(by_node)}  "
                 f"samples={len(rec.ana_samples)}  namespaces={sorted(expected) or '?'}  "
-                f"max_stall={rec.ana_stall_s:.0f}s  "
+                f"cutover_pause={rec.ana_stall_s:.0f}s/{self.a.ana_stall_crit:.0f}s  "
                 f"cutover={', '.join(f'{n}@{t}' for n, t in sorted(rec.ana_cutover.items())) or '-'}"
                 + (f"  (CR reported Completed {rec.ana_cr_lag_s:.0f}s later)"
                    if rec.ana_cr_lag_s else ""))
@@ -2959,7 +2989,10 @@ class FioMigrationTest:
             worst = max((m.ana_stall_s for m in sampled), default=0.0)
             self.log.info(f"host paths (ANA)  : {aok} ok / {afail} violated "
                           f"/ {len(sampled)} sampled  "
-                          f"(worst namespace stall {worst:.0f}s; per-migration CSVs in ana/)")
+                          f"(worst cutover pause {worst:.0f}s of "
+                          f"{self.a.ana_stall_crit:.0f}s allowed, "
+                          f"~{CUTOVER_PAUSE_DESIGN_S:.0f}s by design; "
+                          f"per-migration CSVs in ana/)")
         snapped = [m for m in self.migrations if m.pre_snapshot]
         if snapped:
             sok = len([m for m in snapped
@@ -3194,9 +3227,13 @@ def parse_args():
     p.add_argument("--ana-interval", type=float, default=2.0,
                    help="seconds between host-side ANA samples taken on every consuming "
                         "node through the CSI node pods (0 disables sampling)")
-    p.add_argument("--ana-stall-crit", type=float, default=60.0,
+    p.add_argument("--ana-stall-crit", type=float, default=CUTOVER_PAUSE_CRIT_S,
                    help="fail a migration if some namespace had no accessible path on a "
-                        "consuming node for longer than this (seconds)")
+                        "consuming node for longer than this (seconds). A bounded pause is "
+                        "by design — the control plane drives every path of the subsystem "
+                        f"inaccessible for about {CUTOVER_PAUSE_DESIGN_S}s while it moves "
+                        "the volume — so this bounds that window rather than forbidding it; "
+                        "see CUTOVER_PAUSE_CRIT_S")
     p.add_argument("--snapshot-chance", type=float, default=SNAPSHOT_CHANCE,
                    help="probability (0..1) of taking a VolumeSnapshot of a volume just "
                         "before migrating it, so the migration must carry the snapshot; the "

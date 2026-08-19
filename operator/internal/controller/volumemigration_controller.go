@@ -217,9 +217,14 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 			Transport:      c.TargetType,
 			NrIoQueues:     c.NrIoQueues,
 			ReconnectDelay: c.ReconnectDelay,
-			CtrlLossTmo:    c.CtrlLossTmo,
-			FastIOFailTmo:  c.FastIOFailTmo,
-			KeepAliveTmo:   c.KeepAliveTmo,
+			// Not c.CtrlLossTmo: the host connects every path with the same loss
+			// timeout the CSI driver uses, and the control plane's answer here is an
+			// hour. See vmigration.CtrlLossTmoSec. Overridden at ingestion rather than
+			// where the Job is built so that status.connections records the connect
+			// that will actually be made.
+			CtrlLossTmo:   vmigration.CtrlLossTmoSec,
+			FastIOFailTmo: c.FastIOFailTmo,
+			KeepAliveTmo:  c.KeepAliveTmo,
 		})
 	}
 
@@ -468,6 +473,11 @@ func (r *VolumeMigrationReconciler) timeInValidating(
 // cancelAndFail cancels the backend migration and fails the CR with reason. Used
 // where the operator gives up on a migration it created: the target-side objects must
 // not be left behind.
+//
+// "Target-side objects" is both halves of it. The control plane's are what CancelMigration
+// takes back; the host's are the NVMe paths every consumer node connected to validate,
+// which nothing else will ever release — the Job that failed releases its own, and the
+// ones that passed have to be told.
 func (r *VolumeMigrationReconciler) cancelAndFail(
 	ctx context.Context,
 	vm *simplyblockv1alpha1.VolumeMigration,
@@ -480,6 +490,9 @@ func (r *VolumeMigrationReconciler) cancelAndFail(
 			"migration", vm.Status.MigrationUUID, "subsystem", vm.Status.SubsystemNQN)
 		reason += fmt.Sprintf(" (cancelling the migration also failed: %v)", err)
 	}
+	// Before setFailed, which clears nothing but is the point of no return for the CR:
+	// the node list this needs lives in status.
+	r.releaseMigrationPaths(ctx, vm)
 	return r.setFailed(ctx, vm, reason)
 }
 
@@ -566,6 +579,66 @@ func (r *VolumeMigrationReconciler) pollValidationJobs(
 		"nodes", len(vm.Status.ValidationJobs), "migration", vm.Status.MigrationUUID)
 
 	return r.performMigration(ctx, vm)
+}
+
+// releaseMigrationPaths starts a release Job on every node this migration validated on,
+// for a migration that is being given up before cutover.
+//
+// It is what closes the gap a per-node release cannot. The Job that fails releases its
+// own paths on the way out, but the nodes whose validation *passed* exited successfully
+// and are never told that the migration was cancelled anyway — by another node's failure,
+// or by the operator giving up on a consumer that never started. Their target paths stay
+// connected, retry a target that has stopped answering for them, and settle into the husk
+// that blocks the next migration of the subsystem. Before this, nothing on the node ever
+// took them back.
+//
+// Every recorded node is asked, not only the ones that passed. Release is idempotent and
+// declines to touch a path that is serving, so asking a node that already released costs
+// one Job and reports nothing; guessing which nodes still hold paths would mean trusting
+// Succeeded to mean "connected", which it does not — a Job killed mid-run leaves paths
+// with no record of them at all.
+//
+// Best effort, and deliberately not waited on: the migration's outcome is already decided
+// and must not become "still failing" because a cleanup Job is pending. The Jobs are
+// owned by the CR, so they are garbage-collected with it, and carry a TTL of their own.
+// What escapes this is caught by the reap that runs before the next validation.
+func (r *VolumeMigrationReconciler) releaseMigrationPaths(
+	ctx context.Context,
+	vm *simplyblockv1alpha1.VolumeMigration,
+) {
+	log := logf.FromContext(ctx)
+
+	if len(vm.Status.ValidationJobs) == 0 || len(vm.Status.Connections) == 0 {
+		// Nothing was validated, so no target path was connected from here.
+		return
+	}
+
+	image, err := r.resolveRebalancerImage(ctx, vm.Namespace, vm.Status.ClusterUUID)
+	if err != nil {
+		log.Error(err, "Cannot resolve simplyblock-rebalancer image; migration target paths are left connected",
+			"migration", vm.Status.MigrationUUID, "subsystem", vm.Status.SubsystemNQN)
+		return
+	}
+
+	nodes := make([]string, 0, len(vm.Status.ValidationJobs))
+	for _, vj := range vm.Status.ValidationJobs {
+		job := r.buildReleaseJob(vm, vj.Node, image)
+		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+			log.Error(err, "Cannot start release job; migration target paths are left connected on this node",
+				"node", vj.Node, "migration", vm.Status.MigrationUUID)
+			continue
+		}
+		nodes = append(nodes, vj.Node)
+	}
+	if len(nodes) == 0 {
+		return
+	}
+
+	log.Info("Releasing migration target paths", "nodes", nodes,
+		"subsystem", vm.Status.SubsystemNQN, "migration", vm.Status.MigrationUUID)
+	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "ReleasingPaths", "ReleasingPaths",
+		"Releasing the target paths of subsystem %s on %d node(s): %s",
+		vm.Status.SubsystemNQN, len(nodes), strings.Join(nodes, ", "))
 }
 
 // deleteValidationJobs removes the validation Jobs of a migration. Called when the
@@ -742,10 +815,54 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 	vm *simplyblockv1alpha1.VolumeMigration,
 	hostname, image string,
 ) *batchv1.Job {
+	// No retries: a failed validation cancels the migration, and retrying the Job would
+	// only delay that decision behind a second run of a check that just said no.
+	return migrationPathJob(vm, hostname, image, pathJobSpec{
+		namePrefix:   "vmig-validate-",
+		container:    "nvme-validate",
+		mode:         "validate-migration",
+		backoffLimit: 0,
+	})
+}
+
+// buildReleaseJob constructs the Job that gives a migration's target paths back on one
+// node, for the nodes the operator has to tell because their own Job cannot know.
+func (r *VolumeMigrationReconciler) buildReleaseJob(
+	vm *simplyblockv1alpha1.VolumeMigration,
+	hostname, image string,
+) *batchv1.Job {
+	// Retried, unlike validation: nothing downstream waits on this Job, so a transient
+	// failure that is not retried is simply a path left connected, which is the leak.
+	return migrationPathJob(vm, hostname, image, pathJobSpec{
+		namePrefix:   "vmig-release-",
+		container:    "nvme-release",
+		mode:         "release-migration-paths",
+		backoffLimit: 2,
+	})
+}
+
+// pathJobSpec is what differs between the two host-side migration path Jobs. Everything
+// else about them — the node pinning, the host mounts, the privileges, the VMIG_
+// environment — has to be identical, because both are the same binary reading the same
+// host state, and a release that saw a different fabric than the validation did would be
+// deciding about paths it cannot see.
+type pathJobSpec struct {
+	namePrefix   string
+	container    string
+	mode         string
+	backoffLimit int32
+}
+
+// migrationPathJob builds one node-pinned Job running simplyblock-rebalancer against the
+// host's NVMe fabric.
+func migrationPathJob(
+	vm *simplyblockv1alpha1.VolumeMigration,
+	hostname, image string,
+	js pathJobSpec,
+) *batchv1.Job {
 	privileged := true
 	readOnly := true
 	ttl := int32(3600)
-	backoffLimit := int32(0) // no retries — fail fast and cancel the migration
 	deadline := int64(validationJobDeadline.Seconds())
 
 	connsJSON, _ := json.Marshal(connectionsToValidation(vm.Status.Connections))
@@ -753,14 +870,14 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			// One Job per node, so the name carries both the migration and the node.
-			Name:      "vmig-validate-" + safeNodeID(vm.Status.MigrationUUID) + "-" + nodeSuffix(hostname),
+			Name:      js.namePrefix + safeNodeID(vm.Status.MigrationUUID) + "-" + nodeSuffix(hostname),
 			Namespace: vm.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(vm, simplyblockv1alpha1.GroupVersion.WithKind("VolumeMigration")),
 			},
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit:            &backoffLimit,
+			BackoffLimit:            &js.backoffLimit,
 			TTLSecondsAfterFinished: &ttl,
 			ActiveDeadlineSeconds:   &deadline,
 			Template: corev1.PodTemplateSpec{
@@ -787,10 +904,10 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 					},
 					Containers: []corev1.Container{
 						{
-							Name:            "nvme-validate",
+							Name:            js.container,
 							Image:           image,
 							ImagePullPolicy: corev1.PullAlways,
-							Command:         []string{"simplyblock-rebalancer", "--mode=validate-migration"},
+							Command:         []string{"simplyblock-rebalancer", "--mode=" + js.mode},
 							Env: []corev1.EnvVar{
 								{Name: "VMIG_CONNECTIONS", Value: string(connsJSON)},
 								// Which subsystem this node is expected to have a
@@ -1223,9 +1340,15 @@ func (r *VolumeMigrationReconciler) reconcileAbort(
 	now := metav1.Now()
 	patch := client.MergeFrom(vm.DeepCopy())
 
-	// Best-effort cleanup of the validation Jobs when aborting during Validating.
+	// Best-effort cleanup when aborting during Validating. The validation Jobs go first so
+	// that nothing is still connecting paths while the release Jobs look for them — a Job
+	// deleted here may still have a pod winding down, so this narrows the race rather than
+	// closing it, and what slips through is caught by the reap before the next validation.
+	// Both happen before status is cleared, because releasing needs the node list and the
+	// connections it is about to drop.
 	if len(vm.Status.ValidationJobs) > 0 {
 		r.deleteValidationJobs(ctx, vm)
+		r.releaseMigrationPaths(ctx, vm)
 		vm.Status.ValidationJobs = nil
 		vm.Status.Connections = nil
 	}

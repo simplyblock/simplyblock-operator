@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -240,6 +241,145 @@ func TestPollValidationJobs_OneJobVanished_KeepsTheOthers(t *testing.T) {
 	}
 	if got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseValidating {
 		t.Errorf("phase = %q, want still Validating", got.Status.Phase)
+	}
+}
+
+// ---- releasing migration target paths ----
+
+// releasingVM is a validating migration with target connections recorded on two nodes —
+// the state in which giving up leaves NVMe paths behind on both.
+func releasingVM() *simplyblockv1alpha1.VolumeMigration {
+	vm := validatingVM(testValidationJobName)
+	vm.Status.ValidationJobs = append(vm.Status.ValidationJobs,
+		simplyblockv1alpha1.ValidationJob{Node: testSiblingNode, JobName: "vmig-validate-2"})
+	vm.Status.Connections = []simplyblockv1alpha1.MigrationConnection{
+		{NQN: testSubsystemNQN, IP: "10.0.0.1", Port: 4428, Transport: "tcp"},
+	}
+	return vm
+}
+
+// releaseJobs returns the release Jobs that exist, by the node each is pinned to.
+func releaseJobs(t *testing.T, cl client.Client) map[string]batchv1.Job {
+	t.Helper()
+	var jobs batchv1.JobList
+	if err := cl.List(context.Background(), &jobs); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	out := map[string]batchv1.Job{}
+	for _, j := range jobs.Items {
+		if !strings.HasPrefix(j.Name, "vmig-release-") {
+			continue
+		}
+		out[j.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"]] = j
+	}
+	return out
+}
+
+// The gap a per-node release cannot close: a node whose own validation passed exits
+// successfully and is never told the migration was cancelled, so the operator has to
+// release for it. Every recorded node is asked, not only the ones that passed.
+func TestReconcileAbort_ReleasesTargetPathsOnEveryNode(t *testing.T) {
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+	})
+
+	vm := releasingVM()
+	vm.Spec.Abort = true
+	r, cl := newVMReconciler(t, srv.URL, vm, migrationCluster())
+
+	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	got := releaseJobs(t, cl)
+	for _, node := range []string{testValidationNode, testSiblingNode} {
+		if _, ok := got[node]; !ok {
+			t.Errorf("no release job pinned to %q; got %v", node, got)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("created %d release jobs, want one per validated node", len(got))
+	}
+}
+
+// A failed validation cancels the migration, and the nodes that passed still hold their
+// target paths — the same release has to happen on that route too, not only on abort.
+func TestCancelAndFail_ReleasesTargetPaths(t *testing.T) {
+	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+	})
+
+	vm := releasingVM()
+	r, cl := newVMReconciler(t, srv.URL, vm, migrationCluster())
+
+	if _, err := r.cancelAndFail(context.Background(), vm, "NVMe path validation failed"); err != nil {
+		t.Fatalf("cancelAndFail: %v", err)
+	}
+	if got := getVM(t, cl); got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
+		t.Fatalf("phase = %q, want Failed", got.Status.Phase)
+	}
+	if got := releaseJobs(t, cl); len(got) != 2 {
+		t.Errorf("created %d release jobs, want one per validated node", len(got))
+	}
+}
+
+// The release Job has to run the release mode against the host's own fabric — a Job that
+// looked at the container's /sys, or ran the validation mode, would either see nothing or
+// connect the very paths it was sent to take back.
+func TestBuildReleaseJob_RunsReleaseModeAgainstTheHost(t *testing.T) {
+	r, _ := newVMReconciler(t, unreachableAPI)
+	vm := releasingVM()
+
+	job := r.buildReleaseJob(vm, testConsumerNode, "img:tag")
+	c := job.Spec.Template.Spec.Containers[0]
+
+	if !slices.Contains(c.Command, "--mode=release-migration-paths") {
+		t.Errorf("command = %v, want the release mode", c.Command)
+	}
+	env := map[string]string{}
+	for _, e := range c.Env {
+		env[e.Name] = e.Value
+	}
+	if env["VMIG_SUBSYSTEM_NQN"] != testSubsystemNQN {
+		t.Errorf("VMIG_SUBSYSTEM_NQN = %q, want the migrated subsystem", env["VMIG_SUBSYSTEM_NQN"])
+	}
+	if env["VMIG_SYS_ROOT"] != "/host/sys" {
+		t.Errorf("VMIG_SYS_ROOT = %q, want the mounted host sysfs", env["VMIG_SYS_ROOT"])
+	}
+	if !strings.Contains(env["VMIG_CONNECTIONS"], "10.0.0.1") {
+		t.Errorf("VMIG_CONNECTIONS = %q, want the migration's target addresses", env["VMIG_CONNECTIONS"])
+	}
+
+	// The name must not collide with the validation Job of the same migration and node —
+	// they exist at the same time on the abort path.
+	if job.Name == r.buildValidationJob(vm, testConsumerNode, "img:tag").Name {
+		t.Errorf("release and validation jobs share the name %q", job.Name)
+	}
+	// Unlike validation, a release is retried: nothing waits on it, so a transient
+	// failure that is not retried is just a path left connected.
+	if job.Spec.BackoffLimit == nil || *job.Spec.BackoffLimit == 0 {
+		t.Errorf("BackoffLimit = %v, want a retry budget", job.Spec.BackoffLimit)
+	}
+}
+
+// Nothing to release when nothing was connected: a migration that never recorded target
+// connections must not spawn Jobs to take back paths that do not exist.
+func TestReleaseMigrationPaths_NoConnectionsStartsNoJobs(t *testing.T) {
+	r, cl := newVMReconciler(t, unreachableAPI, migrationCluster())
+	vm := releasingVM()
+	vm.Status.Connections = nil
+
+	r.releaseMigrationPaths(context.Background(), vm)
+
+	if got := releaseJobs(t, cl); len(got) != 0 {
+		t.Errorf("created %d release jobs with no recorded connections, want none", len(got))
 	}
 }
 
