@@ -231,11 +231,9 @@ type StorageClusterSpec struct {
 	// SnodeApiPort defines the storage-node API port.
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Concurrent Worker Restarts"
-	// MaxConcurrentWorkerRestarts caps how many storage worker nodes the operator
-	// may shut down and restart simultaneously during a rolling drain (e.g. an OS
-	// upgrade). It is an operational limit that may be set lower than the cluster's
-	// fault-tolerance level (FTT) when other workloads further constrain capacity.
-	// The effective concurrency is min(MaxConcurrentWorkerRestarts, FTT).
+	// MaxConcurrentWorkerRestarts is the maximum number of Kubernetes worker nodes the operator
+	// may drain and restart simultaneously. The effective concurrency applied by the drain
+	// coordinator is min(MaxConcurrentWorkerRestarts, MaxFaultTolerance).
 	// Defaults to 1 when unset.
 	// +optional
 	// +kubebuilder:validation:Minimum=1
