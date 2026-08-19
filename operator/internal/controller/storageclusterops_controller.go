@@ -226,6 +226,7 @@ func (r *StorageClusterOpsReconciler) reconcileActivate(
 	cluster.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
 	mft := int32(resp.MaxFaultTolerance)
 	cluster.Status.MaxFaultTolerance = &mft
+	cluster.Status.MaxConcurrentWorkerRestarts = effectiveConcurrentRestarts(cluster.Spec.MaxConcurrentWorkerRestarts, &mft)
 	if err := r.Status().Patch(ctx, cluster, clusterPatch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -307,6 +308,7 @@ func (r *StorageClusterOpsReconciler) reconcileExpand(
 	cluster.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", resp.NDCS, resp.NPCS)
 	mft := int32(resp.MaxFaultTolerance)
 	cluster.Status.MaxFaultTolerance = &mft
+	cluster.Status.MaxConcurrentWorkerRestarts = effectiveConcurrentRestarts(cluster.Spec.MaxConcurrentWorkerRestarts, &mft)
 	if err := r.Status().Patch(ctx, cluster, clusterPatch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}

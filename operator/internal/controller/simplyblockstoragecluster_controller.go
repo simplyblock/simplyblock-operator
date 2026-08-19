@@ -294,6 +294,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 	clusterCR.Status.ErasureCodingScheme = fmt.Sprintf("%dx%d", apiResp.NDCS, apiResp.NPCS)
 	mft := int32(apiResp.MaxFaultTolerance)
 	clusterCR.Status.MaxFaultTolerance = &mft
+	clusterCR.Status.MaxConcurrentWorkerRestarts = effectiveConcurrentRestarts(clusterCR.Spec.MaxConcurrentWorkerRestarts, &mft)
 
 	clusterCR.Status.ClusterName = clusterCR.Name
 	clusterCR.Status.Configured = true
