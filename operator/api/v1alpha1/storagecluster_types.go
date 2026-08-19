@@ -224,13 +224,9 @@ type BackupSpec struct {
 }
 
 // StorageClusterSpec defines the desired state of StorageCluster
-//
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.haType) || self.haType == oldSelf.haType",message="haType is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType",message="fabricType is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.hashicorpVaultSettings) || self.hashicorpVaultSettings == oldSelf.hashicorpVaultSettings",message="hashicorpVaultSettings is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.stripe) || self.stripe == oldSelf.stripe",message="stripe is immutable once set"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.blockSize) || self.blockSize == oldSelf.blockSize",message="blockSize is immutable once set"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.isSingleNode) || self.isSingleNode == oldSelf.isSingleNode",message="isSingleNode is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.nvmfBasePort) || self.nvmfBasePort == oldSelf.nvmfBasePort",message="nvmfBasePort is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.rpcBasePort) || self.rpcBasePort == oldSelf.rpcBasePort",message="rpcBasePort is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.snodeApiPort) || self.snodeApiPort == oldSelf.snodeApiPort",message="snodeApiPort is immutable once set"
@@ -241,9 +237,6 @@ type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Stripe"
 	// StripeSpec configures erasure-coding data/parity chunk counts.
 	StripeSpec *StripeSpec `json:"stripe,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="HA Type"
-	// HAType defines the backend high-availability mode.
-	HAType string `json:"haType,omitempty"`
 	// +kubebuilder:validation:Enum=activate;expand;shutdown;start;restart;node-recycle
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Action"
 	// Action triggers a cluster-level action.
@@ -251,37 +244,12 @@ type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Node Recycle"
 	// NodeRecycle configures the node-recycle action.
 	NodeRecycle *NodeRecycleSpec `json:"nodeRecycle,omitempty"`
-
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Single Node"
-	// IsSingleNode enables single-node cluster mode.
-	IsSingleNode *bool `json:"isSingleNode,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Strict Node Anti-Affinity"
-	// StrictNodeAntiAffinity enforces strict anti-affinity between storage nodes.
-	StrictNodeAntiAffinity *bool `json:"strictNodeAntiAffinity,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Queue Pair Count"
-	// QpairCount defines the NVMe queue-pair count used by the cluster.
-	QpairCount *int32 `json:"qpairCount,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Block Size"
-	// BlockSize defines the logical block size in bytes.
-	BlockSize *int32 `json:"blockSize,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Page Size In Blocks"
-	// PageSizeInBlocks defines page size expressed in blocks.
-	PageSizeInBlocks *int32 `json:"pageSizeInBlocks,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Queue Size"
-	// MaxQueueSize defines the maximum backend queue size.
-	MaxQueueSize *int32 `json:"maxQueueSize,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Inflight IO Threshold"
-	// InflightIOThreshold defines the inflight I/O threshold.
-	InflightIOThreshold *int32 `json:"inflightIOThreshold,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Fabric Type"
 	// FabricType defines the storage fabric type.
 	FabricType string `json:"fabricType,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Client Data Interface"
 	// ClientDataIfname defines the client data network interface.
 	ClientDataIfname string `json:"clientDataIfname,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Fault Tolerance"
-	// MaxFaultTolerance defines the maximum tolerated concurrent faults.
-	MaxFaultTolerance *int32 `json:"maxFaultTolerance,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="NVMf Base Port"
 	// NvmfBasePort defines the base NVMf service port.
 	NvmfBasePort *int32 `json:"nvmfBasePort,omitempty"`
@@ -291,16 +259,21 @@ type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Storage Node API Port"
 	// SnodeApiPort defines the storage-node API port.
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
-
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Concurrent Worker Restarts"
+	// MaxConcurrentWorkerRestarts is the maximum number of Kubernetes worker nodes the operator
+	// may drain and restart simultaneously. The effective concurrency applied by the drain
+	// coordinator is min(MaxConcurrentWorkerRestarts, MaxFaultTolerance).
+	// Defaults to 1 when unset.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	MaxConcurrentWorkerRestarts *int32 `json:"maxConcurrentWorkerRestarts,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Warning Threshold"
 	// WarningThresholdSpec defines warning-level capacity thresholds.
 	WarningThresholdSpec *CapacityThresholdSpec `json:"warningThreshold,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Critical Threshold"
 	// CriticalThresholdSpec defines critical-level capacity thresholds.
 	CriticalThresholdSpec *CapacityThresholdSpec `json:"criticalThreshold,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Client Queue Pair Count"
-	// ClientQpairCount defines client-side queue-pair count.
-	ClientQpairCount *int32 `json:"clientQpairCount,omitempty"`
+
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Backup"
 	// Backup specifies the specification for backup to S3 configuration
 	Backup *BackupSpec `json:"backup,omitempty"`
@@ -380,6 +353,12 @@ type StorageClusterStatus struct {
 	// be simultaneously offline (failed, drained, or restarted) without violating
 	// the cluster's redundancy guarantees.
 	MaxFaultTolerance *int32 `json:"maxFaultTolerance,omitempty"`
+	// MaxConcurrentWorkerRestarts is the effective concurrent-restart limit applied
+	// by the drain coordinator: min(spec.MaxConcurrentWorkerRestarts, MaxFaultTolerance).
+	// Defaults to 1. Exposed here so controllers and tooling can read a single
+	// authoritative value without re-computing it.
+	// +optional
+	MaxConcurrentWorkerRestarts *int32 `json:"maxConcurrentWorkerRestarts,omitempty"`
 	// ActionStatus tracks the most recent action execution state.
 	ActionStatus *ActionStatus `json:"actionStatus,omitempty"`
 	// NodeRecycleStatus tracks in-progress state for the node-recycle action.
