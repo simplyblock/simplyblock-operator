@@ -42,15 +42,15 @@ func newPVCWatcherReconciler(t *testing.T, objects ...client.Object) (*PVCAnnota
 	return &PVCAnnotationWatcher{Client: cl, Scheme: scheme}, cl
 }
 
-func pvcRequest(ns, name string) ctrl.Request {
-	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}}
+func pvcRequest(name string) ctrl.Request {
+	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: name}}
 }
 
-func boundPVC(name, ns, sc, pvName string, annotations map[string]string) *corev1.PersistentVolumeClaim {
+func boundPVC(ns, sc, pvName string, annotations map[string]string) *corev1.PersistentVolumeClaim {
 	scPtr := sc
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
+			Name:        "pvc1",
 			Namespace:   ns,
 			Annotations: annotations,
 		},
@@ -65,9 +65,9 @@ func boundPVC(name, ns, sc, pvName string, annotations map[string]string) *corev
 	return pvc
 }
 
-func testCSIPV(name, volumeHandle string) *corev1.PersistentVolume {
+func testCSIPV(volumeHandle string) *corev1.PersistentVolume {
 	return &corev1.PersistentVolume{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: "pv1"},
 		Spec: corev1.PersistentVolumeSpec{
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				CSI: &corev1.CSIPersistentVolumeSource{
@@ -78,9 +78,9 @@ func testCSIPV(name, volumeHandle string) *corev1.PersistentVolume {
 	}
 }
 
-func readyPolicy(name, ns string) *simplyblockv1alpha1.ReplicationPolicy {
+func readyPolicy(name string) *simplyblockv1alpha1.ReplicationPolicy {
 	return &simplyblockv1alpha1.ReplicationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
 		Status:     simplyblockv1alpha1.ReplicationPolicyStatus{Ready: true, BackendPolicyID: "bpol"},
 	}
@@ -90,7 +90,7 @@ func readyPolicy(name, ns string) *simplyblockv1alpha1.ReplicationPolicy {
 
 func TestPVCWatcher_IgnoreNotFound(t *testing.T) {
 	r, _ := newPVCWatcherReconciler(t)
-	res, err := r.Reconcile(context.Background(), pvcRequest("default", "missing"))
+	res, err := r.Reconcile(context.Background(), pvcRequest("missing"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestPVCWatcher_NoPolicyNoPair_NoOp(t *testing.T) {
 	}
 	r, _ := newPVCWatcherReconciler(t, pvc, sc)
 
-	res, err := r.Reconcile(context.Background(), pvcRequest("default", "pvc1"))
+	res, err := r.Reconcile(context.Background(), pvcRequest("pvc1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -134,10 +134,10 @@ func TestPVCWatcher_PVCAnnotation_UnboundRequeue(t *testing.T) {
 		},
 		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
 	}
-	pol := readyPolicy("pol", "default")
+	pol := readyPolicy("pol")
 	r, _ := newPVCWatcherReconciler(t, pvc, pol)
 
-	res, err := r.Reconcile(context.Background(), pvcRequest("default", "pvc1"))
+	res, err := r.Reconcile(context.Background(), pvcRequest("pvc1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -149,14 +149,14 @@ func TestPVCWatcher_PVCAnnotation_UnboundRequeue(t *testing.T) {
 // ---------- creates pair when PVC is bound ----------
 
 func TestPVCWatcher_CreatesPairWhenBound(t *testing.T) {
-	pvc := boundPVC("pvc1", "default", "fast", "pv1",
+	pvc := boundPVC("default", "fast", "pv1",
 		map[string]string{utils.AnnotationReplicationPolicy: "pol"})
-	pv := testCSIPV("pv1", "cluster-uuid:pool-uuid:vol-uuid")
-	pol := readyPolicy("pol", "default")
+	pv := testCSIPV("cluster-uuid:pool-uuid:vol-uuid")
+	pol := readyPolicy("pol")
 
 	r, cl := newPVCWatcherReconciler(t, pvc, pv, pol)
 
-	_, err := r.Reconcile(context.Background(), pvcRequest("default", "pvc1"))
+	_, err := r.Reconcile(context.Background(), pvcRequest("pvc1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -184,19 +184,19 @@ func TestPVCWatcher_CreatesPairWhenBound(t *testing.T) {
 
 func TestPVCWatcher_SCAnnotation_CreatesPair(t *testing.T) {
 	scName := "fast"
-	pvc := boundPVC("pvc1", "default", scName, "pv1", nil)
-	pv := testCSIPV("pv1", "c:p:v")
+	pvc := boundPVC("default", scName, "pv1", nil)
+	pv := testCSIPV("c:p:v")
 	sc := &storagev1.StorageClass{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        scName,
 			Annotations: map[string]string{utils.AnnotationReplicationPolicy: "pol"},
 		},
 	}
-	pol := readyPolicy("pol", "default")
+	pol := readyPolicy("pol")
 
 	r, cl := newPVCWatcherReconciler(t, pvc, pv, sc, pol)
 
-	_, err := r.Reconcile(context.Background(), pvcRequest("default", "pvc1"))
+	_, err := r.Reconcile(context.Background(), pvcRequest("pvc1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -213,20 +213,20 @@ func TestPVCWatcher_SCAnnotation_CreatesPair(t *testing.T) {
 // ---------- policy changed — delete old pair, wait ----------
 
 func TestPVCWatcher_PolicyChanged_DeletesOldPair(t *testing.T) {
-	pvc := boundPVC("pvc1", "default", "fast", "pv1",
+	pvc := boundPVC("default", "fast", "pv1",
 		map[string]string{utils.AnnotationReplicationPolicy: "pol-new"})
-	pv := testCSIPV("pv1", "c:p:v")
+	pv := testCSIPV("c:p:v")
 	existingPair := &simplyblockv1alpha1.ReplicationPair{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol-old-pvc1", Namespace: "default"},
 		Spec: simplyblockv1alpha1.ReplicationPairSpec{
 			PolicyRef: "pol-old", PVCRef: "pvc1", VolumeID: "c:p:v",
 		},
 	}
-	pol := readyPolicy("pol-new", "default")
+	pol := readyPolicy("pol-new")
 
 	r, cl := newPVCWatcherReconciler(t, pvc, pv, existingPair, pol)
 
-	res, err := r.Reconcile(context.Background(), pvcRequest("default", "pvc1"))
+	res, err := r.Reconcile(context.Background(), pvcRequest("pvc1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestPVCWatcher_PolicyChanged_DeletesOldPair(t *testing.T) {
 
 func TestPVCWatcher_PolicyRemoved_DeletesPair(t *testing.T) {
 	// No annotation on PVC.
-	pvc := boundPVC("pvc1", "default", "fast", "pv1", nil)
+	pvc := boundPVC("default", "fast", "pv1", nil)
 	existingPair := &simplyblockv1alpha1.ReplicationPair{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol-pvc1", Namespace: "default"},
 		Spec: simplyblockv1alpha1.ReplicationPairSpec{
@@ -259,7 +259,7 @@ func TestPVCWatcher_PolicyRemoved_DeletesPair(t *testing.T) {
 	}
 	r, cl := newPVCWatcherReconciler(t, pvc, existingPair)
 
-	res, err := r.Reconcile(context.Background(), pvcRequest("default", "pvc1"))
+	res, err := r.Reconcile(context.Background(), pvcRequest("pvc1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestPVCWatcher_PolicyRemoved_DeletesPair(t *testing.T) {
 
 func TestPVCWatcher_PairPendingDeletion_Waits(t *testing.T) {
 	now := metav1.Now()
-	pvc := boundPVC("pvc1", "default", "fast", "pv1",
+	pvc := boundPVC("default", "fast", "pv1",
 		map[string]string{utils.AnnotationReplicationPolicy: "pol"})
 	existingPair := &simplyblockv1alpha1.ReplicationPair{
 		ObjectMeta: metav1.ObjectMeta{
@@ -298,7 +298,7 @@ func TestPVCWatcher_PairPendingDeletion_Waits(t *testing.T) {
 	}
 	r, _ := newPVCWatcherReconciler(t, pvc, existingPair)
 
-	res, err := r.Reconcile(context.Background(), pvcRequest("default", "pvc1"))
+	res, err := r.Reconcile(context.Background(), pvcRequest("pvc1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -310,12 +310,12 @@ func TestPVCWatcher_PairPendingDeletion_Waits(t *testing.T) {
 // ---------- policy not found — requeue ----------
 
 func TestPVCWatcher_PolicyNotFound_Requeues(t *testing.T) {
-	pvc := boundPVC("pvc1", "default", "fast", "pv1",
+	pvc := boundPVC("default", "fast", "pv1",
 		map[string]string{utils.AnnotationReplicationPolicy: "pol"})
-	pv := testCSIPV("pv1", "c:p:v")
+	pv := testCSIPV("c:p:v")
 	r, _ := newPVCWatcherReconciler(t, pvc, pv)
 
-	res, err := r.Reconcile(context.Background(), pvcRequest("default", "pvc1"))
+	res, err := r.Reconcile(context.Background(), pvcRequest("pvc1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -327,9 +327,9 @@ func TestPVCWatcher_PolicyNotFound_Requeues(t *testing.T) {
 // ---------- policy not ready — requeue ----------
 
 func TestPVCWatcher_PolicyNotReady_Requeues(t *testing.T) {
-	pvc := boundPVC("pvc1", "default", "fast", "pv1",
+	pvc := boundPVC("default", "fast", "pv1",
 		map[string]string{utils.AnnotationReplicationPolicy: "pol"})
-	pv := testCSIPV("pv1", "c:p:v")
+	pv := testCSIPV("c:p:v")
 	pol := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: "default"},
 		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
@@ -337,7 +337,7 @@ func TestPVCWatcher_PolicyNotReady_Requeues(t *testing.T) {
 	}
 	r, _ := newPVCWatcherReconciler(t, pvc, pv, pol)
 
-	res, err := r.Reconcile(context.Background(), pvcRequest("default", "pvc1"))
+	res, err := r.Reconcile(context.Background(), pvcRequest("pvc1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

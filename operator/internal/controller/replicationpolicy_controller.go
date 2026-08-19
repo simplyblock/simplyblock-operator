@@ -26,10 +26,13 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -384,6 +387,17 @@ func (r *ReplicationPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.ReplicationPolicy{}).
 		Named("replicationpolicy").
-		Owns(&simplyblockv1alpha1.ReplicationPair{}).
+		Watches(&simplyblockv1alpha1.ReplicationPair{}, handler.EnqueueRequestsFromMapFunc(
+			func(ctx context.Context, obj client.Object) []reconcile.Request {
+				pair := obj.(*simplyblockv1alpha1.ReplicationPair)
+				if pair.Spec.PolicyRef == "" {
+					return nil
+				}
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+					Name:      pair.Spec.PolicyRef,
+					Namespace: obj.GetNamespace(),
+				}}}
+			},
+		)).
 		Complete(r)
 }

@@ -18,6 +18,11 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
+const (
+	apiPathReplicationTargets  = "/api/v2/replication-targets"
+	apiPathReplicationPolicies = "/api/v2/replication-policies"
+)
+
 // newPolicyReconciler creates a ReplicationPolicyReconciler backed by a fake client.
 // The spec.policyRef index is registered so MatchingFields queries work.
 func newPolicyReconciler(t *testing.T, objects ...client.Object) (*ReplicationPolicyReconciler, client.Client) {
@@ -34,14 +39,14 @@ func newPolicyReconciler(t *testing.T, objects ...client.Object) (*ReplicationPo
 	return &ReplicationPolicyReconciler{Client: cl, Scheme: scheme}, cl
 }
 
-func policyRequest(ns, name string) ctrl.Request {
-	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}}
+func policyRequest(name string) ctrl.Request {
+	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: name}}
 }
 
-func getPolicy(t *testing.T, cl client.Client, ns, name string) *simplyblockv1alpha1.ReplicationPolicy {
+func getPolicy(t *testing.T, cl client.Client, name string) *simplyblockv1alpha1.ReplicationPolicy {
 	t.Helper()
 	p := &simplyblockv1alpha1.ReplicationPolicy{}
-	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, p); err != nil {
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: name}, p); err != nil {
 		t.Fatalf("get ReplicationPolicy: %v", err)
 	}
 	return p
@@ -51,7 +56,7 @@ func getPolicy(t *testing.T, cl client.Client, ns, name string) *simplyblockv1al
 
 func TestPolicy_IgnoreNotFound(t *testing.T) {
 	r, _ := newPolicyReconciler(t)
-	res, err := r.Reconcile(context.Background(), policyRequest("default", "missing"))
+	res, err := r.Reconcile(context.Background(), policyRequest("missing"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -71,9 +76,9 @@ func TestPolicy_AddsFinalizer(t *testing.T) {
 	// No backend called — t.Setenv makes NewClient point somewhere unreachable;
 	// the reconciler returns after Update(finalizer) before any API call.
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
-	_, _ = r.Reconcile(context.Background(), policyRequest("default", "pol"))
+	_, _ = r.Reconcile(context.Background(), policyRequest("pol"))
 
-	got := getPolicy(t, cl, "default", "pol")
+	got := getPolicy(t, cl,"pol")
 	if !containsString(got.Finalizers, utils.FinalizerReplicationPolicy) {
 		t.Errorf("finalizer not added; finalizers = %v", got.Finalizers)
 	}
@@ -93,14 +98,14 @@ func TestPolicy_CreatesTargetWhenAbsent(t *testing.T) {
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		switch {
-		case req.Method == http.MethodGet && req.URL.Path == "/api/v2/replication-targets":
-			writeJSON(w, http.StatusOK, map[string]interface{}{"results": []interface{}{}})
-		case req.Method == http.MethodPost && req.URL.Path == "/api/v2/replication-targets":
-			writeJSON(w, http.StatusOK, map[string]string{"id": "tgt-uuid"})
-		case req.Method == http.MethodGet && req.URL.Path == "/api/v2/replication-policies":
-			writeJSON(w, http.StatusOK, map[string]interface{}{"results": []interface{}{}})
-		case req.Method == http.MethodPost && req.URL.Path == "/api/v2/replication-policies":
-			writeJSON(w, http.StatusOK, map[string]string{"id": "pol-uuid"})
+		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationTargets:
+			writeJSON(w,map[string]interface{}{"results": []interface{}{}})
+		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationTargets:
+			writeJSON(w,map[string]string{"id": "tgt-uuid"})
+		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
+			writeJSON(w,map[string]interface{}{"results": []interface{}{}})
+		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationPolicies:
+			writeJSON(w,map[string]string{"id": "pol-uuid"})
 		default:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("{}"))
@@ -108,12 +113,12 @@ func TestPolicy_CreatesTargetWhenAbsent(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	_, err := r.Reconcile(context.Background(), policyRequest("default", "pol"))
+	_, err := r.Reconcile(context.Background(), policyRequest("pol"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := getPolicy(t, cl, "default", "pol")
+	got := getPolicy(t, cl,"pol")
 	if got.Status.BackendTargetID != "tgt-uuid" {
 		t.Errorf("BackendTargetID = %q, want tgt-uuid", got.Status.BackendTargetID)
 	}
@@ -136,15 +141,15 @@ func TestPolicy_ReusesExistingTarget(t *testing.T) {
 	}
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		switch {
-		case req.Method == http.MethodGet && req.URL.Path == "/api/v2/replication-targets":
-			writeJSON(w, http.StatusOK, existingTargets)
-		case req.Method == http.MethodPost && req.URL.Path == "/api/v2/replication-targets":
+		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationTargets:
+			writeJSON(w,existingTargets)
+		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationTargets:
 			t.Error("POST replication-targets should not be called when target already exists")
 			w.WriteHeader(http.StatusInternalServerError)
-		case req.Method == http.MethodGet && req.URL.Path == "/api/v2/replication-policies":
-			writeJSON(w, http.StatusOK, map[string]interface{}{"results": []interface{}{}})
-		case req.Method == http.MethodPost && req.URL.Path == "/api/v2/replication-policies":
-			writeJSON(w, http.StatusOK, map[string]string{"id": "pol-uuid"})
+		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
+			writeJSON(w,map[string]interface{}{"results": []interface{}{}})
+		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationPolicies:
+			writeJSON(w,map[string]string{"id": "pol-uuid"})
 		default:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("{}"))
@@ -152,12 +157,12 @@ func TestPolicy_ReusesExistingTarget(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	_, err := r.Reconcile(context.Background(), policyRequest("default", "pol"))
+	_, err := r.Reconcile(context.Background(), policyRequest("pol"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := getPolicy(t, cl, "default", "pol")
+	got := getPolicy(t, cl,"pol")
 	if got.Status.BackendTargetID != "existing-tgt" {
 		t.Errorf("BackendTargetID = %q, want existing-tgt", got.Status.BackendTargetID)
 	}
@@ -183,12 +188,12 @@ func TestPolicy_MarksReadyAfterBothIDsPresent(t *testing.T) {
 	// No API calls expected — both IDs are already set.
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
-	_, err := r.Reconcile(context.Background(), policyRequest("default", "pol"))
+	_, err := r.Reconcile(context.Background(), policyRequest("pol"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := getPolicy(t, cl, "default", "pol")
+	got := getPolicy(t, cl,"pol")
 	if !got.Status.Ready {
 		t.Errorf("status.ready = false, want true")
 	}
@@ -219,7 +224,7 @@ func TestPolicy_DeletionBlockedWhilePairsExist(t *testing.T) {
 	}
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
-	res, err := r.Reconcile(context.Background(), policyRequest("default", "pol"))
+	res, err := r.Reconcile(context.Background(), policyRequest("pol"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -228,7 +233,7 @@ func TestPolicy_DeletionBlockedWhilePairsExist(t *testing.T) {
 	}
 
 	// Finalizer must NOT be removed while pair exists.
-	got := getPolicy(t, cl, "default", "pol")
+	got := getPolicy(t, cl,"pol")
 	if !containsString(got.Finalizers, utils.FinalizerReplicationPolicy) {
 		t.Errorf("finalizer was removed prematurely")
 	}
@@ -260,7 +265,7 @@ func TestPolicy_DeletionRemovesBackendAndFinalizer(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	_, err := r.Reconcile(context.Background(), policyRequest("default", "pol"))
+	_, err := r.Reconcile(context.Background(), policyRequest("pol"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -369,9 +374,9 @@ func TestParseDurationToMinutes(t *testing.T) {
 
 // ---------- helpers ----------
 
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(v)
 }
 

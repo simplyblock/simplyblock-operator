@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -34,22 +33,22 @@ func newPairReconciler(t *testing.T, objects ...client.Object) (*ReplicationPair
 	}, cl
 }
 
-func pairRequest(ns, name string) ctrl.Request {
-	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}}
+func pairRequest(name string) ctrl.Request {
+	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: name}}
 }
 
-func getPair(t *testing.T, cl client.Client, ns, name string) *simplyblockv1alpha1.ReplicationPair {
+func getPair(t *testing.T, cl client.Client, name string) *simplyblockv1alpha1.ReplicationPair {
 	t.Helper()
 	p := &simplyblockv1alpha1.ReplicationPair{}
-	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, p); err != nil {
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: name}, p); err != nil {
 		t.Fatalf("get ReplicationPair: %v", err)
 	}
 	return p
 }
 
-func readyPolicyWithIDs(name, ns string) *simplyblockv1alpha1.ReplicationPolicy {
+func readyPolicyWithIDs(ns string) *simplyblockv1alpha1.ReplicationPolicy {
 	return &simplyblockv1alpha1.ReplicationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: ns},
 		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
 		Status: simplyblockv1alpha1.ReplicationPolicyStatus{
 			Ready:           true,
@@ -59,10 +58,10 @@ func readyPolicyWithIDs(name, ns string) *simplyblockv1alpha1.ReplicationPolicy 
 	}
 }
 
-func newPair(name, ns, policyRef, volumeID string) *simplyblockv1alpha1.ReplicationPair {
+func newPair(ns, policyRef, volumeID string) *simplyblockv1alpha1.ReplicationPair {
 	return &simplyblockv1alpha1.ReplicationPair{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       name,
+			Name:       "pair1",
 			Namespace:  ns,
 			Finalizers: []string{utils.FinalizerReplicationPair},
 		},
@@ -74,24 +73,11 @@ func newPair(name, ns, policyRef, volumeID string) *simplyblockv1alpha1.Replicat
 	}
 }
 
-// replicationStatusJSON returns a JSON-encoded backend replication status.
-func replicationStatusJSON(state, direction, sourceLvol, targetLvol string, isSource bool) string {
-	rs := replVolumeReplicationStatus{
-		State:        state,
-		Direction:    direction,
-		SourceLvolID: sourceLvol,
-		TargetLvolID: targetLvol,
-		IsSource:     isSource,
-	}
-	b, _ := json.Marshal(rs)
-	return string(b)
-}
-
 // ---------- ignore not-found ----------
 
 func TestPair_IgnoreNotFound(t *testing.T) {
 	r, _ := newPairReconciler(t)
-	res, err := r.Reconcile(context.Background(), pairRequest("default", "missing"))
+	res, err := r.Reconcile(context.Background(), pairRequest("missing"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -103,7 +89,7 @@ func TestPair_IgnoreNotFound(t *testing.T) {
 // ---------- finalizer ----------
 
 func TestPair_AddsFinalizer(t *testing.T) {
-	pol := readyPolicyWithIDs("pol", "default")
+	pol := readyPolicyWithIDs("default")
 	pair := &simplyblockv1alpha1.ReplicationPair{
 		ObjectMeta: metav1.ObjectMeta{Name: "pair1", Namespace: "default"},
 		Spec: simplyblockv1alpha1.ReplicationPairSpec{
@@ -116,9 +102,9 @@ func TestPair_AddsFinalizer(t *testing.T) {
 	}
 	// The reconciler will add the finalizer then return (before hitting the API).
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
-	_, _ = r.Reconcile(context.Background(), pairRequest("default", "pair1"))
+	_, _ = r.Reconcile(context.Background(), pairRequest("pair1"))
 
-	got := getPair(t, cl, "default", "pair1")
+	got := getPair(t, cl,"pair1")
 	if !containsString(got.Finalizers, utils.FinalizerReplicationPair) {
 		t.Errorf("finalizer not added; finalizers = %v", got.Finalizers)
 	}
@@ -127,18 +113,18 @@ func TestPair_AddsFinalizer(t *testing.T) {
 // ---------- policy not found → error state ----------
 
 func TestPair_PolicyNotFound_SetsError(t *testing.T) {
-	pair := newPair("pair1", "default", "pol", "c:p:v")
+	pair := newPair("default", "pol", "c:p:v")
 	r, cl := newPairReconciler(t, pair)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
-	res, err := r.Reconcile(context.Background(), pairRequest("default", "pair1"))
+	res, err := r.Reconcile(context.Background(), pairRequest("pair1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.RequeueAfter != replPairRequeueError {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueError)
 	}
-	got := getPair(t, cl, "default", "pair1")
+	got := getPair(t, cl,"pair1")
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateError) {
 		t.Errorf("state = %q, want error", got.Status.State)
 	}
@@ -152,14 +138,14 @@ func TestPair_PolicyNotReady_Waits(t *testing.T) {
 		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
 		Status:     simplyblockv1alpha1.ReplicationPolicyStatus{Ready: false},
 	}
-	pair := newPair("pair1", "default", "pol", "c:p:v")
+	pair := newPair("default", "pol", "c:p:v")
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
 		t.Fatalf("pre-set policy status: %v", err)
 	}
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
-	res, err := r.Reconcile(context.Background(), pairRequest("default", "pair1"))
+	res, err := r.Reconcile(context.Background(), pairRequest("pair1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -171,22 +157,22 @@ func TestPair_PolicyNotReady_Waits(t *testing.T) {
 // ---------- invalid volume handle → error state ----------
 
 func TestPair_InvalidVolumeHandle_SetsError(t *testing.T) {
-	pol := readyPolicyWithIDs("pol", "default")
-	pair := newPair("pair1", "default", "pol", "bad-handle")
+	pol := readyPolicyWithIDs("default")
+	pair := newPair("default", "pol", "bad-handle")
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
 		t.Fatalf("pre-set policy status: %v", err)
 	}
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
-	res, err := r.Reconcile(context.Background(), pairRequest("default", "pair1"))
+	res, err := r.Reconcile(context.Background(), pairRequest("pair1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.RequeueAfter != replPairRequeueError {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueError)
 	}
-	got := getPair(t, cl, "default", "pair1")
+	got := getPair(t, cl,"pair1")
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateError) {
 		t.Errorf("state = %q, want error", got.Status.State)
 	}
@@ -195,8 +181,8 @@ func TestPair_InvalidVolumeHandle_SetsError(t *testing.T) {
 // ---------- attach success → state = attaching ----------
 
 func TestPair_Attach_Success(t *testing.T) {
-	pol := readyPolicyWithIDs("pol", "default")
-	pair := newPair("pair1", "default", "pol", "cluster-u:pool-u:vol-u")
+	pol := readyPolicyWithIDs("default")
+	pair := newPair("default", "pol", "cluster-u:pool-u:vol-u")
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
 		t.Fatalf("pre-set policy status: %v", err)
@@ -212,14 +198,14 @@ func TestPair_Attach_Success(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	res, err := r.Reconcile(context.Background(), pairRequest("default", "pair1"))
+	res, err := r.Reconcile(context.Background(), pairRequest("pair1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.RequeueAfter != replPairRequeueAttaching {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueAttaching)
 	}
-	got := getPair(t, cl, "default", "pair1")
+	got := getPair(t, cl,"pair1")
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateAttaching) {
 		t.Errorf("state = %q, want attaching", got.Status.State)
 	}
@@ -228,8 +214,8 @@ func TestPair_Attach_Success(t *testing.T) {
 // ---------- attach backend error → error state ----------
 
 func TestPair_Attach_BackendError(t *testing.T) {
-	pol := readyPolicyWithIDs("pol", "default")
-	pair := newPair("pair1", "default", "pol", "cluster-u:pool-u:vol-u")
+	pol := readyPolicyWithIDs("default")
+	pair := newPair("default", "pol", "cluster-u:pool-u:vol-u")
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
 		t.Fatalf("pre-set policy status: %v", err)
@@ -241,11 +227,11 @@ func TestPair_Attach_BackendError(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	_, err := r.Reconcile(context.Background(), pairRequest("default", "pair1"))
+	_, err := r.Reconcile(context.Background(), pairRequest("pair1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got := getPair(t, cl, "default", "pair1")
+	got := getPair(t, cl,"pair1")
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateError) {
 		t.Errorf("state = %q, want error", got.Status.State)
 	}
@@ -254,8 +240,8 @@ func TestPair_Attach_BackendError(t *testing.T) {
 // ---------- poll attach: not yet replicating → stays attaching ----------
 
 func TestPair_PollAttach_WaitsIfNotReplicating(t *testing.T) {
-	pol := readyPolicyWithIDs("pol", "default")
-	pair := newPair("pair1", "default", "pol", "cluster-u:pool-u:vol-u")
+	pol := readyPolicyWithIDs("default")
+	pair := newPair("default", "pol", "cluster-u:pool-u:vol-u")
 	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateAttaching)
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
@@ -267,18 +253,18 @@ func TestPair_PollAttach_WaitsIfNotReplicating(t *testing.T) {
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		// Backend still in "attaching" state.
-		writeJSON(w, http.StatusOK, replVolumeReplicationStatus{State: "attaching"})
+		writeJSON(w,replVolumeReplicationStatus{State: "attaching"})
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	res, err := r.Reconcile(context.Background(), pairRequest("default", "pair1"))
+	res, err := r.Reconcile(context.Background(), pairRequest("pair1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.RequeueAfter != replPairRequeueAttaching {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueAttaching)
 	}
-	got := getPair(t, cl, "default", "pair1")
+	got := getPair(t, cl,"pair1")
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateAttaching) {
 		t.Errorf("state = %q, want still attaching", got.Status.State)
 	}
@@ -287,8 +273,8 @@ func TestPair_PollAttach_WaitsIfNotReplicating(t *testing.T) {
 // ---------- poll attach: backend reaches replicating → advances ----------
 
 func TestPair_PollAttach_AdvancesToReplicating(t *testing.T) {
-	pol := readyPolicyWithIDs("pol", "default")
-	pair := newPair("pair1", "default", "pol", "cluster-u:pool-u:vol-u")
+	pol := readyPolicyWithIDs("default")
+	pair := newPair("default", "pol", "cluster-u:pool-u:vol-u")
 	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateAttaching)
 	r, cl := newPairReconciler(t, pol, pair)
 	if err := cl.Status().Update(context.Background(), pol); err != nil {
@@ -299,7 +285,7 @@ func TestPair_PollAttach_AdvancesToReplicating(t *testing.T) {
 	}
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, replVolumeReplicationStatus{
+		writeJSON(w,replVolumeReplicationStatus{
 			State:        utils.ReplicationBackendStateReplicating,
 			SourceLvolID: "src-lvol",
 			TargetLvolID: "tgt-lvol",
@@ -308,14 +294,14 @@ func TestPair_PollAttach_AdvancesToReplicating(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	res, err := r.Reconcile(context.Background(), pairRequest("default", "pair1"))
+	res, err := r.Reconcile(context.Background(), pairRequest("pair1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.RequeueAfter != replPairRequeueReplicating {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueReplicating)
 	}
-	got := getPair(t, cl, "default", "pair1")
+	got := getPair(t, cl,"pair1")
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateReplicating) {
 		t.Errorf("state = %q, want replicating", got.Status.State)
 	}
@@ -352,7 +338,7 @@ func TestPair_Detach_Success(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	_, err := r.Reconcile(context.Background(), pairRequest("default", "pair1"))
+	_, err := r.Reconcile(context.Background(), pairRequest("pair1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -387,7 +373,7 @@ func TestPair_Detach_NotFound_Succeeds(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	_, err := r.Reconcile(context.Background(), pairRequest("default", "pair1"))
+	_, err := r.Reconcile(context.Background(), pairRequest("pair1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -420,7 +406,7 @@ func TestPair_Detach_Conflict_Waits(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	res, err := r.Reconcile(context.Background(), pairRequest("default", "pair1"))
+	res, err := r.Reconcile(context.Background(), pairRequest("pair1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -429,7 +415,7 @@ func TestPair_Detach_Conflict_Waits(t *testing.T) {
 	}
 
 	// Finalizer must still be present.
-	got := getPair(t, cl, "default", "pair1")
+	got := getPair(t, cl,"pair1")
 	if !containsString(got.Finalizers, utils.FinalizerReplicationPair) {
 		t.Errorf("finalizer was removed on 409 conflict")
 	}
