@@ -210,9 +210,9 @@ func (r *ReplicationPairReconciler) reconcilePollAttach(
 		return ctrl.Result{RequeueAfter: replPairRequeueAttaching}, nil
 	}
 
-	direction := "source"
+	direction := string(simplyblockv1alpha1.ReplicationPairDirectionSource)
 	if !status.IsSource {
-		direction = "target"
+		direction = string(simplyblockv1alpha1.ReplicationPairDirectionTarget)
 	}
 
 	now := metav1.Now()
@@ -271,7 +271,7 @@ func (r *ReplicationPairReconciler) reconcileReplicating(
 		changed = true
 	case "failed_over":
 		pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateFailedOver)
-		pair.Status.Direction = "target"
+		pair.Status.Direction = string(simplyblockv1alpha1.ReplicationPairDirectionTarget)
 		pair.Status.TargetNQN = status.TargetNQN
 		pair.Status.Message = "Failed over to target cluster"
 		changed = true
@@ -321,9 +321,9 @@ func (r *ReplicationPairReconciler) reconcileSyncStatus(
 	// If the backend moved back to replicating (e.g. after failback), follow it.
 	if status.State == utils.ReplicationBackendStateReplicating {
 		pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateReplicating)
-		direction := "source"
+		direction := string(simplyblockv1alpha1.ReplicationPairDirectionSource)
 		if !status.IsSource {
-			direction = "target"
+			direction = string(simplyblockv1alpha1.ReplicationPairDirectionTarget)
 		}
 		pair.Status.Direction = direction
 		pair.Status.Message = "Replicating"
