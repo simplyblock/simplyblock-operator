@@ -39,8 +39,20 @@ type CLIConnector struct {
 
 	// run executes nvme-cli. A field so tests can observe the command line
 	// without a binary present.
-	run func(ctx context.Context, args ...string) ([]byte, error)
+	run CommandRunner
 }
+
+// CommandRunner executes nvme-cli with args and returns its combined output,
+// which is where nvme-cli puts the reason for a failure. The error is the
+// process's, so a non-zero exit must come back as one: connect reads both, and
+// tells "already connected" from a real failure by the output alone.
+//
+// It exists so a caller can wrap the invocation without reimplementing any of
+// the path handling around it. The case it was added for is privilege: an image
+// that runs nvme-cli as a non-root user — as a Red Hat certified image must —
+// reaches the fabric through a setuid helper, and which helper that is, is the
+// image's business rather than this package's.
+type CommandRunner func(ctx context.Context, args ...string) ([]byte, error)
 
 var _ Connector = (*CLIConnector)(nil)
 
@@ -59,10 +71,36 @@ const cliTimeout = 40 * time.Second
 //
 // The options are FabricsConnector's, and mean the same here.
 func NewCLIConnector(subs nvme.SubsystemResolver, opts ...Option) *CLIConnector {
-	c := &CLIConnector{connector: newConnector(subs, opts...), run: runCommand}
+	return NewCLIConnectorWithRunner(subs, runCommand, opts...)
+}
+
+// NewCLIConnectorWithRunner is NewCLIConnector with the nvme-cli invocation
+// supplied by the caller, for an image that cannot exec the binary directly —
+// see CommandRunner. A nil runner means the plain one NewCLIConnector uses.
+func NewCLIConnectorWithRunner(
+	subs nvme.SubsystemResolver,
+	run CommandRunner,
+	opts ...Option,
+) *CLIConnector {
+	if run == nil {
+		run = runCommand
+	}
+	c := &CLIConnector{connector: newConnector(subs, opts...), run: run}
 	c.attach = c.connect
 	c.deleteCtrl = c.disconnectController
 	return c
+}
+
+// SudoRunner runs nvme-cli through sudo, for an image whose process is not root
+// and reaches the fabric through a sudoers rule for the nvme binary.
+//
+// The privilege is needed even in a privileged container: the capabilities a
+// privileged container grants are dropped when the entrypoint runs as an
+// unprivileged uid, so writing /dev/nvme-fabrics fails on permissions with
+// nothing in the container's configuration to suggest why.
+func SudoRunner(ctx context.Context, args ...string) ([]byte, error) {
+	//nolint:gosec // fixed binaries, structured args
+	return exec.CommandContext(ctx, "sudo", append([]string{"nvme"}, args...)...).CombinedOutput()
 }
 
 // connect establishes one path with `nvme connect`.

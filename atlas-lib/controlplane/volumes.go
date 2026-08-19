@@ -227,9 +227,15 @@ func (p CreateVolumeParams) toUnderscore(size int) cpapi.UnderscoreCreateParams 
 	if p.Namespaced {
 		u.Namespaced = ptr.To(true)
 	}
+	// Always sent, unlike the other optional fields: the CSI driver sends an
+	// explicit 1 for a StorageClass that omits max_namespace_per_subsys, so
+	// omitting it here would make identical inputs depend on the control plane's
+	// own default and could silently produce a shared subsystem.
+	maxNS := 1
 	if p.MaxNamespacePerSubsys > 0 {
-		u.MaxNamespacePerSubsys = ptr.To(p.MaxNamespacePerSubsys)
+		maxNS = p.MaxNamespacePerSubsys
 	}
+	u.MaxNamespacePerSubsys = ptr.To(maxNS)
 	if p.NDCS > 0 {
 		u.Ndcs = ptr.To(p.NDCS)
 	}
