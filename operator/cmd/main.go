@@ -416,6 +416,36 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNodeLatency")
 		os.Exit(1)
 	}
+	if err := (&controller.ReplicationPolicyReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPolicy")
+		os.Exit(1)
+	}
+	if err := (&controller.PVCAnnotationWatcher{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PVCAnnotationWatcher")
+		os.Exit(1)
+	}
+	if err := (&controller.ReplicationPairReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("replicationpair-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPair")
+		os.Exit(1)
+	}
+	if err := (&controller.ReplicationOpsReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("replicationops-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ReplicationOps")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	// Provision the mutating-webhook serving certificate at runtime (self-signed

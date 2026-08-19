@@ -6,6 +6,12 @@ const (
 	FinalizerStorageNodeSet    = "storage.simplyblock.io/storagenodeset-finalizer"
 	FinalizerStorageCluster    = "storage.simplyblock.io/cluster-finalizer"
 	FinalizerStorageClusterOps = "storage.simplyblock.io/storageclusterops-finalizer"
+	FinalizerReplicationPolicy = "storage.simplyblock.io/replicationpolicy-finalizer"
+	FinalizerReplicationPair   = "storage.simplyblock.io/replicationpair-finalizer"
+
+	// AnnotationReplicationPolicy is the annotation key on StorageClass or PVC that
+	// opts volumes into a named ReplicationPolicy CR.
+	AnnotationReplicationPolicy = "replication.simplyblock.io/policy"
 
 	ClusterActionActivate           = "activate"
 	ClusterActionExpand             = "expand"

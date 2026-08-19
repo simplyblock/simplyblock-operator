@@ -191,6 +191,9 @@ rules:
   - backuppolicies
   - backuprestores
   - controlplanes
+  - replicationops
+  - replicationpairs
+  - replicationpolicies
   - storagebackups
   - storageclusterops
   - storageclusters
@@ -214,6 +217,9 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
+  - replicationops/finalizers
+  - replicationpairs/finalizers
+  - replicationpolicies/finalizers
   - storagebackups/finalizers
   - storageclusterops/finalizers
   - storageclusters/finalizers
@@ -232,6 +238,9 @@ rules:
   - backuppolicies/status
   - backuprestores/status
   - controlplanes/status
+  - replicationops/status
+  - replicationpairs/status
+  - replicationpolicies/status
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status
