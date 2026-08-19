@@ -119,4 +119,9 @@ type StorageNodeSetAddParams struct {
 	FailureDomain int `json:"failure_domain,omitempty"`
 	// Expand signals that this node is being added to expand an already-active cluster.
 	Expand bool `json:"expand,omitempty"`
+	// ForceFormat wipes partition tables/filesystem signatures from lblk devices that
+	// carry partitions at add-node time. Configure-time eligibility (node_configure.py
+	// --force-format) only marks the device selectable; this flag triggers the actual
+	// destructive wipe server-side.
+	ForceFormat bool `json:"force_format,omitempty"`
 }

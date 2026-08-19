@@ -389,6 +389,7 @@ func (r *StorageNodeReconciler) provisionNode(
 		SpdkSystemMemory: eff.SpdkSystemMemory,
 		FailureDomain:    effectiveFailureDomain(sn, sns),
 		Expand:           ptr.BoolFromOrFalse(eff.Expand),
+		ForceFormat:      ptr.BoolFromOrFalse(eff.BlkForceFormat),
 	}
 
 	// Re-read the in-flight count immediately before the POST to narrow the
@@ -664,6 +665,7 @@ func effectiveNodeConfig(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1
 		ReservedSystemCPU:  sns.Spec.ReservedSystemCPU,
 		UbuntuHost:         sns.Spec.UbuntuHost,
 		Expand:             sns.Spec.Expand,
+		BlkForceFormat:     sns.Spec.BlkForceFormat,
 	}
 	if sn.Spec.Overrides == nil {
 		return eff
@@ -710,6 +712,9 @@ func effectiveNodeConfig(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1
 	}
 	if o.Expand != nil {
 		eff.Expand = o.Expand
+	}
+	if o.BlkForceFormat != nil {
+		eff.BlkForceFormat = o.BlkForceFormat
 	}
 	return eff
 }

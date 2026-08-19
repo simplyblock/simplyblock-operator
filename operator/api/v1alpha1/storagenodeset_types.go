@@ -139,6 +139,14 @@ type StorageNodeSetSpec struct {
 	// whole disk. Ignored for whole-disk selections. Backend default is 3 when unset.
 	// +optional
 	LblkJournalPercent *int32 `json:"lblkJournalPercent,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Lblk Force Format"
+	// BlkForceFormat wipes partition tables and filesystem signatures (wipefs) from
+	// configured block devices that carry partitions, making them eligible as whole-disk
+	// lblk devices. Without this, a partitioned disk named in BlkNames/BlkSerials is
+	// rejected as ineligible. Destructive — only set this when reusing a disk that
+	// previously had partitions and whose data is no longer needed.
+	// +optional
+	BlkForceFormat *bool `json:"blkForceFormat,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Ubuntu Host"
 	// UbuntuHost indicates the node host OS is Ubuntu.
 	UbuntuHost *bool `json:"ubuntuHost,omitempty"`

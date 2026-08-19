@@ -93,6 +93,11 @@ type StorageNodeOverrides struct {
 	// +optional
 	LblkJournalPercent *int32 `json:"lblkJournalPercent,omitempty"`
 
+	// BlkForceFormat overrides whether partitioned lblk devices are force-wiped
+	// (wipefs) to become eligible whole-disk devices on this node.
+	// +optional
+	BlkForceFormat *bool `json:"blkForceFormat,omitempty"`
+
 	// EnableCpuTopology overrides topology-aware CPU handling for this node.
 	// +optional
 	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`

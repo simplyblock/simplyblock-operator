@@ -82,6 +82,7 @@ ARGS="--max-lvol=${MAX_SUBSYS_COUNT:-0}"
 [ -n "${BLK_NAMES_EXCLUDE}" ] && ARGS="${ARGS} --blk-names-exclude=\"${BLK_NAMES_EXCLUDE}\""
 [ -n "${BLK_SERIALS}" ] && ARGS="${ARGS} --blk-serials=\"${BLK_SERIALS}\""
 [ -n "${LBLK_JM_PERCENT}" ] && ARGS="${ARGS} --jm-percent=\"${LBLK_JM_PERCENT}\""
+[ "${LBLK_FORCE_FORMAT}" = "true" ] && ARGS="${ARGS} --force-format"
 ARGS="${ARGS}` + fleetArgs + `"
 eval sudo -E python3 simplyblock_web/node_configure.py ${ARGS}
 `
