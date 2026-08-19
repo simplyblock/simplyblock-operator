@@ -1943,6 +1943,11 @@ func (in *StorageNodeOverrides) DeepCopyInto(out *StorageNodeOverrides) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.BlkForceFormat != nil {
+		in, out := &in.BlkForceFormat, &out.BlkForceFormat
+		*out = new(bool)
+		**out = **in
+	}
 	if in.EnableCpuTopology != nil {
 		in, out := &in.EnableCpuTopology, &out.EnableCpuTopology
 		*out = new(bool)
@@ -2170,6 +2175,11 @@ func (in *StorageNodeSetSpec) DeepCopyInto(out *StorageNodeSetSpec) {
 	if in.LblkJournalPercent != nil {
 		in, out := &in.LblkJournalPercent, &out.LblkJournalPercent
 		*out = new(int32)
+		**out = **in
+	}
+	if in.BlkForceFormat != nil {
+		in, out := &in.BlkForceFormat, &out.BlkForceFormat
+		*out = new(bool)
 		**out = **in
 	}
 	if in.UbuntuHost != nil {

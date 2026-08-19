@@ -83,6 +83,11 @@ spec:
                   Overrides holds per-node configuration propagated from
                   StorageNodeSet.spec.nodeConfigs[workerNode] on every reconcile.
                 properties:
+                  blkForceFormat:
+                    description: |-
+                      BlkForceFormat overrides whether partitioned lblk devices are force-wiped
+                      (wipefs) to become eligible whole-disk devices on this node.
+                    type: boolean
                   blkNames:
                     description: BlkNames overrides the block-device kernel-name selector
                       for this node.

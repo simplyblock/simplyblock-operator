@@ -210,6 +210,7 @@ func buildPerNodeEnvFile(
 		BlkNamesExclude:    sns.Spec.BlkNamesExclude,
 		BlkSerials:         sns.Spec.BlkSerials,
 		LblkJournalPercent: sns.Spec.LblkJournalPercent,
+		BlkForceFormat:     sns.Spec.BlkForceFormat,
 	}
 
 	// Apply per-node overrides if present.
@@ -256,6 +257,9 @@ func buildPerNodeEnvFile(
 		if o.LblkJournalPercent != nil {
 			eff.LblkJournalPercent = o.LblkJournalPercent
 		}
+		if o.BlkForceFormat != nil {
+			eff.BlkForceFormat = o.BlkForceFormat
+		}
 	}
 
 	var b strings.Builder
@@ -280,5 +284,6 @@ func buildPerNodeEnvFile(
 	fmt.Fprintf(&b, "BLK_NAMES_EXCLUDE=%s\n", utils.ShellQuote(strings.Join(eff.BlkNamesExclude, ",")))
 	fmt.Fprintf(&b, "BLK_SERIALS=%s\n", utils.ShellQuote(strings.Join(eff.BlkSerials, ",")))
 	fmt.Fprintf(&b, "LBLK_JM_PERCENT=%s\n", ptr.StringOrDefault(eff.LblkJournalPercent, ""))
+	fmt.Fprintf(&b, "LBLK_FORCE_FORMAT=%t\n", ptr.BoolFromOrFalse(eff.BlkForceFormat))
 	return b.String()
 }

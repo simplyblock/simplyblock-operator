@@ -2659,6 +2659,11 @@ spec:
                   Overrides holds per-node configuration propagated from
                   StorageNodeSet.spec.nodeConfigs[workerNode] on every reconcile.
                 properties:
+                  blkForceFormat:
+                    description: |-
+                      BlkForceFormat overrides whether partitioned lblk devices are force-wiped
+                      (wipefs) to become eligible whole-disk devices on this node.
+                    type: boolean
                   blkNames:
                     description: BlkNames overrides the block-device kernel-name selector
                       for this node.
@@ -2996,6 +3001,14 @@ spec:
           spec:
             description: spec defines the desired state of StorageNodeSet
             properties:
+              blkForceFormat:
+                description: |-
+                  BlkForceFormat wipes partition tables and filesystem signatures (wipefs) from
+                  configured block devices that carry partitions, making them eligible as whole-disk
+                  lblk devices. Without this, a partitioned disk named in BlkNames/BlkSerials is
+                  rejected as ineligible. Destructive — only set this when reusing a disk that
+                  previously had partitions and whose data is no longer needed.
+                type: boolean
               blkNames:
                 description: |-
                   BlkNames selects block devices by kernel name (e.g. "sdb","sdc") when EnableLblk is
@@ -3264,6 +3277,11 @@ spec:
                     of StorageNodeSetSpec. When a field is set here it takes precedence over the
                     fleet default; when omitted the fleet default applies.
                   properties:
+                    blkForceFormat:
+                      description: |-
+                        BlkForceFormat overrides whether partitioned lblk devices are force-wiped
+                        (wipefs) to become eligible whole-disk devices on this node.
+                      type: boolean
                     blkNames:
                       description: BlkNames overrides the block-device kernel-name
                         selector for this node.
