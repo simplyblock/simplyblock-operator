@@ -259,19 +259,19 @@ func replicationPairName(policyName, pvcName string) string {
 	return fmt.Sprintf("%s-%s", policyName, pvcName)
 }
 
-// replicationAnnotationChanged is a predicate that wakes the controller only when
-// the replication policy annotation is added, changed, or removed on a PVC.
+// replicationAnnotationChanged is a predicate for PVC events.
+// CreateFunc always returns true: the PVC may use a StorageClass that carries
+// the replication annotation, which cannot be checked here without a client.
+// The reconciler handles the no-policy case cheaply with an early return.
+// UpdateFunc fires only when the PVC-level annotation changes.
 var replicationAnnotationChanged = predicate.Funcs{
-	CreateFunc: func(e event.CreateEvent) bool {
-		_, ok := e.Object.GetAnnotations()[utils.AnnotationReplicationPolicy]
-		return ok
-	},
+	CreateFunc:  func(event.CreateEvent) bool { return true },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
 	UpdateFunc: func(e event.UpdateEvent) bool {
 		return e.ObjectOld.GetAnnotations()[utils.AnnotationReplicationPolicy] !=
 			e.ObjectNew.GetAnnotations()[utils.AnnotationReplicationPolicy]
 	},
-	DeleteFunc:  func(event.DeleteEvent) bool { return false },
-	GenericFunc: func(event.GenericEvent) bool { return false },
 }
 
 // storageClassAnnotationChanged is a predicate for StorageClass events that filters

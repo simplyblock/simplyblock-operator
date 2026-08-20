@@ -149,7 +149,10 @@ func (r *ReplicationPairReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 }
 
-// reconcileAttach sends PUT /{vol} with replication_policy_id and transitions to attaching.
+// reconcileAttach sends PUT /{vol} with replication_policy_id.
+// The sbcli PUT is synchronous — attach_policy/replication_start complete before the response
+// returns — so a successful 2xx means replication is active and we can transition directly to
+// replicating without a polling phase.
 func (r *ReplicationPairReconciler) reconcileAttach(
 	ctx context.Context,
 	pair *simplyblockv1alpha1.ReplicationPair,
@@ -173,60 +176,40 @@ func (r *ReplicationPairReconciler) reconcileAttach(
 		return r.setError(ctx, pair, fmt.Sprintf("attach failed: %v", err))
 	}
 
-	r.Recorder.Eventf(pair, nil, corev1.EventTypeNormal, "Attaching", "Attaching",
-		"Attaching volume %s to replication policy %s", volumeID, pair.Spec.PolicyRef)
-
-	patch := client.MergeFrom(pair.DeepCopy())
-	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateAttaching)
-	pair.Status.Message = "replication_policy_id set; waiting for backend confirmation"
-	if err := r.Status().Patch(ctx, pair, patch); err != nil {
-		return ctrl.Result{Requeue: true}, nil
-	}
-	return ctrl.Result{RequeueAfter: replPairRequeueAttaching}, nil
-}
-
-// reconcilePollAttach polls GET /{vol}/replication and advances to replicating when ready.
-func (r *ReplicationPairReconciler) reconcilePollAttach(
-	ctx context.Context,
-	pair *simplyblockv1alpha1.ReplicationPair,
-	apiClient *webapi.Client,
-	clusterID, poolID, volumeID string,
-) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
-	status, err := r.fetchReplicationStatus(ctx, apiClient, clusterID, poolID, volumeID)
-	if err != nil {
-		log.Error(err, "poll GET replication failed; retrying", "pair", pair.Name)
-		return ctrl.Result{RequeueAfter: replPairRequeueAttaching}, nil
-	}
-	if status == nil {
-		// Backend has no replication relationship yet — keep waiting.
-		return ctrl.Result{RequeueAfter: replPairRequeueAttaching}, nil
-	}
-
-	if status.State != utils.ReplicationBackendStateReplicating {
-		log.Info("Waiting for replication to reach replicating state",
-			"pair", pair.Name, "backendState", status.State)
-		return ctrl.Result{RequeueAfter: replPairRequeueAttaching}, nil
-	}
-
-	direction := string(simplyblockv1alpha1.ReplicationPairDirectionSource)
-	if !status.IsSource {
-		direction = string(simplyblockv1alpha1.ReplicationPairDirectionTarget)
-	}
-
 	now := metav1.Now()
 	patch := client.MergeFrom(pair.DeepCopy())
 	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateReplicating)
-	pair.Status.Direction = direction
-	pair.Status.SourceLvolID = status.SourceLvolID
-	pair.Status.TargetLvolID = status.TargetLvolID
+	pair.Status.Direction = string(simplyblockv1alpha1.ReplicationPairDirectionSource)
 	pair.Status.Message = "Replicating"
 	pair.Status.LastReplicatedAt = &now
 	if err := r.Status().Patch(ctx, pair, patch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
 
+	r.Recorder.Eventf(pair, nil, corev1.EventTypeNormal, "Replicating", "Replicating",
+		"Volume %s is now replicating to policy %s", volumeID, pair.Spec.PolicyRef)
+	return ctrl.Result{RequeueAfter: replPairRequeueReplicating}, nil
+}
+
+// reconcilePollAttach handles pairs that are still in the legacy "attaching" state.
+// The LVolReplication object only exists on the backend after cutover/failover, so polling
+// GET .../replication in this phase would always return 404. Transition immediately to
+// replicating — the PUT that set replication_policy_id already completed synchronously.
+func (r *ReplicationPairReconciler) reconcilePollAttach(
+	ctx context.Context,
+	pair *simplyblockv1alpha1.ReplicationPair,
+	apiClient *webapi.Client,
+	clusterID, poolID, volumeID string,
+) (ctrl.Result, error) {
+	now := metav1.Now()
+	patch := client.MergeFrom(pair.DeepCopy())
+	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateReplicating)
+	pair.Status.Direction = string(simplyblockv1alpha1.ReplicationPairDirectionSource)
+	pair.Status.Message = "Replicating"
+	pair.Status.LastReplicatedAt = &now
+	if err := r.Status().Patch(ctx, pair, patch); err != nil {
+		return ctrl.Result{Requeue: true}, nil
+	}
 	r.Recorder.Eventf(pair, nil, corev1.EventTypeNormal, "Replicating", "Replicating",
 		"Volume %s is now replicating to policy %s", volumeID, pair.Spec.PolicyRef)
 	return ctrl.Result{RequeueAfter: replPairRequeueReplicating}, nil
@@ -248,8 +231,9 @@ func (r *ReplicationPairReconciler) reconcileReplicating(
 		return ctrl.Result{RequeueAfter: replPairRequeueReplicating}, nil
 	}
 	if status == nil {
-		// Replication relationship gone on the backend unexpectedly.
-		return r.setError(ctx, pair, "replication relationship no longer exists on backend")
+		// The LVolReplication object only exists after a cutover or failover — during normal
+		// replication the backend returns 404. This is expected; keep polling.
+		return ctrl.Result{RequeueAfter: replPairRequeueReplicating}, nil
 	}
 
 	patch := client.MergeFrom(pair.DeepCopy())
