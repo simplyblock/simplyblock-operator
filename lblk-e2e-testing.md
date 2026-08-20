@@ -96,8 +96,12 @@ Tested on: `config-israel` (real local NVMe disks used as lblk block devices) an
 - ⚠️ Kernel renames a device across reboot (sdb→sdc) → **gap found, see below** —
   discovered as a side effect of the device-disappears test's recovery step
 - ⬜ Hung IO on an AIO device (stalled backing store) → watchdog trips, node auto-restarts
-- ⬜ SPDK process crash/zombie mid add-node → cleanup + retry succeeds, no hugepage squat
-- ⬜ add-node retry leaves JM-mesh holes → fresh activation blocks, recovery still proceeds
+- ⚠️ SPDK process crash/zombie mid add-node → **gap found, see below** — actual
+  behavior is the opposite of the expected "cleanup + retry succeeds": no automatic
+  cleanup, no retry, and no CLI-level recovery path at all
+- ⚠️ add-node retry leaves JM-mesh holes → **gap found, see below** — a stale
+  `failed` remote-device bdev pointing at a fully-deleted node/device survived on
+  all 3 surviving nodes indefinitely
 - ⚠️ Journal device (or journal partition) fails → **gap found, see below** — unlike a
   storage-device failure, a JM-device failure is NOT proactively detected
 - 🟡 Adding an NVMe-selected node to an lblk-mode cluster, or vice versa → rejected —
@@ -189,6 +193,78 @@ not just "is it literally NVMe":
   create) rather than steady-state writes
 
 ## Bugs/gaps found along the way (not on the original checklist)
+
+- **Real gap, not yet fixed**: repeated add/remove/delete cycling of a node leaves
+  permanent **JM-mesh holes** — stale `remote_alceml_*` bdev references on every
+  *other* node in the cluster, pointing at a node/device that no longer exists
+  anywhere in the DB. Noticed while cleaning up after the SPDK-crash test above,
+  which involved several add→remove→delete cycles of the same GCP VM
+  (`manohar-lblk-atomicity-storage-node-4`) as it got fresh UUIDs each time. Checking
+  `sn list-devices` on all 3 *original, untouched* nodes afterward, every one of them
+  still carries a `Remote Devices` row for `fcbd8145-4be1-4f69-9d20-7d63efb334e5`
+  (`Node ID: f2e28ca2-...`, `Status: failed`) — a node/device pair from a fully
+  completed, clean removal 2 cycles earlier. Directly confirmed both are gone from
+  the DB entirely (`get_storage_node_by_id`/`get_storage_device_by_id` both raise
+  "not found"), yet the bdev reference itself was never torn down on the peers.
+  Functionally inert right now (`status: failed`, not participating in I/O), but it's
+  a permanent, unbounded leak: every node-replace cycle over a cluster's lifetime
+  adds one more dead entry that node removal never cleans up on the *other* nodes,
+  and it pollutes `sn list-devices` output making it harder to tell real device
+  failures from historical debris.
+  - Fix direction: node/device removal should also issue `bdev_alceml_delete` (or
+    the remote-bdev equivalent) for the removed node's devices on every *other* live
+    node in the cluster, not just tear down the removed node's own local stack.
+    Flagging for the backend (`sbcli`) team — this is core node-removal cleanup
+    logic.
+  - Cleanup: left in place for now since it's inert and this file documents it; a
+    maintainer can decide whether to write a one-off cleanup RPC or just accept it
+    as cosmetic debris until the fix lands.
+
+- **Real gap, not yet fixed**: killing the SPDK process (`bdts`) mid add-node leaves
+  the node **permanently stuck with no automatic recovery and no CLI-level way out** —
+  the opposite of the checklist's expected "cleanup + retry succeeds, no hugepage
+  squat". Repro: added `manohar-lblk-atomicity-storage-node-4` to the StorageNodeSet's
+  `workerNodes`, raced a tight poll loop (`kubectl get pods` every 200ms) to catch the
+  `snode-spdk-pod` the instant it appeared, then `sudo pkill -9 -f bdts` inside the
+  `spdk-container` (the actual SPDK binary is `/root/spdk/ultra/build_bdts/bdts`,
+  launched via a `sudo -E .../run_distr_with_ssd.sh` wrapper as PID 1 — **not** a
+  process named `spdk_tgt`, worth noting for anyone else scripting this).
+  - The wrapper script does not detect the crash and relaunch `bdts` — instead PID 1
+    itself exits **cleanly** shortly after (`containerStatuses[].state.terminated:
+    {exitCode: 0, reason: "Completed"}`).
+  - The pod's `restartPolicy` is `Never`, so Kubernetes never restarts the container
+    on this exit (regardless of exit code, but especially since it's 0/non-failure).
+  - The operator's `storagenodeset` reconciler just polls the cluster API every ~10s
+    forever (`"Not all socket nodes online yet", "online": 0, "expected": 1`) with no
+    active remediation — no pod recreation, no retry trigger — confirmed over a full
+    minute of continuous polling with zero change.
+  - At the `sbcli` level the node is stuck `status: in_creation` indefinitely, and
+    **both standard recovery commands refuse to touch it**: `storage-node remove`
+    errors `"it must be ONLINE or SUSPENDED to start removal (current status:
+    in_creation)"`, and `storage-node delete` errors `"Node must be in removed
+    status"` — there is no supported CLI path out of `in_creation` at all. Recovery
+    required a raw DB write (`node.status = StorageNode.STATUS_REMOVED` via
+    `db_controller`) before `delete` would accept it, followed by a force-delete of
+    the wedged pod (`kubectl delete pod --force --grace-period=0`, since the pod's own
+    graceful termination also hangs).
+  - On the "hugepage squat" half of the checklist: the cluster API's own node listing
+    kept reporting `hugepage_memory: 29429334016` (~27.4GB) for the stuck node the
+    entire time it sat wedged — but checking the actual host
+    (`/sys/devices/system/node/node0/hugepages/hugepages-2048kB/{nr,free}_hugepages`)
+    after the pod was force-deleted showed `free_hugepages == nr_hugepages` (all
+    14033 pages free) — so this is **not** a genuine OS-level hugepage leak, it's a
+    stale DB/API figure for a node that's stuck, not an actual resource pinned by a
+    dead process. Worth distinguishing precisely: the real, confirmed bug is the
+    complete absence of automatic cleanup/retry and the missing CLI recovery path,
+    not a literal hugepage leak.
+  - Fix direction: the wrapper script should detect a non-restart-worthy exit of its
+    child and either relaunch it or exit non-zero so Kubernetes' restart machinery
+    (with `restartPolicy: Always`, if that's adopted) can take over; separately, the
+    `storagenodeset` operator reconciler should notice a node wedged in
+    `in_creation` past some timeout and recreate the pod / re-drive the add; and
+    `sbcli`'s `remove`/`delete` commands should have *some* supported path to abandon
+    a stuck `in_creation` node without a raw DB edit. Flagging for both the operator
+    and `sbcli` teams since the gap spans both layers.
 
 - **Real gap, not yet fixed, most severe finding of this round**: the migration task
   scheduler has a genuine **circular-wait deadlock** between the `device_migration`
