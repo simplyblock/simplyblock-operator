@@ -190,6 +190,62 @@ not just "is it literally NVMe":
 
 ## Bugs/gaps found along the way (not on the original checklist)
 
+- **Real gap, not yet fixed, most severe finding of this round**: the migration task
+  scheduler has a genuine **circular-wait deadlock** between the `device_migration`
+  (outage recovery) and `new_device_migration` (expansion/role-rebalance) task
+  families when both target the same node+distrib. Reproduced twice independently:
+  - `tasks_runner_migration.py` (~line 285) treats a `SUSPENDED` `new_device_migration`
+    task on the same node+`distr_name` as a reason to defer a `device_migration` task
+    ("task found on same node, retry").
+  - `tasks_runner_new_dev_migration.py` (~line 52) treats *any* non-`DONE`
+    `device_migration`/`failed_device_migration` task anywhere in the cluster as a
+    reason to defer a `new_device_migration` task ("deferring: recovery migration
+    ... is open") — by design, since recovery is meant to have priority over
+    expansion.
+  - Put together: task A (`device_migration`) won't run because it sees task B
+    (`new_device_migration`, `suspended`) on the same node/distrib; task B won't run
+    because task A exists at all. Neither side has a tie-breaker, so once both
+    conditions are true simultaneously, **neither task can ever proceed** — confirmed
+    by direct DB inspection (`e5bef9b1-...`, `function: device_migration, status: new,
+    retry: 0`, completely un-retried for the ~50 minutes it sat blocked, while
+    `9e59dc34-...`/`new_device_migration` on the identical node+`distrib_5` sat
+    `suspended` deferring right back to it by UUID). This left the whole cluster
+    stuck `ACTIVE - REBALANCING` with all 3 nodes `Health: False` for 2+ hours with
+    zero progress, and would have stayed that way indefinitely without manual
+    intervention. Recurred a second time immediately afterward (`b83c6418-...` on a
+    different node/distrib) as soon as another recovery migration was queued,
+    confirming this isn't a one-off — it's a structural gap that will hit *any*
+    device-recovery event that happens to race with an in-flight expansion/rebalance.
+  - Workaround applied both times: `sbcli-dev cluster cancel-task <new_device_migration
+    task id>` on the specific task(s) sharing the node+distrib with the stuck
+    `device_migration` task, which immediately unblocked it (it ran to completion
+    within seconds of the conflicting task being canceled).
+  - Fix direction: the `device_migration` side's same-node-distrib check should not
+    treat a merely-`SUSPENDED` (i.e., not actually running) `new_device_migration`
+    task as a blocker — only a genuinely `RUNNING` one should count as "active", matching
+    what `new_device_migration`'s own `get_active_node_mig_task` already does
+    correctly (it only counts `STATUS_RUNNING`, not `NEW`/`SUSPENDED`). Flagging for
+    the backend (`sbcli`) team — this is core task-scheduler logic, not something the
+    operator controls.
+  - Side-effect noted along the way: resolving this triggered the system's own
+    coordinated sequential node-restart mechanism (nodes visibly went `down`→
+    restarted one at a time, never in parallel), which completed cleanly and is
+    consistent with the intended, correct HA behavior (see
+    `feedback_sequential_node_restart` memory) — no new issue there.
+
+- **Not a product bug, own testing oversight, noted for completeness**: node-2's JM
+  device (`5909eaa1-...`) was left stuck `Status: removed` for roughly two hours after
+  the earlier "Device disappears" test, because that test's storage-device and JM
+  device were both carved from the *same* physical GCP PD (`...-storage-node-2-pd-1`)
+  — detaching it took out both devices at once, but only the storage device
+  (`4a92b3aa-...`) was recovered via `restart-device` at the time; the JM device was
+  missed. JM devices aren't in `snode.nvme_devices`, so `restart-device` correctly
+  reports `"device not found"` for one — the right command is `storage-node
+  restart-jm-device`. This stale "removed" JM device is what caused node-1's
+  `port_allow`/reconnect task to loop forever ("Node unable to connect to remote
+  JMs, retry task") once the scheduler deadlock above was cleared and the cluster
+  tried to actually converge. Fixed via `restart-jm-device --force`.
+
 - **Real gap, not yet fixed**: the operator has no code path that calls `sbcli cluster
   complete-expand` after a node-add completes. Combined with `sbcli`'s own
   `cluster_expand()` requiring 2+ new nodes at once, adding storage nodes to an
