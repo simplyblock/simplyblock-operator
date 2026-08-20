@@ -41,9 +41,6 @@ import (
 )
 
 const (
-	// replPairRequeueAttaching is how long to wait between polls while the backend
-	// is completing the attach (PUT /volumes/{v} with replication_policy_id) operation.
-	replPairRequeueAttaching = 10 * time.Second
 	// replPairRequeueReplicating is how often the reconciler syncs lastReplicatedAt
 	// from the backend while a pair is in the steady-state replicating state.
 	replPairRequeueReplicating = 60 * time.Second
