@@ -194,6 +194,7 @@ rules:
   - replicationops
   - replicationpairs
   - replicationpolicies
+  - replicationslots
   - storagebackups
   - storageclusterops
   - storageclusters
@@ -220,6 +221,7 @@ rules:
   - replicationops/finalizers
   - replicationpairs/finalizers
   - replicationpolicies/finalizers
+  - replicationslots/finalizers
   - storagebackups/finalizers
   - storageclusterops/finalizers
   - storageclusters/finalizers
@@ -241,6 +243,7 @@ rules:
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status
+  - replicationslots/status
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status

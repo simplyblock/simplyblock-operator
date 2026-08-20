@@ -23,13 +23,13 @@ func newPVCWatcherReconciler(t *testing.T, objects ...client.Object) (*PVCAnnota
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(
-			&simplyblockv1alpha1.ReplicationPair{},
+			&simplyblockv1alpha1.ReplicationSlot{},
 			&simplyblockv1alpha1.ReplicationPolicy{},
 			&corev1.PersistentVolumeClaim{},
 		).
 		WithObjects(objects...).
-		WithIndex(&simplyblockv1alpha1.ReplicationPair{}, "spec.pvcRef", func(obj client.Object) []string {
-			return []string{obj.(*simplyblockv1alpha1.ReplicationPair).Spec.PVCRef}
+		WithIndex(&simplyblockv1alpha1.ReplicationSlot{}, "spec.pvcRef", func(obj client.Object) []string {
+			return []string{obj.(*simplyblockv1alpha1.ReplicationSlot).Spec.PVCRef}
 		}).
 		WithIndex(&corev1.PersistentVolumeClaim{}, "spec.storageClassName", func(obj client.Object) []string {
 			pvc := obj.(*corev1.PersistentVolumeClaim)
@@ -83,7 +83,7 @@ func testCSIPV(volumeHandle string) *corev1.PersistentVolume {
 func readyPolicy(name string) *simplyblockv1alpha1.ReplicationPolicy {
 	return &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
+		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
 		Status:     simplyblockv1alpha1.ReplicationPolicyStatus{Ready: true, BackendPolicyID: "bpol"},
 	}
 }
@@ -101,9 +101,9 @@ func TestPVCWatcher_IgnoreNotFound(t *testing.T) {
 	}
 }
 
-// ---------- no policy, no pair — nothing to do ----------
+// ---------- no policy, no slot — nothing to do ----------
 
-func TestPVCWatcher_NoPolicyNoPair_NoOp(t *testing.T) {
+func TestPVCWatcher_NoPolicyNoSlot_NoOp(t *testing.T) {
 	scName := testSCName
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: "pvc1", Namespace: "default"},
@@ -148,9 +148,9 @@ func TestPVCWatcher_PVCAnnotation_UnboundRequeue(t *testing.T) {
 	}
 }
 
-// ---------- creates pair when PVC is bound ----------
+// ---------- creates slot when PVC is bound ----------
 
-func TestPVCWatcher_CreatesPairWhenBound(t *testing.T) {
+func TestPVCWatcher_CreatesSlotWhenBound(t *testing.T) {
 	pvc := boundPVC(map[string]string{utils.AnnotationReplicationPolicy: "pol"})
 	pv := testCSIPV("cluster-uuid:pool-uuid:vol-uuid")
 	pol := readyPolicy("pol")
@@ -162,28 +162,28 @@ func TestPVCWatcher_CreatesPairWhenBound(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var pairList simplyblockv1alpha1.ReplicationPairList
-	if err := cl.List(context.Background(), &pairList, client.InNamespace("default")); err != nil {
-		t.Fatalf("list pairs: %v", err)
+	var slotList simplyblockv1alpha1.ReplicationSlotList
+	if err := cl.List(context.Background(), &slotList, client.InNamespace("default")); err != nil {
+		t.Fatalf("list slots: %v", err)
 	}
-	if len(pairList.Items) != 1 {
-		t.Fatalf("expected 1 pair, got %d", len(pairList.Items))
+	if len(slotList.Items) != 1 {
+		t.Fatalf("expected 1 slot, got %d", len(slotList.Items))
 	}
-	pair := pairList.Items[0]
-	if pair.Spec.PolicyRef != "pol" {
-		t.Errorf("PolicyRef = %q, want pol", pair.Spec.PolicyRef)
+	slot := slotList.Items[0]
+	if slot.Spec.PolicyRef != "pol" {
+		t.Errorf("PolicyRef = %q, want pol", slot.Spec.PolicyRef)
 	}
-	if pair.Spec.PVCRef != "pvc1" {
-		t.Errorf("PVCRef = %q, want pvc1", pair.Spec.PVCRef)
+	if slot.Spec.PVCRef != "pvc1" {
+		t.Errorf("PVCRef = %q, want pvc1", slot.Spec.PVCRef)
 	}
-	if pair.Spec.VolumeID != "cluster-uuid:pool-uuid:vol-uuid" {
-		t.Errorf("VolumeID = %q", pair.Spec.VolumeID)
+	if slot.Spec.VolumeID != "cluster-uuid:pool-uuid:vol-uuid" {
+		t.Errorf("VolumeID = %q", slot.Spec.VolumeID)
 	}
 }
 
 // ---------- StorageClass annotation propagates ----------
 
-func TestPVCWatcher_SCAnnotation_CreatesPair(t *testing.T) {
+func TestPVCWatcher_SCAnnotation_CreatesSlot(t *testing.T) {
 	scName := testSCName
 	pvc := boundPVC(nil)
 	pv := testCSIPV("c:p:v")
@@ -202,100 +202,98 @@ func TestPVCWatcher_SCAnnotation_CreatesPair(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var pairList simplyblockv1alpha1.ReplicationPairList
-	if err := cl.List(context.Background(), &pairList, client.InNamespace("default")); err != nil {
-		t.Fatalf("list pairs: %v", err)
+	var slotList simplyblockv1alpha1.ReplicationSlotList
+	if err := cl.List(context.Background(), &slotList, client.InNamespace("default")); err != nil {
+		t.Fatalf("list slots: %v", err)
 	}
-	if len(pairList.Items) != 1 {
-		t.Fatalf("expected 1 pair, got %d", len(pairList.Items))
+	if len(slotList.Items) != 1 {
+		t.Fatalf("expected 1 slot, got %d", len(slotList.Items))
 	}
 }
 
-// ---------- policy changed — delete old pair, wait ----------
+// ---------- policy changed — delete old slot, wait ----------
 
-func TestPVCWatcher_PolicyChanged_DeletesOldPair(t *testing.T) {
+func TestPVCWatcher_PolicyChanged_DeletesOldSlot(t *testing.T) {
 	pvc := boundPVC(map[string]string{utils.AnnotationReplicationPolicy: "pol-new"})
 	pv := testCSIPV("c:p:v")
-	existingPair := &simplyblockv1alpha1.ReplicationPair{
+	existingSlot := &simplyblockv1alpha1.ReplicationSlot{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol-old-pvc1", Namespace: "default"},
-		Spec: simplyblockv1alpha1.ReplicationPairSpec{
+		Spec: simplyblockv1alpha1.ReplicationSlotSpec{
 			PolicyRef: "pol-old", PVCRef: "pvc1", VolumeID: "c:p:v",
 		},
 	}
 	pol := readyPolicy("pol-new")
 
-	r, cl := newPVCWatcherReconciler(t, pvc, pv, existingPair, pol)
+	r, cl := newPVCWatcherReconciler(t, pvc, pv, existingSlot, pol)
 
 	res, err := r.Reconcile(context.Background(), pvcRequest("pvc1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Should requeue to wait for old pair to be GC'd.
+	// Should requeue to wait for old slot to be GC'd.
 	if res.RequeueAfter != pvcReplRequeueDetaching {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, pvcReplRequeueDetaching)
 	}
 
-	// Old pair should be deleted.
-	var pair simplyblockv1alpha1.ReplicationPair
-	err = cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pol-old-pvc1"}, &pair)
+	// Old slot should be deleted.
+	var slot simplyblockv1alpha1.ReplicationSlot
+	err = cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pol-old-pvc1"}, &slot)
 	if err == nil {
-		// Fake client marks as deleted via DeletionTimestamp.
-		if pair.DeletionTimestamp == nil {
-			t.Errorf("old pair still exists and not marked for deletion")
+		if slot.DeletionTimestamp == nil {
+			t.Errorf("old slot still exists and not marked for deletion")
 		}
 	}
 }
 
-// ---------- policy removed — delete pair, no new pair ----------
+// ---------- policy removed — delete slot, no new slot ----------
 
-func TestPVCWatcher_PolicyRemoved_DeletesPair(t *testing.T) {
+func TestPVCWatcher_PolicyRemoved_DeletesSlot(t *testing.T) {
 	// No annotation on PVC.
 	pvc := boundPVC(nil)
-	existingPair := &simplyblockv1alpha1.ReplicationPair{
+	existingSlot := &simplyblockv1alpha1.ReplicationSlot{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol-pvc1", Namespace: "default"},
-		Spec: simplyblockv1alpha1.ReplicationPairSpec{
+		Spec: simplyblockv1alpha1.ReplicationSlotSpec{
 			PolicyRef: "pol", PVCRef: "pvc1", VolumeID: "c:p:v",
 		},
 	}
-	r, cl := newPVCWatcherReconciler(t, pvc, existingPair)
+	r, cl := newPVCWatcherReconciler(t, pvc, existingSlot)
 
 	res, err := r.Reconcile(context.Background(), pvcRequest("pvc1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// No new pair → no requeue.
+	// No new slot → no requeue.
 	if res.RequeueAfter != 0 {
 		t.Errorf("unexpected requeue: %+v", res)
 	}
 
-	var pairList simplyblockv1alpha1.ReplicationPairList
-	if err := cl.List(context.Background(), &pairList, client.InNamespace("default")); err != nil {
-		t.Fatalf("list pairs: %v", err)
+	var slotList simplyblockv1alpha1.ReplicationSlotList
+	if err := cl.List(context.Background(), &slotList, client.InNamespace("default")); err != nil {
+		t.Fatalf("list slots: %v", err)
 	}
-	// After deletion the pair should be gone (fake client removes it unless it has a finalizer).
-	for _, p := range pairList.Items {
-		if p.DeletionTimestamp == nil && p.Name == "pol-pvc1" {
-			t.Errorf("pair %q was not deleted", p.Name)
+	for _, s := range slotList.Items {
+		if s.DeletionTimestamp == nil && s.Name == "pol-pvc1" {
+			t.Errorf("slot %q was not deleted", s.Name)
 		}
 	}
 }
 
-// ---------- pair pending deletion — wait ----------
+// ---------- slot pending deletion — wait ----------
 
-func TestPVCWatcher_PairPendingDeletion_Waits(t *testing.T) {
+func TestPVCWatcher_SlotPendingDeletion_Waits(t *testing.T) {
 	now := metav1.Now()
 	pvc := boundPVC(map[string]string{utils.AnnotationReplicationPolicy: "pol"})
-	existingPair := &simplyblockv1alpha1.ReplicationPair{
+	existingSlot := &simplyblockv1alpha1.ReplicationSlot{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "pol-pvc1", Namespace: "default",
-			Finalizers:        []string{utils.FinalizerReplicationPair},
+			Finalizers:        []string{utils.FinalizerReplicationSlot},
 			DeletionTimestamp: &now,
 		},
-		Spec: simplyblockv1alpha1.ReplicationPairSpec{
+		Spec: simplyblockv1alpha1.ReplicationSlotSpec{
 			PolicyRef: "pol", PVCRef: "pvc1", VolumeID: "c:p:v",
 		},
 	}
-	r, _ := newPVCWatcherReconciler(t, pvc, existingPair)
+	r, _ := newPVCWatcherReconciler(t, pvc, existingSlot)
 
 	res, err := r.Reconcile(context.Background(), pvcRequest("pvc1"))
 	if err != nil {
@@ -329,7 +327,7 @@ func TestPVCWatcher_PolicyNotReady_Requeues(t *testing.T) {
 	pv := testCSIPV("c:p:v")
 	pol := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
+		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
 		Status:     simplyblockv1alpha1.ReplicationPolicyStatus{Ready: false},
 	}
 	r, _ := newPVCWatcherReconciler(t, pvc, pv, pol)
@@ -343,9 +341,9 @@ func TestPVCWatcher_PolicyNotReady_Requeues(t *testing.T) {
 	}
 }
 
-// ---------- replicationPairName ----------
+// ---------- replicationSlotName ----------
 
-func TestReplicationPairName(t *testing.T) {
+func TestReplicationSlotName(t *testing.T) {
 	cases := []struct {
 		policy, pvc string
 		want        string
@@ -354,9 +352,9 @@ func TestReplicationPairName(t *testing.T) {
 		{"pol", "claim-1", "pol-claim-1"},
 	}
 	for _, tc := range cases {
-		got := replicationPairName(tc.policy, tc.pvc)
+		got := replicationSlotName(tc.policy, tc.pvc)
 		if got != tc.want {
-			t.Errorf("replicationPairName(%q, %q) = %q, want %q", tc.policy, tc.pvc, got, tc.want)
+			t.Errorf("replicationSlotName(%q, %q) = %q, want %q", tc.policy, tc.pvc, got, tc.want)
 		}
 	}
 }

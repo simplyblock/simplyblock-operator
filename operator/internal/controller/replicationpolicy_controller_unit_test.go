@@ -20,37 +20,43 @@ import (
 
 const (
 	testClusterName            = "local-cluster"
-	testTargetClusterName      = "cluster-a"
-	testTargetClusterUUID      = "cluster-a-uuid"
-	apiPathReplicationTargets  = "/api/v2/clusters/" + testClusterUUID + "/replication/targets"
 	apiPathReplicationPolicies = "/api/v2/clusters/" + testClusterUUID + "/replication/policies"
 )
 
 // newPolicyReconciler creates a ReplicationPolicyReconciler backed by a fake client.
-// The spec.policyRef index is registered so MatchingFields queries work.
-// Two StorageClusters are pre-populated: local (testClusterName) and target (testTargetClusterName)
-// so ResolveClusterUUID succeeds for both spec.clusterName and spec.target.
+// A StorageCluster (testClusterName → testClusterUUID) is pre-populated.
+// ReplicationSlots are indexed by spec.policyRef for slot-count and deletion-block queries.
 func newPolicyReconciler(t *testing.T, objects ...client.Object) (*ReplicationPolicyReconciler, client.Client) {
 	t.Helper()
-	localCluster := &simplyblockv1alpha1.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: testClusterName, Namespace: "default"},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterUUID},
-	}
-	targetCluster := &simplyblockv1alpha1.StorageCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: testTargetClusterName, Namespace: "default"},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: testTargetClusterUUID},
-	}
+	localCluster := testCluster("default", testClusterName, testClusterUUID)
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
-	allObjects := append([]client.Object{localCluster, targetCluster}, objects...)
+	allObjects := append([]client.Object{localCluster}, objects...)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
+		// ReplicationPolicy status is tracked as a subresource; pairs and slots are not,
+		// so their full structs (including status) are preserved by WithObjects.
 		WithStatusSubresource(&simplyblockv1alpha1.ReplicationPolicy{}).
 		WithObjects(allObjects...).
-		WithIndex(&simplyblockv1alpha1.ReplicationPair{}, "spec.policyRef", func(obj client.Object) []string {
-			return []string{obj.(*simplyblockv1alpha1.ReplicationPair).Spec.PolicyRef}
+		WithIndex(&simplyblockv1alpha1.ReplicationSlot{}, "spec.policyRef", func(obj client.Object) []string {
+			return []string{obj.(*simplyblockv1alpha1.ReplicationSlot).Spec.PolicyRef}
 		}).
 		Build()
 	return &ReplicationPolicyReconciler{Client: cl, Scheme: scheme}, cl
+}
+
+// readyPairForPolicy returns a ReplicationPair that is ready and has a backend target ID.
+func readyPairForPolicy(name, sourceCluster, backendTargetID string) *simplyblockv1alpha1.ReplicationPair {
+	return &simplyblockv1alpha1.ReplicationPair{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec: simplyblockv1alpha1.ReplicationPairSpec{
+			SourceCluster: sourceCluster,
+			TargetCluster: "cluster-b",
+		},
+		Status: simplyblockv1alpha1.ReplicationPairStatus{
+			Ready:           true,
+			BackendTargetID: backendTargetID,
+		},
+	}
 }
 
 func policyRequest(name string) ctrl.Request {
@@ -79,50 +85,89 @@ func TestPolicy_IgnoreNotFound(t *testing.T) {
 	}
 }
 
+// ---------- pair not found → waits ----------
+
+func TestPolicy_PairNotFound_Waits(t *testing.T) {
+	policy := &simplyblockv1alpha1.ReplicationPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: "default"},
+		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "nonexistent-pair"},
+	}
+	r, _ := newPolicyReconciler(t, policy)
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
+
+	res, err := r.Reconcile(context.Background(), policyRequest("pol"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Errorf("expected requeue when pair not found")
+	}
+}
+
+// ---------- pair not ready → waits ----------
+
+func TestPolicy_PairNotReady_Waits(t *testing.T) {
+	pair := &simplyblockv1alpha1.ReplicationPair{
+		ObjectMeta: metav1.ObjectMeta{Name: "pair1", Namespace: "default"},
+		Spec:       simplyblockv1alpha1.ReplicationPairSpec{SourceCluster: testClusterName},
+		Status:     simplyblockv1alpha1.ReplicationPairStatus{Ready: false},
+	}
+	policy := &simplyblockv1alpha1.ReplicationPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: "default"},
+		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
+	}
+	r, _ := newPolicyReconciler(t, pair, policy)
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
+
+	res, err := r.Reconcile(context.Background(), policyRequest("pol"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Errorf("expected requeue when pair not ready")
+	}
+}
+
 // ---------- finalizer ----------
 
 func TestPolicy_AddsFinalizer(t *testing.T) {
+	pair := readyPairForPolicy("pair1", testClusterName, "tgt-uuid")
 	policy := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
+		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
 	}
-	r, cl := newPolicyReconciler(t, policy)
-	// No backend called — t.Setenv makes NewClient point somewhere unreachable;
-	// the reconciler returns after Update(finalizer) before any API call.
+	r, cl := newPolicyReconciler(t, pair, policy)
+	// Backend unreachable — reconciler adds finalizer and returns before API call.
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 	_, _ = r.Reconcile(context.Background(), policyRequest("pol"))
 
 	got := getPolicy(t, cl)
-	if !containsString(got.Finalizers, utils.FinalizerReplicationPolicy) {
+	if !contains(got.Finalizers, utils.FinalizerReplicationPolicy) {
 		t.Errorf("finalizer not added; finalizers = %v", got.Finalizers)
 	}
 }
 
-// ---------- ensure backend target (GET + POST) ----------
+// ---------- ensure backend policy (GET + POST) ----------
 
-func TestPolicy_CreatesTargetWhenAbsent(t *testing.T) {
+func TestPolicy_CreatesBackendPolicy_WhenAbsent(t *testing.T) {
+	pair := readyPairForPolicy("pair1", testClusterName, "tgt-uuid")
 	policy := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "pol", Namespace: "default",
 			Finalizers: []string{utils.FinalizerReplicationPolicy},
 		},
-		Spec: simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
+		Spec: simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
 	}
-	r, cl := newPolicyReconciler(t, policy)
+	r, cl := newPolicyReconciler(t, pair, policy)
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		switch {
-		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationTargets:
-			writeJSON(w, []interface{}{})
-		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationTargets:
-			writeJSON(w, map[string]string{"id": "tgt-uuid"})
 		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
 			writeJSON(w, []interface{}{})
 		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationPolicies:
-			writeJSON(w, map[string]string{"id": "pol-uuid"})
+			writeJSON(w, map[string]string{"id": "pol-backend-uuid"})
 		default:
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("{}"))
 		}
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
@@ -133,39 +178,35 @@ func TestPolicy_CreatesTargetWhenAbsent(t *testing.T) {
 	}
 
 	got := getPolicy(t, cl)
-	if got.Status.BackendTargetID != "tgt-uuid" {
-		t.Errorf("BackendTargetID = %q, want tgt-uuid", got.Status.BackendTargetID)
+	if got.Status.BackendPolicyID != "pol-backend-uuid" {
+		t.Errorf("BackendPolicyID = %q, want pol-backend-uuid", got.Status.BackendPolicyID)
 	}
 }
 
-func TestPolicy_ReusesExistingTarget(t *testing.T) {
+// ---------- reuse existing backend policy ----------
+
+func TestPolicy_ReusesExistingBackendPolicy(t *testing.T) {
+	pair := readyPairForPolicy("pair1", testClusterName, "tgt-uuid")
 	policy := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "pol", Namespace: "default",
 			Finalizers: []string{utils.FinalizerReplicationPolicy},
 		},
-		Spec: simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
+		Spec: simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
 	}
-	r, cl := newPolicyReconciler(t, policy)
+	r, cl := newPolicyReconciler(t, pair, policy)
 
-	existingTargets := []interface{}{
-		map[string]string{"id": "existing-tgt", "target_cluster_id": testTargetClusterUUID, "target_name": "x"},
+	existingPolicies := []interface{}{
+		map[string]string{"id": "existing-pol-uuid", "policy_name": "pol"},
 	}
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
-		switch {
-		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationTargets:
-			writeJSON(w, existingTargets)
-		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationTargets:
-			t.Error("POST replication/targets should not be called when target already exists")
-			w.WriteHeader(http.StatusInternalServerError)
-		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
-			writeJSON(w, []interface{}{})
-		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationPolicies:
-			writeJSON(w, map[string]string{"id": "pol-uuid"})
-		default:
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("{}"))
+		if req.Method == http.MethodGet {
+			writeJSON(w, existingPolicies)
+			return
 		}
+		// POST must NOT be called.
+		t.Error("POST replication/policies should not be called when policy already exists")
+		w.WriteHeader(http.StatusInternalServerError)
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
@@ -175,29 +216,25 @@ func TestPolicy_ReusesExistingTarget(t *testing.T) {
 	}
 
 	got := getPolicy(t, cl)
-	if got.Status.BackendTargetID != "existing-tgt" {
-		t.Errorf("BackendTargetID = %q, want existing-tgt", got.Status.BackendTargetID)
+	if got.Status.BackendPolicyID != "existing-pol-uuid" {
+		t.Errorf("BackendPolicyID = %q, want existing-pol-uuid", got.Status.BackendPolicyID)
 	}
 }
 
 // ---------- mark ready ----------
 
-func TestPolicy_MarksReadyAfterBothIDsPresent(t *testing.T) {
+func TestPolicy_MarksReady_WhenPolicyIDPresent(t *testing.T) {
+	pair := readyPairForPolicy("pair1", testClusterName, "tgt-uuid")
 	policy := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "pol", Namespace: "default",
 			Finalizers: []string{utils.FinalizerReplicationPolicy},
 		},
-		Spec:   simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
-		Status: simplyblockv1alpha1.ReplicationPolicyStatus{BackendTargetID: "tgt", BackendPolicyID: "bpol"},
+		Spec:   simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
+		Status: simplyblockv1alpha1.ReplicationPolicyStatus{BackendPolicyID: "bpol"},
 	}
-	r, cl := newPolicyReconciler(t, policy)
-	// Status subresource: set it via UpdateStatus so the fake client tracks it.
-	if err := cl.Status().Update(context.Background(), policy); err != nil {
-		t.Fatalf("pre-set status: %v", err)
-	}
-
-	// No API calls expected — both IDs are already set.
+	r, cl := newPolicyReconciler(t, pair, policy)
+	// BackendPolicyID already set → no API calls needed.
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
 	_, err := r.Reconcile(context.Background(), policyRequest("pol"))
@@ -213,27 +250,24 @@ func TestPolicy_MarksReadyAfterBothIDsPresent(t *testing.T) {
 
 // ---------- deletion ----------
 
-func TestPolicy_DeletionBlockedWhilePairsExist(t *testing.T) {
+func TestPolicy_DeletionBlockedWhileSlotsExist(t *testing.T) {
 	now := metav1.Now()
+	pair := readyPairForPolicy("pair1", testClusterName, "tgt-uuid")
 	policy := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "pol", Namespace: "default",
 			Finalizers:        []string{utils.FinalizerReplicationPolicy},
 			DeletionTimestamp: &now,
 		},
-		Spec:   simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
-		Status: simplyblockv1alpha1.ReplicationPolicyStatus{BackendPolicyID: "bpol", BackendTargetID: "tgt"},
+		Spec:   simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
+		Status: simplyblockv1alpha1.ReplicationPolicyStatus{BackendPolicyID: "bpol"},
 	}
-	pair := &simplyblockv1alpha1.ReplicationPair{
-		ObjectMeta: metav1.ObjectMeta{Name: "pair1", Namespace: "default"},
-		Spec: simplyblockv1alpha1.ReplicationPairSpec{
-			PolicyRef: "pol", PVCRef: "pvc1", VolumeID: "c:p:v",
-		},
+	// A ReplicationSlot still references this policy.
+	slot := &simplyblockv1alpha1.ReplicationSlot{
+		ObjectMeta: metav1.ObjectMeta{Name: "slot1", Namespace: "default"},
+		Spec:       simplyblockv1alpha1.ReplicationSlotSpec{PolicyRef: "pol", PVCRef: "pvc1", VolumeID: "c:p:v"},
 	}
-	r, cl := newPolicyReconciler(t, policy, pair)
-	if err := cl.Status().Update(context.Background(), policy); err != nil {
-		t.Fatalf("pre-set status: %v", err)
-	}
+	r, cl := newPolicyReconciler(t, pair, policy, slot)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
 	res, err := r.Reconcile(context.Background(), policyRequest("pol"))
@@ -241,31 +275,28 @@ func TestPolicy_DeletionBlockedWhilePairsExist(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.RequeueAfter == 0 {
-		t.Errorf("expected requeue while pairs exist, got %+v", res)
+		t.Errorf("expected requeue while slots exist, got %+v", res)
 	}
 
-	// Finalizer must NOT be removed while pair exists.
 	got := getPolicy(t, cl)
-	if !containsString(got.Finalizers, utils.FinalizerReplicationPolicy) {
+	if !contains(got.Finalizers, utils.FinalizerReplicationPolicy) {
 		t.Errorf("finalizer was removed prematurely")
 	}
 }
 
-func TestPolicy_DeletionRemovesBackendAndFinalizer(t *testing.T) {
+func TestPolicy_DeletionRemovesBackendPolicyAndFinalizer(t *testing.T) {
 	now := metav1.Now()
+	pair := readyPairForPolicy("pair1", testClusterName, "tgt-uuid")
 	policy := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "pol", Namespace: "default",
 			Finalizers:        []string{utils.FinalizerReplicationPolicy},
 			DeletionTimestamp: &now,
 		},
-		Spec:   simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
-		Status: simplyblockv1alpha1.ReplicationPolicyStatus{BackendPolicyID: "bpol", BackendTargetID: "tgt"},
+		Spec:   simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
+		Status: simplyblockv1alpha1.ReplicationPolicyStatus{BackendPolicyID: "bpol"},
 	}
-	r, cl := newPolicyReconciler(t, policy)
-	if err := cl.Status().Update(context.Background(), policy); err != nil {
-		t.Fatalf("pre-set status: %v", err)
-	}
+	r, cl := newPolicyReconciler(t, pair, policy)
 
 	deleted := map[string]bool{}
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
@@ -273,7 +304,6 @@ func TestPolicy_DeletionRemovesBackendAndFinalizer(t *testing.T) {
 			deleted[req.URL.Path] = true
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("{}"))
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
@@ -285,68 +315,15 @@ func TestPolicy_DeletionRemovesBackendAndFinalizer(t *testing.T) {
 	if !deleted["/api/v2/clusters/"+testClusterUUID+"/replication/policies/bpol"] {
 		t.Errorf("backend ReplicationPolicy was not deleted")
 	}
-	if !deleted["/api/v2/clusters/"+testClusterUUID+"/replication/targets/tgt"] {
-		t.Errorf("backend ReplicationTarget was not deleted")
+	// The backend target is managed by the ReplicationPair controller — must NOT be deleted here.
+	if deleted["/api/v2/clusters/"+testClusterUUID+"/replication/targets/tgt-uuid"] {
+		t.Errorf("backend ReplicationTarget must not be deleted by the policy controller")
 	}
 
-	// After removing the last finalizer with DeletionTimestamp set, the fake client GCs the object.
 	var gone simplyblockv1alpha1.ReplicationPolicy
 	err = cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pol"}, &gone)
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("expected policy to be GC'd after deletion; err = %v, finalizers = %v", err, gone.Finalizers)
-	}
-}
-
-// ---------- isTargetOrphaned ----------
-
-func TestPolicy_IsTargetOrphaned(t *testing.T) {
-	cases := []struct {
-		name     string
-		sibling  *simplyblockv1alpha1.ReplicationPolicy
-		wantOrph bool
-	}{
-		{
-			name:     "no siblings — orphaned",
-			sibling:  nil,
-			wantOrph: true,
-		},
-		{
-			name: "sibling with same target — not orphaned",
-			sibling: &simplyblockv1alpha1.ReplicationPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "sib", Namespace: "default"},
-				Spec:       simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
-			},
-			wantOrph: false,
-		},
-		{
-			name: "sibling with different target — orphaned",
-			sibling: &simplyblockv1alpha1.ReplicationPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "sib", Namespace: "default"},
-				Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-b"},
-			},
-			wantOrph: true,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			policy := &simplyblockv1alpha1.ReplicationPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: "default"},
-				Spec:       simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
-			}
-			objects := []client.Object{policy}
-			if tc.sibling != nil {
-				objects = append(objects, tc.sibling)
-			}
-			r, _ := newPolicyReconciler(t, objects...)
-			got, err := r.isTargetOrphaned(context.Background(), policy)
-			if err != nil {
-				t.Fatalf("isTargetOrphaned: %v", err)
-			}
-			if got != tc.wantOrph {
-				t.Errorf("isTargetOrphaned = %v, want %v", got, tc.wantOrph)
-			}
-		})
 	}
 }
 
@@ -390,13 +367,4 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func containsString(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

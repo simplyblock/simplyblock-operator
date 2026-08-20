@@ -4,34 +4,31 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: replicationpolicies.storage.simplyblock.io
+  name: replicationslots.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
   names:
-    kind: ReplicationPolicy
-    listKind: ReplicationPolicyList
-    plural: replicationpolicies
+    kind: ReplicationSlot
+    listKind: ReplicationSlotList
+    plural: replicationslots
     shortNames:
-    - repl
-    singular: replicationpolicy
+    - relslot
+    singular: replicationslot
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.pairRef
-      name: Pair
+    - jsonPath: .spec.policyRef
+      name: Policy
       type: string
-    - jsonPath: .spec.mode
-      name: Mode
+    - jsonPath: .spec.pvcRef
+      name: PVC
       type: string
-    - jsonPath: .spec.interval
-      name: Interval
+    - jsonPath: .status.state
+      name: State
       type: string
-    - jsonPath: .status.ready
-      name: Ready
-      type: boolean
-    - jsonPath: .status.slotCount
-      name: Slots
-      type: integer
+    - jsonPath: .status.direction
+      name: Direction
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -39,11 +36,12 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          ReplicationPolicy defines the replication schedule and retention for volumes replicated
-          between the clusters defined by a ReplicationPair.
-          A StorageClass or PVC references a policy via the storage.simplyblock.io/replication-policy
-          annotation. The operator automatically creates one ReplicationSlot per bound PVC.
-          Deletion is blocked while any ReplicationSlots reference this policy.
+          ReplicationSlot tracks the live replication state for a single PVC.
+          One ReplicationSlot is created per PVC by the PVCAnnotationWatcher controller when
+          a PVC references a ReplicationPolicy via annotation. It is owned by its PVC, so
+          deleting the PVC cascades deletion and triggers a backend detach via the slot finalizer.
+          The ReplicationSlot reconciler drives all backend calls: attach, monitor, cutover,
+          failover, and detach.
         properties:
           apiVersion:
             description: |-
@@ -63,51 +61,29 @@ spec:
           metadata:
             type: object
           spec:
-            description: ReplicationPolicySpec defines the desired replication schedule
-              and retention.
+            description: ReplicationSlotSpec defines the identity of a per-volume
+              replication slot.
             properties:
-              interval:
-                default: 5m
-                description: Interval is how often a replication snapshot is taken
-                  (e.g. "5m", "1h").
+              policyRef:
+                description: PolicyRef is the name of the ReplicationPolicy governing
+                  this slot. Immutable.
                 type: string
-              mode:
-                default: failover
+              pvcRef:
+                description: PVCRef is the name of the PVC being replicated. Immutable.
+                type: string
+              volumeID:
                 description: |-
-                  Mode controls replication semantics.
-                  failover: target is a DR standby; volumes are read-only on the target.
-                  migration: planned online cutover to the target cluster.
-                enum:
-                - failover
-                - migration
+                  VolumeID is the backend lvol UUID of the source volume. Immutable.
+                  Format: "<clusterUUID>:<poolUUID>:<volumeUUID>"
                 type: string
-              pairRef:
-                description: |-
-                  PairRef is the name of the ReplicationPair that defines the source and target clusters.
-                  Multiple ReplicationPolicies may reference the same pair with different schedules.
-                type: string
-              snapshotRetention:
-                default: 3
-                description: SnapshotRetention is the minimum number of snapshots
-                  to retain on the target.
-                format: int32
-                minimum: 2
-                type: integer
             required:
-            - pairRef
+            - policyRef
+            - pvcRef
+            - volumeID
             type: object
           status:
-            description: ReplicationPolicyStatus holds the observed state of a ReplicationPolicy.
+            description: ReplicationSlotStatus holds the observed state of a ReplicationSlot.
             properties:
-              activeOpsRef:
-                description: |-
-                  ActiveOpsRef is the name of the currently running ReplicationOps CR.
-                  Empty when no operation is in progress.
-                type: string
-              backendPolicyID:
-                description: BackendPolicyID is the UUID of the backend ReplicationPolicy
-                  resource.
-                type: string
               conditions:
                 description: Conditions holds standard Kubernetes condition types.
                 items:
@@ -165,15 +141,45 @@ spec:
                   - type
                   type: object
                 type: array
-              ready:
-                description: Ready is true when the backend ReplicationPolicy has
-                  been created.
-                type: boolean
-              slotCount:
-                description: SlotCount is the number of ReplicationSlot CRs currently
-                  managed by this policy.
-                format: int32
-                type: integer
+              direction:
+                description: Direction is which side of the replication relationship
+                  this cluster holds.
+                enum:
+                - source
+                - target
+                type: string
+              lastReplicatedAt:
+                description: LastReplicatedAt is the timestamp of the last successful
+                  replication snapshot.
+                format: date-time
+                type: string
+              message:
+                description: Message provides a human-readable description of the
+                  current state.
+                type: string
+              sourceLvolID:
+                description: SourceLvolID is the UUID of the source volume on the
+                  source cluster.
+                type: string
+              state:
+                description: State is the current replication state for this slot.
+                enum:
+                - attaching
+                - replicating
+                - cutover_pending
+                - cutover_done
+                - failed_over
+                - detaching
+                - error
+                type: string
+              targetLvolID:
+                description: TargetLvolID is the UUID of the replicated volume on
+                  the target cluster.
+                type: string
+              targetNQN:
+                description: TargetNQN is the NVMe NQN on the target cluster (populated
+                  after failover).
+                type: string
             type: object
         type: object
     served: true

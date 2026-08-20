@@ -8,10 +8,11 @@ const (
 	FinalizerStorageClusterOps = "storage.simplyblock.io/storageclusterops-finalizer"
 	FinalizerReplicationPolicy = "storage.simplyblock.io/replicationpolicy-finalizer"
 	FinalizerReplicationPair   = "storage.simplyblock.io/replicationpair-finalizer"
+	FinalizerReplicationSlot   = "storage.simplyblock.io/replicationslot-finalizer"
 
 	// AnnotationReplicationPolicy is the annotation key on StorageClass or PVC that
 	// opts volumes into a named ReplicationPolicy CR.
-	AnnotationReplicationPolicy = "replication.simplyblock.io/policy"
+	AnnotationReplicationPolicy = "storage.simplyblock.io/replication-policy"
 
 	// ReplicationOps scope values.
 	ReplicationOpsScopeTarget = "target"

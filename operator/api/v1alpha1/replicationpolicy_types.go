@@ -20,22 +20,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ReplicationPolicySpec defines the desired replication configuration.
+// ReplicationPolicySpec defines the desired replication schedule and retention.
 type ReplicationPolicySpec struct {
-	// ClusterName is the name of the local StorageCluster this policy belongs to.
+	// PairRef is the name of the ReplicationPair that defines the source and target clusters.
+	// Multiple ReplicationPolicies may reference the same pair with different schedules.
 	// +kubebuilder:validation:Required
-	ClusterName string `json:"clusterName"`
-
-	// Target is the name or UUID of the remote cluster to replicate to.
-	// Immutable after creation.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="target is immutable"
-	Target string `json:"target"`
-
-	// Interval is how often a replication snapshot is taken (e.g. "5m", "1h").
-	// +kubebuilder:default="5m"
-	// +optional
-	Interval string `json:"interval,omitempty"`
+	PairRef string `json:"pairRef"`
 
 	// Mode controls replication semantics.
 	// failover: target is a DR standby; volumes are read-only on the target.
@@ -45,30 +35,31 @@ type ReplicationPolicySpec struct {
 	// +optional
 	Mode string `json:"mode,omitempty"`
 
-	// KeepReplicated is the minimum number of snapshots to retain on the target.
+	// Interval is how often a replication snapshot is taken (e.g. "5m", "1h").
+	// +kubebuilder:default="5m"
+	// +optional
+	Interval string `json:"interval,omitempty"`
+
+	// SnapshotRetention is the minimum number of snapshots to retain on the target.
 	// +kubebuilder:validation:Minimum=2
 	// +kubebuilder:default=3
 	// +optional
-	KeepReplicated int32 `json:"keepReplicated,omitempty"`
+	SnapshotRetention int32 `json:"snapshotRetention,omitempty"`
 }
 
 // ReplicationPolicyStatus holds the observed state of a ReplicationPolicy.
 type ReplicationPolicyStatus struct {
-	// Ready is true when the backend ReplicationTarget and ReplicationPolicy exist.
+	// Ready is true when the backend ReplicationPolicy has been created.
 	// +optional
 	Ready bool `json:"ready,omitempty"`
-
-	// BackendTargetID is the UUID of the backend ReplicationTarget resource.
-	// +optional
-	BackendTargetID string `json:"backendTargetID,omitempty"`
 
 	// BackendPolicyID is the UUID of the backend ReplicationPolicy resource.
 	// +optional
 	BackendPolicyID string `json:"backendPolicyID,omitempty"`
 
-	// PairCount is the number of ReplicationPair CRs currently managed by this policy.
+	// SlotCount is the number of ReplicationSlot CRs currently managed by this policy.
 	// +optional
-	PairCount int32 `json:"pairCount,omitempty"`
+	SlotCount int32 `json:"slotCount,omitempty"`
 
 	// ActiveOpsRef is the name of the currently running ReplicationOps CR.
 	// Empty when no operation is in progress.
@@ -83,18 +74,18 @@ type ReplicationPolicyStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=repl
-// +kubebuilder:printcolumn:name="Target",type=string,JSONPath=".spec.target"
+// +kubebuilder:printcolumn:name="Pair",type=string,JSONPath=".spec.pairRef"
 // +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=".spec.mode"
 // +kubebuilder:printcolumn:name="Interval",type=string,JSONPath=".spec.interval"
-// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.ready"
-// +kubebuilder:printcolumn:name="Pairs",type=integer,JSONPath=".status.pairCount"
+// +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=".status.ready"
+// +kubebuilder:printcolumn:name="Slots",type=integer,JSONPath=".status.slotCount"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
-// ReplicationPolicy defines the desired replication configuration for a set of PVCs.
-// A StorageClass or PVC may reference a ReplicationPolicy by name via the
-// replication.simplyblock.io/policy annotation. The operator ensures the
-// corresponding backend ReplicationTarget and ReplicationPolicy exist, and
-// manages one ReplicationPair CR per PVC that uses this policy.
+// ReplicationPolicy defines the replication schedule and retention for volumes replicated
+// between the clusters defined by a ReplicationPair.
+// A StorageClass or PVC references a policy via the storage.simplyblock.io/replication-policy
+// annotation. The operator automatically creates one ReplicationSlot per bound PVC.
+// Deletion is blocked while any ReplicationSlots reference this policy.
 type ReplicationPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

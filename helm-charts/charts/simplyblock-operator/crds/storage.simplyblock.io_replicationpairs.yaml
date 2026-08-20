@@ -17,18 +17,15 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.policyRef
-      name: Policy
+    - jsonPath: .spec.sourceCluster
+      name: Source
       type: string
-    - jsonPath: .spec.pvcRef
-      name: PVC
+    - jsonPath: .spec.targetCluster
+      name: Target
       type: string
-    - jsonPath: .status.state
-      name: State
-      type: string
-    - jsonPath: .status.direction
-      name: Direction
-      type: string
+    - jsonPath: .status.ready
+      name: Ready
+      type: boolean
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -36,11 +33,11 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          ReplicationPair tracks the live replication relationship between a source PVC
-          and its replicated counterpart on a target cluster. One ReplicationPair is
-          created per PVC by the PVCAnnotationWatcher controller and owned by that PVC,
-          so deleting the PVC triggers garbage collection of the pair. The ReplicationPair
-          reconciler drives all backend calls: attach, monitor, cutover, failover, and detach.
+          ReplicationPair defines the source and target clusters for a replication relationship.
+          It is reusable configuration — multiple ReplicationPolicies may reference the same pair
+          to replicate volumes between the same two clusters with different schedules or retention.
+          The operator ensures the corresponding backend ReplicationTarget exists and stores its ID
+          in status.backendTargetID for use by ReplicationPolicy resources.
         properties:
           apiVersion:
             description: |-
@@ -60,28 +57,32 @@ spec:
           metadata:
             type: object
           spec:
-            description: ReplicationPairSpec defines the immutable identity of a replication
-              relationship.
+            description: ReplicationPairSpec defines the source and target clusters
+              for a replication relationship.
             properties:
-              policyRef:
-                description: PolicyRef is the name of the ReplicationPolicy that owns
-                  this pair. Immutable.
+              sourceCluster:
+                description: SourceCluster is the name of the local StorageCluster
+                  (the replication source).
                 type: string
-              pvcRef:
-                description: PVCRef is the name of the PVC being replicated. Immutable.
+              targetCluster:
+                description: |-
+                  TargetCluster is the name or UUID of the remote cluster (the replication target).
+                  Immutable after creation.
                 type: string
-              volumeID:
-                description: VolumeID is the backend lvol UUID of the source volume.
-                  Immutable.
-                type: string
+                x-kubernetes-validations:
+                - message: targetCluster is immutable
+                  rule: self == oldSelf
             required:
-            - policyRef
-            - pvcRef
-            - volumeID
+            - sourceCluster
+            - targetCluster
             type: object
           status:
             description: ReplicationPairStatus holds the observed state of a ReplicationPair.
             properties:
+              backendTargetID:
+                description: BackendTargetID is the UUID of the backend ReplicationTarget
+                  resource.
+                type: string
               conditions:
                 description: Conditions holds standard Kubernetes condition types.
                 items:
@@ -139,45 +140,14 @@ spec:
                   - type
                   type: object
                 type: array
-              direction:
-                description: Direction is which side of the replication relationship
-                  this cluster holds.
-                enum:
-                - source
-                - target
-                type: string
-              lastReplicatedAt:
-                description: LastReplicatedAt is the timestamp of the last successful
-                  replication snapshot.
-                format: date-time
-                type: string
               message:
                 description: Message provides a human-readable description of the
                   current state.
                 type: string
-              sourceLvolID:
-                description: SourceLvolID is the UUID of the source volume on Cluster
-                  A.
-                type: string
-              state:
-                description: State is the current replication state for this pair.
-                enum:
-                - attaching
-                - replicating
-                - cutover_pending
-                - cutover_done
-                - failed_over
-                - detaching
-                - error
-                type: string
-              targetLvolID:
-                description: TargetLvolID is the UUID of the replicated volume on
-                  Cluster B.
-                type: string
-              targetNQN:
-                description: TargetNQN is the NVMe NQN on the target cluster (populated
-                  after failover).
-                type: string
+              ready:
+                description: Ready is true when the backend ReplicationTarget has
+                  been created and is available.
+                type: boolean
             type: object
         type: object
     served: true

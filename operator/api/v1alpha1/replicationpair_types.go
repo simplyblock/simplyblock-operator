@@ -20,70 +20,28 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ReplicationPairState is the lifecycle state of a ReplicationPair.
-type ReplicationPairState string
-
-const (
-	ReplicationPairStateAttaching      ReplicationPairState = "attaching"
-	ReplicationPairStateReplicating    ReplicationPairState = "replicating"
-	ReplicationPairStateCutoverPending ReplicationPairState = "cutover_pending"
-	ReplicationPairStateCutoverDone    ReplicationPairState = "cutover_done"
-	ReplicationPairStateFailedOver     ReplicationPairState = "failed_over"
-	ReplicationPairStateDetaching      ReplicationPairState = "detaching"
-	ReplicationPairStateError          ReplicationPairState = "error"
-)
-
-// ReplicationPairDirection indicates which side of the replication relationship
-// this cluster holds.
-type ReplicationPairDirection string
-
-const (
-	ReplicationPairDirectionSource ReplicationPairDirection = "source"
-	ReplicationPairDirectionTarget ReplicationPairDirection = "target"
-)
-
-// ReplicationPairSpec defines the immutable identity of a replication relationship.
+// ReplicationPairSpec defines the source and target clusters for a replication relationship.
 type ReplicationPairSpec struct {
-	// PolicyRef is the name of the ReplicationPolicy that owns this pair. Immutable.
+	// SourceCluster is the name of the local StorageCluster (the replication source).
 	// +kubebuilder:validation:Required
-	PolicyRef string `json:"policyRef"`
+	SourceCluster string `json:"sourceCluster"`
 
-	// PVCRef is the name of the PVC being replicated. Immutable.
+	// TargetCluster is the name or UUID of the remote cluster (the replication target).
+	// Immutable after creation.
 	// +kubebuilder:validation:Required
-	PVCRef string `json:"pvcRef"`
-
-	// VolumeID is the backend lvol UUID of the source volume. Immutable.
-	// +kubebuilder:validation:Required
-	VolumeID string `json:"volumeID"`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="targetCluster is immutable"
+	TargetCluster string `json:"targetCluster"`
 }
 
 // ReplicationPairStatus holds the observed state of a ReplicationPair.
 type ReplicationPairStatus struct {
-	// State is the current replication state for this pair.
-	// +kubebuilder:validation:Enum=attaching;replicating;cutover_pending;cutover_done;failed_over;detaching;error
+	// Ready is true when the backend ReplicationTarget has been created and is available.
 	// +optional
-	State string `json:"state,omitempty"`
+	Ready bool `json:"ready,omitempty"`
 
-	// Direction is which side of the replication relationship this cluster holds.
-	// +kubebuilder:validation:Enum=source;target
+	// BackendTargetID is the UUID of the backend ReplicationTarget resource.
 	// +optional
-	Direction string `json:"direction,omitempty"`
-
-	// SourceLvolID is the UUID of the source volume on Cluster A.
-	// +optional
-	SourceLvolID string `json:"sourceLvolID,omitempty"`
-
-	// TargetLvolID is the UUID of the replicated volume on Cluster B.
-	// +optional
-	TargetLvolID string `json:"targetLvolID,omitempty"`
-
-	// TargetNQN is the NVMe NQN on the target cluster (populated after failover).
-	// +optional
-	TargetNQN string `json:"targetNQN,omitempty"`
-
-	// LastReplicatedAt is the timestamp of the last successful replication snapshot.
-	// +optional
-	LastReplicatedAt *metav1.Time `json:"lastReplicatedAt,omitempty"`
+	BackendTargetID string `json:"backendTargetID,omitempty"`
 
 	// Message provides a human-readable description of the current state.
 	// +optional
@@ -97,17 +55,16 @@ type ReplicationPairStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=relpair
-// +kubebuilder:printcolumn:name="Policy",type=string,JSONPath=".spec.policyRef"
-// +kubebuilder:printcolumn:name="PVC",type=string,JSONPath=".spec.pvcRef"
-// +kubebuilder:printcolumn:name="State",type=string,JSONPath=".status.state"
-// +kubebuilder:printcolumn:name="Direction",type=string,JSONPath=".status.direction"
+// +kubebuilder:printcolumn:name="Source",type=string,JSONPath=".spec.sourceCluster"
+// +kubebuilder:printcolumn:name="Target",type=string,JSONPath=".spec.targetCluster"
+// +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=".status.ready"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
-// ReplicationPair tracks the live replication relationship between a source PVC
-// and its replicated counterpart on a target cluster. One ReplicationPair is
-// created per PVC by the PVCAnnotationWatcher controller and owned by that PVC,
-// so deleting the PVC triggers garbage collection of the pair. The ReplicationPair
-// reconciler drives all backend calls: attach, monitor, cutover, failover, and detach.
+// ReplicationPair defines the source and target clusters for a replication relationship.
+// It is reusable configuration — multiple ReplicationPolicies may reference the same pair
+// to replicate volumes between the same two clusters with different schedules or retention.
+// The operator ensures the corresponding backend ReplicationTarget exists and stores its ID
+// in status.backendTargetID for use by ReplicationPolicy resources.
 type ReplicationPair struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

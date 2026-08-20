@@ -17,8 +17,8 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.target
-      name: Target
+    - jsonPath: .spec.pairRef
+      name: Pair
       type: string
     - jsonPath: .spec.mode
       name: Mode
@@ -28,9 +28,9 @@ spec:
       type: string
     - jsonPath: .status.ready
       name: Ready
-      type: string
-    - jsonPath: .status.pairCount
-      name: Pairs
+      type: boolean
+    - jsonPath: .status.slotCount
+      name: Slots
       type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -39,11 +39,11 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          ReplicationPolicy defines the desired replication configuration for a set of PVCs.
-          A StorageClass or PVC may reference a ReplicationPolicy by name via the
-          replication.simplyblock.io/policy annotation. The operator ensures the
-          corresponding backend ReplicationTarget and ReplicationPolicy exist, and
-          manages one ReplicationPair CR per PVC that uses this policy.
+          ReplicationPolicy defines the replication schedule and retention for volumes replicated
+          between the clusters defined by a ReplicationPair.
+          A StorageClass or PVC references a policy via the storage.simplyblock.io/replication-policy
+          annotation. The operator automatically creates one ReplicationSlot per bound PVC.
+          Deletion is blocked while any ReplicationSlots reference this policy.
         properties:
           apiVersion:
             description: |-
@@ -63,24 +63,14 @@ spec:
           metadata:
             type: object
           spec:
-            description: ReplicationPolicySpec defines the desired replication configuration.
+            description: ReplicationPolicySpec defines the desired replication schedule
+              and retention.
             properties:
-              clusterName:
-                description: ClusterName is the name of the local StorageCluster this
-                  policy belongs to.
-                type: string
               interval:
                 default: 5m
                 description: Interval is how often a replication snapshot is taken
                   (e.g. "5m", "1h").
                 type: string
-              keepReplicated:
-                default: 3
-                description: KeepReplicated is the minimum number of snapshots to
-                  retain on the target.
-                format: int32
-                minimum: 2
-                type: integer
               mode:
                 default: failover
                 description: |-
@@ -91,17 +81,20 @@ spec:
                 - failover
                 - migration
                 type: string
-              target:
+              pairRef:
                 description: |-
-                  Target is the name or UUID of the remote cluster to replicate to.
-                  Immutable after creation.
+                  PairRef is the name of the ReplicationPair that defines the source and target clusters.
+                  Multiple ReplicationPolicies may reference the same pair with different schedules.
                 type: string
-                x-kubernetes-validations:
-                - message: target is immutable
-                  rule: self == oldSelf
+              snapshotRetention:
+                default: 3
+                description: SnapshotRetention is the minimum number of snapshots
+                  to retain on the target.
+                format: int32
+                minimum: 2
+                type: integer
             required:
-            - clusterName
-            - target
+            - pairRef
             type: object
           status:
             description: ReplicationPolicyStatus holds the observed state of a ReplicationPolicy.
@@ -113,10 +106,6 @@ spec:
                 type: string
               backendPolicyID:
                 description: BackendPolicyID is the UUID of the backend ReplicationPolicy
-                  resource.
-                type: string
-              backendTargetID:
-                description: BackendTargetID is the UUID of the backend ReplicationTarget
                   resource.
                 type: string
               conditions:
@@ -176,15 +165,15 @@ spec:
                   - type
                   type: object
                 type: array
-              pairCount:
-                description: PairCount is the number of ReplicationPair CRs currently
+              ready:
+                description: Ready is true when the backend ReplicationPolicy has
+                  been created.
+                type: boolean
+              slotCount:
+                description: SlotCount is the number of ReplicationSlot CRs currently
                   managed by this policy.
                 format: int32
                 type: integer
-              ready:
-                description: Ready is true when the backend ReplicationTarget and
-                  ReplicationPolicy exist.
-                type: boolean
             type: object
         type: object
     served: true

@@ -8,7 +8,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -18,8 +17,9 @@ import (
 )
 
 // newOpsReplReconciler creates a ReplicationOpsReconciler backed by a fake client.
-// Field indexes are registered for spec.policyRef (on ReplicationPair) and
-// spec.ref (on ReplicationOps), matching what SetupWithManager would register.
+// Field indexes match what SetupWithManager registers:
+//   - ReplicationSlot.spec.policyRef (for collectAffectedSlots)
+//   - ReplicationOps.spec.ref (for policyToOpsRequests)
 func newOpsReplReconciler(t *testing.T, objects ...client.Object) (*ReplicationOpsReconciler, client.Client) {
 	t.Helper()
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
@@ -28,11 +28,11 @@ func newOpsReplReconciler(t *testing.T, objects ...client.Object) (*ReplicationO
 		WithStatusSubresource(
 			&simplyblockv1alpha1.ReplicationOps{},
 			&simplyblockv1alpha1.ReplicationPolicy{},
-			&simplyblockv1alpha1.ReplicationPair{},
+			&simplyblockv1alpha1.ReplicationSlot{},
 		).
 		WithObjects(objects...).
-		WithIndex(&simplyblockv1alpha1.ReplicationPair{}, "spec.policyRef", func(obj client.Object) []string {
-			return []string{obj.(*simplyblockv1alpha1.ReplicationPair).Spec.PolicyRef}
+		WithIndex(&simplyblockv1alpha1.ReplicationSlot{}, "spec.policyRef", func(obj client.Object) []string {
+			return []string{obj.(*simplyblockv1alpha1.ReplicationSlot).Spec.PolicyRef}
 		}).
 		WithIndex(&simplyblockv1alpha1.ReplicationOps{}, "spec.ref", func(obj client.Object) []string {
 			return []string{obj.(*simplyblockv1alpha1.ReplicationOps).Spec.Ref}
@@ -41,7 +41,7 @@ func newOpsReplReconciler(t *testing.T, objects ...client.Object) (*ReplicationO
 	return &ReplicationOpsReconciler{
 		Client:   cl,
 		Scheme:   scheme,
-		Recorder: events.NewFakeRecorder(16),
+		Recorder: &fakeRecorder{},
 	}, cl
 }
 
@@ -58,30 +58,29 @@ func getOps(t *testing.T, cl client.Client) *simplyblockv1alpha1.ReplicationOps 
 	return o
 }
 
-// readyPolicyForOps returns a ready ReplicationPolicy with backend IDs.
+// readyPolicyForOps returns a ready ReplicationPolicy with BackendPolicyID set.
 func readyPolicyForOps(name string) *simplyblockv1alpha1.ReplicationPolicy {
 	return &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
+		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
 		Status: simplyblockv1alpha1.ReplicationPolicyStatus{
 			Ready:           true,
-			BackendTargetID: "tgt-uuid",
 			BackendPolicyID: "bpol-uuid",
 		},
 	}
 }
 
-// pairForPolicy creates a pair that belongs to a policy with a valid volume handle.
-func pairForPolicy() *simplyblockv1alpha1.ReplicationPair {
-	return &simplyblockv1alpha1.ReplicationPair{
+// slotForPolicy creates a ReplicationSlot that belongs to policy "pol" with a valid volume handle.
+func slotForPolicy() *simplyblockv1alpha1.ReplicationSlot {
+	return &simplyblockv1alpha1.ReplicationSlot{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol-pvc1", Namespace: "default"},
-		Spec: simplyblockv1alpha1.ReplicationPairSpec{
+		Spec: simplyblockv1alpha1.ReplicationSlotSpec{
 			PolicyRef: "pol",
 			PVCRef:    "pvc1",
 			VolumeID:  "cluster-u:pool-u:vol-u",
 		},
-		Status: simplyblockv1alpha1.ReplicationPairStatus{
-			State:        string(simplyblockv1alpha1.ReplicationPairStateReplicating),
+		Status: simplyblockv1alpha1.ReplicationSlotStatus{
+			State:        string(simplyblockv1alpha1.ReplicationSlotStateReplicating),
 			TargetLvolID: "tgt-lvol",
 		},
 	}
@@ -111,14 +110,11 @@ func TestOps_AddsFinalizer(t *testing.T) {
 		},
 	}
 	r, cl := newOpsReplReconciler(t, pol, ops)
-	if err := cl.Status().Update(context.Background(), pol); err != nil {
-		t.Fatalf("pre-set policy status: %v", err)
-	}
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 	_, _ = r.Reconcile(context.Background(), opsRequest("ops1"))
 
 	got := getOps(t, cl)
-	if !containsString(got.Finalizers, finalizerReplicationOps) {
+	if !contains(got.Finalizers, finalizerReplicationOps) {
 		t.Errorf("finalizer not added; finalizers = %v", got.Finalizers)
 	}
 }
@@ -135,13 +131,7 @@ func TestOps_TerminalSucceeded_NoOp(t *testing.T) {
 		Spec:   simplyblockv1alpha1.ReplicationOpsSpec{Action: "failover", Scope: "policy", Ref: "pol"},
 		Status: simplyblockv1alpha1.ReplicationOpsStatus{Phase: string(simplyblockv1alpha1.ReplicationOpsPhaseSucceeded)},
 	}
-	r, cl := newOpsReplReconciler(t, pol, ops)
-	if err := cl.Status().Update(context.Background(), pol); err != nil {
-		t.Fatalf("pre-set policy status: %v", err)
-	}
-	if err := cl.Status().Update(context.Background(), ops); err != nil {
-		t.Fatalf("pre-set ops status: %v", err)
-	}
+	r, _ := newOpsReplReconciler(t, pol, ops)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
 	res, err := r.Reconcile(context.Background(), opsRequest("ops1"))
@@ -163,13 +153,7 @@ func TestOps_TerminalFailed_NoOp(t *testing.T) {
 		Spec:   simplyblockv1alpha1.ReplicationOpsSpec{Action: "failover", Scope: "policy", Ref: "pol"},
 		Status: simplyblockv1alpha1.ReplicationOpsStatus{Phase: string(simplyblockv1alpha1.ReplicationOpsPhaseFailed)},
 	}
-	r, cl := newOpsReplReconciler(t, pol, ops)
-	if err := cl.Status().Update(context.Background(), pol); err != nil {
-		t.Fatalf("pre-set policy status: %v", err)
-	}
-	if err := cl.Status().Update(context.Background(), ops); err != nil {
-		t.Fatalf("pre-set ops status: %v", err)
-	}
+	r, _ := newOpsReplReconciler(t, pol, ops)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
 	res, err := r.Reconcile(context.Background(), opsRequest("ops1"))
@@ -211,8 +195,7 @@ func TestOps_PolicyNotFound_Fails(t *testing.T) {
 
 func TestOps_MutualExclusion_WaitsIfLocked(t *testing.T) {
 	pol := readyPolicyForOps("pol")
-	pol.Status.ActiveOpsRef = "other-ops" // locked by someone else
-
+	pol.Status.ActiveOpsRef = "other-ops" // set before WithObjects so it's seeded
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "ops1", Namespace: "default",
@@ -223,9 +206,6 @@ func TestOps_MutualExclusion_WaitsIfLocked(t *testing.T) {
 		},
 	}
 	r, cl := newOpsReplReconciler(t, pol, ops)
-	if err := cl.Status().Update(context.Background(), pol); err != nil {
-		t.Fatalf("pre-set policy status: %v", err)
-	}
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
 	res, err := r.Reconcile(context.Background(), opsRequest("ops1"))
@@ -235,7 +215,6 @@ func TestOps_MutualExclusion_WaitsIfLocked(t *testing.T) {
 	if res.RequeueAfter == 0 {
 		t.Errorf("expected requeue while policy lock is held by another ops")
 	}
-	// Phase must not advance.
 	got := getOps(t, cl)
 	if got.Status.Phase == string(simplyblockv1alpha1.ReplicationOpsPhaseRunning) {
 		t.Errorf("ops phase advanced to Running while lock was held by another")
@@ -256,9 +235,6 @@ func TestOps_UnknownAction_Fails(t *testing.T) {
 		},
 	}
 	r, cl := newOpsReplReconciler(t, pol, ops)
-	if err := cl.Status().Update(context.Background(), pol); err != nil {
-		t.Fatalf("pre-set policy status: %v", err)
-	}
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
 	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
@@ -275,7 +251,7 @@ func TestOps_UnknownAction_Fails(t *testing.T) {
 
 func TestOps_Failover_ScopePolicy_Success(t *testing.T) {
 	pol := readyPolicyForOps("pol")
-	pair := pairForPolicy()
+	slot := slotForPolicy()
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "ops1", Namespace: "default",
@@ -285,13 +261,7 @@ func TestOps_Failover_ScopePolicy_Success(t *testing.T) {
 			Action: "failover", Scope: utils.ReplicationOpsScopePolicy, Ref: "pol",
 		},
 	}
-	r, cl := newOpsReplReconciler(t, pol, pair, ops)
-	if err := cl.Status().Update(context.Background(), pol); err != nil {
-		t.Fatalf("pre-set policy status: %v", err)
-	}
-	if err := cl.Status().Update(context.Background(), pair); err != nil {
-		t.Fatalf("pre-set pair status: %v", err)
-	}
+	r, cl := newOpsReplReconciler(t, pol, slot, ops)
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -316,7 +286,7 @@ func TestOps_Failover_ScopePolicy_Success(t *testing.T) {
 
 func TestOps_Failover_ScopeTarget_Success(t *testing.T) {
 	pol := readyPolicyForOps("pol")
-	pair := pairForPolicy()
+	slot := slotForPolicy()
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "ops1", Namespace: "default",
@@ -326,13 +296,7 @@ func TestOps_Failover_ScopeTarget_Success(t *testing.T) {
 			Action: "failover", Scope: utils.ReplicationOpsScopeTarget, Ref: "pol",
 		},
 	}
-	r, cl := newOpsReplReconciler(t, pol, pair, ops)
-	if err := cl.Status().Update(context.Background(), pol); err != nil {
-		t.Fatalf("pre-set policy status: %v", err)
-	}
-	if err := cl.Status().Update(context.Background(), pair); err != nil {
-		t.Fatalf("pre-set pair status: %v", err)
-	}
+	r, cl := newOpsReplReconciler(t, pol, slot, ops)
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -353,40 +317,22 @@ func TestOps_Failover_ScopeTarget_Success(t *testing.T) {
 // ---------- failover scope=volume success ----------
 
 func TestOps_Failover_ScopeVolume_Success(t *testing.T) {
+	// For scope=volume, ops.Spec.Ref is the slot name.
+	// resolveAffectedPolicyName also returns ops.Spec.Ref, so the reconciler
+	// tries to find a policy with that name. Create one as a workaround.
 	pol := readyPolicyForOps("pol")
-	pair := pairForPolicy()
+	slot := slotForPolicy() // named "pol-pvc1"
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "ops1", Namespace: "default",
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
-			// For scope=volume, Ref is the pair name.
 			Action: "failover", Scope: utils.ReplicationOpsScopeVolume, Ref: "pol-pvc1",
 		},
 	}
-	r, cl := newOpsReplReconciler(t, pol, pair, ops)
-	if err := cl.Status().Update(context.Background(), pol); err != nil {
-		t.Fatalf("pre-set policy status: %v", err)
-	}
-	if err := cl.Status().Update(context.Background(), pair); err != nil {
-		t.Fatalf("pre-set pair status: %v", err)
-	}
-
-	// For scope=volume, resolveAffectedPolicyName returns ops.Spec.Ref (the pair name).
-	// The reconciler will fail to find a policy named "pol-pvc1", so we instead
-	// pre-set the policy with the pair's name for this test to work as expected.
-	// In practice scope=volume for failover uses the pair ref as the policy ref.
-	// We test the policy-lock path by using scope=policy above.
-	// For scope=volume, the lookup of "pol-pvc1" as a policy will fail (NotFound)
-	// and failOps will be called — so let's pre-create a policy with that name.
 	polForVolume := readyPolicyForOps("pol-pvc1")
-	if err := cl.Create(context.Background(), polForVolume); err != nil {
-		t.Fatalf("create secondary policy: %v", err)
-	}
-	if err := cl.Status().Update(context.Background(), polForVolume); err != nil {
-		t.Fatalf("pre-set secondary policy status: %v", err)
-	}
+	r, cl := newOpsReplReconciler(t, pol, slot, ops, polForVolume)
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -408,8 +354,8 @@ func TestOps_Failover_ScopeVolume_Success(t *testing.T) {
 
 func TestOps_Failback_Success(t *testing.T) {
 	pol := readyPolicyForOps("pol")
-	pair := pairForPolicy()
-	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateFailedOver)
+	slot := slotForPolicy()
+	slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateFailedOver)
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "ops1", Namespace: "default",
@@ -419,13 +365,7 @@ func TestOps_Failback_Success(t *testing.T) {
 			Action: "failback", Scope: utils.ReplicationOpsScopePolicy, Ref: "pol",
 		},
 	}
-	r, cl := newOpsReplReconciler(t, pol, pair, ops)
-	if err := cl.Status().Update(context.Background(), pol); err != nil {
-		t.Fatalf("pre-set policy status: %v", err)
-	}
-	if err := cl.Status().Update(context.Background(), pair); err != nil {
-		t.Fatalf("pre-set pair status: %v", err)
-	}
+	r, cl := newOpsReplReconciler(t, pol, slot, ops)
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -445,13 +385,13 @@ func TestOps_Failback_Success(t *testing.T) {
 		t.Errorf("unexpected results: %+v", got.Status.Results)
 	}
 
-	// Pair direction should be updated back to source.
-	gotPair := &simplyblockv1alpha1.ReplicationPair{}
-	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pol-pvc1"}, gotPair); err != nil {
-		t.Fatalf("get pair: %v", err)
+	// Slot direction should be updated back to source.
+	gotSlot := &simplyblockv1alpha1.ReplicationSlot{}
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pol-pvc1"}, gotSlot); err != nil {
+		t.Fatalf("get slot: %v", err)
 	}
-	if gotPair.Status.Direction != string(simplyblockv1alpha1.ReplicationPairDirectionSource) {
-		t.Errorf("pair direction = %q, want source after failback", gotPair.Status.Direction)
+	if gotSlot.Status.Direction != string(simplyblockv1alpha1.ReplicationSlotDirectionSource) {
+		t.Errorf("slot direction = %q, want source after failback", gotSlot.Status.Direction)
 	}
 }
 
@@ -459,9 +399,8 @@ func TestOps_Failback_Success(t *testing.T) {
 
 func TestOps_Failback_PartialFailure(t *testing.T) {
 	pol := readyPolicyForOps("pol")
-	pair := pairForPolicy()
-	// Use an invalid VolumeID so the pair fails during failback.
-	pair.Spec.VolumeID = "bad-handle"
+	slot := slotForPolicy()
+	slot.Spec.VolumeID = "bad-handle" // invalid handle → fails failback
 	ops := &simplyblockv1alpha1.ReplicationOps{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "ops1", Namespace: "default",
@@ -471,13 +410,7 @@ func TestOps_Failback_PartialFailure(t *testing.T) {
 			Action: "failback", Scope: utils.ReplicationOpsScopePolicy, Ref: "pol",
 		},
 	}
-	r, cl := newOpsReplReconciler(t, pol, pair, ops)
-	if err := cl.Status().Update(context.Background(), pol); err != nil {
-		t.Fatalf("pre-set policy status: %v", err)
-	}
-	if err := cl.Status().Update(context.Background(), pair); err != nil {
-		t.Fatalf("pre-set pair status: %v", err)
-	}
+	r, cl := newOpsReplReconciler(t, pol, slot, ops)
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
 	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
@@ -486,9 +419,8 @@ func TestOps_Failback_PartialFailure(t *testing.T) {
 	}
 	got := getOps(t, cl)
 	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseFailed) {
-		t.Errorf("phase = %q, want Failed when a pair's VolumeID is invalid", got.Status.Phase)
+		t.Errorf("phase = %q, want Failed when a slot's VolumeID is invalid", got.Status.Phase)
 	}
-	// failOps does not persist per-volume results; only Phase and Message are set.
 }
 
 // ---------- succeedOps releases lock ----------
@@ -505,19 +437,12 @@ func TestOps_SucceedOps_ReleasesLock(t *testing.T) {
 		Status: simplyblockv1alpha1.ReplicationOpsStatus{Phase: string(simplyblockv1alpha1.ReplicationOpsPhaseRunning)},
 	}
 	r, cl := newOpsReplReconciler(t, pol, ops)
-	if err := cl.Status().Update(context.Background(), pol); err != nil {
-		t.Fatalf("pre-set policy status: %v", err)
-	}
-	if err := cl.Status().Update(context.Background(), ops); err != nil {
-		t.Fatalf("pre-set ops status: %v", err)
-	}
 
 	_, err := r.succeedOps(context.Background(), ops, "done", nil)
 	if err != nil {
 		t.Fatalf("succeedOps: %v", err)
 	}
 
-	// Policy lock must be released.
 	p := &simplyblockv1alpha1.ReplicationPolicy{}
 	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pol"}, p); err != nil {
 		t.Fatalf("get policy: %v", err)
@@ -541,19 +466,12 @@ func TestOps_FailOps_ReleasesLock(t *testing.T) {
 		Status: simplyblockv1alpha1.ReplicationOpsStatus{Phase: string(simplyblockv1alpha1.ReplicationOpsPhaseRunning)},
 	}
 	r, cl := newOpsReplReconciler(t, pol, ops)
-	if err := cl.Status().Update(context.Background(), pol); err != nil {
-		t.Fatalf("pre-set policy status: %v", err)
-	}
-	if err := cl.Status().Update(context.Background(), ops); err != nil {
-		t.Fatalf("pre-set ops status: %v", err)
-	}
 
 	_, err := r.failOps(context.Background(), ops, "something went wrong")
 	if err != nil {
 		t.Fatalf("failOps: %v", err)
 	}
 
-	// Policy lock must be released.
 	p := &simplyblockv1alpha1.ReplicationPolicy{}
 	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pol"}, p); err != nil {
 		t.Fatalf("get policy: %v", err)

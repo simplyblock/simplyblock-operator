@@ -21,15 +21,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -41,46 +35,24 @@ import (
 )
 
 const (
-	// replPairRequeueReplicating is how often the reconciler syncs lastReplicatedAt
-	// from the backend while a pair is in the steady-state replicating state.
-	replPairRequeueReplicating = 60 * time.Second
-	// replPairRequeueError is the back-off interval after a backend call fails.
+	replPairSyncInterval = 60 * time.Second
 	replPairRequeueError = 30 * time.Second
-
-	replMsgReplicating = "Replicating"
 )
 
-// replVolumeReplicationStatus is the response from
-// GET /api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/{vol}/replication.
-type replVolumeReplicationStatus struct {
-	ReplicationID   string      `json:"replication_id"`
-	SourceLvolID    string      `json:"source_lvol_id"`
-	TargetLvolID    string      `json:"target_lvol_id"`
-	SourceClusterID string      `json:"source_cluster_id"`
-	TargetClusterID string      `json:"target_cluster_id"`
-	Mode            string      `json:"mode"`
-	State           string      `json:"state"`
-	Direction       string      `json:"direction"`
-	TargetNQN       string      `json:"target_nqn"`
-	TargetNsID      int         `json:"target_ns_id"`
-	IsSource        bool        `json:"is_source"`
-	LastSnapshotAt  interface{} `json:"last_snapshot_at"` // string or null
-}
-
 // ReplicationPairReconciler reconciles ReplicationPair resources.
-// It drives the state machine: attaching → replicating → (cutover / failover) → detaching → (deleted).
+// It ensures the backend ReplicationTarget exists for the configured source→target cluster
+// pair and manages its lifecycle. The backend target ID is stored in status.backendTargetID
+// for ReplicationPolicy resources to reference.
 type ReplicationPairReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder events.EventRecorder
+	Scheme *runtime.Scheme
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpairs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpairs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpairs/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
-// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
 
 func (r *ReplicationPairReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -92,364 +64,165 @@ func (r *ReplicationPairReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	apiClient := webapi.NewClient()
 
-	// Handle deletion: the pair must detach from the backend before the CR is removed.
 	if !pair.DeletionTimestamp.IsZero() {
-		return r.reconcileDetach(ctx, &pair, apiClient)
+		return r.reconcileDelete(ctx, &pair, apiClient)
 	}
 
-	// Ensure finalizer so we can run the backend detach on deletion.
 	if !controllerutil.ContainsFinalizer(&pair, utils.FinalizerReplicationPair) {
 		controllerutil.AddFinalizer(&pair, utils.FinalizerReplicationPair)
 		return ctrl.Result{}, r.Update(ctx, &pair)
 	}
 
-	// Fetch the owning ReplicationPolicy; fail fast if it is not ready.
-	var policy simplyblockv1alpha1.ReplicationPolicy
-	if err := r.Get(ctx, types.NamespacedName{Name: pair.Spec.PolicyRef, Namespace: pair.Namespace}, &policy); err != nil {
-		if apierrors.IsNotFound(err) {
-			return r.setError(ctx, &pair, fmt.Sprintf("ReplicationPolicy %q not found", pair.Spec.PolicyRef))
+	// Resolve cluster UUIDs from StorageCluster names (or pass-through if already a UUID).
+	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, pair.Namespace, pair.Spec.SourceCluster)
+	if err != nil {
+		log.Error(err, "failed to resolve source cluster UUID", "sourceCluster", pair.Spec.SourceCluster)
+		return ctrl.Result{RequeueAfter: replPairRequeueError}, nil
+	}
+	targetUUID, err := utils.ResolveClusterUUID(ctx, r.Client, pair.Namespace, pair.Spec.TargetCluster)
+	if err != nil {
+		log.Error(err, "failed to resolve target cluster UUID", "targetCluster", pair.Spec.TargetCluster)
+		return ctrl.Result{RequeueAfter: replPairRequeueError}, nil
+	}
+
+	// Ensure the backend ReplicationTarget exists.
+	if pair.Status.BackendTargetID == "" {
+		targetID, err := r.ensureBackendTarget(ctx, &pair, apiClient, clusterUUID, targetUUID)
+		if err != nil {
+			log.Error(err, "failed to ensure backend ReplicationTarget", "pair", pair.Name)
+			patch := client.MergeFrom(pair.DeepCopy())
+			pair.Status.Ready = false
+			pair.Status.Message = fmt.Sprintf("failed to create backend ReplicationTarget: %v", err)
+			_ = r.Status().Patch(ctx, &pair, patch)
+			return ctrl.Result{RequeueAfter: replPairRequeueError}, nil
 		}
-		return ctrl.Result{}, fmt.Errorf("get ReplicationPolicy %q: %w", pair.Spec.PolicyRef, err)
-	}
-	if !policy.Status.Ready {
-		log.Info("ReplicationPolicy not ready; waiting", "policy", policy.Name)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		patch := client.MergeFrom(pair.DeepCopy())
+		pair.Status.BackendTargetID = targetID
+		pair.Status.Ready = true
+		pair.Status.Message = "ReplicationTarget ready"
+		if err := r.Status().Patch(ctx, &pair, patch); err != nil {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		log.Info("ReplicationPair ready", "pair", pair.Name, "backendTargetID", targetID)
+	} else if !pair.Status.Ready {
+		patch := client.MergeFrom(pair.DeepCopy())
+		pair.Status.Ready = true
+		pair.Status.Message = "ReplicationTarget ready"
+		_ = r.Status().Patch(ctx, &pair, patch)
 	}
 
-	// Parse the CSI volume handle stored in spec.volumeID: "<clusterID>:<poolID>:<volumeID>"
-	clusterID, poolID, volumeID, ok := splitVolumeHandle(pair.Spec.VolumeID)
-	if !ok {
-		return r.setError(ctx, &pair, fmt.Sprintf("invalid VolumeID %q: expected <cluster>:<pool>:<volume>", pair.Spec.VolumeID))
-	}
-
-	// Dispatch on current state.
-	switch simplyblockv1alpha1.ReplicationPairState(pair.Status.State) {
-	case "": // brand-new pair
-		return r.reconcileAttach(ctx, &pair, &policy, apiClient, clusterID, poolID, volumeID)
-	case simplyblockv1alpha1.ReplicationPairStateAttaching:
-		return r.reconcilePollAttach(ctx, &pair, volumeID)
-	case simplyblockv1alpha1.ReplicationPairStateReplicating:
-		return r.reconcileReplicating(ctx, &pair, apiClient, clusterID, poolID, volumeID)
-	case simplyblockv1alpha1.ReplicationPairStateCutoverPending,
-		simplyblockv1alpha1.ReplicationPairStateCutoverDone,
-		simplyblockv1alpha1.ReplicationPairStateFailedOver:
-		// Sync backend state into status; user-driven transitions happen via ReplicationOps.
-		return r.reconcileSyncStatus(ctx, &pair, apiClient, clusterID, poolID, volumeID)
-	case simplyblockv1alpha1.ReplicationPairStateDetaching:
-		// Detaching was triggered externally (e.g. by a ReplicationOps). Drive it
-		// to completion and delete the CR when done.
-		return r.reconcileDetach(ctx, &pair, apiClient)
-	case simplyblockv1alpha1.ReplicationPairStateError:
-		// Back off and retry from attaching.
-		log.Info("ReplicationPair in error state; retrying attach", "pair", pair.Name)
-		return r.reconcileAttach(ctx, &pair, &policy, apiClient, clusterID, poolID, volumeID)
-	default:
-		return r.setError(ctx, &pair, fmt.Sprintf("unknown state %q", pair.Status.State))
-	}
+	return ctrl.Result{RequeueAfter: replPairSyncInterval}, nil
 }
 
-// reconcileAttach sends PUT /{vol} with replication_policy_id.
-// The sbcli PUT is synchronous — attach_policy/replication_start complete before the response
-// returns — so a successful 2xx means replication is active and we can transition directly to
-// replicating without a polling phase.
-func (r *ReplicationPairReconciler) reconcileAttach(
+// reconcileDelete blocks deletion while any ReplicationPolicy still references this pair,
+// then deletes the backend ReplicationTarget before removing the finalizer.
+func (r *ReplicationPairReconciler) reconcileDelete(
 	ctx context.Context,
 	pair *simplyblockv1alpha1.ReplicationPair,
-	policy *simplyblockv1alpha1.ReplicationPolicy,
 	apiClient *webapi.Client,
-	clusterID, poolID, volumeID string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s",
-		clusterID, poolID, volumeID)
-	reqBody := map[string]interface{}{
-		"replication_policy_id": policy.Status.BackendPolicyID,
+	// Block while policies still reference this pair.
+	var policies simplyblockv1alpha1.ReplicationPolicyList
+	if err := r.List(ctx, &policies,
+		client.InNamespace(pair.Namespace),
+		client.MatchingFields{"spec.pairRef": pair.Name},
+	); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list ReplicationPolicies for pair %q: %w", pair.Name, err)
 	}
-	body, status, err := apiClient.Do(ctx, http.MethodPut, endpoint, reqBody)
+	if len(policies.Items) > 0 {
+		log.Info("Waiting for ReplicationPolicies to be deleted before removing pair",
+			"pair", pair.Name, "policyCount", len(policies.Items))
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	// Delete the backend ReplicationTarget.
+	if pair.Status.BackendTargetID != "" {
+		clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, pair.Namespace, pair.Spec.SourceCluster)
+		if err != nil {
+			log.Error(err, "failed to resolve source cluster UUID for target deletion", "pair", pair.Name)
+			return ctrl.Result{RequeueAfter: replPairRequeueError}, nil
+		}
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/targets/%s", clusterUUID, pair.Status.BackendTargetID)
+		body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
+		if err != nil || (status >= 300 && status != http.StatusNotFound) {
+			if err == nil {
+				err = fmt.Errorf("status %d: %s", status, string(body))
+			}
+			log.Error(err, "failed to delete backend ReplicationTarget", "id", pair.Status.BackendTargetID)
+			return ctrl.Result{RequeueAfter: replPairRequeueError}, nil
+		}
+		log.Info("Deleted backend ReplicationTarget", "id", pair.Status.BackendTargetID)
+	}
+
+	controllerutil.RemoveFinalizer(pair, utils.FinalizerReplicationPair)
+	return ctrl.Result{}, client.IgnoreNotFound(r.Update(ctx, pair))
+}
+
+// ensureBackendTarget checks for an existing backend ReplicationTarget for this pair's
+// target cluster; creates one if absent. Returns the target's backend UUID.
+func (r *ReplicationPairReconciler) ensureBackendTarget(
+	ctx context.Context,
+	pair *simplyblockv1alpha1.ReplicationPair,
+	apiClient *webapi.Client,
+	clusterUUID string,
+	targetUUID string,
+) (string, error) {
+	listEndpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/targets", clusterUUID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, listEndpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))
 		}
-		log.Error(err, "PUT volume replication_policy_id failed", "pair", pair.Name)
-		return r.setError(ctx, pair, fmt.Sprintf("attach failed: %v", err))
+		return "", fmt.Errorf("list replication targets: %w", err)
 	}
-
-	now := metav1.Now()
-	patch := client.MergeFrom(pair.DeepCopy())
-	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateReplicating)
-	pair.Status.Direction = string(simplyblockv1alpha1.ReplicationPairDirectionSource)
-	pair.Status.Message = replMsgReplicating
-	pair.Status.LastReplicatedAt = &now
-	if err := r.Status().Patch(ctx, pair, patch); err != nil {
-		return ctrl.Result{Requeue: true}, nil
+	var targets []replicationTargetEntry
+	if err := json.Unmarshal(body, &targets); err != nil {
+		return "", fmt.Errorf("unmarshal replication/targets response: %w", err)
 	}
-
-	r.Recorder.Eventf(pair, nil, corev1.EventTypeNormal, "Replicating", "Replicating",
-		"Volume %s is now replicating to policy %s", volumeID, pair.Spec.PolicyRef)
-	return ctrl.Result{RequeueAfter: replPairRequeueReplicating}, nil
-}
-
-// reconcilePollAttach handles pairs that are still in the legacy "attaching" state.
-// The LVolReplication object only exists on the backend after cutover/failover, so polling
-// GET .../replication in this phase would always return 404. Transition immediately to
-// replicating — the PUT that set replication_policy_id already completed synchronously.
-func (r *ReplicationPairReconciler) reconcilePollAttach(
-	ctx context.Context,
-	pair *simplyblockv1alpha1.ReplicationPair,
-	volumeID string,
-) (ctrl.Result, error) {
-	now := metav1.Now()
-	patch := client.MergeFrom(pair.DeepCopy())
-	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateReplicating)
-	pair.Status.Direction = string(simplyblockv1alpha1.ReplicationPairDirectionSource)
-	pair.Status.Message = replMsgReplicating
-	pair.Status.LastReplicatedAt = &now
-	if err := r.Status().Patch(ctx, pair, patch); err != nil {
-		return ctrl.Result{Requeue: true}, nil
-	}
-	r.Recorder.Eventf(pair, nil, corev1.EventTypeNormal, "Replicating", "Replicating",
-		"Volume %s is now replicating to policy %s", volumeID, pair.Spec.PolicyRef)
-	return ctrl.Result{RequeueAfter: replPairRequeueReplicating}, nil
-}
-
-// reconcileReplicating syncs status.lastReplicatedAt from the backend and watches
-// for external state transitions (cutover, failover).
-func (r *ReplicationPairReconciler) reconcileReplicating(
-	ctx context.Context,
-	pair *simplyblockv1alpha1.ReplicationPair,
-	apiClient *webapi.Client,
-	clusterID, poolID, volumeID string,
-) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
-	status, err := r.fetchReplicationStatus(ctx, apiClient, clusterID, poolID, volumeID)
-	if err != nil {
-		log.Error(err, "GET replication failed during sync", "pair", pair.Name)
-		return ctrl.Result{RequeueAfter: replPairRequeueReplicating}, nil
-	}
-	if status == nil {
-		// The LVolReplication object only exists after a cutover or failover — during normal
-		// replication the backend returns 404. This is expected; keep polling.
-		return ctrl.Result{RequeueAfter: replPairRequeueReplicating}, nil
-	}
-
-	patch := client.MergeFrom(pair.DeepCopy())
-	changed := false
-
-	// Reflect externally-triggered state transitions.
-	switch status.State {
-	case utils.ReplicationBackendStateReplicating:
-		// Steady state — update timestamp.
-	case "cutover_pending":
-		pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateCutoverPending)
-		pair.Status.Message = "Cutover pending — awaiting replication_commit"
-		changed = true
-		r.Recorder.Eventf(pair, nil, corev1.EventTypeNormal, "CutoverPending", "CutoverPending",
-			"Volume %s cutover is pending", volumeID)
-	case "cutover_done":
-		pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateCutoverDone)
-		pair.Status.Message = "Cutover done"
-		changed = true
-	case "failed_over":
-		pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateFailedOver)
-		pair.Status.Direction = string(simplyblockv1alpha1.ReplicationPairDirectionTarget)
-		pair.Status.TargetNQN = status.TargetNQN
-		pair.Status.Message = "Failed over to target cluster"
-		changed = true
-		r.Recorder.Eventf(pair, nil, corev1.EventTypeNormal, "FailedOver", "FailedOver",
-			"Volume %s has failed over; target NQN: %s", volumeID, status.TargetNQN)
-	}
-
-	// Update lastReplicatedAt if the backend reports a newer snapshot.
-	if ts := parseLastSnapshotAt(status.LastSnapshotAt); ts != nil {
-		if pair.Status.LastReplicatedAt == nil || ts.After(pair.Status.LastReplicatedAt.Time) {
-			pair.Status.LastReplicatedAt = &metav1.Time{Time: *ts}
-			changed = true
+	for _, t := range targets {
+		if t.TargetClusterID == targetUUID {
+			return t.ID, nil
 		}
 	}
 
-	if changed {
-		if err := r.Status().Patch(ctx, pair, patch); err != nil {
-			return ctrl.Result{Requeue: true}, nil
-		}
-	}
-
-	return ctrl.Result{RequeueAfter: replPairRequeueReplicating}, nil
-}
-
-// reconcileSyncStatus reflects cutover/failover backend state into CR status.
-func (r *ReplicationPairReconciler) reconcileSyncStatus(
-	ctx context.Context,
-	pair *simplyblockv1alpha1.ReplicationPair,
-	apiClient *webapi.Client,
-	clusterID, poolID, volumeID string,
-) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
-	status, err := r.fetchReplicationStatus(ctx, apiClient, clusterID, poolID, volumeID)
-	if err != nil {
-		log.Error(err, "GET replication failed", "pair", pair.Name)
-		return ctrl.Result{RequeueAfter: replPairRequeueReplicating}, nil
-	}
-	if status == nil {
-		return ctrl.Result{RequeueAfter: replPairRequeueReplicating}, nil
-	}
-
-	patch := client.MergeFrom(pair.DeepCopy())
-	pair.Status.TargetNQN = status.TargetNQN
-	pair.Status.TargetLvolID = status.TargetLvolID
-
-	// If the backend moved back to replicating (e.g. after failback), follow it.
-	if status.State == utils.ReplicationBackendStateReplicating {
-		pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateReplicating)
-		direction := string(simplyblockv1alpha1.ReplicationPairDirectionSource)
-		if !status.IsSource {
-			direction = string(simplyblockv1alpha1.ReplicationPairDirectionTarget)
-		}
-		pair.Status.Direction = direction
-		pair.Status.Message = replMsgReplicating
-	}
-
-	if err := r.Status().Patch(ctx, pair, patch); err != nil {
-		return ctrl.Result{Requeue: true}, nil
-	}
-	return ctrl.Result{RequeueAfter: replPairRequeueReplicating}, nil
-}
-
-// reconcileDetach sends PUT /{vol} with replication_policy_id=null and removes the
-// finalizer so the pair CR can be GC'd.
-func (r *ReplicationPairReconciler) reconcileDetach(
-	ctx context.Context,
-	pair *simplyblockv1alpha1.ReplicationPair,
-	apiClient *webapi.Client,
-) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
-	// Transition to detaching state if not already there.
-	if pair.Status.State != string(simplyblockv1alpha1.ReplicationPairStateDetaching) {
-		patch := client.MergeFrom(pair.DeepCopy())
-		pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateDetaching)
-		pair.Status.Message = "Detaching replication policy"
-		if err := r.Status().Patch(ctx, pair, patch); err != nil {
-			return ctrl.Result{Requeue: true}, nil
-		}
-	}
-
-	// Nothing to call if we never got a volume handle (e.g. pair was never attached).
-	clusterID, poolID, volumeID, ok := splitVolumeHandle(pair.Spec.VolumeID)
-	if !ok {
-		log.Info("No valid volume handle; skipping backend detach", "pair", pair.Name)
-		return r.removePairFinalizer(ctx, pair)
-	}
-
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s",
-		clusterID, poolID, volumeID)
+	// Not found — create.
 	reqBody := map[string]interface{}{
-		"replication_policy_id": nil,
+		"target_name":       fmt.Sprintf("simplyblock-repl-%s", pair.Spec.TargetCluster),
+		"target_cluster_id": targetUUID,
 	}
-	body, status, err := apiClient.Do(ctx, http.MethodPut, endpoint, reqBody)
-	if err != nil || (status >= 300 && status != http.StatusNotFound && status != http.StatusConflict) {
+	body, status, err = apiClient.Do(ctx, http.MethodPost, listEndpoint, reqBody)
+	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))
 		}
-		log.Error(err, "PUT volume replication_policy_id=null failed; retrying", "pair", pair.Name)
-		return ctrl.Result{RequeueAfter: replPairRequeueError}, nil
+		return "", fmt.Errorf("create replication target: %w", err)
 	}
-
-	// 409 means a cutover is in flight; wait for it to settle.
-	if status == http.StatusConflict {
-		log.Info("PUT replication_policy_id=null returned 409 (cutover in flight); retrying", "pair", pair.Name)
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	var created idResponse
+	if err := json.Unmarshal(body, &created); err != nil {
+		return "", fmt.Errorf("unmarshal create-target response: %w", err)
 	}
-
-	r.Recorder.Eventf(pair, nil, corev1.EventTypeNormal, "Detached", "Detached",
-		"Replication detached for volume %s", volumeID)
-
-	return r.removePairFinalizer(ctx, pair)
-}
-
-// removePairFinalizer removes the FinalizerReplicationPair and returns, allowing
-// the pair CR to be garbage-collected.
-func (r *ReplicationPairReconciler) removePairFinalizer(
-	ctx context.Context,
-	pair *simplyblockv1alpha1.ReplicationPair,
-) (ctrl.Result, error) {
-	if controllerutil.ContainsFinalizer(pair, utils.FinalizerReplicationPair) {
-		controllerutil.RemoveFinalizer(pair, utils.FinalizerReplicationPair)
-		return ctrl.Result{}, client.IgnoreNotFound(r.Update(ctx, pair))
+	if created.ID == "" {
+		return "", fmt.Errorf("create replication target: empty id in response: %s", string(body))
 	}
-	return ctrl.Result{}, nil
-}
-
-// setError writes status.state = error and status.message.
-func (r *ReplicationPairReconciler) setError(
-	ctx context.Context,
-	pair *simplyblockv1alpha1.ReplicationPair,
-	msg string,
-) (ctrl.Result, error) {
-	patch := client.MergeFrom(pair.DeepCopy())
-	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateError)
-	pair.Status.Message = msg
-	if err := r.Status().Patch(ctx, pair, patch); err != nil {
-		return ctrl.Result{Requeue: true}, nil
-	}
-	r.Recorder.Eventf(pair, nil, corev1.EventTypeWarning, "Error", "Error",
-		"ReplicationPair %s error: %s", pair.Name, msg)
-	return ctrl.Result{RequeueAfter: replPairRequeueError}, nil
-}
-
-// fetchReplicationStatus calls GET /{vol}/replication and returns the parsed status,
-// or nil if the backend returns 404 (no relationship established yet).
-func (r *ReplicationPairReconciler) fetchReplicationStatus(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	clusterID, poolID, volumeID string,
-) (*replVolumeReplicationStatus, error) {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication",
-		clusterID, poolID, volumeID)
-	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	if status == http.StatusNotFound {
-		return nil, nil
-	}
-	if status >= 300 {
-		return nil, fmt.Errorf("status %d: %s", status, string(body))
-	}
-	var rs replVolumeReplicationStatus
-	if err := json.Unmarshal(body, &rs); err != nil {
-		return nil, fmt.Errorf("unmarshal replication status: %w", err)
-	}
-	return &rs, nil
-}
-
-// splitVolumeHandle parses a simplyblock CSI volume handle
-// "<clusterUUID>:<poolUUID>:<volumeUUID>" into its components.
-func splitVolumeHandle(handle string) (clusterID, poolID, volumeID string, ok bool) {
-	parts := strings.SplitN(handle, ":", 3)
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return "", "", "", false
-	}
-	return parts[0], parts[1], parts[2], true
-}
-
-// parseLastSnapshotAt attempts to parse the last_snapshot_at field, which may be
-// a RFC3339 string or null.
-func parseLastSnapshotAt(v interface{}) *time.Time {
-	s, ok := v.(string)
-	if !ok || s == "" {
-		return nil
-	}
-	t, err := time.Parse(time.RFC3339, s)
-	if err != nil {
-		return nil
-	}
-	return &t
+	return created.ID, nil
 }
 
 func (r *ReplicationPairReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Index ReplicationPolicies by spec.pairRef so deletion can quickly check dependents.
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&simplyblockv1alpha1.ReplicationPolicy{},
+		"spec.pairRef",
+		func(obj client.Object) []string {
+			policy := obj.(*simplyblockv1alpha1.ReplicationPolicy)
+			return []string{policy.Spec.PairRef}
+		},
+	); err != nil {
+		return fmt.Errorf("index ReplicationPolicy.spec.pairRef: %w", err)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.ReplicationPair{}).
 		Named("replicationpair").

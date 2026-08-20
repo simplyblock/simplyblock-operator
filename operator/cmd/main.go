@@ -431,11 +431,18 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.ReplicationPairReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("replicationpair-controller"),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicationPair")
+		os.Exit(1)
+	}
+	if err := (&controller.ReplicationSlotReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("replicationslot-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ReplicationSlot")
 		os.Exit(1)
 	}
 	if err := (&controller.ReplicationOpsReconciler{

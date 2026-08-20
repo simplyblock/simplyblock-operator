@@ -41,8 +41,8 @@ const (
 
 // ReplicationOpsResult holds the outcome for a single volume in a ReplicationOps.
 type ReplicationOpsResult struct {
-	// PairRef is the name of the ReplicationPair CR.
-	PairRef string `json:"pairRef"`
+	// SlotRef is the name of the ReplicationSlot CR.
+	SlotRef string `json:"slotRef"`
 
 	// Status is the outcome for this volume.
 	// +kubebuilder:validation:Enum=succeeded;skipped;failed
@@ -65,16 +65,16 @@ type ReplicationOpsSpec struct {
 	Action string `json:"action"`
 
 	// Scope controls which volumes are affected. Immutable.
-	// target: all volumes whose ReplicationPair references the named policy's target.
+	// target: all volumes whose ReplicationSlot references the named policy's target.
 	// policy: all volumes managed by the named ReplicationPolicy CR.
-	// volume: a single ReplicationPair (unplanned per-volume failover).
+	// volume: a single ReplicationSlot (unplanned per-volume failover).
 	// +kubebuilder:validation:Enum=target;policy;volume
 	// +kubebuilder:validation:Required
 	Scope string `json:"scope"`
 
 	// Ref is the name of the resource identified by Scope:
 	// a ReplicationPolicy name for scope=policy or scope=target,
-	// or a ReplicationPair name for scope=volume. Immutable.
+	// or a ReplicationSlot name for scope=volume. Immutable.
 	// +kubebuilder:validation:Required
 	Ref string `json:"ref"`
 
@@ -89,6 +89,11 @@ type ReplicationOpsStatus struct {
 	// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed
 	// +optional
 	Phase string `json:"phase,omitempty"`
+
+	// Subphase describes what the operation is currently doing within the phase
+	// (e.g. "TriggeringFailover", "UpdatingSlotStatuses", "ReleasingLock").
+	// +optional
+	Subphase string `json:"subphase,omitempty"`
 
 	// Message is a human-readable description of the current phase.
 	// +optional
@@ -114,13 +119,13 @@ type ReplicationOpsStatus struct {
 // +kubebuilder:printcolumn:name="Scope",type=string,JSONPath=".spec.scope"
 // +kubebuilder:printcolumn:name="Ref",type=string,JSONPath=".spec.ref"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
-// +kubebuilder:printcolumn:name="Message",type=string,JSONPath=".status.message"
+// +kubebuilder:printcolumn:name="Subphase",type=string,JSONPath=".status.subphase"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // ReplicationOps is a one-shot user-driven CR for imperative replication operations:
 // failover (planned or unplanned) and failback. The operator drives the backend calls
-// to completion and records per-volume outcomes. Only one ReplicationOps may be active
-// per ReplicationPolicy at a time, enforced via ReplicationPolicy.status.activeOpsRef.
+// to completion and records per-volume outcomes in status.results. Only one ReplicationOps
+// may be active per ReplicationPolicy at a time, enforced via ReplicationPolicy.status.activeOpsRef.
 type ReplicationOps struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

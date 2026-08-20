@@ -45,18 +45,18 @@ const (
 	// yet Bound (no PV handle available yet, so we cannot resolve the volume UUID).
 	pvcReplRequeueUnbound = 15 * time.Second
 
-	// pvcReplRequeueDetaching is how long to wait while the old ReplicationPair is
-	// finishing its detach before we create the replacement pair.
+	// pvcReplRequeueDetaching is how long to wait while the old ReplicationSlot is
+	// finishing its detach before we create the replacement slot.
 	pvcReplRequeueDetaching = 5 * time.Second
 )
 
 // PVCAnnotationWatcher watches PersistentVolumeClaims for changes to the
-// replication.simplyblock.io/policy annotation and creates, replaces, or deletes
-// ReplicationPair CRs accordingly.  It also watches StorageClasses so that an
-// annotation added to a StorageClass propagates to all PVCs using it.
+// storage.simplyblock.io/replication-policy annotation and creates, replaces, or
+// deletes ReplicationSlot CRs accordingly. It also watches StorageClasses so that
+// an annotation added to a StorageClass propagates to all PVCs using it.
 //
 // The watcher does NOT call the simplyblock backend directly; all backend calls are
-// handled by the ReplicationPair reconciler.
+// handled by the ReplicationSlot reconciler.
 type PVCAnnotationWatcher struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -65,7 +65,7 @@ type PVCAnnotationWatcher struct {
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
-// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpairs,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationslots,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies,verbs=get;list;watch
 
 func (r *PVCAnnotationWatcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -76,69 +76,56 @@ func (r *PVCAnnotationWatcher) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// PVC is being deleted: OwnerReference GC will trigger the pair's deletion, which
+	// PVC is being deleted: OwnerReference GC will trigger the slot's deletion, which
 	// its finalizer will catch. Nothing for the watcher to do here.
 	if !pvc.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
 
-	// Determine the desired policy name: PVC annotation wins over StorageClass annotation.
 	desiredPolicy, err := r.resolveDesiredPolicy(ctx, &pvc)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// Find the current ReplicationPair for this PVC (at most one).
-	currentPair, err := r.findPairForPVC(ctx, pvc.Namespace, pvc.Name)
+	currentSlot, err := r.findSlotForPVC(ctx, pvc.Namespace, pvc.Name)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// No pair and no desired policy — nothing to do.
-	if currentPair == nil && desiredPolicy == "" {
+	if currentSlot == nil && desiredPolicy == "" {
 		return ctrl.Result{}, nil
 	}
 
-	// A pair exists: evaluate whether it needs to be replaced or removed.
-	if currentPair != nil {
-		// Deletion in progress — wait for the pair reconciler to finish cleanup.
-		if !currentPair.DeletionTimestamp.IsZero() {
-			log.Info("Waiting for existing ReplicationPair to finish detaching",
-				"pair", currentPair.Name, "pvc", pvc.Name)
+	if currentSlot != nil {
+		if !currentSlot.DeletionTimestamp.IsZero() {
+			log.Info("Waiting for existing ReplicationSlot to finish detaching",
+				"slot", currentSlot.Name, "pvc", pvc.Name)
 			return ctrl.Result{RequeueAfter: pvcReplRequeueDetaching}, nil
 		}
 
-		// Steady state: policy unchanged.
-		if currentPair.Spec.PolicyRef == desiredPolicy {
+		if currentSlot.Spec.PolicyRef == desiredPolicy {
 			return ctrl.Result{}, nil
 		}
 
-		// Policy removed or changed: trigger detach by deleting the pair.
-		// The pair's finalizer (FinalizerReplicationPair) ensures the backend
-		// DELETE /vol/replication-policy runs before the CR is removed.
-		log.Info("Replication policy changed or removed; deleting existing ReplicationPair",
-			"pair", currentPair.Name, "oldPolicy", currentPair.Spec.PolicyRef, "newPolicy", desiredPolicy)
-		if err := r.Delete(ctx, currentPair); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("delete ReplicationPair %q: %w", currentPair.Name, err)
+		log.Info("Replication policy changed or removed; deleting existing ReplicationSlot",
+			"slot", currentSlot.Name, "oldPolicy", currentSlot.Spec.PolicyRef, "newPolicy", desiredPolicy)
+		if err := r.Delete(ctx, currentSlot); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("delete ReplicationSlot %q: %w", currentSlot.Name, err)
 		}
 
-		// If no new policy, we're done (backend cleanup continues in the background).
 		if desiredPolicy == "" {
 			return ctrl.Result{}, nil
 		}
 
-		// New policy required — wait for the old pair to be GC'd before creating.
 		return ctrl.Result{RequeueAfter: pvcReplRequeueDetaching}, nil
 	}
 
-	// No current pair — create one if the policy is set and the PVC is bound.
 	if desiredPolicy == "" {
 		return ctrl.Result{}, nil
 	}
 
-	// PVC must be Bound so we can resolve the backend volume UUID from the PV.
 	if pvc.Status.Phase != corev1.ClaimBound || pvc.Spec.VolumeName == "" {
-		log.Info("PVC not yet Bound; waiting before creating ReplicationPair",
+		log.Info("PVC not yet Bound; waiting before creating ReplicationSlot",
 			"pvc", pvc.Name, "phase", pvc.Status.Phase)
 		return ctrl.Result{RequeueAfter: pvcReplRequeueUnbound}, nil
 	}
@@ -149,7 +136,6 @@ func (r *PVCAnnotationWatcher) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{RequeueAfter: pvcReplRequeueUnbound}, nil
 	}
 
-	// Confirm the named ReplicationPolicy exists and is ready.
 	var policy simplyblockv1alpha1.ReplicationPolicy
 	if err := r.Get(ctx, types.NamespacedName{Name: desiredPolicy, Namespace: pvc.Namespace}, &policy); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -163,16 +149,15 @@ func (r *PVCAnnotationWatcher) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	// Create the ReplicationPair.
-	if err := r.createPair(ctx, &pvc, desiredPolicy, volumeID); err != nil {
+	if err := r.createSlot(ctx, &pvc, desiredPolicy, volumeID); err != nil {
 		return ctrl.Result{}, err
 	}
-	log.Info("Created ReplicationPair", "pvc", pvc.Name, "policy", desiredPolicy)
+	log.Info("Created ReplicationSlot", "pvc", pvc.Name, "policy", desiredPolicy)
 	return ctrl.Result{}, nil
 }
 
 // resolveDesiredPolicy returns the policy name for this PVC: the PVC annotation
-// takes precedence over the StorageClass annotation.  Returns "" when no policy is set.
+// takes precedence over the StorageClass annotation. Returns "" when no policy is set.
 func (r *PVCAnnotationWatcher) resolveDesiredPolicy(
 	ctx context.Context,
 	pvc *corev1.PersistentVolumeClaim,
@@ -193,17 +178,17 @@ func (r *PVCAnnotationWatcher) resolveDesiredPolicy(
 	return sc.Annotations[utils.AnnotationReplicationPolicy], nil
 }
 
-// findPairForPVC returns the ReplicationPair for the given PVC, or nil if none exists.
-func (r *PVCAnnotationWatcher) findPairForPVC(
+// findSlotForPVC returns the ReplicationSlot for the given PVC, or nil if none exists.
+func (r *PVCAnnotationWatcher) findSlotForPVC(
 	ctx context.Context,
 	namespace, pvcName string,
-) (*simplyblockv1alpha1.ReplicationPair, error) {
-	var list simplyblockv1alpha1.ReplicationPairList
+) (*simplyblockv1alpha1.ReplicationSlot, error) {
+	var list simplyblockv1alpha1.ReplicationSlotList
 	if err := r.List(ctx, &list,
 		client.InNamespace(namespace),
 		client.MatchingFields{"spec.pvcRef": pvcName},
 	); err != nil {
-		return nil, fmt.Errorf("list ReplicationPairs for PVC %q: %w", pvcName, err)
+		return nil, fmt.Errorf("list ReplicationSlots for PVC %q: %w", pvcName, err)
 	}
 	if len(list.Items) == 0 {
 		return nil, nil
@@ -212,7 +197,6 @@ func (r *PVCAnnotationWatcher) findPairForPVC(
 }
 
 // resolveVolumeHandle returns the full CSI volume handle for a PV.
-// The handle format is "<clusterUUID>:<poolUUID>:<volumeUUID>".
 func (r *PVCAnnotationWatcher) resolveVolumeHandle(ctx context.Context, pvName string) (string, error) {
 	var pv corev1.PersistentVolume
 	if err := r.Get(ctx, types.NamespacedName{Name: pvName}, &pv); err != nil {
@@ -224,46 +208,39 @@ func (r *PVCAnnotationWatcher) resolveVolumeHandle(ctx context.Context, pvName s
 	return pv.Spec.CSI.VolumeHandle, nil
 }
 
-// createPair creates a ReplicationPair CR for the given PVC and policy.
-// The pair is named "<policy>-<pvc>" and owned by the PVC (cross-namespace GC via
-// OwnerReference works because pair and PVC share the same namespace).
-func (r *PVCAnnotationWatcher) createPair(
+// createSlot creates a ReplicationSlot CR for the given PVC and policy.
+// The slot is named "<policy>-<pvc>" and owned by the PVC.
+func (r *PVCAnnotationWatcher) createSlot(
 	ctx context.Context,
 	pvc *corev1.PersistentVolumeClaim,
 	policyName, volumeHandle string,
 ) error {
-	pair := &simplyblockv1alpha1.ReplicationPair{
+	slot := &simplyblockv1alpha1.ReplicationSlot{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      replicationPairName(policyName, pvc.Name),
+			Name:      replicationSlotName(policyName, pvc.Name),
 			Namespace: pvc.Namespace,
 		},
-		Spec: simplyblockv1alpha1.ReplicationPairSpec{
+		Spec: simplyblockv1alpha1.ReplicationSlotSpec{
 			PolicyRef: policyName,
 			PVCRef:    pvc.Name,
 			VolumeID:  volumeHandle,
 		},
 	}
-	// OwnedBy PVC: deleting the PVC cascades deletion to the pair, which the
-	// pair's finalizer converts into a backend detach before the CR is removed.
-	if err := controllerutil.SetOwnerReference(pvc, pair, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on ReplicationPair: %w", err)
+	if err := controllerutil.SetOwnerReference(pvc, slot, r.Scheme); err != nil {
+		return fmt.Errorf("set owner reference on ReplicationSlot: %w", err)
 	}
-	if err := r.Create(ctx, pair); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create ReplicationPair %q: %w", pair.Name, err)
+	if err := r.Create(ctx, slot); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create ReplicationSlot %q: %w", slot.Name, err)
 	}
 	return nil
 }
 
-// replicationPairName returns the deterministic name for a ReplicationPair.
-func replicationPairName(policyName, pvcName string) string {
+// replicationSlotName returns the deterministic name for a ReplicationSlot.
+func replicationSlotName(policyName, pvcName string) string {
 	return fmt.Sprintf("%s-%s", policyName, pvcName)
 }
 
 // replicationAnnotationChanged is a predicate for PVC events.
-// CreateFunc always returns true: the PVC may use a StorageClass that carries
-// the replication annotation, which cannot be checked here without a client.
-// The reconciler handles the no-policy case cheaply with an early return.
-// UpdateFunc fires only when the PVC-level annotation changes.
 var replicationAnnotationChanged = predicate.Funcs{
 	CreateFunc:  func(event.CreateEvent) bool { return true },
 	DeleteFunc:  func(event.DeleteEvent) bool { return false },
@@ -274,8 +251,7 @@ var replicationAnnotationChanged = predicate.Funcs{
 	},
 }
 
-// storageClassAnnotationChanged is a predicate for StorageClass events that filters
-// to only annotation changes on the replication policy annotation.
+// storageClassAnnotationChanged is a predicate for StorageClass events.
 var storageClassAnnotationChanged = predicate.Funcs{
 	CreateFunc: func(e event.CreateEvent) bool {
 		_, ok := e.Object.GetAnnotations()[utils.AnnotationReplicationPolicy]
@@ -289,8 +265,7 @@ var storageClassAnnotationChanged = predicate.Funcs{
 	GenericFunc: func(event.GenericEvent) bool { return false },
 }
 
-// storageClassToPVCRequests maps a StorageClass event to all PVCs that use it,
-// so that a SC annotation change propagates to those PVCs immediately.
+// storageClassToPVCRequests maps a StorageClass event to all PVCs that use it.
 func (r *PVCAnnotationWatcher) storageClassToPVCRequests(
 	ctx context.Context,
 	obj client.Object,
@@ -311,38 +286,38 @@ func (r *PVCAnnotationWatcher) storageClassToPVCRequests(
 	return reqs
 }
 
-// pairToPVCRequest maps a ReplicationPair event back to its owning PVC so that
-// pair deletions (e.g. pair fully GC'd after detach) re-trigger the watcher
-// and allow a replacement pair to be created when the policy changed.
-func (r *PVCAnnotationWatcher) pairToPVCRequest(
+// slotToPVCRequest maps a ReplicationSlot event back to its owning PVC so that
+// slot deletions (after detach) re-trigger the watcher and allow a replacement slot
+// to be created when the policy changed.
+func (r *PVCAnnotationWatcher) slotToPVCRequest(
 	_ context.Context,
 	obj client.Object,
 ) []ctrl.Request {
-	pair, ok := obj.(*simplyblockv1alpha1.ReplicationPair)
+	slot, ok := obj.(*simplyblockv1alpha1.ReplicationSlot)
 	if !ok {
 		return nil
 	}
-	if pair.Spec.PVCRef == "" {
+	if slot.Spec.PVCRef == "" {
 		return nil
 	}
 	return []ctrl.Request{{NamespacedName: types.NamespacedName{
-		Name:      pair.Spec.PVCRef,
-		Namespace: pair.Namespace,
+		Name:      slot.Spec.PVCRef,
+		Namespace: slot.Namespace,
 	}}}
 }
 
 func (r *PVCAnnotationWatcher) SetupWithManager(mgr ctrl.Manager) error {
-	// Index ReplicationPairs by spec.pvcRef for fast per-PVC lookup.
+	// Index ReplicationSlots by spec.pvcRef for fast per-PVC lookup.
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
-		&simplyblockv1alpha1.ReplicationPair{},
+		&simplyblockv1alpha1.ReplicationSlot{},
 		"spec.pvcRef",
 		func(obj client.Object) []string {
-			pair := obj.(*simplyblockv1alpha1.ReplicationPair)
-			return []string{pair.Spec.PVCRef}
+			slot := obj.(*simplyblockv1alpha1.ReplicationSlot)
+			return []string{slot.Spec.PVCRef}
 		},
 	); err != nil {
-		return fmt.Errorf("index ReplicationPair.spec.pvcRef: %w", err)
+		return fmt.Errorf("index ReplicationSlot.spec.pvcRef: %w", err)
 	}
 
 	// Index PVCs by spec.storageClassName so the SC → PVC mapper is O(matching PVCs).
@@ -364,17 +339,14 @@ func (r *PVCAnnotationWatcher) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.PersistentVolumeClaim{}, builder.WithPredicates(replicationAnnotationChanged)).
 		Named("pvcreplication").
-		// Watch StorageClasses: annotation change on a SC propagates to all PVCs using it.
 		Watches(
 			&storagev1.StorageClass{},
 			handler.EnqueueRequestsFromMapFunc(r.storageClassToPVCRequests),
 			builder.WithPredicates(storageClassAnnotationChanged),
 		).
-		// Watch ReplicationPairs: pair deletion (after detach) re-triggers the watcher
-		// so a replacement pair is created if the annotation changed to a new policy.
 		Watches(
-			&simplyblockv1alpha1.ReplicationPair{},
-			handler.EnqueueRequestsFromMapFunc(r.pairToPVCRequest),
+			&simplyblockv1alpha1.ReplicationSlot{},
+			handler.EnqueueRequestsFromMapFunc(r.slotToPVCRequest),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		Complete(r)
