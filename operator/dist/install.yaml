@@ -845,13 +845,14 @@ spec:
               ref:
                 description: |-
                   Ref is the name of the resource identified by Scope:
-                  a ReplicationPolicy name for scope=policy or scope=target,
+                  a ReplicationPair name for scope=target,
+                  a ReplicationPolicy name for scope=policy,
                   or a ReplicationSlot name for scope=volume. Immutable.
                 type: string
               scope:
                 description: |-
                   Scope controls which volumes are affected. Immutable.
-                  target: all volumes whose ReplicationSlot references the named policy's target.
+                  target: all volumes across every policy that uses the named ReplicationPair.
                   policy: all volumes managed by the named ReplicationPolicy CR.
                   volume: a single ReplicationSlot (unplanned per-volume failover).
                 enum:
@@ -1013,6 +1014,12 @@ spec:
           status:
             description: ReplicationPairStatus holds the observed state of a ReplicationPair.
             properties:
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef is the name of the ReplicationOps currently holding the
+                  target-scope lock on this pair. Only one scope=target ReplicationOps may
+                  be active per pair at a time.
+                type: string
               backendTargetID:
                 description: BackendTargetID is the UUID of the backend ReplicationTarget
                   resource.
@@ -4955,6 +4962,25 @@ webhooks:
     - UPDATE
     resources:
     - persistentvolumeclaims
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha1-replicationops
+  failurePolicy: Fail
+  name: vreplicationops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - replicationops
   sideEffects: None
 - admissionReviewVersions:
   - v1

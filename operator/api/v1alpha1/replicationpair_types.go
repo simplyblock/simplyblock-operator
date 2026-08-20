@@ -50,6 +50,12 @@ type ReplicationPairStatus struct {
 	// Conditions holds standard Kubernetes condition types.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ActiveOpsRef is the name of the ReplicationOps currently holding the
+	// target-scope lock on this pair. Only one scope=target ReplicationOps may
+	// be active per pair at a time.
+	// +optional
+	ActiveOpsRef string `json:"activeOpsRef,omitempty"`
 }
 
 // +kubebuilder:object:root=true

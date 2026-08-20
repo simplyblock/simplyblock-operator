@@ -79,6 +79,12 @@ spec:
           status:
             description: ReplicationPairStatus holds the observed state of a ReplicationPair.
             properties:
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef is the name of the ReplicationOps currently holding the
+                  target-scope lock on this pair. Only one scope=target ReplicationOps may
+                  be active per pair at a time.
+                type: string
               backendTargetID:
                 description: BackendTargetID is the UUID of the backend ReplicationTarget
                   resource.

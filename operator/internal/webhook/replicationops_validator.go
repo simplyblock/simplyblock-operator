@@ -46,13 +46,25 @@ func (v *ReplicationOpsValidator) Handle(ctx context.Context, req admission.Requ
 	ref := ops.Spec.Ref
 
 	switch ops.Spec.Scope {
-	case utils.ReplicationOpsScopePolicy, utils.ReplicationOpsScopeTarget:
+	case utils.ReplicationOpsScopeTarget:
+		var pair simplyblockv1alpha1.ReplicationPair
+		err := v.Client.Get(ctx, types.NamespacedName{Name: ref, Namespace: ns}, &pair)
+		if apierrors.IsNotFound(err) {
+			return admission.Denied(fmt.Sprintf(
+				"spec.ref %q does not name a ReplicationPair in namespace %q (scope=target)",
+				ref, ns))
+		}
+		if err != nil {
+			return admission.Errored(http.StatusInternalServerError, err)
+		}
+
+	case utils.ReplicationOpsScopePolicy:
 		var policy simplyblockv1alpha1.ReplicationPolicy
 		err := v.Client.Get(ctx, types.NamespacedName{Name: ref, Namespace: ns}, &policy)
 		if apierrors.IsNotFound(err) {
 			return admission.Denied(fmt.Sprintf(
-				"spec.ref %q does not name a ReplicationPolicy in namespace %q (scope=%s)",
-				ref, ns, ops.Spec.Scope))
+				"spec.ref %q does not name a ReplicationPolicy in namespace %q (scope=policy)",
+				ref, ns))
 		}
 		if err != nil {
 			return admission.Errored(http.StatusInternalServerError, err)

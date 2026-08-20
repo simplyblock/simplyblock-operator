@@ -65,7 +65,7 @@ type ReplicationOpsSpec struct {
 	Action string `json:"action"`
 
 	// Scope controls which volumes are affected. Immutable.
-	// target: all volumes whose ReplicationSlot references the named policy's target.
+	// target: all volumes across every policy that uses the named ReplicationPair.
 	// policy: all volumes managed by the named ReplicationPolicy CR.
 	// volume: a single ReplicationSlot (unplanned per-volume failover).
 	// +kubebuilder:validation:Enum=target;policy;volume
@@ -73,7 +73,8 @@ type ReplicationOpsSpec struct {
 	Scope string `json:"scope"`
 
 	// Ref is the name of the resource identified by Scope:
-	// a ReplicationPolicy name for scope=policy or scope=target,
+	// a ReplicationPair name for scope=target,
+	// a ReplicationPolicy name for scope=policy,
 	// or a ReplicationSlot name for scope=volume. Immutable.
 	// +kubebuilder:validation:Required
 	Ref string `json:"ref"`

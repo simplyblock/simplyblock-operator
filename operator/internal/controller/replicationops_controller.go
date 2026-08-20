@@ -56,6 +56,8 @@ type ReplicationOpsReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationops,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationops/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationops/finalizers,verbs=update
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpairs,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpairs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationslots,verbs=get;list;watch;update;patch
@@ -86,12 +88,18 @@ func (r *ReplicationOpsReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	switch ops.Status.Phase {
 	case string(simplyblockv1alpha1.ReplicationOpsPhaseSucceeded),
 		string(simplyblockv1alpha1.ReplicationOpsPhaseFailed):
-		r.releasePolicyLock(ctx, &ops)
+		r.releaseLock(ctx, &ops)
 		if controllerutil.ContainsFinalizer(&ops, finalizerReplicationOps) {
 			controllerutil.RemoveFinalizer(&ops, finalizerReplicationOps)
 			return ctrl.Result{}, r.Update(ctx, &ops)
 		}
 		return ctrl.Result{}, nil
+	}
+
+	// scope=target uses a pair-level lock and collects slots across all policies
+	// on the pair. All other scopes use a policy-level lock.
+	if ops.Spec.Scope == utils.ReplicationOpsScopeTarget {
+		return r.reconcileTargetScope(ctx, &ops, apiClient)
 	}
 
 	policyName, err := r.resolveAffectedPolicyName(ctx, &ops)
@@ -145,6 +153,146 @@ func (r *ReplicationOpsReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 }
 
+// reconcileTargetScope handles scope=target: locks at the ReplicationPair level
+// and drives the action across all slots from all policies that reference the pair.
+func (r *ReplicationOpsReconciler) reconcileTargetScope(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	apiClient *webapi.Client,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	var pair simplyblockv1alpha1.ReplicationPair
+	if err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.Ref, Namespace: ops.Namespace}, &pair); err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.failOps(ctx, ops, fmt.Sprintf("ReplicationPair %q not found", ops.Spec.Ref))
+		}
+		return ctrl.Result{}, fmt.Errorf("get ReplicationPair %q: %w", ops.Spec.Ref, err)
+	}
+
+	// Mutual exclusion: only one scope=target ReplicationOps active per pair.
+	if pair.Status.ActiveOpsRef != "" && pair.Status.ActiveOpsRef != ops.Name {
+		log.Info("Another ReplicationOps holds the pair lock; waiting",
+			"ops", ops.Name, "activeOps", pair.Status.ActiveOpsRef, "pair", pair.Name)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if pair.Status.ActiveOpsRef != ops.Name {
+		base := pair.DeepCopy()
+		pair.Status.ActiveOpsRef = ops.Name
+		patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+		if err := r.Status().Patch(ctx, &pair, patch); err != nil {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, nil
+			}
+			return ctrl.Result{}, fmt.Errorf("set pair activeOpsRef: %w", err)
+		}
+	}
+
+	if ops.Status.Phase == "" || ops.Status.Phase == string(simplyblockv1alpha1.ReplicationOpsPhasePending) {
+		now := metav1.Now()
+		patch := client.MergeFrom(ops.DeepCopy())
+		ops.Status.Phase = string(simplyblockv1alpha1.ReplicationOpsPhaseRunning)
+		ops.Status.StartedAt = &now
+		if err := r.Status().Patch(ctx, ops, patch); err != nil {
+			return ctrl.Result{Requeue: true}, nil
+		}
+	}
+
+	switch ops.Spec.Action {
+	case "failover":
+		return r.reconcileTargetFailover(ctx, ops, &pair, apiClient)
+	case "failback":
+		return r.failOps(ctx, ops, "scope=target failback is not supported; use scope=policy")
+	default:
+		return r.failOps(ctx, ops, fmt.Sprintf("unknown action %q", ops.Spec.Action))
+	}
+}
+
+// reconcileTargetFailover fails over all slots across every policy on the pair.
+func (r *ReplicationOpsReconciler) reconcileTargetFailover(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	pair *simplyblockv1alpha1.ReplicationPair,
+	apiClient *webapi.Client,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, ops.Namespace, pair.Spec.SourceCluster)
+	if err != nil {
+		return r.failOps(ctx, ops, fmt.Sprintf("resolve cluster UUID: %v", err))
+	}
+
+	slots, err := r.collectSlotsForPair(ctx, pair.Name, ops.Namespace)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	r.setSubphase(ctx, ops, "TriggeringTargetFailover")
+
+	type backendLvolResult struct {
+		LvolID     string `json:"lvol_id"`
+		Status     string `json:"status"`
+		Detail     string `json:"detail"`
+		TargetLvol string `json:"target_lvol_id"`
+	}
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/targets/%s/failover", clusterUUID, pair.Status.BackendTargetID)
+	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
+	if err != nil || status >= 300 {
+		if err == nil {
+			err = fmt.Errorf("status %d: %s", status, string(body))
+		}
+		log.Error(err, "POST target failover failed")
+		return r.failOps(ctx, ops, fmt.Sprintf("target failover failed: %v", err))
+	}
+
+	var backendResults []backendLvolResult
+	_ = json.Unmarshal(body, &backendResults)
+
+	var failures []string
+	for _, br := range backendResults {
+		if br.Status == "failed" {
+			failures = append(failures, fmt.Sprintf("%s: %s", br.LvolID, br.Detail))
+		}
+	}
+	if len(failures) > 0 {
+		return r.failOps(ctx, ops, fmt.Sprintf("failover failed for %d volume(s): %s",
+			len(failures), strings.Join(failures, "; ")))
+	}
+
+	backendByLvol := make(map[string]backendLvolResult, len(backendResults))
+	for _, br := range backendResults {
+		backendByLvol[br.LvolID] = br
+	}
+
+	r.setSubphase(ctx, ops, "UpdatingSlotStatuses")
+
+	results := make([]simplyblockv1alpha1.ReplicationOpsResult, 0, len(slots))
+	for i := range slots {
+		slot := &slots[i]
+		slotPatch := client.MergeFrom(slot.DeepCopy())
+		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateFailedOver)
+		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
+		slot.Status.Message = fmt.Sprintf("Failed over via ReplicationOps %s (scope=target)", ops.Name)
+		if br, ok := backendByLvol[slot.Spec.VolumeID]; ok && br.TargetLvol != "" {
+			slot.Status.TargetLvolID = br.TargetLvol
+		}
+		if err := r.Status().Patch(ctx, slot, slotPatch); err != nil {
+			log.Error(err, "failed to update slot status after target failover", "slot", slot.Name)
+		}
+		results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
+			SlotRef:      slot.Name,
+			Status:       string(simplyblockv1alpha1.ReplicationOpsResultSucceeded),
+			TargetLvolID: slot.Status.TargetLvolID,
+		})
+	}
+
+	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "FailoverSucceeded", "FailoverSucceeded",
+		"Target failover completed for pair %s (%d volumes across all policies)", pair.Name, len(slots))
+	return r.succeedOps(ctx, ops, "Target failover completed successfully", results)
+}
+
 // reconcileFailover drives a failover to completion.
 func (r *ReplicationOpsReconciler) reconcileFailover(
 	ctx context.Context,
@@ -184,18 +332,6 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 	var backendResults []backendLvolResult
 
 	switch ops.Spec.Scope {
-	case utils.ReplicationOpsScopeTarget:
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/targets/%s/failover", clusterUUID, pair.Status.BackendTargetID)
-		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
-		if err != nil || status >= 300 {
-			if err == nil {
-				err = fmt.Errorf("status %d: %s", status, string(body))
-			}
-			log.Error(err, "POST target failover failed")
-			return r.failOps(ctx, ops, fmt.Sprintf("target failover failed: %v", err))
-		}
-		_ = json.Unmarshal(body, &backendResults)
-
 	case utils.ReplicationOpsScopePolicy:
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/policies/%s/failover", clusterUUID, policy.Status.BackendPolicyID)
 		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
@@ -381,7 +517,7 @@ func (r *ReplicationOpsReconciler) collectAffectedSlots(
 		}
 		return []simplyblockv1alpha1.ReplicationSlot{slot}, nil
 
-	case utils.ReplicationOpsScopePolicy, utils.ReplicationOpsScopeTarget:
+	case utils.ReplicationOpsScopePolicy:
 		var list simplyblockv1alpha1.ReplicationSlotList
 		if err := r.List(ctx, &list,
 			client.InNamespace(ops.Namespace),
@@ -394,6 +530,59 @@ func (r *ReplicationOpsReconciler) collectAffectedSlots(
 	default:
 		return nil, fmt.Errorf("unknown scope %q", ops.Spec.Scope)
 	}
+}
+
+// collectSlotsForPair returns all ReplicationSlots that belong to any policy
+// referencing the given pair.
+func (r *ReplicationOpsReconciler) collectSlotsForPair(
+	ctx context.Context,
+	pairName string,
+	namespace string,
+) ([]simplyblockv1alpha1.ReplicationSlot, error) {
+	var policies simplyblockv1alpha1.ReplicationPolicyList
+	if err := r.List(ctx, &policies,
+		client.InNamespace(namespace),
+		client.MatchingFields{"spec.pairRef": pairName},
+	); err != nil {
+		return nil, fmt.Errorf("list policies for pair %q: %w", pairName, err)
+	}
+
+	var all []simplyblockv1alpha1.ReplicationSlot
+	for _, pol := range policies.Items {
+		var slots simplyblockv1alpha1.ReplicationSlotList
+		if err := r.List(ctx, &slots,
+			client.InNamespace(namespace),
+			client.MatchingFields{"spec.policyRef": pol.Name},
+		); err != nil {
+			return nil, fmt.Errorf("list slots for policy %q: %w", pol.Name, err)
+		}
+		all = append(all, slots.Items...)
+	}
+	return all, nil
+}
+
+// releaseLock releases whichever lock this ops holds: pair-level for scope=target,
+// policy-level for all other scopes.
+func (r *ReplicationOpsReconciler) releaseLock(ctx context.Context, ops *simplyblockv1alpha1.ReplicationOps) {
+	if ops.Spec.Scope == utils.ReplicationOpsScopeTarget {
+		r.releasePairLock(ctx, ops)
+	} else {
+		r.releasePolicyLock(ctx, ops)
+	}
+}
+
+// releasePairLock clears pair.Status.ActiveOpsRef when it matches this ops.
+func (r *ReplicationOpsReconciler) releasePairLock(ctx context.Context, ops *simplyblockv1alpha1.ReplicationOps) {
+	var pair simplyblockv1alpha1.ReplicationPair
+	if err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.Ref, Namespace: ops.Namespace}, &pair); err != nil {
+		return
+	}
+	if pair.Status.ActiveOpsRef != ops.Name {
+		return
+	}
+	patch := client.MergeFrom(pair.DeepCopy())
+	pair.Status.ActiveOpsRef = ""
+	_ = r.Status().Patch(ctx, &pair, patch)
 }
 
 // resolveAffectedPolicyName returns the ReplicationPolicy name targeted by ops.
@@ -440,7 +629,7 @@ func (r *ReplicationOpsReconciler) succeedOps(
 	if err := r.Status().Patch(ctx, ops, patch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
-	r.releasePolicyLock(ctx, ops)
+	r.releaseLock(ctx, ops)
 	return ctrl.Result{}, nil
 }
 
@@ -460,7 +649,7 @@ func (r *ReplicationOpsReconciler) failOps(
 	}
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "Failed", "Failed",
 		"ReplicationOps %s failed: %s", ops.Name, reason)
-	r.releasePolicyLock(ctx, ops)
+	r.releaseLock(ctx, ops)
 	return ctrl.Result{}, nil
 }
 
@@ -518,6 +707,20 @@ func (r *ReplicationOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		},
 	); err != nil {
 		return fmt.Errorf("index ReplicationOps.spec.ref: %w", err)
+	}
+
+	// Index ReplicationPolicy by spec.pairRef so collectSlotsForPair can list
+	// all policies for a given pair without scanning the entire policy list.
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&simplyblockv1alpha1.ReplicationPolicy{},
+		"spec.pairRef",
+		func(obj client.Object) []string {
+			pol := obj.(*simplyblockv1alpha1.ReplicationPolicy)
+			return []string{pol.Spec.PairRef}
+		},
+	); err != nil {
+		return fmt.Errorf("index ReplicationPolicy.spec.pairRef: %w", err)
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
