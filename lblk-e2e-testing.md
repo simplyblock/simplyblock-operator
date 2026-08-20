@@ -95,7 +95,8 @@ Tested on: `config-israel` (real local NVMe disks used as lblk block devices) an
   fired as expected.
 - ⚠️ Kernel renames a device across reboot (sdb→sdc) → **gap found, see below** —
   discovered as a side effect of the device-disappears test's recovery step
-- ⬜ Hung IO on an AIO device (stalled backing store) → watchdog trips, node auto-restarts
+- 🟡 Hung IO on an AIO device (stalled backing store) → watchdog trips, node auto-restarts —
+  attempted, not conclusively tested; see note below
 - ⚠️ SPDK process crash/zombie mid add-node → **gap found, see below** — actual
   behavior is the opposite of the expected "cleanup + retry succeeds": no automatic
   cleanup, no retry, and no CLI-level recovery path at all
@@ -193,6 +194,33 @@ not just "is it literally NVMe":
   create) rather than steady-state writes
 
 ## Bugs/gaps found along the way (not on the original checklist)
+
+- **Not conclusively tested, noted for whoever picks this up**: "Hung IO on an AIO
+  device" needs a backing store that stalls I/O indefinitely without erroring —
+  distinct from the clean "device disappears" case already tested above. Attempted
+  via a `dmsetup create ... linear` passthrough interposed in front of the real GCP
+  disk (so `dmsetup suspend`/`resume` could simulate/release a hang later), on a
+  disposable test node (`manohar-lblk-atomicity-storage-node-4`, safely isolated from
+  the real 3-node cluster). Two blockers, neither a confirmed product bug:
+  1. `node_configure.py`'s auto-discovery correctly detected the dm-wrapped disk as
+     `"holders":["dm-0"]` and excluded it from selection (a good sign, actually — it
+     means the discovery logic properly avoids already-claimed block devices), so it
+     always picked the *other* eligible disks instead, never the one I'd prepared.
+  2. Leaving the dm-linear wrapper in place on an unrelated disk while add-node ran
+     seemed to make the add-node task hang silently for minutes at a time (no error,
+     no log output, no progress) even though the wrapped disk wasn't the one being
+     added — possibly a `udevadm settle`/device-rescan getting slowed down by the
+     presence of the extra dm device across the whole host, but this wasn't isolated
+     enough to point at a specific line of code, so it's **not** included as a
+     confirmed finding above.
+  - Test node fully cleaned up afterward (`dmsetup remove`, node removed/deleted from
+    the cluster, orphaned pod force-deleted); the real 3-node cluster was untouched
+    throughout and reactivated cleanly.
+  - Suggested approach for whoever picks this up: pre-create the dm-linear wrapper
+    *before* the disk is ever discovered (e.g., on initial VM provisioning, before
+    the storage-node pod's first boot) so it's the *only* eligible disk and gets
+    selected by construction, rather than trying to retrofit it onto an
+    already-known disk.
 
 - **Real gap, not yet fixed**: repeated add/remove/delete cycling of a node leaves
   permanent **JM-mesh holes** — stale `remote_alceml_*` bdev references on every
