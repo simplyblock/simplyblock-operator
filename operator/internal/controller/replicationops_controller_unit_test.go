@@ -33,6 +33,7 @@ func newOpsReplReconciler(t *testing.T, objects ...client.Object) (*ReplicationO
 			&simplyblockv1alpha1.ReplicationOps{},
 			&simplyblockv1alpha1.ReplicationPolicy{},
 			&simplyblockv1alpha1.ReplicationSlot{},
+			&simplyblockv1alpha1.ReplicationPair{},
 		).
 		WithObjects(allObjects...).
 		WithIndex(&simplyblockv1alpha1.ReplicationSlot{}, "spec.policyRef", func(obj client.Object) []string {
@@ -40,6 +41,9 @@ func newOpsReplReconciler(t *testing.T, objects ...client.Object) (*ReplicationO
 		}).
 		WithIndex(&simplyblockv1alpha1.ReplicationOps{}, "spec.ref", func(obj client.Object) []string {
 			return []string{obj.(*simplyblockv1alpha1.ReplicationOps).Spec.Ref}
+		}).
+		WithIndex(&simplyblockv1alpha1.ReplicationPolicy{}, "spec.pairRef", func(obj client.Object) []string {
+			return []string{obj.(*simplyblockv1alpha1.ReplicationPolicy).Spec.PairRef}
 		}).
 		Build()
 	return &ReplicationOpsReconciler{
@@ -313,7 +317,7 @@ func TestOps_Failover_ScopeTarget_Success(t *testing.T) {
 			Finalizers: []string{finalizerReplicationOps},
 		},
 		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
-			Action: "failover", Scope: utils.ReplicationOpsScopeTarget, Ref: "pol",
+			Action: "failover", Scope: utils.ReplicationOpsScopeTarget, Ref: "pair1",
 		},
 	}
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops)
