@@ -178,7 +178,9 @@ func TestPair_InvalidVolumeHandle_SetsError(t *testing.T) {
 	}
 }
 
-// ---------- attach success → state = attaching ----------
+// ---------- attach success → state = replicating (no polling phase) ----------
+// The sbcli PUT attach call is synchronous, so a successful 2xx means replication
+// is already running. We skip the attaching polling phase entirely.
 
 func TestPair_Attach_Success(t *testing.T) {
 	pol := readyPolicyWithIDs()
@@ -202,12 +204,15 @@ func TestPair_Attach_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.RequeueAfter != replPairRequeueAttaching {
-		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueAttaching)
+	if res.RequeueAfter != replPairRequeueReplicating {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueReplicating)
 	}
 	got := getPair(t, cl)
-	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateAttaching) {
-		t.Errorf("state = %q, want attaching", got.Status.State)
+	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateReplicating) {
+		t.Errorf("state = %q, want replicating", got.Status.State)
+	}
+	if got.Status.Direction != string(simplyblockv1alpha1.ReplicationPairDirectionSource) {
+		t.Errorf("direction = %q, want source", got.Status.Direction)
 	}
 }
 
@@ -237,9 +242,13 @@ func TestPair_Attach_BackendError(t *testing.T) {
 	}
 }
 
-// ---------- poll attach: not yet replicating → stays attaching ----------
+// ---------- poll attach (legacy attaching state) → immediately transitions ----------
+// Pairs stuck in the legacy "attaching" state are immediately advanced to
+// "replicating" on the next reconcile. The LVolReplication object on the backend
+// only exists after cutover/failover, so polling GET .../replication in this phase
+// would always return 404; no backend call is made.
 
-func TestPair_PollAttach_WaitsIfNotReplicating(t *testing.T) {
+func TestPair_PollAttach_TransitionsToReplicating(t *testing.T) {
 	pol := readyPolicyWithIDs()
 	pair := newPair("cluster-u:pool-u:vol-u")
 	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateAttaching)
@@ -251,48 +260,8 @@ func TestPair_PollAttach_WaitsIfNotReplicating(t *testing.T) {
 		t.Fatalf("pre-set pair status: %v", err)
 	}
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
-		// Backend still in "attaching" state.
-		writeJSON(w, replVolumeReplicationStatus{State: "attaching"})
-	})
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
-
-	res, err := r.Reconcile(context.Background(), pairRequest("pair1"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if res.RequeueAfter != replPairRequeueAttaching {
-		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replPairRequeueAttaching)
-	}
-	got := getPair(t, cl)
-	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateAttaching) {
-		t.Errorf("state = %q, want still attaching", got.Status.State)
-	}
-}
-
-// ---------- poll attach: backend reaches replicating → advances ----------
-
-func TestPair_PollAttach_AdvancesToReplicating(t *testing.T) {
-	pol := readyPolicyWithIDs()
-	pair := newPair("cluster-u:pool-u:vol-u")
-	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateAttaching)
-	r, cl := newPairReconciler(t, pol, pair)
-	if err := cl.Status().Update(context.Background(), pol); err != nil {
-		t.Fatalf("pre-set policy status: %v", err)
-	}
-	if err := cl.Status().Update(context.Background(), pair); err != nil {
-		t.Fatalf("pre-set pair status: %v", err)
-	}
-
-	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, replVolumeReplicationStatus{
-			State:        utils.ReplicationBackendStateReplicating,
-			SourceLvolID: "src-lvol",
-			TargetLvolID: "tgt-lvol",
-			IsSource:     true,
-		})
-	})
-	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+	// No backend call is made from reconcilePollAttach; the server must not be reached.
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "http://127.0.0.1:1")
 
 	res, err := r.Reconcile(context.Background(), pairRequest("pair1"))
 	if err != nil {
@@ -305,11 +274,8 @@ func TestPair_PollAttach_AdvancesToReplicating(t *testing.T) {
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationPairStateReplicating) {
 		t.Errorf("state = %q, want replicating", got.Status.State)
 	}
-	if got.Status.SourceLvolID != "src-lvol" {
-		t.Errorf("SourceLvolID = %q, want src-lvol", got.Status.SourceLvolID)
-	}
-	if got.Status.Direction != "source" {
-		t.Errorf("Direction = %q, want source", got.Status.Direction)
+	if got.Status.Direction != string(simplyblockv1alpha1.ReplicationPairDirectionSource) {
+		t.Errorf("direction = %q, want source", got.Status.Direction)
 	}
 }
 

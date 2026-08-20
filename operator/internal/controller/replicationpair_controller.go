@@ -49,6 +49,8 @@ const (
 	replPairRequeueReplicating = 60 * time.Second
 	// replPairRequeueError is the back-off interval after a backend call fails.
 	replPairRequeueError = 30 * time.Second
+
+	replMsgReplicating = "Replicating"
 )
 
 // replVolumeReplicationStatus is the response from
@@ -128,7 +130,7 @@ func (r *ReplicationPairReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	case "": // brand-new pair
 		return r.reconcileAttach(ctx, &pair, &policy, apiClient, clusterID, poolID, volumeID)
 	case simplyblockv1alpha1.ReplicationPairStateAttaching:
-		return r.reconcilePollAttach(ctx, &pair, apiClient, clusterID, poolID, volumeID)
+		return r.reconcilePollAttach(ctx, &pair, volumeID)
 	case simplyblockv1alpha1.ReplicationPairStateReplicating:
 		return r.reconcileReplicating(ctx, &pair, apiClient, clusterID, poolID, volumeID)
 	case simplyblockv1alpha1.ReplicationPairStateCutoverPending,
@@ -180,7 +182,7 @@ func (r *ReplicationPairReconciler) reconcileAttach(
 	patch := client.MergeFrom(pair.DeepCopy())
 	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateReplicating)
 	pair.Status.Direction = string(simplyblockv1alpha1.ReplicationPairDirectionSource)
-	pair.Status.Message = "Replicating"
+	pair.Status.Message = replMsgReplicating
 	pair.Status.LastReplicatedAt = &now
 	if err := r.Status().Patch(ctx, pair, patch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
@@ -198,14 +200,13 @@ func (r *ReplicationPairReconciler) reconcileAttach(
 func (r *ReplicationPairReconciler) reconcilePollAttach(
 	ctx context.Context,
 	pair *simplyblockv1alpha1.ReplicationPair,
-	apiClient *webapi.Client,
-	clusterID, poolID, volumeID string,
+	volumeID string,
 ) (ctrl.Result, error) {
 	now := metav1.Now()
 	patch := client.MergeFrom(pair.DeepCopy())
 	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateReplicating)
 	pair.Status.Direction = string(simplyblockv1alpha1.ReplicationPairDirectionSource)
-	pair.Status.Message = "Replicating"
+	pair.Status.Message = replMsgReplicating
 	pair.Status.LastReplicatedAt = &now
 	if err := r.Status().Patch(ctx, pair, patch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
@@ -310,7 +311,7 @@ func (r *ReplicationPairReconciler) reconcileSyncStatus(
 			direction = string(simplyblockv1alpha1.ReplicationPairDirectionTarget)
 		}
 		pair.Status.Direction = direction
-		pair.Status.Message = "Replicating"
+		pair.Status.Message = replMsgReplicating
 	}
 
 	if err := r.Status().Patch(ctx, pair, patch); err != nil {
