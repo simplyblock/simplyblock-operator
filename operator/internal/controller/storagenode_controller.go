@@ -75,6 +75,13 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	// Handle deletion before resolving the parent StorageNodeSet: the parent may
+	// already be gone (e.g. cascading delete of the StorageNodeSet racing ahead of
+	// its children), and handleDeletion doesn't need parent fleet config.
+	if !sn.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, &sn, nil)
+	}
+
 	// Fetch the parent StorageNodeSet for fleet config.
 	var sns simplyblockv1alpha1.StorageNodeSet
 	if err := r.Get(ctx, types.NamespacedName{
@@ -93,11 +100,6 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err != nil {
 		log.Info("cluster UUID not ready yet, requeuing", "cluster", sns.Spec.ClusterName)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	// Handle deletion.
-	if !sn.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, &sn, &sns)
 	}
 
 	// Ensure finalizer.
