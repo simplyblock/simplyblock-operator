@@ -92,6 +92,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import csv
 import os
 import random
 import re
@@ -101,7 +102,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # ── configuration / constants ───────────────────────────────────────────────────
 
@@ -221,6 +222,33 @@ CUTOVER_PAUSE_DESIGN_S = 2.0
 # that ran long, and 60s could not.
 CUTOVER_PAUSE_CRIT_S = CUTOVER_PAUSE_DESIGN_S + 3.0
 
+# How many times one migration may freeze the volume.
+#
+# Once. A migration moves the subsystem once, so it takes the pause once, and a second
+# window means the cutover was attempted again — the control plane retrying a step that did
+# not take.
+#
+# This is the sharper of the two checks, and on run fiomig-1787171993 it was exact: the four
+# migrations that froze more than once are precisely the four that silently lost writes
+# (mig-20 twice, mig-29 four times, mig-38 and mig-42 five times each), and none of the other
+# 42 lost anything. The duration bound alone does not cover it — two 3s freezes are two
+# chances to lose a write and look no worse than one healthy pause on the longest-window
+# measure — and it is also less noisy: the one migration whose single pause ran to 5s
+# (mig-21) lost nothing.
+#
+# Loss is roughly one block per affected member per event and reads succeed, so nothing else
+# in the test notices; the freeze count is the only pre-corruption signal seen so far.
+CUTOVER_FREEZES_ALLOWED = 1
+
+# How long after a migration ends a fio verify failure may still be its fault.
+#
+# fio detects a lost write when it next reads that block, not when the write was lost, so a
+# detection trails the loss by however long the read pattern takes to come back around —
+# observed at 3-34s across earlier runs. Attribution has to allow for that or a migration's
+# own losses get filed under "no migration was running".
+VERIFY_LAG_S = 45.0
+VERIFY_LAG = timedelta(seconds=VERIFY_LAG_S)
+
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -335,6 +363,7 @@ class MigrationRecord:
     ana_ok: bool | None = None    # True=paths behaved, False=violation, None=not sampled
     ana_msgs: list[str] = field(default_factory=list)
     ana_stall_s: float = 0.0      # longest window with no accessible path for some namespace
+    ana_freezes: int = 0          # how many such windows there were (see CUTOVER_FREEZES_ALLOWED)
     # The cutover as the *hosts* saw it (per node): the first instant a target path was
     # optimized while no source path was. The CR reaching Completed trails this by tens of
     # seconds, so this — not rec.end — is the instant to correlate I/O against.
@@ -374,6 +403,11 @@ class FioMigrationTest:
         self.log = log
         self.outdir = outdir
         self.run_id = f"fiomig-{int(time.time())}"
+        self._replayed = False
+        # Live log followers (see start_log_streaming) and the grabber pods they run in.
+        self._log_streams: list[dict] = []
+        self._stream_grabbers: dict[str, str] = {}
+        self._stream_parts: dict[tuple, int] = {}
         self.pods: list[str] = []
         self.pvcs: list[str] = []
         self.pv_of: dict[str, str] = {}        # pod -> pv name
@@ -1512,24 +1546,44 @@ class FioMigrationTest:
                         f"{sorted(served) or '-'} but the subsystem has {sorted(expected)} — "
                         f"{sorted(expected - served)} unserved after cutover")
 
-            # 3. stalls: some namespace with no accessible path anywhere on this node
+            # 3. the cutover freezes: windows where some namespace had no accessible path
+            # anywhere on this node. Both how long the longest one lasted and how many there
+            # were — a migration freezes the volume once, and a second window means the
+            # cutover was retried. See CUTOVER_FREEZES_ALLOWED for why the count is the
+            # sharper signal of the two.
             per_ts: dict[datetime, set[int]] = {}
             for s in samples:
                 per_ts.setdefault(s.ts, set()).update(s.accessible_nsids())
             times = sorted(per_ts)
             want = expected or {n for acc in per_ts.values() for n in acc}
+            windows: list[float] = []
             stall_start = None
-            for i, t in enumerate(times):
+            for t in times:
                 missing = bool(want - per_ts[t])
                 if missing and stall_start is None:
                     stall_start = t
                 elif not missing and stall_start is not None:
-                    rec.ana_stall_s = max(rec.ana_stall_s, (t - stall_start).total_seconds())
+                    windows.append((t - stall_start).total_seconds())
                     stall_start = None
             if stall_start is not None:
-                rec.ana_stall_s = max(rec.ana_stall_s,
-                                      (times[-1] - stall_start).total_seconds())
+                windows.append((times[-1] - stall_start).total_seconds())
 
+            # A window of zero length is one sample wide: the pause began and ended between
+            # two samples, so it is a pause the sampler only just caught rather than a
+            # separate freeze, and counting it would make the count depend on --ana-interval.
+            windows = [w for w in windows if w > 0]
+            rec.ana_stall_s = max([rec.ana_stall_s] + windows)
+            # Per node, not summed: every consuming node sees the same freeze, so the count
+            # is how many times the volume froze, not how many nodes noticed.
+            rec.ana_freezes = max(rec.ana_freezes, len(windows))
+
+        if rec.ana_freezes > self.a.ana_freezes_crit:
+            problems.append(
+                f"the volume froze {rec.ana_freezes} times (> {self.a.ana_freezes_crit}); a "
+                f"migration takes the cutover pause once, so the rest are retries of a step "
+                f"that did not take. Every migration observed to freeze more than once has "
+                f"also silently lost writes, so treat this as corruption until the "
+                f"checksums say otherwise")
         if rec.ana_stall_s > self.a.ana_stall_crit:
             problems.append(
                 f"every path to some namespace was inaccessible for {rec.ana_stall_s:.0f}s "
@@ -1547,6 +1601,7 @@ class FioMigrationTest:
             self.log.event(
                 f"ANA VERIFY  {rec.name}  OK  nodes={len(by_node)}  "
                 f"samples={len(rec.ana_samples)}  namespaces={sorted(expected) or '?'}  "
+                f"freezes={rec.ana_freezes}  "
                 f"cutover_pause={rec.ana_stall_s:.0f}s/{self.a.ana_stall_crit:.0f}s  "
                 f"cutover={', '.join(f'{n}@{t}' for n, t in sorted(rec.ana_cutover.items())) or '-'}"
                 + (f"  (CR reported Completed {rec.ana_cr_lag_s:.0f}s later)"
@@ -1856,6 +1911,7 @@ class FioMigrationTest:
         idx = 0
         while time.time() < stop_at - self.a.migration_gap:
             idx += 1
+            self.restart_dead_streams()
             try:
                 self.run_one_migration(idx, hard_deadline)
             except subprocess.CalledProcessError as e:
@@ -1893,13 +1949,27 @@ class FioMigrationTest:
         artifact dir (fio pod logs go to their per-pod subfolder).
 
         Container logs are read straight from each host's /var/log/pods via a privileged
-        grabber pod (hostPath mount) instead of `kubectl logs`, so kubelet log rotation
-        cannot truncate them: rotated + current segments (incl. .gz) are concatenated
-        oldest-first. Best-effort — failures are logged, never fatal."""
+        grabber pod (hostPath mount) instead of `kubectl logs`: rotated + current segments
+        (incl. .gz) are concatenated oldest-first, so nothing kubelet still *has* is missed.
+
+        What that cannot recover is what kubelet has already deleted — it keeps only
+        containerLogMaxSize x containerLogMaxFiles per container — which on a multi-hour run
+        is most of the SPDK log. Those containers are therefore followed live for the whole
+        run instead (start_log_streaming), and the pairs in `streamed` are skipped here.
+
+        Best-effort — failures are logged, never fatal."""
         self.log.info("collecting cluster logs (spdk/proxy/operator/webappapi/tasks/fio/dmesg) ...")
+        streamed = self.stop_log_streaming()
         try:
             snode = self._list_pods(NAMESPACE, ["snode-spdk"])
             cplane = self._list_pods(SIMPLYBLOCK_NAMESPACE, ["operator", "webappapi", "tasks"])
+            # The CSI driver is where the connects, the path reconcilers and
+            # NodeStage/NodePublish happen, so it is the log that says what the host side did
+            # and why. The storage-node DaemonSet is the node agent that starts and probes
+            # SPDK, which puts it on the causal path of every "node went offline" decision.
+            csi = self._list_pods(SIMPLYBLOCK_NAMESPACE,
+                                  ["simplyblock-csi-node", "simplyblock-csi-controller"])
+            snodeapi = self._list_pods(NAMESPACE, ["simplyblock-storage-node-ds"])
             # the fio test pods are named "<run_id>-fio-<N>"; this matches only those
             # (not the "loggrab-<vm>-<run_id>" grabbers, which end with the run id).
             fiopods = self._list_pods(NAMESPACE, [f"{self.run_id}-fio"])
@@ -1907,28 +1977,46 @@ class FioMigrationTest:
             self.log.warn(f"cluster log collection: cannot list pods: {e}")
             return
 
-        grabbers: dict = {}
+        # Reuse the streaming grabbers rather than starting a second set.
+        #
+        # They are still running at this point — their TTL covers the whole run and the
+        # followers were stopped a moment ago — and a Pod is immutable, so applying a second
+        # pod with the same name fails on a field it may not change. That is not theoretical:
+        # it silently emptied operator.txt and dropped csi-node/snode-api entirely for every
+        # node that had a follower, while leaving the vm01 artifacts intact and therefore
+        # looking like a partial success.
+        grabbers: dict = dict(self._stream_grabbers)
+        started: list[str] = []
         try:
-            for node in sorted({p["node"] for p in snode + cplane + fiopods if p["node"]}):
+            for node in sorted({p["node"] for p in snode + cplane + fiopods + csi + snodeapi
+                                if p["node"]}):
+                if node in grabbers:
+                    continue
                 name = self._start_loggrab(node)
                 if name:
                     grabbers[node] = name
-            ready = self._wait_loggrab(list(grabbers.values()))
+                    started.append(name)
+            ready = set(self._stream_grabbers.values()) | self._wait_loggrab(started)
             grabbers = {n: g for n, g in grabbers.items() if g in ready}
 
             # spdk + proxy per storage-node pod -> spdk-<port>.txt / spdk-<port>-proxy.txt
+            #
+            # Anything already streamed is skipped: the stream holds the whole run, and a
+            # grab now would overwrite it with only what kubelet still retains.
             for p in snode:
                 grab = grabbers.get(p["node"])
                 if not grab:
                     continue
                 port = self._snode_port(p["name"])
                 for container, suffix in (("spdk-container", ""), ("spdk-proxy-container", "-proxy")):
+                    if (p["name"], container) in streamed:
+                        continue
                     dest = os.path.join(self.outdir, f"spdk-{port}{suffix}.txt")
                     with open(dest, "wb") as fh:
                         self._grab_container_logs(grab, NAMESPACE, p["name"], container, fh)
 
-            # control-plane: operator / webappapi / tasks (all containers, headered)
-            for key in ("operator", "webappapi", "tasks"):
+            # control-plane: operator / webappapi, one artifact per pod (single-container)
+            for key in ("operator", "webappapi"):
                 pods = [p for p in cplane if key in p["name"]]
                 if not pods:
                     continue
@@ -1940,9 +2028,40 @@ class FioMigrationTest:
                         fh.write(f"==================== POD {p['name']} "
                                  f"({self._short(p['node'])}) ====================\n".encode())
                         for c in p["containers"]:
-                            fh.write(f"-------------------- container {c} "
-                                     f"--------------------\n".encode())
                             self._grab_container_logs(grab, SIMPLYBLOCK_NAMESPACE, p["name"], c, fh)
+
+            # tasks + csi-controller: one artifact per *container*, not per pod.
+            #
+            # The tasks pod runs seventeen independent runners. Merging them produced a 50 MiB
+            # file that is not in time order, which makes its time span meaningless, hides
+            # which runner said what, and stops a grep being scoped to the one that matters.
+            # The container names are already unique and descriptive, so they are the names.
+            for p in [q for q in cplane if "tasks" in q["name"]] + \
+                     [q for q in csi if "csi-controller" in q["name"]]:
+                grab = grabbers.get(p["node"])
+                if not grab:
+                    continue
+                ns = SIMPLYBLOCK_NAMESPACE
+                for c in p["containers"]:
+                    with open(os.path.join(self.outdir, f"{c}.txt"), "wb") as fh:
+                        self._grab_container_logs(grab, ns, p["name"], c, fh)
+
+            # CSI node plugin and storage-node agent: one artifact per *node*. Both reconcile
+            # per host, so "which node" is the first question about anything they did, and a
+            # merged file loses it.
+            for label, pods, ns, container in (
+                    ("csi-node", [q for q in csi if "csi-node" in q["name"]],
+                     SIMPLYBLOCK_NAMESPACE, "csi-node"),
+                    ("snode-api", snodeapi, NAMESPACE, None)):
+                for p in pods:
+                    grab = grabbers.get(p["node"])
+                    if not grab or not p["node"]:
+                        continue
+                    dest = os.path.join(self.outdir, f"{label}-{self._short(p['node'])}.txt")
+                    with open(dest, "wb") as fh:
+                        for c in ([container] if container else p["containers"]):
+                            if c in p["containers"]:
+                                self._grab_container_logs(grab, ns, p["name"], c, fh)
 
             # fio test pods' container stdout (install/start markers + per-5s eta/IOPS
             # status lines) -> the pod's own subfolder, alongside its /logs artifacts.
@@ -1962,9 +2081,13 @@ class FioMigrationTest:
             # dmesg for the storage workers via the privileged spdk-container
             for p in snode:
                 dest = os.path.join(self.outdir, f"dmesg-{self._short(p['node'])}.txt")
+                # `--time-format=iso` carries a UTC offset; `-T` renders local time with
+                # none, so an event cannot be placed against a run window recorded in UTC
+                # without assuming the two agree. Fall back to -T on older util-linux.
                 cp = subprocess.run(
                     ["kubectl", "-n", NAMESPACE, "exec", p["name"], "-c", "spdk-container",
-                     "--", "dmesg", "-T"],
+                     "--", "sh", "-c",
+                     "dmesg --time-format=iso 2>/dev/null || dmesg -T"],
                     capture_output=True, check=False, timeout=120)
                 with open(dest, "wb") as fh:
                     fh.write(cp.stdout)
@@ -1973,10 +2096,139 @@ class FioMigrationTest:
         except Exception as e:  # noqa: BLE001
             self.log.warn(f"cluster log collection error: {e}")
         finally:
-            if grabbers:
+            doomed = sorted(set(grabbers.values()) | set(self._stream_grabbers.values()))
+            if doomed:
                 subprocess.run(["kubectl", "-n", NAMESPACE, "delete", "pod",
-                                *grabbers.values(), "--ignore-not-found", "--wait=false"],
+                                *doomed, "--ignore-not-found", "--wait=false"],
                                capture_output=True, text=True, check=False, timeout=60)
+                self._stream_grabbers = {}
+
+    # ---- live log streaming ------------------------------------------------------
+    # The SPDK containers are the only logs that outrun kubelet rotation (see
+    # _host_stream_script), so they are the only ones streamed. Everything else is small
+    # enough that the one-shot grab at the end still returns the whole run.
+
+    def start_log_streaming(self) -> None:
+        """Start following the storage nodes' SPDK logs into the artifact files.
+
+        Best-effort and never fatal: a run with no SPDK logs is worth less, but it is still
+        a run, and the migrations are the thing under test.
+        """
+        if not self.a.stream_cluster_logs:
+            self.log.info("cluster log streaming disabled (--no-stream-cluster-logs); "
+                          "SPDK logs will be grabbed once at the end and will be "
+                          "rotation-truncated on a long run")
+            return
+        try:
+            snode = self._list_pods(NAMESPACE, ["snode-spdk"])
+        except Exception as e:  # noqa: BLE001
+            self.log.warn(f"log streaming: cannot list storage-node pods: {e}")
+            return
+        if not snode:
+            return
+
+        # The grabbers have to outlive the whole run plus collection, and a pod that
+        # outlives the test is worse than one that dies early — cleanup() deletes them by
+        # label, but only if the test gets that far.
+        ttl = int(self.a.runtime) + 3600
+        for node in sorted({p["node"] for p in snode if p["node"]}):
+            name = self._start_loggrab(node, ttl_s=ttl, purpose="stream")
+            if name:
+                self._stream_grabbers[node] = name
+        ready = self._wait_loggrab(list(self._stream_grabbers.values()))
+        self._stream_grabbers = {n: g for n, g in self._stream_grabbers.items() if g in ready}
+
+        for p in snode:
+            grab = self._stream_grabbers.get(p["node"])
+            if not grab:
+                continue
+            port = self._snode_port(p["name"])
+            for container, suffix in (("spdk-container", ""), ("spdk-proxy-container", "-proxy")):
+                self._open_stream(grab, NAMESPACE, p["name"], container,
+                                  os.path.join(self.outdir, f"spdk-{port}{suffix}.txt"))
+        if self._log_streams:
+            self.log.info(f"streaming {len(self._log_streams)} SPDK container log(s) "
+                          f"live into {self.outdir} (survives kubelet rotation)")
+
+    def _open_stream(self, grabber: str, namespace: str, pod: str, container: str,
+                     dest: str) -> None:
+        """Attach one follower, appending to dest. Parts after the first get a suffix."""
+        key = (pod, container)
+        part = self._stream_parts.get(key, 0)
+        path = dest if part == 0 else f"{dest[:-4]}.part{part}.txt"
+        try:
+            fh = open(path, "ab")
+            proc = subprocess.Popen(  # noqa: S603
+                ["kubectl", "-n", NAMESPACE, "exec", grabber, "--", "sh", "-c",
+                 self._host_stream_script(namespace, pod, container)],
+                stdout=fh, stderr=subprocess.DEVNULL)
+        except Exception as e:  # noqa: BLE001
+            self.log.warn(f"log streaming: cannot follow {pod}/{container}: {e}")
+            return
+        self._stream_parts[key] = part + 1
+        self._log_streams.append({"proc": proc, "fh": fh, "path": path, "dest": dest,
+                                  "grabber": grabber, "namespace": namespace,
+                                  "pod": pod, "container": container})
+
+    def restart_dead_streams(self) -> None:
+        """Re-attach followers that died mid-run, into a .partN file.
+
+        Called from the migration loop rather than from a thread of its own — the loop
+        already ticks often enough, and a follower that dies is rare enough that noticing
+        it within a migration is soon enough.
+
+        A new part rather than an append, because a re-attach re-reads whatever is still
+        retained and would otherwise duplicate a stretch of the previous part in the middle
+        of the file. Separate parts keep each one internally ordered, which is what makes
+        them readable; the gap between them, if any, is bounded by how long the follower
+        was dead.
+        """
+        for st in list(self._log_streams):
+            if st["proc"].poll() is None:
+                continue
+            self._log_streams.remove(st)
+            try:
+                st["fh"].close()
+            except Exception:  # noqa: BLE001
+                pass
+            size = os.path.getsize(st["path"]) if os.path.exists(st["path"]) else 0
+            self.log.warn(f"log stream for {st['pod']}/{st['container']} ended early "
+                          f"(rc={st['proc'].returncode}, {size / 1048576:.1f} MiB); re-attaching")
+            self._open_stream(st["grabber"], st["namespace"], st["pod"], st["container"],
+                              st["dest"])
+
+    def stop_log_streaming(self) -> set:
+        """Stop the followers and return the (pod, container) pairs that were streamed.
+
+        The pairs are what tells collect_cluster_logs which containers it must *not* grab
+        again: re-grabbing one would overwrite a four-hour stream with the last forty
+        minutes kubelet still has, which is the failure this whole mechanism exists to
+        avoid.
+        """
+        streamed = set()
+        for st in self._log_streams:
+            streamed.add((st["pod"], st["container"]))
+            proc = st["proc"]
+            try:
+                proc.terminate()
+                proc.wait(timeout=15)
+            except Exception:  # noqa: BLE001
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                st["fh"].flush()
+                st["fh"].close()
+            except Exception:  # noqa: BLE001
+                pass
+        if self._log_streams:
+            total = sum(os.path.getsize(st["path"]) for st in self._log_streams
+                        if os.path.exists(st["path"]))
+            self.log.info(f"stopped {len(self._log_streams)} log stream(s); "
+                          f"{total / 1048576:.1f} MiB captured live")
+        self._log_streams = []
+        return streamed
 
     @staticmethod
     def _short(node: str) -> str:
@@ -2006,8 +2258,11 @@ class FioMigrationTest:
             })
         return out
 
-    def _start_loggrab(self, node: str) -> str:
-        name = f"loggrab-{self._short(node)}-{self.run_id}"
+    def _start_loggrab(self, node: str, ttl_s: int = 1800, purpose: str = "grab") -> str:
+        # `purpose` is in the name so two sets of grabbers can coexist. Reuse (see
+        # collect_cluster_logs) is the normal path and this is the backstop: a Pod is
+        # immutable, so a name clash fails the apply rather than updating anything.
+        name = f"loggrab-{purpose}-{self._short(node)}-{self.run_id}"
         manifest = json.dumps({
             "apiVersion": "v1", "kind": "Pod",
             "metadata": {"name": name, "namespace": NAMESPACE, "labels": {"test": self.run_id}},
@@ -2016,7 +2271,7 @@ class FioMigrationTest:
                 "tolerations": [{"operator": "Exists"}],
                 "containers": [{
                     "name": "grab", "image": FIO_IMAGE, "imagePullPolicy": "IfNotPresent",
-                    "command": ["sh", "-c", "sleep 1800"],
+                    "command": ["sh", "-c", f"sleep {ttl_s}"],
                     # privileged + runAsUser:0 is required to read the host's
                     # /var/log/pods on OpenShift: without it the container runs as
                     # container_t (SELinux) and gets EACCES even as root, so every
@@ -2052,11 +2307,76 @@ class FioMigrationTest:
         return ready
 
     @staticmethod
-    def _host_dump_script(namespace: str, pod: str, container: str) -> str:
-        # cat all rotated + current CRI log files for one container, oldest-first, gz-aware
-        return (f'd=$(ls -d /podlogs/{namespace}_{pod}_*/{container}/ 2>/dev/null) || exit 0; '
-                f'for f in $(ls -1tr "$d" 2>/dev/null); do '
-                f'case "$f" in *.gz) zcat "$d$f" 2>/dev/null;; *) cat "$d$f";; esac; done')
+    def _host_log_dir(namespace: str, pod: str, container: str,
+                      if_missing: str = "exit 0") -> str:
+        # One pod dir per pod *UID*, so a pod recreated under the same name leaves two.
+        # Take the most recently written one rather than letting `ls -d` expand to several
+        # words, which would make every quoted use of it a path that does not exist — the
+        # bug that would silently empty a grab for any pod that had been recreated.
+        return (f'd=$(ls -1dt /podlogs/{namespace}_{pod}_*/{container}/ 2>/dev/null | head -1); '
+                f'[ -n "$d" ] || {{ {if_missing}; }}; ')
+
+    @staticmethod
+    def _current_log_file() -> str:
+        # The live file is "<restartCount>.log"; kubelet rotates it to
+        # "<restartCount>.log.<timestamp>[.gz]" and opens a new one under the *same* name.
+        # Picking it by name rather than by mtime matters: a .gz written by the rotation
+        # that just happened is briefly the newest file in the directory.
+        return 'cur=$(ls -1 "$d" 2>/dev/null | grep -E "^[0-9]+\\.log$" | sort -n | tail -1); '
+
+    @classmethod
+    def _host_dump_script(cls, namespace: str, pod: str, container: str) -> str:
+        # cat all rotated + current CRI log files for one container, oldest-first, gz-aware.
+        # `gzip -cd` rather than `zcat`: the latter is a .Z-only alias on some hosts, which
+        # would silently drop every gzipped (i.e. every older) segment.
+        return (cls._host_log_dir(namespace, pod, container) +
+                'for f in $(ls -1tr "$d" 2>/dev/null); do '
+                'case "$f" in *.gz) gzip -cd "$d$f" 2>/dev/null;; *) cat "$d$f";; esac; done')
+
+    @classmethod
+    def _host_stream_script(cls, namespace: str, pod: str, container: str) -> str:
+        """Dump what is retained for one container, then follow it for the rest of the run.
+
+        This is the whole point of streaming: kubelet keeps only
+        containerLogMaxSize x containerLogMaxFiles per container (10Mi x 5 = 50Mi on the
+        clusters this runs against), and a busy SPDK container writes that in well under an
+        hour — so a one-shot grab at the end of a four-hour run returns the last forty
+        minutes and silently drops everything before it.
+
+        Three things move the log out from under a follower, and all three have to be
+        handled or the stream goes quiet without ending:
+
+        * **rotation** renames the live file and opens a new one under the *same* name.
+          `tail -F` follows by name and reopens it by itself.
+        * **a container restart** opens `<restartCount+1>.log` beside the old one, in the
+          same directory. `tail -F` on the old name would wait on a file that still exists
+          and never grows again, so the target is re-resolved on a timer instead.
+        * **a pod recreation** makes a whole new `<ns>_<pod>_<uid>` directory, which the
+          same re-resolve picks up.
+
+        Only the first target emits the rotated history: on any later switch the history is
+        the file that was already being followed. A new target is always read from its first
+        line, so a restart costs latency (up to the poll interval) rather than data.
+        """
+        return (
+            'prev=""; tpid=""; '
+            'while :; do '
+            + cls._host_log_dir(namespace, pod, container, if_missing="sleep 5; continue")
+            + cls._current_log_file() +
+            '[ -n "$cur" ] || { sleep 5; continue; }; '
+            'if [ "$d$cur" != "$prev" ]; then '
+            '  [ -n "$tpid" ] && kill "$tpid" 2>/dev/null; '
+            '  if [ -z "$prev" ]; then '
+            '    for f in $(ls -1tr "$d" 2>/dev/null); do '
+            '      [ "$f" = "$cur" ] && continue; '
+            '      case "$f" in *.gz) gzip -cd "$d$f" 2>/dev/null;; *) cat "$d$f" 2>/dev/null;; esac; '
+            '    done; '
+            '  fi; '
+            '  tail -F -n +1 "$d$cur" 2>/dev/null & tpid=$!; '
+            '  prev="$d$cur"; '
+            'fi; '
+            'sleep 5; '
+            'done')
 
     def _grab_container_logs(self, grabber: str, namespace: str, pod: str, container: str, fh) -> None:
         cp = subprocess.run(
@@ -2253,6 +2573,15 @@ class FioMigrationTest:
         that instant falls relative to the migration that was in flight — and within it,
         relative to the cutover the hosts actually observed (which the CR reports tens of
         seconds late). "3s after cutover" and "during the copy" are different bugs.
+
+        The window a hit is matched against extends VERIFY_LAG_S past the migration's end,
+        because a verify failure is detected when fio next happens to *read* the block, not
+        when the write was lost. On run fiomig-1787171993 that mattered: all five of mig-20's
+        lost blocks surfaced 18-20s after it finished and were filed under "outside every
+        migration window", which read as corruption with no migration to blame and hid the
+        fact that a *Completed* migration had lost writes. A hit past the grace is still
+        reported as outside — the point is not to attribute everything, only to stop
+        attributing a migration's own losses to nothing.
         """
         out = []
         for line in hits:
@@ -2267,12 +2596,16 @@ class FioMigrationTest:
             migration, into, after_cutover = "", None, None
             if when:
                 for m in self.migrations:
-                    if not m.end or not (m.start <= when <= m.end):
+                    if not m.end or not (m.start <= when <= m.end + VERIFY_LAG):
                         continue
+                    lagged = when > m.end
                     cut = sorted(m.ana_cutover.values())
                     migration = m.name
                     into = round((when - m.start).total_seconds(), 1)
-                    where = f"during {m.name} (phase={m.phase}, {into:.0f}s in)"
+                    where = (f"during {m.name} (phase={m.phase}, {into:.0f}s in)" if not lagged
+                             else f"attributed to {m.name} (phase={m.phase}), detected "
+                                  f"{(when - m.end).total_seconds():.0f}s after it ended — "
+                                  f"within fio's verify backlog")
                     if cut:
                         cut_dt = datetime.strptime(cut[0], "%Y-%m-%dT%H:%M:%SZ").replace(
                             tzinfo=timezone.utc)
@@ -2351,6 +2684,9 @@ class FioMigrationTest:
             if k not in ("analyze_dir", "outdir"):
                 setattr(saved, k, v)
         self = cls(saved, log, outdir)
+        # Marks a replay, so the analysis knows the recorded verdicts came from whatever code
+        # produced the archive rather than from this process.
+        self._replayed = True
         self.run_id = state["run_id"]
         self.pods = state["pods"]
         self.pv_of = state["pv_of"]
@@ -2369,13 +2705,105 @@ class FioMigrationTest:
             m = dict(m)
             n_samples = m.pop("ana_sample_count", 0)
             m["start"], m["end"] = _dt(m.get("start")) or now_utc(), _dt(m.get("end"))
-            # only the sample count is ever read back; the samples themselves live in ana/*.csv
-            m["ana_samples"] = [None] * n_samples
+            m.setdefault("ana_freezes", 0)
+            # The samples themselves are archived in ana/*.csv rather than in state.json, so
+            # they are read back from there — see _rehydrate_ana_samples for why it is worth
+            # doing rather than restoring a count.
+            m["ana_samples"] = self._rehydrate_ana_samples(m.get("ana_csv") or "") \
+                or [None] * n_samples
             self.migrations.append(MigrationRecord(**m))
         self.health_events = [PodHealthEvent(ts=_dt(e["ts"]), pod=e["pod"], detail=e["detail"])
                               for e in state.get("health_events", [])]
         self._fio_finished.set()
         return self
+
+    def _reverify_ana_from_archive(self) -> None:
+        """Re-derive the host-path verdicts from the archived ANA samples, when there are any.
+
+        A no-op on a live run, where the verdicts were just computed from the same samples.
+        On --analyze-dir it is what makes a fix to the ANA checks testable against a finished
+        run instead of only against the next one, and it re-states the verdict rather than
+        trusting the one the run recorded — which is the point, since the recorded verdict
+        came from the code being replaced.
+
+        A replayed duration is not identical to the live one: the CSV stores whole seconds, so
+        a window measured from it can be a second off either way, and a migration whose pause
+        sat on the threshold can change sides. The freeze *count* is structural and does not
+        move, which is the other reason to prefer it over the duration bound.
+        """
+        if not self._replayed:
+            return
+        rehydrated = [m for m in self.migrations
+                      if m.ana_samples and all(s is not None for s in m.ana_samples)]
+        if not rehydrated:
+            return
+        for m in rehydrated:
+            # node_ip is a live-cluster lookup and is not archived, but the CSV's role column
+            # was written from exactly the two entries the verification needs, so invert it:
+            # the addresses labelled target and source name the IPs of this migration's target
+            # and source. Without this the verification declines every replayed migration for
+            # want of a target IP.
+            for role, node_uuid in (("target", m.target), ("source", m.source)):
+                if node_uuid and node_uuid not in self.node_ip:
+                    ip = self._archived_role_ip(m.ana_csv or "", role)
+                    if ip:
+                        self.node_ip[node_uuid] = ip
+            m.ana_stall_s, m.ana_freezes, m.ana_msgs, m.ana_ok = 0.0, 0, [], None
+            self._verify_ana_states(m)
+        self.log.info(f"re-derived host-path verdicts for {len(rehydrated)} migration(s) "
+                      "from the archived ANA samples")
+
+    @staticmethod
+    def _archived_role_ip(csv_path: str, role: str) -> str:
+        """The IP the archived samples label with role ("target" / "source"), or "" if none."""
+        if not csv_path or not os.path.exists(csv_path):
+            return ""
+        try:
+            with open(csv_path, newline="") as fh:
+                for r in csv.DictReader(fh):
+                    if r.get("role") == role and r.get("address"):
+                        return r["address"].rsplit(":", 1)[0]
+        except OSError:
+            return ""
+        return ""
+
+    @staticmethod
+    def _rehydrate_ana_samples(csv_path: str) -> list[AnaSample]:
+        """Read a migration's archived ANA samples back from its ana/*.csv.
+
+        Without this a re-analysis cannot re-derive any host-path verdict: state.json keeps
+        only the sample count, so --analyze-dir replayed whatever verdict the run reached and
+        a fix to the ANA checks could not be tried against an archived run at all. That is
+        the wrong way round for the check most likely to need fixing — the run it matters on
+        is the four-hour one — and it is what made the freeze count added alongside this
+        unverifiable except by running the whole thing again.
+
+        The CSV is one row per (controller, namespace); AnaSample is one controller, so rows
+        are regrouped by (ts, node, address). A missing or unreadable file yields nothing and
+        leaves the stored verdict in place.
+        """
+        if not csv_path or not os.path.exists(csv_path):
+            return []
+        grouped: dict[tuple, AnaSample] = {}
+        try:
+            with open(csv_path, newline="") as fh:
+                for r in csv.DictReader(fh):
+                    try:
+                        ts = datetime.fromisoformat(r["ts"].replace("Z", "+00:00"))
+                    except (ValueError, KeyError):
+                        continue
+                    key = (ts, r.get("node", ""), r.get("address", ""))
+                    s = grouped.get(key)
+                    if s is None:
+                        s = AnaSample(ts=ts, node=r.get("node", ""), phase=r.get("phase", ""),
+                                      address=r.get("address", ""),
+                                      state=r.get("ctrl_state", ""))
+                        grouped[key] = s
+                    if r.get("nsid"):
+                        s.ana[int(r["nsid"])] = r.get("ana_state", "")
+        except OSError:
+            return []
+        return [grouped[k] for k in sorted(grouped)]
 
     @staticmethod
     def _state_from_test_log(outdir: str) -> dict:
@@ -2443,6 +2871,7 @@ class FioMigrationTest:
 
     def analyze(self) -> bool:
         """Returns True if I/O was continuous (PASS), False on any I/O loss (FAIL)."""
+        self._reverify_ana_from_archive()
         self.log.info("=" * 78)
         self.log.info("ANALYSIS — correlating IOPS/latency with migration windows")
         self.log.info("=" * 78)
@@ -2651,6 +3080,7 @@ class FioMigrationTest:
                 "ana_ok": m.ana_ok, "ana_msgs": m.ana_msgs,
                 "ana_samples": len(m.ana_samples), "ana_csv": m.ana_csv,
                 "ana_max_stall_s": round(m.ana_stall_s, 1),
+                "ana_freezes": m.ana_freezes,
                 "ana_observed_cutover": m.ana_cutover,
                 "ana_cr_completed_lag_s": round(m.ana_cr_lag_s, 1),
             })
@@ -2688,7 +3118,8 @@ class FioMigrationTest:
         report["ana_failures"] = [
             {"name": m.name, "pv": m.pv, "phase": m.phase, "subsystem_nqn": m.nqn,
              "target_has_consumer": m.target_has_consumer,
-             "max_stall_s": round(m.ana_stall_s, 1), "csv": m.ana_csv, "msgs": m.ana_msgs}
+             "max_stall_s": round(m.ana_stall_s, 1), "freezes": m.ana_freezes,
+             "csv": m.ana_csv, "msgs": m.ana_msgs}
             for m in ana_failures]
 
         # The target-selection discriminator: how the run split between migrating onto a
@@ -2987,9 +3418,10 @@ class FioMigrationTest:
             aok = len([m for m in sampled if m.ana_ok is True])
             afail = len([m for m in sampled if m.ana_ok is False])
             worst = max((m.ana_stall_s for m in sampled), default=0.0)
+            refroze = len([m for m in sampled if m.ana_freezes > self.a.ana_freezes_crit])
             self.log.info(f"host paths (ANA)  : {aok} ok / {afail} violated "
                           f"/ {len(sampled)} sampled  "
-                          f"(worst cutover pause {worst:.0f}s of "
+                          f"({refroze} re-froze the volume; worst cutover pause {worst:.0f}s of "
                           f"{self.a.ana_stall_crit:.0f}s allowed, "
                           f"~{CUTOVER_PAUSE_DESIGN_S:.0f}s by design; "
                           f"per-migration CSVs in ana/)")
@@ -3027,8 +3459,19 @@ class FioMigrationTest:
         self.log.info("  <pod>/result.json     fio final JSON summary")
         self.log.info("  <pod>/fio.log         fio pod container stdout (eta/IOPS status lines)")
         self.log.info("  test.log              full event log (migration start/stop, I/O-loss events)")
-        self.log.info("  spdk-<port>[-proxy].txt / {operator,webappapi,tasks}.txt / dmesg-<vm>.txt")
-        self.log.info("                        full host-sourced cluster logs (no rotation cut-off)")
+        self.log.info("  spdk-<port>[-proxy].txt   host-sourced SPDK logs, followed live for the whole")
+        self.log.info("                        run, so kubelet rotation cannot truncate them; a")
+        self.log.info("                        .partN file means the follower was re-attached")
+        self.log.info("  {operator,webappapi}.txt  control plane, one file per pod")
+        self.log.info("  tasks-runner-*.txt / csi-*.txt")
+        self.log.info("                        one file per container — the tasks pod runs 17 runners,")
+        self.log.info("                        so merging them hides which one said what")
+        self.log.info("  csi-node-<vm>.txt / snode-api-<vm>.txt")
+        self.log.info("                        per node: both reconcile per host, so \"which node\" is")
+        self.log.info("                        the first question about anything they did")
+        self.log.info("  dmesg-<vm>.txt        ISO-timestamped, so events can be placed against the run")
+        self.log.info("                        All of the above are grabbed at the end — whatever the")
+        self.log.info("                        kubelet still retained (see --stream-cluster-logs)")
         self.log.info(line)
         if io_lost:
             self.log.crit("RESULT: FAIL — I/O LOSS DETECTED (see CRITICAL lines above)")
@@ -3039,6 +3482,10 @@ class FioMigrationTest:
     # ---- cleanup ----------------------------------------------------------------
 
     def cleanup(self) -> None:
+        # Before the --keep return and idempotent, so the followers are stopped even when
+        # the run failed before collection reached them — otherwise they outlive the test
+        # as orphaned kubectl processes.
+        self.stop_log_streaming()
         if self.a.keep:
             self.log.info(f"--keep set; leaving resources (label test={self.run_id})")
             return
@@ -3111,6 +3558,9 @@ class FioMigrationTest:
                                       + " — host paths on those nodes cannot be sampled")
                 else:
                     self.log.info("ANA sampling disabled (--ana-interval 0)")
+            # Before wait_io_flowing, so the streams also cover the mount/attach the first
+            # migration is judged against rather than starting once I/O is already flowing.
+            self.start_log_streaming()
             self.wait_io_flowing()
             self._io_start_time = now_utc()
 
@@ -3227,6 +3677,18 @@ def parse_args():
     p.add_argument("--ana-interval", type=float, default=2.0,
                    help="seconds between host-side ANA samples taken on every consuming "
                         "node through the CSI node pods (0 disables sampling)")
+    p.add_argument("--stream-cluster-logs", action=argparse.BooleanOptionalAction, default=True,
+                   help="follow the storage nodes' SPDK container logs into the artifact dir "
+                        "for the whole run, instead of grabbing them once at the end. The "
+                        "kubelet keeps only containerLogMaxSize x containerLogMaxFiles per "
+                        "container (50Mi by default), which a busy SPDK container writes in "
+                        "well under an hour, so a one-shot grab on a multi-hour run silently "
+                        "returns only its tail")
+    p.add_argument("--ana-freezes-crit", type=int, default=CUTOVER_FREEZES_ALLOWED,
+                   help="fail a migration that froze the volume (drove every path to some "
+                        "namespace inaccessible) more times than this. A migration cuts over "
+                        "once; more means the cutover was retried, and every migration seen "
+                        "to do so has also silently lost writes — see CUTOVER_FREEZES_ALLOWED")
     p.add_argument("--ana-stall-crit", type=float, default=CUTOVER_PAUSE_CRIT_S,
                    help="fail a migration if some namespace had no accessible path on a "
                         "consuming node for longer than this (seconds). A bounded pause is "
