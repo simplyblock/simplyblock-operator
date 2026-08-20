@@ -18,8 +18,10 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -166,6 +168,18 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 
 	r.setSubphase(ctx, ops, "TriggeringFailover")
 
+	// backendLvolResults holds per-volume results returned by the backend
+	// failover endpoint. The backend always returns HTTP 200; actual failures
+	// are encoded in the status field of each result entry.
+	type backendLvolResult struct {
+		LvolID     string `json:"lvol_id"`
+		Status     string `json:"status"` // "failed_over" | "failed" | "skipped"
+		Detail     string `json:"detail"`
+		TargetLvol string `json:"target_lvol_id"`
+	}
+
+	var backendResults []backendLvolResult
+
 	switch ops.Spec.Scope {
 	case utils.ReplicationOpsScopeTarget:
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/targets/%s/failover", clusterUUID, pair.Status.BackendTargetID)
@@ -177,6 +191,7 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 			log.Error(err, "POST target failover failed")
 			return r.failOps(ctx, ops, fmt.Sprintf("target failover failed: %v", err))
 		}
+		_ = json.Unmarshal(body, &backendResults)
 
 	case utils.ReplicationOpsScopePolicy:
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/policies/%s/failover", clusterUUID, policy.Status.BackendPolicyID)
@@ -187,6 +202,19 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 			}
 			log.Error(err, "POST policy failover failed")
 			return r.failOps(ctx, ops, fmt.Sprintf("policy failover failed: %v", err))
+		}
+		_ = json.Unmarshal(body, &backendResults)
+
+		// Backend always returns 200; check per-volume status for failures.
+		var failures []string
+		for _, r := range backendResults {
+			if r.Status == "failed" {
+				failures = append(failures, fmt.Sprintf("%s: %s", r.LvolID, r.Detail))
+			}
+		}
+		if len(failures) > 0 {
+			return r.failOps(ctx, ops, fmt.Sprintf("failover failed for %d volume(s): %s",
+				len(failures), strings.Join(failures, "; ")))
 		}
 
 	case utils.ReplicationOpsScopeVolume:
@@ -213,6 +241,12 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 		return r.failOps(ctx, ops, fmt.Sprintf("unknown scope %q", ops.Spec.Scope))
 	}
 
+	// Build a map of backend results by lvol ID for quick lookup.
+	backendByLvol := make(map[string]backendLvolResult, len(backendResults))
+	for _, br := range backendResults {
+		backendByLvol[br.LvolID] = br
+	}
+
 	r.setSubphase(ctx, ops, "UpdatingSlotStatuses")
 
 	results := make([]simplyblockv1alpha1.ReplicationOpsResult, 0, len(slots))
@@ -222,6 +256,10 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateFailedOver)
 		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
 		slot.Status.Message = fmt.Sprintf("Failed over via ReplicationOps %s", ops.Name)
+		// Populate TargetLvolID from the backend response when available.
+		if br, ok := backendByLvol[slot.Spec.VolumeID]; ok && br.TargetLvol != "" {
+			slot.Status.TargetLvolID = br.TargetLvol
+		}
 		if err := r.Status().Patch(ctx, slot, slotPatch); err != nil {
 			log.Error(err, "failed to update slot status after failover", "slot", slot.Name)
 		}
