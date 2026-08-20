@@ -87,6 +87,12 @@ func (r *ReplicationPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	targetUUID, err := utils.ResolveClusterUUID(ctx, r.Client, policy.Namespace, policy.Spec.Target)
+	if err != nil {
+		log.Error(err, "failed to resolve target cluster UUID", "target", policy.Spec.Target)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	apiClient := webapi.NewClient()
 
 	if !policy.DeletionTimestamp.IsZero() {
@@ -102,7 +108,7 @@ func (r *ReplicationPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Step 1: ensure the backend ReplicationTarget for spec.target exists.
 	// Multiple ReplicationPolicy CRs pointing at the same remote cluster share one target.
 	if policy.Status.BackendTargetID == "" {
-		targetID, err := r.ensureBackendTarget(ctx, &policy, apiClient, clusterUUID)
+		targetID, err := r.ensureBackendTarget(ctx, &policy, apiClient, clusterUUID, targetUUID)
 		if err != nil {
 			log.Error(err, "failed to ensure backend ReplicationTarget", "target", policy.Spec.Target)
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -254,6 +260,7 @@ func (r *ReplicationPolicyReconciler) ensureBackendTarget(
 	policy *simplyblockv1alpha1.ReplicationPolicy,
 	apiClient *webapi.Client,
 	clusterUUID string,
+	targetUUID string,
 ) (string, error) {
 	// List existing targets and look for one whose target_cluster_id matches.
 	listEndpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/targets", clusterUUID)
@@ -269,7 +276,7 @@ func (r *ReplicationPolicyReconciler) ensureBackendTarget(
 		return "", fmt.Errorf("unmarshal replication/targets response: %w", err)
 	}
 	for _, t := range targets {
-		if t.TargetClusterID == policy.Spec.Target {
+		if t.TargetClusterID == targetUUID {
 			return t.ID, nil
 		}
 	}
@@ -277,7 +284,7 @@ func (r *ReplicationPolicyReconciler) ensureBackendTarget(
 	// Not found — create a new one.
 	reqBody := map[string]interface{}{
 		"target_name":       fmt.Sprintf("simplyblock-repl-%s", policy.Spec.Target),
-		"target_cluster_id": policy.Spec.Target,
+		"target_cluster_id": targetUUID,
 	}
 	body, status, err = apiClient.Do(ctx, http.MethodPost, listEndpoint, reqBody)
 	if err != nil || status >= 300 {

@@ -20,22 +20,28 @@ import (
 
 const (
 	testClusterName            = "local-cluster"
+	testTargetClusterName      = "cluster-a"
+	testTargetClusterUUID      = "cluster-a-uuid"
 	apiPathReplicationTargets  = "/api/v2/clusters/" + testClusterUUID + "/replication/targets"
 	apiPathReplicationPolicies = "/api/v2/clusters/" + testClusterUUID + "/replication/policies"
 )
 
 // newPolicyReconciler creates a ReplicationPolicyReconciler backed by a fake client.
 // The spec.policyRef index is registered so MatchingFields queries work.
-// A StorageCluster named testClusterName with UUID testClusterUUID is pre-populated
-// so ResolveClusterUUID succeeds for any policy using ClusterName: testClusterName.
+// Two StorageClusters are pre-populated: local (testClusterName) and target (testTargetClusterName)
+// so ResolveClusterUUID succeeds for both spec.clusterName and spec.target.
 func newPolicyReconciler(t *testing.T, objects ...client.Object) (*ReplicationPolicyReconciler, client.Client) {
 	t.Helper()
 	localCluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: testClusterName, Namespace: "default"},
 		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterUUID},
 	}
+	targetCluster := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: testTargetClusterName, Namespace: "default"},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: testTargetClusterUUID},
+	}
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
-	allObjects := append([]client.Object{localCluster}, objects...)
+	allObjects := append([]client.Object{localCluster, targetCluster}, objects...)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&simplyblockv1alpha1.ReplicationPolicy{}).
@@ -143,7 +149,7 @@ func TestPolicy_ReusesExistingTarget(t *testing.T) {
 	r, cl := newPolicyReconciler(t, policy)
 
 	existingTargets := []interface{}{
-		map[string]string{"id": "existing-tgt", "target_cluster_id": "cluster-a", "target_name": "x"},
+		map[string]string{"id": "existing-tgt", "target_cluster_id": testTargetClusterUUID, "target_name": "x"},
 	}
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		switch {
