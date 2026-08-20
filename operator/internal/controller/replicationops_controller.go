@@ -709,20 +709,6 @@ func (r *ReplicationOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index ReplicationOps.spec.ref: %w", err)
 	}
 
-	// Index ReplicationPolicy by spec.pairRef so collectSlotsForPair can list
-	// all policies for a given pair without scanning the entire policy list.
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(),
-		&simplyblockv1alpha1.ReplicationPolicy{},
-		"spec.pairRef",
-		func(obj client.Object) []string {
-			pol := obj.(*simplyblockv1alpha1.ReplicationPolicy)
-			return []string{pol.Spec.PairRef}
-		},
-	); err != nil {
-		return fmt.Errorf("index ReplicationPolicy.spec.pairRef: %w", err)
-	}
-
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.ReplicationOps{}).
 		Named("replicationops").
