@@ -94,7 +94,10 @@ func (r *ReplicationOpsReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	policyName := r.resolveAffectedPolicyName(&ops)
+	policyName, err := r.resolveAffectedPolicyName(ctx, &ops)
+	if err != nil {
+		return r.failOps(ctx, &ops, err.Error())
+	}
 	var policy simplyblockv1alpha1.ReplicationPolicy
 	if err := r.Get(ctx, types.NamespacedName{Name: policyName, Namespace: ops.Namespace}, &policy); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -394,8 +397,20 @@ func (r *ReplicationOpsReconciler) collectAffectedSlots(
 }
 
 // resolveAffectedPolicyName returns the ReplicationPolicy name targeted by ops.
-func (r *ReplicationOpsReconciler) resolveAffectedPolicyName(ops *simplyblockv1alpha1.ReplicationOps) string {
-	return ops.Spec.Ref
+// For scope=volume, ref is a ReplicationSlot name; the policy is read from the
+// slot's spec.policyRef. For all other scopes, ref IS the policy name.
+func (r *ReplicationOpsReconciler) resolveAffectedPolicyName(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+) (string, error) {
+	if ops.Spec.Scope != utils.ReplicationOpsScopeVolume {
+		return ops.Spec.Ref, nil
+	}
+	var slot simplyblockv1alpha1.ReplicationSlot
+	if err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.Ref, Namespace: ops.Namespace}, &slot); err != nil {
+		return "", fmt.Errorf("scope=volume: get ReplicationSlot %q: %w", ops.Spec.Ref, err)
+	}
+	return slot.Spec.PolicyRef, nil
 }
 
 // setSubphase updates status.subphase without blocking on error.
@@ -453,8 +468,8 @@ func (r *ReplicationOpsReconciler) releasePolicyLock(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.ReplicationOps,
 ) {
-	policyName := r.resolveAffectedPolicyName(ops)
-	if policyName == "" {
+	policyName, err := r.resolveAffectedPolicyName(ctx, ops)
+	if err != nil || policyName == "" {
 		return
 	}
 	var policy simplyblockv1alpha1.ReplicationPolicy
