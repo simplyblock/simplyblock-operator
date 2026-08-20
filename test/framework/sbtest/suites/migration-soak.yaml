@@ -1,0 +1,47 @@
+# Observation only: no workload, no driver. For watching a cluster someone else is loading —
+# including the existing operator/test/fio_migration_test.py — and for checking that
+# collection works before committing a long run to it.
+#
+#   make collect OUT=./runs/soak SUITE=migration-soak DURATION=600
+#
+# For a run this framework drives itself, use migration-full.
+description: >-
+  Long migration soak — the collection configuration the corruption work needed. Both log
+  components are on deliberately.
+
+run:
+  id_prefix: fiomig
+  outdir: ./runs
+
+components:
+  # The SPDK containers outrun kubelet rotation within the hour, so they are followed live;
+  # everything else is still complete from a one-shot grab at the end. That split is the
+  # whole reason both log components exist.
+  logs.stream:
+    containers:
+      - spdk-container
+      - spdk-proxy-container
+    ttl_s: 21600
+  logs.collect: true
+  host.dmesg: true
+  cluster.events: true
+  # Before *and* after: "did the last run leave a mess?" is a real question, because a leaked
+  # controller breaks the next run rather than this one.
+  nvme.snapshot: true
+  ana.sample:
+    interval_s: 2.0
+
+detectors:
+  ana.freeze-count:
+    # More than one freeze in a migration meant lost writes on 5 of 5 archived runs.
+    max_freezes: 1
+  ana.cutover-pause:
+    max_pause_s: 5.0
+  fio.checksum:
+    # Corruption surfaces when fio next reads the block, after the migration has ended.
+    verify_lag_s: 45
+  fio.outage:
+    min_seconds: 30
+  migration.outcomes:
+    min_completed_fraction: 0.8
+    max_timeout_fraction: 0.1
