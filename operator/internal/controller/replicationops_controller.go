@@ -163,8 +163,8 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 
 	switch ops.Spec.Scope {
 	case utils.ReplicationOpsScopeTarget:
-		// POST /replication-targets/{id}/failover — atomically fails over all volumes.
-		endpoint := fmt.Sprintf("/api/v2/replication-targets/%s/failover", policy.Status.BackendTargetID)
+		// POST /replication/targets/{id}/failover — atomically fails over all volumes.
+		endpoint := fmt.Sprintf("/api/v2/replication/targets/%s/failover", policy.Status.BackendTargetID)
 		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
@@ -175,8 +175,8 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 		}
 
 	case utils.ReplicationOpsScopePolicy:
-		// POST /replication-policies/{id}/failover — atomically fails over all volumes in policy.
-		endpoint := fmt.Sprintf("/api/v2/replication-policies/%s/failover", policy.Status.BackendPolicyID)
+		// POST /replication/policies/{id}/failover — atomically fails over all volumes in policy.
+		endpoint := fmt.Sprintf("/api/v2/replication/policies/%s/failover", policy.Status.BackendPolicyID)
 		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
@@ -187,7 +187,7 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 		}
 
 	case utils.ReplicationOpsScopeVolume:
-		// POST /{vol}/replicate_lvol — per-volume unplanned failover.
+		// POST /{vol}/replication/failover — per-volume unplanned failover.
 		if len(pairs) != 1 {
 			return r.failOps(ctx, ops, fmt.Sprintf("scope=volume requires exactly 1 pair; got %d", len(pairs)))
 		}
@@ -196,14 +196,14 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 		if !ok {
 			return r.failOps(ctx, ops, fmt.Sprintf("invalid VolumeID on pair %s", pair.Name))
 		}
-		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replicate_lvol",
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/failover",
 			clusterID, poolID, volumeID)
 		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
 				err = fmt.Errorf("status %d: %s", status, string(body))
 			}
-			log.Error(err, "POST replicate_lvol failed", "pair", pair.Name)
+			log.Error(err, "POST replication/failover failed", "pair", pair.Name)
 			return r.failOps(ctx, ops, fmt.Sprintf("volume failover failed: %v", err))
 		}
 

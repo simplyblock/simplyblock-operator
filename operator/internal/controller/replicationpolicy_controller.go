@@ -43,27 +43,17 @@ import (
 // its status (pair count and readiness) when already steady.
 const replPolicyRequeueInterval = 30 * time.Second
 
-// replicationTargetEntry is a single item from GET /api/v2/replication-targets.
+// replicationTargetEntry is a single item from GET /api/v2/replication/targets.
 type replicationTargetEntry struct {
 	ID              string `json:"id"`
 	TargetClusterID string `json:"target_cluster_id"`
 	TargetName      string `json:"target_name"`
 }
 
-// replicationTargetListResponse is the envelope from GET /api/v2/replication-targets.
-type replicationTargetListResponse struct {
-	Results []replicationTargetEntry `json:"results"`
-}
-
-// replicationPolicyEntry is a single item from GET /api/v2/replication-policies.
+// replicationPolicyEntry is a single item from GET /api/v2/replication/policies.
 type replicationPolicyEntry struct {
 	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-// replicationPolicyListResponse is the envelope from GET /api/v2/replication-policies.
-type replicationPolicyListResponse struct {
-	Results []replicationPolicyEntry `json:"results"`
+	Name string `json:"policy_name"`
 }
 
 // idResponse is the envelope for POST calls that return {"id": "..."}.
@@ -183,7 +173,7 @@ func (r *ReplicationPolicyReconciler) reconcileDelete(
 
 	// Delete the backend ReplicationPolicy.
 	if policy.Status.BackendPolicyID != "" {
-		endpoint := fmt.Sprintf("/api/v2/replication-policies/%s", policy.Status.BackendPolicyID)
+		endpoint := fmt.Sprintf("/api/v2/replication/policies/%s", policy.Status.BackendPolicyID)
 		body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 		if err != nil || (status >= 300 && status != http.StatusNotFound) {
 			if err == nil {
@@ -202,7 +192,7 @@ func (r *ReplicationPolicyReconciler) reconcileDelete(
 			log.Error(err, "failed to check whether ReplicationTarget is shared")
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		} else if shouldDelete {
-			endpoint := fmt.Sprintf("/api/v2/replication-targets/%s", policy.Status.BackendTargetID)
+			endpoint := fmt.Sprintf("/api/v2/replication/targets/%s", policy.Status.BackendTargetID)
 			body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 			if err != nil || (status >= 300 && status != http.StatusNotFound) {
 				if err == nil {
@@ -257,18 +247,18 @@ func (r *ReplicationPolicyReconciler) ensureBackendTarget(
 	apiClient *webapi.Client,
 ) (string, error) {
 	// List existing targets and look for one whose target_cluster_id matches.
-	body, status, err := apiClient.Do(ctx, http.MethodGet, "/api/v2/replication-targets", nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, "/api/v2/replication/targets", nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))
 		}
 		return "", fmt.Errorf("list replication targets: %w", err)
 	}
-	var listResp replicationTargetListResponse
-	if err := json.Unmarshal(body, &listResp); err != nil {
-		return "", fmt.Errorf("unmarshal replication-targets response: %w", err)
+	var targets []replicationTargetEntry
+	if err := json.Unmarshal(body, &targets); err != nil {
+		return "", fmt.Errorf("unmarshal replication/targets response: %w", err)
 	}
-	for _, t := range listResp.Results {
+	for _, t := range targets {
 		if t.TargetClusterID == policy.Spec.Target {
 			return t.ID, nil
 		}
@@ -279,7 +269,7 @@ func (r *ReplicationPolicyReconciler) ensureBackendTarget(
 		"target_name":       fmt.Sprintf("simplyblock-repl-%s", policy.Spec.Target),
 		"target_cluster_id": policy.Spec.Target,
 	}
-	body, status, err = apiClient.Do(ctx, http.MethodPost, "/api/v2/replication-targets", reqBody)
+	body, status, err = apiClient.Do(ctx, http.MethodPost, "/api/v2/replication/targets", reqBody)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))
@@ -304,18 +294,18 @@ func (r *ReplicationPolicyReconciler) ensureBackendPolicy(
 	apiClient *webapi.Client,
 ) (string, error) {
 	// List existing backend policies and look for one with a matching name.
-	body, status, err := apiClient.Do(ctx, http.MethodGet, "/api/v2/replication-policies", nil)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, "/api/v2/replication/policies", nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))
 		}
 		return "", fmt.Errorf("list replication policies: %w", err)
 	}
-	var listResp replicationPolicyListResponse
-	if err := json.Unmarshal(body, &listResp); err != nil {
-		return "", fmt.Errorf("unmarshal replication-policies response: %w", err)
+	var policies []replicationPolicyEntry
+	if err := json.Unmarshal(body, &policies); err != nil {
+		return "", fmt.Errorf("unmarshal replication/policies response: %w", err)
 	}
-	for _, p := range listResp.Results {
+	for _, p := range policies {
 		if p.Name == policy.Name {
 			return p.ID, nil
 		}
@@ -330,12 +320,12 @@ func (r *ReplicationPolicyReconciler) ensureBackendPolicy(
 	}
 	reqBody := map[string]interface{}{
 		"policy_name":     policy.Name,
-		"target":          policy.Status.BackendTargetID,
+		"target_id":       policy.Status.BackendTargetID,
 		"interval_min":    intervalMin,
 		"mode":            policy.Spec.Mode,
 		"keep_replicated": policy.Spec.KeepReplicated,
 	}
-	body, status, err = apiClient.Do(ctx, http.MethodPost, "/api/v2/replication-policies", reqBody)
+	body, status, err = apiClient.Do(ctx, http.MethodPost, "/api/v2/replication/policies", reqBody)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))

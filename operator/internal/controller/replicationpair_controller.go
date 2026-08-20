@@ -42,7 +42,7 @@ import (
 
 const (
 	// replPairRequeueAttaching is how long to wait between polls while the backend
-	// is completing the attach (PUT /replication-policy) operation.
+	// is completing the attach (PUT /volumes/{v} with replication_policy_id) operation.
 	replPairRequeueAttaching = 10 * time.Second
 	// replPairRequeueReplicating is how often the reconciler syncs lastReplicatedAt
 	// from the backend while a pair is in the steady-state replicating state.
@@ -149,7 +149,7 @@ func (r *ReplicationPairReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 }
 
-// reconcileAttach sends PUT /{vol}/replication-policy and transitions to attaching.
+// reconcileAttach sends PUT /{vol} with replication_policy_id and transitions to attaching.
 func (r *ReplicationPairReconciler) reconcileAttach(
 	ctx context.Context,
 	pair *simplyblockv1alpha1.ReplicationPair,
@@ -159,17 +159,17 @@ func (r *ReplicationPairReconciler) reconcileAttach(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication-policy",
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s",
 		clusterID, poolID, volumeID)
 	reqBody := map[string]interface{}{
-		"policy_id": policy.Status.BackendPolicyID,
+		"replication_policy_id": policy.Status.BackendPolicyID,
 	}
 	body, status, err := apiClient.Do(ctx, http.MethodPut, endpoint, reqBody)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))
 		}
-		log.Error(err, "PUT replication-policy failed", "pair", pair.Name)
+		log.Error(err, "PUT volume replication_policy_id failed", "pair", pair.Name)
 		return r.setError(ctx, pair, fmt.Sprintf("attach failed: %v", err))
 	}
 
@@ -178,7 +178,7 @@ func (r *ReplicationPairReconciler) reconcileAttach(
 
 	patch := client.MergeFrom(pair.DeepCopy())
 	pair.Status.State = string(simplyblockv1alpha1.ReplicationPairStateAttaching)
-	pair.Status.Message = "PUT replication-policy sent; waiting for backend confirmation"
+	pair.Status.Message = "replication_policy_id set; waiting for backend confirmation"
 	if err := r.Status().Patch(ctx, pair, patch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -335,8 +335,8 @@ func (r *ReplicationPairReconciler) reconcileSyncStatus(
 	return ctrl.Result{RequeueAfter: replPairRequeueReplicating}, nil
 }
 
-// reconcileDetach calls DELETE /{vol}/replication-policy and removes the finalizer
-// so the pair CR can be GC'd.
+// reconcileDetach sends PUT /{vol} with replication_policy_id=null and removes the
+// finalizer so the pair CR can be GC'd.
 func (r *ReplicationPairReconciler) reconcileDetach(
 	ctx context.Context,
 	pair *simplyblockv1alpha1.ReplicationPair,
@@ -361,20 +361,23 @@ func (r *ReplicationPairReconciler) reconcileDetach(
 		return r.removePairFinalizer(ctx, pair)
 	}
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication-policy",
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s",
 		clusterID, poolID, volumeID)
-	body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
+	reqBody := map[string]interface{}{
+		"replication_policy_id": nil,
+	}
+	body, status, err := apiClient.Do(ctx, http.MethodPut, endpoint, reqBody)
 	if err != nil || (status >= 300 && status != http.StatusNotFound && status != http.StatusConflict) {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))
 		}
-		log.Error(err, "DELETE replication-policy failed; retrying", "pair", pair.Name)
+		log.Error(err, "PUT volume replication_policy_id=null failed; retrying", "pair", pair.Name)
 		return ctrl.Result{RequeueAfter: replPairRequeueError}, nil
 	}
 
 	// 409 means a cutover is in flight; wait for it to settle.
 	if status == http.StatusConflict {
-		log.Info("DELETE replication-policy returned 409 (cutover in flight); retrying", "pair", pair.Name)
+		log.Info("PUT replication_policy_id=null returned 409 (cutover in flight); retrying", "pair", pair.Name)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 

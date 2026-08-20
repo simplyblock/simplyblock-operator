@@ -330,11 +330,11 @@ func TestPair_Detach_Success(t *testing.T) {
 	r, cl := newPairReconciler(t, pair)
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
-		if req.Method == http.MethodDelete {
-			w.WriteHeader(http.StatusOK)
+		if req.Method == http.MethodPut {
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		w.WriteHeader(http.StatusNotFound)
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 

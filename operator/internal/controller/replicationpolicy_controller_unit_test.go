@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	apiPathReplicationTargets  = "/api/v2/replication-targets"
-	apiPathReplicationPolicies = "/api/v2/replication-policies"
+	apiPathReplicationTargets  = "/api/v2/replication/targets"
+	apiPathReplicationPolicies = "/api/v2/replication/policies"
 )
 
 // newPolicyReconciler creates a ReplicationPolicyReconciler backed by a fake client.
@@ -99,11 +99,11 @@ func TestPolicy_CreatesTargetWhenAbsent(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		switch {
 		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationTargets:
-			writeJSON(w, map[string]interface{}{"results": []interface{}{}})
+			writeJSON(w, []interface{}{})
 		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationTargets:
 			writeJSON(w, map[string]string{"id": "tgt-uuid"})
 		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
-			writeJSON(w, map[string]interface{}{"results": []interface{}{}})
+			writeJSON(w, []interface{}{})
 		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationPolicies:
 			writeJSON(w, map[string]string{"id": "pol-uuid"})
 		default:
@@ -134,20 +134,18 @@ func TestPolicy_ReusesExistingTarget(t *testing.T) {
 	}
 	r, cl := newPolicyReconciler(t, policy)
 
-	existingTargets := map[string]interface{}{
-		"results": []interface{}{
-			map[string]string{"id": "existing-tgt", "target_cluster_id": "cluster-a", "target_name": "x"},
-		},
+	existingTargets := []interface{}{
+		map[string]string{"id": "existing-tgt", "target_cluster_id": "cluster-a", "target_name": "x"},
 	}
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		switch {
 		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationTargets:
 			writeJSON(w, existingTargets)
 		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationTargets:
-			t.Error("POST replication-targets should not be called when target already exists")
+			t.Error("POST replication/targets should not be called when target already exists")
 			w.WriteHeader(http.StatusInternalServerError)
 		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
-			writeJSON(w, map[string]interface{}{"results": []interface{}{}})
+			writeJSON(w, []interface{}{})
 		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationPolicies:
 			writeJSON(w, map[string]string{"id": "pol-uuid"})
 		default:
@@ -270,10 +268,10 @@ func TestPolicy_DeletionRemovesBackendAndFinalizer(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !deleted["/api/v2/replication-policies/bpol"] {
+	if !deleted["/api/v2/replication/policies/bpol"] {
 		t.Errorf("backend ReplicationPolicy was not deleted")
 	}
-	if !deleted["/api/v2/replication-targets/tgt"] {
+	if !deleted["/api/v2/replication/targets/tgt"] {
 		t.Errorf("backend ReplicationTarget was not deleted")
 	}
 
