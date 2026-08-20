@@ -149,6 +149,16 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
+	// Resolve the pair and source cluster UUID — needed for all backend failover endpoints.
+	var pair simplyblockv1alpha1.ReplicationPair
+	if err := r.Get(ctx, types.NamespacedName{Name: policy.Spec.PairRef, Namespace: policy.Namespace}, &pair); err != nil {
+		return r.failOps(ctx, ops, fmt.Sprintf("get ReplicationPair %q: %v", policy.Spec.PairRef, err))
+	}
+	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, policy.Namespace, pair.Spec.SourceCluster)
+	if err != nil {
+		return r.failOps(ctx, ops, fmt.Sprintf("resolve cluster UUID: %v", err))
+	}
+
 	slots, err := r.collectAffectedSlots(ctx, ops, policy)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -158,7 +168,7 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 
 	switch ops.Spec.Scope {
 	case utils.ReplicationOpsScopeTarget:
-		endpoint := fmt.Sprintf("/api/v2/replication/targets/%s/failover", policy.Status.BackendPolicyID)
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/targets/%s/failover", clusterUUID, pair.Status.BackendTargetID)
 		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
@@ -169,7 +179,7 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 		}
 
 	case utils.ReplicationOpsScopePolicy:
-		endpoint := fmt.Sprintf("/api/v2/replication/policies/%s/failover", policy.Status.BackendPolicyID)
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/policies/%s/failover", clusterUUID, policy.Status.BackendPolicyID)
 		body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
 		if err != nil || status >= 300 {
 			if err == nil {
