@@ -29,6 +29,7 @@ import (
 // Fields here mirror the configurable (non-immutable, non-infrastructure) fields
 // of StorageNodeSetSpec. When a field is set here it takes precedence over the
 // fleet default; when omitted the fleet default applies.
+// +kubebuilder:validation:XValidation:rule="!(((has(self.enableLblk) && self.enableLblk) || (has(self.blkNames) && size(self.blkNames) > 0) || (has(self.blkNamesExclude) && size(self.blkNamesExclude) > 0) || (has(self.blkSerials) && size(self.blkSerials) > 0)) && ((has(self.pcieAllowList) && size(self.pcieAllowList) > 0) || (has(self.pcieDenyList) && size(self.pcieDenyList) > 0) || (has(self.pcieModel) && self.pcieModel != '') || (has(self.driveSizeRange) && self.driveSizeRange != '') || (has(self.deviceNames) && size(self.deviceNames) > 0)))",message="lblk selectors (enableLblk/blkNames/blkNamesExclude/blkSerials) are mutually exclusive with NVMe PCIe selectors (pcieAllowList/pcieDenyList/pcieModel/driveSizeRange/deviceNames)"
 type StorageNodeOverrides struct {
 	// SpdkImage overrides the SPDK image for this node (e.g. for phased rollouts).
 	// +optional
@@ -75,16 +76,28 @@ type StorageNodeOverrides struct {
 	// +optional
 	EnableLblk *bool `json:"enableLblk,omitempty"`
 
-	// BlkNames overrides the block-device kernel-name selector for this node.
+	// BlkNames overrides the block-device kernel-name selector for this node. Immutable
+	// once set — including the transition from unset to set, since a StorageNodeSet
+	// commonly starts with no selector (auto-select) and the backend (node_configure.py)
+	// silently skips regenerating config for an already-provisioned node, so an
+	// accepted-but-ignored edit here would otherwise look like it took effect when it
+	// did nothing.
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:XValidation:rule="oldSelf.hasValue() && self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
 	// +optional
 	BlkNames []string `json:"blkNames,omitempty"`
 
 	// BlkNamesExclude overrides the block-device kernel-name exclusion selector for
-	// this node.
+	// this node. Immutable once set, including the unset-to-set transition (see BlkNames).
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:XValidation:rule="oldSelf.hasValue() && self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
 	// +optional
 	BlkNamesExclude []string `json:"blkNamesExclude,omitempty"`
 
-	// BlkSerials overrides the block-device serial/WWN selector for this node.
+	// BlkSerials overrides the block-device serial/WWN selector for this node. Immutable
+	// once set, including the unset-to-set transition (see BlkNames).
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:XValidation:rule="oldSelf.hasValue() && self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
 	// +optional
 	BlkSerials []string `json:"blkSerials,omitempty"`
 
