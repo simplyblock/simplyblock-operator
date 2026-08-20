@@ -60,11 +60,11 @@ func getSlot(t *testing.T, cl client.Client) *simplyblockv1alpha1.ReplicationSlo
 	return s
 }
 
-// readyReplicationPolicy returns a ReplicationPolicy with BackendPolicyID set and Ready=true.
+// readyReplicationPolicy returns a ReplicationPolicy named "pol" with BackendPolicyID set and Ready=true.
 // Status is pre-seeded so the fake client's WithObjects preserves it on Get.
-func readyReplicationPolicy(name string) *simplyblockv1alpha1.ReplicationPolicy {
+func readyReplicationPolicy() *simplyblockv1alpha1.ReplicationPolicy {
 	return &simplyblockv1alpha1.ReplicationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: "default"},
 		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
 		Status: simplyblockv1alpha1.ReplicationPolicyStatus{
 			Ready:           true,
@@ -184,7 +184,7 @@ func TestSlot_AddsFinalizer(t *testing.T) {
 // ---------- reconcileAttach: sets state to replicating on success ----------
 
 func TestSlot_ReconcileAttach_Success(t *testing.T) {
-	pol := readyReplicationPolicy("pol")
+	pol := readyReplicationPolicy()
 	slot := newTestSlot("") // state="" triggers reconcileAttach
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
@@ -218,7 +218,7 @@ func TestSlot_ReconcileAttach_Success(t *testing.T) {
 // ---------- reconcileAttach: failure sets state to error ----------
 
 func TestSlot_ReconcileAttach_Failure_SetsError(t *testing.T) {
-	pol := readyReplicationPolicy("pol")
+	pol := readyReplicationPolicy()
 	slot := newTestSlot("")
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
@@ -267,7 +267,7 @@ func TestSlot_PolicyNotReady_Waits(t *testing.T) {
 // ---------- invalid volume handle → error state ----------
 
 func TestSlot_InvalidVolumeHandle_SetsError(t *testing.T) {
-	pol := readyReplicationPolicy("pol")
+	pol := readyReplicationPolicy()
 	slot := &simplyblockv1alpha1.ReplicationSlot{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "slot1",
@@ -296,7 +296,7 @@ func TestSlot_InvalidVolumeHandle_SetsError(t *testing.T) {
 // ---------- reconcilePollAttach: attaching → replicating ----------
 
 func TestSlot_ReconcilePollAttach_TransitionsToReplicating(t *testing.T) {
-	pol := readyReplicationPolicy("pol")
+	pol := readyReplicationPolicy()
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateAttaching))
 
 	r, cl := newSlotReconciler(t, slot, pol)
@@ -322,7 +322,7 @@ func TestSlot_ReconcilePollAttach_TransitionsToReplicating(t *testing.T) {
 // ---------- reconcileReplicating: backend 404 (normal) → keep replicating ----------
 
 func TestSlot_ReconcileReplicating_NotFound_KeepsPolling(t *testing.T) {
-	pol := readyReplicationPolicy("pol")
+	pol := readyReplicationPolicy()
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateReplicating))
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
@@ -353,7 +353,7 @@ func TestSlot_ReconcileReplicating_NotFound_KeepsPolling(t *testing.T) {
 // ---------- reconcileReplicating: backend returns failed_over → updates state ----------
 
 func TestSlot_ReconcileReplicating_FailedOver_UpdatesState(t *testing.T) {
-	pol := readyReplicationPolicy("pol")
+	pol := readyReplicationPolicy()
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateReplicating))
 
 	backendStatus := replVolumeReplicationStatus{
@@ -395,7 +395,7 @@ func TestSlot_ReconcileReplicating_FailedOver_UpdatesState(t *testing.T) {
 // ---------- reconcileReplicating: lastSnapshotAt updated ----------
 
 func TestSlot_ReconcileReplicating_UpdatesLastReplicatedAt(t *testing.T) {
-	pol := readyReplicationPolicy("pol")
+	pol := readyReplicationPolicy()
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateReplicating))
 
 	snapshotTime := "2024-06-01T12:00:00Z"
@@ -446,7 +446,7 @@ func TestSlot_ReconcileDetach_RemovesFinalizer(t *testing.T) {
 			PolicyRef: "pol", PVCRef: "pvc1", VolumeID: "cluster-id:pool-id:vol-id",
 		},
 	}
-	pol := readyReplicationPolicy("pol")
+	pol := readyReplicationPolicy()
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodPut {
@@ -487,7 +487,7 @@ func TestSlot_ReconcileDetach_Failure_KeepsFinalizer(t *testing.T) {
 			PolicyRef: "pol", PVCRef: "pvc1", VolumeID: "cluster-id:pool-id:vol-id",
 		},
 	}
-	pol := readyReplicationPolicy("pol")
+	pol := readyReplicationPolicy()
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -513,7 +513,7 @@ func TestSlot_ReconcileDetach_Failure_KeepsFinalizer(t *testing.T) {
 // ---------- error state retries attach ----------
 
 func TestSlot_ErrorState_RetriesAttach(t *testing.T) {
-	pol := readyReplicationPolicy("pol")
+	pol := readyReplicationPolicy()
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateError))
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {

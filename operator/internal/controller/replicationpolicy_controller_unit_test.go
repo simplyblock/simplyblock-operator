@@ -44,17 +44,17 @@ func newPolicyReconciler(t *testing.T, objects ...client.Object) (*ReplicationPo
 	return &ReplicationPolicyReconciler{Client: cl, Scheme: scheme}, cl
 }
 
-// readyPairForPolicy returns a ReplicationPair that is ready and has a backend target ID.
-func readyPairForPolicy(name, sourceCluster, backendTargetID string) *simplyblockv1alpha1.ReplicationPair {
+// readyPairForPolicy returns a ReplicationPair named "pair1" that is ready and has a backend target ID.
+func readyPairForPolicy() *simplyblockv1alpha1.ReplicationPair {
 	return &simplyblockv1alpha1.ReplicationPair{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "pair1", Namespace: "default"},
 		Spec: simplyblockv1alpha1.ReplicationPairSpec{
-			SourceCluster: sourceCluster,
+			SourceCluster: testClusterName,
 			TargetCluster: "cluster-b",
 		},
 		Status: simplyblockv1alpha1.ReplicationPairStatus{
 			Ready:           true,
-			BackendTargetID: backendTargetID,
+			BackendTargetID: "tgt-uuid",
 		},
 	}
 }
@@ -131,7 +131,7 @@ func TestPolicy_PairNotReady_Waits(t *testing.T) {
 // ---------- finalizer ----------
 
 func TestPolicy_AddsFinalizer(t *testing.T) {
-	pair := readyPairForPolicy("pair1", testClusterName, "tgt-uuid")
+	pair := readyPairForPolicy()
 	policy := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: "default"},
 		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
@@ -150,7 +150,7 @@ func TestPolicy_AddsFinalizer(t *testing.T) {
 // ---------- ensure backend policy (GET + POST) ----------
 
 func TestPolicy_CreatesBackendPolicy_WhenAbsent(t *testing.T) {
-	pair := readyPairForPolicy("pair1", testClusterName, "tgt-uuid")
+	pair := readyPairForPolicy()
 	policy := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "pol", Namespace: "default",
@@ -186,7 +186,7 @@ func TestPolicy_CreatesBackendPolicy_WhenAbsent(t *testing.T) {
 // ---------- reuse existing backend policy ----------
 
 func TestPolicy_ReusesExistingBackendPolicy(t *testing.T) {
-	pair := readyPairForPolicy("pair1", testClusterName, "tgt-uuid")
+	pair := readyPairForPolicy()
 	policy := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "pol", Namespace: "default",
@@ -224,7 +224,7 @@ func TestPolicy_ReusesExistingBackendPolicy(t *testing.T) {
 // ---------- mark ready ----------
 
 func TestPolicy_MarksReady_WhenPolicyIDPresent(t *testing.T) {
-	pair := readyPairForPolicy("pair1", testClusterName, "tgt-uuid")
+	pair := readyPairForPolicy()
 	policy := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "pol", Namespace: "default",
@@ -252,7 +252,7 @@ func TestPolicy_MarksReady_WhenPolicyIDPresent(t *testing.T) {
 
 func TestPolicy_DeletionBlockedWhileSlotsExist(t *testing.T) {
 	now := metav1.Now()
-	pair := readyPairForPolicy("pair1", testClusterName, "tgt-uuid")
+	pair := readyPairForPolicy()
 	policy := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "pol", Namespace: "default",
@@ -286,7 +286,7 @@ func TestPolicy_DeletionBlockedWhileSlotsExist(t *testing.T) {
 
 func TestPolicy_DeletionRemovesBackendPolicyAndFinalizer(t *testing.T) {
 	now := metav1.Now()
-	pair := readyPairForPolicy("pair1", testClusterName, "tgt-uuid")
+	pair := readyPairForPolicy()
 	policy := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "pol", Namespace: "default",
