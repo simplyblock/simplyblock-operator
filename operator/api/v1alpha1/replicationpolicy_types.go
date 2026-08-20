@@ -22,6 +22,10 @@ import (
 
 // ReplicationPolicySpec defines the desired replication configuration.
 type ReplicationPolicySpec struct {
+	// ClusterName is the name of the local StorageCluster this policy belongs to.
+	// +kubebuilder:validation:Required
+	ClusterName string `json:"clusterName"`
+
 	// Target is the name or UUID of the remote cluster to replicate to.
 	// Immutable after creation.
 	// +kubebuilder:validation:Required

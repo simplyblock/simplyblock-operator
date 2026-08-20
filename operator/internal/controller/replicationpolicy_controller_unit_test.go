@@ -19,19 +19,27 @@ import (
 )
 
 const (
-	apiPathReplicationTargets  = "/api/v2/replication/targets"
-	apiPathReplicationPolicies = "/api/v2/replication/policies"
+	testClusterName            = "local-cluster"
+	apiPathReplicationTargets  = "/api/v2/clusters/" + testClusterUUID + "/replication/targets"
+	apiPathReplicationPolicies = "/api/v2/clusters/" + testClusterUUID + "/replication/policies"
 )
 
 // newPolicyReconciler creates a ReplicationPolicyReconciler backed by a fake client.
 // The spec.policyRef index is registered so MatchingFields queries work.
+// A StorageCluster named testClusterName with UUID testClusterUUID is pre-populated
+// so ResolveClusterUUID succeeds for any policy using ClusterName: testClusterName.
 func newPolicyReconciler(t *testing.T, objects ...client.Object) (*ReplicationPolicyReconciler, client.Client) {
 	t.Helper()
+	localCluster := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: testClusterName, Namespace: "default"},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterUUID},
+	}
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	allObjects := append([]client.Object{localCluster}, objects...)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&simplyblockv1alpha1.ReplicationPolicy{}).
-		WithObjects(objects...).
+		WithObjects(allObjects...).
 		WithIndex(&simplyblockv1alpha1.ReplicationPair{}, "spec.policyRef", func(obj client.Object) []string {
 			return []string{obj.(*simplyblockv1alpha1.ReplicationPair).Spec.PolicyRef}
 		}).
@@ -70,7 +78,7 @@ func TestPolicy_IgnoreNotFound(t *testing.T) {
 func TestPolicy_AddsFinalizer(t *testing.T) {
 	policy := &simplyblockv1alpha1.ReplicationPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
+		Spec:       simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
 	}
 	r, cl := newPolicyReconciler(t, policy)
 	// No backend called — t.Setenv makes NewClient point somewhere unreachable;
@@ -92,7 +100,7 @@ func TestPolicy_CreatesTargetWhenAbsent(t *testing.T) {
 			Name: "pol", Namespace: "default",
 			Finalizers: []string{utils.FinalizerReplicationPolicy},
 		},
-		Spec: simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
+		Spec: simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
 	}
 	r, cl := newPolicyReconciler(t, policy)
 
@@ -130,7 +138,7 @@ func TestPolicy_ReusesExistingTarget(t *testing.T) {
 			Name: "pol", Namespace: "default",
 			Finalizers: []string{utils.FinalizerReplicationPolicy},
 		},
-		Spec: simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
+		Spec: simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
 	}
 	r, cl := newPolicyReconciler(t, policy)
 
@@ -174,7 +182,7 @@ func TestPolicy_MarksReadyAfterBothIDsPresent(t *testing.T) {
 			Name: "pol", Namespace: "default",
 			Finalizers: []string{utils.FinalizerReplicationPolicy},
 		},
-		Spec:   simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
+		Spec:   simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
 		Status: simplyblockv1alpha1.ReplicationPolicyStatus{BackendTargetID: "tgt", BackendPolicyID: "bpol"},
 	}
 	r, cl := newPolicyReconciler(t, policy)
@@ -207,7 +215,7 @@ func TestPolicy_DeletionBlockedWhilePairsExist(t *testing.T) {
 			Finalizers:        []string{utils.FinalizerReplicationPolicy},
 			DeletionTimestamp: &now,
 		},
-		Spec:   simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
+		Spec:   simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
 		Status: simplyblockv1alpha1.ReplicationPolicyStatus{BackendPolicyID: "bpol", BackendTargetID: "tgt"},
 	}
 	pair := &simplyblockv1alpha1.ReplicationPair{
@@ -245,7 +253,7 @@ func TestPolicy_DeletionRemovesBackendAndFinalizer(t *testing.T) {
 			Finalizers:        []string{utils.FinalizerReplicationPolicy},
 			DeletionTimestamp: &now,
 		},
-		Spec:   simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
+		Spec:   simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
 		Status: simplyblockv1alpha1.ReplicationPolicyStatus{BackendPolicyID: "bpol", BackendTargetID: "tgt"},
 	}
 	r, cl := newPolicyReconciler(t, policy)
@@ -268,10 +276,10 @@ func TestPolicy_DeletionRemovesBackendAndFinalizer(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !deleted["/api/v2/replication/policies/bpol"] {
+	if !deleted["/api/v2/clusters/"+testClusterUUID+"/replication/policies/bpol"] {
 		t.Errorf("backend ReplicationPolicy was not deleted")
 	}
-	if !deleted["/api/v2/replication/targets/tgt"] {
+	if !deleted["/api/v2/clusters/"+testClusterUUID+"/replication/targets/tgt"] {
 		t.Errorf("backend ReplicationTarget was not deleted")
 	}
 
@@ -300,7 +308,7 @@ func TestPolicy_IsTargetOrphaned(t *testing.T) {
 			name: "sibling with same target — not orphaned",
 			sibling: &simplyblockv1alpha1.ReplicationPolicy{
 				ObjectMeta: metav1.ObjectMeta{Name: "sib", Namespace: "default"},
-				Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
+				Spec:       simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
 			},
 			wantOrph: false,
 		},
@@ -318,7 +326,7 @@ func TestPolicy_IsTargetOrphaned(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			policy := &simplyblockv1alpha1.ReplicationPolicy{
 				ObjectMeta: metav1.ObjectMeta{Name: "pol", Namespace: "default"},
-				Spec:       simplyblockv1alpha1.ReplicationPolicySpec{Target: "cluster-a"},
+				Spec:       simplyblockv1alpha1.ReplicationPolicySpec{ClusterName: testClusterName, Target: "cluster-a"},
 			}
 			objects := []client.Object{policy}
 			if tc.sibling != nil {

@@ -71,6 +71,7 @@ type ReplicationPolicyReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpairs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
 
 func (r *ReplicationPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -80,10 +81,16 @@ func (r *ReplicationPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, policy.Namespace, policy.Spec.ClusterName)
+	if err != nil {
+		log.Error(err, "failed to resolve local cluster UUID", "clusterName", policy.Spec.ClusterName)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	apiClient := webapi.NewClient()
 
 	if !policy.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, &policy, apiClient)
+		return r.reconcileDelete(ctx, &policy, apiClient, clusterUUID)
 	}
 
 	// Ensure our finalizer is present so we can clean up backend resources on deletion.
@@ -95,7 +102,7 @@ func (r *ReplicationPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Step 1: ensure the backend ReplicationTarget for spec.target exists.
 	// Multiple ReplicationPolicy CRs pointing at the same remote cluster share one target.
 	if policy.Status.BackendTargetID == "" {
-		targetID, err := r.ensureBackendTarget(ctx, &policy, apiClient)
+		targetID, err := r.ensureBackendTarget(ctx, &policy, apiClient, clusterUUID)
 		if err != nil {
 			log.Error(err, "failed to ensure backend ReplicationTarget", "target", policy.Spec.Target)
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -109,7 +116,7 @@ func (r *ReplicationPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Step 2: ensure the backend ReplicationPolicy (one per CR) exists.
 	if policy.Status.BackendPolicyID == "" {
-		policyID, err := r.ensureBackendPolicy(ctx, &policy, apiClient)
+		policyID, err := r.ensureBackendPolicy(ctx, &policy, apiClient, clusterUUID)
 		if err != nil {
 			log.Error(err, "failed to ensure backend ReplicationPolicy", "policy", policy.Name)
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -154,6 +161,7 @@ func (r *ReplicationPolicyReconciler) reconcileDelete(
 	ctx context.Context,
 	policy *simplyblockv1alpha1.ReplicationPolicy,
 	apiClient *webapi.Client,
+	clusterUUID string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -173,7 +181,7 @@ func (r *ReplicationPolicyReconciler) reconcileDelete(
 
 	// Delete the backend ReplicationPolicy.
 	if policy.Status.BackendPolicyID != "" {
-		endpoint := fmt.Sprintf("/api/v2/replication/policies/%s", policy.Status.BackendPolicyID)
+		endpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/policies/%s", clusterUUID, policy.Status.BackendPolicyID)
 		body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 		if err != nil || (status >= 300 && status != http.StatusNotFound) {
 			if err == nil {
@@ -192,7 +200,7 @@ func (r *ReplicationPolicyReconciler) reconcileDelete(
 			log.Error(err, "failed to check whether ReplicationTarget is shared")
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		} else if shouldDelete {
-			endpoint := fmt.Sprintf("/api/v2/replication/targets/%s", policy.Status.BackendTargetID)
+			endpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/targets/%s", clusterUUID, policy.Status.BackendTargetID)
 			body, status, err := apiClient.Do(ctx, http.MethodDelete, endpoint, nil)
 			if err != nil || (status >= 300 && status != http.StatusNotFound) {
 				if err == nil {
@@ -245,9 +253,11 @@ func (r *ReplicationPolicyReconciler) ensureBackendTarget(
 	ctx context.Context,
 	policy *simplyblockv1alpha1.ReplicationPolicy,
 	apiClient *webapi.Client,
+	clusterUUID string,
 ) (string, error) {
 	// List existing targets and look for one whose target_cluster_id matches.
-	body, status, err := apiClient.Do(ctx, http.MethodGet, "/api/v2/replication/targets", nil)
+	listEndpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/targets", clusterUUID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, listEndpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))
@@ -269,7 +279,7 @@ func (r *ReplicationPolicyReconciler) ensureBackendTarget(
 		"target_name":       fmt.Sprintf("simplyblock-repl-%s", policy.Spec.Target),
 		"target_cluster_id": policy.Spec.Target,
 	}
-	body, status, err = apiClient.Do(ctx, http.MethodPost, "/api/v2/replication/targets", reqBody)
+	body, status, err = apiClient.Do(ctx, http.MethodPost, listEndpoint, reqBody)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))
@@ -292,9 +302,11 @@ func (r *ReplicationPolicyReconciler) ensureBackendPolicy(
 	ctx context.Context,
 	policy *simplyblockv1alpha1.ReplicationPolicy,
 	apiClient *webapi.Client,
+	clusterUUID string,
 ) (string, error) {
 	// List existing backend policies and look for one with a matching name.
-	body, status, err := apiClient.Do(ctx, http.MethodGet, "/api/v2/replication/policies", nil)
+	listEndpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/policies", clusterUUID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, listEndpoint, nil)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))
@@ -325,7 +337,7 @@ func (r *ReplicationPolicyReconciler) ensureBackendPolicy(
 		"mode":            policy.Spec.Mode,
 		"keep_replicated": policy.Spec.KeepReplicated,
 	}
-	body, status, err = apiClient.Do(ctx, http.MethodPost, "/api/v2/replication/policies", reqBody)
+	body, status, err = apiClient.Do(ctx, http.MethodPost, listEndpoint, reqBody)
 	if err != nil || status >= 300 {
 		if err == nil {
 			err = fmt.Errorf("status %d: %s", status, string(body))

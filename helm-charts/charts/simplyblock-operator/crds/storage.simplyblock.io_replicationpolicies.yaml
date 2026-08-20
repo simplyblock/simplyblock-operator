@@ -65,6 +65,10 @@ spec:
           spec:
             description: ReplicationPolicySpec defines the desired replication configuration.
             properties:
+              clusterName:
+                description: ClusterName is the name of the local StorageCluster this
+                  policy belongs to.
+                type: string
               interval:
                 default: 5m
                 description: Interval is how often a replication snapshot is taken
@@ -96,6 +100,7 @@ spec:
                 - message: target is immutable
                   rule: self == oldSelf
             required:
+            - clusterName
             - target
             type: object
           status:
