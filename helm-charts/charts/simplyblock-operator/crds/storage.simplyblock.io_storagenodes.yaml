@@ -89,24 +89,45 @@ spec:
                       (wipefs) to become eligible whole-disk devices on this node.
                     type: boolean
                   blkNames:
-                    description: BlkNames overrides the block-device kernel-name selector
-                      for this node.
+                    description: |-
+                      BlkNames overrides the block-device kernel-name selector for this node. Immutable
+                      once set — including the transition from unset to set, since a StorageNodeSet
+                      commonly starts with no selector (auto-select) and the backend (node_configure.py)
+                      silently skips regenerating config for an already-provisioned node, so an
+                      accepted-but-ignored edit here would otherwise look like it took effect when it
+                      did nothing.
                     items:
                       type: string
+                    maxItems: 64
                     type: array
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      optionalOldSelf: true
+                      rule: oldSelf.hasValue() && self == oldSelf.value()
                   blkNamesExclude:
                     description: |-
                       BlkNamesExclude overrides the block-device kernel-name exclusion selector for
-                      this node.
+                      this node. Immutable once set, including the unset-to-set transition (see BlkNames).
                     items:
                       type: string
+                    maxItems: 64
                     type: array
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      optionalOldSelf: true
+                      rule: oldSelf.hasValue() && self == oldSelf.value()
                   blkSerials:
-                    description: BlkSerials overrides the block-device serial/WWN
-                      selector for this node.
+                    description: |-
+                      BlkSerials overrides the block-device serial/WWN selector for this node. Immutable
+                      once set, including the unset-to-set transition (see BlkNames).
                     items:
                       type: string
+                    maxItems: 64
                     type: array
+                    x-kubernetes-validations:
+                    - message: field is immutable
+                      optionalOldSelf: true
+                      rule: oldSelf.hasValue() && self == oldSelf.value()
                   deviceNames:
                     description: |-
                       DeviceNames explicitly defines the NVMe namespace names to use on this node
@@ -206,6 +227,17 @@ spec:
                       this node.
                     type: boolean
                 type: object
+                x-kubernetes-validations:
+                - message: lblk selectors (enableLblk/blkNames/blkNamesExclude/blkSerials)
+                    are mutually exclusive with NVMe PCIe selectors (pcieAllowList/pcieDenyList/pcieModel/driveSizeRange/deviceNames)
+                  rule: '!(((has(self.enableLblk) && self.enableLblk) || (has(self.blkNames)
+                    && size(self.blkNames) > 0) || (has(self.blkNamesExclude) && size(self.blkNamesExclude)
+                    > 0) || (has(self.blkSerials) && size(self.blkSerials) > 0)) &&
+                    ((has(self.pcieAllowList) && size(self.pcieAllowList) > 0) ||
+                    (has(self.pcieDenyList) && size(self.pcieDenyList) > 0) || (has(self.pcieModel)
+                    && self.pcieModel != '''') || (has(self.driveSizeRange) && self.driveSizeRange
+                    != '''') || (has(self.deviceNames) && size(self.deviceNames) >
+                    0)))'
               socketId:
                 description: SocketID is the NUMA socket identifier from spec.socketsToUse
                   (e.g. "0", "1"). Immutable.
