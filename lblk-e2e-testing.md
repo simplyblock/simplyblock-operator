@@ -51,38 +51,68 @@ Tested on: `config-israel` (real local NVMe disks used as lblk block devices) an
   2-new-nodes-at-once expansion actually works cleanly (didn't spend the extra
   infra-provisioning time to confirm the supported path, given the unsupported path was
   already conclusively and reproducibly broken twice).
-- ⬜ `--force`/`--force-format` reuse of a previously-partitioned disk — the
-  `BlkForceFormat` field/wiring is merged (PR #437) but never exercised end-to-end
+- ✅ `--force`/`--force-format` reuse of a previously-partitioned disk — exercised at
+  the `node_configure.py` level: a partitioned disk (`sdd`) selected with `--force`
+  succeeds cleanly and writes config, vs. clean rejection without `--force` (see Error
+  Cases). The `BlkForceFormat` CRD field/wiring (PR #437) still hasn't been driven
+  through the full K8s CR → operator → add-node path end-to-end, only the underlying
+  CLI behavior it wires up to.
 - 🟡 `/blockdevices` inventory accuracy — eligibility flags observed correctly in
   `node_configure.py` output logs on every run, but no dedicated systematic check across
   all eligibility-rule branches (mounted, held, root-disk, read-only, etc.)
 
 ## Error Cases
 
-- 🟡 Missing/typo'd device name or serial → clean rejection — attempted on GCP, blocked:
-  `node_configure.py` refuses to regenerate config once the node's own DaemonSet pod is
-  `Running` (`_is_pod_present_for_node()` checks for a `snode-spdk-pod-*` on the same
-  k8s node), and the operator races to add-node within seconds of the pod becoming ready
-  — the window to test manually via `kubectl exec` is too narrow to reliably hit. Would
-  need a standalone test harness (e.g. running `node_configure.py` in a plain `docker run`
-  outside the k8s pod-management flow) to properly isolate.
-- 🟡 Requested device busy (mounted / backs root fs) → rejected with reason — same blocker
-- 🟡 Fewer than minimum devices selected → rejected — same blocker
+- ✅ Missing/typo'd device name or serial → clean rejection — **resolved & confirmed**.
+  The earlier "blocked" note was solvable: reused the removed 4th GCP node (labeled
+  for DaemonSet scheduling but deliberately kept out of `workerNodes`, so the operator
+  never attempts add-node and the `_is_pod_present_for_node()` guard never trips) to
+  get an indefinite, stable window for manual `kubectl exec` testing.
+  `{'sdz': 'not present'}` — clean, no partial state.
+- ✅ Requested device busy (mounted / backs root fs) → `{'sda': 'mounted (busy)'}` —
+  clean rejection with reason.
+- ✅ Fewer than minimum devices selected → `"lblk mode requires at least 2 partitions
+  or SSDs per node; only 1 eligible unit(s) selected: ['sdb']"` — clean rejection.
 - ✅ `--lblk` combined with any NVMe selection flag → was a crash (CrashLoopBackOff)
   instead of a clean rejection; **fixed** at the CRD level (see the Operator/K8s-specific
   entry below) — now rejected at admission time before any pod is ever created
 - ✅ Duplicate serials among selected devices → clean rejection (hit this ourselves via
   the donor-cluster NVMe-oF workaround; confirmed working as intended)
-- ⬜ Disk and one of its own partitions both selected → rejected
-- ⬜ Partitioned disk selected without `--force`/`--force-format` → rejected
-- ⬜ Device disappears after node is online (unplugged / NVMe-oF path drop) →
-  `device_remove` fires, node degrades gracefully
+- ✅ Disk and one of its own partitions both selected → distinct, clear rejection:
+  `"selection contains partition(s) ['sdd1'] of a disk that is itself selected; select
+  either the whole disk or its partitions"` (only surfaces once `--force` gets past the
+  more basic "disk is partitioned" check first — see next item)
+- ✅ Partitioned disk selected without `--force`/`--force-format` → `{'sdd': 'partitioned
+  (pass --force to format at add-node)'}` — clean rejection; **and** confirmed the
+  Good-Case flip side: the same disk selected *with* `--force` succeeds cleanly
+  (config written) — validates the previously-untested `--force-format` reuse Good Case
+  too.
+- ✅ Device disappears after node is online (unplugged / NVMe-oF path drop) →
+  live `gcloud compute instances detach-disk` on a GCP lblk storage node's data disk
+  while online. Confirmed graceful: device flipped `Status: removed`, node stayed
+  `online` (no crash/restart) with `Health: False` and `Dev: 1/0` — correctly reflects
+  the degraded state without any cascading cluster-level failure. `device_remove`
+  fired as expected.
+- ⚠️ Kernel renames a device across reboot (sdb→sdc) → **gap found, see below** —
+  discovered as a side effect of the device-disappears test's recovery step
 - ⬜ Hung IO on an AIO device (stalled backing store) → watchdog trips, node auto-restarts
 - ⬜ SPDK process crash/zombie mid add-node → cleanup + retry succeeds, no hugepage squat
 - ⬜ add-node retry leaves JM-mesh holes → fresh activation blocks, recovery still proceeds
-- ⬜ Journal device (or journal partition) fails → node/cluster behavior on JM loss
-- ⬜ Kernel renames a device across reboot (sdb→sdc) → serial-based resolution still finds it
-- ⬜ Adding an NVMe-selected node to an lblk-mode cluster, or vice versa → rejected
+- ⚠️ Journal device (or journal partition) fails → **gap found, see below** — unlike a
+  storage-device failure, a JM-device failure is NOT proactively detected
+- 🟡 Adding an NVMe-selected node to an lblk-mode cluster, or vice versa → rejected —
+  attempted on GCP, not meaningfully testable in this environment: GCP `pd-balanced`
+  disks aren't real NVMe PCIe hardware at all, so NVMe-mode `node_configure.py` (no
+  `--lblk`) just fails at "no NVMe devices with class 0108 found" — a client-side
+  hardware-absence error, not the cluster-level device-mode mismatch check we actually
+  want to exercise. Indirect confirmation only: we organically hit the reverse case
+  earlier this session (a genuinely lblk-configured node against a cluster still in
+  `nvme` mode) and got the expected clean rejection — `"The node config carries
+  'lblk_devices' but this cluster runs in nvme device mode; re-run 'sn configure'
+  without --lblk or create the cluster with --device-mode lblk."` The check is
+  symmetric in its wording, so this is reasonably strong (if indirect) evidence the
+  reverse direction works too, but not a direct repro. Would need a machine with real
+  NVMe hardware (e.g. `config-israel`) to test directly.
 - ✅ Operator: editing `blkNames` on an already-provisioned StorageNodeSet/node →
   **fixed and verified**: `BlkNames`/`BlkNamesExclude`/`BlkSerials` now carry a CEL
   immutability rule on both `StorageNodeSetSpec` and `StorageNodeOverrides`. Root-caused
@@ -94,7 +124,10 @@ Tested on: `config-israel` (real local NVMe disks used as lblk block devices) an
   `oldSelf.hasValue() && self == oldSelf.value()`. Empirically verified all 3 transitions
   on the live GCP cluster: unset→set rejected, set→different-value rejected, set→same-
   value (no-op) allowed.
-- ⬜ Selected device smaller than the journal floor (2 GiB) → clear rejection
+- ✅ Selected device smaller than the journal floor (2 GiB) → precise, clear rejection
+  with actual byte-size math: `"journal needs 3253406269 bytes (3% of 108446875648, min
+  2147483648) but the smallest selected partition sdc1 (1072693248 bytes) may
+  contribute at most 536346624; provide a larger partition"`
 
 
 ## Compatibility / Environment Cases
@@ -106,8 +139,16 @@ Tested on: `config-israel` (real local NVMe disks used as lblk block devices) an
   - 🟡 NVMe-oF volume — attempted via a donor-cluster workaround, abandoned after hitting
     the duplicate-serial-number blocker (architectural, see findings doc)
   - ⏭️ local SATA/SAS SSD, virtio-blk, iSCSI LUN — excluded per instruction
-- ⬜ GPT vs MBR partition tables — partitions were prepped on `config-israel` vm15's
-  `nvme3n1` for this earlier but never actually exercised
+- ⚠️ GPT vs MBR partition tables — exercised on `config-israel` vm15's `nvme3n1`
+  (spare 48.5GB QEMU NVMe test disk, isolated from the cluster's real 580GB storage
+  NVMes). **Two real gaps found, see below**: (1) partition-table-type detection
+  silently breaks in any container that doesn't bind-mount `/run/udev` — which
+  includes the actual production `snode-spdk-pod`/DaemonSet, confirmed by inspecting
+  its real volume mounts; (2) once that's worked around, the GPT journal-split path
+  has a sector-size unit bug that corrupts partition boundaries on any 4Kn
+  (4096-byte-native-sector) disk. MBR itself is correctly and cleanly rejected once
+  detection works. Disk fully restored to its original two-partition GPT layout
+  (same PARTUUIDs/labels) afterward.
 
 ## Operator/K8s-specific Cases
 
@@ -177,3 +218,135 @@ not just "is it literally NVMe":
   Reduced to 600s (10min) in commit `83b2ece` so this class of failure self-heals in
   minutes regardless of root cause. Independent of whatever causes the SA recreation
   itself, which remains an open question.
+
+- **Real gap, not yet fixed**: `restart-device` fails to recover an lblk/AIO device
+  after the kernel reassigns its backing block-device name (e.g. GCP detach/reattach:
+  `/dev/sdc` → `/dev/sdd`), even though `sbcli`'s `restart_device()` already contains
+  serial-first re-resolution logic explicitly written for this ("lblk mode: ... kernel
+  names shift, recreate if gone" —
+  `simplyblock_core/controllers/device_controller.py:497`). Root cause: that
+  re-resolution is gated behind `if not snode.rpc_client().get_bdevs(device_obj.nvme_bdev):`
+  — but the preceding teardown step only deletes the PT/alceml layers, never the base
+  `bdev_aio` itself, so a **stale** aio bdev object (still registered in SPDK, still
+  pointing at the now-gone `/dev/sdc` file descriptor) satisfies `get_bdevs()` and the
+  whole serial-resolution/recreate block gets skipped. The subsequent
+  `_def_create_device_stack()` then tries to layer a fresh alceml bdev on top of that
+  dead aio bdev and fails outright (`Failed to create alceml bdev`,
+  `bdev.c:8748:bdev_open_ext: *NOTICE*: Currently unable to find bdev with name:
+  alceml_...`), leaving the device permanently stuck in `unavailable`/`removed` status
+  — no automatic recovery path once this happens.
+  - Repro: on GCP lblk cluster, live-detached a storage node's data disk (confirmed
+    `device_remove` fires correctly, node degrades gracefully — see Error Cases above),
+    then reattached the same GCP PD. Kernel remapped it from `/dev/sdc` to `/dev/sdd`
+    (confirmed via `lsblk` + `/dev/disk/by-id/google-persistent-disk-N` symlinks).
+    `sbcli-dev storage-node restart-device <uuid>` then failed with "Failed to create
+    alceml bdev" / "Failed to create device stack", and the SPDK RPC log showed
+    `bdev_alceml_create` called against `cntr_path: aio_SYN_<serial>_<id>` with no
+    preceding fresh `bdev_aio_create` call for that name at all — i.e. the
+    serial-resolution branch never ran.
+  - Fix direction: either (a) have the teardown step also delete the base `bdev_aio`
+    bdev unconditionally before the type check, so `get_bdevs()` correctly reports it
+    missing and the recreate path always runs for `bdev_type == "aio"`, or (b) make the
+    check itself verify the aio bdev's backing file is still openable (not just that a
+    bdev object with that name exists) before deciding recreation isn't needed. Not
+    fixed live in this session — flagging as a finding for the backend (`sbcli`) team,
+    since `simplyblock-operator` doesn't own this code path.
+  - Confirmed the workaround: manually deleting the stale base bdev
+    (`bdev_aio_delete` on `aio_SYN_<serial>_<id>`) via direct RPC, then re-running
+    `restart-device --force`, recovered the device cleanly (`online`, rebalance task
+    created, cluster went `DEGRADED` → `ACTIVE - REBALANCING`). So the underlying
+    per-layer recreate logic is otherwise sound — it's specifically the stale-aio-bdev
+    detection gap above that blocks the automatic path.
+
+- **Real gap, not yet fixed**: a JM (journal) device's backing block device disappearing
+  is not proactively detected the way a storage device's is. Repro: live-detached the
+  GCP PD backing node-3's JM device (`gcloud compute instances detach-disk`, same
+  technique as the passing "Device disappears" storage-device test above). Polled
+  `sn list-devices` every 20s for 4+ minutes — the JM device stayed reported
+  `Status: online, Health: True` the entire time (contrast: the storage-device case
+  flipped to `removed`/`Health: False` within ~20s). Then wrote real data through a
+  mounted CSI volume on a client node (`dd ... oflag=direct` into the k8s CSI
+  globalmount path) — the write immediately failed with `Input/output error` at the
+  application layer, proving the failure *is* real and *is* reaching the data path,
+  it's just invisible in the node/device health reporting. So there is no graceful
+  degradation for JM loss the way there is for a storage-device loss: no proactive
+  flip to unhealthy/removed, no automatic failover of the journal role to a healthy
+  mesh peer, and no re-balance triggered — the operator/monitoring stack simply
+  doesn't know anything is wrong until/unless something else notices the I/O errors.
+  Disk reattached afterward to restore node-3. Fix direction: the periodic
+  device-health-check should probe the JM bdev the same way it probes storage bdevs
+  (e.g. a lightweight read/write liveness check), not rely on it only being exercised
+  incidentally by real journal traffic. Flagging for the backend (`sbcli`) team — this
+  is core cluster/HA behavior, not something the operator controls.
+
+- **Real gap, found incidentally (not yet fixed)**: leftover `failed_device_migration`
+  tasks from the earlier cluster-expansion incident (see above — the removed node-4
+  and its devices) were still present in `cluster list-tasks`, `suspended`, each
+  retried 75-77 times, all failing with `'Device <uuid> not found'` (confirmed via
+  direct DB lookup — the referenced devices genuinely no longer exist, they belonged
+  to the node we `sn remove`'d during that recovery). These can never succeed since
+  their target device is gone, yet nothing auto-cancels or garbage-collects them —
+  they'd have retried forever, and appear to have been holding the whole cluster's
+  health/status reporting hostage (`cluster list` showed `DEGRADED`/stuck
+  `REBALANCING` and all 3 nodes `Health: False` well past when the actual, unrelated
+  device-recovery work should have converged). Manually canceled all 12 via
+  `sbcli-dev cluster cancel-task <id>`, after which the cluster's task queue cleared
+  down to only genuine in-flight recovery-migration tasks. Fix direction: task
+  scheduler should detect a "device not found" failure as terminal (not retry-forever)
+  and auto-cancel, or at least surface it distinctly from a transient/retryable
+  failure. Flagging for the backend (`sbcli`) team.
+
+- **Real gap, not yet fixed**: `node_utils.py`'s partition-table-type detection
+  (used before splitting a GPT partition for the journal in lblk-with-partitions
+  mode) relies on `lsblk -ndo PTTYPE /dev/{parent}`, which silently returns an
+  **empty string** — not an error, not "unknown", just empty — inside any container
+  that doesn't have the host's `/run/udev` bind-mounted (`lsblk`'s PTTYPE column
+  needs the udev database; without it, it doesn't fall back to a raw probe the way
+  `blkid -p` does). Confirmed the real production `snode-spdk-pod`/DaemonSet
+  (`simplyblock-storage-node-ds-gcp-lblk-node` on the GCP lblk cluster) mounts
+  `dev-vol:/dev`, `host-sys:/sys`, `etc-simplyblock`, `host-mnt`, `host-modules`,
+  `var-run-simplyblock` — **no `/run/udev`** — so this isn't a debug-pod artifact,
+  it's the actual shipped configuration. Net effect: `node_configure.py --lblk` with
+  `--jm-percent`/partition-based journal splitting will always hit
+  `"disk X has partition table 'unknown'; splitting a partition for the journal
+  requires GPT"` in production, even against a disk that genuinely is GPT — a
+  real, always-on feature is unconditionally broken.
+  - Repro: on `config-israel` vm15, ran the `feat-lblk-rebased-onto-main` image as a
+    privileged debug pod with `/dev`+`/sys` (matching prod) against the spare
+    `nvme3n1` disk (confirmed via `blkid -p`: genuinely GPT, two labeled partitions).
+    `lsblk -ndo PTTYPE /dev/nvme3n1` returned empty; adding a `/run/udev` hostPath
+    mount fixed it instantly (`gpt` reported correctly, `/run/udev/data` populated).
+  - Fix direction: use `blkid -p -o value -s PTTYPE /dev/{parent}` (or equivalent
+    direct-probe call) instead of `lsblk`'s udev-dependent column, so detection works
+    regardless of whether `/run/udev` happens to be mounted.
+
+- **Real gap, not yet fixed**: once partition-table detection is fixed (see above),
+  `split_partition_for_journal()` in `node_utils.py` (~line 383) has a **sector-size
+  unit mismatch**. It reads `start`/`size` from `/sys/block/{parent}/{part}/{start,
+  size}` — which the kernel always expresses in fixed 512-byte units regardless of
+  the device's actual sector size — then passes those raw numbers directly as sector
+  arguments to `sgdisk`, which interprets them in the **disk's own native sector
+  size**. On a classic 512-byte-sector disk the two units coincide and it works by
+  accident; on any 4Kn (4096-byte native sector) disk, every boundary is inflated by
+  exactly `native_sector_size / 512` = 8x.
+  - Repro: requested a 2 GiB (`2147483648`-byte) journal split via `--jm-percent` on
+    `nvme3n1` (a QEMU NVMe emulated disk with 4096-byte logical/physical sectors,
+    confirmed via `sgdisk -p`: "Sector size (logical/physical): 4096/4096 bytes").
+    The resulting `sb_jm` partition came out as **16.0 GiB** — exactly 8x the
+    requested size — and the subsequent data-partition `sgdisk -n` call then failed
+    outright (`Could not create partition 3 ... Error encountered; not saving
+    changes`) because the inflated journal partition's end sector overran into
+    already-allocated space.
+  - Fix direction: convert the sysfs `start`/`size` values (always 512-byte units) to
+    the disk's actual logical sector size before building the `sgdisk` sector
+    arguments — e.g. multiply/divide by `(sysfs 512B units) / (blockdev --getss
+    /dev/{parent})` — or pass byte offsets to a tool that accepts them directly
+    instead of raw sector counts.
+  - Confirmed MBR itself is handled correctly once detection is fixed: the same
+    disk relabeled as `dos` (MBR) via `sfdisk` was cleanly and correctly rejected
+    with `"disk nvme3n1 has partition table 'dos'; splitting a partition for the
+    journal requires GPT"` — no crash, no partial mutation, clear error.
+  - Test hygiene: `nvme3n1` was fully restored afterward to its original state (GPT,
+    two 20GiB partitions, same PARTUUIDs `c1987f59-...`/`61be8e65-...` and disk GUID
+    `1f2c3b58-...`, labels `data1`/`data2`) via `sgdisk --zap-all` + recreate, so the
+    disk is unchanged for whoever uses it next.
