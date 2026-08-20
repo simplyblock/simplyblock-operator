@@ -1276,25 +1276,30 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: snapshotreplications.storage.simplyblock.io
+  name: replicationslots.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
   names:
-    kind: SnapshotReplication
-    listKind: SnapshotReplicationList
-    plural: snapshotreplications
-    singular: snapshotreplication
+    kind: ReplicationSlot
+    listKind: ReplicationSlotList
+    plural: replicationslots
+    shortNames:
+    - relslot
+    singular: replicationslot
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.configured
-      name: Configured
-      type: boolean
-    - jsonPath: .status.conditions[?(@.type=='Ready')].status
-      name: Ready
+    - jsonPath: .spec.policyRef
+      name: Policy
       type: string
-    - jsonPath: .status.conditions[?(@.type=='Ready')].reason
-      name: Reason
+    - jsonPath: .spec.pvcRef
+      name: PVC
+      type: string
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .status.direction
+      name: Direction
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -1302,8 +1307,13 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: SnapshotReplication is the Schema for the snapshotreplications
-          API
+        description: |-
+          ReplicationSlot tracks the live replication state for a single PVC.
+          One ReplicationSlot is created per PVC by the PVCAnnotationWatcher controller when
+          a PVC references a ReplicationPolicy via annotation. It is owned by its PVC, so
+          deleting the PVC cascades deletion and triggers a backend detach via the slot finalizer.
+          The ReplicationSlot reconciler drives all backend calls: attach, monitor, cutover,
+          failover, and detach.
         properties:
           apiVersion:
             description: |-
@@ -1323,67 +1333,31 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of SnapshotReplication
+            description: ReplicationSlotSpec defines the identity of a per-volume
+              replication slot.
             properties:
-              action:
-                enum:
-                - failback
+              policyRef:
+                description: PolicyRef is the name of the ReplicationPolicy governing
+                  this slot. Immutable.
                 type: string
-              excludeVolumeIDs:
-                description: 'Optional: volumes to exclude from failback.'
-                items:
-                  type: string
-                type: array
-              includeVolumeIDs:
+              pvcRef:
+                description: PVCRef is the name of the PVC being replicated. Immutable.
+                type: string
+              volumeID:
                 description: |-
-                  Optional: only these volumes are included in failback.
-                  If empty, all volumes are candidates unless excluded below.
-                items:
-                  type: string
-                type: array
-              interval:
-                description: 'snapshot replication interval in seconds (default: 300sec)'
-                format: int32
-                type: integer
-              sourceCluster:
-                description: Source cluster for the snapshots
+                  VolumeID is the backend lvol UUID of the source volume. Immutable.
+                  Format: "<clusterUUID>:<poolUUID>:<volumeUUID>"
                 type: string
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
-              sourcePool:
-                description: required for failback to a fresh source cluster
-                type: string
-              targetCluster:
-                description: Target cluster for replication
-                type: string
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
-              targetPool:
-                description: Target cluster pool for replication
-                type: string
-              timeout:
-                description: snapshot replication timeout
-                format: int32
-                type: integer
-              volumeIDs:
-                description: 'Optional: list of volumes to replicate. Empty means
-                  all volumes'
-                items:
-                  type: string
-                type: array
             required:
-            - sourceCluster
-            - targetCluster
-            - targetPool
+            - policyRef
+            - pvcRef
+            - volumeID
             type: object
           status:
-            description: status defines the observed state of SnapshotReplication
+            description: ReplicationSlotStatus holds the observed state of a ReplicationSlot.
             properties:
               conditions:
-                description: Conditions provides human-readable status conditions
-                  for kubectl get output.
+                description: Conditions holds standard Kubernetes condition types.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -1439,74 +1413,46 @@ spec:
                   - type
                   type: object
                 type: array
-                x-kubernetes-list-map-keys:
-                - type
-                x-kubernetes-list-type: map
-              configured:
-                type: boolean
-              observedFailbackGeneration:
-                description: The metadata.generation value for which failback was
-                  last processed.
-                format: int64
-                type: integer
-              volumes:
-                description: Per-volume replication status
-                items:
-                  description: VolumeReplicationStatus tracks the replication state
-                    of an individual volume
-                  properties:
-                    errors:
-                      description: 'Optional: list of errors encountered for this
-                        volume'
-                      items:
-                        description: ReplicationError stores timestamped error messages
-                        properties:
-                          message:
-                            type: string
-                          timestamp:
-                            format: date-time
-                            type: string
-                        required:
-                        - message
-                        - timestamp
-                        type: object
-                      type: array
-                    lastReplicationTime:
-                      description: Timestamp of the last successful replication for
-                        this volume
-                      format: date-time
-                      type: string
-                    lastSnapshotID:
-                      description: Last snapshot ID replicated for this volume
-                      type: string
-                    phase:
-                      description: Phase is the current replication phase for this
-                        volume.
-                      enum:
-                      - Pending
-                      - Running
-                      - TriggeringTargetReplication
-                      - WaitingForTargetReplication
-                      - ReplicatingToSource
-                      - WaitingForTargetDeletion
-                      - Completed
-                      - Failed
-                      - Paused
-                      type: string
-                    replicatedCount:
-                      description: Number of snapshots successfully replicated
-                      format: int32
-                      type: integer
-                    volumeID:
-                      description: Volume ID
-                      type: string
-                  required:
-                  - volumeID
-                  type: object
-                type: array
+              direction:
+                description: Direction is which side of the replication relationship
+                  this cluster holds.
+                enum:
+                - source
+                - target
+                type: string
+              lastReplicatedAt:
+                description: LastReplicatedAt is the timestamp of the last successful
+                  replication snapshot.
+                format: date-time
+                type: string
+              message:
+                description: Message provides a human-readable description of the
+                  current state.
+                type: string
+              sourceLvolID:
+                description: SourceLvolID is the UUID of the source volume on the
+                  source cluster.
+                type: string
+              state:
+                description: State is the current replication state for this slot.
+                enum:
+                - attaching
+                - replicating
+                - cutover_pending
+                - cutover_done
+                - failed_over
+                - detaching
+                - error
+                type: string
+              targetLvolID:
+                description: TargetLvolID is the UUID of the replicated volume on
+                  the target cluster.
+                type: string
+              targetNQN:
+                description: TargetNQN is the NVMe NQN on the target cluster (populated
+                  after failover).
+                type: string
             type: object
-        required:
-        - spec
         type: object
     served: true
     storage: true
