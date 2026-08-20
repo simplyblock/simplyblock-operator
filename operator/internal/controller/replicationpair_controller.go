@@ -380,7 +380,7 @@ func (r *ReplicationPairReconciler) removePairFinalizer(
 ) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(pair, utils.FinalizerReplicationPair) {
 		controllerutil.RemoveFinalizer(pair, utils.FinalizerReplicationPair)
-		return ctrl.Result{}, r.Update(ctx, pair)
+		return ctrl.Result{}, client.IgnoreNotFound(r.Update(ctx, pair))
 	}
 	return ctrl.Result{}, nil
 }
