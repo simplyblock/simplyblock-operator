@@ -17,12 +17,16 @@ import (
 )
 
 // newOpsReplReconciler creates a ReplicationOpsReconciler backed by a fake client.
+// A StorageCluster (testClusterName → testClusterUUID) is pre-populated so that
+// reconcileFailover can resolve the cluster UUID via utils.ResolveClusterUUID.
 // Field indexes match what SetupWithManager registers:
 //   - ReplicationSlot.spec.policyRef (for collectAffectedSlots)
 //   - ReplicationOps.spec.ref (for policyToOpsRequests)
 func newOpsReplReconciler(t *testing.T, objects ...client.Object) (*ReplicationOpsReconciler, client.Client) {
 	t.Helper()
+	localCluster := testCluster("default", testClusterName, testClusterUUID)
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	allObjects := append([]client.Object{localCluster}, objects...)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(
@@ -30,7 +34,7 @@ func newOpsReplReconciler(t *testing.T, objects ...client.Object) (*ReplicationO
 			&simplyblockv1alpha1.ReplicationPolicy{},
 			&simplyblockv1alpha1.ReplicationSlot{},
 		).
-		WithObjects(objects...).
+		WithObjects(allObjects...).
 		WithIndex(&simplyblockv1alpha1.ReplicationSlot{}, "spec.policyRef", func(obj client.Object) []string {
 			return []string{obj.(*simplyblockv1alpha1.ReplicationSlot).Spec.PolicyRef}
 		}).
@@ -43,6 +47,22 @@ func newOpsReplReconciler(t *testing.T, objects ...client.Object) (*ReplicationO
 		Scheme:   scheme,
 		Recorder: &fakeRecorder{},
 	}, cl
+}
+
+// readyPairForOps returns a ReplicationPair named "pair1" that is ready.
+// All policies created by readyPolicyForOps reference this pair via PairRef: "pair1".
+func readyPairForOps() *simplyblockv1alpha1.ReplicationPair {
+	return &simplyblockv1alpha1.ReplicationPair{
+		ObjectMeta: metav1.ObjectMeta{Name: "pair1", Namespace: "default"},
+		Spec: simplyblockv1alpha1.ReplicationPairSpec{
+			SourceCluster: testClusterName,
+			TargetCluster: "cluster-b",
+		},
+		Status: simplyblockv1alpha1.ReplicationPairStatus{
+			Ready:           true,
+			BackendTargetID: "tgt-uuid",
+		},
+	}
 }
 
 func opsRequest(name string) ctrl.Request {
@@ -261,7 +281,7 @@ func TestOps_Failover_ScopePolicy_Success(t *testing.T) {
 			Action: "failover", Scope: utils.ReplicationOpsScopePolicy, Ref: "pol",
 		},
 	}
-	r, cl := newOpsReplReconciler(t, pol, slot, ops)
+	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops)
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -296,7 +316,7 @@ func TestOps_Failover_ScopeTarget_Success(t *testing.T) {
 			Action: "failover", Scope: utils.ReplicationOpsScopeTarget, Ref: "pol",
 		},
 	}
-	r, cl := newOpsReplReconciler(t, pol, slot, ops)
+	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops)
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -332,7 +352,7 @@ func TestOps_Failover_ScopeVolume_Success(t *testing.T) {
 		},
 	}
 	polForVolume := readyPolicyForOps("pol-pvc1")
-	r, cl := newOpsReplReconciler(t, pol, slot, ops, polForVolume)
+	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops, polForVolume)
 
 	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
