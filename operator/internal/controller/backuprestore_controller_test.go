@@ -124,7 +124,7 @@ func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
 		t.Fatalf("storageClassName = %q, want %q", pv.Spec.StorageClassName, wantStorageClass)
 	}
 
-	wantVolumeHandle := "cluster-uuid:pool-a:lvol-uuid"
+	wantVolumeHandle := "cluster-uuid:pool-uuid:lvol-uuid"
 	if pv.Spec.CSI.VolumeHandle != wantVolumeHandle {
 		t.Fatalf("volumeHandle = %q, want %q", pv.Spec.CSI.VolumeHandle, wantVolumeHandle)
 	}
