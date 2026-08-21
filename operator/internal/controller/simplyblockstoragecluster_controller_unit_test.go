@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
@@ -420,6 +422,122 @@ func TestStorageClusterReconcileCreationPaths(t *testing.T) {
 		}
 		if current.Status.ErasureCodingScheme != "4x2" {
 			t.Fatalf("expected dto coding tuple to map to erasureCodingScheme, got %#v", current.Status)
+		}
+	})
+}
+
+// TestStorageClusterReconcileCreationSendsChecksumValidation covers
+// spec.checkSumValidation threading into the POST /api/v2/clusters/ payload.
+// Kept separate from TestStorageClusterReconcileCreationPaths to stay under
+// the linter's cyclomatic-complexity limit for that (already large) table.
+func TestStorageClusterReconcileCreationSendsChecksumValidation(t *testing.T) {
+	newCreateMock := func(t *testing.T, respBody string) *webapimock.SpecServer {
+		t.Helper()
+		mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", true)
+		mock.Register(
+			http.MethodGet,
+			"/api/v2/_meta/ready",
+			webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+		)
+		mock.Register(
+			http.MethodPost,
+			"/api/v2/clusters/",
+			webapimock.RouteResponse{
+				Status:  http.StatusOK,
+				Body:    respBody,
+				Headers: map[string]string{"Content-Type": "application/json"},
+			},
+		)
+		t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+		return mock
+	}
+
+	createPayload := func(t *testing.T, mock *webapimock.SpecServer, cluster *simplyblockv1alpha1.StorageCluster) map[string]any {
+		t.Helper()
+		r := newClusterStateTestReconciler(t, cluster)
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cluster)}); err != nil {
+			t.Fatalf("reconcile returned error: %v", err)
+		}
+
+		requests := mock.Requests()
+		var createReq *webapimock.RecordedRequest
+		for i := range requests {
+			if requests[i].Method == http.MethodPost && strings.HasPrefix(requests[i].Path, "/api/v2/clusters") {
+				createReq = &requests[i]
+			}
+		}
+		if createReq == nil {
+			t.Fatalf("expected a POST /api/v2/clusters/ request, got %#v", requests)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(createReq.Body, &body); err != nil {
+			t.Fatalf("failed to unmarshal create request body: %v", err)
+		}
+		return body
+	}
+
+	t.Run("sends inline checksum and atomic 4k to backend", func(t *testing.T) {
+		mock := newCreateMock(t, `{
+			"id":"cluster-checksum-uuid",
+			"secret":"cluster-checksum-secret",
+			"nqn":"nqn.2026-04.io.simplyblock:cluster-checksum",
+			"distr_ndcs":1,
+			"distr_npcs":1,
+			"is_re_balancing":false,
+			"status":"online"
+		}`)
+		defer mock.Close()
+
+		cluster := &simplyblockv1alpha1.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "cluster-checksum",
+				Namespace:  "default",
+				Finalizers: []string{utils.FinalizerStorageCluster},
+			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{
+				CheckSumValidation: &simplyblockv1alpha1.CheckSumValidationSpec{
+					InlineChecksum: ptr.To(true),
+					Atomic4k:       ptr.To(true),
+				},
+			},
+		}
+		body := createPayload(t, mock, cluster)
+
+		if body["inline_checksum"] != true {
+			t.Fatalf("expected inline_checksum=true in create payload, got %#v", body["inline_checksum"])
+		}
+		if body["atomic_4k"] != true {
+			t.Fatalf("expected atomic_4k=true in create payload, got %#v", body["atomic_4k"])
+		}
+	})
+
+	t.Run("omits inline checksum and atomic 4k by default", func(t *testing.T) {
+		mock := newCreateMock(t, `{
+			"id":"cluster-no-checksum-uuid",
+			"secret":"cluster-no-checksum-secret",
+			"nqn":"nqn.2026-04.io.simplyblock:cluster-no-checksum",
+			"distr_ndcs":1,
+			"distr_npcs":1,
+			"is_re_balancing":false,
+			"status":"online"
+		}`)
+		defer mock.Close()
+
+		cluster := &simplyblockv1alpha1.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "cluster-no-checksum",
+				Namespace:  "default",
+				Finalizers: []string{utils.FinalizerStorageCluster},
+			},
+			Spec: simplyblockv1alpha1.StorageClusterSpec{},
+		}
+		body := createPayload(t, mock, cluster)
+
+		if _, present := body["inline_checksum"]; present {
+			t.Fatalf("expected inline_checksum to be omitted when unset, got %#v", body["inline_checksum"])
+		}
+		if _, present := body["atomic_4k"]; present {
+			t.Fatalf("expected atomic_4k to be omitted when unset, got %#v", body["atomic_4k"])
 		}
 	})
 }

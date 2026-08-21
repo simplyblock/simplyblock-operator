@@ -447,6 +447,10 @@ func main() {
 			&webhook.Admission{Handler: &internalwebhook.StorageNodeValidator{OperatorNamespace: operatorNamespace}})
 		setupLog.Info("registered storagenode validating webhook")
 
+		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-storagecluster",
+			&webhook.Admission{Handler: &internalwebhook.StorageClusterValidator{}})
+		setupLog.Info("registered storagecluster validating webhook")
+
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-pinned-volume",
 			&webhook.Admission{Handler: &internalwebhook.PersistentVolumeClaimValidator{
 				Client:    mgr.GetClient(),

@@ -84,6 +84,30 @@ spec:
                 required:
                 - credentialsSecretRef
                 type: object
+              checkSumValidation:
+                description: |-
+                  CheckSumValidation configures inline CRC checksum validation for silent-data-error
+                  protection. Immutable once set — frozen at cluster-create time on the backend, with no
+                  upgrade path for existing clusters.
+                properties:
+                  atomic4k:
+                    default: false
+                    description: |-
+                      Atomic4k declares that devices guarantee 4K write atomicity even with a <4K logical
+                      block size (e.g. AWS NVMe is 512B but atomic at 4K), letting checksum fallback mode run
+                      on them despite the data plane's normal >=4K block-size requirement. Only meaningful
+                      when InlineChecksum is true. Cannot be changed after cluster creation.
+                    type: boolean
+                  inlineChecksum:
+                    default: false
+                    description: |-
+                      InlineChecksum enables inline CRC checksum validation on every IO for silent-data-error
+                      protection. Cannot be enabled or disabled after cluster creation.
+                    type: boolean
+                type: object
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               clientDataIfname:
                 description: ClientDataIfname defines the client data network interface.
                 type: string
@@ -333,6 +357,8 @@ spec:
             x-kubernetes-validations:
             - message: field enableFailureDomains is immutable once set
               rule: '!has(oldSelf.enableFailureDomains) || has(self.enableFailureDomains)'
+            - message: field checkSumValidation is immutable once set
+              rule: '!has(oldSelf.checkSumValidation) || has(self.checkSumValidation)'
             - message: fabricType is immutable once set
               rule: '!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType'
             - message: hashicorpVaultSettings is immutable once set
@@ -346,6 +372,9 @@ spec:
               rule: '!has(oldSelf.rpcBasePort) || self.rpcBasePort == oldSelf.rpcBasePort'
             - message: snodeApiPort is immutable once set
               rule: '!has(oldSelf.snodeApiPort) || self.snodeApiPort == oldSelf.snodeApiPort'
+            - message: checkSumValidation is immutable once set
+              rule: '!has(oldSelf.checkSumValidation) || self.checkSumValidation ==
+                oldSelf.checkSumValidation'
           status:
             description: status defines the observed state of StorageCluster
             properties:
