@@ -441,10 +441,12 @@ func parseLastSnapshotAt(v interface{}) *time.Time {
 
 // reconcileCutoverPending handles the cutover_pending state.
 //
-// The backend task is holding for REPL_CUTOVER_PRECONNECT_WAIT_SEC after setting
-// cutover_pending, giving us a window to pre-connect the target NVMe paths on every
-// node that has the volume mounted. When the backend's deadline expires it proceeds
-// with the ANA flip regardless, so this is best-effort on the operator side.
+// The backend task suspends waiting for POST .../replication/cutover-proceed.
+// This reconciler pre-connects the target NVMe paths via a preconnect Job, then
+// signals the backend via callCutoverProceed so the ANA flip happens only after
+// the target controllers are already connected. A safety timeout on the backend
+// side (REPL_CUTOVER_PROCEED_TIMEOUT_SEC) lets cutover proceed even if the
+// operator is unavailable.
 func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 	ctx context.Context,
 	slot *simplyblockv1alpha1.ReplicationSlot,
@@ -487,11 +489,18 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		// Job exists — check its terminal state.
 		for _, c := range existingJob.Status.Conditions {
 			if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
-				log.Info("Preconnect job succeeded", "job", jobName)
+				log.Info("Preconnect job succeeded; signalling backend to proceed", "job", jobName)
+				if err := r.callCutoverProceed(ctx, apiClient, clusterID, poolID, volumeID); err != nil {
+					log.Error(err, "POST cutover-proceed failed", "slot", slot.Name)
+					return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+				}
 				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 			}
 			if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-				log.Info("Preconnect job failed (backend will proceed anyway)", "job", jobName)
+				log.Info("Preconnect job failed; signalling backend to proceed anyway", "job", jobName)
+				if err := r.callCutoverProceed(ctx, apiClient, clusterID, poolID, volumeID); err != nil {
+					log.Error(err, "POST cutover-proceed failed after job failure", "slot", slot.Name)
+				}
 				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 			}
 		}
@@ -508,8 +517,12 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
 	}
 	if node == "" {
-		// No active consumer; nothing to pre-connect.
-		log.Info("No active consumer for preconnect; skipping", "slot", slot.Name)
+		// No active consumer; nothing to pre-connect — signal immediately.
+		log.Info("No active consumer for preconnect; signalling backend to proceed", "slot", slot.Name)
+		if err := r.callCutoverProceed(ctx, apiClient, clusterID, poolID, volumeID); err != nil {
+			log.Error(err, "POST cutover-proceed failed (no consumer)", "slot", slot.Name)
+			return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
@@ -544,6 +557,28 @@ func replSlotPreconnectJobName(volumeID string) string {
 		s = s[:20]
 	}
 	return "replslot-preconnect-" + s
+}
+
+// callCutoverProceed signals the backend that target NVMe paths are connected
+// and the ANA flip may proceed. It is idempotent: the backend ignores duplicate
+// signals once cutover_proceed is already true.
+func (r *ReplicationSlotReconciler) callCutoverProceed(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterID, poolID, volumeID string,
+) error {
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/cutover-proceed",
+		clusterID, poolID, volumeID)
+	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	// 204 = signalled; 404 = no cutover_pending record (already advanced).
+	if status == http.StatusNoContent || status == http.StatusNotFound {
+		return nil
+	}
+	return fmt.Errorf("POST cutover-proceed: status %d: %s", status, string(body))
 }
 
 // backendVolumeConnection is the JSON shape of one entry from GET .../volumes/{id}/connect.
