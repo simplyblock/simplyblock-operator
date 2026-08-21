@@ -80,9 +80,8 @@ func newStorageNode(name, ns, snsRef, worker string) *simplyblockv1alpha1.Storag
 // ── TestSyncOverrides ─────────────────────────────────────────────────────────
 
 func TestSyncOverrides_PropagatesNodeConfigs(t *testing.T) {
-	maxSubsys := int32(99)
 	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, map[string]simplyblockv1alpha1.StorageNodeOverrides{
-		snTestWorker: {MaxSubsystemCount: &maxSubsys, SpdkSystemMemory: "8G"},
+		snTestWorker: {DriveSizeRange: "50G-1T", SpdkSystemMemory: "8G"},
 	})
 	sn := newStorageNode("sn-1", snTestNS, "sns", snTestWorker)
 	r := newSNReconciler(t, sns, sn)
@@ -101,8 +100,8 @@ func TestSyncOverrides_PropagatesNodeConfigs(t *testing.T) {
 	if updated.Spec.Overrides.SpdkSystemMemory != "8G" {
 		t.Errorf("SpdkSystemMemory: got %q want %q", updated.Spec.Overrides.SpdkSystemMemory, "8G")
 	}
-	if *updated.Spec.Overrides.MaxSubsystemCount != 99 {
-		t.Errorf("MaxSubsystemCount: got %d want 99", *updated.Spec.Overrides.MaxSubsystemCount)
+	if updated.Spec.Overrides.DriveSizeRange != "50G-1T" {
+		t.Errorf("DriveSizeRange: got %q want %q", updated.Spec.Overrides.DriveSizeRange, "50G-1T")
 	}
 }
 

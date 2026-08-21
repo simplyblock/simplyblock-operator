@@ -41,6 +41,23 @@ type MigrationConnection struct {
 	KeepAliveTmo   int    `json:"keepAliveTmo,omitempty"`
 }
 
+// ValidationJob is one NVMe path-validation Job and the worker node it runs on.
+// The node is a consumer of some volume in the migrated subsystem — the volume named
+// in the spec, or one of its siblings sharing the same NVMe subsystem.
+type ValidationJob struct {
+	// Node is the Kubernetes node name the Job is pinned to.
+	Node string `json:"node"`
+
+	// JobName is the name of the Job object in the VolumeMigration's namespace.
+	JobName string `json:"jobName"`
+
+	// Succeeded records that this node's validation passed. It is kept because the
+	// Job's own existence is not a reliable record: Jobs are reaped, and re-reading a
+	// reaped Job would otherwise look like "never validated" and start it again.
+	// +optional
+	Succeeded bool `json:"succeeded,omitempty"`
+}
+
 // VolumeMigrationSpec defines the desired state of a VolumeMigration.
 type VolumeMigrationSpec struct {
 	// PVName is the name of the PersistentVolume whose backing logical volume
@@ -80,15 +97,19 @@ type VolumeMigrationStatus struct {
 	// PoolUUID is the storage pool UUID that contains the volume.
 	PoolUUID string `json:"poolUUID,omitempty"`
 
+	// SubsystemNQN is the NQN of the volume's NVMe subsystem, resolved from the
+	// storage API when the migration is submitted. The migration is addressed by
+	// it, and every volume sharing the subsystem moves with it.
+	SubsystemNQN string `json:"subsystemNQN,omitempty"`
+
 	// SourceNodeUUID is the storage node UUID where the volume resided before
 	// migration, as reported by the storage API.
 	SourceNodeUUID string `json:"sourceNodeUUID,omitempty"`
 
-	// SnapsTotal is the total number of snapshots to migrate, as reported by the API.
-	SnapsTotal int `json:"snapsTotal,omitempty"`
-
-	// SnapsMigrated is the number of snapshots migrated so far.
-	SnapsMigrated int `json:"snapsMigrated,omitempty"`
+	// MemberCount is the number of volumes (namespaces) in the migrated
+	// subsystem, as reported by the storage API. More than one means the
+	// migration moves sibling volumes along with this one.
+	MemberCount int `json:"memberCount,omitempty"`
 
 	// ErrorMessage holds the failure reason when Phase is Failed.
 	ErrorMessage string `json:"errorMessage,omitempty"`
@@ -98,10 +119,20 @@ type VolumeMigrationStatus struct {
 	// establish and verify the paths before calling ContinueMigration.
 	Connections []MigrationConnection `json:"connections,omitempty"`
 
-	// ValidationJobName is the name of the Job that runs `nvme connect` for each
-	// connection path and validates ANA state before ContinueMigration is called.
-	// Set during the Validating phase; cleared when the phase advances to Running.
-	ValidationJobName string `json:"validationJobName,omitempty"`
+	// ValidationJobs are the Jobs that run `nvme connect` for each connection path
+	// and validate ANA state before ContinueMigration is called — one per worker
+	// node that consumes a volume of the migrated subsystem. A subsystem migrates
+	// as a unit, so every consuming node must have the new paths before cutover;
+	// all of these Jobs must succeed. Set during the Validating phase; cleared when
+	// the phase advances to Running.
+	ValidationJobs []ValidationJob `json:"validationJobs,omitempty"`
+
+	// DeferredSince is when the storage API first refused to accept this migration
+	// because the cluster was busy with work that ends on its own (a data realignment
+	// or another node migration). While set, the migration is being retried and has
+	// not started. It bounds the retrying: past a fixed window the migration fails
+	// rather than waiting forever. Cleared once the migration is submitted.
+	DeferredSince *metav1.Time `json:"deferredSince,omitempty"`
 
 	// StartedAt is the time the migration was submitted to the storage API.
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
@@ -116,7 +147,7 @@ type VolumeMigrationStatus struct {
 // +kubebuilder:printcolumn:name="PV",type="string",JSONPath=".spec.pvName"
 // +kubebuilder:printcolumn:name="Target Node",type="string",JSONPath=".spec.targetNodeUUID"
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
-// +kubebuilder:printcolumn:name="Snaps",type="integer",JSONPath=".status.snapsMigrated",priority=1
+// +kubebuilder:printcolumn:name="Volumes",type="integer",JSONPath=".status.memberCount",priority=1
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // VolumeMigration triggers a storage-node migration for a single PersistentVolume.

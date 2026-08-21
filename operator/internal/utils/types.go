@@ -37,7 +37,10 @@ type ClusterAddParams struct {
 	HashicorpVaultSettings *HashicorpVaultConfig `json:"hashicorp_vault_settings,omitempty"`
 	// EnableFailureDomain opts the cluster into failure-domain mode.
 	// Wire key must match the /api/v2/clusters/ endpoint — verify against sbcli before release.
-	EnableFailureDomain bool `json:"enable_failure_domain,omitempty"`
+	EnableFailureDomain bool  `json:"enable_failure_domain,omitempty"`
+	SpdkVcpuCount       int   `json:"spdk_vcpu_count,omitempty"`
+	HugepagesMem        int64 `json:"hugepages_mem,omitempty"`
+	MaxSubsys           uint  `json:"max_subsys,omitempty"`
 }
 
 type ClusterUpdateParams struct {

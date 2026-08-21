@@ -134,12 +134,13 @@ non-destructive), or **E2E** (live cluster, may remove/modify nodes).
 
 ### Per-Node Configuration (DaemonSet)
 
-| Scenario | Expected | Classification |
-|---|---|---|
-| `nodeConfigs[worker].maxSubsystemCount` differs per node | Per-node ConfigMap has correct `MAX_LVOL` per worker | Integration |
-| `nodeConfigs[worker].spdkSystemMemory` differs per node | Init container receives correct `spdk_sys_mem` in POST | E2E |
-| `nodeConfigs[worker].deviceNames` set | `--nvme-devices` arg in init container uses override | Integration |
-| ConfigMap created before DaemonSet on fresh install | Init container finds non-empty env file; no `MAX_LVOL=0` failure | E2E |
+| Scenario | Expected                                                                                                                                    | Classification |
+|---|---------------------------------------------------------------------------------------------------------------------------------------------|---|
+| `nodeConfigs[worker].driveSizeRange` differs per node | Per-node ConfigMap has correct `SIZE_RANGE` per worker                                                                                      | Integration |
+| `StorageCluster.spec.maxSubsystemCount` / `vcpuCount` / `maxHugePagesSize` set | Every per-node ConfigMap entry carries the same `MAX_SUBSYS_COUNT` / `VCPU_COUNT` / `MAX_HUGE_PAGES_SIZE`; no per-node override path exists | Integration |
+| `nodeConfigs[worker].spdkSystemMemory` differs per node | Init container receives correct `spdk_sys_mem` in POST                                                                                      | E2E |
+| `nodeConfigs[worker].deviceNames` set | `--nvme-devices` arg in init container uses override                                                                                        | Integration |
+| ConfigMap created before DaemonSet on fresh install | Init container finds non-empty env file; no `MAX_SUBSYS_COUNT=0` failure                                                                            | E2E |
 
 ### Failure Domain
 

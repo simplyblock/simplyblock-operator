@@ -19,19 +19,25 @@ package controller
 // reconcilePerNodeConfigMap creates or updates a single ConfigMap that holds
 // per-worker-node effective configuration values. The DaemonSet init container
 // mounts this ConfigMap and sources the file matching its hostname so that
-// fields like maxSubsystemCount, corePercentage, deviceNames, etc. differ
-// per node without requiring a separate DaemonSet per node.
+// fields like deviceNames, pcieAllowList, etc. differ per node without
+// requiring a separate DaemonSet per node.
+//
+// MAX_SUBSYS_COUNT, MAX_HUGE_PAGES_SIZE and VCPU_COUNT are cluster-scoped
+// (StorageCluster.spec) rather than per-node: they size huge pages and the SPDK
+// core layout, which the control plane assumes uniform across the cluster. They
+// are still written into every per-node entry because the init container reads
+// its whole configuration from this one file.
 //
 // ConfigMap structure:
 //
 //	data:
 //	  vm02.example.com: |
-//	    MAX_LVOL=20
-//	    MAX_SIZE=
-//	    CORES_PERCENTAGE=50
+//	    MAX_SUBSYS_COUNT=20
+//	    MAX_HUGE_PAGES_SIZE=
+//	    VCPU_COUNT=8
 //	    ...
 //	  vm03.example.com: |
-//	    MAX_LVOL=25
+//	    MAX_SUBSYS_COUNT=20
 //	    ...
 
 import (
@@ -68,9 +74,30 @@ func (r *StorageNodeSetReconciler) reconcilePerNodeConfigMap(
 	log := logf.FromContext(ctx)
 	name := PerNodeConfigMapName(sns.Name)
 
+	// MAX_SUBSYS_COUNT, MAX_HUGE_PAGES_SIZE and VCPU_COUNT come from the StorageCluster,
+	// so every entry this ConfigMap holds shares them.
+	var cluster simplyblockv1alpha1.StorageCluster
+	if err := r.Get(ctx, client.ObjectKey{
+		Name:      sns.Spec.ClusterName,
+		Namespace: sns.Namespace,
+	}, &cluster); err != nil {
+		return fmt.Errorf("getting StorageCluster %q for per-node ConfigMap: %w", sns.Spec.ClusterName, err)
+	}
+
+	// maxSubsystemCount and vcpuCount are required by the CRD schema, so they can
+	// only be nil on a StorageCluster admitted before that requirement existed.
+	// Refuse to write a config the node cannot boot from: an empty MAX_SUBSYS_COUNT
+	// reaches node_configure.py as --max-subsys-count=0 and fails config
+	// generation there, far from the cause.
+	if cluster.Spec.MaxSubsystemCount == nil || cluster.Spec.VCPUCount == nil {
+		return fmt.Errorf(
+			"StorageCluster %q is missing required node sizing: set spec.maxSubsystemCount and spec.vcpuCount",
+			sns.Spec.ClusterName)
+	}
+
 	data := make(map[string]string, len(sns.Spec.WorkerNodes))
 	for _, worker := range sns.Spec.WorkerNodes {
-		data[worker] = buildPerNodeEnvFile(sns, worker)
+		data[worker] = buildPerNodeEnvFile(&cluster, sns, worker)
 	}
 
 	// Also include manually created StorageNode CRs that reference this StorageNodeSet
@@ -93,7 +120,7 @@ func (r *StorageNodeSetReconciler) reconcilePerNodeConfigMap(
 				}
 				snsCopy.Spec.NodeConfigs[sn.Spec.WorkerNode] = *sn.Spec.Overrides
 			}
-			data[sn.Spec.WorkerNode] = buildPerNodeEnvFile(snsCopy, sn.Spec.WorkerNode)
+			data[sn.Spec.WorkerNode] = buildPerNodeEnvFile(&cluster, snsCopy, sn.Spec.WorkerNode)
 		}
 	}
 
@@ -126,7 +153,7 @@ func (r *StorageNodeSetReconciler) reconcilePerNodeConfigMap(
 		if entry, ok := existing.Data[worker]; ok {
 			data[worker] = entry
 		} else {
-			data[worker] = buildPerNodeEnvFile(sns, worker)
+			data[worker] = buildPerNodeEnvFile(&cluster, sns, worker)
 		}
 	}
 
@@ -159,13 +186,16 @@ func (r *StorageNodeSetReconciler) reconcilePerNodeConfigMap(
 
 // buildPerNodeEnvFile returns a shell-sourceable env file string with the
 // effective per-node values for the given worker, merging fleet defaults from
-// the StorageNodeSet spec with any nodeConfigs overrides.
-func buildPerNodeEnvFile(sns *simplyblockv1alpha1.StorageNodeSet, worker string) string {
+// the StorageNodeSet spec with any nodeConfigs overrides. The huge-page and
+// core-sizing values (MAX_SUBSYS_COUNT, MAX_HUGE_PAGES_SIZE, VCPU_COUNT) come from the
+// StorageCluster and are therefore identical in every entry.
+func buildPerNodeEnvFile(
+	cluster *simplyblockv1alpha1.StorageCluster,
+	sns *simplyblockv1alpha1.StorageNodeSet,
+	worker string,
+) string {
 	// Start with fleet defaults.
 	eff := simplyblockv1alpha1.StorageNodeOverrides{
-		MaxSubsystemCount:  sns.Spec.MaxSubsystemCount,
-		MaxSize:            sns.Spec.MaxSize,
-		CorePercentage:     sns.Spec.CorePercentage,
 		SpdkSystemMemory:   sns.Spec.SpdkSystemMemory,
 		JournalManagerSpec: sns.Spec.JournalManagerSpec,
 		PcieAllowList:      sns.Spec.PcieAllowList,
@@ -179,15 +209,6 @@ func buildPerNodeEnvFile(sns *simplyblockv1alpha1.StorageNodeSet, worker string)
 
 	// Apply per-node overrides if present.
 	if o, ok := sns.Spec.NodeConfigs[worker]; ok {
-		if o.MaxSubsystemCount != nil {
-			eff.MaxSubsystemCount = o.MaxSubsystemCount
-		}
-		if o.MaxSize != "" {
-			eff.MaxSize = o.MaxSize
-		}
-		if o.CorePercentage != nil {
-			eff.CorePercentage = o.CorePercentage
-		}
 		if o.SpdkSystemMemory != "" {
 			eff.SpdkSystemMemory = o.SpdkSystemMemory
 		}
@@ -218,9 +239,10 @@ func buildPerNodeEnvFile(sns *simplyblockv1alpha1.StorageNodeSet, worker string)
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "MAX_LVOL=%s\n", ptr.StringOrDefault(eff.MaxSubsystemCount, ""))
-	fmt.Fprintf(&b, "MAX_SIZE=%s\n", utils.ShellQuote(eff.MaxSize))
-	fmt.Fprintf(&b, "CORES_PERCENTAGE=%s\n", ptr.StringOrDefault(eff.CorePercentage, ""))
+	// Cluster-scoped: identical for every worker in every set of this cluster.
+	fmt.Fprintf(&b, "MAX_SUBSYS_COUNT=%s\n", ptr.StringOrDefault(cluster.Spec.MaxSubsystemCount, ""))
+	fmt.Fprintf(&b, "MAX_HUGE_PAGES_SIZE=%s\n", utils.ShellQuote(cluster.Spec.MaxHugePagesSize))
+	fmt.Fprintf(&b, "VCPU_COUNT=%s\n", ptr.StringOrDefault(cluster.Spec.VCPUCount, ""))
 	fmt.Fprintf(&b, "PCI_ALLOWED=%s\n", utils.ShellQuote(strings.Join(eff.PcieAllowList, ",")))
 	fmt.Fprintf(&b, "PCI_BLOCKED=%s\n", utils.ShellQuote(strings.Join(eff.PcieDenyList, ",")))
 	fmt.Fprintf(&b, "NVME_DEVICES=%s\n", utils.ShellQuote(strings.Join(eff.DeviceNames, ",")))

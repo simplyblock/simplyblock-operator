@@ -380,7 +380,7 @@ func (r *StorageNodeReconciler) provisionNode(
 		DataNics:         sns.Spec.DataIfname,
 		Namespace:        sn.Namespace,
 		JMPercent:        journalManagerPercentPerDeviceFromSpec(eff.JournalManagerSpec),
-		Partitions:       ptr.IntFrom(sns.Spec.Partitions, 1),
+		Partitions:       partitionsPerDevice(sns),
 		HaJMCount:        journalManagerCountFromSpec(eff.JournalManagerSpec),
 		CRName:           sns.Name,
 		CRNameSpace:      sns.Namespace,
@@ -635,15 +635,24 @@ func (r *StorageNodeReconciler) checkFailureDomain(
 	)
 }
 
+// partitionsPerDevice translates spec.enableJournalDevice into the backend's
+// partitions-per-device count: 0 dedicates a whole NVMe device to the journal
+// manager, 1 carves a journal partition out of each storage device. Unset
+// defaults to 1, preserving the behaviour of the spec.partitions field this
+// replaced.
+func partitionsPerDevice(sns *simplyblockv1alpha1.StorageNodeSet) int {
+	if ptr.BoolFromOrFalse(sns.Spec.EnableJournalDevice) {
+		return 0
+	}
+	return 1
+}
+
 // effectiveNodeConfig returns the merged config for a node: fleet defaults
 // overridden by any per-node values from StorageNode.spec.overrides.
 func effectiveNodeConfig(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1alpha1.StorageNodeSet) simplyblockv1alpha1.StorageNodeOverrides {
 	eff := simplyblockv1alpha1.StorageNodeOverrides{
 		SpdkImage:          sns.Spec.SpdkImage,
 		SpdkProxyImage:     sns.Spec.SpdkProxyImage,
-		MaxSubsystemCount:  sns.Spec.MaxSubsystemCount,
-		MaxSize:            sns.Spec.MaxSize,
-		CorePercentage:     sns.Spec.CorePercentage,
 		SpdkSystemMemory:   sns.Spec.SpdkSystemMemory,
 		JournalManagerSpec: sns.Spec.JournalManagerSpec,
 		PcieAllowList:      sns.Spec.PcieAllowList,
@@ -665,15 +674,6 @@ func effectiveNodeConfig(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1
 	}
 	if o.SpdkProxyImage != "" {
 		eff.SpdkProxyImage = o.SpdkProxyImage
-	}
-	if o.MaxSubsystemCount != nil {
-		eff.MaxSubsystemCount = o.MaxSubsystemCount
-	}
-	if o.MaxSize != "" {
-		eff.MaxSize = o.MaxSize
-	}
-	if o.CorePercentage != nil {
-		eff.CorePercentage = o.CorePercentage
 	}
 	if o.SpdkSystemMemory != "" {
 		eff.SpdkSystemMemory = o.SpdkSystemMemory

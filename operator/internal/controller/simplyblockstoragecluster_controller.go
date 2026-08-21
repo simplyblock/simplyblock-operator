@@ -220,14 +220,22 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		return ctrl.Result{}, err
 	}
 
+	maxHugePageSize := utils.ParseSize(clusterCR.Spec.MaxHugePagesSize, "si/iec", "", false)
+	if maxHugePageSize == nil {
+		return ctrl.Result{}, fmt.Errorf("invalid max huge pages size: %s", clusterCR.Spec.MaxHugePagesSize)
+	}
+
 	params := utils.ClusterAddParams{
-		Name:        clusterCR.Name,
-		CapWarn:     capacityThreshold(clusterCR.Spec.WarningThresholdSpec),
-		CapCrit:     capacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
-		ProvCapWarn: provisionedCapacityThreshold(clusterCR.Spec.WarningThresholdSpec),
-		ProvCapCrit: provisionedCapacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
-		DistrNdcs:   stripeDataChunks(clusterCR.Spec.StripeSpec),
-		DistrNpcs:   stripeParityChunks(clusterCR.Spec.StripeSpec),
+		Name:          clusterCR.Name,
+		CapWarn:       capacityThreshold(clusterCR.Spec.WarningThresholdSpec),
+		CapCrit:       capacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
+		ProvCapWarn:   provisionedCapacityThreshold(clusterCR.Spec.WarningThresholdSpec),
+		ProvCapCrit:   provisionedCapacityThreshold(clusterCR.Spec.CriticalThresholdSpec),
+		DistrNdcs:     stripeDataChunks(clusterCR.Spec.StripeSpec),
+		DistrNpcs:     stripeParityChunks(clusterCR.Spec.StripeSpec),
+		SpdkVcpuCount: ptr.IntFrom(clusterCR.Spec.VCPUCount, 8),
+		HugepagesMem:  *maxHugePageSize,
+		MaxSubsys:     uint(ptr.IntFrom(clusterCR.Spec.MaxSubsystemCount, 10)),
 
 		EnableNodeAffinity:     ptr.BoolFromOrFalse(clusterCR.Spec.EnableNodeAffinity),
 		Fabric:                 clusterCR.Spec.FabricType,

@@ -1953,6 +1953,24 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
+              maxHugePagesSize:
+                description: |-
+                  MaxHugePagesSize is the maximum allocatable size of huge pages on each
+                  storage node (e.g. "100G", "1T"; a bare number is interpreted as GB). It is
+                  a floor, not a cap: the effective huge-page allocation is the larger of this
+                  value and the minimum the node's device and subsystem count requires. When
+                  omitted the computed minimum is used.
+                type: string
+              maxSubsystemCount:
+                description: |-
+                  MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
+                  node. Applies to every storage node in the cluster. Required: it sizes huge
+                  pages, and a node that receives no value fails config generation outright
+                  rather than falling back to a default.
+                format: int32
+                maximum: 75
+                minimum: 10
+                type: integer
               nvmfBasePort:
                 description: NvmfBasePort defines the base NVMf service port.
                 format: int32
@@ -1980,6 +1998,15 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              vcpuCount:
+                description: |-
+                  VCPUCount is the number of vCPUs allocated to SPDK on each storage node.
+                  This is an explicit core count, not a percentage. Required: the core layout
+                  it produces must match across the cluster, so it is stated rather than left
+                  to a per-node heuristic.
+                format: int32
+                minimum: 8
+                type: integer
               volumeAutoPlacement:
                 description: |-
                   VolumeAutoPlacement configures automatic, latency-driven volume rebalancing. When
@@ -2115,6 +2142,9 @@ spec:
                     format: int32
                     type: integer
                 type: object
+            required:
+            - maxSubsystemCount
+            - vcpuCount
             type: object
             x-kubernetes-validations:
             - message: field enableFailureDomains is immutable once set
@@ -2568,11 +2598,6 @@ spec:
                   Overrides holds per-node configuration propagated from
                   StorageNodeSet.spec.nodeConfigs[workerNode] on every reconcile.
                 properties:
-                  corePercentage:
-                    description: CorePercentage overrides the percentage of cores
-                      allocated to SPDK for this node (0-99).
-                    format: int32
-                    type: integer
                   deviceNames:
                     description: |-
                       DeviceNames explicitly defines the NVMe namespace names to use on this node
@@ -2616,15 +2641,6 @@ spec:
                         format: int32
                         type: integer
                     type: object
-                  maxSize:
-                    description: MaxSize overrides the maximum allocatable size of
-                      huge pages for this node.
-                    type: string
-                  maxSubsystemCount:
-                    description: MaxSubsystemCount overrides the maximum number of
-                      NVMe-oF subsystems for this node.
-                    format: int32
-                    type: integer
                   pcieAllowList:
                     description: PcieAllowList overrides the list of PCI addresses
                       allowed for use on this node.
@@ -2961,11 +2977,6 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
-              corePercentage:
-                description: CorePercentage is the percentage of cores to be used
-                  for spdk (0-99).
-                format: int32
-                type: integer
               dataIfname:
                 description: DataIfname lists data-plane network interfaces.
                 items:
@@ -2983,6 +2994,17 @@ spec:
               enableCpuTopology:
                 description: EnableCpuTopology enables topology-aware CPU handling.
                 type: boolean
+              enableJournalDevice:
+                description: |-
+                  EnableJournalDevice dedicates a whole NVMe device to the journal manager
+                  instead of carving a journal partition out of every storage device. When
+                  true the smallest device on the node becomes the journal device, and the
+                  remaining devices are used whole; when false (the default) each device is
+                  GPT-partitioned into a journal slice plus a storage slice.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               expand:
                 description: |-
                   Expand indicates that storage nodes added from this StorageNodeSet are being
@@ -3088,14 +3110,6 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
-              maxSize:
-                description: MaxSize is the maximum allocatable size of huge pages.
-                type: string
-              maxSubsystemCount:
-                description: MaxSubsystemCount is the maximum number of NVMe-oF subsystems
-                  per node.
-                format: int32
-                type: integer
               mgmtIfname:
                 description: MgmtIfname is the management interface name used by storage
                   nodes.
@@ -3116,11 +3130,6 @@ spec:
                     of StorageNodeSetSpec. When a field is set here it takes precedence over the
                     fleet default; when omitted the fleet default applies.
                   properties:
-                    corePercentage:
-                      description: CorePercentage overrides the percentage of cores
-                        allocated to SPDK for this node (0-99).
-                      format: int32
-                      type: integer
                     deviceNames:
                       description: |-
                         DeviceNames explicitly defines the NVMe namespace names to use on this node
@@ -3165,15 +3174,6 @@ spec:
                           format: int32
                           type: integer
                       type: object
-                    maxSize:
-                      description: MaxSize overrides the maximum allocatable size
-                        of huge pages for this node.
-                      type: string
-                    maxSubsystemCount:
-                      description: MaxSubsystemCount overrides the maximum number
-                        of NVMe-oF subsystems for this node.
-                      format: int32
-                      type: integer
                     pcieAllowList:
                       description: PcieAllowList overrides the list of PCI addresses
                         allowed for use on this node.
@@ -3256,14 +3256,6 @@ spec:
                   Generated MachineConfig resources will carry the machineconfiguration.openshift.io/role label
                   set to this value. Defaults to "worker" when unset.
                 type: string
-              partitions:
-                description: Partitions is the number of partitions created per backend
-                  storage device.
-                format: int32
-                type: integer
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
               pcieAllowList:
                 description: PcieAllowList is the list of PCI addresses allowed for
                   use.
@@ -3367,8 +3359,8 @@ spec:
             x-kubernetes-validations:
             - message: field mgmtIfname is immutable once set
               rule: '!has(oldSelf.mgmtIfname) || has(self.mgmtIfname)'
-            - message: field partitions is immutable once set
-              rule: '!has(oldSelf.partitions) || has(self.partitions)'
+            - message: field enableJournalDevice is immutable once set
+              rule: '!has(oldSelf.enableJournalDevice) || has(self.enableJournalDevice)'
             - message: field nodesPerSocket is immutable once set
               rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
             - message: field forceFormat4K is immutable once set
@@ -3970,8 +3962,8 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.snapsMigrated
-      name: Snaps
+    - jsonPath: .status.memberCount
+      name: Volumes
       priority: 1
       type: integer
     - jsonPath: .metadata.creationTimestamp
@@ -4082,9 +4074,24 @@ spec:
                   - transport
                   type: object
                 type: array
+              deferredSince:
+                description: |-
+                  DeferredSince is when the storage API first refused to accept this migration
+                  because the cluster was busy with work that ends on its own (a data realignment
+                  or another node migration). While set, the migration is being retried and has
+                  not started. It bounds the retrying: past a fixed window the migration fails
+                  rather than waiting forever. Cleared once the migration is submitted.
+                format: date-time
+                type: string
               errorMessage:
                 description: ErrorMessage holds the failure reason when Phase is Failed.
                 type: string
+              memberCount:
+                description: |-
+                  MemberCount is the number of volumes (namespaces) in the migrated
+                  subsystem, as reported by the storage API. More than one means the
+                  migration moves sibling volumes along with this one.
+                type: integer
               migrationUUID:
                 description: |-
                   MigrationUUID is the identifier returned by the storage API when the
@@ -4103,14 +4110,6 @@ spec:
               poolUUID:
                 description: PoolUUID is the storage pool UUID that contains the volume.
                 type: string
-              snapsMigrated:
-                description: SnapsMigrated is the number of snapshots migrated so
-                  far.
-                type: integer
-              snapsTotal:
-                description: SnapsTotal is the total number of snapshots to migrate,
-                  as reported by the API.
-                type: integer
               sourceNodeUUID:
                 description: |-
                   SourceNodeUUID is the storage node UUID where the volume resided before
@@ -4121,12 +4120,45 @@ spec:
                   the storage API.
                 format: date-time
                 type: string
-              validationJobName:
+              subsystemNQN:
                 description: |-
-                  ValidationJobName is the name of the Job that runs `nvme connect` for each
-                  connection path and validates ANA state before ContinueMigration is called.
-                  Set during the Validating phase; cleared when the phase advances to Running.
+                  SubsystemNQN is the NQN of the volume's NVMe subsystem, resolved from the
+                  storage API when the migration is submitted. The migration is addressed by
+                  it, and every volume sharing the subsystem moves with it.
                 type: string
+              validationJobs:
+                description: |-
+                  ValidationJobs are the Jobs that run `nvme connect` for each connection path
+                  and validate ANA state before ContinueMigration is called — one per worker
+                  node that consumes a volume of the migrated subsystem. A subsystem migrates
+                  as a unit, so every consuming node must have the new paths before cutover;
+                  all of these Jobs must succeed. Set during the Validating phase; cleared when
+                  the phase advances to Running.
+                items:
+                  description: |-
+                    ValidationJob is one NVMe path-validation Job and the worker node it runs on.
+                    The node is a consumer of some volume in the migrated subsystem — the volume named
+                    in the spec, or one of its siblings sharing the same NVMe subsystem.
+                  properties:
+                    jobName:
+                      description: JobName is the name of the Job object in the VolumeMigration's
+                        namespace.
+                      type: string
+                    node:
+                      description: Node is the Kubernetes node name the Job is pinned
+                        to.
+                      type: string
+                    succeeded:
+                      description: |-
+                        Succeeded records that this node's validation passed. It is kept because the
+                        Job's own existence is not a reliable record: Jobs are reaped, and re-reading a
+                        reaped Job would otherwise look like "never validated" and start it again.
+                      type: boolean
+                  required:
+                  - jobName
+                  - node
+                  type: object
+                type: array
               volumeUUID:
                 description: VolumeUUID is the logical volume UUID resolved from the
                   PV's CSI volume handle.
