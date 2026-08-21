@@ -102,6 +102,25 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              deviceMode:
+                default: nvme
+                description: |-
+                  DeviceMode selects how storage devices are attached for every node in this
+                  cluster. "nvme" (default) auto-discovers and attaches NVMe PCIe devices via the
+                  SPDK nvme driver. "lblk" wraps arbitrary Linux block devices (e.g. cloud block
+                  volumes, virtio-blk disks, non-NVMe local disks) in SPDK AIO bdevs instead; which
+                  devices are used is then selected per node via StorageNodeSet/StorageNode block-
+                  device fields (blkNames/blkNamesExclude/blkSerials). Chosen at cluster-create time
+                  on the backend and cannot be switched on a live cluster.
+                  Requires sbcli with lblk device-mode support (simplyblock/sbcli#1224); sending this
+                  against an older backend is rejected at cluster creation.
+                enum:
+                - nvme
+                - lblk
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               enableFailureDomains:
                 description: |-
                   EnableFailureDomains opts the cluster into failure-domain mode. When enabled, every
@@ -333,6 +352,8 @@ spec:
             x-kubernetes-validations:
             - message: field enableFailureDomains is immutable once set
               rule: '!has(oldSelf.enableFailureDomains) || has(self.enableFailureDomains)'
+            - message: field deviceMode is immutable once set
+              rule: '!has(oldSelf.deviceMode) || has(self.deviceMode)'
             - message: fabricType is immutable once set
               rule: '!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType'
             - message: hashicorpVaultSettings is immutable once set

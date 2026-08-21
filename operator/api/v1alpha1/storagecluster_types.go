@@ -304,6 +304,22 @@ type StorageClusterSpec struct {
 	// +k8s:immutable
 	// +optional
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
+
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Device Mode"
+	// DeviceMode selects how storage devices are attached for every node in this
+	// cluster. "nvme" (default) auto-discovers and attaches NVMe PCIe devices via the
+	// SPDK nvme driver. "lblk" wraps arbitrary Linux block devices (e.g. cloud block
+	// volumes, virtio-blk disks, non-NVMe local disks) in SPDK AIO bdevs instead; which
+	// devices are used is then selected per node via StorageNodeSet/StorageNode block-
+	// device fields (blkNames/blkNamesExclude/blkSerials). Chosen at cluster-create time
+	// on the backend and cannot be switched on a live cluster.
+	// Requires sbcli with lblk device-mode support (simplyblock/sbcli#1224); sending this
+	// against an older backend is rejected at cluster creation.
+	// +kubebuilder:validation:Enum=nvme;lblk
+	// +kubebuilder:default=nvme
+	// +k8s:immutable
+	// +optional
+	DeviceMode string `json:"deviceMode,omitempty"`
 }
 
 // StorageClusterStatus defines the observed state of StorageCluster.

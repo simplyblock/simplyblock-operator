@@ -33,6 +33,7 @@ type JournalManagerSpec struct {
 }
 
 // StorageNodeSetSpec defines the desired state of StorageNodeSet
+// +kubebuilder:validation:XValidation:rule="!(((has(self.enableLblk) && self.enableLblk) || (has(self.blkNames) && size(self.blkNames) > 0) || (has(self.blkNamesExclude) && size(self.blkNamesExclude) > 0) || (has(self.blkSerials) && size(self.blkSerials) > 0)) && ((has(self.pcieAllowList) && size(self.pcieAllowList) > 0) || (has(self.pcieDenyList) && size(self.pcieDenyList) > 0) || (has(self.pcieModel) && size(self.pcieModel) > 0) || (has(self.driveSizeRange) && size(self.driveSizeRange) > 0) || (has(self.deviceNames) && size(self.deviceNames) > 0)))",message="lblk selectors (enableLblk/blkNames/blkNamesExclude/blkSerials) are mutually exclusive with NVMe PCIe selectors (pcieAllowList/pcieDenyList/pcieModel/driveSizeRange/deviceNames)"
 type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Name"
 	// ClusterName is the target storage cluster name.
@@ -106,6 +107,59 @@ type StorageNodeSetSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Device Names"
 	// DeviceNames explicitly defines a comma separated list of nvme namespace names like nvme0n1,nvme1n1...
 	DeviceNames []string `json:"deviceNames,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Linux Block Devices"
+	// EnableLblk selects Linux block devices (via SPDK AIO bdevs) instead of NVMe PCIe
+	// devices for this fleet. Only meaningful when the parent StorageCluster's
+	// spec.deviceMode is "lblk"; mutually exclusive with PcieAllowList/PcieDenyList/
+	// PcieModel/DriveSizeRange/DeviceNames — the backend rejects a node configured with
+	// both NVMe and lblk selection.
+	// +k8s:immutable
+	// +optional
+	EnableLblk *bool `json:"enableLblk,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Block Device Names"
+	// BlkNames selects block devices by kernel name (e.g. "sdb","sdc") when EnableLblk is
+	// set. Without a selector (BlkNames/BlkNamesExclude/BlkSerials all empty), every
+	// eligible whole disk on the node is used. At most one of BlkNames, BlkNamesExclude,
+	// BlkSerials may be set. Immutable once set — including the transition from unset to
+	// set, since a fleet commonly starts with no selector (auto-select) and the backend
+	// (node_configure.py) silently skips regenerating config for an already-provisioned
+	// node, so an accepted-but-ignored edit here would otherwise look like it took effect
+	// when it did nothing.
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:XValidation:rule="!oldSelf.hasValue() || self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
+	// +optional
+	BlkNames []string `json:"blkNames,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Block Device Names Exclude"
+	// BlkNamesExclude excludes block devices by kernel name when EnableLblk is set; all
+	// other eligible whole disks are used. Immutable once set, including the unset-to-set
+	// transition (see BlkNames).
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:XValidation:rule="!oldSelf.hasValue() || self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
+	// +optional
+	BlkNamesExclude []string `json:"blkNamesExclude,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Block Device Serials"
+	// BlkSerials selects block devices by serial number or WWN when EnableLblk is set —
+	// stable across kernel device-name changes/reboots, the recommended selector for
+	// cloud/virtualized disks whose /dev/sdX name is not guaranteed stable. Immutable once
+	// set, including the unset-to-set transition (see BlkNames).
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:XValidation:rule="!oldSelf.hasValue() || self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
+	// +optional
+	BlkSerials []string `json:"blkSerials,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Lblk Journal Percent"
+	// LblkJournalPercent is the percentage of a selected partition's capacity carved out
+	// for the journal when the smallest selected lblk device is a partition rather than a
+	// whole disk. Ignored for whole-disk selections. Backend default is 3 when unset.
+	// +optional
+	LblkJournalPercent *int32 `json:"lblkJournalPercent,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Lblk Force Format"
+	// BlkForceFormat wipes partition tables and filesystem signatures (wipefs) from
+	// configured block devices that carry partitions, making them eligible as whole-disk
+	// lblk devices. Without this, a partitioned disk named in BlkNames/BlkSerials is
+	// rejected as ineligible. Destructive — only set this when reusing a disk that
+	// previously had partitions and whose data is no longer needed.
+	// +optional
+	BlkForceFormat *bool `json:"blkForceFormat,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Ubuntu Host"
 	// UbuntuHost indicates the node host OS is Ubuntu.
 	UbuntuHost *bool `json:"ubuntuHost,omitempty"`

@@ -17,6 +17,60 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
+// storageNodeSetSATokenExpirationSeconds is deliberately short (kubelet
+// refreshes a projected ServiceAccountToken at ~80% of its expiration, so this
+// gives an ~8 minute refresh cycle). If the "simplyblock-storage-node-sa"
+// ServiceAccount is ever deleted and recreated (observed in practice, e.g.
+// under rapid CRD/informer churn), every pod's already-mounted token is bound
+// to the old ServiceAccount UID and the API server rejects it with 401 until
+// the token is refreshed. Kubernetes' default projected SA token has a ~1
+// hour expiration (kubelet refresh ~48min), which turned exactly this kind of
+// event into a long-feeling, manual-intervention-required outage. A short
+// expiration bounds that self-heal window to minutes instead.
+const storageNodeSetSATokenExpirationSeconds int64 = 600
+
+// storageNodeSetSATokenMountPath is the standard path Kubernetes' own
+// ServiceAccount admission controller normally auto-mounts a projected token
+// at. Since we mount our own short-lived token volume here instead (see
+// storageNodeSetSATokenExpirationSeconds), AutomountServiceAccountToken is set
+// to false on the pod spec to avoid a duplicate-mount-path conflict with the
+// default auto-injected volume.
+const storageNodeSetSATokenMountPath = "/var/run/secrets/kubernetes.io/serviceaccount"
+
+// buildStorageNodeSetSATokenVolume mirrors the structure of Kubernetes' own
+// auto-injected "kube-api-access-*" projected volume (token + cluster CA +
+// namespace), just with a short, explicit token expiration.
+func buildStorageNodeSetSATokenVolume() corev1.Volume {
+	return corev1.Volume{
+		Name: "kube-api-access-short",
+		VolumeSource: corev1.VolumeSource{
+			Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{
+					{
+						ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+							Path:              "token",
+							ExpirationSeconds: ptr.To(storageNodeSetSATokenExpirationSeconds),
+						},
+					},
+					{
+						ConfigMap: &corev1.ConfigMapProjection{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "kube-root-ca.crt"},
+							Items:                []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}},
+						},
+					},
+					{
+						DownwardAPI: &corev1.DownwardAPIProjection{
+							Items: []corev1.DownwardAPIVolumeFile{
+								{Path: "namespace", FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 // defaultInitContainerResources are applied when the user has not set
 // InitContainerResources on the StorageNodeSet CR.
 var defaultInitContainerResources = corev1.ResourceRequirements{
@@ -56,9 +110,9 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 	image := sn.Spec.ClusterImage
 
 	// Build the fleet-level (non-overridable) args that are always appended.
-	// Per-node args (pci-*, device-*, size-range) and the cluster-scoped sizing
-	// args (max-subsys-count, max-size, vcpu-count) are read at runtime from the per-node
-	// ConfigMap via the init script.
+	// Per-node args (pci-*, device-*, size-range, lblk/blk-*) and the cluster-scoped
+	// sizing args (max-subsys-count, max-size, vcpu-count) are read at runtime from
+	// the per-node ConfigMap via the init script.
 	fleetArgs := ""
 	if len(sn.Spec.SocketsToUse) > 0 {
 		fleetArgs += " --sockets-to-use=" + JoinList(sn.Spec.SocketsToUse)
@@ -77,6 +131,12 @@ ARGS="--max-lvol=${MAX_SUBSYS_COUNT:-0}"
 [ -n "${NVME_DEVICES}" ] && ARGS="${ARGS} --nvme-devices=\"${NVME_DEVICES}\""
 [ -n "${DEVICE_MODEL}" ] && ARGS="${ARGS} --device-model=\"${DEVICE_MODEL}\""
 [ -n "${SIZE_RANGE}" ] && ARGS="${ARGS} --size-range=\"${SIZE_RANGE}\""
+[ "${LBLK}" = "true" ] && ARGS="${ARGS} --lblk"
+[ -n "${BLK_NAMES}" ] && ARGS="${ARGS} --blk-names=\"${BLK_NAMES}\""
+[ -n "${BLK_NAMES_EXCLUDE}" ] && ARGS="${ARGS} --blk-names-exclude=\"${BLK_NAMES_EXCLUDE}\""
+[ -n "${BLK_SERIALS}" ] && ARGS="${ARGS} --blk-serials=\"${BLK_SERIALS}\""
+[ -n "${LBLK_JM_PERCENT}" ] && ARGS="${ARGS} --jm-percent=\"${LBLK_JM_PERCENT}\""
+[ "${LBLK_FORCE_FORMAT}" = "true" ] && ARGS="${ARGS} --force-format"
 ARGS="${ARGS}` + fleetArgs + `"
 eval sudo -E python3 simplyblock_web/node_configure.py ${ARGS}
 `
@@ -201,6 +261,13 @@ fi`
 				},
 			},
 		},
+		buildStorageNodeSetSATokenVolume(),
+	}
+
+	saTokenMount := corev1.VolumeMount{
+		Name:      "kube-api-access-short",
+		MountPath: storageNodeSetSATokenMountPath,
+		ReadOnly:  true,
 	}
 
 	nodeEnvMount := corev1.VolumeMount{Name: "node-env", MountPath: "/etc/node-env"}
@@ -209,7 +276,14 @@ fi`
 		{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
 		{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
 		{Name: "host-mnt", MountPath: "/mnt"},
+		// dev-vol/host-sys: node_configure.py's lblk device-eligibility check
+		// (--lblk/--blk-names/--blk-serials) inspects host block devices via
+		// /dev and /sys/block eagerly at config-generation time, unlike NVMe
+		// PCIe discovery which defers to the main container's SPDK startup.
+		{Name: "dev-vol", MountPath: "/dev"},
+		{Name: "host-sys", MountPath: "/sys"},
 		nodeEnvMount,
+		saTokenMount,
 	}
 
 	mainMounts := []corev1.VolumeMount{
@@ -218,6 +292,7 @@ fi`
 		{Name: "host-sys", MountPath: "/sys"},
 		{Name: "var-run-simplyblock", MountPath: "/var/run/simplyblock"},
 		nodeEnvMount,
+		saTokenMount,
 	}
 
 	readinessProbe := &corev1.Probe{
@@ -290,8 +365,13 @@ fi`
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "simplyblock-storage-node-sa",
-					HostNetwork:        true,
-					Tolerations:        sn.Spec.Tolerations,
+					// The default auto-injected token volume mounts at the same
+					// path as saTokenMount (storageNodeSetSATokenMountPath); this
+					// avoids a duplicate-mount-path conflict with it in favor of
+					// the short-lived token above.
+					AutomountServiceAccountToken: ptr.To(false),
+					HostNetwork:                  true,
+					Tolerations:                  sn.Spec.Tolerations,
 					NodeSelector: map[string]string{
 						kube.LabelStorageNodeSet: sn.Name,
 					},

@@ -205,6 +205,12 @@ func buildPerNodeEnvFile(
 		DeviceNames:        sns.Spec.DeviceNames,
 		EnableCpuTopology:  sns.Spec.EnableCpuTopology,
 		ReservedSystemCPU:  sns.Spec.ReservedSystemCPU,
+		EnableLblk:         sns.Spec.EnableLblk,
+		BlkNames:           sns.Spec.BlkNames,
+		BlkNamesExclude:    sns.Spec.BlkNamesExclude,
+		BlkSerials:         sns.Spec.BlkSerials,
+		LblkJournalPercent: sns.Spec.LblkJournalPercent,
+		BlkForceFormat:     sns.Spec.BlkForceFormat,
 	}
 
 	// Apply per-node overrides if present.
@@ -236,6 +242,24 @@ func buildPerNodeEnvFile(
 		if o.ReservedSystemCPU != "" {
 			eff.ReservedSystemCPU = o.ReservedSystemCPU
 		}
+		if o.EnableLblk != nil {
+			eff.EnableLblk = o.EnableLblk
+		}
+		if len(o.BlkNames) > 0 {
+			eff.BlkNames = o.BlkNames
+		}
+		if len(o.BlkNamesExclude) > 0 {
+			eff.BlkNamesExclude = o.BlkNamesExclude
+		}
+		if len(o.BlkSerials) > 0 {
+			eff.BlkSerials = o.BlkSerials
+		}
+		if o.LblkJournalPercent != nil {
+			eff.LblkJournalPercent = o.LblkJournalPercent
+		}
+		if o.BlkForceFormat != nil {
+			eff.BlkForceFormat = o.BlkForceFormat
+		}
 	}
 
 	var b strings.Builder
@@ -255,5 +279,11 @@ func buildPerNodeEnvFile(
 		b.WriteString("JM_PERCENT=\n")
 		b.WriteString("HA_JM_COUNT=\n")
 	}
+	fmt.Fprintf(&b, "LBLK=%t\n", ptr.BoolFromOrFalse(eff.EnableLblk))
+	fmt.Fprintf(&b, "BLK_NAMES=%s\n", utils.ShellQuote(strings.Join(eff.BlkNames, ",")))
+	fmt.Fprintf(&b, "BLK_NAMES_EXCLUDE=%s\n", utils.ShellQuote(strings.Join(eff.BlkNamesExclude, ",")))
+	fmt.Fprintf(&b, "BLK_SERIALS=%s\n", utils.ShellQuote(strings.Join(eff.BlkSerials, ",")))
+	fmt.Fprintf(&b, "LBLK_JM_PERCENT=%s\n", ptr.StringOrDefault(eff.LblkJournalPercent, ""))
+	fmt.Fprintf(&b, "LBLK_FORCE_FORMAT=%t\n", ptr.BoolFromOrFalse(eff.BlkForceFormat))
 	return b.String()
 }
