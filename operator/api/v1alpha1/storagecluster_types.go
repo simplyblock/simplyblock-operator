@@ -255,6 +255,7 @@ type StorageClusterSpec struct {
 	// rather than falling back to a default.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=10
+	// +kubebuilder:validation:Maximum=75
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Huge Pages Size"
 	// MaxHugePagesSize is the maximum allocatable size of huge pages on each
