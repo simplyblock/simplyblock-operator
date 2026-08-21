@@ -93,7 +93,8 @@ type nvmeListOutput struct {
 // ── main ───────────────────────────────────────────────────────────────────────
 
 func main() {
-	mode := flag.String("mode", "", "baseline, probe, validate-migration, release-migration-paths, or replication-preconnect")
+	mode := flag.String("mode", "",
+		"baseline, probe, validate-migration, release-migration-paths, or replication-preconnect")
 
 	// Connection flags — used when --config is not provided.
 	addr := flag.String("addr", os.Getenv("FIO_NODE_ADDR"), "NVMe-oF TCP address")

@@ -460,8 +460,10 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
 	}
 	if status == nil || status.State != "cutover_pending" {
-		// Backend already advanced; sync status normally.
-		return r.reconcileSyncStatus(ctx, slot, apiClient, clusterID, poolID, volumeID)
+		// Backend advanced past cutover_pending — transition the K8s state to match.
+		// We cannot call reconcileSyncStatus here because it only handles replicating;
+		// it would leave the slot stuck in cutover_pending forever.
+		return r.applyAdvancedBackendState(ctx, slot, status)
 	}
 
 	// Fetch connection strings. During cutover_pending the backend returns both
@@ -500,7 +502,7 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 	}
 
 	// Find the node running a pod that has this volume mounted.
-	node, err := r.findPreconnectConsumerNode(ctx, clusterID, volumeID)
+	node, err := r.findPreconnectConsumerNode(ctx, volumeID)
 	if err != nil {
 		log.Error(err, "Cannot resolve consuming node for preconnect", "slot", slot.Name)
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
@@ -601,7 +603,7 @@ func (r *ReplicationSlotReconciler) fetchVolumeConnections(
 // has the given volume's PVC mounted. Returns "" when no active consumer exists.
 func (r *ReplicationSlotReconciler) findPreconnectConsumerNode(
 	ctx context.Context,
-	clusterID, volumeID string,
+	volumeID string,
 ) (string, error) {
 	// Find the PersistentVolume whose CSI handle encodes this volume.
 	var pvList corev1.PersistentVolumeList
@@ -736,6 +738,51 @@ func (r *ReplicationSlotReconciler) buildPreconnectJob(
 			},
 		},
 	}
+}
+
+// applyAdvancedBackendState transitions the slot from cutover_pending to whatever
+// state the backend now reports. reconcileSyncStatus cannot be used here because it
+// only transitions to replicating — calling it from cutover_pending would leave the
+// slot permanently stuck.
+func (r *ReplicationSlotReconciler) applyAdvancedBackendState(
+	ctx context.Context,
+	slot *simplyblockv1alpha1.ReplicationSlot,
+	status *replVolumeReplicationStatus,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if status == nil {
+		// LVolReplication not found yet — backend may still be creating it; retry.
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	patch := client.MergeFrom(slot.DeepCopy())
+	switch status.State {
+	case "cutover_done":
+		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone)
+		slot.Status.Message = "Cutover done"
+		slot.Status.TargetNQN = status.TargetNQN
+		slot.Status.TargetLvolID = status.TargetLvolID
+		log.Info("Cutover completed; advancing slot state to cutover_done", "slot", slot.Name)
+	case "failed_over":
+		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateFailedOver)
+		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
+		slot.Status.Message = "Failed over to target cluster"
+		slot.Status.TargetNQN = status.TargetNQN
+		slot.Status.TargetLvolID = status.TargetLvolID
+		log.Info("Slot failed over; advancing slot state to failed_over", "slot", slot.Name)
+		r.Recorder.Eventf(slot, nil, corev1.EventTypeNormal, "FailedOver", "FailedOver",
+			"Volume failed over; target NQN: %s", status.TargetNQN)
+	default:
+		slot.Status.TargetNQN = status.TargetNQN
+		slot.Status.TargetLvolID = status.TargetLvolID
+		log.Info("Backend advanced from cutover_pending to unexpected state",
+			"slot", slot.Name, "backendState", status.State)
+	}
+	if err := r.Status().Patch(ctx, slot, patch); err != nil {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	return ctrl.Result{RequeueAfter: replSlotRequeueReplicating}, nil
 }
 
 func (r *ReplicationSlotReconciler) SetupWithManager(mgr ctrl.Manager) error {
