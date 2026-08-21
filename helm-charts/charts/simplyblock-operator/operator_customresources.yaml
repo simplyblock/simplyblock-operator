@@ -14,7 +14,7 @@ spec:
   # Cluster-wide storage-node sizing — applies to every storage node in the cluster.
   maxSubsystemCount: 100
   vcpuCount: 25
-  # maxHugePagesSize: 0
+  # maxHugePagesSize: "0"
   stripe:
     dataChunks: 1
     parityChunks: 1
