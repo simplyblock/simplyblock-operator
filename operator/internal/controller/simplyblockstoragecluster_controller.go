@@ -240,9 +240,13 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		return ctrl.Result{}, err
 	}
 
-	maxHugePageSize := utils.ParseSize(clusterCR.Spec.MaxHugePagesSize, "si/iec", "", false)
-	if maxHugePageSize == nil {
-		return ctrl.Result{}, fmt.Errorf("invalid max huge pages size: %s", clusterCR.Spec.MaxHugePagesSize)
+	// maxHugePagesSize is optional: left unset, the backend computes the minimum
+	// itself, and HugepagesMem's omitempty drops the key from the request. Only a
+	// value the user actually supplied has to parse — parsing "" yields nil, which
+	// would otherwise fail every cluster that omits the field.
+	var hugePagesMem *int64
+	if raw := clusterCR.Spec.MaxHugePagesSize; raw != "" {
+		hugePagesMem = utils.ParseSize(raw, "si/iec", "", false)
 	}
 
 	params := utils.ClusterAddParams{
@@ -254,7 +258,7 @@ func (r *StorageClusterReconciler) reconcileCreate(
 		DistrNdcs:     stripeDataChunks(clusterCR.Spec.StripeSpec),
 		DistrNpcs:     stripeParityChunks(clusterCR.Spec.StripeSpec),
 		SpdkVcpuCount: ptr.IntFrom(clusterCR.Spec.VCPUCount, 8),
-		HugepagesMem:  *maxHugePageSize,
+		HugepagesMem:  ptr.Int64From(hugePagesMem, 0),
 		MaxSubsys:     uint(ptr.IntFrom(clusterCR.Spec.MaxSubsystemCount, 10)),
 
 		EnableNodeAffinity:     ptr.BoolFromOrFalse(clusterCR.Spec.EnableNodeAffinity),
