@@ -98,7 +98,8 @@ type SpdkCsiInitiator interface {
 
 // initiatorNVMf is an implementation of NVMf tcp initiator
 type initiatorNVMf struct {
-	lvolID         string
+	lvolID         string // source lvol UUID — used for backend API calls
+	deviceLvolID   string // clone UUID after failover, else same as lvolID — used for local device lookup
 	targetType     string
 	nqn            string
 	reconnectDelay string
@@ -320,6 +321,11 @@ func NewSpdkCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, err
 	}
 	switch targetType {
 	case TargetTypeTCP, TargetTypeRDMA:
+		srcLvolID := volumeContext["uuid"]
+		deviceLvolID := volumeContext["targetLvolID"]
+		if deviceLvolID == "" {
+			deviceLvolID = srcLvolID
+		}
 		return &initiatorNVMf{
 			nsId:           nsId,
 			targetType:     volumeContext["targetType"],
@@ -331,7 +337,8 @@ func NewSpdkCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, err
 			hostIface:      volumeContext["hostIface"],
 			hostNQN:        volumeContext["hostNQN"],
 			poolID:         volumeContext["poolID"],
-			lvolID:         volumeContext["uuid"],
+			lvolID:         srcLvolID,
+			deviceLvolID:   deviceLvolID,
 		}, nil
 
 	default:
@@ -421,7 +428,7 @@ func (nvmf *initiatorNVMf) connectOnce(ctx context.Context) (string, error) {
 		}
 	}
 
-	return matchNamespaceDevice(ctx, defaultDevDiskByID, nvmf.model, nvmf.lvolID, nvmf.nsId, time.Second)
+	return matchNamespaceDevice(ctx, defaultDevDiskByID, nvmf.model, nvmf.deviceLvolID, nvmf.nsId, time.Second)
 }
 
 // registerDevicePresence records a freshly connected device in the shared

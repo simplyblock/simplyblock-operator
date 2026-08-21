@@ -329,17 +329,9 @@ func (client APIClient) getVolumeInfo(ctx context.Context, poolID, lvolID, hostN
 		return nil, err
 	}
 
-	// For failed-over volumes the backend redirects to the clone and sets
-	// TargetLvolID. Use the clone UUID for device lookup; fall back to the
-	// original lvolID for normal (non-failed-over) volumes.
-	effectiveLvolID := lvolID
-	if result[0].TargetLvolID != "" {
-		effectiveLvolID = result[0].TargetLvolID
-	}
-
-	return map[string]string{
-		"name":           effectiveLvolID,
-		"uuid":           effectiveLvolID,
+	info := map[string]string{
+		"name":           lvolID,
+		"uuid":           lvolID,
 		"nqn":            result[0].Nqn,
 		"reconnectDelay": strconv.Itoa(result[0].ReconnectDelay),
 		"nrIoQueues":     strconv.Itoa(result[0].NrIoQueues),
@@ -349,7 +341,14 @@ func (client APIClient) getVolumeInfo(ctx context.Context, poolID, lvolID, hostN
 		"connections":    string(connectionsData),
 		"nsId":           strconv.Itoa(result[0].NSID),
 		"hostIface":      result[0].HostIface,
-	}, nil
+	}
+	// For failed-over volumes the backend sets TargetLvolID to the clone UUID.
+	// Store it separately so the initiator uses it for device lookup without
+	// affecting the backend API calls that still use the original lvolID.
+	if result[0].TargetLvolID != "" {
+		info["targetLvolID"] = result[0].TargetLvolID
+	}
+	return info, nil
 }
 
 // deleteVolume deletes a volume by UUID
