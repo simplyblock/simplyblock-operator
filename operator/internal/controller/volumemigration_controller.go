@@ -26,6 +26,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -1263,10 +1264,11 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 		}
 		r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationCompleted", "MigrationCompleted",
 			"Migration %s completed successfully", vm.Status.MigrationUUID)
-		// A volume moved: flag the owning cluster so the rebalancer's periodic loop
-		// triggers a control-plane data realignment. Best-effort — the flag is
-		// re-asserted on every completed migration and realignment is idempotent.
-		r.markClusterPendingRealignment(ctx, vm.Namespace, vm.Status.ClusterUUID)
+		// A volume moved: count it on the owning cluster so the rebalancer's periodic
+		// loop triggers a control-plane data realignment once enough have accumulated
+		// and the cluster is quiet. Best-effort — a missed count is picked up by the
+		// next completing migration, and realignment is idempotent.
+		r.markClusterVolumeMoved(ctx, vm.Namespace, vm.Status.ClusterUUID)
 	} else {
 		vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseFailed
 		vm.Status.ErrorMessage = result.Migration.ErrorMessage
@@ -1279,16 +1281,24 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 	return ctrl.Result{}, nil
 }
 
-// markClusterPendingRealignment sets status.pendingDataRealignment=true on the
-// StorageCluster whose backend UUID matches clusterUUID, recording that a volume has
-// moved and a control-plane data realignment is due. The persisted flag is picked up
-// by the VolumeRebalancerReconciler's periodic loop.
+// markClusterVolumeMoved increments status.volumeMoveGeneration on the StorageCluster
+// whose backend UUID matches clusterUUID, recording that one more volume has moved and
+// a control-plane data realignment is owed. The counter is read by the
+// VolumeRebalancerReconciler's periodic loop, which compares it against
+// status.realignedGeneration.
 //
-// Best-effort: any failure is logged but does not fail the migration. The flag is a
-// monotonic "something moved" marker — it is re-asserted by every completed migration
-// and only ever cleared by a successful realignment — so a missed write is corrected
-// by the next completing migration.
-func (r *VolumeMigrationReconciler) markClusterPendingRealignment(
+// A counter rather than a flag because both quantities matter: how many moves are
+// outstanding (so DataRealignment.MinMoves can batch them) and whether a move landed
+// after a realignment was already requested (so it is not silently absorbed by a
+// realignment that cannot account for it).
+//
+// Best-effort: any failure is logged but does not fail the migration — the realignment
+// is late, not lost, because the next completed migration increments again. The write
+// takes the optimistic-locking path and retries on conflict, since two migrations
+// completing at once would otherwise read the same value and one increment would
+// vanish; with MinMoves batching, a lost increment delays a realignment indefinitely
+// rather than by one cycle.
+func (r *VolumeMigrationReconciler) markClusterVolumeMoved(
 	ctx context.Context,
 	namespace, clusterUUID string,
 ) {
@@ -1296,27 +1306,32 @@ func (r *VolumeMigrationReconciler) markClusterPendingRealignment(
 	if clusterUUID == "" {
 		return
 	}
-	var clusters simplyblockv1alpha1.StorageClusterList
-	if err := r.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
-		log.Error(err, "Cannot list StorageClusters to flag pending realignment", "clusterUUID", clusterUUID)
-		return
+
+	var name string
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var clusters simplyblockv1alpha1.StorageClusterList
+		if err := r.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
+			return err
+		}
+		for i := range clusters.Items {
+			cr := &clusters.Items[i]
+			if cr.Status.UUID != clusterUUID {
+				continue
+			}
+			name = cr.Name
+			patch := client.MergeFromWithOptions(cr.DeepCopy(), client.MergeFromWithOptimisticLock{})
+			cr.Status.VolumeMoveGeneration = ptr.To(ptr.Int64FromOrZero(cr.Status.VolumeMoveGeneration) + 1)
+			return r.Status().Patch(ctx, cr, patch)
+		}
+		return nil
+	})
+	switch {
+	case err != nil:
+		log.Error(err, "Cannot record volume move for realignment", "clusterUUID", clusterUUID, "cluster", name)
+	case name == "":
+		log.Info("No StorageCluster matched volume's cluster UUID; cannot record volume move",
+			"clusterUUID", clusterUUID)
 	}
-	for i := range clusters.Items {
-		cr := &clusters.Items[i]
-		if cr.Status.UUID != clusterUUID {
-			continue
-		}
-		if ptr.BoolFromOrFalse(cr.Status.PendingDataRealignment) {
-			return // already flagged; nothing to do
-		}
-		patch := client.MergeFrom(cr.DeepCopy())
-		cr.Status.PendingDataRealignment = ptr.To(true)
-		if err := r.Status().Patch(ctx, cr, patch); err != nil {
-			log.Error(err, "Cannot flag StorageCluster pending realignment", "cluster", cr.Name)
-		}
-		return
-	}
-	log.Info("No StorageCluster matched volume's cluster UUID; cannot flag pending realignment", "clusterUUID", clusterUUID)
 }
 
 // reconcileAbort cancels an in-progress migration.
