@@ -148,8 +148,11 @@ spec:
               maxSubsystemCount:
                 description: |-
                   MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
-                  node. Applies to every storage node in the cluster.
+                  node. Applies to every storage node in the cluster. Required: it sizes huge
+                  pages, and a node that receives no value fails config generation outright
+                  rather than falling back to a default.
                 format: int32
+                minimum: 10
                 type: integer
               nvmfBasePort:
                 description: NvmfBasePort defines the base NVMf service port.
@@ -181,10 +184,11 @@ spec:
               vcpuCount:
                 description: |-
                   VCPUCount is the number of vCPUs allocated to SPDK on each storage node.
-                  This is an explicit core count, not a percentage. When omitted the node
-                  falls back to the backend's own core-allocation heuristic.
+                  This is an explicit core count, not a percentage. Required: the core layout
+                  it produces must match across the cluster, so it is stated rather than left
+                  to a per-node heuristic.
                 format: int32
-                minimum: 1
+                minimum: 8
                 type: integer
               volumeAutoPlacement:
                 description: |-
@@ -321,6 +325,9 @@ spec:
                     format: int32
                     type: integer
                 type: object
+            required:
+            - maxSubsystemCount
+            - vcpuCount
             type: object
             x-kubernetes-validations:
             - message: field enableFailureDomains is immutable once set

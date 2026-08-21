@@ -11,10 +11,12 @@ spec:
   # rpcBasePort: 9502
   # snodeApiPort: 8090
   # enableFailureDomains: false
-  # Cluster-wide storage-node sizing — applies to every storage node in the cluster.
-  maxSubsystemCount: 100
-  vcpuCount: 25
-  # maxHugePagesSize: "0"
+  # Cluster-wide storage-node sizing — required, and applies to every storage
+  # node in the cluster. maxSubsystemCount must not exceed the backend's
+  # MAX_SUBSYSTEMS_PER_NODE (75); vcpuCount is an explicit core count.
+  maxSubsystemCount: 50
+  vcpuCount: 8
+  # maxHugePagesSize: "100G"
   stripe:
     dataChunks: 1
     parityChunks: 1

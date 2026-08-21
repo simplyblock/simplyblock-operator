@@ -250,9 +250,12 @@ type StorageClusterSpec struct {
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Subsystem Count"
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
-	// node. Applies to every storage node in the cluster.
-	// +optional
-	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
+	// node. Applies to every storage node in the cluster. Required: it sizes huge
+	// pages, and a node that receives no value fails config generation outright
+	// rather than falling back to a default.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=10
+	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Huge Pages Size"
 	// MaxHugePagesSize is the maximum allocatable size of huge pages on each
 	// storage node (e.g. "100G", "1T"; a bare number is interpreted as GB). It is
@@ -263,11 +266,12 @@ type StorageClusterSpec struct {
 	MaxHugePagesSize string `json:"maxHugePagesSize,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="vCPU Count"
 	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node.
-	// This is an explicit core count, not a percentage. When omitted the node
-	// falls back to the backend's own core-allocation heuristic.
-	// +kubebuilder:validation:Minimum=1
-	// +optional
-	VCPUCount *int32 `json:"vcpuCount,omitempty"`
+	// This is an explicit core count, not a percentage. Required: the core layout
+	// it produces must match across the cluster, so it is stated rather than left
+	// to a per-node heuristic.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=8
+	VCPUCount *int32 `json:"vcpuCount"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Warning Threshold"
 	// WarningThresholdSpec defines warning-level capacity thresholds.

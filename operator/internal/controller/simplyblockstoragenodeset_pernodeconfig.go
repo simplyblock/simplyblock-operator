@@ -84,6 +84,17 @@ func (r *StorageNodeSetReconciler) reconcilePerNodeConfigMap(
 		return fmt.Errorf("getting StorageCluster %q for per-node ConfigMap: %w", sns.Spec.ClusterName, err)
 	}
 
+	// maxSubsystemCount and vcpuCount are required by the CRD schema, so they can
+	// only be nil on a StorageCluster admitted before that requirement existed.
+	// Refuse to write a config the node cannot boot from: an empty MAX_SUBSYS_COUNT
+	// reaches node_configure.py as --max-subsys-count=0 and fails config
+	// generation there, far from the cause.
+	if cluster.Spec.MaxSubsystemCount == nil || cluster.Spec.VCPUCount == nil {
+		return fmt.Errorf(
+			"StorageCluster %q is missing required node sizing: set spec.maxSubsystemCount and spec.vcpuCount",
+			sns.Spec.ClusterName)
+	}
+
 	data := make(map[string]string, len(sns.Spec.WorkerNodes))
 	for _, worker := range sns.Spec.WorkerNodes {
 		data[worker] = buildPerNodeEnvFile(&cluster, sns, worker)

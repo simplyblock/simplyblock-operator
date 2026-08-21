@@ -293,8 +293,10 @@ spec:
       - description: MaxQueueSize defines the maximum backend queue size.
         displayName: Max Queue Size
         path: maxQueueSize
-      - description: MaxSubsystemCount is the maximum number of NVMe-oF subsystems
-          per storage node. Applies to every storage node in the cluster.
+      - description: 'MaxSubsystemCount is the maximum number of NVMe-oF subsystems
+          per storage node. Applies to every storage node in the cluster. Required:
+          it sizes huge pages, and a node that receives no value fails config generation
+          outright rather than falling back to a default.'
         displayName: Max Subsystem Count
         path: maxSubsystemCount
       - description: NodeRollingRestart configures the node-rolling-restart action.
@@ -326,9 +328,10 @@ spec:
           layout.
         displayName: Data Chunks
         path: stripe.dataChunks
-      - description: VCPUCount is the number of vCPUs allocated to SPDK on each storage
-          node. This is an explicit core count, not a percentage. When omitted the
-          node falls back to the backend's own core-allocation heuristic.
+      - description: 'VCPUCount is the number of vCPUs allocated to SPDK on each storage
+          node. This is an explicit core count, not a percentage. Required: the core
+          layout it produces must match across the cluster, so it is stated rather
+          than left to a per-node heuristic.'
         displayName: vCPU Count
         path: vcpuCount
       - description: WarningThresholdSpec defines warning-level capacity thresholds.

@@ -5,12 +5,14 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -22,7 +24,8 @@ const (
 
 func newSNSReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetReconciler {
 	t.Helper()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme)
+	// corev1: the reconciler reads/writes the per-node ConfigMap and lists Nodes.
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(
@@ -166,8 +169,74 @@ func TestBuildPerNodeEnvFile_ClusterSizingIdenticalAcrossWorkers(t *testing.T) {
 	}
 }
 
+// maxSubsystemCount and vcpuCount are required by the CRD schema; a cluster
+// missing them (admitted before that requirement) must not yield a ConfigMap the
+// node cannot boot from, since an empty MAX_SUBSYS_COUNT only fails later inside
+// node_configure.py.
+func TestReconcilePerNodeConfigMap_RejectsClusterMissingRequiredSizing(t *testing.T) {
+	vcpuCount := int32(8)
+	cases := map[string]*simplyblockv1alpha1.StorageCluster{
+		"both unset":        newSizingStorageCluster(nil, nil, ""),
+		"maxSubsystemCount": newSizingStorageCluster(nil, &vcpuCount, ""),
+		"vcpuCount":         newSizingStorageCluster(ptr.To(int32(20)), nil, ""),
+	}
+	for name, cluster := range cases {
+		t.Run(name, func(t *testing.T) {
+			sns := &simplyblockv1alpha1.StorageNodeSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "sns", Namespace: snsTestNS},
+				Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+					ClusterName: snsTestCluster,
+					WorkerNodes: []string{"worker-a"},
+				},
+			}
+			r := newSNSReconciler(t, cluster, sns)
+			err := r.reconcilePerNodeConfigMap(context.Background(), sns)
+			if err == nil {
+				t.Fatal("expected an error for a cluster missing required node sizing")
+			}
+			if !strings.Contains(err.Error(), "maxSubsystemCount") {
+				t.Errorf("error should name the fields to set, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestReconcilePerNodeConfigMap_WritesClusterSizingForEveryWorker(t *testing.T) {
+	cluster := newSizingStorageCluster(ptr.To(int32(20)), ptr.To(int32(8)), "")
+	sns := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sns", Namespace: snsTestNS},
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			ClusterName: snsTestCluster,
+			WorkerNodes: []string{"worker-a", "worker-b"},
+		},
+	}
+	r := newSNSReconciler(t, cluster, sns)
+	if err := r.reconcilePerNodeConfigMap(context.Background(), sns); err != nil {
+		t.Fatalf("reconcilePerNodeConfigMap: %v", err)
+	}
+
+	var cm corev1.ConfigMap
+	if err := r.Get(context.Background(), types.NamespacedName{
+		Name:      PerNodeConfigMapName(sns.Name),
+		Namespace: snsTestNS,
+	}, &cm); err != nil {
+		t.Fatalf("get ConfigMap: %v", err)
+	}
+	for _, worker := range []string{"worker-a", "worker-b"} {
+		entry, ok := cm.Data[worker]
+		if !ok {
+			t.Fatalf("no entry for %s", worker)
+		}
+		for _, want := range []string{"MAX_SUBSYS_COUNT=20", "VCPU_COUNT=8"} {
+			if !strings.Contains(entry, want) {
+				t.Errorf("%s: missing %q in:\n%s", worker, want, entry)
+			}
+		}
+	}
+}
+
 func TestBuildPerNodeEnvFile_ContainsAllRequiredKeys(t *testing.T) {
-	cluster := newSizingStorageCluster(nil, nil, "")
+	cluster := newSizingStorageCluster(ptr.To(int32(20)), ptr.To(int32(8)), "")
 	sns := &simplyblockv1alpha1.StorageNodeSet{
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: snsTestCluster},
 	}
