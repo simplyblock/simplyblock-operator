@@ -283,9 +283,22 @@ spec:
       - description: MaxFaultTolerance defines the maximum tolerated concurrent faults.
         displayName: Max Fault Tolerance
         path: maxFaultTolerance
+      - description: MaxHugePagesSize is the maximum allocatable size of huge pages
+          on each storage node (e.g. "100G", "1T"; a bare number is interpreted as
+          GB). It is a floor, not a cap: the effective huge-page allocation is the
+          larger of this value and the minimum the node's device and subsystem count
+          requires. When omitted the computed minimum is used.
+        displayName: Max Huge Pages Size
+        path: maxHugePagesSize
       - description: MaxQueueSize defines the maximum backend queue size.
         displayName: Max Queue Size
         path: maxQueueSize
+      - description: 'MaxSubsystemCount is the maximum number of NVMe-oF subsystems
+          per storage node. Applies to every storage node in the cluster. Required:
+          it sizes huge pages, and a node that receives no value fails config generation
+          outright rather than falling back to a default.'
+        displayName: Max Subsystem Count
+        path: maxSubsystemCount
       - description: NodeRecycle configures the node-recycle action.
         displayName: Node Recycle
         path: nodeRecycle
@@ -315,6 +328,12 @@ spec:
           layout.
         displayName: Data Chunks
         path: stripe.dataChunks
+      - description: 'VCPUCount is the number of vCPUs allocated to SPDK on each storage
+          node. This is an explicit core count, not a percentage. Required: the core
+          layout it produces must match across the cluster, so it is stated rather
+          than left to a per-node heuristic.'
+        displayName: vCPU Count
+        path: vcpuCount
       - description: WarningThresholdSpec defines warning-level capacity thresholds.
         displayName: Warning Threshold
         path: warningThreshold
@@ -367,10 +386,6 @@ spec:
       - description: ClusterName is the target storage cluster name.
         displayName: Cluster Name
         path: clusterName
-      - description: CorePercentage is the percentage of cores to be used for spdk
-          (0-99).
-        displayName: Core Percentage
-        path: corePercentage
       - description: DataIfname lists data-plane network interfaces.
         displayName: Data Interfaces
         path: dataIfname
@@ -384,6 +399,13 @@ spec:
       - description: EnableCpuTopology enables topology-aware CPU handling.
         displayName: Enable CPU Topology
         path: enableCpuTopology
+      - description: EnableJournalDevice dedicates a whole NVMe device to the journal
+          manager instead of carving a journal partition out of every storage device.
+          When true the smallest device on the node becomes the journal device, and
+          the remaining devices are used whole; when false (the default) each device
+          is GPT-partitioned into a journal slice plus a storage slice.
+        displayName: Enable Journal Device
+        path: enableJournalDevice
       - description: Force enables forced action execution where supported.
         displayName: Force
         path: force
@@ -394,13 +416,6 @@ spec:
       - description: JournalManagerSpec configures journal manager behavior.
         displayName: Journal Manager
         path: journalManager
-      - description: MaxSize is the maximum allocatable size of the storage node.
-        displayName: Max Size
-        path: maxSize
-      - description: MaxSubsystemCount is the maximum number of NVMe-oF subsystems
-          per node.
-        displayName: Max Subsystem Count
-        path: maxSubsystemCount
       - description: MgmtIfname is the management interface name used by storage nodes.
         displayName: Management Interface
         path: mgmtIfname
@@ -415,10 +430,6 @@ spec:
           be enabled.
         displayName: OpenShift Cluster
         path: openShiftCluster
-      - description: Partitions is the number of partitions created per backend storage
-          device.
-        displayName: Partitions
-        path: partitions
       - description: PcieAllowList is the list of PCI addresses allowed for use.
         displayName: PCIe Allow List
         path: pcieAllowList

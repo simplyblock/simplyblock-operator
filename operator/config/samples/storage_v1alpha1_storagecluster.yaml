@@ -6,6 +6,11 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: sample-cluster
 spec:
+  # Cluster-wide storage-node sizing — required, and applies to every storage
+  # node in the cluster. maxSubsystemCount must not exceed the backend's
+  # MAX_SUBSYSTEMS_PER_NODE (75); vcpuCount is an explicit core count.
+  maxSubsystemCount: 50
+  vcpuCount: 8
   backup:
     localEndpoint: http://10.10.11.10:9000
     snapshotBackups: true

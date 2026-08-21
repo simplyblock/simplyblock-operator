@@ -147,6 +147,24 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
+              maxHugePagesSize:
+                description: |-
+                  MaxHugePagesSize is the maximum allocatable size of huge pages on each
+                  storage node (e.g. "100G", "1T"; a bare number is interpreted as GB). It is
+                  a floor, not a cap: the effective huge-page allocation is the larger of this
+                  value and the minimum the node's device and subsystem count requires. When
+                  omitted the computed minimum is used.
+                type: string
+              maxSubsystemCount:
+                description: |-
+                  MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
+                  node. Applies to every storage node in the cluster. Required: it sizes huge
+                  pages, and a node that receives no value fails config generation outright
+                  rather than falling back to a default.
+                format: int32
+                maximum: 75
+                minimum: 10
+                type: integer
               nodeRecycle:
                 description: NodeRecycle configures the node-recycle action.
                 properties:
@@ -184,6 +202,15 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              vcpuCount:
+                description: |-
+                  VCPUCount is the number of vCPUs allocated to SPDK on each storage node.
+                  This is an explicit core count, not a percentage. Required: the core layout
+                  it produces must match across the cluster, so it is stated rather than left
+                  to a per-node heuristic.
+                format: int32
+                minimum: 8
+                type: integer
               volumeAutoPlacement:
                 description: |-
                   VolumeAutoPlacement configures automatic, latency-driven volume rebalancing. When
@@ -319,6 +346,9 @@ spec:
                     format: int32
                     type: integer
                 type: object
+            required:
+            - maxSubsystemCount
+            - vcpuCount
             type: object
             x-kubernetes-validations:
             - message: field enableFailureDomains is immutable once set

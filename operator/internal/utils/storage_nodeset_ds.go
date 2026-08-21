@@ -56,8 +56,9 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 	image := sn.Spec.ClusterImage
 
 	// Build the fleet-level (non-overridable) args that are always appended.
-	// Per-node args (max-lvol, cores-percentage, pci-*, device-*, size-range)
-	// are read at runtime from the per-node ConfigMap via the init script.
+	// Per-node args (pci-*, device-*, size-range) and the cluster-scoped sizing
+	// args (max-subsys-count, max-size, vcpu-count) are read at runtime from the per-node
+	// ConfigMap via the init script.
 	fleetArgs := ""
 	if len(sn.Spec.SocketsToUse) > 0 {
 		fleetArgs += " --sockets-to-use=" + JoinList(sn.Spec.SocketsToUse)
@@ -70,8 +71,7 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 	// so that node_configure.py receives per-node values for each pod.
 	initScript := `set -e
 [ -f /etc/node-env/env.sh ] && . /etc/node-env/env.sh
-ARGS="--max-lvol=${MAX_LVOL:-0} --max-size=\"${MAX_SIZE:-}\""
-[ -n "${CORES_PERCENTAGE}" ] && ARGS="${ARGS} --cores-percentage=\"${CORES_PERCENTAGE}\""
+ARGS=""
 [ -n "${PCI_ALLOWED}" ] && ARGS="${ARGS} --pci-allowed=\"${PCI_ALLOWED}\""
 [ -n "${PCI_BLOCKED}" ] && ARGS="${ARGS} --pci-blocked=\"${PCI_BLOCKED}\""
 [ -n "${NVME_DEVICES}" ] && ARGS="${ARGS} --nvme-devices=\"${NVME_DEVICES}\""

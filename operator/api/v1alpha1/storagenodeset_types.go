@@ -43,13 +43,6 @@ type StorageNodeSetSpec struct {
 	// Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
 	// +kubebuilder:validation:Pattern=`^($|(quay\.io/simplyblock-io|docker\.io/simplyblock|public\.ecr\.aws/simply-block)/[a-z0-9][a-z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
 	ClusterImage string `json:"clusterImage,omitempty"`
-
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Subsystem Count"
-	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per node.
-	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Size"
-	// MaxSize is the maximum allocatable size of huge pages.
-	MaxSize string `json:"maxSize,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="SPDK Image"
 	// SpdkImage is the SPDK image reference used by node services.
 	// Must reference one of the trusted registries (quay.io/simplyblock-io, docker.io/simplyblock, public.ecr.aws/simply-block); digest pinning (@sha256:...) is recommended.
@@ -64,16 +57,17 @@ type StorageNodeSetSpec struct {
 	// MgmtIfname is the management interface name used by storage nodes.
 	// +k8s:immutable
 	MgmtIfname string `json:"mgmtIfname,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Partitions"
-	// Partitions is the number of partitions created per backend storage device.
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Journal Device"
+	// EnableJournalDevice dedicates a whole NVMe device to the journal manager
+	// instead of carving a journal partition out of every storage device. When
+	// true the smallest device on the node becomes the journal device, and the
+	// remaining devices are used whole; when false (the default) each device is
+	// GPT-partitioned into a journal slice plus a storage slice.
 	// +k8s:immutable
-	Partitions *int32 `json:"partitions,omitempty"`
+	EnableJournalDevice *bool `json:"enableJournalDevice,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Journal Manager"
 	// JournalManagerSpec configures journal manager behavior.
 	JournalManagerSpec *JournalManagerSpec `json:"journalManager,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Core Percentage"
-	// CorePercentage is the percentage of cores to be used for spdk (0-99).
-	CorePercentage *int32 `json:"corePercentage,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PCIe Allow List"
 	// PcieAllowList is the list of PCI addresses allowed for use.
 	PcieAllowList []string `json:"pcieAllowList,omitempty"`

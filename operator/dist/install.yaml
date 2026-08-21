@@ -1349,6 +1349,24 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
+              maxHugePagesSize:
+                description: |-
+                  MaxHugePagesSize is the maximum allocatable size of huge pages on each
+                  storage node (e.g. "100G", "1T"; a bare number is interpreted as GB). It is
+                  a floor, not a cap: the effective huge-page allocation is the larger of this
+                  value and the minimum the node's device and subsystem count requires. When
+                  omitted the computed minimum is used.
+                type: string
+              maxSubsystemCount:
+                description: |-
+                  MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
+                  node. Applies to every storage node in the cluster. Required: it sizes huge
+                  pages, and a node that receives no value fails config generation outright
+                  rather than falling back to a default.
+                format: int32
+                maximum: 75
+                minimum: 10
+                type: integer
               nodeRecycle:
                 description: NodeRecycle configures the node-recycle action.
                 properties:
@@ -1386,6 +1404,15 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              vcpuCount:
+                description: |-
+                  VCPUCount is the number of vCPUs allocated to SPDK on each storage node.
+                  This is an explicit core count, not a percentage. Required: the core layout
+                  it produces must match across the cluster, so it is stated rather than left
+                  to a per-node heuristic.
+                format: int32
+                minimum: 8
+                type: integer
               volumeAutoPlacement:
                 description: |-
                   VolumeAutoPlacement configures automatic, latency-driven volume rebalancing. When
@@ -1521,6 +1548,9 @@ spec:
                     format: int32
                     type: integer
                 type: object
+            required:
+            - maxSubsystemCount
+            - vcpuCount
             type: object
             x-kubernetes-validations:
             - message: field enableFailureDomains is immutable once set
@@ -2042,11 +2072,6 @@ spec:
                   Overrides holds per-node configuration propagated from
                   StorageNodeSet.spec.nodeConfigs[workerNode] on every reconcile.
                 properties:
-                  corePercentage:
-                    description: CorePercentage overrides the percentage of cores
-                      allocated to SPDK for this node (0-99).
-                    format: int32
-                    type: integer
                   deviceNames:
                     description: |-
                       DeviceNames explicitly defines the NVMe namespace names to use on this node
@@ -2090,15 +2115,6 @@ spec:
                         format: int32
                         type: integer
                     type: object
-                  maxSize:
-                    description: MaxSize overrides the maximum allocatable size of
-                      huge pages for this node.
-                    type: string
-                  maxSubsystemCount:
-                    description: MaxSubsystemCount overrides the maximum number of
-                      NVMe-oF subsystems for this node.
-                    format: int32
-                    type: integer
                   pcieAllowList:
                     description: PcieAllowList overrides the list of PCI addresses
                       allowed for use on this node.
@@ -2435,11 +2451,6 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
-              corePercentage:
-                description: CorePercentage is the percentage of cores to be used
-                  for spdk (0-99).
-                format: int32
-                type: integer
               dataIfname:
                 description: DataIfname lists data-plane network interfaces.
                 items:
@@ -2457,6 +2468,17 @@ spec:
               enableCpuTopology:
                 description: EnableCpuTopology enables topology-aware CPU handling.
                 type: boolean
+              enableJournalDevice:
+                description: |-
+                  EnableJournalDevice dedicates a whole NVMe device to the journal manager
+                  instead of carving a journal partition out of every storage device. When
+                  true the smallest device on the node becomes the journal device, and the
+                  remaining devices are used whole; when false (the default) each device is
+                  GPT-partitioned into a journal slice plus a storage slice.
+                type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               expand:
                 description: |-
                   Expand indicates that storage nodes added from this StorageNodeSet are being
@@ -2562,14 +2584,6 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
-              maxSize:
-                description: MaxSize is the maximum allocatable size of huge pages.
-                type: string
-              maxSubsystemCount:
-                description: MaxSubsystemCount is the maximum number of NVMe-oF subsystems
-                  per node.
-                format: int32
-                type: integer
               mgmtIfname:
                 description: MgmtIfname is the management interface name used by storage
                   nodes.
@@ -2590,11 +2604,6 @@ spec:
                     of StorageNodeSetSpec. When a field is set here it takes precedence over the
                     fleet default; when omitted the fleet default applies.
                   properties:
-                    corePercentage:
-                      description: CorePercentage overrides the percentage of cores
-                        allocated to SPDK for this node (0-99).
-                      format: int32
-                      type: integer
                     deviceNames:
                       description: |-
                         DeviceNames explicitly defines the NVMe namespace names to use on this node
@@ -2639,15 +2648,6 @@ spec:
                           format: int32
                           type: integer
                       type: object
-                    maxSize:
-                      description: MaxSize overrides the maximum allocatable size
-                        of huge pages for this node.
-                      type: string
-                    maxSubsystemCount:
-                      description: MaxSubsystemCount overrides the maximum number
-                        of NVMe-oF subsystems for this node.
-                      format: int32
-                      type: integer
                     pcieAllowList:
                       description: PcieAllowList overrides the list of PCI addresses
                         allowed for use on this node.
@@ -2730,14 +2730,6 @@ spec:
                   Generated MachineConfig resources will carry the machineconfiguration.openshift.io/role label
                   set to this value. Defaults to "worker" when unset.
                 type: string
-              partitions:
-                description: Partitions is the number of partitions created per backend
-                  storage device.
-                format: int32
-                type: integer
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
               pcieAllowList:
                 description: PcieAllowList is the list of PCI addresses allowed for
                   use.
@@ -2841,8 +2833,8 @@ spec:
             x-kubernetes-validations:
             - message: field mgmtIfname is immutable once set
               rule: '!has(oldSelf.mgmtIfname) || has(self.mgmtIfname)'
-            - message: field partitions is immutable once set
-              rule: '!has(oldSelf.partitions) || has(self.partitions)'
+            - message: field enableJournalDevice is immutable once set
+              rule: '!has(oldSelf.enableJournalDevice) || has(self.enableJournalDevice)'
             - message: field nodesPerSocket is immutable once set
               rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
             - message: field forceFormat4K is immutable once set

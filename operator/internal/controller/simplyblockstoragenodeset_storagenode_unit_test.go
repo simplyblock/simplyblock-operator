@@ -5,12 +5,14 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
@@ -22,7 +24,8 @@ const (
 
 func newSNSReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetReconciler {
 	t.Helper()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme)
+	// corev1: the reconciler reads/writes the per-node ConfigMap and lists Nodes.
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(
@@ -108,64 +111,137 @@ func TestSanitiseDNSLabel_StripsLeadingTrailingHyphens(t *testing.T) {
 
 // ── TestBuildPerNodeEnvFile ───────────────────────────────────────────────────
 
-func TestBuildPerNodeEnvFile_UsesFleetDefaults(t *testing.T) {
-	maxSubsys := int32(20)
-	corePercent := int32(50)
-	sns := &simplyblockv1alpha1.StorageNodeSet{
-		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
-			ClusterName:       snsTestCluster,
-			MaxSubsystemCount: &maxSubsys,
-			CorePercentage:    &corePercent,
-			SpdkSystemMemory:  "4G",
+// newSizingStorageCluster returns a StorageCluster carrying the cluster-scoped
+// node sizing values that buildPerNodeEnvFile reads.
+func newSizingStorageCluster(maxSubsys, vcpuCount *int32, maxHugePages string) *simplyblockv1alpha1.StorageCluster {
+	return &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: snsTestCluster, Namespace: snsTestNS},
+		Spec: simplyblockv1alpha1.StorageClusterSpec{
+			MaxSubsystemCount: maxSubsys,
+			VCPUCount:         vcpuCount,
+			MaxHugePagesSize:  maxHugePages,
 		},
-	}
-	env := buildPerNodeEnvFile(sns, "worker-a.example.com")
-	if !strings.Contains(env, "MAX_LVOL=20") {
-		t.Errorf("missing MAX_LVOL=20 in env:\n%s", env)
-	}
-	if !strings.Contains(env, "CORES_PERCENTAGE=50") {
-		t.Errorf("missing CORES_PERCENTAGE=50 in env:\n%s", env)
 	}
 }
 
-func TestBuildPerNodeEnvFile_OverrideWinsOverFleet(t *testing.T) {
-	fleetMax := int32(20)
-	overrideMax := int32(99)
+func TestBuildPerNodeEnvFile_UsesClusterSizingValues(t *testing.T) {
+	maxSubsys := int32(20)
+	vcpuCount := int32(8)
+	cluster := newSizingStorageCluster(&maxSubsys, &vcpuCount, "100G")
 	sns := &simplyblockv1alpha1.StorageNodeSet{
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
-			ClusterName:       snsTestCluster,
-			MaxSubsystemCount: &fleetMax,
+			ClusterName:      snsTestCluster,
+			SpdkSystemMemory: "4G",
+		},
+	}
+	env := buildPerNodeEnvFile(cluster, sns, "worker-a.example.com")
+	for _, want := range []string{"MAX_SUBSYS_COUNT=20", "VCPU_COUNT=8", "MAX_HUGE_PAGES_SIZE='100G'"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("missing %q in env:\n%s", want, env)
+		}
+	}
+}
+
+// Cluster sizing values are not overridable per node: nodeConfigs may narrow
+// device selection but never the huge-page or core layout.
+func TestBuildPerNodeEnvFile_ClusterSizingIdenticalAcrossWorkers(t *testing.T) {
+	maxSubsys := int32(20)
+	vcpuCount := int32(8)
+	cluster := newSizingStorageCluster(&maxSubsys, &vcpuCount, "")
+	sns := &simplyblockv1alpha1.StorageNodeSet{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			ClusterName: snsTestCluster,
 			NodeConfigs: map[string]simplyblockv1alpha1.StorageNodeOverrides{
-				"worker-b": {MaxSubsystemCount: &overrideMax},
+				"worker-b": {DriveSizeRange: "50G-1T"},
 			},
 		},
 	}
-	env := buildPerNodeEnvFile(sns, "worker-b")
-	if !strings.Contains(env, "MAX_LVOL=99") {
-		t.Errorf("expected MAX_LVOL=99 (override), got:\n%s", env)
+	plain := buildPerNodeEnvFile(cluster, sns, "worker-a")
+	overridden := buildPerNodeEnvFile(cluster, sns, "worker-b")
+
+	for _, want := range []string{"MAX_SUBSYS_COUNT=20", "VCPU_COUNT=8"} {
+		if !strings.Contains(plain, want) || !strings.Contains(overridden, want) {
+			t.Errorf("expected %q in both entries:\n%s\n---\n%s", want, plain, overridden)
+		}
+	}
+	if !strings.Contains(overridden, "SIZE_RANGE='50G-1T'") {
+		t.Errorf("expected per-node driveSizeRange override to apply:\n%s", overridden)
 	}
 }
 
-func TestBuildPerNodeEnvFile_WorkerNotInNodeConfigs_UsesFleet(t *testing.T) {
-	maxSubsys := int32(15)
+// maxSubsystemCount and vcpuCount are required by the CRD schema; a cluster
+// missing them (admitted before that requirement) must not yield a ConfigMap the
+// node cannot boot from, since an empty MAX_SUBSYS_COUNT only fails later inside
+// node_configure.py.
+func TestReconcilePerNodeConfigMap_RejectsClusterMissingRequiredSizing(t *testing.T) {
+	vcpuCount := int32(8)
+	cases := map[string]*simplyblockv1alpha1.StorageCluster{
+		"both unset":        newSizingStorageCluster(nil, nil, ""),
+		"maxSubsystemCount": newSizingStorageCluster(nil, &vcpuCount, ""),
+		"vcpuCount":         newSizingStorageCluster(ptr.To(int32(20)), nil, ""),
+	}
+	for name, cluster := range cases {
+		t.Run(name, func(t *testing.T) {
+			sns := &simplyblockv1alpha1.StorageNodeSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "sns", Namespace: snsTestNS},
+				Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+					ClusterName: snsTestCluster,
+					WorkerNodes: []string{"worker-a"},
+				},
+			}
+			r := newSNSReconciler(t, cluster, sns)
+			err := r.reconcilePerNodeConfigMap(context.Background(), sns)
+			if err == nil {
+				t.Fatal("expected an error for a cluster missing required node sizing")
+			}
+			if !strings.Contains(err.Error(), "maxSubsystemCount") {
+				t.Errorf("error should name the fields to set, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestReconcilePerNodeConfigMap_WritesClusterSizingForEveryWorker(t *testing.T) {
+	cluster := newSizingStorageCluster(ptr.To(int32(20)), ptr.To(int32(8)), "")
 	sns := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sns", Namespace: snsTestNS},
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
-			ClusterName:       snsTestCluster,
-			MaxSubsystemCount: &maxSubsys,
+			ClusterName: snsTestCluster,
+			WorkerNodes: []string{"worker-a", "worker-b"},
 		},
 	}
-	env := buildPerNodeEnvFile(sns, "worker-not-configured")
-	if !strings.Contains(env, "MAX_LVOL=15") {
-		t.Errorf("expected fleet MAX_LVOL=15:\n%s", env)
+	r := newSNSReconciler(t, cluster, sns)
+	if err := r.reconcilePerNodeConfigMap(context.Background(), sns); err != nil {
+		t.Fatalf("reconcilePerNodeConfigMap: %v", err)
+	}
+
+	var cm corev1.ConfigMap
+	if err := r.Get(context.Background(), types.NamespacedName{
+		Name:      PerNodeConfigMapName(sns.Name),
+		Namespace: snsTestNS,
+	}, &cm); err != nil {
+		t.Fatalf("get ConfigMap: %v", err)
+	}
+	for _, worker := range []string{"worker-a", "worker-b"} {
+		entry, ok := cm.Data[worker]
+		if !ok {
+			t.Fatalf("no entry for %s", worker)
+		}
+		for _, want := range []string{"MAX_SUBSYS_COUNT=20", "VCPU_COUNT=8"} {
+			if !strings.Contains(entry, want) {
+				t.Errorf("%s: missing %q in:\n%s", worker, want, entry)
+			}
+		}
 	}
 }
 
 func TestBuildPerNodeEnvFile_ContainsAllRequiredKeys(t *testing.T) {
+	cluster := newSizingStorageCluster(ptr.To(int32(20)), ptr.To(int32(8)), "")
 	sns := &simplyblockv1alpha1.StorageNodeSet{
 		Spec: simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: snsTestCluster},
 	}
-	env := buildPerNodeEnvFile(sns, "any-worker")
-	required := []string{"MAX_LVOL=", "MAX_SIZE=", "CORES_PERCENTAGE=",
+	env := buildPerNodeEnvFile(cluster, sns, "any-worker")
+	required := []string{"MAX_SUBSYS_COUNT=", "MAX_HUGE_PAGES_SIZE=", "VCPU_COUNT=",
 		"PCI_ALLOWED=", "PCI_BLOCKED=", "NVME_DEVICES=",
 		"DEVICE_MODEL=", "SIZE_RANGE=", "JM_PERCENT=", "HA_JM_COUNT="}
 	for _, key := range required {

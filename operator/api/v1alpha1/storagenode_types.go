@@ -30,14 +30,6 @@ import (
 // of StorageNodeSetSpec. When a field is set here it takes precedence over the
 // fleet default; when omitted the fleet default applies.
 type StorageNodeOverrides struct {
-	// MaxSubsystemCount overrides the maximum number of NVMe-oF subsystems for this node.
-	// +optional
-	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
-
-	// MaxSize overrides the maximum allocatable size of huge pages for this node.
-	// +optional
-	MaxSize string `json:"maxSize,omitempty"`
-
 	// SpdkImage overrides the SPDK image for this node (e.g. for phased rollouts).
 	// +optional
 	SpdkImage string `json:"spdkImage,omitempty"`
@@ -45,10 +37,6 @@ type StorageNodeOverrides struct {
 	// SpdkProxyImage overrides the SPDK proxy image for this node.
 	// +optional
 	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
-
-	// CorePercentage overrides the percentage of cores allocated to SPDK for this node (0-99).
-	// +optional
-	CorePercentage *int32 `json:"corePercentage,omitempty"`
 
 	// SpdkSystemMemory overrides the SPDK huge-page memory allocation for this node
 	// (e.g. "4G", "512M").
