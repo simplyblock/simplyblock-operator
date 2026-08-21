@@ -645,18 +645,14 @@ spec:
               sourceClusterUUID:
                 description: |-
                   SourceClusterUUID is the UUID of the cluster that originally created the backup.
-                  Copied from the referenced StorageBackup's status.sourceClusterUUID.
-                  When non-empty, the controller performs source-switch before and after the restore.
+                  Copied from the referenced StorageBackup's status.sourceClusterUUID. When non-empty
+                  and different from ClusterUUID, the controller resolves that cluster's backup
+                  credentials and sends them with the restore request, since the backup's bucket may
+                  not be this cluster's own.
                 type: string
               sourceLvolID:
                 description: SourceLvolID is the original logical volume UUID that
                   was backed up.
-                type: string
-              sourceSwitchedAt:
-                description: |-
-                  SourceSwitchedAt records when the target cluster was switched to read from the
-                  source cluster's S3 bucket. Cleared once source-switch local completes.
-                format: date-time
                 type: string
               startedAt:
                 description: StartedAt is when the backend restore task was accepted.

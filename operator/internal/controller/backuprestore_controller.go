@@ -69,20 +69,19 @@ type BackupRestoreReconciler struct {
 }
 
 type restoreAPIRequest struct {
-	BackupID     string `json:"backup_id"`
-	LvolName     string `json:"lvol_name"`
-	Pool         string `json:"pool"`
-	TargetNodeID string `json:"target_node_id,omitempty"`
+	BackupID      string                `json:"backup_id"`
+	LvolName      string                `json:"lvol_name"`
+	Pool          string                `json:"pool"`
+	TargetNodeID  string                `json:"target_node_id,omitempty"`
+	S3Credentials *s3CredentialsRequest `json:"s3_credentials,omitempty"`
 }
 
-type sourceSwitchRequest struct {
-	SourceClusterID string `json:"source_cluster_id"`
-}
-
-type backupSourceAPIResponse struct {
-	SourceClusterID string `json:"source_cluster_id"`
-	IsLocal         bool   `json:"is_local"`
-	Active          bool   `json:"active"`
+// s3CredentialsRequest carries credentials for a backup's own bucket, for the
+// cross-cluster restore case where that bucket is not this cluster's own.
+// Mirrors sbcli's S3Credentials model.
+type s3CredentialsRequest struct {
+	AccessKeyID     string `json:"access_key_id"`
+	SecretAccessKey string `json:"secret_access_key"`
 }
 
 type restoreAPIResponse struct {
@@ -140,26 +139,12 @@ func (r *BackupRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return res, err
 	}
 
-	// For cross-cluster restores, source-switch the target cluster before submitting the restore task.
-	if isCrossCluster(restoreCR) && restoreCR.Status.SourceSwitchedAt == nil {
-		if res, done, err = r.reconcileSourceSwitch(ctx, restoreCR, clusterUUID, apiClient); done {
-			return res, err
-		}
-	}
-
 	if res, done, err = r.reconcileRestoreTask(ctx, restoreCR, clusterUUID, apiClient); done {
 		return res, err
 	}
 
 	if restoreCR.Status.Phase == simplyblockv1alpha1.RestorePhaseInProgress {
 		if res, done, err = r.reconcileInProgress(ctx, restoreCR, clusterUUID, apiClient); done {
-			return res, err
-		}
-	}
-
-	// After the lvol comes online, switch the target cluster back to its local bucket.
-	if restoreCR.Status.Phase == simplyblockv1alpha1.RestorePhaseSwitchingSourceLocal {
-		if res, done, err = r.reconcileSourceSwitchLocal(ctx, restoreCR, clusterUUID, apiClient); done {
 			return res, err
 		}
 	}
@@ -314,9 +299,18 @@ func (r *BackupRestoreReconciler) reconcileRestoreTask(
 	}
 
 	log := logf.FromContext(ctx)
+
+	s3Credentials, err := r.resolveCrossClusterCredentials(ctx, restoreCR)
+	if err != nil {
+		// Non-fatal: proceed without credentials. If the backup's bucket really is
+		// foreign, the restore API rejects the request with a clear precondition
+		// error instead of silently reading the wrong bucket.
+		log.Info("Could not resolve source cluster's backup credentials; proceeding without them", "err", err)
+	}
+
 	lvolName := fmt.Sprintf("restore-%s", restoreCR.UID)
 	lvolID, err := r.callRestoreAPI(ctx, apiClient, clusterUUID,
-		restoreCR.Status.BackupID, lvolName, restoreCR.Status.PoolName, restoreCR.Spec.TargetNode)
+		restoreCR.Status.BackupID, lvolName, restoreCR.Status.PoolName, restoreCR.Spec.TargetNode, s3Credentials)
 	if err != nil {
 		log.Error(err, "Restore API call failed", "restore", restoreCR.Name)
 		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, eventReasonRestoreAPIFailed,
@@ -359,15 +353,9 @@ func (r *BackupRestoreReconciler) reconcileInProgress(
 
 	switch lvolStatus {
 	case utils.NodeStatusOnline:
-		nextPhase := simplyblockv1alpha1.RestorePhasePVCBinding
-		nextMsg := "Restore complete; creating PV and PVC"
-		if isCrossCluster(restoreCR) {
-			nextPhase = simplyblockv1alpha1.RestorePhaseSwitchingSourceLocal
-			nextMsg = "Restore complete; switching target cluster back to local backup source"
-		}
 		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
-			s.Phase = nextPhase
-			s.Message = nextMsg
+			s.Phase = simplyblockv1alpha1.RestorePhasePVCBinding
+			s.Message = "Restore complete; creating PV and PVC"
 		}); patchErr != nil {
 			return ctrl.Result{}, true, patchErr
 		}
@@ -478,121 +466,56 @@ func isCrossCluster(restoreCR *simplyblockv1alpha1.BackupRestore) bool {
 		restoreCR.Status.SourceClusterUUID != restoreCR.Status.ClusterUUID
 }
 
-func (r *BackupRestoreReconciler) reconcileSourceSwitch(
+// resolveCrossClusterCredentials returns the S3 credentials for a cross-cluster
+// restore's source bucket, or nil for a local restore.
+//
+// The restore backend reads a backup from wherever it says it lives, which may
+// not be this cluster's own bucket for a backup imported from another cluster.
+// The source cluster's StorageCluster CR (if still present in this namespace)
+// already has that bucket's credentials via its own backup.credentialsSecretRef,
+// so this resolves and forwards them rather than requiring the caller to supply
+// them separately.
+//
+// Returns a nil credentials with a non-nil error when they cannot be resolved
+// (source cluster CR gone, no backup config, secret missing) -- the caller
+// proceeds without them and lets the restore API's own precondition check
+// decide whether they were actually needed.
+func (r *BackupRestoreReconciler) resolveCrossClusterCredentials(
 	ctx context.Context,
 	restoreCR *simplyblockv1alpha1.BackupRestore,
-	clusterUUID string,
-	apiClient *webapi.Client,
-) (ctrl.Result, bool, error) {
-	log := logf.FromContext(ctx)
+) (*s3CredentialsRequest, error) {
+	if !isCrossCluster(restoreCR) {
+		return nil, nil
+	}
 
-	// Guard: check current active source to detect concurrent cross-cluster restores.
-	activeSrc, err := r.getActiveBackupSource(ctx, apiClient, clusterUUID)
+	sourceCluster, err := utils.ResolveClusterCRByUUID(ctx, r.Client, restoreCR.Namespace, restoreCR.Status.SourceClusterUUID)
 	if err != nil {
-		// Non-fatal: proceed if the sources endpoint is unavailable.
-		log.Info("Could not read active backup source; proceeding with source-switch", "err", err)
-	} else if activeSrc != "" && activeSrc != clusterUUID && activeSrc != restoreCR.Status.SourceClusterUUID {
-		msg := fmt.Sprintf("target cluster is already source-switched to %s; retry when that cross-cluster restore completes", activeSrc)
-		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
-			s.Phase = simplyblockv1alpha1.RestorePhaseFailed
-			s.Message = msg
-		}); patchErr != nil {
-			return ctrl.Result{}, true, patchErr
-		}
-		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, eventReasonRestoreAPIFailed, "%s", msg)
-		return ctrl.Result{}, true, nil
+		return nil, fmt.Errorf("resolve source cluster %s: %w", restoreCR.Status.SourceClusterUUID, err)
 	}
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/source-switch", clusterUUID)
-	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, sourceSwitchRequest{
-		SourceClusterID: restoreCR.Status.SourceClusterUUID,
-	})
-	if err != nil || status >= 300 {
-		msg := fmt.Sprintf("source-switch to %s failed", restoreCR.Status.SourceClusterUUID)
-		if err != nil {
-			msg = fmt.Sprintf("%s: %v", msg, err)
-		} else {
-			msg = fmt.Sprintf("%s: status=%d body=%s", msg, status, string(body))
-		}
-		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
-			s.Message = msg
-		}); patchErr != nil {
-			return ctrl.Result{}, true, patchErr
-		}
-		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, eventReasonRestoreAPIFailed, "%s", msg)
-		return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
+	if sourceCluster.Spec.Backup == nil {
+		return nil, fmt.Errorf("source cluster %s has no backup configuration", sourceCluster.Name)
 	}
 
-	now := metav1.Now()
-	if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
-		s.Phase = simplyblockv1alpha1.RestorePhaseSwitchingSource
-		s.SourceSwitchedAt = &now
-		s.Message = fmt.Sprintf("Switched to source cluster %s; submitting restore task", restoreCR.Status.SourceClusterUUID)
-	}); patchErr != nil {
-		return ctrl.Result{}, true, patchErr
-	}
-	return ctrl.Result{}, false, nil
-}
-
-func (r *BackupRestoreReconciler) reconcileSourceSwitchLocal(
-	ctx context.Context,
-	restoreCR *simplyblockv1alpha1.BackupRestore,
-	clusterUUID string,
-	apiClient *webapi.Client,
-) (ctrl.Result, bool, error) {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/source-switch", clusterUUID)
-	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, sourceSwitchRequest{
-		SourceClusterID: "local",
-	})
-	if err != nil || status >= 300 {
-		msg := "source-switch back to local failed"
-		if err != nil {
-			msg = fmt.Sprintf("%s: %v", msg, err)
-		} else {
-			msg = fmt.Sprintf("%s: status=%d body=%s", msg, status, string(body))
-		}
-		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
-			s.Message = msg
-		}); patchErr != nil {
-			return ctrl.Result{}, true, patchErr
-		}
-		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreAPIFailed, eventReasonRestoreAPIFailed, "%s", msg)
-		return ctrl.Result{RequeueAfter: restoreReconcileRequeue}, true, nil
+	secretName := sourceCluster.Spec.Backup.CredentialsSecretRef.Name
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, client.ObjectKey{Name: secretName, Namespace: sourceCluster.Namespace}, secret); err != nil {
+		return nil, fmt.Errorf("get backup credentials secret %q for source cluster %s: %w", secretName, sourceCluster.Name, err)
 	}
 
-	if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
-		s.Phase = simplyblockv1alpha1.RestorePhasePVCBinding
-		s.SourceSwitchedAt = nil
-		s.Message = "Switched back to local backup source; creating PV and PVC"
-	}); patchErr != nil {
-		return ctrl.Result{}, true, patchErr
+	accessKeyID, ok := secret.Data["access_key_id"]
+	if !ok {
+		return nil, fmt.Errorf("secret %q missing key %q", secretName, "access_key_id")
 	}
-	return ctrl.Result{}, false, nil
-}
+	secretAccessKey, ok := secret.Data["secret_access_key"]
+	if !ok {
+		return nil, fmt.Errorf("secret %q missing key %q", secretName, "secret_access_key")
+	}
 
-func (r *BackupRestoreReconciler) getActiveBackupSource(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	clusterUUID string,
-) (string, error) {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/sources", clusterUUID)
-	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return "", err
-	}
-	if status >= 300 {
-		return "", fmt.Errorf("get backup sources failed: status=%d", status)
-	}
-	var sources []backupSourceAPIResponse
-	if err := json.Unmarshal(body, &sources); err != nil {
-		return "", fmt.Errorf("unmarshal backup sources: %w", err)
-	}
-	for _, s := range sources {
-		if s.Active {
-			return s.SourceClusterID, nil
-		}
-	}
-	return clusterUUID, nil // no active entry means local
+	return &s3CredentialsRequest{
+		AccessKeyID:     string(accessKeyID),
+		SecretAccessKey: string(secretAccessKey),
+	}, nil
 }
 
 func (r *BackupRestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -662,13 +585,15 @@ func (r *BackupRestoreReconciler) callRestoreAPI(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	clusterUUID, backupID, lvolName, poolName, targetNodeID string,
+	s3Credentials *s3CredentialsRequest,
 ) (string, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/restore", clusterUUID)
 	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, restoreAPIRequest{
-		BackupID:     backupID,
-		LvolName:     lvolName,
-		Pool:         poolName,
-		TargetNodeID: targetNodeID,
+		BackupID:      backupID,
+		LvolName:      lvolName,
+		Pool:          poolName,
+		TargetNodeID:  targetNodeID,
+		S3Credentials: s3Credentials,
 	})
 	if err != nil {
 		return "", err
