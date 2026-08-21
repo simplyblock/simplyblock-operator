@@ -115,6 +115,15 @@ type recorder struct {
 	presentErr     error
 	ensureCallSeq  int
 	validateCallSq int
+
+	reaps       int
+	releases    int
+	releaseConn []volumemigration.Connection
+	reapErr     error
+	releaseErr  error
+	// order records the host-touching steps in the order they happened, so the two
+	// cleanups can be pinned to the right side of the connect.
+	order []string
 }
 
 func (rec *recorder) newRun(attempts int) validationRun {
@@ -125,9 +134,22 @@ func (rec *recorder) newRun(attempts int) validationRun {
 		},
 		ensurePaths: func(context.Context, string, []volumemigration.Connection) error {
 			rec.ensures++
+			rec.order = append(rec.order, "ensure")
 			err := errAt(rec.ensureErrs, rec.ensureCallSeq)
 			rec.ensureCallSeq++
 			return err
+		},
+		reapDead: func(_ context.Context, _, _ string) ([]volumemigration.Released, error) {
+			rec.reaps++
+			rec.order = append(rec.order, "reap")
+			return nil, rec.reapErr
+		},
+		releasePaths: func(_ context.Context, _, _ string,
+			c []volumemigration.Connection) ([]volumemigration.Released, error) {
+			rec.releases++
+			rec.releaseConn = c
+			rec.order = append(rec.order, "release")
+			return nil, rec.releaseErr
 		},
 		presentAddresses: func(_ context.Context, _, _ string) (map[string]bool, error) {
 			return rec.preExisting, rec.presentErr
@@ -318,6 +340,96 @@ func TestValidationRun_PreExistingSnapshotFails(t *testing.T) {
 	if rec.ensures != 0 {
 		t.Errorf("connected %d path(s) without a baseline", rec.ensures)
 	}
+}
+
+// ---- cleanup around the run ----
+
+// The leak that poisoned the test cluster: a validation that fails must give its target
+// paths back, on the node that has them, before the exit code cancels the migration.
+func TestValidationRun_ReleasesPathsWhenValidationFails(t *testing.T) {
+	boom := errors.New("controller-not-contributing")
+	rec := &recorder{present: true, validateErrs: []error{boom, boom}}
+	if _, err := rec.newRun(2).run(context.Background(), "/host/sys", "nqn.x", conns); err == nil {
+		t.Fatal("expected the validation to fail")
+	}
+	if rec.releases != 1 {
+		t.Errorf("released %d times, want exactly once after the attempts were exhausted", rec.releases)
+	}
+	if len(rec.releaseConn) != len(conns) || rec.releaseConn[0].IP != conns[0].IP {
+		t.Errorf("released %v, want the migration's own target connections", rec.releaseConn)
+	}
+}
+
+// A validation that passes must not release: those paths are about to become the
+// volume's data path at cutover, and releasing them is the outage being avoided.
+func TestValidationRun_KeepsPathsWhenValidationPasses(t *testing.T) {
+	rec := &recorder{present: true}
+	if _, err := rec.newRun(3).run(context.Background(), "/host/sys", "nqn.x", conns); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if rec.releases != 0 {
+		t.Errorf("released %d time(s) after a successful validation, want none", rec.releases)
+	}
+}
+
+// The reap runs once, before anything is connected: it clears an earlier migration's
+// husks so this one's verification is not rejected over them. Doing it after the connect
+// would diagnose the paths this run just established.
+func TestValidationRun_ReapsBeforeConnecting(t *testing.T) {
+	rec := &recorder{present: true}
+	if _, err := rec.newRun(3).run(context.Background(), "/host/sys", "nqn.x", conns); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if rec.reaps != 1 {
+		t.Errorf("reaped %d times, want exactly once", rec.reaps)
+	}
+	if len(rec.order) == 0 || rec.order[0] != "reap" {
+		t.Errorf("step order = %v, want the reap first", rec.order)
+	}
+}
+
+// A node with no connection to the subsystem is skipped before either cleanup: it has no
+// paths of ours, and connecting or reaping there would touch a subsystem it does not use.
+func TestValidationRun_SkippedNodeIsNotTouched(t *testing.T) {
+	rec := &recorder{present: false}
+	outcome, err := rec.newRun(3).run(context.Background(), "/host/sys", "nqn.x", conns)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if outcome != outcomeSkipped {
+		t.Fatalf("outcome = %v, want skipped", outcome)
+	}
+	if rec.reaps != 0 || rec.releases != 0 {
+		t.Errorf("reaped %d and released %d on a node with no connection, want neither",
+			rec.reaps, rec.releases)
+	}
+}
+
+// Neither cleanup may change the outcome. A reap that fails still lets the validation
+// decide, and a release that fails must not mask why the migration was cancelled.
+func TestValidationRun_CleanupFailuresDoNotChangeTheOutcome(t *testing.T) {
+	t.Run("a failed reap still validates", func(t *testing.T) {
+		rec := &recorder{present: true, reapErr: errors.New("delete_controller: device busy")}
+		if _, err := rec.newRun(3).run(context.Background(), "/host/sys", "nqn.x", conns); err != nil {
+			t.Errorf("run: %v, want the failed reap to be swallowed", err)
+		}
+	})
+
+	t.Run("a failed release still reports the validation error", func(t *testing.T) {
+		boom := errors.New("no inaccessible path")
+		rec := &recorder{
+			present:      true,
+			validateErrs: []error{boom},
+			releaseErr:   errors.New("delete_controller: device busy"),
+		}
+		_, err := rec.newRun(1).run(context.Background(), "/host/sys", "nqn.x", conns)
+		if err == nil {
+			t.Fatal("expected the validation error")
+		}
+		if !strings.Contains(err.Error(), boom.Error()) {
+			t.Errorf("error = %q, want the validation cause, not the release failure", err)
+		}
+	})
 }
 
 // The baseline is passed through to verification, which is what lets it report whether

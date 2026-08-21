@@ -30,6 +30,31 @@ func (c Connection) Address() string {
 	return fmt.Sprintf("%s:%d", c.IP, c.Port)
 }
 
+// CtrlLossTmoSec is how long the kernel keeps retrying a migration target path whose
+// controller it has lost, before deleting it.
+//
+// It must match the CSI driver's DefaultCtrlLossTmo (csi-driver's initiator.go), which
+// is the value every volume path in this system is connected with: the driver hardcodes
+// it and ignores the ctrl-loss-tmo the control plane returns. A migration target path
+// becomes the volume's data path at cutover, so connecting it with anything else would
+// leave the same volume's paths on two different loss timeouts depending on which one
+// last moved.
+//
+// The control plane's value is deliberately not used, and the migration is where that
+// matters most. It answers CreateMigration with an hour, which for a path that may
+// never be cut over to means an abandoned controller retries a target that has stopped
+// answering for it until the node reboots — and because the kernel resets its reconnect
+// counter whenever a reconnect gets far enough, "an hour" is a floor rather than a
+// bound. At a minute, a target path nothing cleans up expires on its own.
+//
+// The cleanups are still needed and are not a fallback for this: ReleaseMigrationPaths
+// removes the path when validation fails, ReapDeadControllers removes the husk a lost
+// one leaves behind. This only bounds how long a path that escapes both can survive.
+// It is applied where the control plane's answer is first recorded, so that the
+// VolumeMigration's status.connections is a truthful record of the connect that will be
+// made, and so there is one place that decides it rather than two that can disagree.
+const CtrlLossTmoSec = 60
+
 // target renders one connection as an atlas connect target.
 //
 // A zero tunable is left off rather than sent as 0, matching what the operator
@@ -47,10 +72,17 @@ func (c Connection) target() nvmeof.Target {
 		ReconnectDelaySec: c.ReconnectDelay,
 		KeepAliveTMOSec:   c.KeepAliveTmo,
 	}
-	if c.CtrlLossTmo > 0 {
+	// The two timeouts are sent whenever they are set to anything at all, including
+	// the negative "retry forever" and the zero "fail I/O at once" — atlas makes them
+	// pointers precisely because both are meaningful (see nvmeof.WithCtrlLossTMOSec),
+	// so a `> 0` guard here would silently turn either into the kernel default.
+	// Unset is the only thing that may be dropped, and for these fields the CRD's
+	// omitempty makes unset indistinguishable from zero; zero is the safer reading of
+	// the two, since sending it is what the caller asked for either way.
+	if c.CtrlLossTmo != 0 {
 		t.CtrlLossTMOSec = ptr.To(c.CtrlLossTmo)
 	}
-	if c.FastIOFailTmo > 0 {
+	if c.FastIOFailTmo != 0 {
 		t.FastIOFailTMOSec = ptr.To(c.FastIOFailTmo)
 	}
 	return t

@@ -95,8 +95,32 @@ type DataRealignmentSettings struct {
 	// if so, triggers it. Explicit triggers (see the
 	// simplyblock.io/trigger-realignment annotation) bypass this spacing. Defaults to
 	// 10m.
+	//
+	// Note that this is a floor on the spacing between realignment *requests*, not a
+	// ceiling on how long one takes: a realignment blocks all volume migrations for as
+	// long as the control plane needs, which on a busy cluster has been measured at
+	// tens of minutes. An interval shorter than that means the next realignment is
+	// requested as soon as the previous one finishes and any volume has moved, which is
+	// what MinMoves exists to damp.
 	// +optional
 	Interval *metav1.Duration `json:"interval,omitempty"`
+	// MinMoves is how many volume moves must accumulate before a realignment is
+	// triggered. Defaults to 1: every completed migration schedules a realignment.
+	//
+	// Raise it to batch. Because the control plane refuses new migrations while a
+	// realignment runs, a value of 1 makes the two alternate — one migration completes,
+	// a realignment follows and blocks migrations until it is done. On a cluster where
+	// realignment takes tens of minutes that is most of the available time, so a run
+	// that migrates continuously spends the majority of it waiting. A higher value
+	// trades realignment promptness (data structures stay unaligned for longer, so
+	// fault-tolerance and node-affinity guarantees are restored later) for migration
+	// throughput.
+	//
+	// Explicit triggers (the simplyblock.io/trigger-realignment annotation) ignore this
+	// threshold, so a drain or node removal still realigns immediately.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	MinMoves *int32 `json:"minMoves,omitempty"`
 }
 
 // MetricsBackend selects the NodeMetricsProvider implementation.
@@ -362,13 +386,21 @@ type StorageClusterStatus struct {
 	Status string `json:"status,omitempty"`
 	// Rebalancing indicates whether cluster rebalancing is currently active.
 	Rebalancing *bool `json:"rebalancing,omitempty"`
-	// PendingDataRealignment indicates that at least one volume has been moved since
-	// the last successful control-plane data realignment, so a realignment is due on
-	// the next DataRealignment.Interval tick. It is persisted so a pending realignment
-	// survives an operator restart, and is cleared once a realignment completes
-	// successfully.
+	// VolumeMoveGeneration counts completed volume moves. Every migration that reaches
+	// Completed increments it, and nothing else writes it, so it only ever grows.
 	// +optional
-	PendingDataRealignment *bool `json:"pendingDataRealignment,omitempty"`
+	VolumeMoveGeneration *int64 `json:"volumeMoveGeneration,omitempty"`
+	// RealignedGeneration is the VolumeMoveGeneration that the last successfully
+	// requested realignment covers. A realignment is outstanding while
+	// VolumeMoveGeneration exceeds it.
+	//
+	// This is recorded from the value read *before* the request is sent, because that
+	// is what the realignment can actually account for: a migration completing while
+	// the request is in flight raises VolumeMoveGeneration past it and so correctly
+	// leaves another realignment outstanding, instead of being swallowed by the one
+	// already running.
+	// +optional
+	RealignedGeneration *int64 `json:"realignedGeneration,omitempty"`
 	// LastDataRealignmentAt is the time of the last successful control-plane data
 	// realignment. It is used to space realignments by DataRealignment.Interval and to
 	// avoid re-running at the end of an interval when nothing is pending.

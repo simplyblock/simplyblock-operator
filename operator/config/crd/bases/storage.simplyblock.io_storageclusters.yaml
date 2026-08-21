@@ -318,7 +318,33 @@ spec:
                           if so, triggers it. Explicit triggers (see the
                           simplyblock.io/trigger-realignment annotation) bypass this spacing. Defaults to
                           10m.
+
+                          Note that this is a floor on the spacing between realignment *requests*, not a
+                          ceiling on how long one takes: a realignment blocks all volume migrations for as
+                          long as the control plane needs, which on a busy cluster has been measured at
+                          tens of minutes. An interval shorter than that means the next realignment is
+                          requested as soon as the previous one finishes and any volume has moved, which is
+                          what MinMoves exists to damp.
                         type: string
+                      minMoves:
+                        description: |-
+                          MinMoves is how many volume moves must accumulate before a realignment is
+                          triggered. Defaults to 1: every completed migration schedules a realignment.
+
+                          Raise it to batch. Because the control plane refuses new migrations while a
+                          realignment runs, a value of 1 makes the two alternate — one migration completes,
+                          a realignment follows and blocks migrations until it is done. On a cluster where
+                          realignment takes tens of minutes that is most of the available time, so a run
+                          that migrates continuously spends the majority of it waiting. A higher value
+                          trades realignment promptness (data structures stay unaligned for longer, so
+                          fault-tolerance and node-affinity guarantees are restored later) for migration
+                          throughput.
+
+                          Explicit triggers (the simplyblock.io/trigger-realignment annotation) ignore this
+                          threshold, so a drain or node removal still realigns immediately.
+                        format: int32
+                        minimum: 1
+                        type: integer
                     type: object
                   enabled:
                     description: |-
@@ -495,20 +521,25 @@ spec:
               nqn:
                 description: NQN is the cluster NVM subsystem qualified name.
                 type: string
-              pendingDataRealignment:
-                description: |-
-                  PendingDataRealignment indicates that at least one volume has been moved since
-                  the last successful control-plane data realignment, so a realignment is due on
-                  the next DataRealignment.Interval tick. It is persisted so a pending realignment
-                  survives an operator restart, and is cleared once a realignment completes
-                  successfully.
-                type: boolean
               phase:
                 description: |-
                   Phase tracks the cluster creation lifecycle to prevent concurrent reconcilers
                   from creating duplicate clusters. Set to "creation" while a creation is in
                   progress and cleared once the cluster UUID is persisted.
                 type: string
+              realignedGeneration:
+                description: |-
+                  RealignedGeneration is the VolumeMoveGeneration that the last successfully
+                  requested realignment covers. A realignment is outstanding while
+                  VolumeMoveGeneration exceeds it.
+
+                  This is recorded from the value read *before* the request is sent, because that
+                  is what the realignment can actually account for: a migration completing while
+                  the request is in flight raises VolumeMoveGeneration past it and so correctly
+                  leaves another realignment outstanding, instead of being swallowed by the one
+                  already running.
+                format: int64
+                type: integer
               rebalancing:
                 description: Rebalancing indicates whether cluster rebalancing is
                   currently active.
@@ -582,6 +613,12 @@ spec:
               uuid:
                 description: UUID is the backend cluster UUID.
                 type: string
+              volumeMoveGeneration:
+                description: |-
+                  VolumeMoveGeneration counts completed volume moves. Every migration that reaches
+                  Completed increments it, and nothing else writes it, so it only ever grows.
+                format: int64
+                type: integer
             type: object
         required:
         - spec

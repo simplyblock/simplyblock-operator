@@ -1,14 +1,30 @@
-// simplyblock-rebalancer measures NVMe-oF write latency via fio and exposes results in two modes:
+// simplyblock-rebalancer runs the host-side steps of rebalancing and volume migration
+// that need a privileged process on the node itself. It has four modes:
 //
-//	--mode=baseline  One-shot measurement. Writes {"p50_ns":...,"p99_ns":...} to
-//	                 --termination-log and exits. Used by the one-shot Kubernetes Job.
+//	--mode=baseline  One-shot NVMe-oF write-latency measurement. Writes
+//	                 {"p50_ns":...,"p99_ns":...} to --termination-log and exits. Used by
+//	                 the one-shot Kubernetes Job.
 //
 //	--mode=probe     Long-running. Measures latency on --interval and exposes the
 //	                 results via a Prometheus /metrics endpoint on --metrics-addr.
 //	                 No node-exporter or textfile collector required.
 //
-// All flag values fall back to the corresponding environment variable when the flag
-// is not set explicitly (see the flag definitions below).
+//	--mode=validate-migration
+//	                 Connects a migration's target NVMe paths on this node and verifies
+//	                 they are established and parked, so the operator knows the node can
+//	                 take over at cutover. Exits non-zero when they are not, which
+//	                 cancels the migration. Releases what it connected before it does.
+//
+//	--mode=release-migration-paths
+//	                 Gives back a migration's target paths on this node without
+//	                 validating. The operator runs it on nodes whose validation passed
+//	                 when the migration is cancelled anyway, since a Job that succeeded
+//	                 never learns that it should let go.
+//
+// The two migration modes are configured through VMIG_* environment variables rather
+// than flags, because the operator builds their Jobs from a CR. All other flag values
+// fall back to the corresponding environment variable when the flag is not set
+// explicitly (see the flag definitions below).
 package main
 
 import (
@@ -70,7 +86,7 @@ type nvmeListOutput struct {
 // ── main ───────────────────────────────────────────────────────────────────────
 
 func main() {
-	mode := flag.String("mode", "", "baseline, probe, or validate-migration")
+	mode := flag.String("mode", "", "baseline, probe, validate-migration, or release-migration-paths")
 
 	// Connection flags — used when --config is not provided.
 	addr := flag.String("addr", os.Getenv("FIO_NODE_ADDR"), "NVMe-oF TCP address")
@@ -102,6 +118,9 @@ func main() {
 	case "validate-migration":
 		validateMigration()
 
+	case "release-migration-paths":
+		releaseMigration()
+
 	case "baseline":
 		if *addr == "" || *port == "" || *nqn == "" {
 			log.Fatal("--addr, --port and --nqn (or FIO_NODE_ADDR/FIO_NODE_PORT/FIO_VOLUME_NQN) are required")
@@ -127,7 +146,7 @@ func main() {
 		}
 
 	default:
-		log.Fatalf("--mode must be baseline, probe, or validate-migration, got %q", *mode)
+		log.Fatalf("--mode must be baseline, probe, validate-migration or release-migration-paths, got %q", *mode)
 	}
 }
 
