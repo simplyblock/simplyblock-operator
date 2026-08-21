@@ -448,9 +448,9 @@ EOF
   max_subsys=$(kubectl -n "$NAMESPACE" get configmap "${STORAGENODESET}-per-node-config" \
     -o jsonpath="{.data['$EXPAND_WORKER']}" 2>/dev/null | \
     grep "^MAX_SUBSYS_COUNT=" | cut -d= -f2 || true)
-  [[ -n "$want_max_subsys" && "$max_subsys" == "$want_max_subsys" ]] \
-    && pass "Cluster maxSubsystemCount=$want_max_subsys reflected as MAX_SUBSYS_COUNT in ConfigMap" \
-    || fail "Expected MAX_SUBSYS_COUNT=$want_max_subsys (from StorageCluster $cluster_name), got '$max_subsys'"
+  [[ "$max_subsys" == "$want_max_subsys" ]] \
+    && pass "Cluster maxSubsystemCount ($want_max_subsys) reflected as MAX_SUBSYS_COUNT in ConfigMap" \
+    || fail "Expected MAX_SUBSYS_COUNT to match StorageCluster $cluster_name spec ($want_max_subsys), got '$max_subsys'"
 
   # 4. StorageNodeReconciler picks it up and provisions it
   info "Waiting up to ${TIMEOUT_EXPANSION}s for $EXPAND_SN_NAME to come online..."
