@@ -38,6 +38,9 @@ type validationRun struct {
 	ensurePaths      func(ctx context.Context, sysRoot string, conns []volumemigration.Connection) error
 	verifyPaths      func(ctx context.Context, sysRoot, nqn string, conns []volumemigration.Connection,
 		preExisting map[string]bool) ([]volumemigration.PathState, error)
+	reapDead     func(ctx context.Context, sysRoot, nqn string) ([]volumemigration.Released, error)
+	releasePaths func(ctx context.Context, sysRoot, nqn string,
+		conns []volumemigration.Connection) ([]volumemigration.Released, error)
 	sleep    func(time.Duration)
 	attempts int
 	delay    time.Duration
@@ -51,6 +54,8 @@ func newValidationRun() validationRun {
 		presentAddresses: volumemigration.PresentAddresses,
 		ensurePaths:      volumemigration.EnsureMigrationPaths,
 		verifyPaths:      volumemigration.VerifyMigrationPaths,
+		reapDead:         volumemigration.ReapDeadControllers,
+		releasePaths:     volumemigration.ReleaseMigrationPaths,
 		sleep:            time.Sleep,
 		attempts:         validateAttempts(),
 		delay:            validateRetryDelay(),
@@ -98,6 +103,17 @@ func (v validationRun) run(
 		log.Printf("host is connected to %s; validating the migration paths", nqn)
 	}
 
+	// Clear the husks an earlier migration left behind before deciding anything about
+	// this one. A validation run that never got to release its target paths leaves
+	// controllers that are live and serve no namespace, and the verification below
+	// rejects the migration over exactly those — so without this, one abandoned attempt
+	// blocks every later migration of the subsystem for as long as the node is up. This
+	// is the same defect the verification reports, cleared with the same diagnosis.
+	//
+	// Best effort: a reap that fails is logged and the run continues. The verification
+	// is what decides whether the fabric is fit to cut over, and it is about to run.
+	v.reap(ctx, sysRoot, nqn)
+
 	// Which of the expected addresses the host already had a controller for. A path
 	// that was there before proves nothing about our connect, and on an HA cluster the
 	// migration target may already be a listener for this subsystem — so the check has
@@ -139,7 +155,57 @@ func (v validationRun) run(
 			v.sleep(v.delay)
 		}
 	}
+
+	// Give back the paths this run established. The migration is not going to cut over —
+	// the operator cancels it on this Job's failure — so the target paths have no future
+	// use, and leaving them is what made a single failed validation poison the host: they
+	// stay connected, retry a target that has stopped answering for them, and settle into
+	// the state the reap above now has to clear.
+	//
+	// Releasing here rather than leaving it to the operator is what makes it ordered: the
+	// paths go before the exit code that cancels the migration, on the node that has them,
+	// while this process still knows which addresses it was asked for. The operator's own
+	// release covers the nodes that passed and are never told they failed.
+	v.release(ctx, sysRoot, nqn, conns)
+
 	return outcomeValidated, fmt.Errorf("validation failed after %d attempt(s): %w", v.attempts, lastErr)
+}
+
+// reap clears the dead controllers of nqn, logging what went. Failures are logged and
+// swallowed: this runs to improve the odds of a verification that is about to happen
+// anyway, and refusing to validate because a cleanup failed would turn a recoverable
+// state into the outcome it was meant to prevent.
+func (v validationRun) reap(ctx context.Context, sysRoot, nqn string) {
+	if v.reapDead == nil || nqn == "" {
+		return
+	}
+	reaped, err := v.reapDead(ctx, sysRoot, nqn)
+	if len(reaped) > 0 {
+		log.Printf("reaped %d dead controller(s) of %s before validating: %s",
+			len(reaped), nqn, volumemigration.FormatReleased(reaped))
+	}
+	if err != nil {
+		log.Printf("could not reap every dead controller of %s (continuing): %v", nqn, err)
+	}
+}
+
+// release disconnects the migration's target paths, logging what went. Failures are
+// logged and swallowed: the run has already failed and the exit code must report that
+// failure rather than this one, which would only mask why the migration was cancelled.
+func (v validationRun) release(
+	ctx context.Context,
+	sysRoot, nqn string,
+	conns []volumemigration.Connection,
+) {
+	if v.releasePaths == nil || nqn == "" {
+		return
+	}
+	released, err := v.releasePaths(ctx, sysRoot, nqn, conns)
+	log.Printf("released %d migration target path(s) of %s: %s",
+		len(released), nqn, volumemigration.FormatReleased(released))
+	if err != nil {
+		log.Printf("could not release every migration target path of %s: %v", nqn, err)
+	}
 }
 
 func validateMigration() {
@@ -158,6 +224,51 @@ func validateMigration() {
 		// The operator collects this log per node, so say plainly that this node
 		// needed nothing rather than leaving an empty success.
 		log.Printf("no host connection to %s on this node: nothing to validate", nqn)
+	}
+}
+
+// releaseMigration gives back the migration target paths on this node without
+// validating anything.
+//
+// It is the mode the operator runs on nodes whose own validation passed. Those never
+// learn that the migration was cancelled — another node's Job failed, or the operator
+// gave up waiting — so their Job exited successfully with the target paths connected and
+// nothing on the node will ever release them. Every other failure path releases in the
+// Job that failed; this one exists because a success cannot.
+//
+// Safe to run when there is nothing to do, which is the normal case: a subsystem that is
+// not attached, or paths already gone, release nothing. It is also safe to run after a
+// cutover the operator did not observe — the paths would be serving I/O by then, and
+// ReleaseMigrationPaths will not touch a path that is serving.
+func releaseMigration() {
+	conns, err := parseConnections(os.Getenv("VMIG_CONNECTIONS"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+
+	nqn := os.Getenv("VMIG_SUBSYSTEM_NQN")
+	if nqn == "" {
+		log.Fatal("VMIG_SUBSYSTEM_NQN env var not set")
+	}
+	sysRoot := os.Getenv("VMIG_SYS_ROOT")
+
+	released, err := volumemigration.ReleaseMigrationPaths(context.Background(), sysRoot, nqn, conns)
+	log.Printf("released %d migration target path(s) of %s: %s",
+		len(released), nqn, volumemigration.FormatReleased(released))
+	if err != nil {
+		log.Fatalf("could not release every migration target path of %s: %v", nqn, err)
+	}
+
+	// The husk a path lost before this ran leaves behind blocks the next migration of the
+	// subsystem just as surely as the path would have, so clear it while we are here.
+	reaped, rerr := volumemigration.ReapDeadControllers(context.Background(), sysRoot, nqn)
+	if len(reaped) > 0 {
+		log.Printf("reaped %d dead controller(s) of %s: %s",
+			len(reaped), nqn, volumemigration.FormatReleased(reaped))
+	}
+	if rerr != nil {
+		log.Printf("could not reap every dead controller of %s: %v", nqn, rerr)
 	}
 }
 

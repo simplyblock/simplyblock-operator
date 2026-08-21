@@ -138,8 +138,15 @@ func TestReconcileStart_AcceptedAfterDeferral_ClearsDeferredSince(t *testing.T) 
 	}
 }
 
-// Every connect parameter has to reach the validation Job verbatim: the job passes
-// them to `nvme connect`, and a dropped timeout changes the path's failure behaviour.
+// Every connect parameter has to reach the validation Job: the job passes them to
+// `nvme connect`, and a dropped timeout changes the path's failure behaviour.
+//
+// One is not passed through. ctrl_loss_tmo is replaced with vmigration.CtrlLossTmoSec,
+// because a migration target path becomes the volume's data path at cutover and must
+// carry the same loss timeout as every other path in the system — the control plane
+// answers with an hour, and an abandoned path retries for at least that long. What is
+// recorded here is what will be connected, which is the point of overriding it at
+// ingestion rather than where the Job is built.
 func TestReconcileStart_RecordsEveryConnectionField(t *testing.T) {
 	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveVolume(w, r) {
@@ -162,10 +169,14 @@ func TestReconcileStart_RecordsEveryConnectionField(t *testing.T) {
 	}
 	want := simplyblockv1alpha1.MigrationConnection{
 		NQN: "nqn.x", IP: "10.0.0.1", Port: 4420, Transport: "tcp",
-		NrIoQueues: 3, ReconnectDelay: 2, CtrlLossTmo: 3600, FastIOFailTmo: 8, KeepAliveTmo: 4,
+		NrIoQueues: 3, ReconnectDelay: 2, CtrlLossTmo: vmigration.CtrlLossTmoSec,
+		FastIOFailTmo: 8, KeepAliveTmo: 4,
 	}
 	if got.Status.Connections[0] != want {
 		t.Errorf("connection = %+v, want %+v", got.Status.Connections[0], want)
+	}
+	if vmigration.CtrlLossTmoSec == 3600 {
+		t.Error("the override is vacuous: CtrlLossTmoSec matches what the control plane answered")
 	}
 	if got.Status.MemberCount != 2 {
 		t.Errorf("MemberCount = %d, want 2", got.Status.MemberCount)

@@ -116,7 +116,13 @@ type VolumeMigrationStatus struct {
 
 	// Connections holds the NVMe-oF connection parameters for the new target-side
 	// paths returned by CreateMigration. Used during the Validating phase to
-	// establish and verify the paths before calling ContinueMigration.
+	// establish and verify the paths before calling ContinueMigration, and again to
+	// release them if the migration never cuts over.
+	//
+	// These are the parameters the paths are actually connected with, not verbatim
+	// what CreateMigration answered: ctrlLossTmo is replaced with the value every
+	// path in this system uses, because a target path becomes the volume's data path
+	// at cutover. The rest is passed through.
 	Connections []MigrationConnection `json:"connections,omitempty"`
 
 	// ValidationJobs are the Jobs that run `nvme connect` for each connection path
