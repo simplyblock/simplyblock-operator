@@ -57,7 +57,7 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 
 	// Build the fleet-level (non-overridable) args that are always appended.
 	// Per-node args (pci-*, device-*, size-range) and the cluster-scoped sizing
-	// args (max-lvol, max-size, vcpu-count) are read at runtime from the per-node
+	// args (max-subsys-count, max-size, vcpu-count) are read at runtime from the per-node
 	// ConfigMap via the init script.
 	fleetArgs := ""
 	if len(sn.Spec.SocketsToUse) > 0 {
