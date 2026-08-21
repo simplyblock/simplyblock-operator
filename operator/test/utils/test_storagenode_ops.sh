@@ -448,6 +448,12 @@ EOF
   max_subsys=$(kubectl -n "$NAMESPACE" get configmap "${STORAGENODESET}-per-node-config" \
     -o jsonpath="{.data['$EXPAND_WORKER']}" 2>/dev/null | \
     grep "^MAX_SUBSYS_COUNT=" | cut -d= -f2 || true)
+  # Assert the expectation is non-empty before comparing: maxSubsystemCount is a
+  # required field, so an empty $want_max_subsys means the lookup itself failed
+  # (bad cluster name, missing RBAC). Comparing empty against empty would let
+  # that pass silently.
+  [[ -n "$want_max_subsys" ]] \
+    || fail "Could not read spec.maxSubsystemCount from StorageCluster '$cluster_name' — it is required and must be set"
   [[ "$max_subsys" == "$want_max_subsys" ]] \
     && pass "Cluster maxSubsystemCount ($want_max_subsys) reflected as MAX_SUBSYS_COUNT in ConfigMap" \
     || fail "Expected MAX_SUBSYS_COUNT to match StorageCluster $cluster_name spec ($want_max_subsys), got '$max_subsys'"
