@@ -38,10 +38,12 @@ spec:
       openAPIV3Schema:
         description: "BackupPolicy is the Schema for the backuppolicies API.\n\nA
           BackupPolicy defines retention and scheduling parameters for Simplyblock\nbackups.
-          To apply a policy to a PVC, annotate the PVC with:\n\n\tsimplybk/backup-policy:
-          <BackupPolicy-name>\n\nThe BackupPolicy must be in the same namespace as
-          the annotated PVC.\nThe controller attaches and detaches the policy in the
-          Simplyblock backend\nwhenever the annotation is added or removed."
+          To apply a policy to a PVC, annotate the PVC with:\n\n\tsimplyblock.io/backup-policy:
+          <BackupPolicy-name>\n\nThe deprecated simplybk/backup-policy annotation
+          is still honoured for\nbackwards compatibility; when both are set, simplyblock.io/backup-policy\ntakes
+          precedence.\n\nThe BackupPolicy must be in the same namespace as the annotated
+          PVC.\nThe controller attaches and detaches the policy in the Simplyblock
+          backend\nwhenever the annotation is added or removed."
         properties:
           apiVersion:
             description: |-

@@ -50,8 +50,13 @@ const (
 
 	// pvcBackupPolicyAnnotation is the PVC annotation that names the BackupPolicy
 	// to apply. The value must match the BackupPolicy CR name in the same namespace.
-	//   simplybk/backup-policy: <BackupPolicy-name>
-	pvcBackupPolicyAnnotation = "simplybk/backup-policy"
+	//   simplyblock.io/backup-policy: <BackupPolicy-name>
+	//
+	// deprecatedPvcBackupPolicyAnnotation is the legacy spelling of the same
+	// annotation. It is still honoured for backwards compatibility, but
+	// pvcBackupPolicyAnnotation wins when both are present.
+	pvcBackupPolicyAnnotation           = "simplyblock.io/backup-policy"
+	deprecatedPvcBackupPolicyAnnotation = "simplybk/backup-policy"
 )
 
 // Event reason constants for BackupPolicy reconciliation.
@@ -270,7 +275,7 @@ func (r *BackupPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					enqueuePolicy(e.Object, "", q)
 				},
 				UpdateFunc: func(_ context.Context, e event.TypedUpdateEvent[client.Object], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-					oldPolicy := e.ObjectOld.GetAnnotations()[pvcBackupPolicyAnnotation]
+					oldPolicy := backupPolicyNameFromAnnotations(e.ObjectOld.GetAnnotations())
 					enqueuePolicy(e.ObjectNew, oldPolicy, q)
 				},
 				DeleteFunc: func(_ context.Context, e event.TypedDeleteEvent[client.Object], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
@@ -282,12 +287,24 @@ func (r *BackupPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// backupPolicyNameFromAnnotations returns the BackupPolicy name referenced by
+// the given PVC annotations, or "" when neither annotation is set. Both the
+// current and the deprecated annotation are honoured; the current spelling
+// wins when both carry a non-empty value.
+func backupPolicyNameFromAnnotations(annotations map[string]string) string {
+	if name := annotations[pvcBackupPolicyAnnotation]; name != "" {
+		return name
+	}
+
+	return annotations[deprecatedPvcBackupPolicyAnnotation]
+}
+
 // enqueuePolicy enqueues reconcile requests for the policy named in the PVC's
 // current annotation, and also for oldPolicyName if it differs (so a policy
 // whose annotation was just removed or changed also reconciles and detaches).
 func enqueuePolicy(pvc client.Object, oldPolicyName string, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 	ns := pvc.GetNamespace()
-	current := pvc.GetAnnotations()[pvcBackupPolicyAnnotation]
+	current := backupPolicyNameFromAnnotations(pvc.GetAnnotations())
 	seen := map[string]struct{}{}
 	for _, name := range []string{current, oldPolicyName} {
 		if name == "" {
@@ -548,7 +565,7 @@ func (r *BackupPolicyReconciler) computeDesiredAttachments(
 	for i := range pvcList.Items {
 		pvc := &pvcList.Items[i]
 
-		if pvc.Annotations[pvcBackupPolicyAnnotation] != policyCR.Name {
+		if backupPolicyNameFromAnnotations(pvc.Annotations) != policyCR.Name {
 			continue
 		}
 		if pvc.DeletionTimestamp != nil {
