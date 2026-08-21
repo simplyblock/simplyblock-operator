@@ -13,9 +13,9 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 )
 
-const migrateSrcEnvFile = `MAX_LVOL=10
-MAX_SIZE=''
-CORES_PERCENTAGE=50
+const migrateSrcEnvFile = `MAX_SUBSYS_COUNT=10
+MAX_HUGE_PAGES_SIZE=''
+VCPU_COUNT=8
 RESERVED_SYSTEM_CPUS=''
 CPU_TOPOLOGY_ENABLED=true
 PCI_ALLOWED='0000:02:00.0,0000:03:00.0'
@@ -73,8 +73,8 @@ func TestMergePcieAllowedIntoEnvFile(t *testing.T) {
 	}
 
 	// No PCI_ALLOWED line present: one is appended.
-	appended := mergePcieAllowedIntoEnvFile("MAX_LVOL=10\n", []string{"0000:05:00.0"})
-	if !strings.Contains(appended, "MAX_LVOL=10") ||
+	appended := mergePcieAllowedIntoEnvFile("MAX_SUBSYS_COUNT=10\n", []string{"0000:05:00.0"})
+	if !strings.Contains(appended, "MAX_SUBSYS_COUNT=10") ||
 		!strings.Contains(appended, `PCI_ALLOWED='0000:05:00.0'`) {
 		t.Fatalf("PCI_ALLOWED not appended:\n%s", appended)
 	}

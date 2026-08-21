@@ -155,9 +155,7 @@ if run_test 4; then
       -o jsonpath='{.spec.overrides}' 2>/dev/null)
     if [[ -n "$overrides" && "$overrides" != "{}" ]]; then
       found_overrides=true
-      max_lvol=$(kubectl -n "$NAMESPACE" get storagenode "$name" \
-        -o jsonpath='{.spec.overrides.maxSubsystemCount}' 2>/dev/null)
-      info "$name: maxSubsystemCount=$max_lvol"
+      info "$name: overrides=$overrides"
     fi
   done
   $found_overrides && pass "StorageNode.spec.overrides populated from nodeConfigs" \
@@ -406,7 +404,7 @@ spec:
   workerNode: $EXPAND_WORKER
   socketIndex: 0
   overrides:
-    maxSubsystemCount: 15
+    driveSizeRange: "50G-2T"
     spdkSystemMemory: "2G"
 EOF
 
@@ -434,12 +432,25 @@ EOF
     || fail "Per-node ConfigMap did not include $EXPAND_WORKER within 60s"
 
   # 3. Overrides merged with fleet defaults in ConfigMap entry
-  max_lvol=$(kubectl -n "$NAMESPACE" get configmap "${STORAGENODESET}-per-node-config" \
+  size_range=$(kubectl -n "$NAMESPACE" get configmap "${STORAGENODESET}-per-node-config" \
     -o jsonpath="{.data['$EXPAND_WORKER']}" 2>/dev/null | \
-    grep "^MAX_LVOL=" | cut -d= -f2 || true)
-  [[ "$max_lvol" == "15" ]] \
-    && pass "Override maxSubsystemCount=15 reflected in ConfigMap" \
-    || fail "Expected MAX_LVOL=15 in ConfigMap, got '$max_lvol'"
+    grep "^SIZE_RANGE=" | cut -d= -f2 | tr -d "'" || true)
+  [[ "$size_range" == "50G-2T" ]] \
+    && pass "Override driveSizeRange=50G-2T reflected in ConfigMap" \
+    || fail "Expected SIZE_RANGE='50G-2T' in ConfigMap, got '$size_range'"
+
+  # 3b. Cluster-scoped sizing comes from the StorageCluster, not the node/set, and
+  #     must be identical in every entry — there is no per-node override for it.
+  cluster_name=$(kubectl -n "$NAMESPACE" get storagenodeset "$STORAGENODESET" \
+    -o jsonpath='{.spec.clusterName}' 2>/dev/null)
+  want_max_subsys=$(kubectl -n "$NAMESPACE" get storagecluster "$cluster_name" \
+    -o jsonpath='{.spec.maxSubsystemCount}' 2>/dev/null)
+  max_subsys=$(kubectl -n "$NAMESPACE" get configmap "${STORAGENODESET}-per-node-config" \
+    -o jsonpath="{.data['$EXPAND_WORKER']}" 2>/dev/null | \
+    grep "^MAX_SUBSYS_COUNT=" | cut -d= -f2 || true)
+  [[ -n "$want_max_subsys" && "$max_subsys" == "$want_max_subsys" ]] \
+    && pass "Cluster maxSubsystemCount=$want_max_subsys reflected as MAX_SUBSYS_COUNT in ConfigMap" \
+    || fail "Expected MAX_SUBSYS_COUNT=$want_max_subsys (from StorageCluster $cluster_name), got '$max_subsys'"
 
   # 4. StorageNodeReconciler picks it up and provisions it
   info "Waiting up to ${TIMEOUT_EXPANSION}s for $EXPAND_SN_NAME to come online..."

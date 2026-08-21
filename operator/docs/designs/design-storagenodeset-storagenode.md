@@ -66,12 +66,9 @@ type StorageNodeSetSpec struct {
     WorkerNodes    []string `json:"workerNodes"`
 
     // Fleet-wide defaults — apply to every StorageNode unless overridden by NodeConfigs.
-    MaxSubsystemCount *int32              `json:"maxSubsystemCount,omitempty"`
-    Partitions            *int32              `json:"partitions,omitempty"`
+    EnableJournalDevice   *bool               `json:"enableJournalDevice,omitempty"`
     JournalManagerSpec    *JournalManagerSpec `json:"journalManager,omitempty"`
-    CorePercentage        *int32              `json:"corePercentage,omitempty"`
     SpdkSystemMemory      string              `json:"spdkSystemMemory,omitempty"`
-    MaxSize               string              `json:"maxSize,omitempty"`
     NodesPerSocket        *int32              `json:"nodesPerSocket,omitempty"`
     SocketsToUse          []string            `json:"socketsToUse,omitempty"`
     // ... tolerations, resources, image pull policy, OpenShift fields, etc.
@@ -85,11 +82,10 @@ type StorageNodeSetSpec struct {
     // Example:
     //   nodeConfigs:
     //     vm02.simplyblock3.localdomain:
-    //       maxSubsystemCount: 50
     //       spdkSystemMemory: "8G"
     //       failureDomain: 1
     //     vm04.simplyblock3.localdomain:
-    //       maxSubsystemCount: 10
+    //       driveSizeRange: "100G-2T"
     //       failureDomain: 2
     // +optional
     NodeConfigs map[string]StorageNodeOverrides `json:"nodeConfigs,omitempty"`
@@ -97,6 +93,10 @@ type StorageNodeSetSpec struct {
     // REMOVED: action, nodeUUID, force, reattachVolume, workerNode
     // REMOVED: systemVolumeFilterRegex (moves to StorageNodeOps)
     // REMOVED: nodeFailureDomains (consolidated into NodeConfigs[].failureDomain)
+    // REMOVED: maxSubsystemCount, maxSize, corePercentage — now cluster-scoped on
+    //          StorageCluster.spec as maxSubsystemCount, maxHugePagesSize and
+    //          vcpuCount, so every node in a cluster sizes huge pages and SPDK
+    //          cores identically.
 }
 
 type StorageNodeSetStatus struct {
@@ -142,14 +142,13 @@ type StorageNodeSpec struct {
     SocketIndex *int32 `json:"socketIndex,omitempty"`
 
     // Overrides allow per-node configuration overrides of the parent StorageNodeSet defaults.
-    // Immutable fields from the parent (clusterName, mgmtIfname, partitions, etc.) cannot
+    // Immutable fields from the parent (clusterName, mgmtIfname, enableJournalDevice, etc.) cannot
     // be overridden here.
     // +optional
     Overrides *StorageNodeOverrides `json:"overrides,omitempty"`
 }
 
 type StorageNodeOverrides struct {
-    MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
     SpdkSystemMemory      string `json:"spdkSystemMemory,omitempty"`
 
     // FailureDomain is the failure-domain group index (≥ 1) for this node.

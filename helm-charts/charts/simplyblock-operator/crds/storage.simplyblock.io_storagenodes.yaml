@@ -83,11 +83,6 @@ spec:
                   Overrides holds per-node configuration propagated from
                   StorageNodeSet.spec.nodeConfigs[workerNode] on every reconcile.
                 properties:
-                  corePercentage:
-                    description: CorePercentage overrides the percentage of cores
-                      allocated to SPDK for this node (0-99).
-                    format: int32
-                    type: integer
                   deviceNames:
                     description: |-
                       DeviceNames explicitly defines the NVMe namespace names to use on this node
@@ -131,15 +126,6 @@ spec:
                         format: int32
                         type: integer
                     type: object
-                  maxSize:
-                    description: MaxSize overrides the maximum allocatable size of
-                      huge pages for this node.
-                    type: string
-                  maxSubsystemCount:
-                    description: MaxSubsystemCount overrides the maximum number of
-                      NVMe-oF subsystems for this node.
-                    format: int32
-                    type: integer
                   pcieAllowList:
                     description: PcieAllowList overrides the list of PCI addresses
                       allowed for use on this node.

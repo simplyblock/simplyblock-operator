@@ -456,7 +456,7 @@ PVC created (user)
 ┌───────────────────────────────▼──────────────────────────────────────────┐
 │  Simplyblock Backend: add_lvol_ha(host_id_or_name=<uuid>)                │
 │  host_node set → _get_next_3_nodes() is NEVER called                    │
-│  _resolve_lvol_subsystem() still enforces max_lvol as a hard backstop   │
+│  _resolve_lvol_subsystem() still enforces max_subsys as a hard backstop   │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -537,11 +537,11 @@ ranking further, to only override when the imbalance is meaningful.
 
 **Eligibility filter, applied before ranking:**
 
-| Filter | Source | Rationale |
-|---|---|---|
-| `status == "online"` | `webapi.StorageNodeInfo.Status` | Never place on an offline node |
-| `health_check == true` | `webapi.StorageNodeInfo.Healthy` | Mirrors rebalancer target eligibility (Issue #130 §6 Step 5) |
-| `Lvols < LvolsMax` | `webapi.StorageNodeInfo.Lvols` / `.LvolsMax` (§8) | Mirrors `sbcli`'s own `max_lvol` capacity gate (`_resolve_lvol_subsystem`) so we don't hand the backend a node it will immediately reject |
+| Filter                       | Source | Rationale                                                                                                                                   |
+|------------------------------|---|---------------------------------------------------------------------------------------------------------------------------------------------|
+| `status == "online"`         | `webapi.StorageNodeInfo.Status` | Never place on an offline node                                                                                                              |
+| `health_check == true`       | `webapi.StorageNodeInfo.Healthy` | Mirrors rebalancer target eligibility (Issue #130 §6 Step 5)                                                                                |
+| `Subsystems < SubsystemsMax` | `webapi.StorageNodeInfo.Lvols` / `.LvolsMax` (§8) | Mirrors `sbcli`'s own `max_subsys` capacity gate (`_resolve_lvol_subsystem`) so we don't hand the backend a node it will immediately reject |
 
 There is deliberately no "is this a secondary/replica-only node" filter.
 `sbcli`'s `StorageNode.is_secondary_node` models a dedicated-replica-capacity
@@ -743,7 +743,7 @@ type StorageNodeInfo struct {
 
 `Lvols` / `LvolsMax` require **no backend change** — `StorageNodeDTO` in
 `simplyblock_web/api/v2/_dtos.py` already serializes `lvols` and `lvols_max`
-(`model.lvols`, `model.max_lvol`); the Go struct simply never mapped them
+(`model.lvols`, `model.max_subsys`); the Go struct simply never mapped them
 because the rebalancer never needed them.
 
 ### 8.2 `StorageCluster` CRD — one field addition (§6's load threshold)

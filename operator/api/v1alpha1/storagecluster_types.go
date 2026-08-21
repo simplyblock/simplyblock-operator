@@ -238,6 +238,37 @@ type StorageClusterSpec struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	MaxConcurrentWorkerRestarts *int32 `json:"maxConcurrentWorkerRestarts,omitempty"`
+
+	// The three fields below configure how every storage node in this cluster
+	// sizes its SPDK deployment. They live on the StorageCluster rather than the
+	// StorageNodeSet because the control plane assumes them to be uniform: huge
+	// pages are sized from maxSubsystemCount together with the isolated core
+	// count, and a node that disagrees with its peers ends up with a huge-page
+	// and core layout the cluster cannot place erasure-coding chunks across
+	// evenly. Making them cluster-scoped removes the per-node and per-set
+	// override paths that allowed such a divergence.
+
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Subsystem Count"
+	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
+	// node. Applies to every storage node in the cluster.
+	// +optional
+	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Huge Pages Size"
+	// MaxHugePagesSize is the maximum allocatable size of huge pages on each
+	// storage node (e.g. "100G", "1T"; a bare number is interpreted as GB). It is
+	// a floor, not a cap: the effective huge-page allocation is the larger of this
+	// value and the minimum the node's device and subsystem count requires. When
+	// omitted the computed minimum is used.
+	// +optional
+	MaxHugePagesSize string `json:"maxHugePagesSize,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="vCPU Count"
+	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node.
+	// This is an explicit core count, not a percentage. When omitted the node
+	// falls back to the backend's own core-allocation heuristic.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	VCPUCount *int32 `json:"vcpuCount,omitempty"`
+
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Warning Threshold"
 	// WarningThresholdSpec defines warning-level capacity thresholds.
 	WarningThresholdSpec *CapacityThresholdSpec `json:"warningThreshold,omitempty"`
