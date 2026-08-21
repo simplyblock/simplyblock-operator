@@ -13,6 +13,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/simplyblock/atlas/kube"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -152,13 +154,16 @@ func ResolveClusterCRByUUID(
 		return nil, err
 	}
 
+	items := make([]*simplyblockv1alpha1.StorageCluster, len(clusters.Items))
 	for i := range clusters.Items {
-		if clusters.Items[i].Status.UUID == uuid {
-			return &clusters.Items[i], nil
-		}
+		items[i] = &clusters.Items[i]
 	}
 
-	return nil, fmt.Errorf("%w: cluster UUID %q in namespace %q", ErrClusterNotFound, uuid, namespace)
+	found, err := kube.FindByKey(items, func(sc *simplyblockv1alpha1.StorageCluster) string { return sc.Status.UUID }, uuid)
+	if err != nil {
+		return nil, fmt.Errorf("%w: cluster UUID %q in namespace %q", ErrClusterNotFound, uuid, namespace)
+	}
+	return found, nil
 }
 
 func ResolvePoolIdentifier(ctx context.Context, k8sClient client.Client, namespace, cluster, pool string) (string, error) {
