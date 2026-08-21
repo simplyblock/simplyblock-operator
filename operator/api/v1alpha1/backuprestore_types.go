@@ -27,10 +27,6 @@ const (
 	RestorePhasePVCBinding = "PVCBinding"
 	RestorePhaseDone       = "Done"
 	RestorePhaseFailed     = "Failed"
-
-	// Cross-cluster phases: inserted between Pending and InProgress, and between InProgress and PVCBinding.
-	RestorePhaseSwitchingSource      = "SwitchingSource"
-	RestorePhaseSwitchingSourceLocal = "SwitchingSourceLocal"
 )
 
 // BackupRef identifies the StorageBackup to restore from, scoped to the same namespace.
@@ -123,13 +119,11 @@ type BackupRestoreStatus struct {
 	PVCNamespace string `json:"pvcNamespace,omitempty"`
 
 	// SourceClusterUUID is the UUID of the cluster that originally created the backup.
-	// Copied from the referenced StorageBackup's status.sourceClusterUUID.
-	// When non-empty, the controller performs source-switch before and after the restore.
+	// Copied from the referenced StorageBackup's status.sourceClusterUUID. When non-empty
+	// and different from ClusterUUID, the controller resolves that cluster's backup
+	// credentials and sends them with the restore request, since the backup's bucket may
+	// not be this cluster's own.
 	SourceClusterUUID string `json:"sourceClusterUUID,omitempty"`
-
-	// SourceSwitchedAt records when the target cluster was switched to read from the
-	// source cluster's S3 bucket. Cleared once source-switch local completes.
-	SourceSwitchedAt *metav1.Time `json:"sourceSwitchedAt,omitempty"`
 
 	// StartedAt is when the backend restore task was accepted.
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`

@@ -136,6 +136,31 @@ func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, name
 	return ResolveClusterUUID(ctx, k8sClient, namespace, cluster)
 }
 
+// ResolveClusterCRByUUID finds the StorageCluster CR in namespace whose backend
+// UUID matches uuid. Used to go from a cross-cluster reference (which only
+// carries the backend UUID) back to the CR, to read config the backend doesn't
+// expose, such as a cluster's backup credentials secret.
+func ResolveClusterCRByUUID(
+	ctx context.Context,
+	c client.Client,
+	namespace string,
+	uuid string,
+) (*simplyblockv1alpha1.StorageCluster, error) {
+
+	var clusters simplyblockv1alpha1.StorageClusterList
+	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+
+	for i := range clusters.Items {
+		if clusters.Items[i].Status.UUID == uuid {
+			return &clusters.Items[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("%w: cluster UUID %q in namespace %q", ErrClusterNotFound, uuid, namespace)
+}
+
 func ResolvePoolIdentifier(ctx context.Context, k8sClient client.Client, namespace, cluster, pool string) (string, error) {
 	if pool == "" {
 		return "", nil

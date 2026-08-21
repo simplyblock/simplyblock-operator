@@ -224,6 +224,106 @@ func TestBackupRestoreFailsWhenBackupIsFailed(t *testing.T) {
 	}
 }
 
+func TestResolveCrossClusterCredentialsLocalRestoreReturnsNil(t *testing.T) {
+	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+	k8sClient := newTestClient(t, scheme, nil)
+	r := &BackupRestoreReconciler{Client: k8sClient, Scheme: scheme}
+
+	restore := &simplyblockv1alpha1.BackupRestore{
+		Status: simplyblockv1alpha1.BackupRestoreStatus{
+			ClusterUUID:       "cluster-uuid",
+			SourceClusterUUID: "cluster-uuid",
+		},
+	}
+
+	creds, err := r.resolveCrossClusterCredentials(context.Background(), restore)
+	if err != nil {
+		t.Fatalf("resolveCrossClusterCredentials returned error: %v", err)
+	}
+	if creds != nil {
+		t.Fatalf("creds = %+v, want nil for a local restore", creds)
+	}
+}
+
+func TestResolveCrossClusterCredentialsResolvesSourceClusterSecret(t *testing.T) {
+	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+
+	sourceCluster := testCluster("default", "source-cluster", "source-uuid")
+	sourceCluster.Spec.Backup = &simplyblockv1alpha1.BackupSpec{
+		CredentialsSecretRef: simplyblockv1alpha1.BackupCredentialsSecretRef{Name: "source-backup-creds"},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "source-backup-creds", Namespace: "default"},
+		Data: map[string][]byte{
+			"access_key_id":     []byte("AKIDEXAMPLE"),
+			"secret_access_key": []byte("supersecret"),
+		},
+	}
+
+	k8sClient := newTestClient(t, scheme, nil, sourceCluster, secret)
+	r := &BackupRestoreReconciler{Client: k8sClient, Scheme: scheme}
+
+	restore := &simplyblockv1alpha1.BackupRestore{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+		Status: simplyblockv1alpha1.BackupRestoreStatus{
+			ClusterUUID:       "target-uuid",
+			SourceClusterUUID: "source-uuid",
+		},
+	}
+
+	creds, err := r.resolveCrossClusterCredentials(context.Background(), restore)
+	if err != nil {
+		t.Fatalf("resolveCrossClusterCredentials returned error: %v", err)
+	}
+	if creds == nil {
+		t.Fatal("creds = nil, want resolved credentials")
+	}
+	if creds.AccessKeyID != "AKIDEXAMPLE" || creds.SecretAccessKey != "supersecret" {
+		t.Fatalf("creds = %+v, want AKIDEXAMPLE/supersecret", creds)
+	}
+}
+
+func TestResolveCrossClusterCredentialsSourceClusterGone(t *testing.T) {
+	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+	k8sClient := newTestClient(t, scheme, nil)
+	r := &BackupRestoreReconciler{Client: k8sClient, Scheme: scheme}
+
+	restore := &simplyblockv1alpha1.BackupRestore{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+		Status: simplyblockv1alpha1.BackupRestoreStatus{
+			ClusterUUID:       "target-uuid",
+			SourceClusterUUID: "source-uuid",
+		},
+	}
+
+	creds, err := r.resolveCrossClusterCredentials(context.Background(), restore)
+	if err == nil {
+		t.Fatal("expected an error when the source cluster CR no longer exists")
+	}
+	if creds != nil {
+		t.Fatalf("creds = %+v, want nil alongside the error", creds)
+	}
+}
+
+func TestResolveCrossClusterCredentialsSourceClusterHasNoBackupConfig(t *testing.T) {
+	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+	sourceCluster := testCluster("default", "source-cluster", "source-uuid")
+	k8sClient := newTestClient(t, scheme, nil, sourceCluster)
+	r := &BackupRestoreReconciler{Client: k8sClient, Scheme: scheme}
+
+	restore := &simplyblockv1alpha1.BackupRestore{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+		Status: simplyblockv1alpha1.BackupRestoreStatus{
+			ClusterUUID:       "target-uuid",
+			SourceClusterUUID: "source-uuid",
+		},
+	}
+
+	if _, err := r.resolveCrossClusterCredentials(context.Background(), restore); err == nil {
+		t.Fatal("expected an error when the source cluster has no backup configuration")
+	}
+}
+
 func resourceMustParse(t *testing.T, value string) resource.Quantity {
 	t.Helper()
 
