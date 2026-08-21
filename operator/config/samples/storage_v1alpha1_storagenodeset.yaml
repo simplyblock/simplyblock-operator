@@ -8,6 +8,5 @@ metadata:
 spec:
   clusterName: sample-cluster
   clusterImage: quay.io/simplyblock-io/simplyblock:26.2.5-PRE
-  maxSubsystemCount: 256
   workerNodes:
     - worker-node-1
