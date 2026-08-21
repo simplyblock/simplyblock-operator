@@ -124,6 +124,10 @@ type LvolConnectResp struct {
 	Connect        string `json:"connect"`
 	NSID           int    `json:"ns-id"`
 	HostIface      string `json:"host-iface,omitempty"`
+	// TargetLvolID is the clone UUID on the target cluster, set only when the
+	// volume has been failed over. The CSI driver uses it for device lookup
+	// instead of the original source lvol UUID.
+	TargetLvolID string `json:"target-lvol-id,omitempty"`
 }
 
 type connectionInfo struct {
@@ -325,7 +329,7 @@ func (client APIClient) getVolumeInfo(ctx context.Context, poolID, lvolID, hostN
 		return nil, err
 	}
 
-	return map[string]string{
+	info := map[string]string{
 		"name":           lvolID,
 		"uuid":           lvolID,
 		"nqn":            result[0].Nqn,
@@ -337,7 +341,14 @@ func (client APIClient) getVolumeInfo(ctx context.Context, poolID, lvolID, hostN
 		"connections":    string(connectionsData),
 		"nsId":           strconv.Itoa(result[0].NSID),
 		"hostIface":      result[0].HostIface,
-	}, nil
+	}
+	// For failed-over volumes the backend sets TargetLvolID to the clone UUID.
+	// Store it separately so the initiator uses it for device lookup without
+	// affecting the backend API calls that still use the original lvolID.
+	if result[0].TargetLvolID != "" {
+		info["targetLvolID"] = result[0].TargetLvolID
+	}
+	return info, nil
 }
 
 // deleteVolume deletes a volume by UUID

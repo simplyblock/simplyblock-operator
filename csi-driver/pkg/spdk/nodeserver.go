@@ -294,20 +294,17 @@ func (ns *nodeServer) NodeStageVolume(
 	if spdkVol, err := parseVolumeID(volumeID); err == nil {
 		vc["poolID"] = spdkVol.poolID
 
-		// When the volume was provisioned against a pool with allowed_hosts, the controller
-		// couldn't fetch connection info (no host NQN available there). Re-fetch it here using
-		// the node's host NQN so that NewSpdkCsiInitiator gets the fields it needs.
-		if vc["nqn"] == "" || vc["targetType"] == "" {
-			if sbcClient, clientErr := util.NewsimplyBlockClient(ctx, spdkVol.clusterID, spdkVol.poolID); clientErr == nil {
-				connInfo, infoErr := sbcClient.VolumeInfo(ctx, spdkVol.lvolID, vc["hostNQN"])
-				if infoErr != nil {
-					klog.Errorf("failed to fetch volume connection info for %s: %v", volumeID, infoErr)
-				} else {
-					for k, v := range connInfo {
-						if vc[k] == "" {
-							vc[k] = v
-						}
-					}
+		// Re-fetch connection info from the backend when:
+		// - the volume was provisioned against a pool with allowed_hosts (nqn/targetType empty), or
+		// - the volume may have been failed over (always refresh so the backend can redirect
+		//   to the clone and return target_lvol_id for correct device lookup).
+		if sbcClient, clientErr := util.NewsimplyBlockClient(ctx, spdkVol.clusterID, spdkVol.poolID); clientErr == nil {
+			connInfo, infoErr := sbcClient.VolumeInfo(ctx, spdkVol.lvolID, vc["hostNQN"])
+			if infoErr != nil {
+				klog.Warningf("failed to fetch volume connection info for %s: %v", volumeID, infoErr)
+			} else {
+				for k, v := range connInfo {
+					vc[k] = v
 				}
 			}
 		}
