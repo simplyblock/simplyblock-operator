@@ -131,6 +131,25 @@ func dhchapAllowedNodeSegment(req *csi.CreateVolumeRequest) (key, val string) {
 	return key, dhchapAllowedNodeLabelValue
 }
 
+// vdoCapableSegment returns the vdo-capable topology key/value to pin
+// PersistentVolume.spec.nodeAffinity to, or ("", "") for a volume that doesn't use
+// client-side VDO. Unlike dhchapAllowedNodeSegment, vdoCapableLabelKey is a single
+// fixed, well-known key (not a per-pool dynamic one), so there's no equivalent of
+// paramDHCHAPNodeLabel to read back -- client_compression/client_deduplication
+// themselves are enough to decide whether the constraint applies. Same rationale
+// as dhchapAllowedNodeSegment for not consulting AccessibilityRequirements: the
+// constraint is node-independent ("any vdo-capable node"), so building it from the
+// StorageClass parameters directly sidesteps CSINode's topology-key
+// registration-timing gap.
+func vdoCapableSegment(req *csi.CreateVolumeRequest) (key, val string) {
+	compression, _ := kube.BoolParam(req.GetParameters(), paramClientCompression, false)
+	deduplication, _ := kube.BoolParam(req.GetParameters(), paramClientDeduplication, false)
+	if !compression && !deduplication {
+		return "", ""
+	}
+	return vdoCapableLabelKey, vdoCapableLabelValue
+}
+
 type controllerServer struct {
 	*csicommon.DefaultControllerServer
 	volumeLocks *util.VolumeLocks
@@ -500,10 +519,17 @@ func (cs *controllerServer) CreateVolume(
 		csiVolume.VolumeContext["targetType"] = volType
 	}
 
-	// Merge in DHCHAP's allowed-node segment so its PV gets nodeAffinity too
-	// (issue #403) — resolveClusterSelection only tracks zone/region.
+	// Merge in DHCHAP's allowed-node segment, and VDO's vdo-capable segment, so
+	// their PVs get nodeAffinity too (issue #403) — resolveClusterSelection only
+	// tracks zone/region.
 	topologySegments := copyTopologySegments(selection.topology)
 	if key, val := dhchapAllowedNodeSegment(req); key != "" {
+		if topologySegments == nil {
+			topologySegments = map[string]string{}
+		}
+		topologySegments[key] = val
+	}
+	if key, val := vdoCapableSegment(req); key != "" {
 		if topologySegments == nil {
 			topologySegments = map[string]string{}
 		}

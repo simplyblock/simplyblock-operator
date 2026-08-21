@@ -313,3 +313,61 @@ func TestDHCHAPAllowedNodeSegment(t *testing.T) {
 		}
 	})
 }
+
+func TestVDOCapableSegment(t *testing.T) {
+	t.Run("neither client_compression nor client_deduplication set", func(t *testing.T) {
+		req := &csi.CreateVolumeRequest{Parameters: map[string]string{}}
+		if key, val := vdoCapableSegment(req); key != "" || val != "" {
+			t.Errorf("got (%q, %q), want (\"\", \"\")", key, val)
+		}
+	})
+
+	t.Run("client_compression true", func(t *testing.T) {
+		req := &csi.CreateVolumeRequest{
+			Parameters: map[string]string{paramClientCompression: "True"},
+		}
+		key, val := vdoCapableSegment(req)
+		if key != vdoCapableLabelKey || val != vdoCapableLabelValue {
+			t.Errorf("got (%q, %q), want (%q, %q)", key, val, vdoCapableLabelKey, vdoCapableLabelValue)
+		}
+	})
+
+	t.Run("client_deduplication alone is enough", func(t *testing.T) {
+		// A dedup-only volume still needs a working kvdo module on the node, so this
+		// must not require client_compression too.
+		req := &csi.CreateVolumeRequest{
+			Parameters: map[string]string{paramClientDeduplication: "True"},
+		}
+		key, val := vdoCapableSegment(req)
+		if key != vdoCapableLabelKey || val != vdoCapableLabelValue {
+			t.Errorf("got (%q, %q), want (%q, %q)", key, val, vdoCapableLabelKey, vdoCapableLabelValue)
+		}
+	})
+
+	t.Run("both false", func(t *testing.T) {
+		req := &csi.CreateVolumeRequest{
+			Parameters: map[string]string{
+				paramClientCompression:   "False",
+				paramClientDeduplication: "False",
+			},
+		}
+		if key, val := vdoCapableSegment(req); key != "" || val != "" {
+			t.Errorf("got (%q, %q), want (\"\", \"\")", key, val)
+		}
+	})
+
+	t.Run("ignores AccessibilityRequirements entirely", func(t *testing.T) {
+		req := &csi.CreateVolumeRequest{
+			Parameters: map[string]string{paramClientCompression: "True"},
+			AccessibilityRequirements: &csi.TopologyRequirement{
+				Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
+					vdoCapableLabelKey: "false",
+				})},
+			},
+		}
+		key, val := vdoCapableSegment(req)
+		if key != vdoCapableLabelKey || val != vdoCapableLabelValue {
+			t.Errorf("got (%q, %q), want (%q, %q)", key, val, vdoCapableLabelKey, vdoCapableLabelValue)
+		}
+	})
+}
