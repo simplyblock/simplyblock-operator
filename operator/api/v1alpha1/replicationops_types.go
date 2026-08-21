@@ -60,14 +60,18 @@ type ReplicationOpsResult struct {
 // ReplicationOpsSpec defines the desired state of a ReplicationOps.
 type ReplicationOpsSpec struct {
 	// Action is the operation to perform. Immutable.
-	// +kubebuilder:validation:Enum=failover;failback
+	// failover:  unplanned — promote target clone, source may be down.
+	// failback:  restore source as primary after a prior failover.
+	// migration: planned cutover — calls replication_commit per volume; both clusters stay up.
+	//            State progression: replicating → cutover_pending → cutover_done.
+	// +kubebuilder:validation:Enum=failover;failback;migration
 	// +kubebuilder:validation:Required
 	Action string `json:"action"`
 
 	// Scope controls which volumes are affected. Immutable.
 	// target: all volumes across every policy that uses the named ReplicationPair.
 	// policy: all volumes managed by the named ReplicationPolicy CR.
-	// volume: a single ReplicationSlot (unplanned per-volume failover).
+	// volume: a single ReplicationSlot (planned or unplanned per-volume operation).
 	// +kubebuilder:validation:Enum=target;policy;volume
 	// +kubebuilder:validation:Required
 	Scope string `json:"scope"`

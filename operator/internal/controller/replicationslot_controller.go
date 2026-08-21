@@ -21,9 +21,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
+	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,6 +76,9 @@ type ReplicationSlotReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
+	// apiReader is an uncached reader for consumer-pod lookups; a stale cache
+	// could miss a running pod and skip preconnect on an actively-used volume.
+	apiReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationslots,verbs=get;list;watch;create;update;patch;delete
@@ -80,6 +86,9 @@ type ReplicationSlotReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationslots/finalizers,verbs=update
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 func (r *ReplicationSlotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -127,8 +136,9 @@ func (r *ReplicationSlotReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return r.reconcilePollAttach(ctx, &slot, volumeID)
 	case simplyblockv1alpha1.ReplicationSlotStateReplicating:
 		return r.reconcileReplicating(ctx, &slot, apiClient, clusterID, poolID, volumeID)
-	case simplyblockv1alpha1.ReplicationSlotStateCutoverPending,
-		simplyblockv1alpha1.ReplicationSlotStateCutoverDone,
+	case simplyblockv1alpha1.ReplicationSlotStateCutoverPending:
+		return r.reconcileCutoverPending(ctx, &slot, apiClient, clusterID, poolID, volumeID)
+	case simplyblockv1alpha1.ReplicationSlotStateCutoverDone,
 		simplyblockv1alpha1.ReplicationSlotStateFailedOver:
 		return r.reconcileSyncStatus(ctx, &slot, apiClient, clusterID, poolID, volumeID)
 	case simplyblockv1alpha1.ReplicationSlotStateDetaching:
@@ -429,9 +439,392 @@ func parseLastSnapshotAt(v interface{}) *time.Time {
 	return &t
 }
 
+// reconcileCutoverPending handles the cutover_pending state.
+//
+// The backend task suspends waiting for POST .../replication/cutover-proceed.
+// This reconciler pre-connects the target NVMe paths via a preconnect Job, then
+// signals the backend via callCutoverProceed so the ANA flip happens only after
+// the target controllers are already connected. A safety timeout on the backend
+// side (REPL_CUTOVER_PROCEED_TIMEOUT_SEC) lets cutover proceed even if the
+// operator is unavailable.
+func (r *ReplicationSlotReconciler) reconcileCutoverPending(
+	ctx context.Context,
+	slot *simplyblockv1alpha1.ReplicationSlot,
+	apiClient *webapi.Client,
+	clusterID, poolID, volumeID string,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	// Re-check backend state; the backend may have already cut over before we ran.
+	status, err := r.fetchReplicationStatus(ctx, apiClient, clusterID, poolID, volumeID)
+	if err != nil {
+		log.Error(err, "GET replication failed in cutover_pending", "slot", slot.Name)
+		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+	}
+	if status == nil || status.State != "cutover_pending" {
+		// Backend advanced past cutover_pending — transition the K8s state to match.
+		// We cannot call reconcileSyncStatus here because it only handles replicating;
+		// it would leave the slot stuck in cutover_pending forever.
+		return r.applyAdvancedBackendState(ctx, slot, status)
+	}
+
+	// Fetch connection strings. During cutover_pending the backend returns both
+	// target and source paths (target first). EnsureMigrationPaths is idempotent
+	// for already-connected source paths, so passing all 4 is safe.
+	conns, err := r.fetchVolumeConnections(ctx, apiClient, clusterID, poolID, volumeID)
+	if err != nil {
+		log.Error(err, "GET volume/connect failed in cutover_pending", "slot", slot.Name)
+		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+	}
+	if len(conns) == 0 {
+		// No connections returned; backend may not have populated them yet.
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	jobName := replSlotPreconnectJobName(volumeID)
+
+	// Check if the preconnect Job already exists.
+	var existingJob batchv1.Job
+	if err := r.Get(ctx, types.NamespacedName{Namespace: slot.Namespace, Name: jobName}, &existingJob); err == nil {
+		// Job exists — check its terminal state.
+		for _, c := range existingJob.Status.Conditions {
+			if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+				log.Info("Preconnect job succeeded; signalling backend to proceed", "job", jobName)
+				if err := r.callCutoverProceed(ctx, apiClient, clusterID, poolID, volumeID); err != nil {
+					log.Error(err, "POST cutover-proceed failed", "slot", slot.Name)
+					return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+				}
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+			if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+				log.Info("Preconnect job failed; signalling backend to proceed anyway", "job", jobName)
+				if err := r.callCutoverProceed(ctx, apiClient, clusterID, poolID, volumeID); err != nil {
+					log.Error(err, "POST cutover-proceed failed after job failure", "slot", slot.Name)
+				}
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+		}
+		// Still running.
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	} else if !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, fmt.Errorf("get preconnect job %q: %w", jobName, err)
+	}
+
+	// Find the node running a pod that has this volume mounted.
+	node, err := r.findPreconnectConsumerNode(ctx, volumeID)
+	if err != nil {
+		log.Error(err, "Cannot resolve consuming node for preconnect", "slot", slot.Name)
+		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+	}
+	if node == "" {
+		// No active consumer; nothing to pre-connect — signal immediately.
+		log.Info("No active consumer for preconnect; signalling backend to proceed", "slot", slot.Name)
+		if err := r.callCutoverProceed(ctx, apiClient, clusterID, poolID, volumeID); err != nil {
+			log.Error(err, "POST cutover-proceed failed (no consumer)", "slot", slot.Name)
+			return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	image, err := r.resolvePreconnectImage(ctx, slot.Namespace, clusterID)
+	if err != nil {
+		log.Error(err, "Cannot resolve rebalancer image for preconnect", "slot", slot.Name)
+		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+	}
+
+	connsJSON, err := json.Marshal(conns)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("marshal connections for preconnect job: %w", err)
+	}
+
+	job := r.buildPreconnectJob(slot, jobName, node, image, string(connsJSON))
+	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+		return ctrl.Result{}, fmt.Errorf("create preconnect job %q: %w", jobName, err)
+	}
+
+	log.Info("Preconnect job created", "job", jobName, "node", node,
+		"connections", len(conns))
+	r.Recorder.Eventf(slot, nil, corev1.EventTypeNormal, "PreconnectStarted", "PreconnectStarted",
+		"Connecting target NVMe paths on node %s before cutover of volume %s", node, volumeID)
+
+	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+}
+
+// replSlotPreconnectJobName returns a stable, unique Job name for a volume's preconnect Job.
+func replSlotPreconnectJobName(volumeID string) string {
+	s := strings.ReplaceAll(volumeID, "-", "")
+	if len(s) > 20 {
+		s = s[:20]
+	}
+	return "replslot-preconnect-" + s
+}
+
+// callCutoverProceed signals the backend that target NVMe paths are connected
+// and the ANA flip may proceed. It is idempotent: the backend ignores duplicate
+// signals once cutover_proceed is already true.
+func (r *ReplicationSlotReconciler) callCutoverProceed(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterID, poolID, volumeID string,
+) error {
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/cutover-proceed",
+		clusterID, poolID, volumeID)
+	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	// 204 = signalled; 404 = no cutover_pending record (already advanced).
+	if status == http.StatusNoContent || status == http.StatusNotFound {
+		return nil
+	}
+	return fmt.Errorf("POST cutover-proceed: status %d: %s", status, string(body))
+}
+
+// backendVolumeConnection is the JSON shape of one entry from GET .../volumes/{id}/connect.
+// The backend serialises NvmeConnectEntry with hyphenated field names (alias_generator).
+type backendVolumeConnection struct {
+	Transport      string `json:"transport"`
+	IP             string `json:"ip"`
+	Port           int    `json:"port"`
+	NQN            string `json:"nqn"`
+	NrIoQueues     int    `json:"nr-io-queues"`
+	ReconnectDelay int    `json:"reconnect-delay"`
+	CtrlLossTmo    int    `json:"ctrl-loss-tmo"`
+	FastIOFailTmo  int    `json:"fast-io-fail-tmo"`
+	KeepAliveTmo   int    `json:"keep-alive-tmo"`
+}
+
+// fetchVolumeConnections calls GET .../volumes/{id}/connect and returns the paths
+// as volumemigration.Connection objects ready for the preconnect Job.
+func (r *ReplicationSlotReconciler) fetchVolumeConnections(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterID, poolID, volumeID string,
+) ([]vmigration.Connection, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/connect",
+		clusterID, poolID, volumeID)
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status >= 300 {
+		return nil, fmt.Errorf("GET connect: status %d: %s", status, string(body))
+	}
+
+	var raw []backendVolumeConnection
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("parse connect response: %w", err)
+	}
+
+	out := make([]vmigration.Connection, len(raw))
+	for i, c := range raw {
+		out[i] = vmigration.Connection{
+			NQN:            c.NQN,
+			IP:             c.IP,
+			Port:           c.Port,
+			Transport:      c.Transport,
+			NrIoQueues:     c.NrIoQueues,
+			ReconnectDelay: c.ReconnectDelay,
+			CtrlLossTmo:    c.CtrlLossTmo,
+			FastIOFailTmo:  c.FastIOFailTmo,
+			KeepAliveTmo:   c.KeepAliveTmo,
+		}
+	}
+	return out, nil
+}
+
+// findPreconnectConsumerNode finds the Kubernetes node name running a pod that
+// has the given volume's PVC mounted. Returns "" when no active consumer exists.
+func (r *ReplicationSlotReconciler) findPreconnectConsumerNode(
+	ctx context.Context,
+	volumeID string,
+) (string, error) {
+	// Find the PersistentVolume whose CSI handle encodes this volume.
+	var pvList corev1.PersistentVolumeList
+	if err := r.apiReader.List(ctx, &pvList); err != nil {
+		return "", fmt.Errorf("list PersistentVolumes: %w", err)
+	}
+
+	var pvName, pvcName, pvcNamespace string
+	for i := range pvList.Items {
+		pv := &pvList.Items[i]
+		if pv.Spec.CSI == nil {
+			continue
+		}
+		parts := strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)
+		if len(parts) != 3 || parts[2] != volumeID {
+			continue
+		}
+		if pv.Spec.ClaimRef == nil {
+			continue
+		}
+		pvName = pv.Name
+		pvcName = pv.Spec.ClaimRef.Name
+		pvcNamespace = pv.Spec.ClaimRef.Namespace
+		break
+	}
+	if pvName == "" {
+		return "", nil // no PV for this volume
+	}
+
+	// Find a Running pod that uses the PVC.
+	var podList corev1.PodList
+	if err := r.apiReader.List(ctx, &podList, client.InNamespace(pvcNamespace)); err != nil {
+		return "", fmt.Errorf("list pods in %s: %w", pvcNamespace, err)
+	}
+
+	var nodes []string
+	for _, pod := range podList.Items {
+		if pod.Status.Phase != corev1.PodRunning || pod.Spec.NodeName == "" {
+			continue
+		}
+		for _, vol := range pod.Spec.Volumes {
+			if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == pvcName {
+				nodes = append(nodes, pod.Spec.NodeName)
+				break
+			}
+		}
+	}
+	sort.Strings(nodes)
+	if len(nodes) == 0 {
+		return "", nil
+	}
+	return nodes[0], nil
+}
+
+// resolvePreconnectImage returns the simplyblock-rebalancer image from the
+// StorageCluster, falling back to the default image when none is configured.
+func (r *ReplicationSlotReconciler) resolvePreconnectImage(
+	ctx context.Context,
+	namespace, clusterUUID string,
+) (string, error) {
+	var clusters simplyblockv1alpha1.StorageClusterList
+	if err := r.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
+		return "", fmt.Errorf("list StorageClusters: %w", err)
+	}
+	for _, cr := range clusters.Items {
+		if cr.Status.UUID != clusterUUID {
+			continue
+		}
+		vm := cr.Spec.VolumeMigrationSettings
+		if vm != nil && vm.RebalancerImage != nil && *vm.RebalancerImage != "" {
+			return *vm.RebalancerImage, nil
+		}
+		break
+	}
+	return defaultRebalancerImage, nil
+}
+
+// buildPreconnectJob creates the Job that connects target NVMe paths on the
+// consuming node before the cutover ANA flip.
+func (r *ReplicationSlotReconciler) buildPreconnectJob(
+	slot *simplyblockv1alpha1.ReplicationSlot,
+	jobName, hostname, image, connsJSON string,
+) *batchv1.Job {
+	privileged := true
+	readOnly := true
+	ttl := int32(3600)
+	deadline := int64(120)
+	backoffLimit := int32(1)
+
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: slot.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(slot, simplyblockv1alpha1.GroupVersion.WithKind("ReplicationSlot")),
+			},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:            &backoffLimit,
+			TTLSecondsAfterFinished: &ttl,
+			ActiveDeadlineSeconds:   &deadline,
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					NodeSelector:  map[string]string{"kubernetes.io/hostname": hostname},
+					HostNetwork:   true,
+					Volumes: []corev1.Volume{
+						{
+							Name: "host-sys",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{Path: "/sys"},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:            "replication-preconnect",
+							Image:           image,
+							ImagePullPolicy: corev1.PullAlways,
+							Command:         []string{"simplyblock-rebalancer", "--mode=replication-preconnect"},
+							Env: []corev1.EnvVar{
+								{Name: "REPL_CONNECTIONS", Value: connsJSON},
+								{Name: "VMIG_SYS_ROOT", Value: "/host/sys"},
+							},
+							SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "host-sys", MountPath: "/host/sys", ReadOnly: readOnly},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// applyAdvancedBackendState transitions the slot from cutover_pending to whatever
+// state the backend now reports. reconcileSyncStatus cannot be used here because it
+// only transitions to replicating — calling it from cutover_pending would leave the
+// slot permanently stuck.
+func (r *ReplicationSlotReconciler) applyAdvancedBackendState(
+	ctx context.Context,
+	slot *simplyblockv1alpha1.ReplicationSlot,
+	status *replVolumeReplicationStatus,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if status == nil {
+		// LVolReplication not found yet — backend may still be creating it; retry.
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	patch := client.MergeFrom(slot.DeepCopy())
+	switch status.State {
+	case "cutover_done":
+		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone)
+		slot.Status.Message = "Cutover done"
+		slot.Status.TargetNQN = status.TargetNQN
+		slot.Status.TargetLvolID = status.TargetLvolID
+		log.Info("Cutover completed; advancing slot state to cutover_done", "slot", slot.Name)
+	case "failed_over":
+		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateFailedOver)
+		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
+		slot.Status.Message = "Failed over to target cluster"
+		slot.Status.TargetNQN = status.TargetNQN
+		slot.Status.TargetLvolID = status.TargetLvolID
+		log.Info("Slot failed over; advancing slot state to failed_over", "slot", slot.Name)
+		r.Recorder.Eventf(slot, nil, corev1.EventTypeNormal, "FailedOver", "FailedOver",
+			"Volume failed over; target NQN: %s", status.TargetNQN)
+	default:
+		slot.Status.TargetNQN = status.TargetNQN
+		slot.Status.TargetLvolID = status.TargetLvolID
+		log.Info("Backend advanced from cutover_pending to unexpected state",
+			"slot", slot.Name, "backendState", status.State)
+	}
+	if err := r.Status().Patch(ctx, slot, patch); err != nil {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	return ctrl.Result{RequeueAfter: replSlotRequeueReplicating}, nil
+}
+
 func (r *ReplicationSlotReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.apiReader = mgr.GetAPIReader()
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.ReplicationSlot{}).
+		Owns(&batchv1.Job{}).
 		Named("replicationslot").
 		Complete(r)
 }
