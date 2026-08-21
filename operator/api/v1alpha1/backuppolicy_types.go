@@ -102,7 +102,11 @@ type BackupPolicyStatus struct {
 // A BackupPolicy defines retention and scheduling parameters for Simplyblock
 // backups. To apply a policy to a PVC, annotate the PVC with:
 //
-//	simplybk/backup-policy: <BackupPolicy-name>
+//	simplyblock.io/backup-policy: <BackupPolicy-name>
+//
+// The deprecated simplybk/backup-policy annotation is still honoured for
+// backwards compatibility; when both are set, simplyblock.io/backup-policy
+// takes precedence.
 //
 // The BackupPolicy must be in the same namespace as the annotated PVC.
 // The controller attaches and detaches the policy in the Simplyblock backend

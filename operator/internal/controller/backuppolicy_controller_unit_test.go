@@ -91,6 +91,66 @@ func TestBackupPolicyReconcileAnnotationAddAttachesLvol(t *testing.T) {
 		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/attach", lvolID)
 }
 
+func TestBackupPolicyReconcileDeprecatedAnnotationAttachesLvol(t *testing.T) {
+	const (
+		namespace   = "default"
+		clusterName = "cluster-a"
+		clusterUUID = "cluster-uuid-policy-deprecated"
+		policyName  = "policy-deprecated"
+		policyID    = "policy-id-deprecated"
+		pvcName     = "pvc-deprecated"
+		pvName      = "pv-deprecated"
+		lvolID      = "lvol-deprecated"
+	)
+
+	mock := webapimock.NewSpecServerFromFile(t, "../../../shared/openapi.json", false)
+	defer mock.Close()
+	mock.Register(http.MethodGet, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: backupPolicyListJSON(
+			backupPolicyAPIResponse{ID: policyID, Name: policyName},
+		)},
+	)
+	mock.Register(http.MethodPost, "/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/attach",
+		webapimock.RouteResponse{Status: http.StatusOK, Body: `{}`},
+	)
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", mock.URL())
+
+	policy := testBackupPolicyCR(policyName)
+	// Only the legacy annotation is set — it must still attach.
+	pv, pvc := testBackupPolicyPVC(pvcName, pvName, "", clusterUUID, lvolID,
+		map[string]string{deprecatedPvcBackupPolicyAnnotation: policyName})
+
+	r := newBackupPolicyTestReconciler(t,
+		policy,
+		testCluster(namespace, clusterName, clusterUUID),
+		pv,
+		pvc,
+	)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
+	if err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("expected no requeue, got %+v", res)
+	}
+
+	current := getBackupPolicy(t, r.Client, policy)
+	if current.Status.Phase != simplyblockv1alpha1.BackupPolicyPhaseActive {
+		t.Fatalf("expected phase %q, got %q", simplyblockv1alpha1.BackupPolicyPhaseActive, current.Status.Phase)
+	}
+	if len(current.Status.AttachedLvols) != 1 || current.Status.AttachedLvols[0] != lvol(namespace, pvcName, lvolID) {
+		t.Fatalf("unexpected attached lvols: %#v", current.Status.AttachedLvols)
+	}
+
+	reqs := mock.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 backend requests, got %#v", reqs)
+	}
+	assertAttachDetachRequest(t, reqs[1],
+		"/api/v2/clusters/"+clusterUUID+"/backups/backup-policies/"+policyID+"/attach", lvolID)
+}
+
 func TestBackupPolicyReconcileAnnotationRemovalDetachesLvol(t *testing.T) {
 	const (
 		namespace   = "default"
@@ -587,6 +647,52 @@ func assertAttachDetachRequest(t *testing.T, req webapimock.RecordedRequest, pat
 	}
 	if body.TargetType != "lvol" || body.TargetID != lvolID {
 		t.Fatalf("unexpected attach/detach body: %#v", body)
+	}
+}
+
+// ---- backupPolicyNameFromAnnotations tests ----
+
+func TestBackupPolicyNameFromAnnotations(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		want        string
+	}{
+		{name: "nil annotations"},
+		{name: "unrelated annotations only", annotations: map[string]string{"simplybk/lvol-id": "lvol-1"}},
+		{
+			name:        "current annotation",
+			annotations: map[string]string{pvcBackupPolicyAnnotation: "policy-a"},
+			want:        "policy-a",
+		},
+		{
+			name:        "deprecated annotation",
+			annotations: map[string]string{deprecatedPvcBackupPolicyAnnotation: "policy-b"},
+			want:        "policy-b",
+		},
+		{
+			name: "current wins over deprecated",
+			annotations: map[string]string{
+				pvcBackupPolicyAnnotation:           "policy-a",
+				deprecatedPvcBackupPolicyAnnotation: "policy-b",
+			},
+			want: "policy-a",
+		},
+		{
+			name: "empty current falls back to deprecated",
+			annotations: map[string]string{
+				pvcBackupPolicyAnnotation:           "",
+				deprecatedPvcBackupPolicyAnnotation: "policy-b",
+			},
+			want: "policy-b",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := backupPolicyNameFromAnnotations(tc.annotations); got != tc.want {
+				t.Fatalf("backupPolicyNameFromAnnotations() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
