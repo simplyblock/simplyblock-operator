@@ -1,5 +1,5 @@
 // simplyblock-rebalancer runs the host-side steps of rebalancing and volume migration
-// that need a privileged process on the node itself. It has four modes:
+// that need a privileged process on the node itself. It has five modes:
 //
 //	--mode=baseline  One-shot NVMe-oF write-latency measurement. Writes
 //	                 {"p50_ns":...,"p99_ns":...} to --termination-log and exits. Used by
@@ -21,7 +21,14 @@
 //	                 when the migration is cancelled anyway, since a Job that succeeded
 //	                 never learns that it should let go.
 //
-// The two migration modes are configured through VMIG_* environment variables rather
+//	--mode=replication-preconnect
+//	                 Connects the target NVMe paths for a cross-cluster replication
+//	                 cutover while the source paths are still serving I/O. Run during
+//	                 the cutover_pending window so the kernel can switch to target paths
+//	                 via ANA when the source is set to INACCESSIBLE, without pod restart.
+//	                 Configured via REPL_CONNECTIONS (JSON) and VMIG_SYS_ROOT.
+//
+// The migration/replication modes are configured through environment variables rather
 // than flags, because the operator builds their Jobs from a CR. All other flag values
 // fall back to the corresponding environment variable when the flag is not set
 // explicitly (see the flag definitions below).
@@ -86,7 +93,7 @@ type nvmeListOutput struct {
 // ── main ───────────────────────────────────────────────────────────────────────
 
 func main() {
-	mode := flag.String("mode", "", "baseline, probe, validate-migration, or release-migration-paths")
+	mode := flag.String("mode", "", "baseline, probe, validate-migration, release-migration-paths, or replication-preconnect")
 
 	// Connection flags — used when --config is not provided.
 	addr := flag.String("addr", os.Getenv("FIO_NODE_ADDR"), "NVMe-oF TCP address")
@@ -120,6 +127,9 @@ func main() {
 
 	case "release-migration-paths":
 		releaseMigration()
+
+	case "replication-preconnect":
+		runReplicationPreconnect()
 
 	case "baseline":
 		if *addr == "" || *port == "" || *nqn == "" {
