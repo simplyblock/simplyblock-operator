@@ -83,21 +83,21 @@ type StorageNodeOverrides struct {
 	// accepted-but-ignored edit here would otherwise look like it took effect when it
 	// did nothing.
 	// +kubebuilder:validation:MaxItems=64
-	// +kubebuilder:validation:XValidation:rule="oldSelf.hasValue() && self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
+	// +kubebuilder:validation:XValidation:rule="!oldSelf.hasValue() || self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
 	// +optional
 	BlkNames []string `json:"blkNames,omitempty"`
 
 	// BlkNamesExclude overrides the block-device kernel-name exclusion selector for
 	// this node. Immutable once set, including the unset-to-set transition (see BlkNames).
 	// +kubebuilder:validation:MaxItems=64
-	// +kubebuilder:validation:XValidation:rule="oldSelf.hasValue() && self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
+	// +kubebuilder:validation:XValidation:rule="!oldSelf.hasValue() || self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
 	// +optional
 	BlkNamesExclude []string `json:"blkNamesExclude,omitempty"`
 
 	// BlkSerials overrides the block-device serial/WWN selector for this node. Immutable
 	// once set, including the unset-to-set transition (see BlkNames).
 	// +kubebuilder:validation:MaxItems=64
-	// +kubebuilder:validation:XValidation:rule="oldSelf.hasValue() && self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
+	// +kubebuilder:validation:XValidation:rule="!oldSelf.hasValue() || self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
 	// +optional
 	BlkSerials []string `json:"blkSerials,omitempty"`
 

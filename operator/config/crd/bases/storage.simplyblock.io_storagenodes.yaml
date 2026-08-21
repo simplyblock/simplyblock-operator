@@ -103,7 +103,7 @@ spec:
                     x-kubernetes-validations:
                     - message: field is immutable
                       optionalOldSelf: true
-                      rule: oldSelf.hasValue() && self == oldSelf.value()
+                      rule: '!oldSelf.hasValue() || self == oldSelf.value()'
                   blkNamesExclude:
                     description: |-
                       BlkNamesExclude overrides the block-device kernel-name exclusion selector for
@@ -115,7 +115,7 @@ spec:
                     x-kubernetes-validations:
                     - message: field is immutable
                       optionalOldSelf: true
-                      rule: oldSelf.hasValue() && self == oldSelf.value()
+                      rule: '!oldSelf.hasValue() || self == oldSelf.value()'
                   blkSerials:
                     description: |-
                       BlkSerials overrides the block-device serial/WWN selector for this node. Immutable
@@ -127,7 +127,7 @@ spec:
                     x-kubernetes-validations:
                     - message: field is immutable
                       optionalOldSelf: true
-                      rule: oldSelf.hasValue() && self == oldSelf.value()
+                      rule: '!oldSelf.hasValue() || self == oldSelf.value()'
                   deviceNames:
                     description: |-
                       DeviceNames explicitly defines the NVMe namespace names to use on this node
