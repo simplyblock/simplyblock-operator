@@ -71,7 +71,7 @@ func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEna
 	// so that node_configure.py receives per-node values for each pod.
 	initScript := `set -e
 [ -f /etc/node-env/env.sh ] && . /etc/node-env/env.sh
-ARGS=""
+ARGS="--max-lvol=${MAX_SUBSYS_COUNT:-0}"
 [ -n "${PCI_ALLOWED}" ] && ARGS="${ARGS} --pci-allowed=\"${PCI_ALLOWED}\""
 [ -n "${PCI_BLOCKED}" ] && ARGS="${ARGS} --pci-blocked=\"${PCI_BLOCKED}\""
 [ -n "${NVME_DEVICES}" ] && ARGS="${ARGS} --nvme-devices=\"${NVME_DEVICES}\""
