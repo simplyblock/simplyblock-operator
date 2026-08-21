@@ -41,6 +41,17 @@ const (
 	// realignmentRetryDelay is how soon to retry after a failed realignment call,
 	// rather than waiting a full interval.
 	realignmentRetryDelay = 30 * time.Second
+
+	// realignmentBusyRetryDelay is how soon to re-check when a realignment is due but
+	// a volume is still moving. Short, because the whole point is to trigger promptly
+	// once the cluster goes quiet.
+	realignmentBusyRetryDelay = 30 * time.Second
+
+	// defaultDataRealignmentMinMoves is the number of volume moves that must
+	// accumulate before a realignment is triggered when MinMoves is unset. One
+	// preserves the historical behavior: every completed migration schedules a
+	// realignment.
+	defaultDataRealignmentMinMoves = 1
 )
 
 // rebalanceMigrationName is the deterministic VolumeMigration CR name for a volume.
@@ -410,13 +421,14 @@ func nextRequeue(
 // A realignment runs when either:
 //   - the TriggerRealignmentAnnotation is set to a non-empty value (explicit,
 //     immediate trigger — e.g. after a storage node drain and removal), which
-//     bypasses interval spacing; or
-//   - status.pendingDataRealignment is set (at least one volume moved) AND at least
-//     Interval has elapsed since the last successful realignment.
+//     bypasses every gate below; or
+//   - at least MinMoves volume moves are outstanding (status.volumeMoveGeneration
+//     beyond status.realignedGeneration) AND at least Interval has elapsed since the
+//     last successful realignment AND no volume is currently moving.
 //
-// On success the pending flag is cleared and lastDataRealignmentAt is recorded, so
-// the next interval window starts fresh — the counter/flag is reset so a realignment
-// never runs at the end of the window with nothing to align.
+// On success the covered generation is recorded and lastDataRealignmentAt is stamped,
+// so the next interval window starts fresh and a realignment never runs with nothing
+// to align.
 func (r *VolumeRebalancerReconciler) reconcileDataRealignment(
 	ctx context.Context,
 	clusterCR *simplyblockv1alpha1.StorageCluster,
@@ -424,7 +436,7 @@ func (r *VolumeRebalancerReconciler) reconcileDataRealignment(
 ) time.Duration {
 	log := logf.FromContext(ctx)
 
-	enabled, interval := resolveDataRealignmentConfig(clusterCR)
+	enabled, interval, minMoves := resolveDataRealignmentConfig(clusterCR)
 	if !enabled {
 		return 0
 	}
@@ -432,18 +444,46 @@ func (r *VolumeRebalancerReconciler) reconcileDataRealignment(
 	// Any non-empty annotation value forces an immediate run; an empty value (or an
 	// absent annotation) does not.
 	forced := clusterCR.Annotations[simplyblockv1alpha1.TriggerRealignmentAnnotation] != ""
-	pending := ptr.BoolFromOrFalse(clusterCR.Status.PendingDataRealignment)
+	// The generation read here is what a successful request will be recorded as
+	// covering, so it must be taken before the call and not re-read after it.
+	generation := ptr.Int64FromOrZero(clusterCR.Status.VolumeMoveGeneration)
+	outstanding := generation - ptr.Int64FromOrZero(clusterCR.Status.RealignedGeneration)
 
-	if !forced && !pending {
-		// Nothing moved since the last realignment — re-check at the interval boundary.
+	if !forced && outstanding < minMoves {
+		// Not enough has moved yet — re-check at the interval boundary.
 		return interval
 	}
 
 	// Honor interval spacing for the periodic (non-forced) path. Explicit triggers
-	// run immediately regardless of when the last realignment happened.
+	// run immediately regardless of when the last realignment happened. Checked
+	// before the in-flight lookup below, which costs a List.
 	if !forced && clusterCR.Status.LastDataRealignmentAt != nil {
 		if elapsed := time.Since(clusterCR.Status.LastDataRealignmentAt.Time); elapsed < interval {
 			return interval - elapsed
+		}
+	}
+
+	// Never realign while a volume is still moving. Two reasons, and the second is the
+	// one that bites: realigning to "current placement" while placement is still
+	// changing asks the control plane to chase a moving target, and a migration that
+	// completes after the request went out raises the generation past what the request
+	// covers — so the next interval tick fires a second realignment on top of the one
+	// still running. Waiting for quiescence removes both, and because the control plane
+	// refuses new migrations while a realignment runs, nothing can then complete
+	// mid-realignment to re-arm it.
+	//
+	// Forced triggers skip this: a drain or node removal has decided the realignment is
+	// needed now, and deferring it could leave a removed node's data unaligned.
+	if !forced {
+		moving, err := r.movingVolumes(ctx, clusterCR)
+		if err != nil {
+			log.Error(err, "Cannot list VolumeMigrations; deferring realignment", "cluster", clusterCR.Name)
+			return realignmentBusyRetryDelay
+		}
+		if len(moving) > 0 {
+			log.V(1).Info("Deferring data realignment; volume(s) still moving",
+				"cluster", clusterCR.Name, "migrations", moving, "outstandingMoves", outstanding)
+			return realignmentBusyRetryDelay
 		}
 	}
 
@@ -454,15 +494,17 @@ func (r *VolumeRebalancerReconciler) reconcileDataRealignment(
 		return realignmentRetryDelay
 	}
 
-	// Success — reset the pending flag and stamp the time so the interval restarts.
+	// Success — record the generation this realignment covers and stamp the time so the
+	// interval restarts.
 	now := metav1.Now()
 	patch := client.MergeFrom(clusterCR.DeepCopy())
-	clusterCR.Status.PendingDataRealignment = ptr.To(false)
+	clusterCR.Status.RealignedGeneration = ptr.To(generation)
 	clusterCR.Status.LastDataRealignmentAt = &now
 	if err := r.Status().Patch(ctx, clusterCR, patch); err != nil {
-		// The realignment happened; failing to clear the flag only risks one extra
+		// The realignment happened; failing to record it only risks one extra
 		// (idempotent) realignment next cycle. Log and continue.
-		log.Error(err, "Realignment triggered but clearing pending flag failed", "cluster", clusterCR.Name)
+		log.Error(err, "Realignment triggered but recording the covered generation failed",
+			"cluster", clusterCR.Name, "generation", generation)
 	}
 
 	if forced {
@@ -471,10 +513,48 @@ func (r *VolumeRebalancerReconciler) reconcileDataRealignment(
 		}
 	}
 
-	log.Info("Control-plane data realignment triggered", "cluster", clusterCR.Name, "forced", forced)
+	log.Info("Control-plane data realignment triggered", "cluster", clusterCR.Name,
+		"forced", forced, "moves", outstanding, "generation", generation)
 	r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeNormal, "DataRealignmentTriggered", "DataRealignmentTriggered",
-		"Control-plane data realignment triggered to re-align data structures to current volume placement")
+		"Control-plane data realignment triggered after %d volume move(s) to re-align data structures to current volume placement",
+		outstanding)
 	return interval
+}
+
+// movingVolumes names the VolumeMigrations for this cluster that the control plane has
+// accepted and not yet finished, i.e. the ones that may be moving data right now.
+//
+// Deliberately keyed on MigrationUUID rather than phase alone. A CR whose submission
+// was refused — which is exactly what happens while a realignment is running, since the
+// control plane rejects migrations then — sits non-terminal for as long as it keeps
+// retrying, but no data is moving and it must not hold realignment off. Only a
+// migration the control plane has taken on counts.
+func (r *VolumeRebalancerReconciler) movingVolumes(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+) ([]string, error) {
+	var migrations simplyblockv1alpha1.VolumeMigrationList
+	if err := r.List(ctx, &migrations, client.InNamespace(clusterCR.Namespace)); err != nil {
+		return nil, fmt.Errorf("list VolumeMigrations in %s: %w", clusterCR.Namespace, err)
+	}
+	var moving []string
+	for i := range migrations.Items {
+		vm := &migrations.Items[i]
+		if vm.Status.MigrationUUID == "" {
+			continue // never accepted by the control plane; nothing is moving
+		}
+		if vm.Status.ClusterUUID != "" && vm.Status.ClusterUUID != clusterCR.Status.UUID {
+			continue // another cluster in the same namespace
+		}
+		switch vm.Status.Phase {
+		case simplyblockv1alpha1.VolumeMigrationPhaseCompleted,
+			simplyblockv1alpha1.VolumeMigrationPhaseFailed,
+			simplyblockv1alpha1.VolumeMigrationPhaseAborted:
+			continue
+		}
+		moving = append(moving, vm.Name)
+	}
+	return moving, nil
 }
 
 // removeTriggerAnnotation deletes the explicit-trigger annotation from the cluster,
@@ -496,24 +576,28 @@ func (r *VolumeRebalancerReconciler) removeTriggerAnnotation(
 // default and is only meaningful while volume migration itself is enabled.
 func resolveDataRealignmentConfig(
 	clusterCR *simplyblockv1alpha1.StorageCluster,
-) (enabled bool, interval time.Duration) {
+) (enabled bool, interval time.Duration, minMoves int64) {
 	interval = defaultDataRealignmentInterval
+	minMoves = defaultDataRealignmentMinMoves
 	vms := clusterCR.Spec.VolumeMigrationSettings
 	if vms != nil && !ptr.BoolFromOrTrue(vms.Enabled) {
 		// Volume migration disabled — nothing ever moves, so nothing to realign.
-		return false, interval
+		return false, interval, minMoves
 	}
 	if vms == nil || vms.DataRealignment == nil {
-		return true, interval
+		return true, interval, minMoves
 	}
 	dr := vms.DataRealignment
 	if !ptr.BoolFromOrTrue(dr.Enabled) {
-		return false, interval
+		return false, interval, minMoves
 	}
 	if dr.Interval != nil && dr.Interval.Duration > 0 {
 		interval = dr.Interval.Duration
 	}
-	return true, interval
+	if n := ptr.Int64From(dr.MinMoves, defaultDataRealignmentMinMoves); n > 0 {
+		minMoves = n
+	}
+	return true, interval, minMoves
 }
 
 func (r *VolumeRebalancerReconciler) SetupWithManager(

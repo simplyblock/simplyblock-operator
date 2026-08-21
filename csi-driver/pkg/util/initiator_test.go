@@ -307,3 +307,99 @@ func resetNodeHostNQNCache(t *testing.T) {
 		nodeHostNQNMu.Unlock()
 	})
 }
+
+// ---- endpoint matching ----
+
+func TestParseEndpoint(t *testing.T) {
+	tests := []struct {
+		name, address, wantIP, wantPort string
+	}{
+		{"traddr and trsvcid", "traddr=10.0.0.112,trsvcid=4428", "10.0.0.112", "4428"},
+		{"with src_addr", "traddr=10.0.0.113,trsvcid=4430,src_addr=10.0.0.113", "10.0.0.113", "4430"},
+		{"order does not matter", "trsvcid=4426,traddr=10.0.0.114", "10.0.0.114", "4426"},
+		{"port missing", "traddr=10.0.0.112", "10.0.0.112", ""},
+		{"empty", "", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip, port := parseEndpoint(tt.address)
+			if ip != tt.wantIP || port != tt.wantPort {
+				t.Errorf("parseEndpoint(%q) = (%q, %q), want (%q, %q)",
+					tt.address, ip, port, tt.wantIP, tt.wantPort)
+			}
+		})
+	}
+}
+
+// The bug this fixes: a storage node serves one subsystem on several ports, so a stale
+// controller at a port the control plane no longer publishes used to read as "this node is
+// connected" and mask the endpoint it does publish. Matching on address alone left the
+// volume a path short with a reconcile that found nothing to do every tick.
+func TestMissingEndpoints_StaleControllerOnSameNodeDoesNotMaskAPublishedPort(t *testing.T) {
+	conns := []*LvolConnectResp{{IP: "10.0.0.112", Port: 4428}}
+	active := []path{{Address: "traddr=10.0.0.112,trsvcid=4426", State: "connecting"}}
+
+	missing := missingEndpoints(conns, active)
+	if len(missing) != 1 || missing[0].Port != 4428 {
+		t.Fatalf("missingEndpoints = %+v, want the published 10.0.0.112:4428 reported missing", missing)
+	}
+}
+
+// The same endpoint attached is the normal case and must not be connected again: a second
+// connect to one endpoint adds a duplicate controller rather than replacing anything.
+func TestMissingEndpoints_AttachedEndpointIsNotReconnected(t *testing.T) {
+	conns := []*LvolConnectResp{{IP: "10.0.0.112", Port: 4428}}
+	active := []path{{Address: "traddr=10.0.0.112,trsvcid=4428,src_addr=10.0.0.113", State: "live"}}
+
+	if missing := missingEndpoints(conns, active); len(missing) != 0 {
+		t.Errorf("missingEndpoints = %+v, want nothing for an already attached endpoint", missing)
+	}
+}
+
+// A controller that is attached but cannot serve still counts as attached: the remedy is a
+// teardown by the repairer, not a second controller for the same endpoint.
+func TestMissingEndpoints_UnusableControllerStillCountsAsAttached(t *testing.T) {
+	conns := []*LvolConnectResp{{IP: "10.0.0.113", Port: 4430}}
+	for _, p := range []path{
+		{Address: "traddr=10.0.0.113,trsvcid=4430", State: "connecting"},
+		{Address: "traddr=10.0.0.113,trsvcid=4430", State: "live", ANAState: ""},
+	} {
+		if missing := missingEndpoints(conns, []path{p}); len(missing) != 0 {
+			t.Errorf("missingEndpoints with %+v = %+v, want it treated as attached", p, missing)
+		}
+	}
+}
+
+// An attached endpoint the control plane no longer publishes is neither reported as
+// missing nor allowed to satisfy a published one — it is simply not consulted.
+func TestMissingEndpoints_UnpublishedEndpointIsIgnored(t *testing.T) {
+	conns := []*LvolConnectResp{{IP: "10.0.0.112", Port: 4428}}
+	active := []path{
+		{Address: "traddr=10.0.0.114,trsvcid=4430", State: "live", ANAState: "non-optimized"},
+		{Address: "traddr=10.0.0.112,trsvcid=4428", State: "live", ANAState: "non-optimized"},
+	}
+	if missing := missingEndpoints(conns, active); len(missing) != 0 {
+		t.Errorf("missingEndpoints = %+v, want the unpublished path ignored, not acted on", missing)
+	}
+}
+
+// Several secondaries on one node, which is what the IP keying collapsed into one.
+func TestMissingEndpoints_DistinctPortsOnOneNodeAreDistinctEndpoints(t *testing.T) {
+	conns := []*LvolConnectResp{
+		{IP: "10.0.0.112", Port: 4426},
+		{IP: "10.0.0.112", Port: 4428},
+	}
+	active := []path{{Address: "traddr=10.0.0.112,trsvcid=4426", State: "live", ANAState: "non-optimized"}}
+
+	missing := missingEndpoints(conns, active)
+	if len(missing) != 1 || missing[0].Port != 4428 {
+		t.Fatalf("missingEndpoints = %+v, want only :4428 missing", missing)
+	}
+}
+
+func TestMissingEndpoints_NoActivePathsReportsAll(t *testing.T) {
+	conns := []*LvolConnectResp{{IP: "10.0.0.112", Port: 4428}, {IP: "10.0.0.114", Port: 4430}}
+	if missing := missingEndpoints(conns, nil); len(missing) != 2 {
+		t.Errorf("missingEndpoints = %+v, want both reported missing", missing)
+	}
+}
