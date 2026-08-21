@@ -74,8 +74,8 @@ type replVolumeReplicationStatus struct {
 // It drives the per-volume state machine: attaching → replicating → (cutover / failover) → detaching.
 type ReplicationSlotReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	Recorder  events.EventRecorder
+	Scheme   *runtime.Scheme
+	Recorder events.EventRecorder
 	// apiReader is an uncached reader for consumer-pod lookups; a stale cache
 	// could miss a running pod and skip preconnect on an actively-used volume.
 	apiReader client.Reader
