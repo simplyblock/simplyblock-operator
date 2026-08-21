@@ -772,25 +772,33 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: snapshotreplications.storage.simplyblock.io
+  name: replicationops.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
   names:
-    kind: SnapshotReplication
-    listKind: SnapshotReplicationList
-    plural: snapshotreplications
-    singular: snapshotreplication
+    kind: ReplicationOps
+    listKind: ReplicationOpsList
+    plural: replicationops
+    shortNames:
+    - replops
+    singular: replicationops
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.configured
-      name: Configured
-      type: boolean
-    - jsonPath: .status.conditions[?(@.type=='Ready')].status
-      name: Ready
+    - jsonPath: .spec.action
+      name: Action
       type: string
-    - jsonPath: .status.conditions[?(@.type=='Ready')].reason
-      name: Reason
+    - jsonPath: .spec.scope
+      name: Scope
+      type: string
+    - jsonPath: .spec.ref
+      name: Ref
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.subphase
+      name: Subphase
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -798,8 +806,11 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: SnapshotReplication is the Schema for the snapshotreplications
-          API
+        description: |-
+          ReplicationOps is a one-shot user-driven CR for imperative replication operations:
+          failover (planned or unplanned) and failback. The operator drives the backend calls
+          to completion and records per-volume outcomes in status.results. Only one ReplicationOps
+          may be active per ReplicationPolicy at a time, enforced via ReplicationPolicy.status.activeOpsRef.
         properties:
           apiVersion:
             description: |-
@@ -819,67 +830,198 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of SnapshotReplication
+            description: ReplicationOpsSpec defines the desired state of a ReplicationOps.
             properties:
               action:
+                description: Action is the operation to perform. Immutable.
                 enum:
+                - failover
                 - failback
                 type: string
-              excludeVolumeIDs:
-                description: 'Optional: volumes to exclude from failback.'
-                items:
-                  type: string
-                type: array
-              includeVolumeIDs:
+              ref:
                 description: |-
-                  Optional: only these volumes are included in failback.
-                  If empty, all volumes are candidates unless excluded below.
-                items:
-                  type: string
-                type: array
-              interval:
-                description: 'snapshot replication interval in seconds (default: 300sec)'
-                format: int32
-                type: integer
-              sourceCluster:
-                description: Source cluster for the snapshots
+                  Ref is the name of the resource identified by Scope:
+                  a ReplicationPair name for scope=target,
+                  a ReplicationPolicy name for scope=policy,
+                  or a ReplicationSlot name for scope=volume. Immutable.
                 type: string
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
-              sourcePool:
-                description: required for failback to a fresh source cluster
+              scope:
+                description: |-
+                  Scope controls which volumes are affected. Immutable.
+                  target: all volumes across every policy that uses the named ReplicationPair.
+                  policy: all volumes managed by the named ReplicationPolicy CR.
+                  volume: a single ReplicationSlot (unplanned per-volume failover).
+                enum:
+                - target
+                - policy
+                - volume
+                type: string
+              sourceClusterID:
+                description: SourceClusterID is used for failback only. Omit to recover
+                  to the original source.
+                type: string
+            required:
+            - action
+            - ref
+            - scope
+            type: object
+          status:
+            description: ReplicationOpsStatus holds the observed state of a ReplicationOps.
+            properties:
+              completedAt:
+                description: CompletedAt is when the operation finished (successfully
+                  or not).
+                format: date-time
+                type: string
+              message:
+                description: Message is a human-readable description of the current
+                  phase.
+                type: string
+              phase:
+                description: Phase is the current lifecycle phase of this operation.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              results:
+                description: Results holds a per-volume summary of the operation outcome.
+                items:
+                  description: ReplicationOpsResult holds the outcome for a single
+                    volume in a ReplicationOps.
+                  properties:
+                    detail:
+                      description: Detail is an optional human-readable note (error
+                        message or skip reason).
+                      type: string
+                    slotRef:
+                      description: SlotRef is the name of the ReplicationSlot CR.
+                      type: string
+                    status:
+                      description: Status is the outcome for this volume.
+                      enum:
+                      - succeeded
+                      - skipped
+                      - failed
+                      type: string
+                    targetLvolID:
+                      description: TargetLvolID is the UUID of the volume on the target
+                        cluster (failover only).
+                      type: string
+                  required:
+                  - slotRef
+                  - status
+                  type: object
+                type: array
+              startedAt:
+                description: StartedAt is when the operation began.
+                format: date-time
+                type: string
+              subphase:
+                description: |-
+                  Subphase describes what the operation is currently doing within the phase
+                  (e.g. "TriggeringFailover", "UpdatingSlotStatuses", "ReleasingLock").
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: replicationpairs.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: ReplicationPair
+    listKind: ReplicationPairList
+    plural: replicationpairs
+    shortNames:
+    - relpair
+    singular: replicationpair
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.sourceCluster
+      name: Source
+      type: string
+    - jsonPath: .spec.targetCluster
+      name: Target
+      type: string
+    - jsonPath: .status.ready
+      name: Ready
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ReplicationPair defines the source and target clusters for a replication relationship.
+          It is reusable configuration — multiple ReplicationPolicies may reference the same pair
+          to replicate volumes between the same two clusters with different schedules or retention.
+          The operator ensures the corresponding backend ReplicationTarget exists and stores its ID
+          in status.backendTargetID for use by ReplicationPolicy resources.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ReplicationPairSpec defines the source and target clusters
+              for a replication relationship.
+            properties:
+              sourceCluster:
+                description: SourceCluster is the name of the local StorageCluster
+                  (the replication source).
                 type: string
               targetCluster:
-                description: Target cluster for replication
+                description: |-
+                  TargetCluster is the name or UUID of the remote cluster (the replication target).
+                  Immutable after creation.
                 type: string
                 x-kubernetes-validations:
-                - message: field is immutable
+                - message: targetCluster is immutable
                   rule: self == oldSelf
-              targetPool:
-                description: Target cluster pool for replication
-                type: string
-              timeout:
-                description: snapshot replication timeout
-                format: int32
-                type: integer
-              volumeIDs:
-                description: 'Optional: list of volumes to replicate. Empty means
-                  all volumes'
-                items:
-                  type: string
-                type: array
             required:
             - sourceCluster
             - targetCluster
-            - targetPool
             type: object
           status:
-            description: status defines the observed state of SnapshotReplication
+            description: ReplicationPairStatus holds the observed state of a ReplicationPair.
             properties:
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef is the name of the ReplicationOps currently holding the
+                  target-scope lock on this pair. Only one scope=target ReplicationOps may
+                  be active per pair at a time.
+                type: string
+              backendTargetID:
+                description: BackendTargetID is the UUID of the backend ReplicationTarget
+                  resource.
+                type: string
               conditions:
-                description: Conditions provides human-readable status conditions
-                  for kubectl get output.
+                description: Conditions holds standard Kubernetes condition types.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -935,74 +1077,385 @@ spec:
                   - type
                   type: object
                 type: array
-                x-kubernetes-list-map-keys:
-                - type
-                x-kubernetes-list-type: map
-              configured:
+              message:
+                description: Message provides a human-readable description of the
+                  current state.
+                type: string
+              ready:
+                description: Ready is true when the backend ReplicationTarget has
+                  been created and is available.
                 type: boolean
-              observedFailbackGeneration:
-                description: The metadata.generation value for which failback was
-                  last processed.
-                format: int64
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: replicationpolicies.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: ReplicationPolicy
+    listKind: ReplicationPolicyList
+    plural: replicationpolicies
+    shortNames:
+    - repl
+    singular: replicationpolicy
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.pairRef
+      name: Pair
+      type: string
+    - jsonPath: .spec.mode
+      name: Mode
+      type: string
+    - jsonPath: .spec.interval
+      name: Interval
+      type: string
+    - jsonPath: .status.ready
+      name: Ready
+      type: boolean
+    - jsonPath: .status.slotCount
+      name: Slots
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ReplicationPolicy defines the replication schedule and retention for volumes replicated
+          between the clusters defined by a ReplicationPair.
+          A StorageClass or PVC references a policy via the storage.simplyblock.io/replication-policy
+          annotation. The operator automatically creates one ReplicationSlot per bound PVC.
+          Deletion is blocked while any ReplicationSlots reference this policy.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ReplicationPolicySpec defines the desired replication schedule
+              and retention.
+            properties:
+              interval:
+                default: 5m
+                description: Interval is how often a replication snapshot is taken
+                  (e.g. "5m", "1h").
+                type: string
+              mode:
+                default: failover
+                description: |-
+                  Mode controls replication semantics.
+                  failover: target is a DR standby; volumes are read-only on the target.
+                  migration: planned online cutover to the target cluster.
+                enum:
+                - failover
+                - migration
+                type: string
+              pairRef:
+                description: |-
+                  PairRef is the name of the ReplicationPair that defines the source and target clusters.
+                  Multiple ReplicationPolicies may reference the same pair with different schedules.
+                type: string
+              snapshotRetention:
+                default: 3
+                description: SnapshotRetention is the minimum number of snapshots
+                  to retain on the target.
+                format: int32
+                minimum: 2
                 type: integer
-              volumes:
-                description: Per-volume replication status
+            required:
+            - pairRef
+            type: object
+          status:
+            description: ReplicationPolicyStatus holds the observed state of a ReplicationPolicy.
+            properties:
+              activeOpsRef:
+                description: |-
+                  ActiveOpsRef is the name of the currently running ReplicationOps CR.
+                  Empty when no operation is in progress.
+                type: string
+              backendPolicyID:
+                description: BackendPolicyID is the UUID of the backend ReplicationPolicy
+                  resource.
+                type: string
+              conditions:
+                description: Conditions holds standard Kubernetes condition types.
                 items:
-                  description: VolumeReplicationStatus tracks the replication state
-                    of an individual volume
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
                   properties:
-                    errors:
-                      description: 'Optional: list of errors encountered for this
-                        volume'
-                      items:
-                        description: ReplicationError stores timestamped error messages
-                        properties:
-                          message:
-                            type: string
-                          timestamp:
-                            format: date-time
-                            type: string
-                        required:
-                        - message
-                        - timestamp
-                        type: object
-                      type: array
-                    lastReplicationTime:
-                      description: Timestamp of the last successful replication for
-                        this volume
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
                       format: date-time
                       type: string
-                    lastSnapshotID:
-                      description: Last snapshot ID replicated for this volume
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
                       type: string
-                    phase:
-                      description: Phase is the current replication phase for this
-                        volume.
-                      enum:
-                      - Pending
-                      - Running
-                      - TriggeringTargetReplication
-                      - WaitingForTargetReplication
-                      - ReplicatingToSource
-                      - WaitingForTargetDeletion
-                      - Completed
-                      - Failed
-                      - Paused
-                      type: string
-                    replicatedCount:
-                      description: Number of snapshots successfully replicated
-                      format: int32
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
                       type: integer
-                    volumeID:
-                      description: Volume ID
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
                       type: string
                   required:
-                  - volumeID
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
                   type: object
                 type: array
+              ready:
+                description: Ready is true when the backend ReplicationPolicy has
+                  been created.
+                type: boolean
+              slotCount:
+                description: SlotCount is the number of ReplicationSlot CRs currently
+                  managed by this policy.
+                format: int32
+                type: integer
             type: object
-        required:
-        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: replicationslots.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: ReplicationSlot
+    listKind: ReplicationSlotList
+    plural: replicationslots
+    shortNames:
+    - relslot
+    singular: replicationslot
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.policyRef
+      name: Policy
+      type: string
+    - jsonPath: .spec.pvcRef
+      name: PVC
+      type: string
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .status.direction
+      name: Direction
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ReplicationSlot tracks the live replication state for a single PVC.
+          One ReplicationSlot is created per PVC by the PVCAnnotationWatcher controller when
+          a PVC references a ReplicationPolicy via annotation. It is owned by its PVC, so
+          deleting the PVC cascades deletion and triggers a backend detach via the slot finalizer.
+          The ReplicationSlot reconciler drives all backend calls: attach, monitor, cutover,
+          failover, and detach.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ReplicationSlotSpec defines the identity of a per-volume
+              replication slot.
+            properties:
+              policyRef:
+                description: PolicyRef is the name of the ReplicationPolicy governing
+                  this slot. Immutable.
+                type: string
+              pvcRef:
+                description: PVCRef is the name of the PVC being replicated. Immutable.
+                type: string
+              volumeID:
+                description: |-
+                  VolumeID is the backend lvol UUID of the source volume. Immutable.
+                  Format: "<clusterUUID>:<poolUUID>:<volumeUUID>"
+                type: string
+            required:
+            - policyRef
+            - pvcRef
+            - volumeID
+            type: object
+          status:
+            description: ReplicationSlotStatus holds the observed state of a ReplicationSlot.
+            properties:
+              conditions:
+                description: Conditions holds standard Kubernetes condition types.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              direction:
+                description: Direction is which side of the replication relationship
+                  this cluster holds.
+                enum:
+                - source
+                - target
+                type: string
+              lastReplicatedAt:
+                description: LastReplicatedAt is the timestamp of the last successful
+                  replication snapshot.
+                format: date-time
+                type: string
+              message:
+                description: Message provides a human-readable description of the
+                  current state.
+                type: string
+              sourceLvolID:
+                description: SourceLvolID is the UUID of the source volume on the
+                  source cluster.
+                type: string
+              state:
+                description: State is the current replication state for this slot.
+                enum:
+                - attaching
+                - replicating
+                - cutover_pending
+                - cutover_done
+                - failed_over
+                - detaching
+                - error
+                type: string
+              targetLvolID:
+                description: TargetLvolID is the UUID of the replicated volume on
+                  the target cluster.
+                type: string
+              targetNQN:
+                description: TargetNQN is the NVMe NQN on the target cluster (populated
+                  after failover).
+                type: string
+            type: object
         type: object
     served: true
     storage: true
@@ -3955,7 +4408,10 @@ rules:
   - backuppolicies
   - backuprestores
   - controlplanes
-  - snapshotreplications
+  - replicationops
+  - replicationpairs
+  - replicationpolicies
+  - replicationslots
   - storagebackups
   - storageclusterops
   - storageclusters
@@ -3979,7 +4435,10 @@ rules:
   - backupimports/finalizers
   - backuppolicies/finalizers
   - backuprestores/finalizers
-  - snapshotreplications/finalizers
+  - replicationops/finalizers
+  - replicationpairs/finalizers
+  - replicationpolicies/finalizers
+  - replicationslots/finalizers
   - storagebackups/finalizers
   - storageclusterops/finalizers
   - storageclusters/finalizers
@@ -3998,7 +4457,10 @@ rules:
   - backuppolicies/status
   - backuprestores/status
   - controlplanes/status
-  - snapshotreplications/status
+  - replicationops/status
+  - replicationpairs/status
+  - replicationpolicies/status
+  - replicationslots/status
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status
@@ -4528,6 +4990,25 @@ webhooks:
     - UPDATE
     resources:
     - persistentvolumeclaims
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: simplyblock-operator-system
+      path: /validate-storage-simplyblock-io-v1alpha1-replicationops
+  failurePolicy: Fail
+  name: vreplicationops.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    resources:
+    - replicationops
   sideEffects: None
 - admissionReviewVersions:
   - v1
