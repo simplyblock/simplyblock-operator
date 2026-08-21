@@ -263,7 +263,8 @@ func TestBuildPerNodeEnvFile_LblkFleetDefaults(t *testing.T) {
 			LblkJournalPercent: &jmPercent,
 		},
 	}
-	env := buildPerNodeEnvFile(sns, "worker-a")
+	cluster := newSizingStorageCluster(nil, nil, "")
+	env := buildPerNodeEnvFile(cluster, sns, "worker-a")
 	if !strings.Contains(env, "LBLK=true") {
 		t.Errorf("expected LBLK=true, got:\n%s", env)
 	}
@@ -291,7 +292,8 @@ func TestBuildPerNodeEnvFile_LblkOverrideWinsOverFleet(t *testing.T) {
 			},
 		},
 	}
-	env := buildPerNodeEnvFile(sns, "worker-b")
+	cluster := newSizingStorageCluster(nil, nil, "")
+	env := buildPerNodeEnvFile(cluster, sns, "worker-b")
 	if !strings.Contains(env, "LBLK=true") {
 		t.Errorf("expected override LBLK=true, got:\n%s", env)
 	}
