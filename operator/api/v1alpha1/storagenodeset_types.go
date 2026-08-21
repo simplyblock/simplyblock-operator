@@ -126,7 +126,7 @@ type StorageNodeSetSpec struct {
 	// node, so an accepted-but-ignored edit here would otherwise look like it took effect
 	// when it did nothing.
 	// +kubebuilder:validation:MaxItems=64
-	// +kubebuilder:validation:XValidation:rule="oldSelf.hasValue() && self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
+	// +kubebuilder:validation:XValidation:rule="!oldSelf.hasValue() || self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
 	// +optional
 	BlkNames []string `json:"blkNames,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Block Device Names Exclude"
@@ -134,7 +134,7 @@ type StorageNodeSetSpec struct {
 	// other eligible whole disks are used. Immutable once set, including the unset-to-set
 	// transition (see BlkNames).
 	// +kubebuilder:validation:MaxItems=64
-	// +kubebuilder:validation:XValidation:rule="oldSelf.hasValue() && self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
+	// +kubebuilder:validation:XValidation:rule="!oldSelf.hasValue() || self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
 	// +optional
 	BlkNamesExclude []string `json:"blkNamesExclude,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Block Device Serials"
@@ -143,7 +143,7 @@ type StorageNodeSetSpec struct {
 	// cloud/virtualized disks whose /dev/sdX name is not guaranteed stable. Immutable once
 	// set, including the unset-to-set transition (see BlkNames).
 	// +kubebuilder:validation:MaxItems=64
-	// +kubebuilder:validation:XValidation:rule="oldSelf.hasValue() && self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
+	// +kubebuilder:validation:XValidation:rule="!oldSelf.hasValue() || self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
 	// +optional
 	BlkSerials []string `json:"blkSerials,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Lblk Journal Percent"

@@ -90,7 +90,7 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   optionalOldSelf: true
-                  rule: oldSelf.hasValue() && self == oldSelf.value()
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
               blkNamesExclude:
                 description: |-
                   BlkNamesExclude excludes block devices by kernel name when EnableLblk is set; all
@@ -103,7 +103,7 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   optionalOldSelf: true
-                  rule: oldSelf.hasValue() && self == oldSelf.value()
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
               blkSerials:
                 description: |-
                   BlkSerials selects block devices by serial number or WWN when EnableLblk is set —
@@ -117,7 +117,7 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   optionalOldSelf: true
-                  rule: oldSelf.hasValue() && self == oldSelf.value()
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
               clusterImage:
                 description: |-
                   ClusterImage is the container image used for storage-node workloads.
@@ -382,7 +382,7 @@ spec:
                       x-kubernetes-validations:
                       - message: field is immutable
                         optionalOldSelf: true
-                        rule: oldSelf.hasValue() && self == oldSelf.value()
+                        rule: '!oldSelf.hasValue() || self == oldSelf.value()'
                     blkNamesExclude:
                       description: |-
                         BlkNamesExclude overrides the block-device kernel-name exclusion selector for
@@ -394,7 +394,7 @@ spec:
                       x-kubernetes-validations:
                       - message: field is immutable
                         optionalOldSelf: true
-                        rule: oldSelf.hasValue() && self == oldSelf.value()
+                        rule: '!oldSelf.hasValue() || self == oldSelf.value()'
                     blkSerials:
                       description: |-
                         BlkSerials overrides the block-device serial/WWN selector for this node. Immutable
@@ -406,7 +406,7 @@ spec:
                       x-kubernetes-validations:
                       - message: field is immutable
                         optionalOldSelf: true
-                        rule: oldSelf.hasValue() && self == oldSelf.value()
+                        rule: '!oldSelf.hasValue() || self == oldSelf.value()'
                     deviceNames:
                       description: |-
                         DeviceNames explicitly defines the NVMe namespace names to use on this node
