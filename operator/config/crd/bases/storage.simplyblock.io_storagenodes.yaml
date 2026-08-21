@@ -235,9 +235,8 @@ spec:
                     > 0) || (has(self.blkSerials) && size(self.blkSerials) > 0)) &&
                     ((has(self.pcieAllowList) && size(self.pcieAllowList) > 0) ||
                     (has(self.pcieDenyList) && size(self.pcieDenyList) > 0) || (has(self.pcieModel)
-                    && self.pcieModel != '''') || (has(self.driveSizeRange) && self.driveSizeRange
-                    != '''') || (has(self.deviceNames) && size(self.deviceNames) >
-                    0)))'
+                    && size(self.pcieModel) > 0) || (has(self.driveSizeRange) && size(self.driveSizeRange)
+                    > 0) || (has(self.deviceNames) && size(self.deviceNames) > 0)))'
               socketId:
                 description: SocketID is the NUMA socket identifier from spec.socketsToUse
                   (e.g. "0", "1"). Immutable.

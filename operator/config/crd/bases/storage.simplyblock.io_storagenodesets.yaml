@@ -515,10 +515,9 @@ spec:
                       size(self.blkNamesExclude) > 0) || (has(self.blkSerials) &&
                       size(self.blkSerials) > 0)) && ((has(self.pcieAllowList) &&
                       size(self.pcieAllowList) > 0) || (has(self.pcieDenyList) &&
-                      size(self.pcieDenyList) > 0) || (has(self.pcieModel) && self.pcieModel
-                      != '''') || (has(self.driveSizeRange) && self.driveSizeRange
-                      != '''') || (has(self.deviceNames) && size(self.deviceNames)
-                      > 0)))'
+                      size(self.pcieDenyList) > 0) || (has(self.pcieModel) && size(self.pcieModel)
+                      > 0) || (has(self.driveSizeRange) && size(self.driveSizeRange)
+                      > 0) || (has(self.deviceNames) && size(self.deviceNames) > 0)))'
                 description: |-
                   NodeConfigs allows per-worker-node configuration overrides keyed by the
                   Kubernetes worker node name. Entries are propagated to the corresponding
@@ -674,8 +673,8 @@ spec:
                 && size(self.blkNames) > 0) || (has(self.blkNamesExclude) && size(self.blkNamesExclude)
                 > 0) || (has(self.blkSerials) && size(self.blkSerials) > 0)) && ((has(self.pcieAllowList)
                 && size(self.pcieAllowList) > 0) || (has(self.pcieDenyList) && size(self.pcieDenyList)
-                > 0) || (has(self.pcieModel) && self.pcieModel != '''') || (has(self.driveSizeRange)
-                && self.driveSizeRange != '''') || (has(self.deviceNames) && size(self.deviceNames)
+                > 0) || (has(self.pcieModel) && size(self.pcieModel) > 0) || (has(self.driveSizeRange)
+                && size(self.driveSizeRange) > 0) || (has(self.deviceNames) && size(self.deviceNames)
                 > 0)))'
           status:
             description: status defines the observed state of StorageNodeSet
