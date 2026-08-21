@@ -508,7 +508,8 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 // reconcileMigration drives a planned online cutover (mode=migration).
 // For each slot it calls POST .../replication/commit which queues an async
 // task on the backend. The backend transitions the slot through:
-//   replicating → cutover_pending (both paths served) → cutover_done (target only).
+//
+//	replicating → cutover_pending (both paths served) → cutover_done (target only).
 //
 // The ReplicationOps succeeds as soon as all commit calls are accepted (202).
 // The slot state transitions to cutover_done asynchronously; the test script
