@@ -725,7 +725,7 @@ func (r *BackupRestoreReconciler) ensurePV(
 	existing := &corev1.PersistentVolume{}
 	if err := r.Get(ctx, client.ObjectKey{Name: pvName}, existing); err == nil {
 		wantStorageClass := simplyblockStorageClassName(restoreCR.Namespace, restoreCR.Spec.ClusterName, restoreCR.Status.PoolName)
-		wantHandle := fmt.Sprintf("%s:%s:%s", clusterUUID, restoreCR.Status.PoolName, restoreCR.Status.RestoredLvolID)
+		wantHandle := fmt.Sprintf("%s:%s:%s", clusterUUID, restoreCR.Status.PoolUUID, restoreCR.Status.RestoredLvolID)
 		var mismatch string
 		switch {
 		case existing.Spec.StorageClassName != wantStorageClass:
@@ -759,7 +759,7 @@ func (r *BackupRestoreReconciler) ensurePV(
 
 	volumeHandle := fmt.Sprintf("%s:%s:%s",
 		clusterUUID,
-		restoreCR.Status.PoolName,
+		restoreCR.Status.PoolUUID,
 		restoreCR.Status.RestoredLvolID,
 	)
 	volumeAttributes, err := r.restoreVolumeAttributes(
