@@ -81,6 +81,17 @@ var responseRules = []responseRule{
 // own rules; convert to NvmeConnectEntry where the difference does not matter.
 type LvolConnectEntry NvmeConnectEntry
 
+// UnmarshalJSON decodes and validates a BackupConfigOutput.
+func (d *BackupConfigOutput) UnmarshalJSON(data []byte) error {
+	type plain BackupConfigOutput // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = BackupConfigOutput(v)
+	return Validate(data, d)
+}
+
 // UnmarshalJSON decodes and validates a BackupDTO.
 func (d *BackupDTO) UnmarshalJSON(data []byte) error {
 	type plain BackupDTO // shed this method, so the decode below does not recurse
@@ -89,6 +100,17 @@ func (d *BackupDTO) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*d = BackupDTO(v)
+	return Validate(data, d)
+}
+
+// UnmarshalJSON decodes and validates a BackupManifest.
+func (d *BackupManifest) UnmarshalJSON(data []byte) error {
+	type plain BackupManifest // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = BackupManifest(v)
 	return Validate(data, d)
 }
 
@@ -122,6 +144,17 @@ func (d *ClusterDTO) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*d = ClusterDTO(v)
+	return Validate(data, d)
+}
+
+// UnmarshalJSON decodes and validates a DataPlane.
+func (d *DataPlane) UnmarshalJSON(data []byte) error {
+	type plain DataPlane // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = DataPlane(v)
 	return Validate(data, d)
 }
 
@@ -180,6 +213,17 @@ func (d *NvmeConnectEntry) UnmarshalJSON(data []byte) error {
 	return Validate(data, d)
 }
 
+// UnmarshalJSON decodes and validates a S3Credentials.
+func (d *S3Credentials) UnmarshalJSON(data []byte) error {
+	type plain S3Credentials // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = S3Credentials(v)
+	return Validate(data, d)
+}
+
 // UnmarshalJSON decodes and validates a SnapshotDTO.
 func (d *SnapshotDTO) UnmarshalJSON(data []byte) error {
 	type plain SnapshotDTO // shed this method, so the decode below does not recurse
@@ -188,6 +232,17 @@ func (d *SnapshotDTO) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*d = SnapshotDTO(v)
+	return Validate(data, d)
+}
+
+// UnmarshalJSON decodes and validates a Source.
+func (d *Source) UnmarshalJSON(data []byte) error {
+	type plain Source // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = Source(v)
 	return Validate(data, d)
 }
 
@@ -221,6 +276,17 @@ func (d *TaskDTO) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*d = TaskDTO(v)
+	return Validate(data, d)
+}
+
+// UnmarshalJSON decodes and validates a Volume.
+func (d *Volume) UnmarshalJSON(data []byte) error {
+	type plain Volume // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = Volume(v)
 	return Validate(data, d)
 }
 

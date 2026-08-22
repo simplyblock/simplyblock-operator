@@ -90,6 +90,54 @@ func (e ClusterParamsHaType) Valid() bool {
 	}
 }
 
+// Defines values for FDBKeyDescriptorType.
+const (
+	Fdb FDBKeyDescriptorType = "fdb"
+)
+
+// Valid indicates whether the value is a known member of the FDBKeyDescriptorType enum.
+func (e FDBKeyDescriptorType) Valid() bool {
+	switch e {
+	case Fdb:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HCPKeyDescriptorType.
+const (
+	Hcp HCPKeyDescriptorType = "hcp"
+)
+
+// Valid indicates whether the value is a known member of the HCPKeyDescriptorType enum.
+func (e HCPKeyDescriptorType) Valid() bool {
+	switch e {
+	case Hcp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecondaryTarget.
+const (
+	SecondaryTargetN0 SecondaryTarget = 0
+	SecondaryTargetN1 SecondaryTarget = 1
+)
+
+// Valid indicates whether the value is a known member of the SecondaryTarget enum.
+func (e SecondaryTarget) Valid() bool {
+	switch e {
+	case SecondaryTargetN0:
+		return true
+	case SecondaryTargetN1:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for StorageNodeDTOStatus.
 const (
 	StorageNodeDTOStatusDown        StorageNodeDTOStatus = "down"
@@ -237,6 +285,45 @@ func (e TaskDTOStatus) Valid() bool {
 	}
 }
 
+// Defines values for VolumeFabric.
+const (
+	Rdma    VolumeFabric = "rdma"
+	Tcp     VolumeFabric = "tcp"
+	Tcprdma VolumeFabric = "tcp,rdma"
+)
+
+// Valid indicates whether the value is a known member of the VolumeFabric enum.
+func (e VolumeFabric) Valid() bool {
+	switch e {
+	case Rdma:
+		return true
+	case Tcp:
+		return true
+	case Tcprdma:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VolumeHaType.
+const (
+	VolumeHaTypeHa     VolumeHaType = "ha"
+	VolumeHaTypeSingle VolumeHaType = "single"
+)
+
+// Valid indicates whether the value is a known member of the VolumeHaType enum.
+func (e VolumeHaType) Valid() bool {
+	switch e {
+	case VolumeHaTypeHa:
+		return true
+	case VolumeHaTypeSingle:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateParamsHaType.
 const (
 	CreateParamsHaTypeHa     CreateParamsHaType = "ha"
@@ -257,16 +344,16 @@ func (e CreateParamsHaType) Valid() bool {
 
 // Defines values for CreateParamsPriorityClass.
 const (
-	N0 CreateParamsPriorityClass = 0
-	N1 CreateParamsPriorityClass = 1
+	CreateParamsPriorityClassN0 CreateParamsPriorityClass = 0
+	CreateParamsPriorityClassN1 CreateParamsPriorityClass = 1
 )
 
 // Valid indicates whether the value is a known member of the CreateParamsPriorityClass enum.
 func (e CreateParamsPriorityClass) Valid() bool {
 	switch e {
-	case N0:
+	case CreateParamsPriorityClassN0:
 		return true
-	case N1:
+	case CreateParamsPriorityClassN1:
 		return true
 	default:
 		return false
@@ -399,35 +486,111 @@ func (e ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStorageP
 	}
 }
 
-// BackupConfigParams defines model for BackupConfigParams.
-type BackupConfigParams struct {
-	AccessKeyId      *string `json:"access_key_id,omitempty"`
-	BucketName       *string `json:"bucket_name,omitempty"`
-	LocalEndpoint    *string `json:"local_endpoint,omitempty"`
-	LocalTesting     *bool   `json:"local_testing,omitempty"`
-	S3ThreadPoolSize *int    `json:"s3_thread_pool_size,omitempty"`
-	SecondaryTarget  *int    `json:"secondary_target,omitempty"`
-	SecretAccessKey  *string `json:"secret_access_key,omitempty"`
-	SnapshotBackups  *bool   `json:"snapshot_backups,omitempty"`
-	WithCompression  *bool   `json:"with_compression,omitempty"`
+// BackupConfigInput A cluster's backup configuration: a location plus how to authenticate to it.
+type BackupConfigInput struct {
+	BucketName       string         `json:"bucket_name"`
+	Credentials      *S3Credentials `json:"credentials,omitempty"`
+	Endpoint         *string        `json:"endpoint,omitempty"`
+	Region           *string        `json:"region,omitempty"`
+	S3ThreadPoolSize *int           `json:"s3_thread_pool_size,omitempty"`
+
+	// SecondaryTarget The kind of secondary store, numbered as the data plane's RPC expects.
+	SecondaryTarget *SecondaryTarget `json:"secondary_target,omitempty"`
+	SnapshotBackups *bool            `json:"snapshot_backups,omitempty"`
+	UsePathStyle    *bool            `json:"use_path_style,omitempty"`
+	VerifyTls       *bool            `json:"verify_tls,omitempty"`
+	WithCompression *bool            `json:"with_compression,omitempty"`
+}
+
+// BackupConfigOutput A cluster's backup configuration: a location plus how to authenticate to it.
+type BackupConfigOutput struct {
+	BucketName       string         `json:"bucket_name"`
+	Credentials      *S3Credentials `json:"credentials,omitempty"`
+	Endpoint         *string        `json:"endpoint,omitempty"`
+	Region           *string        `json:"region,omitempty"`
+	S3ThreadPoolSize *int           `json:"s3_thread_pool_size,omitempty"`
+	SecondaryTarget  *int           `json:"secondary_target,omitempty"`
+	SnapshotBackups  *bool          `json:"snapshot_backups,omitempty"`
+	UsePathStyle     *bool          `json:"use_path_style,omitempty"`
+	VerifyTls        *bool          `json:"verify_tls,omitempty"`
+	WithCompression  *bool          `json:"with_compression,omitempty"`
 }
 
 // BackupDTO defines model for BackupDTO.
 type BackupDTO struct {
-	AllowedHosts    []map[string]interface{} `json:"allowed_hosts"`
-	CompletedAt     int                      `json:"completed_at"`
-	CreatedAt       int                      `json:"created_at"`
-	Id              openapi_types.UUID       `json:"id"`
-	LvolId          string                   `json:"lvol_id"`
-	LvolName        string                   `json:"lvol_name"`
-	NodeId          string                   `json:"node_id"`
-	PrevBackupId    string                   `json:"prev_backup_id"`
-	S3Id            int                      `json:"s3_id"`
-	Size            int                      `json:"size"`
-	SnapshotId      string                   `json:"snapshot_id"`
-	SnapshotName    string                   `json:"snapshot_name"`
-	SourceClusterId string                   `json:"source_cluster_id"`
-	Status          string                   `json:"status"`
+	AllowedHosts []string            `json:"allowed_hosts"`
+	CompletedAt  int                 `json:"completed_at"`
+	CreatedAt    int                 `json:"created_at"`
+	Encrypted    bool                `json:"encrypted"`
+	Id           openapi_types.UUID  `json:"id"`
+	LvolId       openapi_types.UUID  `json:"lvol_id"`
+	LvolName     string              `json:"lvol_name"`
+	NodeId       openapi_types.UUID  `json:"node_id"`
+	PrevBackupId *openapi_types.UUID `json:"prev_backup_id,omitempty"`
+	S3Id         int                 `json:"s3_id"`
+	Size         int                 `json:"size"`
+	SnapshotId   openapi_types.UUID  `json:"snapshot_id"`
+	SnapshotName string              `json:"snapshot_name"`
+	Status       string              `json:"status"`
+}
+
+// BackupLocation Where a backup's objects are, and how to interpret them. Never secret.
+//
+// Every field here affects whether the objects can be read back at all, which
+// is why the whole model is embedded in each backup rather than looked up from
+// the cluster that happened to create it.
+type BackupLocation struct {
+	BucketName string  `json:"bucket_name"`
+	Endpoint   *string `json:"endpoint,omitempty"`
+	Region     *string `json:"region,omitempty"`
+
+	// SecondaryTarget The kind of secondary store, numbered as the data plane's RPC expects.
+	SecondaryTarget *SecondaryTarget `json:"secondary_target,omitempty"`
+	SnapshotBackups *bool            `json:"snapshot_backups,omitempty"`
+	UsePathStyle    *bool            `json:"use_path_style,omitempty"`
+	VerifyTls       *bool            `json:"verify_tls,omitempty"`
+	WithCompression *bool            `json:"with_compression,omitempty"`
+}
+
+// BackupManifest defines model for BackupManifest.
+type BackupManifest struct {
+	BackupId    openapi_types.UUID `json:"backup_id"`
+	CompletedAt int                `json:"completed_at"`
+	CreatedAt   int                `json:"created_at"`
+
+	// Dataplane How the objects are encoded, so a later format change is detectable.
+	//
+	// Everything here has to be recorded because reading the bucket cannot
+	// recover it -- unlike the bucket's name, region and endpoint, which the
+	// reader necessarily supplied to get this far.
+	Dataplane  DataPlane `json:"dataplane"`
+	Encryption *struct {
+		union json.RawMessage
+	} `json:"encryption,omitempty"`
+	PrevBackupId  *openapi_types.UUID `json:"prev_backup_id,omitempty"`
+	S3Id          int                 `json:"s3_id"`
+	SchemaVersion *int                `json:"schema_version,omitempty"`
+	Size          int                 `json:"size"`
+
+	// Source Where this backup came from. Provenance for an operator reading a bucket.
+	//
+	// Nothing may resolve configuration or keys through these -- that dependency
+	// on the originating cluster is the whole problem being removed.
+	Source Source `json:"source"`
+
+	// Volume The shape of the volume this backup was taken from.
+	//
+	// Split in two by what is knowable. The identity and size come off the backup
+	// record and are always present. The settings below them come off the live
+	// volume, so they are absent together once that volume is deleted -- and
+	// absent is not the same answer as ``0``, which for a QoS cap means
+	// "unlimited" and for a priority class is a real class.
+	//
+	// Nothing reads the settings yet; restore still creates its volume with
+	// hardcoded defaults. They are recorded anyway because a manifest is read
+	// years after it is written, and a backup taken today cannot be given a shape
+	// retroactively once its volume is gone.
+	Volume Volume `json:"volume"`
 }
 
 // BackupPolicyDTO defines model for BackupPolicyDTO.
@@ -480,7 +643,7 @@ type ClusterDTOStatus string
 
 // ClusterParams defines model for ClusterParams.
 type ClusterParams struct {
-	BackupConfig           *BackupConfigParams     `json:"backup_config,omitempty"`
+	BackupConfig           *BackupConfigInput      `json:"backup_config,omitempty"`
 	BlkSize                *ClusterParamsBlkSize   `json:"blk_size,omitempty"`
 	CapCrit                *int                    `json:"cap_crit,omitempty"`
 	CapWarn                *int                    `json:"cap_warn,omitempty"`
@@ -519,6 +682,17 @@ type ClusterParamsBlkSize int
 
 // ClusterParamsHaType defines model for ClusterParams.HaType.
 type ClusterParamsHaType string
+
+// DataPlane How the objects are encoded, so a later format change is detectable.
+//
+// Everything here has to be recorded because reading the bucket cannot
+// recover it -- unlike the bucket's name, region and endpoint, which the
+// reader necessarily supplied to get this far.
+type DataPlane struct {
+	ClusterSize     *int    `json:"cluster_size,omitempty"`
+	KeyFormat       *string `json:"key_format,omitempty"`
+	WithCompression *bool   `json:"with_compression,omitempty"`
+}
 
 // DeviceDTO defines model for DeviceDTO.
 type DeviceDTO struct {
@@ -568,10 +742,32 @@ type DeviceHealthInfoDTO struct {
 	WarningTemperatureTimeMinutes           int                `json:"warning_temperature_time_minutes"`
 }
 
+// FDBKeyDescriptor Keys held in the cluster's own FoundationDB, by “LocalKMS“.
+type FDBKeyDescriptor struct {
+	DekPath string                `json:"dek_path"`
+	Type    *FDBKeyDescriptorType `json:"type,omitempty"`
+}
+
+// FDBKeyDescriptorType defines model for FDBKeyDescriptor.Type.
+type FDBKeyDescriptorType string
+
 // FailbackParams defines model for FailbackParams.
 type FailbackParams struct {
 	SourceClusterId *string `json:"source_cluster_id,omitempty"`
 }
+
+// HCPKeyDescriptor Keys held in HashiCorp Vault, wrapped under a named transit key.
+type HCPKeyDescriptor struct {
+	DekPath      string                `json:"dek_path"`
+	KekName      string                `json:"kek_name"`
+	KvMount      *string               `json:"kv_mount,omitempty"`
+	TransitMount *string               `json:"transit_mount,omitempty"`
+	Type         *HCPKeyDescriptorType `json:"type,omitempty"`
+	VaultBaseUrl *string               `json:"vault_base_url,omitempty"`
+}
+
+// HCPKeyDescriptorType defines model for HCPKeyDescriptor.Type.
+type HCPKeyDescriptorType string
 
 // HTTPValidationError defines model for HTTPValidationError.
 type HTTPValidationError struct {
@@ -656,6 +852,18 @@ type RootModelUnionCreateParamsCloneParams struct {
 	union json.RawMessage
 }
 
+// S3Credentials A static key pair.
+//
+// A pair rather than two independent fields, so "access key set, secret
+// missing" is unrepresentable instead of something a validator has to catch.
+type S3Credentials struct {
+	AccessKeyId     *string `json:"access_key_id,omitempty"`
+	SecretAccessKey *string `json:"secret_access_key,omitempty"`
+}
+
+// SecondaryTarget The kind of secondary store, numbered as the data plane's RPC expects.
+type SecondaryTarget int
+
 // SnapshotDTO defines model for SnapshotDTO.
 type SnapshotDTO struct {
 	CreatedAt   time.Time          `json:"created_at"`
@@ -667,6 +875,16 @@ type SnapshotDTO struct {
 	Size        int                `json:"size"`
 	Status      string             `json:"status"`
 	UsedSize    int                `json:"used_size"`
+}
+
+// Source Where this backup came from. Provenance for an operator reading a bucket.
+//
+// Nothing may resolve configuration or keys through these -- that dependency
+// on the originating cluster is the whole problem being removed.
+type Source struct {
+	ClusterId   openapi_types.UUID `json:"cluster_id"`
+	ClusterName *string            `json:"cluster_name,omitempty"`
+	NodeId      openapi_types.UUID `json:"node_id"`
 }
 
 // StorageNodeDTO defines model for StorageNodeDTO.
@@ -834,6 +1052,42 @@ type ValidationError_Loc_Item struct {
 	union json.RawMessage
 }
 
+// Volume The shape of the volume this backup was taken from.
+//
+// Split in two by what is knowable. The identity and size come off the backup
+// record and are always present. The settings below them come off the live
+// volume, so they are absent together once that volume is deleted -- and
+// absent is not the same answer as “0“, which for a QoS cap means
+// "unlimited" and for a priority class is a real class.
+//
+// Nothing reads the settings yet; restore still creates its volume with
+// hardcoded defaults. They are recorded anyway because a manifest is read
+// years after it is written, and a backup taken today cannot be given a shape
+// retroactively once its volume is gone.
+type Volume struct {
+	AllowedHosts      *[]string          `json:"allowed_hosts,omitempty"`
+	Fabric            *VolumeFabric      `json:"fabric,omitempty"`
+	HaType            *VolumeHaType      `json:"ha_type,omitempty"`
+	LvolId            openapi_types.UUID `json:"lvol_id"`
+	LvolName          string             `json:"lvol_name"`
+	LvolPriorityClass *int               `json:"lvol_priority_class,omitempty"`
+	MaxSize           *int               `json:"max_size,omitempty"`
+	PoolName          *string            `json:"pool_name,omitempty"`
+	RMbytesPerSec     *int               `json:"r_mbytes_per_sec,omitempty"`
+	RwIosPerSec       *int               `json:"rw_ios_per_sec,omitempty"`
+	RwMbytesPerSec    *int               `json:"rw_mbytes_per_sec,omitempty"`
+	Size              int                `json:"size"`
+	SnapshotId        openapi_types.UUID `json:"snapshot_id"`
+	SnapshotName      string             `json:"snapshot_name"`
+	WMbytesPerSec     *int               `json:"w_mbytes_per_sec,omitempty"`
+}
+
+// VolumeFabric defines model for Volume.Fabric.
+type VolumeFabric string
+
+// VolumeHaType defines model for Volume.HaType.
+type VolumeHaType string
+
 // VolumeDTO defines model for VolumeDTO.
 type VolumeDTO struct {
 	AllowedHosts          []string                `json:"allowed_hosts"`
@@ -891,11 +1145,6 @@ type UnderscoreBackupSnapshotParams struct {
 	SnapshotId string `json:"snapshot_id"`
 }
 
-// UnderscoreBackupSourceSwitchParams defines model for _BackupSourceSwitchParams.
-type UnderscoreBackupSourceSwitchParams struct {
-	SourceClusterId string `json:"source_cluster_id"`
-}
-
 // UnderscoreCloneParams defines model for _CloneParams.
 type UnderscoreCloneParams struct {
 	DeleteSnapOnLvolDelete *bool   `json:"delete_snap_on_lvol_delete,omitempty"`
@@ -941,9 +1190,30 @@ type CreateParamsHaType string
 // CreateParamsPriorityClass defines model for CreateParams.PriorityClass.
 type CreateParamsPriorityClass int
 
-// UnderscoreImportParams defines model for _ImportParams.
-type UnderscoreImportParams struct {
-	Metadata []map[string]interface{} `json:"metadata"`
+// UnderscoreImportFromBucket Import whatever a bucket turns out to contain.
+//
+// The disaster-recovery path: it needs a bucket and credentials for it, and
+// nothing from the cluster that wrote the backups.
+type UnderscoreImportFromBucket struct {
+	// Bucket A cluster's backup configuration: a location plus how to authenticate to it.
+	Bucket BackupConfigInput `json:"bucket"`
+}
+
+// UnderscoreImportManifests Manifests carried in the request itself, e.g. from an export file.
+//
+// The location is named separately because a manifest does not carry one --
+// it describes its objects, not how to reach them. Which bucket an export
+// file's backups are in is the caller's to state, and stating it is what lets
+// the file be imported against a copy of the bucket rather than only against
+// the original.
+type UnderscoreImportManifests struct {
+	// Location Where a backup's objects are, and how to interpret them. Never secret.
+	//
+	// Every field here affects whether the objects can be read back at all, which
+	// is why the whole model is embedded in each backup rather than looked up from
+	// the cluster that happened to create it.
+	Location BackupLocation   `json:"location"`
+	Metadata []BackupManifest `json:"metadata"`
 }
 
 // UnderscoreMigrationParams defines model for _MigrationParams.
@@ -978,10 +1248,11 @@ type UnderscoreRestartParams struct {
 
 // UnderscoreRestoreParams defines model for _RestoreParams.
 type UnderscoreRestoreParams struct {
-	BackupId     string  `json:"backup_id"`
-	LvolName     string  `json:"lvol_name"`
-	Pool         string  `json:"pool"`
-	TargetNodeId *string `json:"target_node_id,omitempty"`
+	BackupId      string         `json:"backup_id"`
+	LvolName      string         `json:"lvol_name"`
+	Pool          string         `json:"pool"`
+	S3Credentials *S3Credentials `json:"s3_credentials,omitempty"`
+	TargetNodeId  *string        `json:"target_node_id,omitempty"`
 }
 
 // UnderscoreSnapshotParams defines model for _SnapshotParams.
@@ -1026,6 +1297,11 @@ type ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetParams struct {
 
 	// LvolName Export all completed backups for this lvol name
 	LvolName *string `form:"lvol_name,omitempty" json:"lvol_name,omitempty"`
+}
+
+// ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody defines parameters for ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPost.
+type ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody struct {
+	union json.RawMessage
 }
 
 // ClustersCapacityApiV2ClustersClusterIdCapacityGetParams defines parameters for ClustersCapacityApiV2ClustersClusterIdCapacityGet.
@@ -1168,6 +1444,9 @@ type ClustersUpdateApiV2ClustersClusterIdPutJSONRequestBody = UpdatableClusterPa
 // ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody defines body for ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost for application/json ContentType.
 type ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody = UnderscoreReplicationParams
 
+// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody defines body for ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut for application/json ContentType.
+type ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody = BackupConfigInput
+
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostJSONRequestBody defines body for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost for application/json ContentType.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostJSONRequestBody = UnderscoreBackupSnapshotParams
 
@@ -1180,14 +1459,14 @@ type ClustersBackupPoliciesAttachApiV2ClustersClusterIdBackupsBackupPoliciesPoli
 // ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPostJSONRequestBody defines body for ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPost for application/json ContentType.
 type ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPostJSONRequestBody = UnderscoreAttachParams
 
+// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostJSONRequestBody defines body for ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost for application/json ContentType.
+type ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostJSONRequestBody = BackupConfigInput
+
 // ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONRequestBody defines body for ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPost for application/json ContentType.
-type ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONRequestBody = UnderscoreImportParams
+type ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONRequestBody ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody
 
 // ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostJSONRequestBody defines body for ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost for application/json ContentType.
 type ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostJSONRequestBody = UnderscoreRestoreParams
-
-// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostJSONRequestBody defines body for ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost for application/json ContentType.
-type ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostJSONRequestBody = UnderscoreBackupSourceSwitchParams
 
 // ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostJSONRequestBody defines body for ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPost for application/json ContentType.
 type ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostJSONRequestBody = StorageNodeParams
@@ -1361,6 +1640,68 @@ func (t *ValidationError_Loc_Item) UnmarshalJSON(b []byte) error {
 	return err
 }
 
+// AsUnderscoreImportManifests returns the union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody as a UnderscoreImportManifests
+func (t ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) AsUnderscoreImportManifests() (UnderscoreImportManifests, error) {
+	var body UnderscoreImportManifests
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromUnderscoreImportManifests overwrites any union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody as the provided UnderscoreImportManifests
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) FromUnderscoreImportManifests(v UnderscoreImportManifests) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeUnderscoreImportManifests performs a merge with any union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody, using the provided UnderscoreImportManifests
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) MergeUnderscoreImportManifests(v UnderscoreImportManifests) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsUnderscoreImportFromBucket returns the union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody as a UnderscoreImportFromBucket
+func (t ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) AsUnderscoreImportFromBucket() (UnderscoreImportFromBucket, error) {
+	var body UnderscoreImportFromBucket
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromUnderscoreImportFromBucket overwrites any union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody as the provided UnderscoreImportFromBucket
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) FromUnderscoreImportFromBucket(v UnderscoreImportFromBucket) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeUnderscoreImportFromBucket performs a merge with any union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody, using the provided UnderscoreImportFromBucket
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) MergeUnderscoreImportFromBucket(v UnderscoreImportFromBucket) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
 // RequestEditorFn is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
 
@@ -1511,6 +1852,50 @@ type ClientInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/addreplication (the `ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost` operationId).
 	ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost(ctx context.Context, clusterId openapi_types.UUID, body ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet Clusters:Backup-Config:Get
+	//
+	// The cluster's backup configuration, with credentials masked.
+	//
+	// The credentials are ``SecretStr``, which FastAPI's JSON serialization
+	// renders as ``**********``.
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet` operationId).
+	ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBody Clusters:Backup-Config:Set
+	//
+	// Replace the cluster's backup configuration.
+	//
+	// Backup configuration used to be settable only at cluster-create time, which
+	// left no way to correct or complete it -- notably no way to record a region
+	// on a cluster created before it was mandatory.
+	//
+	// A full replacement rather than a patch: the fields interact (an endpoint
+	// implies addressing style and TLS expectations), so merging half a config
+	// into an existing one produces combinations nobody chose.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
+	ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut Clusters:Backup-Config:Set
+	//
+	// Replace the cluster's backup configuration.
+	//
+	// Backup configuration used to be settable only at cluster-create time, which
+	// left no way to correct or complete it -- notably no way to record a region
+	// on a cluster created before it was mandatory.
+	//
+	// A full replacement rather than a patch: the fields interact (an endpoint
+	// implies addressing style and TLS expectations), so merging half a config
+	// into an existing one produces combinations nobody chose.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
+	ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersBackupsListApiV2ClustersClusterIdBackupsGet Clusters:Backups:List
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/backups/ (the `ClustersBackupsListApiV2ClustersClusterIdBackupsGet` operationId).
@@ -1582,6 +1967,32 @@ type ClientInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/backup-policies/{policy_id}/detach (the `ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPost` operationId).
 	ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPost(ctx context.Context, clusterId openapi_types.UUID, policyId openapi_types.UUID, body ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithBody Clusters:Backups:Discover
+	//
+	// List the backups a bucket contains, without importing anything.
+	//
+	// A POST because it carries credentials, which have no business in a query
+	// string. Takes no cluster state at all: this is what an operator runs when
+	// the cluster that wrote the backups no longer exists.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/discover (the `ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost` operationId).
+	ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost Clusters:Backups:Discover
+	//
+	// List the backups a bucket contains, without importing anything.
+	//
+	// A POST because it carries credentials, which have no business in a query
+	// string. Takes no cluster state at all: this is what an operator runs when
+	// the cluster that wrote the backups no longer exists.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/discover (the `ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost` operationId).
+	ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet Clusters:Backups:Export
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/backups/export (the `ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet` operationId).
@@ -1614,25 +2025,6 @@ type ClientInterface interface {
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/restore (the `ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost` operationId).
 	ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithBody Clusters:Backups:Source-Switch
-	//
-	// Takes any type of body and a specified content type.
-	//
-	// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/source-switch (the `ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost` operationId).
-	ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost Clusters:Backups:Source-Switch
-	//
-	// Takes a body of the `application/json` content type.
-	//
-	// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/source-switch (the `ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost` operationId).
-	ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet Clusters:Backups:Sources
-	//
-	// Corresponds with GET /api/v2/clusters/{cluster_id}/backups/sources (the `ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet` operationId).
-	ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersBackupsDetailApiV2ClustersClusterIdBackupsBackupIdGet Clusters:Backups:Detail
 	//
@@ -2364,6 +2756,80 @@ func (c *Client) ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost(
 	return c.Client.Do(req)
 }
 
+// ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet Clusters:Backup-Config:Get
+//
+// The cluster's backup configuration, with credentials masked.
+//
+// The credentials are “SecretStr“, which FastAPI's JSON serialization
+// renders as “**********“.
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet` operationId).
+func (c *Client) ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetRequest(c.Server, clusterId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBody Clusters:Backup-Config:Set
+//
+// Replace the cluster's backup configuration.
+//
+// Backup configuration used to be settable only at cluster-create time, which
+// left no way to correct or complete it -- notably no way to record a region
+// on a cluster created before it was mandatory.
+//
+// A full replacement rather than a patch: the fields interact (an endpoint
+// implies addressing style and TLS expectations), so merging half a config
+// into an existing one produces combinations nobody chose.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
+func (c *Client) ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut Clusters:Backup-Config:Set
+//
+// Replace the cluster's backup configuration.
+//
+// Backup configuration used to be settable only at cluster-create time, which
+// left no way to correct or complete it -- notably no way to record a region
+// on a cluster created before it was mandatory.
+//
+// A full replacement rather than a patch: the fields interact (an endpoint
+// implies addressing style and TLS expectations), so merging half a config
+// into an existing one produces combinations nobody chose.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
+func (c *Client) ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // ClustersBackupsListApiV2ClustersClusterIdBackupsGet Clusters:Backups:List
 //
 // Corresponds with GET /api/v2/clusters/{cluster_id}/backups/ (the `ClustersBackupsListApiV2ClustersClusterIdBackupsGet` operationId).
@@ -2545,6 +3011,52 @@ func (c *Client) ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackup
 	return c.Client.Do(req)
 }
 
+// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithBody Clusters:Backups:Discover
+//
+// List the backups a bucket contains, without importing anything.
+//
+// A POST because it carries credentials, which have no business in a query
+// string. Takes no cluster state at all: this is what an operator runs when
+// the cluster that wrote the backups no longer exists.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/discover (the `ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost` operationId).
+func (c *Client) ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost Clusters:Backups:Discover
+//
+// List the backups a bucket contains, without importing anything.
+//
+// A POST because it carries credentials, which have no business in a query
+// string. Takes no cluster state at all: this is what an operator runs when
+// the cluster that wrote the backups no longer exists.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/discover (the `ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost` operationId).
+func (c *Client) ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet Clusters:Backups:Export
 //
 // Corresponds with GET /api/v2/clusters/{cluster_id}/backups/export (the `ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet` operationId).
@@ -2618,55 +3130,6 @@ func (c *Client) ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostW
 // Corresponds with POST /api/v2/clusters/{cluster_id}/backups/restore (the `ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost` operationId).
 func (c *Client) ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostRequest(c.Server, clusterId, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithBody Clusters:Backups:Source-Switch
-//
-// Takes any type of body and a specified content type.
-//
-// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/source-switch (the `ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost` operationId).
-func (c *Client) ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostRequestWithBody(c.Server, clusterId, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost Clusters:Backups:Source-Switch
-//
-// Takes a body of the `application/json` content type.
-//
-// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/source-switch (the `ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost` operationId).
-func (c *Client) ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostRequest(c.Server, clusterId, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet Clusters:Backups:Sources
-//
-// Corresponds with GET /api/v2/clusters/{cluster_id}/backups/sources (the `ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet` operationId).
-func (c *Client) ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetRequest(c.Server, clusterId)
 	if err != nil {
 		return nil, err
 	}
@@ -4522,6 +4985,87 @@ func NewClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostRequestWit
 	return req, nil
 }
 
+// NewClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetRequest constructs an http.Request for the ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet method
+func NewClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/backup-config", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequest calls the generic ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut builder with application/json body
+func NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequest(server string, clusterId openapi_types.UUID, body ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequestWithBody constructs an http.Request for the ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut method, with any body, and a specified content type
+func NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/backup-config", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPut, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewClustersBackupsListApiV2ClustersClusterIdBackupsGetRequest constructs an http.Request for the ClustersBackupsListApiV2ClustersClusterIdBackupsGet method
 func NewClustersBackupsListApiV2ClustersClusterIdBackupsGetRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
 	var err error
@@ -4860,6 +5404,53 @@ func NewClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesP
 	return req, nil
 }
 
+// NewClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostRequest calls the generic ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost builder with application/json body
+func NewClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostRequest(server string, clusterId openapi_types.UUID, body ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostRequestWithBody constructs an http.Request for the ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost method, with any body, and a specified content type
+func NewClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/backups/discover", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetRequest constructs an http.Request for the ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet method
 func NewClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetRequest(server string, clusterId openapi_types.UUID, params *ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetParams) (*http.Request, error) {
 	var err error
@@ -5023,87 +5614,6 @@ func NewClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostRequestWit
 	}
 
 	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostRequest calls the generic ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost builder with application/json body
-func NewClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostRequest(server string, clusterId openapi_types.UUID, body ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostRequestWithBody(server, clusterId, "application/json", bodyReader)
-}
-
-// NewClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostRequestWithBody constructs an http.Request for the ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost method, with any body, and a specified content type
-func NewClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v2/clusters/%s/backups/source-switch", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetRequest constructs an http.Request for the ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet method
-func NewClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v2/clusters/%s/backups/sources", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
 
 	return req, nil
 }
@@ -9444,6 +9954,52 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/addreplication (the `ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost` operationId).
 	ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostResponse, error)
 
+	// ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetWithResponse Clusters:Backup-Config:Get
+	//
+	// The cluster's backup configuration, with credentials masked.
+	//
+	// The credentials are ``SecretStr``, which FastAPI's JSON serialization
+	// renders as ``**********``.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet` operationId).
+	ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse, error)
+
+	// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBodyWithResponse Clusters:Backup-Config:Set
+	//
+	// Replace the cluster's backup configuration.
+	//
+	// Backup configuration used to be settable only at cluster-create time, which
+	// left no way to correct or complete it -- notably no way to record a region
+	// on a cluster created before it was mandatory.
+	//
+	// A full replacement rather than a patch: the fields interact (an endpoint
+	// implies addressing style and TLS expectations), so merging half a config
+	// into an existing one produces combinations nobody chose.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
+	ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse, error)
+
+	// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithResponse Clusters:Backup-Config:Set
+	//
+	// Replace the cluster's backup configuration.
+	//
+	// Backup configuration used to be settable only at cluster-create time, which
+	// left no way to correct or complete it -- notably no way to record a region
+	// on a cluster created before it was mandatory.
+	//
+	// A full replacement rather than a patch: the fields interact (an endpoint
+	// implies addressing style and TLS expectations), so merging half a config
+	// into an existing one produces combinations nobody chose.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
+	ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse, error)
+
 	// ClustersBackupsListApiV2ClustersClusterIdBackupsGetWithResponse Clusters:Backups:List
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -9521,6 +10077,32 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/backup-policies/{policy_id}/detach (the `ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPost` operationId).
 	ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, policyId openapi_types.UUID, body ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPostResponse, error)
 
+	// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithBodyWithResponse Clusters:Backups:Discover
+	//
+	// List the backups a bucket contains, without importing anything.
+	//
+	// A POST because it carries credentials, which have no business in a query
+	// string. Takes no cluster state at all: this is what an operator runs when
+	// the cluster that wrote the backups no longer exists.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/discover (the `ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost` operationId).
+	ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse, error)
+
+	// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithResponse Clusters:Backups:Discover
+	//
+	// List the backups a bucket contains, without importing anything.
+	//
+	// A POST because it carries credentials, which have no business in a query
+	// string. Takes no cluster state at all: this is what an operator runs when
+	// the cluster that wrote the backups no longer exists.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/discover (the `ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost` operationId).
+	ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse, error)
+
 	// ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetWithResponse Clusters:Backups:Export
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -9555,27 +10137,6 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/restore (the `ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost` operationId).
 	ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostResponse, error)
-
-	// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithBodyWithResponse Clusters:Backups:Source-Switch
-	//
-	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/source-switch (the `ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost` operationId).
-	ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse, error)
-
-	// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithResponse Clusters:Backups:Source-Switch
-	//
-	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/source-switch (the `ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost` operationId).
-	ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse, error)
-
-	// ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetWithResponse Clusters:Backups:Sources
-	//
-	// Returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with GET /api/v2/clusters/{cluster_id}/backups/sources (the `ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet` operationId).
-	ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse, error)
 
 	// ClustersBackupsDetailApiV2ClustersClusterIdBackupsBackupIdGetWithResponse Clusters:Backups:Detail
 	//
@@ -10609,6 +11170,95 @@ func (r ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostResponse) 
 	return ""
 }
 
+type ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *BackupConfigOutput
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse) GetJSON200() *BackupConfigOutput {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ClustersBackupsListApiV2ClustersClusterIdBackupsGetResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -10917,17 +11567,65 @@ func (r ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesP
 	return ""
 }
 
-type ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetResponse struct {
+type ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *interface{}
+	JSON200 *[]BackupManifest
 	// JSON422 the response for an HTTP 422 `application/json` response
 	JSON422 *HTTPValidationError
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetResponse) GetJSON200() *interface{} {
+func (r ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse) GetJSON200() *[]BackupManifest {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *[]BackupManifest
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetResponse) GetJSON200() *[]BackupManifest {
 	return r.JSON200
 }
 
@@ -11055,102 +11753,6 @@ func (r ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostResponse) 
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostResponse) ContentType() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Header.Get("Content-Type")
-	}
-	return ""
-}
-
-type ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *interface{}
-	// JSON422 the response for an HTTP 422 `application/json` response
-	JSON422 *HTTPValidationError
-}
-
-// GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse) GetJSON200() *interface{} {
-	return r.JSON200
-}
-
-// GetJSON422 returns the response for an HTTP 422 `application/json` response
-func (r ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse) GetJSON422() *HTTPValidationError {
-	return r.JSON422
-}
-
-// GetBody returns the raw response body bytes
-func (r ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse) GetBody() []byte {
-	return r.Body
-}
-
-// Status returns HTTPResponse.Status
-func (r ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse) ContentType() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Header.Get("Content-Type")
-	}
-	return ""
-}
-
-type ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *interface{}
-	// JSON422 the response for an HTTP 422 `application/json` response
-	JSON422 *HTTPValidationError
-}
-
-// GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse) GetJSON200() *interface{} {
-	return r.JSON200
-}
-
-// GetJSON422 returns the response for an HTTP 422 `application/json` response
-func (r ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse) GetJSON422() *HTTPValidationError {
-	return r.JSON422
-}
-
-// GetBody returns the raw response body bytes
-func (r ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse) GetBody() []byte {
-	return r.Body
-}
-
-// Status returns HTTPResponse.Status
-func (r ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -14775,6 +15377,70 @@ func (c *ClientWithResponses) ClustersAddreplicationApiV2ClustersClusterIdAddrep
 	return ParseClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostResponse(rsp)
 }
 
+// ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetWithResponse Clusters:Backup-Config:Get
+//
+// The cluster's backup configuration, with credentials masked.
+//
+// The credentials are “SecretStr“, which FastAPI's JSON serialization
+// renders as “**********“.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet` operationId).
+func (c *ClientWithResponses) ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse, error) {
+	rsp, err := c.ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(ctx, clusterId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse(rsp)
+}
+
+// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBodyWithResponse Clusters:Backup-Config:Set
+//
+// Replace the cluster's backup configuration.
+//
+// Backup configuration used to be settable only at cluster-create time, which
+// left no way to correct or complete it -- notably no way to record a region
+// on a cluster created before it was mandatory.
+//
+// A full replacement rather than a patch: the fields interact (an endpoint
+// implies addressing style and TLS expectations), so merging half a config
+// into an existing one produces combinations nobody chose.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
+func (c *ClientWithResponses) ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse, error) {
+	rsp, err := c.ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse(rsp)
+}
+
+// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithResponse Clusters:Backup-Config:Set
+//
+// Replace the cluster's backup configuration.
+//
+// Backup configuration used to be settable only at cluster-create time, which
+// left no way to correct or complete it -- notably no way to record a region
+// on a cluster created before it was mandatory.
+//
+// A full replacement rather than a patch: the fields interact (an endpoint
+// implies addressing style and TLS expectations), so merging half a config
+// into an existing one produces combinations nobody chose.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
+func (c *ClientWithResponses) ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse, error) {
+	rsp, err := c.ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse(rsp)
+}
+
 // ClustersBackupsListApiV2ClustersClusterIdBackupsGetWithResponse Clusters:Backups:List
 //
 // Returns a wrapper object for the known response body format(s).
@@ -14918,6 +15584,44 @@ func (c *ClientWithResponses) ClustersBackupPoliciesDetachApiV2ClustersClusterId
 	return ParseClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPostResponse(rsp)
 }
 
+// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithBodyWithResponse Clusters:Backups:Discover
+//
+// List the backups a bucket contains, without importing anything.
+//
+// A POST because it carries credentials, which have no business in a query
+// string. Takes no cluster state at all: this is what an operator runs when
+// the cluster that wrote the backups no longer exists.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/discover (the `ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost` operationId).
+func (c *ClientWithResponses) ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse, error) {
+	rsp, err := c.ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse(rsp)
+}
+
+// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithResponse Clusters:Backups:Discover
+//
+// List the backups a bucket contains, without importing anything.
+//
+// A POST because it carries credentials, which have no business in a query
+// string. Takes no cluster state at all: this is what an operator runs when
+// the cluster that wrote the backups no longer exists.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/discover (the `ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost` operationId).
+func (c *ClientWithResponses) ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse, error) {
+	rsp, err := c.ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse(rsp)
+}
+
 // ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetWithResponse Clusters:Backups:Export
 //
 // Returns a wrapper object for the known response body format(s).
@@ -14981,45 +15685,6 @@ func (c *ClientWithResponses) ClustersBackupsRestoreApiV2ClustersClusterIdBackup
 		return nil, err
 	}
 	return ParseClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostResponse(rsp)
-}
-
-// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithBodyWithResponse Clusters:Backups:Source-Switch
-//
-// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
-//
-// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/source-switch (the `ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost` operationId).
-func (c *ClientWithResponses) ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse, error) {
-	rsp, err := c.ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithBody(ctx, clusterId, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse(rsp)
-}
-
-// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithResponse Clusters:Backups:Source-Switch
-//
-// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
-//
-// Corresponds with POST /api/v2/clusters/{cluster_id}/backups/source-switch (the `ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost` operationId).
-func (c *ClientWithResponses) ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse, error) {
-	rsp, err := c.ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost(ctx, clusterId, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse(rsp)
-}
-
-// ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetWithResponse Clusters:Backups:Sources
-//
-// Returns a wrapper object for the known response body format(s).
-//
-// Corresponds with GET /api/v2/clusters/{cluster_id}/backups/sources (the `ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet` operationId).
-func (c *ClientWithResponses) ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse, error) {
-	rsp, err := c.ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet(ctx, clusterId, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse(rsp)
 }
 
 // ClustersBackupsDetailApiV2ClustersClusterIdBackupsBackupIdGetWithResponse Clusters:Backups:Detail
@@ -16482,6 +17147,68 @@ func ParseClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostResponse
 	return response, nil
 }
 
+// ParseClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse parses an HTTP response from a ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetWithResponse call
+func ParseClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse(rsp *http.Response) (*ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest BackupConfigOutput
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse parses an HTTP response from a ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithResponse call
+func ParseClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse(rsp *http.Response) (*ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseClustersBackupsListApiV2ClustersClusterIdBackupsGetResponse parses an HTTP response from a ClustersBackupsListApiV2ClustersClusterIdBackupsGetWithResponse call
 func ParseClustersBackupsListApiV2ClustersClusterIdBackupsGetResponse(rsp *http.Response) (*ClustersBackupsListApiV2ClustersClusterIdBackupsGetResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -16697,6 +17424,39 @@ func ParseClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPolicie
 	return response, nil
 }
 
+// ParseClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse parses an HTTP response from a ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostWithResponse call
+func ParseClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse(rsp *http.Response) (*ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []BackupManifest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetResponse parses an HTTP response from a ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetWithResponse call
 func ParseClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetResponse(rsp *http.Response) (*ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -16712,7 +17472,7 @@ func ParseClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetResponse(rs
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest interface{}
+		var dest []BackupManifest
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -16783,72 +17543,6 @@ func ParseClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostResponse
 			return nil, err
 		}
 		response.JSON202 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest HTTPValidationError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse parses an HTTP response from a ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostWithResponse call
-func ParseClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse(rsp *http.Response) (*ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest interface{}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest HTTPValidationError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse parses an HTTP response from a ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetWithResponse call
-func ParseClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse(rsp *http.Response) (*ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGetResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest interface{}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError

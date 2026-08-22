@@ -5048,7 +5048,15 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_ImportParams"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/_ImportManifests"
+                  },
+                  {
+                    "$ref": "#/components/schemas/_ImportFromBucket"
+                  }
+                ],
+                "title": "Parameters"
               }
             }
           }
@@ -5137,103 +5145,13 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupManifest"
+                  },
+                  "title": "Response Clusters Backups Export Api V2 Clusters  Cluster Id  Backups Export Get"
                 }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/backups/source-switch": {
-      "post": {
-        "summary": "Clusters:Backups:Source-Switch",
-        "operationId": "clusters_backups_source_switch_api_v2_clusters__cluster_id__backups_source_switch_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/_BackupSourceSwitchParams"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/backups/sources": {
-      "get": {
-        "summary": "Clusters:Backups:Sources",
-        "operationId": "clusters_backups_sources_api_v2_clusters__cluster_id__backups_sources_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
               }
             }
           },
@@ -5619,6 +5537,166 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/backup-config": {
+      "get": {
+        "summary": "Clusters:Backup-Config:Get",
+        "description": "The cluster's backup configuration, with credentials masked.\n\nThe credentials are ``SecretStr``, which FastAPI's JSON serialization\nrenders as ``**********``.",
+        "operationId": "clusters_backup_config_get_api_v2_clusters__cluster_id__backup_config_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupConfig-Output"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Clusters:Backup-Config:Set",
+        "description": "Replace the cluster's backup configuration.\n\nBackup configuration used to be settable only at cluster-create time, which\nleft no way to correct or complete it -- notably no way to record a region\non a cluster created before it was mandatory.\n\nA full replacement rather than a patch: the fields interact (an endpoint\nimplies addressing style and TLS expectations), so merging half a config\ninto an existing one produces combinations nobody chose.",
+        "operationId": "clusters_backup_config_set_api_v2_clusters__cluster_id__backup_config_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupConfig-Input"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/backups/discover": {
+      "post": {
+        "summary": "Clusters:Backups:Discover",
+        "description": "List the backups a bucket contains, without importing anything.\n\nA POST because it carries credentials, which have no business in a query\nstring. Takes no cluster state at all: this is what an operator runs when\nthe cluster that wrote the backups no longer exists.",
+        "operationId": "clusters_backups_discover_api_v2_clusters__cluster_id__backups_discover_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupConfig-Input"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackupManifest"
+                  },
+                  "title": "Response Clusters Backups Discover Api V2 Clusters  Cluster Id  Backups Discover Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/management-nodes/": {
       "get": {
         "summary": "Management Nodes:List",
@@ -5750,106 +5828,78 @@
   },
   "components": {
     "schemas": {
-      "BackupConfigParams": {
+      "BackupConfig-Input": {
         "properties": {
-          "access_key_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "password",
-                "writeOnly": true
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Access Key Id"
-          },
-          "secret_access_key": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "password",
-                "writeOnly": true
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Secret Access Key"
-          },
-          "local_endpoint": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Local Endpoint"
-          },
           "bucket_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
+            "minLength": 1,
             "title": "Bucket Name"
           },
-          "snapshot_backups": {
+          "region": {
             "anyOf": [
               {
-                "type": "boolean"
+                "type": "string",
+                "minLength": 1
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Snapshot Backups"
+            "title": "Region"
           },
-          "with_compression": {
+          "endpoint": {
             "anyOf": [
               {
-                "type": "boolean"
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "With Compression"
+            "title": "Endpoint"
           },
           "secondary_target": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 0.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Secondary Target"
+            "$ref": "#/components/schemas/SecondaryTarget",
+            "default": 0
           },
-          "local_testing": {
+          "with_compression": {
+            "type": "boolean",
+            "title": "With Compression",
+            "default": false
+          },
+          "snapshot_backups": {
+            "type": "boolean",
+            "title": "Snapshot Backups",
+            "default": true
+          },
+          "verify_tls": {
+            "type": "boolean",
+            "title": "Verify Tls",
+            "default": true
+          },
+          "use_path_style": {
+            "type": "boolean",
+            "title": "Use Path Style",
+            "default": false
+          },
+          "credentials": {
             "anyOf": [
               {
-                "type": "boolean"
+                "$ref": "#/components/schemas/S3Credentials"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Local Testing"
+            ]
           },
           "s3_thread_pool_size": {
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 1.0
               },
               {
                 "type": "null"
@@ -5858,8 +5908,90 @@
             "title": "S3 Thread Pool Size"
           }
         },
+        "additionalProperties": false,
         "type": "object",
-        "title": "BackupConfigParams"
+        "required": [
+          "bucket_name"
+        ],
+        "title": "BackupConfig",
+        "description": "A cluster's backup configuration: a location plus how to authenticate to it."
+      },
+      "BackupConfig-Output": {
+        "properties": {
+          "bucket_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Bucket Name"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "endpoint": {
+            "type": "string",
+            "title": "Endpoint"
+          },
+          "secondary_target": {
+            "type": "integer"
+          },
+          "with_compression": {
+            "type": "boolean",
+            "title": "With Compression",
+            "default": false
+          },
+          "snapshot_backups": {
+            "type": "boolean",
+            "title": "Snapshot Backups",
+            "default": true
+          },
+          "verify_tls": {
+            "type": "boolean",
+            "title": "Verify Tls",
+            "default": true
+          },
+          "use_path_style": {
+            "type": "boolean",
+            "title": "Use Path Style",
+            "default": false
+          },
+          "credentials": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/S3Credentials"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "s3_thread_pool_size": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "S3 Thread Pool Size"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bucket_name"
+        ],
+        "title": "BackupConfig",
+        "description": "A cluster's backup configuration: a location plus how to authenticate to it."
       },
       "BackupDTO": {
         "properties": {
@@ -5874,6 +6006,7 @@
           },
           "lvol_id": {
             "type": "string",
+            "format": "uuid",
             "title": "Lvol Id"
           },
           "lvol_name": {
@@ -5882,6 +6015,7 @@
           },
           "snapshot_id": {
             "type": "string",
+            "format": "uuid",
             "title": "Snapshot Id"
           },
           "snapshot_name": {
@@ -5890,6 +6024,7 @@
           },
           "node_id": {
             "type": "string",
+            "format": "uuid",
             "title": "Node Id"
           },
           "status": {
@@ -5897,7 +6032,15 @@
             "title": "Status"
           },
           "prev_backup_id": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Prev Backup Id"
           },
           "size": {
@@ -5906,8 +6049,8 @@
           },
           "allowed_hosts": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "type": "string",
+              "pattern": "nqn\\.\\d{4}-\\d{2}\\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?\\.)*[a-zA-Z]{2,}(?::[a-zA-Z0-9.\\-:_]+)?"
             },
             "type": "array",
             "title": "Allowed Hosts"
@@ -5920,9 +6063,9 @@
             "type": "integer",
             "title": "Completed At"
           },
-          "source_cluster_id": {
-            "type": "string",
-            "title": "Source Cluster Id"
+          "encrypted": {
+            "type": "boolean",
+            "title": "Encrypted"
           }
         },
         "type": "object",
@@ -5935,14 +6078,168 @@
           "snapshot_name",
           "node_id",
           "status",
-          "prev_backup_id",
           "size",
           "allowed_hosts",
           "created_at",
           "completed_at",
-          "source_cluster_id"
+          "encrypted"
         ],
         "title": "BackupDTO"
+      },
+      "BackupLocation": {
+        "properties": {
+          "bucket_name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Bucket Name"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
+          },
+          "secondary_target": {
+            "$ref": "#/components/schemas/SecondaryTarget",
+            "default": 0
+          },
+          "with_compression": {
+            "type": "boolean",
+            "title": "With Compression",
+            "default": false
+          },
+          "snapshot_backups": {
+            "type": "boolean",
+            "title": "Snapshot Backups",
+            "default": true
+          },
+          "verify_tls": {
+            "type": "boolean",
+            "title": "Verify Tls",
+            "default": true
+          },
+          "use_path_style": {
+            "type": "boolean",
+            "title": "Use Path Style",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bucket_name"
+        ],
+        "title": "BackupLocation",
+        "description": "Where a backup's objects are, and how to interpret them. Never secret.\n\nEvery field here affects whether the objects can be read back at all, which\nis why the whole model is embedded in each backup rather than looked up from\nthe cluster that happened to create it."
+      },
+      "BackupManifest": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version",
+            "default": 1
+          },
+          "backup_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Backup Id"
+          },
+          "s3_id": {
+            "type": "integer",
+            "title": "S3 Id"
+          },
+          "created_at": {
+            "type": "integer",
+            "title": "Created At"
+          },
+          "completed_at": {
+            "type": "integer",
+            "title": "Completed At"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "prev_backup_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prev Backup Id"
+          },
+          "encryption": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/FDBKeyDescriptor"
+                  },
+                  {
+                    "$ref": "#/components/schemas/HCPKeyDescriptor"
+                  }
+                ],
+                "discriminator": {
+                  "propertyName": "type",
+                  "mapping": {
+                    "fdb": "#/components/schemas/FDBKeyDescriptor",
+                    "hcp": "#/components/schemas/HCPKeyDescriptor"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Encryption"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "volume": {
+            "$ref": "#/components/schemas/Volume"
+          },
+          "dataplane": {
+            "$ref": "#/components/schemas/DataPlane"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "backup_id",
+          "s3_id",
+          "created_at",
+          "completed_at",
+          "size",
+          "source",
+          "volume",
+          "dataplane"
+        ],
+        "title": "BackupManifest"
       },
       "BackupPolicyDTO": {
         "properties": {
@@ -6327,7 +6624,7 @@
           "backup_config": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/BackupConfigParams"
+                "$ref": "#/components/schemas/BackupConfig-Input"
               },
               {
                 "type": "null"
@@ -6352,6 +6649,35 @@
         },
         "type": "object",
         "title": "ClusterParams"
+      },
+      "DataPlane": {
+        "properties": {
+          "key_format": {
+            "type": "string",
+            "title": "Key Format",
+            "default": "{s3_id}/{mid}/{extent}"
+          },
+          "cluster_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cluster Size"
+          },
+          "with_compression": {
+            "type": "boolean",
+            "title": "With Compression",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DataPlane",
+        "description": "How the objects are encoded, so a later format change is detectable.\n\nEverything here has to be recorded because reading the bucket cannot\nrecover it -- unlike the bucket's name, region and endpoint, which the\nreader necessarily supplied to get this far."
       },
       "DeviceDTO": {
         "properties": {
@@ -6584,6 +6910,27 @@
         ],
         "title": "DeviceHealthInfoDTO"
       },
+      "FDBKeyDescriptor": {
+        "properties": {
+          "dek_path": {
+            "type": "string",
+            "title": "Dek Path"
+          },
+          "type": {
+            "type": "string",
+            "const": "fdb",
+            "title": "Type",
+            "default": "fdb"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dek_path"
+        ],
+        "title": "FDBKeyDescriptor",
+        "description": "Keys held in the cluster's own FoundationDB, by ``LocalKMS``."
+      },
       "FailbackParams": {
         "properties": {
           "source_cluster_id": {
@@ -6600,6 +6947,68 @@
         },
         "type": "object",
         "title": "FailbackParams"
+      },
+      "HCPKeyDescriptor": {
+        "properties": {
+          "dek_path": {
+            "type": "string",
+            "title": "Dek Path"
+          },
+          "type": {
+            "type": "string",
+            "const": "hcp",
+            "title": "Type",
+            "default": "hcp"
+          },
+          "kek_name": {
+            "type": "string",
+            "title": "Kek Name"
+          },
+          "vault_base_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vault Base Url"
+          },
+          "transit_mount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transit Mount"
+          },
+          "kv_mount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kv Mount"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dek_path",
+          "kek_name"
+        ],
+        "title": "HCPKeyDescriptor",
+        "description": "Keys held in HashiCorp Vault, wrapped under a named transit key."
       },
       "HTTPValidationError": {
         "properties": {
@@ -6900,6 +7309,39 @@
         ],
         "title": "RootModel[Union[_CreateParams, _CloneParams]]"
       },
+      "S3Credentials": {
+        "properties": {
+          "access_key_id": {
+            "type": "string",
+            "format": "password",
+            "title": "Access Key Id",
+            "writeOnly": true
+          },
+          "secret_access_key": {
+            "type": "string",
+            "format": "password",
+            "title": "Secret Access Key",
+            "writeOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "access_key_id",
+          "secret_access_key"
+        ],
+        "title": "S3Credentials",
+        "description": "A static key pair.\n\nA pair rather than two independent fields, so \"access key set, secret\nmissing\" is unrepresentable instead of something a validator has to catch."
+      },
+      "SecondaryTarget": {
+        "type": "integer",
+        "enum": [
+          0,
+          1
+        ],
+        "title": "SecondaryTarget",
+        "description": "The kind of secondary store, numbered as the data plane's RPC expects."
+      },
       "SnapshotDTO": {
         "properties": {
           "id": {
@@ -6963,6 +7405,39 @@
           "created_at"
         ],
         "title": "SnapshotDTO"
+      },
+      "Source": {
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cluster Id"
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Node Id"
+          },
+          "cluster_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cluster Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cluster_id",
+          "node_id"
+        ],
+        "title": "Source",
+        "description": "Where this backup came from. Provenance for an operator reading a bucket.\n\nNothing may resolve configuration or keys through these -- that dependency\non the originating cluster is the whole problem being removed."
       },
       "StorageNodeDTO": {
         "properties": {
@@ -7845,6 +8320,160 @@
         ],
         "title": "ValidationError"
       },
+      "Volume": {
+        "properties": {
+          "lvol_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Lvol Id"
+          },
+          "lvol_name": {
+            "type": "string",
+            "title": "Lvol Name"
+          },
+          "snapshot_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Snapshot Id"
+          },
+          "snapshot_name": {
+            "type": "string",
+            "title": "Snapshot Name"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "allowed_hosts": {
+            "items": {
+              "type": "string",
+              "pattern": "nqn\\.\\d{4}-\\d{2}\\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?\\.)*[a-zA-Z]{2,}(?::[a-zA-Z0-9.\\-:_]+)?"
+            },
+            "type": "array",
+            "title": "Allowed Hosts",
+            "default": []
+          },
+          "pool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pool Name"
+          },
+          "ha_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "single",
+                  "ha"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ha Type"
+          },
+          "fabric": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "tcp",
+                  "rdma",
+                  "tcp,rdma"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fabric"
+          },
+          "lvol_priority_class": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lvol Priority Class"
+          },
+          "max_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Size"
+          },
+          "rw_ios_per_sec": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rw Ios Per Sec"
+          },
+          "rw_mbytes_per_sec": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rw Mbytes Per Sec"
+          },
+          "r_mbytes_per_sec": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "R Mbytes Per Sec"
+          },
+          "w_mbytes_per_sec": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "W Mbytes Per Sec"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "lvol_id",
+          "lvol_name",
+          "snapshot_id",
+          "snapshot_name",
+          "size"
+        ],
+        "title": "Volume",
+        "description": "The shape of the volume this backup was taken from.\n\nSplit in two by what is knowable. The identity and size come off the backup\nrecord and are always present. The settings below them come off the live\nvolume, so they are absent together once that volume is deleted -- and\nabsent is not the same answer as ``0``, which for a QoS cap means\n\"unlimited\" and for a priority class is a real class.\n\nNothing reads the settings yet; restore still creates its volume with\nhardcoded defaults. They are recorded anyway because a manifest is read\nyears after it is written, and a backup taken today cannot be given a shape\nretroactively once its volume is gone."
+      },
       "VolumeDTO": {
         "properties": {
           "id": {
@@ -8112,19 +8741,6 @@
         ],
         "title": "_BackupSnapshotParams"
       },
-      "_BackupSourceSwitchParams": {
-        "properties": {
-          "source_cluster_id": {
-            "type": "string",
-            "title": "Source Cluster Id"
-          }
-        },
-        "type": "object",
-        "required": [
-          "source_cluster_id"
-        ],
-        "title": "_BackupSourceSwitchParams"
-      },
       "_CloneParams": {
         "properties": {
           "name": {
@@ -8364,22 +8980,41 @@
         ],
         "title": "_CreateParams"
       },
-      "_ImportParams": {
+      "_ImportFromBucket": {
+        "properties": {
+          "bucket": {
+            "$ref": "#/components/schemas/BackupConfig-Input"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bucket"
+        ],
+        "title": "_ImportFromBucket",
+        "description": "Import whatever a bucket turns out to contain.\n\nThe disaster-recovery path: it needs a bucket and credentials for it, and\nnothing from the cluster that wrote the backups."
+      },
+      "_ImportManifests": {
         "properties": {
           "metadata": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/BackupManifest"
             },
             "type": "array",
             "title": "Metadata"
+          },
+          "location": {
+            "$ref": "#/components/schemas/BackupLocation"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
-          "metadata"
+          "metadata",
+          "location"
         ],
-        "title": "_ImportParams"
+        "title": "_ImportManifests",
+        "description": "Manifests carried in the request itself, e.g. from an export file.\n\nThe location is named separately because a manifest does not carry one --\nit describes its objects, not how to reach them. Which bucket an export\nfile's backups are in is the caller's to state, and stating it is what lets\nthe file be imported against a copy of the bucket rather than only against\nthe original."
       },
       "_MigrationParams": {
         "properties": {
@@ -8549,6 +9184,16 @@
               }
             ],
             "title": "Target Node Id"
+          },
+          "s3_credentials": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/S3Credentials"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
