@@ -235,6 +235,8 @@ type BackupSpec struct {
 type StorageClusterSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Enable Node Affinity"
 	// EnableNodeAffinity enables node-affinity placement for storage components.
+	// +k8s:immutable
+	// +optional
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Stripe"
 	// StripeSpec configures erasure-coding data/parity chunk counts.

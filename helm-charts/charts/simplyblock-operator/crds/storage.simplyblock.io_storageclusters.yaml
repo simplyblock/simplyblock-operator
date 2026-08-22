@@ -116,6 +116,9 @@ spec:
                 description: EnableNodeAffinity enables node-affinity placement for
                   storage components.
                 type: boolean
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               fabricType:
                 description: FabricType defines the storage fabric type.
                 type: string
@@ -357,6 +360,8 @@ spec:
             - vcpuCount
             type: object
             x-kubernetes-validations:
+            - message: field enableNodeAffinity is immutable once set
+              rule: '!has(oldSelf.enableNodeAffinity) || has(self.enableNodeAffinity)'
             - message: field enableFailureDomains is immutable once set
               rule: '!has(oldSelf.enableFailureDomains) || has(self.enableFailureDomains)'
             - message: fabricType is immutable once set
