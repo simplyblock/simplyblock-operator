@@ -324,7 +324,7 @@ type StorageClusterSpec struct {
 	// it produces must match across the cluster, so it is stated rather than left
 	// to a per-node heuristic.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Minimum=8
+	// +kubebuilder:validation:Minimum=6
 	VCPUCount *int32 `json:"vcpuCount"`
 
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Warning Threshold"

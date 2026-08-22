@@ -1862,7 +1862,7 @@ spec:
                   it produces must match across the cluster, so it is stated rather than left
                   to a per-node heuristic.
                 format: int32
-                minimum: 8
+                minimum: 6
                 type: integer
               volumeAutoPlacement:
                 description: |-
