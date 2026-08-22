@@ -348,6 +348,10 @@ func (r *StoragePoolReconciler) deleteStorageClass(ctx context.Context, storageP
 	return client.IgnoreNotFound(r.Delete(ctx, sc))
 }
 
+// scParamTrue is the CSI driver's string encoding of a true StorageClassParameters boolean
+// (see boolStr in mergeStorageClassParameters below).
+const scParamTrue = "True"
+
 // createStorageClassIfNotExists creates the StorageClass for the pool the first time it's
 // needed. It is intentionally create-only, not create-or-update: StorageClass Parameters and
 // AllowedTopologies are immutable in the Kubernetes API itself, so there is no "update" to
@@ -381,19 +385,35 @@ func (r *StoragePoolReconciler) createStorageClassIfNotExists(ctx context.Contex
 		AllowVolumeExpansion: &allowExpansion,
 	}
 
+	// A pool may need to compose two independent topology requirements (DHCHAP-allowed
+	// nodes, VDO-capable nodes). Both go into a single TopologySelectorTerm's
+	// MatchLabelExpressions, which Kubernetes ANDs together within one term -- separate
+	// terms would be ORed, which would incorrectly let a volume needing both land on a
+	// node satisfying only one.
+	var topologyExprs []corev1.TopologySelectorLabelRequirement
 	if storagePoolCR.Spec.DHCHAP && len(storagePoolCR.Spec.AllowedNodes) > 0 {
 		nodeLabelKey := poolNodeLabelKey(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name)
-		sc.AllowedTopologies = []corev1.TopologySelectorTerm{
-			{
-				MatchLabelExpressions: []corev1.TopologySelectorLabelRequirement{
-					{
-						Key:    nodeLabelKey,
-						Values: []string{"allowed"},
-					},
-				},
-			},
-		}
+		topologyExprs = append(topologyExprs, corev1.TopologySelectorLabelRequirement{
+			Key:    nodeLabelKey,
+			Values: []string{"allowed"},
+		})
 		params[dhchapNodeLabelParam] = nodeLabelKey // CreateVolume can't derive this key on its own (#403)
+	}
+	// VDO is needed whenever either client-side parameter is true, not client_compression
+	// alone -- a dedup-only volume still needs a working kvdo module on the node. No extra
+	// param to thread through here: vdoCapableLabelKey is a single fixed, well-known
+	// key/value (unlike DHCHAP's per-pool dynamic key), so CreateVolume can check
+	// client_compression/client_deduplication directly (see the #403-equivalent fix there).
+	if params["client_compression"] == scParamTrue || params["client_deduplication"] == scParamTrue {
+		topologyExprs = append(topologyExprs, corev1.TopologySelectorLabelRequirement{
+			Key:    "simplyblock.io/vdo-capable",
+			Values: []string{"true"},
+		})
+	}
+	if len(topologyExprs) > 0 {
+		sc.AllowedTopologies = []corev1.TopologySelectorTerm{
+			{MatchLabelExpressions: topologyExprs},
+		}
 	}
 
 	if err := r.Create(ctx, sc); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -413,7 +433,7 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 	}
 	boolStr := func(b *bool) string {
 		if b != nil && *b {
-			return "True"
+			return scParamTrue
 		}
 		return "False"
 	}
@@ -422,6 +442,8 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 	dst["qos_r_mbytes"] = p.QosRMbytes
 	dst["qos_w_mbytes"] = p.QosWMbytes
 	dst["compression"] = p.Compression
+	dst["client_compression"] = boolStr(p.ClientCompression)
+	dst["client_deduplication"] = boolStr(p.ClientDeduplication)
 	dst["encryption"] = boolStr(p.Encryption)
 	dst["replicate"] = boolStr(p.Replicate)
 	dst["lvol_priority_class"] = p.LvolPriorityClass
