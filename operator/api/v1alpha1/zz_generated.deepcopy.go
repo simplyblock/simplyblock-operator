@@ -1356,16 +1356,8 @@ func (in *StorageBackupStatus) DeepCopyInto(out *StorageBackupStatus) {
 	*out = *in
 	if in.AllowedHosts != nil {
 		in, out := &in.AllowedHosts, &out.AllowedHosts
-		*out = make([]map[string]string, len(*in))
-		for i := range *in {
-			if (*in)[i] != nil {
-				in, out := &(*in)[i], &(*out)[i]
-				*out = make(map[string]string, len(*in))
-				for key, val := range *in {
-					(*out)[key] = val
-				}
-			}
-		}
+		*out = make([]string, len(*in))
+		copy(*out, *in)
 	}
 	if in.CreatedAt != nil {
 		in, out := &in.CreatedAt, &out.CreatedAt

@@ -113,8 +113,10 @@ type StorageBackupStatus struct {
 	PrevBackupID string `json:"prevBackupID,omitempty"`
 	// Size is the backup size in bytes.
 	Size int64 `json:"size,omitempty"`
-	// AllowedHosts contains the allowed host metadata returned by the backup API.
-	AllowedHosts []map[string]string `json:"allowedHosts,omitempty"`
+	// AllowedHosts lists the NQNs allowed to attach, as the backup API reports
+	// them. NQNs alone: a host's entry in the control plane also carries its
+	// DHCHAP keys and PSK, which the backup API deliberately does not hand out.
+	AllowedHosts []string `json:"allowedHosts,omitempty"`
 	// CreatedAt is when the backup was created.
 	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
 	// CompletedAt is when the backup completed.

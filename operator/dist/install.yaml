@@ -1569,12 +1569,12 @@ spec:
             description: status defines the observed state of StorageBackup
             properties:
               allowedHosts:
-                description: AllowedHosts contains the allowed host metadata returned
-                  by the backup API.
+                description: |-
+                  AllowedHosts lists the NQNs allowed to attach, as the backup API reports
+                  them. NQNs alone: a host's entry in the control plane also carries its
+                  DHCHAP keys and PSK, which the backup API deliberately does not hand out.
                 items:
-                  additionalProperties:
-                    type: string
-                  type: object
+                  type: string
                 type: array
               apiStatus:
                 description: APIStatus is the raw status returned by the backup API.
