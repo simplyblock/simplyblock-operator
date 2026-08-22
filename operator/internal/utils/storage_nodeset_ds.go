@@ -403,6 +403,25 @@ func buildStorageNodeSetTLSVolume(tlsProvider string) corev1.Volume {
 	}
 }
 
+// storageNodeSetRBACManagedByLabel marks the ServiceAccount, ClusterRole, and
+// ClusterRoleBinding shared by every StorageNodeSet in scope (per-namespace for
+// the SA/binding, cluster-wide for the ClusterRole) as operator-managed.
+// Deliberately a label, not an ownerReference: none of these objects are 1:1
+// with a single StorageNodeSet, so a controller ownerReference would make
+// whichever StorageNodeSet last reconciled the sole "owner" — and deleting (or
+// even briefly delete-recreating) that one StorageNodeSet would let
+// kube-controller-manager's garbage collector cascade-delete RBAC objects
+// every other StorageNodeSet in scope still depends on. A ServiceAccount
+// deleted out from under running pods this way leaves their already-mounted
+// tokens bound to a now-nonexistent UID, which the API server rejects
+// (401) until kubelet's next token refresh (default ~48min). Labels carry no
+// GC semantics, so these objects are only ever removed by an explicit
+// `kubectl delete` — never as fallout from any single StorageNodeSet's
+// lifecycle.
+var storageNodeSetRBACManagedByLabel = map[string]string{
+	"simplyblock.io/managed-by": "storagenodeset-controller",
+}
+
 func BuildStorageNodeSetServiceAccount(namespace string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		TypeMeta: metav1.TypeMeta{
@@ -412,6 +431,7 @@ func BuildStorageNodeSetServiceAccount(namespace string) *corev1.ServiceAccount 
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "simplyblock-storage-node-sa",
 			Namespace: namespace,
+			Labels:    storageNodeSetRBACManagedByLabel,
 		},
 	}
 }
@@ -455,7 +475,8 @@ func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
 			APIVersion: "rbac.authorization.k8s.io/v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "simplyblock-storage-node-role",
+			Name:   "simplyblock-storage-node-role",
+			Labels: storageNodeSetRBACManagedByLabel,
 		},
 		Rules: baseRules,
 	}
@@ -614,7 +635,8 @@ func BuildStorageNodeSetClusterRoleBinding(namespace string) *rbacv1.ClusterRole
 			APIVersion: "rbac.authorization.k8s.io/v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("simplyblock-storage-node-binding-%s", namespace),
+			Name:   fmt.Sprintf("simplyblock-storage-node-binding-%s", namespace),
+			Labels: storageNodeSetRBACManagedByLabel,
 		},
 		Subjects: []rbacv1.Subject{
 			{

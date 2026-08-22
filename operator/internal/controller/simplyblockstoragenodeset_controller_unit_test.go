@@ -870,7 +870,14 @@ func TestStorageNodeSetReconcileKnownWorkerSkipsProvisioning(t *testing.T) {
 	}
 }
 
-func TestStorageNodeSetReconcileServiceAccountHasOwnerReference(t *testing.T) {
+// TestStorageNodeSetReconcileServiceAccountIsLabeledNotOwned guards against
+// reintroducing an ownerReference from the ServiceAccount to a single
+// StorageNodeSet. The SA is shared across every StorageNodeSet in the
+// namespace; an ownerReference would let kube-controller-manager's garbage
+// collector cascade-delete it whenever whichever StorageNodeSet last claimed
+// it is deleted (or even briefly delete-recreated), instantly invalidating
+// the token every already-running storage-node pod has mounted.
+func TestStorageNodeSetReconcileServiceAccountIsLabeledNotOwned(t *testing.T) {
 	const namespace = "default"
 	const clusterName = "cluster-ownerref-sa"
 	const clusterUUID = "cluster-uuid-ownerref-sa"
@@ -906,8 +913,11 @@ func TestStorageNodeSetReconcileServiceAccountHasOwnerReference(t *testing.T) {
 		t.Fatalf("failed to fetch serviceaccount: %v", err)
 	}
 
-	if len(sa.OwnerReferences) == 0 {
-		t.Fatalf("expected ServiceAccount to carry ownerReference to storagenodeset CR")
+	if len(sa.OwnerReferences) != 0 {
+		t.Fatalf("expected ServiceAccount to carry no ownerReference (shared across StorageNodeSets, must not be GC-cascaded on any single one's deletion), got %+v", sa.OwnerReferences)
+	}
+	if got := sa.Labels["simplyblock.io/managed-by"]; got != "storagenodeset-controller" {
+		t.Fatalf("expected ServiceAccount to carry managed-by label, got %q", got)
 	}
 }
 

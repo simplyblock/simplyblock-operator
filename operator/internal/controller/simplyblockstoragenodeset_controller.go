@@ -1099,22 +1099,36 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNodes(
 
 // reconcileRBAC ensures the ServiceAccount, ClusterRole, and ClusterRoleBinding
 // required by the storage-node DaemonSet are present and up to date.
+//
+// None of these three carry an ownerReference to snCR, deliberately: they are
+// shared by every StorageNodeSet in scope (per-namespace for the SA/binding,
+// cluster-wide for the ClusterRole), not owned 1:1 by this one. An
+// ownerReference would make whichever StorageNodeSet reconciles last the sole
+// GC-relevant owner, and deleting — or even briefly delete-recreating — that
+// one StorageNodeSet would let kube-controller-manager's garbage collector
+// cascade-delete these objects out from under every other StorageNodeSet in
+// scope. That is especially costly for the ServiceAccount: any pod already
+// running with a token mounted from the deleted SA has that token instantly
+// rejected (401) by the API server, since validation checks the SA's live UID
+// on every call rather than something cached — and nothing self-heals until
+// kubelet's next token refresh (default ~48min). See the incident referenced
+// in git history for this file. Leaving these labeled-but-unowned means only
+// an explicit `kubectl delete` ever removes them.
 func (r *StorageNodeSetReconciler) reconcileRBAC(ctx context.Context, snCR *simplyblockv1alpha1.StorageNodeSet) error {
 	sa := utils.BuildStorageNodeSetServiceAccount(snCR.Namespace)
-	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
-		return fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
-	}
-	desiredSAOwnerRefs := sa.OwnerReferences
+	desiredSALabels := sa.Labels
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
-		sa.OwnerReferences = desiredSAOwnerRefs
+		sa.Labels = desiredSALabels
 		return nil
 	}); err != nil {
 		return fmt.Errorf("failed to apply ServiceAccount: %w", err)
 	}
 
 	cr := utils.BuildStorageNodeSetClusterRole(ptr.BoolFromOrFalse(snCR.Spec.OpenShiftCluster))
+	desiredCRLabels := cr.Labels
 	desiredCRRules := cr.Rules
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
+		cr.Labels = desiredCRLabels
 		cr.Rules = desiredCRRules
 		return nil
 	}); err != nil {
@@ -1122,9 +1136,11 @@ func (r *StorageNodeSetReconciler) reconcileRBAC(ctx context.Context, snCR *simp
 	}
 
 	crb := utils.BuildStorageNodeSetClusterRoleBinding(snCR.Namespace)
+	desiredCRBLabels := crb.Labels
 	desiredCRBSubjects := crb.Subjects
 	desiredCRBRoleRef := crb.RoleRef
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
+		crb.Labels = desiredCRBLabels
 		crb.Subjects = desiredCRBSubjects
 		crb.RoleRef = desiredCRBRoleRef
 		return nil
