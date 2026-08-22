@@ -36,6 +36,7 @@ const (
 	// per-volume -- uniqueness comes from the VG name (vdo-<lvolID>), matching the design's
 	// one-VG-per-volume convention.
 	poolLVName = "vdopool"
+	lvsCmd     = "lvs"
 )
 
 // vgName returns the VG name this volume's VDO stack lives in.
@@ -105,6 +106,25 @@ func vgExists(ctx context.Context, devicePath, vg string) bool {
 	return pvVGName(ctx, devicePath) == vg
 }
 
+// vgHasLV reports whether vg already contains a logical volume named lvName. Distinguishes a
+// fully-created VDO stack from an orphaned VG left behind by an interrupted create (pvcreate
+// and vgcreate completed, lvcreate did not) -- confirmed live: such a VG reports #LV 0 and
+// vgchange -ay against it "succeeds" while producing no mountable device at all.
+func vgHasLV(ctx context.Context, devicePath, vg, lvName string) bool {
+	args := append([]string{lvsCmd}, devicesArgs(devicePath)...)
+	args = append(args, "--noheadings", "-o", "lv_name", vg)
+	out, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, args...)
+	if err != nil {
+		return false
+	}
+	for name := range strings.FieldsSeq(out) {
+		if name == lvName {
+			return true
+		}
+	}
+	return false
+}
+
 // pvVGName returns the VG name a device's on-disk PV signature currently belongs to, or ""
 // if the device carries no LVM signature at all (a genuinely blank device, or the probe
 // itself failing -- both are treated the same way by callers: nothing to resolve). Scoped to
@@ -153,12 +173,28 @@ func CreateOrAttachVDO(
 	}
 
 	if vgExists(ctx, devicePath, vg) {
-		vgchangeArgs := append([]string{"vgchange"}, devicesArgs(devicePath)...)
-		vgchangeArgs = append(vgchangeArgs, "-ay", vg)
-		if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, vgchangeArgs...); err != nil {
-			return "", fmt.Errorf("reactivate VG %s: %w", vg, err)
+		if vgHasLV(ctx, devicePath, vg, lvolID) {
+			vgchangeArgs := append([]string{"vgchange"}, devicesArgs(devicePath)...)
+			vgchangeArgs = append(vgchangeArgs, "-ay", vg)
+			if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, vgchangeArgs...); err != nil {
+				return "", fmt.Errorf("reactivate VG %s: %w", vg, err)
+			}
+			return vdoDevicePath(lvolID), nil
 		}
-		return vdoDevicePath(lvolID), nil
+		// Orphaned VG from an earlier interrupted create: pvcreate+vgcreate completed but
+		// lvcreate never did (confirmed live -- an earlier attempt hit this exact state
+		// with "#LV 0"), so there is nothing here to reactivate. Every subsequent stage
+		// attempt would otherwise reactivate an empty VG forever, never producing a
+		// mountable device. Remove it and fall through to a fresh create.
+		klog.Warningf(
+			"CreateOrAttachVDO: VG %s exists but has no %s logical volume -- removing orphaned VG and recreating", //nolint:lll
+			vg, lvolID,
+		)
+		vgremoveArgs := append([]string{"vgremove", "-f"}, devicesArgs(devicePath)...)
+		vgremoveArgs = append(vgremoveArgs, vg)
+		if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, vgremoveArgs...); err != nil {
+			return "", fmt.Errorf("remove orphaned empty VG %s: %w", vg, err)
+		}
 	}
 
 	pvcreateArgs := append([]string{"pvcreate"}, devicesArgs(devicePath)...)
@@ -223,7 +259,7 @@ func ResolveClonedVDO(ctx context.Context, devicePath, lvolID string) error {
 	// source volume. Rename it to lvolID so every subsequent operation (CreateOrAttachVDO's
 	// vgs/lvs check, mount, grow, remove) can address it consistently by this volume's own
 	// identity, not the source's.
-	lvsArgs := append([]string{"lvs"}, devicesArgs(devicePath)...)
+	lvsArgs := append([]string{lvsCmd}, devicesArgs(devicePath)...)
 	lvsArgs = append(lvsArgs, "--noheadings", "-o", "lv_name", vg)
 	out, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, lvsArgs...)
 	if err != nil {
@@ -376,7 +412,7 @@ func GrowVDO(ctx context.Context, devicePath, lvolID string) (string, error) {
 	// safely be sized up to the pool's own capacity without relying on dedup/compression
 	// savings, matching how creation omits -V to get the same "largest safe size" default).
 	// Read the pool's new size back and extend the logical volume to match it.
-	lvsArgs := append([]string{"lvs"}, devicesArgs(devicePath)...)
+	lvsArgs := append([]string{lvsCmd}, devicesArgs(devicePath)...)
 	lvsArgs = append(lvsArgs, "--noheadings", "--units", "b", "--nosuffix", "-o", "lv_size", vg+"/"+poolLVName)
 	poolSize, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, lvsArgs...)
 	if err != nil {
