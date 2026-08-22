@@ -43,6 +43,7 @@ import (
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/controller"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	internalwebhook "github.com/simplyblock/simplyblock-operator/internal/webhook"
 	// +kubebuilder:scaffold:imports
@@ -348,7 +349,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupImport")
 		os.Exit(1)
 	}
-	if err := (&controller.VolumeMigrationReconciler{
+	if err := (&volumemigration.Reconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("volumemigration-controller"),
@@ -390,7 +391,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageClusterOps")
 		os.Exit(1)
 	}
-	if err := (&controller.VolumeRebalancerReconciler{
+	if err := (&autoplacement.VolumeRebalancerReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),
 		Recorder:          mgr.GetEventRecorder("volumerebalancer-controller"),

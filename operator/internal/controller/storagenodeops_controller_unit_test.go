@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -28,11 +29,11 @@ const (
 
 func newOpsReconciler(t *testing.T, objects ...client.Object) *StorageNodeOpsReconciler {
 	t.Helper()
-	scheme := newTestScheme(t,
+	scheme := ctrltest.NewScheme(t,
 		simplyblockv1alpha1.AddToScheme,
 		corev1.AddToScheme,
 	)
-	cl := newTestClient(t, scheme,
+	cl := ctrltest.NewClient(t, scheme,
 		[]client.Object{
 			&simplyblockv1alpha1.StorageNode{},
 			&simplyblockv1alpha1.StorageNodeOps{},
@@ -332,12 +333,12 @@ func TestEndpointSliceHasWorker_MatchesBuilderOutput(t *testing.T) {
 	// Build the slice exactly as reconcileEndpointSlice does.
 	slice := utils.BuildStorageNodeSetEndpointSlice(sns, map[string]string{worker: "10.0.0.15"})
 
-	scheme := newTestScheme(t,
+	scheme := ctrltest.NewScheme(t,
 		simplyblockv1alpha1.AddToScheme,
 		corev1.AddToScheme,
 		discoveryv1.AddToScheme,
 	)
-	cl := newTestClient(t, scheme, nil, slice)
+	cl := ctrltest.NewClient(t, scheme, nil, slice)
 	r := &StorageNodeOpsReconciler{Client: cl, Scheme: scheme, Recorder: events.NewFakeRecorder(16), apiReader: cl}
 
 	// The enrolled worker is found — this is what the drifted name broke.

@@ -1,4 +1,4 @@
-package controller
+package volumemigration
 
 import (
 	"context"
@@ -12,15 +12,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
-	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 )
 
-// ---- reconcileStart: resolving the volume before submitting ----
+// ---- submitMigration: resolving the volume before submitting ----
 
 // The volume can be gone by the time the migration is reconciled (deleted PVC, a
 // stale CR). There is nothing to migrate, so this fails rather than retrying forever.
 func TestReconcileStart_VolumeGone_Fails(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/volumes/"+testVolumeUUID+"/") {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -46,7 +46,7 @@ func TestReconcileStart_VolumeGone_Fails(t *testing.T) {
 
 // A transient read failure is not a reason to fail the migration: it must be retried.
 func TestReconcileStart_VolumeLookupError_RetriesWithoutFailing(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/volumes/"+testVolumeUUID+"/") {
 			http.Error(w, "boom", http.StatusInternalServerError)
 			return
@@ -69,7 +69,7 @@ func TestReconcileStart_VolumeLookupError_RetriesWithoutFailing(t *testing.T) {
 // returns nothing, so the CR must requeue and try again rather than fail.
 func TestReconcileStart_ExistingMigrationCancelled_Requeues(t *testing.T) {
 	var cancelled bool
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveVolume(w, r) {
 			return
 		}
@@ -112,7 +112,7 @@ func TestReconcileStart_ExistingMigrationCancelled_Requeues(t *testing.T) {
 // Once the cluster accepts the migration, the deferral stamp must be cleared —
 // otherwise a later reconcile would measure the window from the first refusal.
 func TestReconcileStart_AcceptedAfterDeferral_ClearsDeferredSince(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveVolume(w, r) {
 			return
 		}
@@ -141,14 +141,14 @@ func TestReconcileStart_AcceptedAfterDeferral_ClearsDeferredSince(t *testing.T) 
 // Every connect parameter has to reach the validation Job: the job passes them to
 // `nvme connect`, and a dropped timeout changes the path's failure behaviour.
 //
-// One is not passed through. ctrl_loss_tmo is replaced with vmigration.CtrlLossTmoSec,
+// One is not passed through. ctrl_loss_tmo is replaced with CtrlLossTmoSec,
 // because a migration target path becomes the volume's data path at cutover and must
 // carry the same loss timeout as every other path in the system — the control plane
 // answers with an hour, and an abandoned path retries for at least that long. What is
 // recorded here is what will be connected, which is the point of overriding it at
 // ingestion rather than where the Job is built.
 func TestReconcileStart_RecordsEveryConnectionField(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveVolume(w, r) {
 			return
 		}
@@ -169,13 +169,13 @@ func TestReconcileStart_RecordsEveryConnectionField(t *testing.T) {
 	}
 	want := simplyblockv1alpha1.MigrationConnection{
 		NQN: "nqn.x", IP: "10.0.0.1", Port: 4420, Transport: "tcp",
-		NrIoQueues: 3, ReconnectDelay: 2, CtrlLossTmo: vmigration.CtrlLossTmoSec,
+		NrIoQueues: 3, ReconnectDelay: 2, CtrlLossTmo: CtrlLossTmoSec,
 		FastIOFailTmo: 8, KeepAliveTmo: 4,
 	}
 	if got.Status.Connections[0] != want {
 		t.Errorf("connection = %+v, want %+v", got.Status.Connections[0], want)
 	}
-	if vmigration.CtrlLossTmoSec == 3600 {
+	if CtrlLossTmoSec == 3600 {
 		t.Error("the override is vacuous: CtrlLossTmoSec matches what the control plane answered")
 	}
 	if got.Status.MemberCount != 2 {
@@ -183,12 +183,12 @@ func TestReconcileStart_RecordsEveryConnectionField(t *testing.T) {
 	}
 }
 
-// ---- performMigration: the branches around the continue call ----
+// ---- cutover: the branches around the continue call ----
 
 // A migration that reached a terminal state on its own must not be continued or
 // cancelled; it advances to Running so the polling path classifies the outcome.
 func TestPerformMigration_AlreadyTerminal_AdvancesForClassification(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveSubsystemMembers(w, r) {
 			return
 		}
@@ -209,7 +209,7 @@ func TestPerformMigration_AlreadyTerminal_AdvancesForClassification(t *testing.T
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if got := getVM(t, cl); got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseRunning {
-		t.Errorf("phase = %q, want Running so reconcileRunning classifies it", got.Status.Phase)
+		t.Errorf("phase = %q, want Running so pollMigration classifies it", got.Status.Phase)
 	}
 }
 
@@ -218,7 +218,7 @@ func TestPerformMigration_AlreadyTerminal_AdvancesForClassification(t *testing.T
 func TestPerformMigration_ContinueErroredButAdvanced_TreatedAsContinued(t *testing.T) {
 	var cancelCalled bool
 	calls := 0
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveSubsystemMembers(w, r) {
 			return
 		}
@@ -260,7 +260,7 @@ func TestPerformMigration_ContinueErroredButAdvanced_TreatedAsContinued(t *testi
 // Reading the migration before the continue can fail transiently. That must requeue,
 // not cancel: the migration is fine, our view of it is not.
 func TestPerformMigration_GetMigrationError_RequeuesWithoutCancelling(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveSubsystemMembers(w, r) {
 			return
 		}
@@ -292,7 +292,7 @@ func TestPerformMigration_GetMigrationError_RequeuesWithoutCancelling(t *testing
 // When the operator gives up and the cancel also fails, the CR must still fail — and
 // say that target-side objects may have been left behind.
 func TestPerformMigration_ContinueAndCancelBothFail_ReportsBoth(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveSubsystemMembers(w, r) {
 			return
 		}
@@ -328,7 +328,7 @@ func TestPerformMigration_ContinueAndCancelBothFail_ReportsBoth(t *testing.T) {
 // proceeds with the nodes already validated rather than stalling indefinitely.
 func TestPerformMigration_LateNodeCheckFails_ContinuesWithValidatedSet(t *testing.T) {
 	var continueCalled bool
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/storage-pools/"):
 			http.Error(w, "boom", http.StatusInternalServerError)
@@ -357,12 +357,12 @@ func TestPerformMigration_LateNodeCheckFails_ContinuesWithValidatedSet(t *testin
 	}
 }
 
-// ---- reconcileRunning ----
+// ---- pollMigration ----
 
 // Inside the initial delay the control-plane tracker may not have the record yet, so
 // nothing is polled and no progress is written.
 func TestReconcileRunning_WithinInitialDelay_DoesNotPoll(t *testing.T) {
-	srv := newAPIServer(t, func(_ http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(_ http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request %s %s inside the initial delay", r.Method, r.URL.Path)
 	})
 
@@ -384,11 +384,11 @@ func TestReconcileRunning_WithinInitialDelay_DoesNotPoll(t *testing.T) {
 // A migration still in flight past the stuck timeout is surfaced as a warning while
 // polling continues — it may yet finish, and cancelling it is the operator's call.
 func TestReconcileRunning_PastStuckTimeout_WarnsAndKeepsPolling(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"` + testMigrationUUID + `","phase":"snap_copy","status":"running"}`))
 	})
 
-	old := metav1.NewTime(time.Now().Add(-vmigration.MigrationStuckWarningTimeout - time.Minute))
+	old := metav1.NewTime(time.Now().Add(-MigrationStuckWarningTimeout - time.Minute))
 	r, cl := newVMReconciler(t, srv.URL, runningVM(&old))
 
 	res, err := r.Reconcile(context.Background(), vmRequest())
@@ -405,7 +405,7 @@ func TestReconcileRunning_PastStuckTimeout_WarnsAndKeepsPolling(t *testing.T) {
 
 // Polling failures are transient by nature; they must not decide the migration's fate.
 func TestReconcileRunning_PollError_RequeuesWithoutVerdict(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	})
 
@@ -433,7 +433,7 @@ func TestReconcileRunning_PollError_RequeuesWithoutVerdict(t *testing.T) {
 // Without the member listing the node set is unknown, and validating a guess would
 // risk cutting over with an unvalidated consumer. Retry instead of proceeding.
 func TestReconcileValidating_MemberListingFails_RetriesWithoutJobs(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/storage-pools/") {
 			http.Error(w, "boom", http.StatusInternalServerError)
 			return
@@ -466,7 +466,7 @@ func TestReconcileValidating_MemberListingFails_RetriesWithoutJobs(t *testing.T)
 // this CSI driver, so it contributes no node — and must not block the migration.
 func TestReconcileValidating_MemberWithoutPV_ValidatesTheRest(t *testing.T) {
 	const orphanVolumeUUID = "orphan-vol"
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveSubsystemMembers(w, r, orphanVolumeUUID) {
 			return
 		}
@@ -492,7 +492,7 @@ func TestReconcileValidating_MemberWithoutPV_ValidatesTheRest(t *testing.T) {
 // still needs the new paths, so namespace must not scope the search.
 func TestReconcileValidating_SiblingInAnotherNamespace_IsIncluded(t *testing.T) {
 	const siblingVolumeUUID = "cross-ns-vol"
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveSubsystemMembers(w, r, siblingVolumeUUID) {
 			return
 		}
@@ -539,7 +539,7 @@ func TestReconcileValidating_SiblingInAnotherNamespace_IsIncluded(t *testing.T) 
 // The image is resolved when the Jobs are built, not only at submit time. If it cannot
 // be resolved then, retry — the migration is already created and must not be failed.
 func TestReconcileValidating_ImageUnresolvable_Requeues(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveSubsystemMembers(w, r) {
 			return
 		}
@@ -571,7 +571,7 @@ func TestReconcileValidating_ImageUnresolvable_Requeues(t *testing.T) {
 // through an explicit mount — without it the check would report "no connection"
 // everywhere and validation would silently no-op.
 func TestBuildValidationJob_MountsHostSysfs(t *testing.T) {
-	r, _ := newVMReconciler(t, unreachableAPI)
+	r, _ := newVMReconciler(t, ctrltest.UnreachableAPI)
 	vm := validatingVM("")
 	job := r.buildValidationJob(vm, testConsumerNode, "rebalancer:test")
 

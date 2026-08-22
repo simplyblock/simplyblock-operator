@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -94,12 +95,12 @@ func syncTestBackupServer(t *testing.T) *httptest.Server {
 func newSyncTestReconciler(t *testing.T, apiURL string, objects ...client.Object) *StorageBackupSyncReconciler {
 	t.Helper()
 
-	scheme := newTestScheme(
+	scheme := ctrltest.NewScheme(
 		t,
 		simplyblockv1alpha1.AddToScheme,
 		corev1.AddToScheme,
 	)
-	cl := newTestClient(t, scheme, []client.Object{
+	cl := ctrltest.NewClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.StorageCluster{},
 		&simplyblockv1alpha1.StorageBackup{},
 	}, objects...)

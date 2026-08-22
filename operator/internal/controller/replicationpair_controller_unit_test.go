@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -22,7 +23,7 @@ import (
 // It indexes ReplicationPolicy.spec.pairRef so deletion-blocking checks work.
 func newSitePairReconciler(t *testing.T, objects ...client.Object) (*ReplicationPairReconciler, client.Client) {
 	t.Helper()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	scheme := ctrltest.NewScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(
@@ -124,7 +125,7 @@ func TestSitePair_CreatesBackendTarget(t *testing.T) {
 	pair := newSitePair()
 
 	// API: GET targets returns empty list; POST creates target with ID.
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodGet {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`[]`))
@@ -166,7 +167,7 @@ func TestSitePair_ReuseExistingTarget(t *testing.T) {
 	cluster2 := testCluster("default", "cluster2", "tgt-uuid")
 	pair := newSitePair()
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodGet {
 			w.WriteHeader(http.StatusOK)
 			resp, _ := json.Marshal([]map[string]string{
@@ -242,7 +243,7 @@ func TestSitePair_DeletionSucceeds(t *testing.T) {
 	}
 	cluster1 := testCluster("default", "cluster1", "src-uuid")
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodDelete {
 			w.WriteHeader(http.StatusNoContent)
 			return

@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 )
 
@@ -500,8 +501,8 @@ func resolveTestObjects(clusterUUID string, annotations map[string]string) (*cor
 
 func TestResolvePVCLvolID_FromHandle(t *testing.T) {
 	pv, pvc := resolveTestObjects(resolveTestClusterUUID, nil)
-	scheme := newTestScheme(t, corev1.AddToScheme)
-	k8s := newTestClient(t, scheme, nil, pv, pvc)
+	scheme := ctrltest.NewScheme(t, corev1.AddToScheme)
+	k8s := ctrltest.NewClient(t, scheme, nil, pv, pvc)
 
 	got, err := resolvePVCLvolID(context.Background(), k8s, pvc, resolveTestClusterUUID)
 	if err != nil {
@@ -515,8 +516,8 @@ func TestResolvePVCLvolID_FromHandle(t *testing.T) {
 func TestResolvePVCLvolID_AnnotationMatchesHandle(t *testing.T) {
 	ann := map[string]string{pvcLvolIDAnnotation: resolveTestLvolID}
 	pv, pvc := resolveTestObjects(resolveTestClusterUUID, ann)
-	scheme := newTestScheme(t, corev1.AddToScheme)
-	k8s := newTestClient(t, scheme, nil, pv, pvc)
+	scheme := ctrltest.NewScheme(t, corev1.AddToScheme)
+	k8s := ctrltest.NewClient(t, scheme, nil, pv, pvc)
 
 	got, err := resolvePVCLvolID(context.Background(), k8s, pvc, resolveTestClusterUUID)
 	if err != nil {
@@ -533,8 +534,8 @@ func TestResolvePVCLvolID_AnnotationMatchesHandle(t *testing.T) {
 func TestResolvePVCLvolID_AnnotationMismatch(t *testing.T) {
 	ann := map[string]string{pvcLvolIDAnnotation: "lvol-stale-annotation"}
 	pv, pvc := resolveTestObjects(resolveTestClusterUUID, ann)
-	scheme := newTestScheme(t, corev1.AddToScheme)
-	k8s := newTestClient(t, scheme, nil, pv, pvc)
+	scheme := ctrltest.NewScheme(t, corev1.AddToScheme)
+	k8s := ctrltest.NewClient(t, scheme, nil, pv, pvc)
 
 	_, err := resolvePVCLvolID(context.Background(), k8s, pvc, resolveTestClusterUUID)
 	if err == nil {
@@ -547,8 +548,8 @@ func TestResolvePVCLvolID_AnnotationMismatch(t *testing.T) {
 
 func TestResolvePVCLvolID_WrongCluster(t *testing.T) {
 	pv, pvc := resolveTestObjects("other-cluster-uuid", nil)
-	scheme := newTestScheme(t, corev1.AddToScheme)
-	k8s := newTestClient(t, scheme, nil, pv, pvc)
+	scheme := ctrltest.NewScheme(t, corev1.AddToScheme)
+	k8s := ctrltest.NewClient(t, scheme, nil, pv, pvc)
 
 	_, err := resolvePVCLvolID(context.Background(), k8s, pvc, resolveTestClusterUUID)
 	if err == nil {
@@ -561,8 +562,8 @@ func TestResolvePVCLvolID_Unbound(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: resolveTestPVCName, Namespace: resolveTestNamespace},
 		Spec:       corev1.PersistentVolumeClaimSpec{},
 	}
-	scheme := newTestScheme(t, corev1.AddToScheme)
-	k8s := newTestClient(t, scheme, nil, pvc)
+	scheme := ctrltest.NewScheme(t, corev1.AddToScheme)
+	k8s := ctrltest.NewClient(t, scheme, nil, pvc)
 
 	_, err := resolvePVCLvolID(context.Background(), k8s, pvc, resolveTestClusterUUID)
 	if err == nil || !strings.Contains(err.Error(), "not bound") {
@@ -826,8 +827,8 @@ func TestBackupPolicyReconcileInvalidSpecMakesNoBackendCalls(t *testing.T) {
 func newBackupPolicyTestReconciler(t *testing.T, objects ...client.Object) *BackupPolicyReconciler {
 	t.Helper()
 
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
-	cl := newTestClient(t, scheme, []client.Object{
+	scheme := ctrltest.NewScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	cl := ctrltest.NewClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.BackupPolicy{},
 	}, objects...)
 

@@ -1,4 +1,4 @@
-package controller
+package volumemigration
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -16,58 +15,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
-	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 )
-
-// ---- job naming ----
-
-// Job names are Kubernetes object names, so a node name that is long, upper-case or
-// dotted must still produce a valid DNS-1123 label — and two different nodes must
-// never collide, or the second node's validation would silently reuse the first's Job.
-func TestNodeSuffix(t *testing.T) {
-	label := regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
-
-	cases := []string{
-		"worker-1",
-		"vm04.simplyblock4.localdomain",
-		"WORKER-UPPER.example.com",
-		"ip-10-0-1-23.eu-central-1.compute.internal",
-		strings.Repeat("very-long-node-name", 10),
-		"node_with_underscores",
-		"1.2.3.4",
-		"",
-	}
-	seen := map[string]string{}
-	for _, node := range cases {
-		t.Run(node, func(t *testing.T) {
-			suffix := nodeSuffix(node)
-			if !label.MatchString(suffix) {
-				t.Errorf("nodeSuffix(%q) = %q, which is not a valid DNS-1123 label", node, suffix)
-			}
-			full := "vmig-validate-" + safeNodeID(testMigrationUUID) + "-" + suffix
-			if len(full) > 63 {
-				t.Errorf("job name %q is %d chars, over the 63-char label limit", full, len(full))
-			}
-			if other, dup := seen[suffix]; dup {
-				t.Errorf("nodeSuffix(%q) collides with nodeSuffix(%q) = %q", node, other, suffix)
-			}
-			seen[suffix] = node
-		})
-	}
-
-	// Same node, same suffix: the Job is recreated under the same name across
-	// reconciles rather than piling up duplicates.
-	if a, b := nodeSuffix("worker-1"), nodeSuffix("worker-1"); a != b {
-		t.Errorf("nodeSuffix is not deterministic: %q vs %q", a, b)
-	}
-	// Hosts that share a short name but differ in domain must not collide.
-	if a, b := nodeSuffix("vm04.dc1.example.com"), nodeSuffix("vm04.dc2.example.com"); a == b {
-		t.Errorf("nodeSuffix collides for different FQDNs with the same host part: %q", a)
-	}
-}
 
 // ---- connection conversion ----
 
@@ -82,7 +36,7 @@ func TestConnectionsToValidation(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d connections, want 1", len(got))
 	}
-	want := vmigration.Connection{
+	want := Connection{
 		NQN: "nqn.x", IP: "10.0.0.1", Port: 4420, Transport: "tcp",
 		NrIoQueues: 3, ReconnectDelay: 2, CtrlLossTmo: 3600, FastIOFailTmo: 8, KeepAliveTmo: 4,
 	}
@@ -111,7 +65,7 @@ func TestPVNamesForVolumes(t *testing.T) {
 	other := csiPV(testClusterUUID + ":" + testPoolUUID + ":other-vol")
 	other.Name = "pv-other"
 
-	r, _ := newVMReconciler(t, unreachableAPI, hostPath, malformed, wanted, other)
+	r, _ := newVMReconciler(t, ctrltest.UnreachableAPI, hostPath, malformed, wanted, other)
 
 	got, err := r.pvNamesForVolumes(context.Background(),
 		map[string]struct{}{testVolumeUUID: {}, "missing-vol": {}})
@@ -130,7 +84,7 @@ func TestPVNamesForVolumes(t *testing.T) {
 // A PV that vanished between the member listing and the consumer lookup is an error
 // worth retrying, not a silent "no consumer" that would skip validation for it.
 func TestResolveConsumerNodeName_PVMissing(t *testing.T) {
-	r, _ := newVMReconciler(t, unreachableAPI)
+	r, _ := newVMReconciler(t, ctrltest.UnreachableAPI)
 	if _, err := r.resolveConsumerNodeName(context.Background(), "pv-does-not-exist"); err == nil {
 		t.Errorf("expected an error for a missing PV")
 	}
@@ -143,7 +97,7 @@ func TestResolveRebalancerImage(t *testing.T) {
 	image := "pinned:v1"
 
 	t.Run("explicit image is used", func(t *testing.T) {
-		r, _ := newVMReconciler(t, unreachableAPI, clusterWithSettings(
+		r, _ := newVMReconciler(t, ctrltest.UnreachableAPI, clusterWithSettings(
 			&simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &enabled, RebalancerImage: &image}))
 		got, err := r.resolveRebalancerImage(context.Background(), testVMNamespace, testClusterUUID)
 		if err != nil {
@@ -155,7 +109,7 @@ func TestResolveRebalancerImage(t *testing.T) {
 	})
 
 	t.Run("enabled without a pinned image falls back to the default", func(t *testing.T) {
-		r, _ := newVMReconciler(t, unreachableAPI, clusterWithSettings(
+		r, _ := newVMReconciler(t, ctrltest.UnreachableAPI, clusterWithSettings(
 			&simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &enabled}))
 		got, err := r.resolveRebalancerImage(context.Background(), testVMNamespace, testClusterUUID)
 		if err != nil {
@@ -167,7 +121,7 @@ func TestResolveRebalancerImage(t *testing.T) {
 	})
 
 	t.Run("disabled is an error", func(t *testing.T) {
-		r, _ := newVMReconciler(t, unreachableAPI, clusterWithSettings(
+		r, _ := newVMReconciler(t, ctrltest.UnreachableAPI, clusterWithSettings(
 			&simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &disabled}))
 		_, err := r.resolveRebalancerImage(context.Background(), testVMNamespace, testClusterUUID)
 		if err == nil {
@@ -181,7 +135,7 @@ func TestResolveRebalancerImage(t *testing.T) {
 	// An unknown cluster UUID must not silently fall back to a default image: the CR
 	// would then migrate against a cluster the operator does not manage.
 	t.Run("no StorageCluster for the UUID is an error", func(t *testing.T) {
-		r, _ := newVMReconciler(t, unreachableAPI)
+		r, _ := newVMReconciler(t, ctrltest.UnreachableAPI)
 		_, err := r.resolveRebalancerImage(context.Background(), testVMNamespace, "unknown-cluster")
 		if err == nil {
 			t.Fatalf("expected an error for an unknown cluster UUID")
@@ -198,15 +152,16 @@ func TestResolveRebalancerImage(t *testing.T) {
 // duplicate the status entry or fail the reconcile.
 func TestStartValidationJobs_ExistingJobIsNotDuplicated(t *testing.T) {
 	vm := validatingVM("")
-	r, cl := newVMReconciler(t, unreachableAPI, vm, migrationCluster())
+	r, cl := newVMReconciler(t, ctrltest.UnreachableAPI, vm, migrationCluster())
+	p := newPass(vm)
 
-	if _, err := r.startValidationJobs(context.Background(), vm, []string{testConsumerNode}); err != nil {
+	if _, err := r.startValidationJobs(context.Background(), p, []string{testConsumerNode}); err != nil {
 		t.Fatalf("startValidationJobs: %v", err)
 	}
 	first := len(vm.Status.ValidationJobs)
 
 	// Same node again: nothing new to create, nothing new to record.
-	if _, err := r.startValidationJobs(context.Background(), vm, []string{testConsumerNode}); err != nil {
+	if _, err := r.startValidationJobs(context.Background(), p, []string{testConsumerNode}); err != nil {
 		t.Fatalf("startValidationJobs (repeat): %v", err)
 	}
 	if len(vm.Status.ValidationJobs) != first {
@@ -230,7 +185,7 @@ func TestPollValidationJobs_OneJobVanished_KeepsTheOthers(t *testing.T) {
 	// Only the first node's Job exists.
 	present := validationJob(batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue})
 
-	r, cl := newVMReconciler(t, unreachableAPI, vm, present, migrationCluster())
+	r, cl := newVMReconciler(t, ctrltest.UnreachableAPI, vm, present, migrationCluster())
 
 	if _, err := r.Reconcile(context.Background(), vmRequest()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -279,7 +234,7 @@ func releaseJobs(t *testing.T, cl client.Client) map[string]batchv1.Job {
 // successfully and is never told the migration was cancelled, so the operator has to
 // release for it. Every recorded node is asked, not only the ones that passed.
 func TestReconcileAbort_ReleasesTargetPathsOnEveryNode(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/") {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -308,7 +263,7 @@ func TestReconcileAbort_ReleasesTargetPathsOnEveryNode(t *testing.T) {
 // A failed validation cancels the migration, and the nodes that passed still hold their
 // target paths — the same release has to happen on that route too, not only on abort.
 func TestCancelAndFail_ReleasesTargetPaths(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/") {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -319,7 +274,10 @@ func TestCancelAndFail_ReleasesTargetPaths(t *testing.T) {
 	vm := releasingVM()
 	r, cl := newVMReconciler(t, srv.URL, vm, migrationCluster())
 
-	if _, err := r.cancelAndFail(context.Background(), vm, "NVMe path validation failed"); err != nil {
+	err := runStep(t, r, vm, func(ctx context.Context, p *migrationPass, sm *statemachine.Machine[phase]) (ctrl.Result, error) {
+		return r.cancelAndFail(ctx, p, sm, "NVMe path validation failed")
+	})
+	if err != nil {
 		t.Fatalf("cancelAndFail: %v", err)
 	}
 	if got := getVM(t, cl); got.Status.Phase != simplyblockv1alpha1.VolumeMigrationPhaseFailed {
@@ -334,7 +292,7 @@ func TestCancelAndFail_ReleasesTargetPaths(t *testing.T) {
 // looked at the container's /sys, or ran the validation mode, would either see nothing or
 // connect the very paths it was sent to take back.
 func TestBuildReleaseJob_RunsReleaseModeAgainstTheHost(t *testing.T) {
-	r, _ := newVMReconciler(t, unreachableAPI)
+	r, _ := newVMReconciler(t, ctrltest.UnreachableAPI)
 	vm := releasingVM()
 
 	job := r.buildReleaseJob(vm, testConsumerNode, "img:tag")
@@ -372,7 +330,7 @@ func TestBuildReleaseJob_RunsReleaseModeAgainstTheHost(t *testing.T) {
 // Nothing to release when nothing was connected: a migration that never recorded target
 // connections must not spawn Jobs to take back paths that do not exist.
 func TestReleaseMigrationPaths_NoConnectionsStartsNoJobs(t *testing.T) {
-	r, cl := newVMReconciler(t, unreachableAPI, migrationCluster())
+	r, cl := newVMReconciler(t, ctrltest.UnreachableAPI, migrationCluster())
 	vm := releasingVM()
 	vm.Status.Connections = nil
 
@@ -387,7 +345,7 @@ func TestReleaseMigrationPaths_NoConnectionsStartsNoJobs(t *testing.T) {
 
 // Aborting during validation must clean up every node's Job, not just the first.
 func TestReconcileAbort_DeletesAllValidationJobs(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/migrations/") {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -426,7 +384,7 @@ func TestReconcileAbort_DeletesAllValidationJobs(t *testing.T) {
 // A cancel that fails must not leave the CR claiming it was aborted: retry instead, so
 // the backend migration is not left running behind an Aborted CR.
 func TestReconcileAbort_CancelFails_RequeuesWithoutAborting(t *testing.T) {
-	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	})
 
@@ -449,7 +407,7 @@ func TestReconcileAbort_CancelFails_RequeuesWithoutAborting(t *testing.T) {
 // A migration deferred by a busy cluster has not been submitted, so aborting it needs
 // no backend call — and must not spin for the rest of the deferral window.
 func TestReconcileAbort_WhileDeferred_AbortsWithoutBackendCall(t *testing.T) {
-	srv := newAPIServer(t, func(_ http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(_ http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request %s %s: nothing was submitted to cancel", r.Method, r.URL.Path)
 	})
 
@@ -477,7 +435,7 @@ func TestReconcileAbort_WhileDeferred_AbortsWithoutBackendCall(t *testing.T) {
 // Log collection is best effort and runs on every finished Job: a Job with no pods
 // left (evicted, GC'd) must not disturb the reconcile.
 func TestCollectAndLogJobPodLogs_NoPods(t *testing.T) {
-	r, _ := newVMReconciler(t, unreachableAPI)
+	r, _ := newVMReconciler(t, ctrltest.UnreachableAPI)
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "vmig-validate-x", Namespace: testVMNamespace}}
 	r.collectAndLogJobPodLogs(context.Background(), job) // must not panic
 }
@@ -491,7 +449,7 @@ func TestCollectAndLogJobPodLogs_NoPods(t *testing.T) {
 // A node that passed must stay recorded as passed, its Job must not be recreated, and
 // the migration must not continue while another node is still pending.
 func TestPollValidationJobs_PassedNodeIsNotRevalidated(t *testing.T) {
-	srv := newAPIServer(t, func(_ http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(_ http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request %s %s: one node is still pending", r.Method, r.URL.Path)
 	})
 
@@ -563,7 +521,7 @@ func TestPollValidationJobs_PassedNodeIsNotRevalidated(t *testing.T) {
 // validating it.
 func TestValidateLateNodes_PassedNodeIsNotTreatedAsNew(t *testing.T) {
 	var continueCalled bool
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveSubsystemMembers(w, r) {
 			return
 		}
@@ -607,7 +565,7 @@ func TestValidateLateNodes_PassedNodeIsNotTreatedAsNew(t *testing.T) {
 }
 
 // drainEvents returns the events recorded so far.
-func drainEvents(t *testing.T, r *VolumeMigrationReconciler) []string {
+func drainEvents(t *testing.T, r *Reconciler) []string {
 	t.Helper()
 	rec, ok := r.Recorder.(*events.FakeRecorder)
 	if !ok {
@@ -633,7 +591,7 @@ func drainEvents(t *testing.T, r *VolumeMigrationReconciler) []string {
 // single-pass test could see it — which is why it reached a cluster.
 func TestReconcileValidating_ConvergesWithStaggeredCompletions(t *testing.T) {
 	const siblingVolumeUUID = "sibling-vol"
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if serveSubsystemMembers(w, r, siblingVolumeUUID) {
 			return
 		}

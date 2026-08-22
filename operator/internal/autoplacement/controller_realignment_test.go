@@ -1,4 +1,4 @@
-package controller
+package autoplacement
 
 import (
 	"context"
@@ -17,6 +17,8 @@ import (
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
+	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -180,13 +182,13 @@ func newRealignFixture(t *testing.T, status int, cr *simplyblockv1alpha1.Storage
 	t.Helper()
 
 	var calls int32
-	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&calls, 1)
 		w.WriteHeader(status)
 	})
 
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
-	cl := newTestClient(t, scheme,
+	scheme := ctrltest.NewScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	cl := ctrltest.NewClient(t, scheme,
 		[]client.Object{&simplyblockv1alpha1.StorageCluster{}}, cr)
 
 	rec := events.NewFakeRecorder(64)
@@ -458,14 +460,14 @@ func newRealignFixtureWith(
 	t.Helper()
 
 	var calls int32
-	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&calls, 1)
 		w.WriteHeader(http.StatusOK)
 	})
 
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	scheme := ctrltest.NewScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	objs := append([]client.Object{cr}, extra...)
-	cl := newTestClient(t, scheme,
+	cl := ctrltest.NewClient(t, scheme,
 		[]client.Object{&simplyblockv1alpha1.StorageCluster{}}, objs...)
 
 	rec := events.NewFakeRecorder(64)
@@ -561,8 +563,7 @@ func TestReconcileDataRealignment_RecordsOnlyTheGenerationItCovered(t *testing.T
 	}
 
 	// mig-67 finishes ten seconds later.
-	vmr := &VolumeMigrationReconciler{Client: f.cl, Scheme: f.r.Scheme, Recorder: events.NewFakeRecorder(8)}
-	vmr.markClusterVolumeMoved(context.Background(), realignNamespace, realignClusterUUID)
+	volumemigration.MarkVolumeMoved(context.Background(), f.cl, realignNamespace, realignClusterUUID)
 
 	cr = f.getCluster(t)
 	gen := ptr.Int64FromOrZero(cr.Status.VolumeMoveGeneration)
@@ -642,7 +643,6 @@ func TestReconcileDataRealignment_ReplayOfStackedRealignment(t *testing.T) {
 	// mig-67 is moving; one earlier move is already owed.
 	f := newRealignFixtureWith(t, realignTestCluster(1, 0, nil, false, nil),
 		movingMigration("mig-67", simplyblockv1alpha1.VolumeMigrationPhaseRunning))
-	vmr := &VolumeMigrationReconciler{Client: f.cl, Scheme: f.r.Scheme, Recorder: events.NewFakeRecorder(8)}
 
 	// 02:13:31 — due, but a volume is moving: deferred instead of sent.
 	f.r.reconcileDataRealignment(ctx, f.getCluster(t), realignClusterUUID)
@@ -651,7 +651,7 @@ func TestReconcileDataRealignment_ReplayOfStackedRealignment(t *testing.T) {
 	}
 
 	// 02:13:41 — mig-67 completes: counter goes to 2, migration reaches a terminal phase.
-	vmr.markClusterVolumeMoved(ctx, realignNamespace, realignClusterUUID)
+	volumemigration.MarkVolumeMoved(ctx, f.cl, realignNamespace, realignClusterUUID)
 	done := &simplyblockv1alpha1.VolumeMigration{}
 	if err := f.cl.Get(ctx, types.NamespacedName{Namespace: realignNamespace, Name: "mig-67"}, done); err != nil {
 		t.Fatalf("get mig-67: %v", err)

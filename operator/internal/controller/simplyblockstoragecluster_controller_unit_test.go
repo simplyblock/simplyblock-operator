@@ -9,6 +9,7 @@ import (
 	"time"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
 	corev1 "k8s.io/api/core/v1"
@@ -440,7 +441,7 @@ func TestReconcileCreateOptimisticLockPreventsRace(t *testing.T) {
 			Status: simplyblockv1alpha1.StorageClusterStatus{},
 		}
 
-		scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+		scheme := ctrltest.NewScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 
 		patchCount := 0
 		cl := fake.NewClientBuilder().
@@ -537,8 +538,8 @@ func TestReconcileCreateOptimisticLockPreventsRace(t *testing.T) {
 func newClusterStateTestReconciler(t *testing.T, objects ...client.Object) *StorageClusterReconciler {
 	t.Helper()
 
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
-	cl := newTestClient(t, scheme, []client.Object{
+	scheme := ctrltest.NewScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	cl := ctrltest.NewClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.StorageCluster{},
 	}, objects...)
 

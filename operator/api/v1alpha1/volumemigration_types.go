@@ -84,6 +84,20 @@ type VolumeMigrationStatus struct {
 	// +kubebuilder:validation:Enum=Pending;Validating;Running;Completed;Failed;Aborted
 	Phase VolumeMigrationPhase `json:"phase,omitempty"`
 
+	// PhaseDeadline is when the current phase runs out of time, after which the
+	// migration fails rather than waiting longer. It is the phase's own bound, set
+	// when the phase is entered and cleared when it is left, and it is persisted
+	// because the operator does not keep a migration in memory between reconciles:
+	// a phase that expired while the operator was down has to be recognised on the
+	// pass after it comes back.
+	//
+	// A phase with no deadline is one nothing can usefully bound. Running is the
+	// only such phase — a data copy takes as long as there is data — and its
+	// progress is watched instead of timed.
+	//
+	// +optional
+	PhaseDeadline *metav1.Time `json:"phaseDeadline,omitempty"`
+
 	// MigrationUUID is the identifier returned by the storage API when the
 	// migration was submitted. Used for polling and cancellation.
 	MigrationUUID string `json:"migrationUUID,omitempty"`
@@ -136,8 +150,10 @@ type VolumeMigrationStatus struct {
 	// DeferredSince is when the storage API first refused to accept this migration
 	// because the cluster was busy with work that ends on its own (a data realignment
 	// or another node migration). While set, the migration is being retried and has
-	// not started. It bounds the retrying: past a fixed window the migration fails
-	// rather than waiting forever. Cleared once the migration is submitted.
+	// not started. Cleared once the migration is submitted.
+	//
+	// It records how long the wait has been going on, for whoever is watching; what
+	// ends the wait is PhaseDeadline, armed on the first refusal.
 	DeferredSince *metav1.Time `json:"deferredSince,omitempty"`
 
 	// StartedAt is the time the migration was submitted to the storage API.

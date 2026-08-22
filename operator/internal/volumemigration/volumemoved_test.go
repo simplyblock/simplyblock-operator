@@ -1,26 +1,40 @@
-package controller
+package volumemigration
 
 import (
 	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 )
 
-// newVMReconcilerForRealign builds a VolumeMigrationReconciler whose fake client has
-// the StorageCluster status subresource enabled (markClusterVolumeMoved patches
-// StorageCluster status, not VolumeMigration status).
-func newVMReconcilerForRealign(t *testing.T, objs ...client.Object) (*VolumeMigrationReconciler, client.Client) {
+// The cluster the counter is kept on. Named to match the rebalancing tests on the
+// reading end of it, which exercise the same three values.
+const (
+	realignNamespace   = "sb"
+	realignClusterName = "cluster-a"
+	realignClusterUUID = "cluster-uuid-a"
+)
+
+// newMoveCounterClient builds a fake client with the StorageCluster status subresource
+// enabled — MarkVolumeMoved patches StorageCluster status, not VolumeMigration status.
+func newMoveCounterClient(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
-	cl := newTestClient(t, scheme, []client.Object{&simplyblockv1alpha1.StorageCluster{}}, objs...)
-	return &VolumeMigrationReconciler{Client: cl, Scheme: scheme, Recorder: events.NewFakeRecorder(16)}, cl
+	scheme := ctrltest.NewScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	return ctrltest.NewClient(t, scheme, []client.Object{&simplyblockv1alpha1.StorageCluster{}}, objs...)
+}
+
+func moveCounterCluster(uuid string) *simplyblockv1alpha1.StorageCluster {
+	return &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: realignClusterName, Namespace: realignNamespace},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: uuid},
+	}
 }
 
 func getClusterByName(t *testing.T, cl client.Client) *simplyblockv1alpha1.StorageCluster {
@@ -33,11 +47,10 @@ func getClusterByName(t *testing.T, cl client.Client) *simplyblockv1alpha1.Stora
 	return cr
 }
 
-func TestMarkClusterVolumeMoved_IncrementsGeneration(t *testing.T) {
-	cr := testCluster(realignNamespace, realignClusterName, realignClusterUUID)
-	r, cl := newVMReconcilerForRealign(t, cr)
+func TestMarkVolumeMoved_IncrementsGeneration(t *testing.T) {
+	cl := newMoveCounterClient(t, moveCounterCluster(realignClusterUUID))
 
-	r.markClusterVolumeMoved(context.Background(), realignNamespace, realignClusterUUID)
+	MarkVolumeMoved(context.Background(), cl, realignNamespace, realignClusterUUID)
 
 	if got := ptr.Int64FromOrZero(getClusterByName(t, cl).Status.VolumeMoveGeneration); got != 1 {
 		t.Fatalf("generation = %d, want 1", got)
@@ -46,12 +59,11 @@ func TestMarkClusterVolumeMoved_IncrementsGeneration(t *testing.T) {
 
 // Each completed migration must count, or MinMoves batching can never be reached.
 // The superseded boolean was idempotent by design; the counter must not be.
-func TestMarkClusterVolumeMoved_EveryMoveCounts(t *testing.T) {
-	cr := testCluster(realignNamespace, realignClusterName, realignClusterUUID)
-	r, cl := newVMReconcilerForRealign(t, cr)
+func TestMarkVolumeMoved_EveryMoveCounts(t *testing.T) {
+	cl := newMoveCounterClient(t, moveCounterCluster(realignClusterUUID))
 
 	for range 5 {
-		r.markClusterVolumeMoved(context.Background(), realignNamespace, realignClusterUUID)
+		MarkVolumeMoved(context.Background(), cl, realignNamespace, realignClusterUUID)
 	}
 
 	if got := ptr.Int64FromOrZero(getClusterByName(t, cl).Status.VolumeMoveGeneration); got != 5 {
@@ -61,13 +73,13 @@ func TestMarkClusterVolumeMoved_EveryMoveCounts(t *testing.T) {
 
 // A move counted while a realignment already covers an earlier generation must push the
 // counter past realignedGeneration, which is what leaves the next realignment owed.
-func TestMarkClusterVolumeMoved_CountsPastAlreadyRealigned(t *testing.T) {
-	cr := testCluster(realignNamespace, realignClusterName, realignClusterUUID)
+func TestMarkVolumeMoved_CountsPastAlreadyRealigned(t *testing.T) {
+	cr := moveCounterCluster(realignClusterUUID)
 	cr.Status.VolumeMoveGeneration = ptr.To(int64(7))
 	cr.Status.RealignedGeneration = ptr.To(int64(7))
-	r, cl := newVMReconcilerForRealign(t, cr)
+	cl := newMoveCounterClient(t, cr)
 
-	r.markClusterVolumeMoved(context.Background(), realignNamespace, realignClusterUUID)
+	MarkVolumeMoved(context.Background(), cl, realignNamespace, realignClusterUUID)
 
 	got := getClusterByName(t, cl)
 	if gen := ptr.Int64FromOrZero(got.Status.VolumeMoveGeneration); gen != 8 {
@@ -78,25 +90,23 @@ func TestMarkClusterVolumeMoved_CountsPastAlreadyRealigned(t *testing.T) {
 	}
 }
 
-func TestMarkClusterVolumeMoved_NoMatchingClusterLeavesOthersAlone(t *testing.T) {
+func TestMarkVolumeMoved_NoMatchingClusterLeavesOthersAlone(t *testing.T) {
 	// A cluster with a *different* UUID must not be counted against.
-	cr := testCluster(realignNamespace, realignClusterName, "some-other-uuid")
-	r, cl := newVMReconcilerForRealign(t, cr)
+	cl := newMoveCounterClient(t, moveCounterCluster("some-other-uuid"))
 
-	r.markClusterVolumeMoved(context.Background(), realignNamespace, realignClusterUUID)
+	MarkVolumeMoved(context.Background(), cl, realignNamespace, realignClusterUUID)
 
 	if got := getClusterByName(t, cl).Status.VolumeMoveGeneration; got != nil {
 		t.Fatalf("unrelated cluster counted: %d", *got)
 	}
 }
 
-func TestMarkClusterVolumeMoved_EmptyUUIDIsNoOp(t *testing.T) {
-	cr := testCluster(realignNamespace, realignClusterName, realignClusterUUID)
-	r, cl := newVMReconcilerForRealign(t, cr)
+func TestMarkVolumeMoved_EmptyUUIDIsNoOp(t *testing.T) {
+	cl := newMoveCounterClient(t, moveCounterCluster(realignClusterUUID))
 
 	// Must not count against any cluster (and must not panic) when the volume carries
 	// no resolved cluster UUID.
-	r.markClusterVolumeMoved(context.Background(), realignNamespace, "")
+	MarkVolumeMoved(context.Background(), cl, realignNamespace, "")
 
 	if got := getClusterByName(t, cl).Status.VolumeMoveGeneration; got != nil {
 		t.Fatalf("cluster counted for empty UUID: %d", *got)

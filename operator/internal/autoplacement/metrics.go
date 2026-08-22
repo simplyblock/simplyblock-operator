@@ -5,6 +5,8 @@ import (
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
+// What rebalancing exports. The gauges describe the state the last evaluation cycle
+// observed; the counters describe what it decided to do about it.
 var (
 	rebalancerMaxLatencyDeviationPct = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -29,6 +31,30 @@ var (
 		},
 		[]string{"cluster"},
 	)
+
+	rebalancerEvaluationTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "simplyblock_rebalancer_evaluation_total",
+			Help: "Total evaluation cycles, labelled by outcome (skipped, migrated, dry_run, error).",
+		},
+		[]string{"cluster", "result"},
+	)
+
+	rebalancerMigrationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "simplyblock_rebalancer_migrations_total",
+			Help: "Total volume migrations initiated.",
+		},
+		[]string{"cluster", "source_node", "target_node"},
+	)
+
+	rebalancerPinnedBlockedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "simplyblock_rebalancer_pinned_blocked_total",
+			Help: "Number of times rebalancing was blocked because all hot volumes are pinned.",
+		},
+		[]string{"cluster"},
+	)
 )
 
 func init() {
@@ -36,6 +62,9 @@ func init() {
 		rebalancerMaxLatencyDeviationPct,
 		rebalancerNodeLatencyDeviationPct,
 		rebalancerCooldownVolumes,
+		rebalancerEvaluationTotal,
+		rebalancerMigrationsTotal,
+		rebalancerPinnedBlockedTotal,
 	)
 }
 
