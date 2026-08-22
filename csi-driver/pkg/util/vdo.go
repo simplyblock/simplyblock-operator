@@ -94,21 +94,15 @@ func devicesArgs(devicePath string) []string {
 	return []string{"--devices", devicePath}
 }
 
-// vgExists reports whether vg already exists, distinguishing "genuinely absent" (safe to
-// treat as fresh) from a probe error (lock contention, etc. -- must not be misread as
-// "doesn't exist", since that would send a caller down the destructive lvcreate path over
-// what might be live data). Scoped to devicePath -- see devicesArgs.
-func vgExists(ctx context.Context, devicePath, vg string) (bool, error) {
-	args := append([]string{"vgs"}, devicesArgs(devicePath)...)
-	args = append(args, "--noheadings", vg)
-	_, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, args...)
-	if err == nil {
-		return true, nil
-	}
-	if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "Failed to find") {
-		return false, nil
-	}
-	return false, err
+// vgExists reports whether devicePath's own on-disk PV signature already belongs to vg.
+// Content-based (via pvVGName), not a name-based `vgs <name>` lookup -- confirmed live that
+// `vgs --devices devicePath vgname` can report success for a VG name that was never actually
+// created on that device (this host has an LVM devices file restricting default visibility
+// to unrelated devices; querying by name alone, even with --devices, does not reliably tie
+// the answer back to devicePath specifically). Content-based matching is what
+// ResolveClonedVDO already relies on for the same class of identity question.
+func vgExists(ctx context.Context, devicePath, vg string) bool {
+	return pvVGName(ctx, devicePath) == vg
 }
 
 // pvVGName returns the VG name a device's on-disk PV signature currently belongs to, or ""
@@ -158,11 +152,7 @@ func CreateOrAttachVDO(
 		klog.Warningf("CreateOrAttachVDO: pvscan --cache %s: %v", devicePath, err)
 	}
 
-	exists, err := vgExists(ctx, devicePath, vg)
-	if err != nil {
-		return "", fmt.Errorf("check existing VG %s: %w", vg, err)
-	}
-	if exists {
+	if vgExists(ctx, devicePath, vg) {
 		vgchangeArgs := append([]string{"vgchange"}, devicesArgs(devicePath)...)
 		vgchangeArgs = append(vgchangeArgs, "-ay", vg)
 		if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, vgchangeArgs...); err != nil {
