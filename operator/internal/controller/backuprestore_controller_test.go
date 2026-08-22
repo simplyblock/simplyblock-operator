@@ -16,14 +16,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const lvolUUID = "lvol-uuid"
 
 func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
-	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
-	k8sClient := newTestClient(t, scheme, nil)
+	scheme := ctrltest.NewScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+	k8sClient := ctrltest.NewClient(t, scheme, nil)
 
 	apiClient := &webapi.Client{
 		BaseURL: "http://simplyblock.test",
@@ -157,7 +158,7 @@ func TestBackupRestoreEnsurePVIncludesCSIAttributes(t *testing.T) {
 // StorageBackup stuck in a terminal Failed phase is itself marked Failed (with no further
 // requeue), rather than looping in Pending forever.
 func TestBackupRestoreFailsWhenBackupIsFailed(t *testing.T) {
-	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+	scheme := ctrltest.NewScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
 
 	cluster := testCluster("default", "mycluster", "cluster-uuid")
 	backup := &simplyblockv1alpha1.StorageBackup{
@@ -191,7 +192,7 @@ func TestBackupRestoreFailsWhenBackupIsFailed(t *testing.T) {
 		},
 	}
 
-	k8sClient := newTestClient(t, scheme,
+	k8sClient := ctrltest.NewClient(t, scheme,
 		[]client.Object{&simplyblockv1alpha1.BackupRestore{}},
 		cluster, backup, restore,
 	)
@@ -225,8 +226,8 @@ func TestBackupRestoreFailsWhenBackupIsFailed(t *testing.T) {
 }
 
 func TestResolveCrossClusterCredentialsLocalRestoreReturnsNil(t *testing.T) {
-	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
-	k8sClient := newTestClient(t, scheme, nil)
+	scheme := ctrltest.NewScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+	k8sClient := ctrltest.NewClient(t, scheme, nil)
 	r := &BackupRestoreReconciler{Client: k8sClient, Scheme: scheme}
 
 	restore := &simplyblockv1alpha1.BackupRestore{
@@ -246,7 +247,7 @@ func TestResolveCrossClusterCredentialsLocalRestoreReturnsNil(t *testing.T) {
 }
 
 func TestResolveCrossClusterCredentialsResolvesSourceClusterSecret(t *testing.T) {
-	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+	scheme := ctrltest.NewScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
 
 	sourceCluster := testCluster("default", "source-cluster", "source-uuid")
 	sourceCluster.Spec.Backup = &simplyblockv1alpha1.BackupSpec{
@@ -260,7 +261,7 @@ func TestResolveCrossClusterCredentialsResolvesSourceClusterSecret(t *testing.T)
 		},
 	}
 
-	k8sClient := newTestClient(t, scheme, nil, sourceCluster, secret)
+	k8sClient := ctrltest.NewClient(t, scheme, nil, sourceCluster, secret)
 	r := &BackupRestoreReconciler{Client: k8sClient, Scheme: scheme}
 
 	restore := &simplyblockv1alpha1.BackupRestore{
@@ -284,8 +285,8 @@ func TestResolveCrossClusterCredentialsResolvesSourceClusterSecret(t *testing.T)
 }
 
 func TestResolveCrossClusterCredentialsSourceClusterGone(t *testing.T) {
-	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
-	k8sClient := newTestClient(t, scheme, nil)
+	scheme := ctrltest.NewScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+	k8sClient := ctrltest.NewClient(t, scheme, nil)
 	r := &BackupRestoreReconciler{Client: k8sClient, Scheme: scheme}
 
 	restore := &simplyblockv1alpha1.BackupRestore{
@@ -306,9 +307,9 @@ func TestResolveCrossClusterCredentialsSourceClusterGone(t *testing.T) {
 }
 
 func TestResolveCrossClusterCredentialsSourceClusterHasNoBackupConfig(t *testing.T) {
-	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+	scheme := ctrltest.NewScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
 	sourceCluster := testCluster("default", "source-cluster", "source-uuid")
-	k8sClient := newTestClient(t, scheme, nil, sourceCluster)
+	k8sClient := ctrltest.NewClient(t, scheme, nil, sourceCluster)
 	r := &BackupRestoreReconciler{Client: k8sClient, Scheme: scheme}
 
 	restore := &simplyblockv1alpha1.BackupRestore{

@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -25,7 +26,7 @@ const (
 
 func newSNReconciler(t *testing.T, objects ...client.Object) *StorageNodeReconciler {
 	t.Helper()
-	scheme := newTestScheme(t,
+	scheme := ctrltest.NewScheme(t,
 		simplyblockv1alpha1.AddToScheme,
 		corev1.AddToScheme,
 	)

@@ -632,6 +632,29 @@ func (sm *Machine[S]) Reset() {
 //		Phase         VolumeMigrationPhase `json:"phase,omitempty"`
 //		PhaseDeadline *metav1.Time         `json:"phaseDeadline,omitempty"`
 //	}
+//
+// # Carrying more than the state
+//
+// A machine often has companion values that must survive the same restart the state
+// does — an id the next process needs to address something with, a number of
+// attempts, a timestamp. Those belong to the caller, not to the machine, so a
+// Snapshot does not carry them and there is no bag to put them in. Declare them
+// where the state is declared and they travel together.
+//
+// Outside Kubernetes, embedding produces one flat record with no wrapper to unpack:
+//
+//	type persisted struct {
+//		statemachine.Snapshot[phase]
+//		MigrationUUID string `json:"migrationUUID"`
+//		Attempt       int    `json:"attempt"`
+//	}
+//
+//	// {"state":"Running","deadline":"...","migrationUUID":"mig-1","attempt":3}
+//
+// In a controller they are simply more status fields, which is the better deal: they
+// stay typed, the CRD schema validates them, kubectl can print them, and another
+// controller can read them. A key-value bag would cost all four — and an `any` in it
+// does not even round-trip, since an int written through JSON comes back a float64.
 type Snapshot[S comparable] struct {
 	// State is the state the machine was in.
 	State S `json:"state"`

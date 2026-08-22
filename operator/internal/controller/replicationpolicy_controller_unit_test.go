@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -29,7 +30,7 @@ const (
 func newPolicyReconciler(t *testing.T, objects ...client.Object) (*ReplicationPolicyReconciler, client.Client) {
 	t.Helper()
 	localCluster := testCluster("default", testClusterName, testClusterUUID)
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	scheme := ctrltest.NewScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	allObjects := append([]client.Object{localCluster}, objects...)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -160,7 +161,7 @@ func TestPolicy_CreatesBackendPolicy_WhenAbsent(t *testing.T) {
 	}
 	r, cl := newPolicyReconciler(t, pair, policy)
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		switch {
 		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
 			writeJSON(w, []interface{}{})
@@ -199,7 +200,7 @@ func TestPolicy_ReusesExistingBackendPolicy(t *testing.T) {
 	existingPolicies := []interface{}{
 		map[string]string{"id": "existing-pol-uuid", "policy_name": "pol"},
 	}
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodGet {
 			writeJSON(w, existingPolicies)
 			return
@@ -299,7 +300,7 @@ func TestPolicy_DeletionRemovesBackendPolicyAndFinalizer(t *testing.T) {
 	r, cl := newPolicyReconciler(t, pair, policy)
 
 	deleted := map[string]bool{}
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodDelete {
 			deleted[req.URL.Path] = true
 		}

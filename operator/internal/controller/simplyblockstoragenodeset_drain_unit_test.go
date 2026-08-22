@@ -15,6 +15,7 @@ import (
 	"github.com/simplyblock/atlas/kube"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
@@ -32,13 +33,13 @@ const (
 
 func newDrainReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetReconciler {
 	t.Helper()
-	scheme := newTestScheme(t,
+	scheme := ctrltest.NewScheme(t,
 		simplyblockv1alpha1.AddToScheme,
 		corev1.AddToScheme,
 	)
 	cluster := testCluster(drainTestNS, drainTestCluster, drainTestClusterUUID)
 	all := append([]client.Object{cluster}, objects...)
-	cl := newTestClient(t, scheme, []client.Object{
+	cl := ctrltest.NewClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.StorageNodeSet{},
 		&simplyblockv1alpha1.StorageCluster{},
 		&simplyblockv1alpha1.VolumeMigration{},

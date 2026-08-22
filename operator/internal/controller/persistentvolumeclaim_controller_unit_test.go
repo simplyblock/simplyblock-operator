@@ -16,6 +16,7 @@ import (
 	"github.com/simplyblock/atlas/kube"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -47,7 +48,7 @@ func pinClusterCR() *simplyblockv1alpha1.StorageCluster {
 // placement). currentNode is the storage_node_id reported for the volume.
 func pinAPIServer(t *testing.T, nodes []string, currentNode string) string {
 	t.Helper()
-	srv := newAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/storage-nodes/"):
 			var b strings.Builder
@@ -71,8 +72,8 @@ func pinAPIServer(t *testing.T, nodes []string, currentNode string) string {
 
 func newPVCReconciler(t *testing.T, apiURL string, objs ...client.Object) (*PersistentVolumeClaimReconciler, client.Client) {
 	t.Helper()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
-	cl := newTestClient(t, scheme, nil, objs...)
+	scheme := ctrltest.NewScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	cl := ctrltest.NewClient(t, scheme, nil, objs...)
 	r := &PersistentVolumeClaimReconciler{
 		Client:    cl,
 		Scheme:    scheme,
@@ -136,7 +137,7 @@ func listPinMigrations(t *testing.T, cl client.Client) []simplyblockv1alpha1.Vol
 
 func TestPVCReconcile_NoChangeGate(t *testing.T) {
 	// desired == applied → nothing happens, no API call.
-	r, cl := newPVCReconciler(t, unreachableAPI, pinPVC(pinNodeB, pinNodeB), pinPV())
+	r, cl := newPVCReconciler(t, ctrltest.UnreachableAPI, pinPVC(pinNodeB, pinNodeB), pinPV())
 	if _, err := r.Reconcile(context.Background(), pinRequest()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -147,7 +148,7 @@ func TestPVCReconcile_NoChangeGate(t *testing.T) {
 
 func TestPVCReconcile_Unpin(t *testing.T) {
 	// Annotation removed but applied still set → clear applied, no migration.
-	r, cl := newPVCReconciler(t, unreachableAPI, pinPVC("", pinNodeB), pinPV())
+	r, cl := newPVCReconciler(t, ctrltest.UnreachableAPI, pinPVC("", pinNodeB), pinPV())
 	if _, err := r.Reconcile(context.Background(), pinRequest()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -163,7 +164,7 @@ func TestPVCReconcile_Unpin(t *testing.T) {
 func TestPVCReconcile_UnboundRequeues(t *testing.T) {
 	pvc := pinPVC(pinNodeB, "")
 	pvc.Spec.VolumeName = ""
-	r, cl := newPVCReconciler(t, unreachableAPI, pvc)
+	r, cl := newPVCReconciler(t, ctrltest.UnreachableAPI, pvc)
 	res, err := r.Reconcile(context.Background(), pinRequest())
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)

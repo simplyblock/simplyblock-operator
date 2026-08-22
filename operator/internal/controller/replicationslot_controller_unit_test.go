@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -32,8 +33,8 @@ func (f *fakeRecorder) AnnotatedEventf(_ runtime.Object, _ map[string]string, _ 
 // Status for both ReplicationSlot and ReplicationPolicy is pre-seeded via WithObjects.
 func newSlotReconciler(t *testing.T, objects ...client.Object) (*ReplicationSlotReconciler, client.Client) {
 	t.Helper()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
-	cl := newTestClient(t, scheme,
+	scheme := ctrltest.NewScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	cl := ctrltest.NewClient(t, scheme,
 		[]client.Object{
 			&simplyblockv1alpha1.ReplicationSlot{},
 			&simplyblockv1alpha1.ReplicationPolicy{},
@@ -187,7 +188,7 @@ func TestSlot_ReconcileAttach_Success(t *testing.T) {
 	pol := readyReplicationPolicy()
 	slot := newTestSlot("") // state="" triggers reconcileAttach
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodPut {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -221,7 +222,7 @@ func TestSlot_ReconcileAttach_Failure_SetsError(t *testing.T) {
 	pol := readyReplicationPolicy()
 	slot := newTestSlot("")
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
@@ -325,7 +326,7 @@ func TestSlot_ReconcileReplicating_NotFound_KeepsPolling(t *testing.T) {
 	pol := readyReplicationPolicy()
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateReplicating))
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodGet {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -362,7 +363,7 @@ func TestSlot_ReconcileReplicating_FailedOver_UpdatesState(t *testing.T) {
 		TargetNQN: "nqn.test",
 		IsSource:  false,
 	}
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodGet {
 			w.WriteHeader(http.StatusOK)
 			body, _ := json.Marshal(backendStatus)
@@ -403,7 +404,7 @@ func TestSlot_ReconcileReplicating_UpdatesLastReplicatedAt(t *testing.T) {
 		"state":            utils.ReplicationBackendStateReplicating,
 		"last_snapshot_at": snapshotTime,
 	}
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodGet {
 			w.WriteHeader(http.StatusOK)
 			body, _ := json.Marshal(backendStatus)
@@ -448,7 +449,7 @@ func TestSlot_ReconcileDetach_RemovesFinalizer(t *testing.T) {
 	}
 	pol := readyReplicationPolicy()
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodPut {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -489,7 +490,7 @@ func TestSlot_ReconcileDetach_Failure_KeepsFinalizer(t *testing.T) {
 	}
 	pol := readyReplicationPolicy()
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
@@ -516,7 +517,7 @@ func TestSlot_ErrorState_RetriesAttach(t *testing.T) {
 	pol := readyReplicationPolicy()
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateError))
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodPut {
 			w.WriteHeader(http.StatusOK)
 			return

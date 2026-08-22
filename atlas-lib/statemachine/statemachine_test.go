@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -1144,6 +1145,62 @@ func TestSnapshotJSON(t *testing.T) {
 	}
 	if string(data) != `{"state":"off"}` {
 		t.Errorf("Marshal = %s, want the deadline omitted", data)
+	}
+}
+
+// The documented way to carry companion values across a snapshot: embed, and get one
+// flat record instead of a wrapper to unpack. This is the alternative to a key-value
+// bag on Snapshot, so it is worth holding to.
+func TestSnapshotEmbedsIntoACallersRecord(t *testing.T) {
+	type persisted struct {
+		Snapshot[st]
+		MigrationUUID string `json:"migrationUUID"`
+		Attempt       int    `json:"attempt"`
+	}
+
+	sm := armed(t)
+	deadline, ok := sm.Deadline()
+	if !ok {
+		t.Fatalf("armed machine has no deadline")
+	}
+
+	blob, err := json.Marshal(persisted{
+		Snapshot:      sm.Snapshot(),
+		MigrationUUID: "mig-1",
+		Attempt:       3,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// One object, no nesting: the machine's fields sit beside the caller's.
+	for _, want := range []string{`"state":`, `"deadline":`, `"migrationUUID":"mig-1"`, `"attempt":3`} {
+		if !strings.Contains(string(blob), want) {
+			t.Errorf("wire form %s is missing %s", blob, want)
+		}
+	}
+
+	var back persisted
+	if err := json.Unmarshal(blob, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.MigrationUUID != "mig-1" || back.Attempt != 3 {
+		t.Errorf("caller fields = %+v, want them preserved", back)
+	}
+
+	// The embedded half still restores a machine, deadline included.
+	fresh := newTest(t, nil)
+	if err := fresh.Restore(back.Snapshot); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if got := fresh.CurrentState(); got != sm.CurrentState() {
+		t.Errorf("restored state = %v, want %v", got, sm.CurrentState())
+	}
+	got, ok := fresh.Deadline()
+	if !ok {
+		t.Fatalf("restored machine has no deadline")
+	}
+	if !got.Equal(deadline.Truncate(time.Second)) && got.Sub(deadline).Abs() > time.Second {
+		t.Errorf("restored deadline = %v, want ~%v", got, deadline)
 	}
 }
 

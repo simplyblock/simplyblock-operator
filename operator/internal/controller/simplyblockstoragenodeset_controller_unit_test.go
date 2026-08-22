@@ -11,6 +11,7 @@ import (
 	"time"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	webapimock "github.com/simplyblock/simplyblock-operator/internal/webapi/mock"
@@ -315,7 +316,7 @@ func TestStorageNodeSetLabelingHelpers(t *testing.T) {
 // objects for the storage-node-uuid path and to avoid a spurious List error).
 func newStorageNodeUUIDLabelTestReconciler(t *testing.T, objects ...client.Object) *StorageNodeSetReconciler {
 	t.Helper()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	scheme := ctrltest.NewScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&simplyblockv1alpha1.StorageNode{}, &simplyblockv1alpha1.StorageNodeSet{}).
@@ -1479,7 +1480,7 @@ func newStorageNodeSetStateTestReconciler(
 ) *StorageNodeSetReconciler {
 	t.Helper()
 
-	scheme := newTestScheme(
+	scheme := ctrltest.NewScheme(
 		t,
 		simplyblockv1alpha1.AddToScheme,
 		corev1.AddToScheme,

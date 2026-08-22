@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -25,7 +26,7 @@ import (
 func newOpsReplReconciler(t *testing.T, objects ...client.Object) (*ReplicationOpsReconciler, client.Client) {
 	t.Helper()
 	localCluster := testCluster("default", testClusterName, testClusterUUID)
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	scheme := ctrltest.NewScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
 	allObjects := append([]client.Object{localCluster}, objects...)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -287,7 +288,7 @@ func TestOps_Failover_ScopePolicy_Success(t *testing.T) {
 	}
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops)
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("{}"))
 	})
@@ -322,7 +323,7 @@ func TestOps_Failover_ScopeTarget_Success(t *testing.T) {
 	}
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops)
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("{}"))
 	})
@@ -358,7 +359,7 @@ func TestOps_Failover_ScopeVolume_Success(t *testing.T) {
 	polForVolume := readyPolicyForOps("pol-pvc1")
 	r, cl := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops, polForVolume)
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("{}"))
 	})
@@ -391,7 +392,7 @@ func TestOps_Failback_Success(t *testing.T) {
 	}
 	r, cl := newOpsReplReconciler(t, pol, slot, ops)
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv := ctrltest.NewAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("{}"))
 	})

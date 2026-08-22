@@ -1,4 +1,4 @@
-package controller
+package autoplacement
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 
 	atlaskube "github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
-	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
+	"github.com/simplyblock/atlas/statemachine"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -77,14 +77,14 @@ type VolumeRebalancerReconciler struct {
 	LatencyPercentile string
 
 	migrationState *volumemigration.MigrationState
-	rebalancer     *autoplacement.Rebalancer
+	rebalancer     *Rebalancer
 }
 
 func (r *VolumeRebalancerReconciler) init(scResolver atlaskube.Resolver) {
 	r.migrationState = volumemigration.NewMigrationState()
-	r.rebalancer = autoplacement.NewRebalancer(
-		autoplacement.NewStorageNodeSelector(r.Client),
-		autoplacement.NewLogicalVolumeSelector(r.apiClient, r.Client, scResolver),
+	r.rebalancer = NewRebalancer(
+		NewStorageNodeSelector(r.Client),
+		NewLogicalVolumeSelector(r.apiClient, r.Client, scResolver),
 	)
 }
 
@@ -102,8 +102,6 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	ctx context.Context,
 	req ctrl.Request,
 ) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
 	clusterCR := &simplyblockv1alpha1.StorageCluster{}
 	if err := r.Get(ctx, req.NamespacedName, clusterCR); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -112,49 +110,84 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	if clusterCR.Status.UUID == "" {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
-	// utils.ResolveClusterUUID returns clusterCR.Status.UUID for this cluster; use it
-	// directly for the realignment call, which needs no other lookup.
-	realignClusterUUID := clusterCR.Status.UUID
 
 	// Post-migration control-plane data realignment. This runs for every cluster with
 	// volume migration enabled, independent of auto-rebalancing, so it also covers
 	// manual VolumeMigrations and drain/removal-triggered moves. realignRequeue is the
 	// delay until the next realignment check (0 when realignment is disabled).
-	realignRequeue := r.reconcileDataRealignment(ctx, clusterCR, realignClusterUUID)
+	//
+	// utils.ResolveClusterUUID returns clusterCR.Status.UUID for this cluster; use it
+	// directly for the realignment call, which needs no other lookup.
+	realignRequeue := r.reconcileDataRealignment(ctx, clusterCR, clusterCR.Status.UUID)
 
 	// Auto-rebalancing is opt-in: run only when explicitly enabled (Enabled=true).
-	// An unset flag means off, so realignment still gets its requeue.
-	spec := autoplacement.GetConfig(clusterCR.Spec.VolumeAutoPlacement)
+	// An unset flag means off, so realignment still gets its requeue. No cycle runs
+	// here, which is why nothing is recorded against the evaluation metric — a cluster
+	// that has rebalancing switched off is not a cluster whose cycles are being skipped.
+	spec := GetConfig(clusterCR.Spec.VolumeAutoPlacement)
 	if !ptr.BoolFromOrFalse(spec.Enabled) {
 		return ctrl.Result{RequeueAfter: realignRequeue}, nil
 	}
 
-	cfg, err := autoplacement.ResolveAutoPlacementConfig(spec)
-	if err != nil {
-		log.Error(err, "Invalid rebalancing configuration; skipping cycle")
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		return ctrl.Result{RequeueAfter: autoplacement.DefaultEvaluationInterval}, nil
+	return r.evaluate(ctx, clusterCR, spec, realignRequeue)
+}
+
+// evaluate runs one rebalancing evaluation cycle: read the cluster's load, decide
+// whether volumes should move, and create the VolumeMigrations that move them. It
+// reports when the next cycle should run.
+//
+// The cycle is driven as a state machine whose terminal phases are the outcomes a cycle
+// can have — see [cyclePhase]. Every route out of here therefore goes through one of
+// deferCycle, failCycle, dryRunCycle or the Migrating → Completed pair, and the outcome
+// metric is recorded by the phase rather than by the route.
+func (r *VolumeRebalancerReconciler) evaluate(
+	ctx context.Context,
+	clusterCR *simplyblockv1alpha1.StorageCluster,
+	spec simplyblockv1alpha1.VolumeAutoPlacementSettings,
+	realignRequeue time.Duration,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	cycleStart := time.Now()
+
+	// A configuration that does not parse still spends a cycle and still owes an
+	// outcome, so it is reported through the machine like any other. Its own interval
+	// is unusable, so the cycle is bounded and paced by the default one.
+	cfg, cfgErr := ResolveAutoPlacementConfig(spec)
+	interval := DefaultEvaluationInterval
+	if cfgErr == nil {
+		// The operator-wide latency-percentile flag is general, not per cluster.
+		if r.LatencyPercentile != "" {
+			cfg.LatencyPercentile = r.LatencyPercentile
+		}
+		interval = cfg.EvalInterval
 	}
 
-	// Apply the operator-wide latency-percentile flag (general, not per cluster).
-	if r.LatencyPercentile != "" {
-		cfg.LatencyPercentile = r.LatencyPercentile
+	c := &cycle{cluster: clusterCR, deadline: cycleStart.Add(interval)}
+	sm := r.cycleMachine(ctx, c)
+	defer sm.Close()
+
+	// paced is the requeue for a cycle that ran its course: whatever is left of the
+	// evaluation interval, shortened when a realignment check is due sooner.
+	paced := nextRequeue(cycleStart, interval, realignRequeue)
+
+	if cfgErr != nil {
+		log.Error(cfgErr, "Invalid rebalancing configuration; skipping cycle")
+		return r.deferCycle(ctx, c, sm, "invalid rebalancing configuration", DefaultEvaluationInterval)
 	}
-	cycleStart := time.Now()
 
 	clusterUUID, err := utils.ResolveClusterUUID(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
 	if err != nil {
 		log.Error(err, "Cannot get cluster auth; requeuing")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return r.failCycle(ctx, c, sm, "cluster auth unavailable", 30*time.Second)
 	}
+	c.clusterUUID = clusterUUID
 
 	r.processPendingMigrations(ctx, clusterCR, clusterUUID)
 
 	nodes, err := r.apiClient.GetStorageNodes(ctx, clusterUUID)
 	if err != nil {
 		log.Error(err, "Cannot list storage nodes; requeuing")
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "error").Inc()
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return r.failCycle(ctx, c, sm, "cannot list storage nodes", 30*time.Second)
 	}
 	nodeMap := make(map[string]webapi.StorageNodeInfo, len(nodes))
 	for _, n := range nodes {
@@ -163,14 +196,12 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 
 	if hasOfflineNode(nodeMap) {
 		log.Info("Cluster has offline node(s); skipping rebalancing cycle")
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		return ctrl.Result{RequeueAfter: nextRequeue(cycleStart, cfg.EvalInterval, realignRequeue)}, nil
+		return r.deferCycle(ctx, c, sm, "cluster has offline node(s)", paced)
 	}
 
 	if r.migrationState.HasPendingMigrationForCluster(clusterUUID) {
 		log.V(1).Info("Pending migrations exist; deferring new migrations to next cycle")
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		return ctrl.Result{RequeueAfter: nextRequeue(cycleStart, cfg.EvalInterval, realignRequeue)}, nil
+		return r.deferCycle(ctx, c, sm, "migrations already pending", paced)
 	}
 
 	storageNodes := make([]volumemigration.StorageNode, 0, len(nodeMap))
@@ -182,14 +213,13 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 	}
 
 	toMigrate, pinnedBlocked, err := r.rebalancer.SelectMigrations(ctx, cfg, isCoolingDown,
-		autoplacement.StorageNodeSelectorInput{
+		StorageNodeSelectorInput{
 			Namespace:    clusterCR.Namespace,
 			StorageNodes: storageNodes,
 		})
 	if err != nil {
 		log.Error(err, "Cannot select migration candidates; requeuing")
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "error").Inc()
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return r.failCycle(ctx, c, sm, "cannot select migration candidates", 30*time.Second)
 	}
 	if pinnedBlocked {
 		// A hot node could not be rebalanced because every volume it hosts is pinned.
@@ -197,8 +227,7 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 		rebalancerPinnedBlockedTotal.WithLabelValues(clusterCR.Name).Inc()
 	}
 	if len(toMigrate) == 0 {
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
-		return ctrl.Result{RequeueAfter: nextRequeue(cycleStart, cfg.EvalInterval, realignRequeue)}, nil
+		return r.deferCycle(ctx, c, sm, "no migration candidates", paced)
 	}
 
 	// Dry-run: when migration creation is disabled the rebalancer still evaluated load and
@@ -209,31 +238,21 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 			log.Info("migrationEnabled=false; skipping migration (dry-run)",
 				"volume", mc.Volume.UUID, "source", mc.SourceNodeUUID, "target", mc.TargetNodeUUID)
 		}
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "dry_run").Inc()
-		return ctrl.Result{RequeueAfter: nextRequeue(cycleStart, cfg.EvalInterval, realignRequeue)}, nil
+		return r.dryRunCycle(ctx, c, sm, paced)
 	}
 
-	if err := r.setRebalancing(ctx, clusterCR, true); err != nil {
-		log.Error(err, "Failed to set status.rebalancing=true")
+	// Past this point the cycle is going to move volumes. Entering Migrating raises
+	// status.rebalancing and arms the phase with what is left of the cycle; Completed,
+	// its only exit, lowers the flag again and records how many CRs were created.
+	if err := sm.TransitionTo(ctx, cycleMigrating); err != nil {
+		return ctrl.Result{}, err
 	}
-	defer func() {
-		if err := r.setRebalancing(ctx, clusterCR, false); err != nil {
-			log.Error(err, "Failed to clear status.rebalancing")
-		}
-	}()
-
-	migratedCount := r.executeMigrations(ctx, clusterCR, toMigrate, cfg.CoolDownSecs, cycleStart.Add(cfg.EvalInterval))
-
-	activeCooldowns := r.migrationState.GetCooldownCountByCluster(clusterUUID, time.Now())
-	autoplacement.SetCooldownVolumes(clusterUUID, float64(activeCooldowns))
-
-	if migratedCount > 0 {
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "migrated").Inc()
-	} else {
-		rebalancerEvaluationTotal.WithLabelValues(clusterCR.Name, "skipped").Inc()
+	c.migrated = r.executeMigrations(ctx, sm, clusterCR, toMigrate, cfg.CoolDownSecs)
+	if err := sm.TransitionTo(ctx, cycleCompleted); err != nil {
+		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, cfg.EvalInterval)}, nil
+	return ctrl.Result{RequeueAfter: requeueAfter(cycleStart, interval)}, nil
 }
 
 // executeMigrations creates a VolumeMigration CR for each MigrationCandidate and
@@ -241,12 +260,18 @@ func (r *VolumeRebalancerReconciler) Reconcile(
 // Source and target are already resolved by the Rebalancer. The VolumeMigration
 // controller owns the backend protocol (CreateMigration → validate NVMe paths →
 // ContinueMigration → poll); this function only creates the CR and tracks it.
+//
+// The cycle's remaining time is the Migrating phase's own bound, so the loop stops when
+// the machine says the phase is over rather than by comparing clocks. Note which
+// context does what: sm.Done() decides whether to start another migration, while the
+// creation itself carries ctx — a CR create cancelled halfway may still have taken
+// effect, so the boundary is between migrations, never inside one.
 func (r *VolumeRebalancerReconciler) executeMigrations(
 	ctx context.Context,
+	sm *statemachine.Machine[cyclePhase],
 	clusterCR *simplyblockv1alpha1.StorageCluster,
-	toMigrate []autoplacement.MigrationCandidate,
+	toMigrate []MigrationCandidate,
 	coolDownSecs int64,
-	cycleDeadline time.Time,
 ) int {
 	log := logf.FromContext(ctx)
 	ownerRefs := []metav1.OwnerReference{{
@@ -257,11 +282,13 @@ func (r *VolumeRebalancerReconciler) executeMigrations(
 	}}
 	migratedCount := 0
 	for _, mc := range toMigrate {
-		if time.Now().After(cycleDeadline) {
+		select {
+		case <-sm.Done():
 			r.Recorder.Eventf(clusterCR, nil, corev1.EventTypeNormal, "VolumeRebalancingDeferred", "VolumeRebalancingDeferred",
 				"Cycle deadline reached; %d migration candidate(s) deferred to next cycle",
 				len(toMigrate)-migratedCount)
-			break
+			return migratedCount
+		default:
 		}
 
 		name := rebalanceMigrationName(mc.Volume.UUID)
@@ -622,7 +649,7 @@ func (r *VolumeRebalancerReconciler) SetupWithManager(
 	// Index PersistentVolumes by CSI driver so BuildCSIManagedSet can filter to
 	// simplyblock CSI volumes through the cache instead of listing every PV.
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.PersistentVolume{},
-		autoplacement.PVCSIDriverIndexField, func(o client.Object) []string {
+		PVCSIDriverIndexField, func(o client.Object) []string {
 			pv, ok := o.(*corev1.PersistentVolume)
 			if !ok || pv.Spec.CSI == nil {
 				return nil

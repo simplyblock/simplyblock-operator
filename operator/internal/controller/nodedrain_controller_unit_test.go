@@ -8,6 +8,7 @@ import (
 	"time"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/ctrltest"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 	corev1 "k8s.io/api/core/v1"
@@ -916,7 +917,7 @@ func TestNodeDrainStatusPatch409RetryPreservesDrainState(t *testing.T) {
 		},
 	}
 
-	scheme := newTestScheme(
+	scheme := ctrltest.NewScheme(
 		t,
 		simplyblockv1alpha1.AddToScheme,
 		corev1.AddToScheme,
@@ -989,13 +990,13 @@ func TestNodeDrainStatusPatch409RetryPreservesDrainState(t *testing.T) {
 func newNodeDrainTestReconciler(t *testing.T, objects ...client.Object) *NodeDrainCoordinatorReconciler {
 	t.Helper()
 
-	scheme := newTestScheme(
+	scheme := ctrltest.NewScheme(
 		t,
 		simplyblockv1alpha1.AddToScheme,
 		corev1.AddToScheme,
 		policyv1.AddToScheme,
 	)
-	cl := newTestClient(t, scheme, []client.Object{
+	cl := ctrltest.NewClient(t, scheme, []client.Object{
 		&simplyblockv1alpha1.StorageNodeSet{},
 		&simplyblockv1alpha1.StorageCluster{},
 	}, objects...)

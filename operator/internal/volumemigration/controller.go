@@ -1,22 +1,19 @@
-package controller
+package volumemigration
 
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/simplyblock/atlas/ptr"
-	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
+	"github.com/simplyblock/atlas/statemachine"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -32,6 +29,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -44,8 +42,8 @@ import (
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters/status,verbs=get;update;patch
 
-// VolumeMigrationReconciler reconciles VolumeMigration resources.
-type VolumeMigrationReconciler struct {
+// Reconciler reconciles VolumeMigration resources.
+type Reconciler struct {
 	client.Client
 	Scheme     *runtime.Scheme
 	Recorder   events.EventRecorder
@@ -104,7 +102,15 @@ const (
 // once it is Running, rather than continuing the migration unvalidated.
 var errConsumerNotReady = errors.New("volume has a consumer that is not running yet")
 
-func (r *VolumeMigrationReconciler) Reconcile(
+// Reconcile drives one migration one step. The lifecycle itself lives in
+// [Reconciler.machineFor]: this restores the machine to where the
+// resource says the migration is, lets the current phase act, and writes the
+// machine's new position back.
+//
+// The machine does not survive between reconciles — the process holds no memory of
+// the last pass and may not even be the same process — so status.phase and
+// status.phaseDeadline are where it lives, and every pass rebuilds it from them.
+func (r *Reconciler) Reconcile(
 	ctx context.Context,
 	req ctrl.Request,
 ) (ctrl.Result, error) {
@@ -113,184 +119,210 @@ func (r *VolumeMigrationReconciler) Reconcile(
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Terminal phases — nothing left to do.
-	switch vm.Status.Phase {
-	case simplyblockv1alpha1.VolumeMigrationPhaseCompleted,
-		simplyblockv1alpha1.VolumeMigrationPhaseFailed,
-		simplyblockv1alpha1.VolumeMigrationPhaseAborted:
+	p := &migrationPass{vm: vm, before: vm.DeepCopy()}
+	sm := r.machineFor(ctx, p)
+	defer sm.Close()
+
+	if err := r.restorePhase(ctx, sm, vm); err != nil {
+		// An unrecognised phase: a downgrade, or a hand-edited resource. Retrying is
+		// the only safe answer — guessing which phase was meant could re-submit a
+		// migration that is already running.
+		return ctrl.Result{}, err
+	}
+
+	// Completed, Failed and Aborted have no outgoing edges: nothing left to do.
+	if sm.IsTerminal() {
 		return ctrl.Result{}, nil
 	}
 
-	// Abort applies to any migration that has not finished, including one still
+	res, advanceErr := r.advance(ctx, p, sm)
+
+	// The status write happens even when the step failed. A step that gave up halfway
+	// may still have learned something worth keeping — a validation that passed on one
+	// node, a deferral that started — and dropping it would mean re-running the work
+	// that produced it, which for a validation means re-connecting NVMe paths.
+	if err := r.persist(ctx, p, sm); err != nil {
+		return ctrl.Result{}, errors.Join(advanceErr, err)
+	}
+	if advanceErr != nil {
+		return ctrl.Result{}, advanceErr
+	}
+	return requeueWithin(res, sm), nil
+}
+
+// advance lets the current phase act, which is not the same as taking a transition:
+// most passes of a Validating or Running migration only poll what they are waiting
+// for and update counters, and the machine moves when that wait is over.
+func (r *Reconciler) advance(
+	ctx context.Context,
+	p *migrationPass,
+	sm *statemachine.Machine[phase],
+) (ctrl.Result, error) {
+	// An abort applies to any migration that has not finished, including one still
 	// pending — a migration deferred by a busy cluster would otherwise keep retrying
 	// for the whole deferral window while the user has already asked it to stop.
-	if vm.Spec.Abort {
-		return r.reconcileAbort(ctx, vm)
+	if p.vm.Spec.Abort {
+		return r.abort(ctx, p, sm)
 	}
 
-	switch vm.Status.Phase {
-	case simplyblockv1alpha1.VolumeMigrationPhaseRunning:
-		return r.reconcileRunning(ctx, vm)
-	case simplyblockv1alpha1.VolumeMigrationPhaseValidating:
-		return r.reconcileValidating(ctx, vm)
+	switch sm.CurrentState() {
+	case phaseValidating:
+		return r.validateMigration(ctx, p, sm)
+	case phaseRunning:
+		return r.pollMigration(ctx, p, sm)
 	default:
-		return r.reconcileStart(ctx, vm)
+		return r.submitMigration(ctx, p, sm)
 	}
 }
 
-// reconcileStart resolves the PV to a logical volume, finds its cluster/pool,
-// and submits the migration to the storage API.
-func (r *VolumeMigrationReconciler) reconcileStart(
+// submitMigration resolves the PV to a logical volume, finds its cluster, pool and
+// NVMe subsystem, and submits the migration to the storage API. It is the Pending
+// phase's work: everything here happens before the control plane knows the migration
+// exists, so anything malformed fails the migration outright rather than leaving
+// something behind.
+func (r *Reconciler) submitMigration(
 	ctx context.Context,
-	vm *simplyblockv1alpha1.VolumeMigration,
+	p *migrationPass,
+	sm *statemachine.Machine[phase],
 ) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
+	vm := p.vm
 
 	// Resolve PV → volume UUID via CSI volume handle.
 	pv := &corev1.PersistentVolume{}
 	if err := r.Get(ctx, types.NamespacedName{Name: vm.Spec.PVName}, pv); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.setFailed(ctx, vm, fmt.Sprintf("PersistentVolume %q not found", vm.Spec.PVName))
+			return r.fail(ctx, p, sm, fmt.Sprintf("PersistentVolume %q not found", vm.Spec.PVName))
 		}
 		return ctrl.Result{}, fmt.Errorf("get PV %q: %w", vm.Spec.PVName, err)
 	}
 	if pv.Spec.CSI == nil || pv.Spec.CSI.VolumeHandle == "" {
-		return r.setFailed(ctx, vm, fmt.Sprintf("PV %q has no CSI volume handle", vm.Spec.PVName))
+		return r.fail(ctx, p, sm, fmt.Sprintf("PV %q has no CSI volume handle", vm.Spec.PVName))
 	}
 	// CSI volume handle format: "<clusterUUID>:<poolUUID>:<volumeUUID>"
 	parts := strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return r.setFailed(ctx, vm, fmt.Sprintf("PV %q has unexpected CSI volume handle format %q (expected <clusterUUID>:<poolUUID>:<volumeUUID>)", vm.Spec.PVName, pv.Spec.CSI.VolumeHandle))
+		return r.fail(ctx, p, sm, fmt.Sprintf("PV %q has unexpected CSI volume handle format %q (expected <clusterUUID>:<poolUUID>:<volumeUUID>)", vm.Spec.PVName, pv.Spec.CSI.VolumeHandle))
 	}
-	clusterUUID, poolUUID, volumeUUID := parts[0], parts[1], parts[2]
+	// Recorded before the migration is submitted, so that a migration still being
+	// retried already says which cluster it is waiting on.
+	vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID = parts[0], parts[1], parts[2]
 
-	if _, err := r.resolveRebalancerImage(ctx, vm.Namespace, clusterUUID); err != nil {
-		return r.setFailed(ctx, vm, fmt.Sprintf("volume migration not enabled/configured for cluster %q: %v", clusterUUID, err))
+	if _, err := r.resolveRebalancerImage(ctx, vm.Namespace, vm.Status.ClusterUUID); err != nil {
+		return r.fail(ctx, p, sm, fmt.Sprintf("volume migration not enabled/configured for cluster %q: %v", vm.Status.ClusterUUID, err))
 	}
 
 	// The storage API migrates a whole NVMe subsystem, addressed by its NQN, so
 	// resolve the volume to its subsystem before submitting. For a namespaced
 	// volume the subsystem is shared and its sibling volumes move along.
-	volume, err := r.apiClient.GetVolume(ctx, clusterUUID, poolUUID, volumeUUID)
+	volume, err := r.apiClient.GetVolume(ctx, vm.Status.ClusterUUID, vm.Status.PoolUUID, vm.Status.VolumeUUID)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("get volume %q: %w", volumeUUID, err)
+		return ctrl.Result{}, fmt.Errorf("get volume %q: %w", vm.Status.VolumeUUID, err)
 	}
 	if volume == nil {
-		return r.setFailed(ctx, vm, fmt.Sprintf("volume %s no longer exists", volumeUUID))
+		return r.fail(ctx, p, sm, fmt.Sprintf("volume %s no longer exists", vm.Status.VolumeUUID))
 	}
 	if volume.NQN == "" {
-		return r.setFailed(ctx, vm, fmt.Sprintf("volume %s has no subsystem NQN; cannot address its migration", volumeUUID))
+		return r.fail(ctx, p, sm, fmt.Sprintf("volume %s has no subsystem NQN; cannot address its migration", vm.Status.VolumeUUID))
 	}
 
-	log.Info("Submitting volume migration",
-		"volume", volumeUUID, "cluster", clusterUUID, "subsystem", volume.NQN,
-		"target", vm.Spec.TargetNodeUUID)
-
-	migration, err := r.apiClient.CreateMigration(ctx, clusterUUID, volume.NQN, vm.Spec.TargetNodeUUID)
+	migration, err := r.apiClient.CreateMigration(ctx, vm.Status.ClusterUUID, volume.NQN, vm.Spec.TargetNodeUUID)
 	switch {
 	case errors.Is(err, webapi.ErrMigrationNotAcceptingYet):
-		return r.deferMigration(ctx, vm, clusterUUID, err)
+		return r.deferMigration(ctx, p, sm, err)
 	case isIndeterminateCreate(err):
 		// The request never got an answer, so whether the control plane created the
 		// migration is unknown — and it may well have: a create can take longer than the
 		// client timeout while a rebalance is in flight, and it allocates bdevs on the way.
 		// Failing here would abandon that half-created migration. Retrying instead lets the
 		// next attempt hit the existing-migration path, which cancels it before re-creating.
-		return r.retryIndeterminateCreate(ctx, vm, clusterUUID, err)
+		return r.retryIndeterminateCreate(ctx, p, sm, err)
 	case err != nil:
-		return r.setFailed(ctx, vm, fmt.Sprintf("CreateMigration: %v", err))
+		return r.fail(ctx, p, sm, fmt.Sprintf("CreateMigration: %v", err))
 	}
 	if migration == nil {
 		// Previous migration had to be canceled, retry in the next reconcile cycle.
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 	if migration.ID == "" {
-		return r.setFailed(ctx, vm, "CreateMigration returned empty migration UUID")
+		return r.fail(ctx, p, sm, "CreateMigration returned empty migration UUID")
 	}
 
-	now := metav1.Now()
-	conns := make([]simplyblockv1alpha1.MigrationConnection, 0, len(migration.ConnectStrings))
-	for _, c := range migration.ConnectStrings {
-		conns = append(conns, simplyblockv1alpha1.MigrationConnection{
-			NQN:            c.Nqn,
-			IP:             c.IP,
-			Port:           c.Port,
-			Transport:      c.TargetType,
-			NrIoQueues:     c.NrIoQueues,
-			ReconnectDelay: c.ReconnectDelay,
-			// Not c.CtrlLossTmo: the host connects every path with the same loss
-			// timeout the CSI driver uses, and the control plane's answer here is an
-			// hour. See vmigration.CtrlLossTmoSec. Overridden at ingestion rather than
-			// where the Job is built so that status.connections records the connect
-			// that will actually be made.
-			CtrlLossTmo:   vmigration.CtrlLossTmoSec,
-			FastIOFailTmo: c.FastIOFailTmo,
-			KeepAliveTmo:  c.KeepAliveTmo,
-		})
+	// Accepted. The hook records what came back; it runs only if the phase is
+	// actually entered, so there is no route that writes a Validating migration
+	// without one behind it.
+	p.created = migration
+	if err := sm.TransitionTo(ctx, phaseValidating); err != nil {
+		return ctrl.Result{}, err
 	}
-
-	patch := client.MergeFrom(vm.DeepCopy())
-	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseValidating
-	vm.Status.DeferredSince = nil // accepted; the deferral window no longer applies
-	vm.Status.MigrationUUID = migration.ID
-	vm.Status.ClusterUUID = clusterUUID
-	vm.Status.VolumeUUID = volumeUUID
-	vm.Status.PoolUUID = poolUUID
-	// Persisted so every later call — continue, poll, cancel — can address the
-	// migration without resolving the volume again.
-	vm.Status.SubsystemNQN = volume.NQN
-	vm.Status.MemberCount = migration.MemberCount
-	// SourceNodeUUID is populated from GetMigration once status=Running.
-	vm.Status.Connections = conns
-	vm.Status.StartedAt = &now
-	if err := r.Status().Patch(ctx, vm, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch status Validating: %w", err)
-	}
-
-	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationCreated", "MigrationCreated",
-		"Migration %s created for subsystem %s (%d volume(s)): validating %d connection(s) to node %s",
-		migration.ID, volume.NQN, migration.MemberCount, len(conns), vm.Spec.TargetNodeUUID)
 	return ctrl.Result{Requeue: true}, nil
 }
 
-// deferMigration holds a migration the control plane refused because the cluster is
-// busy with work that ends on its own, and retries it — typically the data realignment
-// a previous migration triggered, which the control plane will not migrate through.
+// holdInPending keeps a migration nothing has been submitted for in Pending and has
+// it retried, failing it with reason once the window for that runs out.
 //
-// The wait is bounded by maxMigrationDeferral, measured from the first refusal (which
-// is why it is recorded in status rather than kept in memory: the operator may restart,
-// and an observer needs to see that the migration is waiting and since when). Past that
-// window the migration fails with the control plane's own reason, so whatever is waiting
-// on this CR learns about it instead of hanging on a phase that never becomes terminal.
-func (r *VolumeMigrationReconciler) deferMigration(
+// The window is armed by re-entering Pending, which happens exactly once — on the
+// first pass that finds no deadline. Re-arming on every refusal would push the
+// deadline out each time and the retrying would never end.
+func (r *Reconciler) holdInPending(
 	ctx context.Context,
-	vm *simplyblockv1alpha1.VolumeMigration,
-	clusterUUID string,
+	p *migrationPass,
+	sm *statemachine.Machine[phase],
+	reason string,
+) (ctrl.Result, error) {
+	if sm.TimeoutReached() {
+		return r.fail(ctx, p, sm, reason)
+	}
+	if _, armed := sm.Deadline(); !armed {
+		if err := sm.TransitionTo(ctx, phasePending); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{RequeueAfter: migrationDeferredRetryDelay}, nil
+}
+
+// deferredFor is how long the migration has been waiting to be accepted, for the log
+// line and the event that report it. Zero if nothing recorded the start of the wait,
+// which a hand-written status.phase can arrange.
+func deferredFor(vm *simplyblockv1alpha1.VolumeMigration) time.Duration {
+	if vm.Status.DeferredSince == nil {
+		return 0
+	}
+	return time.Since(vm.Status.DeferredSince.Time).Round(time.Second)
+}
+
+// deferMigration holds a migration the control plane refused because the cluster is
+// busy with work that ends on its own — typically the data realignment a previous
+// migration triggered, which the control plane will not migrate through.
+//
+// The wait is bounded by the Pending phase's deadline, and past it the migration
+// fails with the control plane's own reason. Reporting that reason is why the
+// deadline is consulted here, holding a fresh refusal, rather than generically before
+// the phase acts: "the cluster did not accept this in 10 minutes" is only actionable
+// together with what it was refusing for.
+func (r *Reconciler) deferMigration(
+	ctx context.Context,
+	p *migrationPass,
+	sm *statemachine.Machine[phase],
 	cause error,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	vm := p.vm
 
-	if vm.Status.DeferredSince == nil {
-		now := metav1.Now()
-		patch := client.MergeFrom(vm.DeepCopy())
-		vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhasePending
-		vm.Status.DeferredSince = &now
-		if err := r.Status().Patch(ctx, vm, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("patch status Pending (deferred): %w", err)
-		}
-	} else if waited := time.Since(vm.Status.DeferredSince.Time); waited > maxMigrationDeferral {
-		return r.setFailed(ctx, vm, fmt.Sprintf(
-			"cluster %s did not accept the migration within %s: %v", clusterUUID, maxMigrationDeferral, cause))
+	res, err := r.holdInPending(ctx, p, sm, fmt.Sprintf(
+		"cluster %s did not accept the migration within %s: %v",
+		vm.Status.ClusterUUID, maxMigrationDeferral, cause))
+	if err != nil || sm.IsTerminal() {
+		return res, err
 	}
 
-	waited := time.Since(vm.Status.DeferredSince.Time).Round(time.Second)
+	waited := deferredFor(vm)
 	log.Info("Cluster is not accepting migrations yet; retrying",
-		"cluster", clusterUUID, "waited", waited, "giveUpAfter", maxMigrationDeferral,
+		"cluster", vm.Status.ClusterUUID, "waited", waited, "giveUpAfter", maxMigrationDeferral,
 		"reason", cause.Error())
 	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationDeferred", "MigrationDeferred",
 		"Cluster %s is not accepting migrations yet (waiting %s of at most %s); retrying in %s",
-		clusterUUID, waited, maxMigrationDeferral, migrationDeferredRetryDelay)
-	return ctrl.Result{RequeueAfter: migrationDeferredRetryDelay}, nil
+		vm.Status.ClusterUUID, waited, maxMigrationDeferral, migrationDeferredRetryDelay)
+	return res, nil
 }
 
 // isIndeterminateCreate reports whether a CreateMigration error left the outcome unknown
@@ -312,74 +344,79 @@ func isIndeterminateCreate(err error) bool {
 }
 
 // retryIndeterminateCreate keeps a migration whose create timed out in Pending and retries
-// it, bounded by the same deferral ceiling: the request may have taken effect, so the CR
-// must not be failed until a later attempt can observe (and cancel) what was left behind.
-func (r *VolumeMigrationReconciler) retryIndeterminateCreate(
+// it, bounded by the same window: the request may have taken effect, so the CR must not be
+// failed until a later attempt can observe (and cancel) what was left behind.
+func (r *Reconciler) retryIndeterminateCreate(
 	ctx context.Context,
-	vm *simplyblockv1alpha1.VolumeMigration,
-	clusterUUID string,
+	p *migrationPass,
+	sm *statemachine.Machine[phase],
 	cause error,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	vm := p.vm
 
-	if vm.Status.DeferredSince == nil {
-		now := metav1.Now()
-		patch := client.MergeFrom(vm.DeepCopy())
-		vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhasePending
-		vm.Status.DeferredSince = &now
-		if err := r.Status().Patch(ctx, vm, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("patch status Pending (create timed out): %w", err)
-		}
-	} else if waited := time.Since(vm.Status.DeferredSince.Time); waited > maxMigrationDeferral {
-		return r.setFailed(ctx, vm, fmt.Sprintf(
-			"CreateMigration did not return within %s of retrying on cluster %s: %v",
-			maxMigrationDeferral, clusterUUID, cause))
+	res, err := r.holdInPending(ctx, p, sm, fmt.Sprintf(
+		"CreateMigration did not return within %s of retrying on cluster %s: %v",
+		maxMigrationDeferral, vm.Status.ClusterUUID, cause))
+	if err != nil || sm.IsTerminal() {
+		return res, err
 	}
 
-	waited := time.Since(vm.Status.DeferredSince.Time).Round(time.Second)
+	waited := deferredFor(vm)
 	log.Info("CreateMigration gave no answer; the migration may exist on the backend, retrying",
-		"cluster", clusterUUID, "waited", waited, "giveUpAfter", maxMigrationDeferral,
+		"cluster", vm.Status.ClusterUUID, "waited", waited, "giveUpAfter", maxMigrationDeferral,
 		"reason", cause.Error())
 	r.Recorder.Eventf(vm, nil, corev1.EventTypeWarning, "MigrationCreateIndeterminate",
 		"MigrationCreateIndeterminate",
 		"CreateMigration on cluster %s returned no answer (%v); it may have taken effect, "+
-			"so retrying in %s rather than failing", clusterUUID, cause, migrationDeferredRetryDelay)
-	return ctrl.Result{RequeueAfter: migrationDeferredRetryDelay}, nil
+			"so retrying in %s rather than failing", vm.Status.ClusterUUID, cause, migrationDeferredRetryDelay)
+	return res, nil
 }
 
-// reconcileValidating creates one Job per worker node that consumes a volume of the
+// validateMigration creates one Job per worker node that consumes a volume of the
 // migrated subsystem. Each Job:
 //  1. Checks whether this node has a host connection to the subsystem at all.
 //  2. If it does, runs `nvme connect` for each connection returned by CreateMigration.
 //  3. Runs `nvme list --verbose` and verifies all new NQNs appear with ANA
 //     state "inaccessible" (paths connected but volume not yet migrated).
 //
-// Once every Job has succeeded the controller calls ContinueMigration and advances to
-// Running. Any Job failing cancels the migration: cutover is subsystem-wide, so
-// continuing with a subset of the consumers ready guarantees an outage for the rest.
-func (r *VolumeMigrationReconciler) reconcileValidating(
+// Once every Job has succeeded the migration cuts over to Running. Any Job failing
+// cancels it: cutover is subsystem-wide, so continuing with a subset of the consumers
+// ready guarantees an outage for the rest.
+func (r *Reconciler) validateMigration(
 	ctx context.Context,
-	vm *simplyblockv1alpha1.VolumeMigration,
+	p *migrationPass,
+	sm *statemachine.Machine[phase],
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	vm := p.vm
 
 	if vm.Status.MigrationUUID == "" {
-		return r.setFailed(ctx, vm, "migration UUID is empty in Validating phase; status was likely written before a failed CreateMigration")
+		return r.fail(ctx, p, sm, "migration UUID is empty in Validating phase; status was likely written before a failed CreateMigration")
+	}
+
+	// The phase's bound is the outer limit on the whole validation. Reaching it means
+	// something is not going to finish — a Job that cannot be scheduled and is not
+	// being replaced, a node set that keeps growing — and the control plane will not
+	// hold a created-but-unstarted migration open indefinitely anyway.
+	if sm.TimeoutReached() {
+		return r.cancelAndFail(ctx, p, sm, fmt.Sprintf(
+			"NVMe path validation of subsystem %s did not finish within %s",
+			vm.Status.SubsystemNQN, phaseBound(phaseValidating)))
 	}
 
 	// Jobs already created — poll them.
 	if len(vm.Status.ValidationJobs) > 0 {
-		return r.pollValidationJobs(ctx, vm)
+		return r.pollValidationJobs(ctx, p, sm)
 	}
 
 	nodes, err := r.resolveValidationNodes(ctx, vm)
 	switch {
 	case errors.Is(err, errConsumerNotReady):
 		// A consumer pod exists but is not Running yet. Do not skip validation: wait
-		// so its node gets the new paths too. Bounded, because the control plane will
-		// not hold a created-but-unstarted migration open indefinitely.
-		if waited := r.timeInValidating(vm); waited > maxConsumerWait {
-			return r.cancelAndFail(ctx, vm, fmt.Sprintf(
+		// so its node gets the new paths too.
+		if !mayWaitForConsumers(sm) {
+			return r.cancelAndFail(ctx, p, sm, fmt.Sprintf(
 				"consumer pods of subsystem %s were not all Running within %s: %v",
 				vm.Status.SubsystemNQN, maxConsumerWait, err))
 		}
@@ -395,27 +432,44 @@ func (r *VolumeMigrationReconciler) reconcileValidating(
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	case len(nodes) == 0:
 		// No volume of the subsystem has a consumer, so there are no NVMe I/O paths to
-		// validate anywhere. Skip validation and continue the migration directly.
+		// validate anywhere. Skip validation and cut over directly.
 		log.Info("No consumer for any volume of the subsystem; skipping NVMe path validation",
 			"subsystem", vm.Status.SubsystemNQN, "migration", vm.Status.MigrationUUID)
 		r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "ValidationSkipped", "ValidationSkipped",
 			"No consumer for any volume of subsystem %s; skipping NVMe path validation",
 			vm.Status.SubsystemNQN)
-		return r.performMigration(ctx, vm)
+		return r.cutover(ctx, p, sm)
 	}
 
-	return r.startValidationJobs(ctx, vm, nodes)
+	return r.startValidationJobs(ctx, p, nodes)
+}
+
+// mayWaitForConsumers reports whether enough of the Validating phase is left to keep
+// waiting for a consumer pod and still run the Jobs afterwards.
+//
+// It is how maxConsumerWait is spent: the phase is bounded by that wait plus a full
+// Job deadline (see [phaseBound]), so "leave the Jobs their time" and "wait at most
+// maxConsumerWait" are the same rule stated once. Waiting up to the phase's own
+// deadline instead would mean finding the consumer just as the phase expires, with no
+// time left to validate anything on it.
+func mayWaitForConsumers(sm *statemachine.Machine[phase]) bool {
+	deadline, ok := sm.Deadline()
+	if !ok {
+		return true
+	}
+	return time.Until(deadline) > validationJobDeadline
 }
 
 // startValidationJobs creates a validation Job on each node and records them in
 // status. Existing entries are kept, so it also serves to add nodes that appeared
-// after the first round (see performMigration's pre-cutover re-check).
-func (r *VolumeMigrationReconciler) startValidationJobs(
+// after the first round (see cutover's pre-cutover re-check).
+func (r *Reconciler) startValidationJobs(
 	ctx context.Context,
-	vm *simplyblockv1alpha1.VolumeMigration,
+	p *migrationPass,
 	nodes []string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	vm := p.vm
 
 	// Get the simplyblock-rebalancer image from the StorageCluster (it contains nvme-cli).
 	image, err := r.resolveRebalancerImage(ctx, vm.Namespace, vm.Status.ClusterUUID)
@@ -444,12 +498,7 @@ func (r *VolumeMigrationReconciler) startValidationJobs(
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	patch := client.MergeFrom(vm.DeepCopy())
 	vm.Status.ValidationJobs = append(vm.Status.ValidationJobs, added...)
-	if err := r.Status().Patch(ctx, vm, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch ValidationJobs: %w", err)
-	}
-
 	for _, vj := range added {
 		log.Info("Validation job created", "job", vj.JobName, "node", vj.Node,
 			"subsystem", vm.Status.SubsystemNQN, "connections", len(vm.Status.Connections))
@@ -460,56 +509,50 @@ func (r *VolumeMigrationReconciler) startValidationJobs(
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
-// timeInValidating is how long the migration has been in the Validating phase, i.e.
-// since it was submitted to the storage API.
-func (r *VolumeMigrationReconciler) timeInValidating(
-	vm *simplyblockv1alpha1.VolumeMigration,
-) time.Duration {
-	if vm.Status.StartedAt == nil {
-		return 0
-	}
-	return time.Since(vm.Status.StartedAt.Time)
-}
-
-// cancelAndFail cancels the backend migration and fails the CR with reason. Used
-// where the operator gives up on a migration it created: the target-side objects must
-// not be left behind.
-//
-// "Target-side objects" is both halves of it. The control plane's are what CancelMigration
-// takes back; the host's are the NVMe paths every consumer node connected to validate,
-// which nothing else will ever release — the Job that failed releases its own, and the
-// ones that passed have to be told.
-func (r *VolumeMigrationReconciler) cancelAndFail(
+// fail ends the migration with reason. Nothing is taken back: this is the route for a
+// migration that never reached the storage API, or one the storage API has already
+// finished with.
+func (r *Reconciler) fail(
 	ctx context.Context,
-	vm *simplyblockv1alpha1.VolumeMigration,
+	p *migrationPass,
+	sm *statemachine.Machine[phase],
 	reason string,
 ) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-	if err := r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID); err != nil {
-		// Report the original reason regardless; a failed cancel only adds to it.
-		log.Error(err, "Cannot cancel migration; target-side objects may remain",
-			"migration", vm.Status.MigrationUUID, "subsystem", vm.Status.SubsystemNQN)
-		reason += fmt.Sprintf(" (cancelling the migration also failed: %v)", err)
+	p.failure = reason
+	if err := sm.TransitionTo(ctx, phaseFailed); err != nil {
+		return ctrl.Result{}, err
 	}
-	// Before setFailed, which clears nothing but is the point of no return for the CR:
-	// the node list this needs lives in status.
-	r.releaseMigrationPaths(ctx, vm)
-	return r.setFailed(ctx, vm, reason)
+	return ctrl.Result{}, nil
 }
 
-// pollValidationJobs waits for every node's validation Job. The migration continues
+// cancelAndFail ends the migration with reason and takes back what submitting it
+// created: the control plane's target-side objects, and the NVMe paths every consumer
+// node connected in order to validate. Used where the operator gives up on a
+// migration it created and the storage API still believes in.
+func (r *Reconciler) cancelAndFail(
+	ctx context.Context,
+	p *migrationPass,
+	sm *statemachine.Machine[phase],
+	reason string,
+) (ctrl.Result, error) {
+	p.cancelBackend = true
+	p.releasePaths = true
+	return r.fail(ctx, p, sm, reason)
+}
+
+// pollValidationJobs waits for every node's validation Job. The migration cuts over
 // only once all of them have succeeded; the first failure cancels it. Each Job's pod
 // log is collected as it finishes, so the operator log shows per node whether paths
 // were connected and validated or the node turned out to have no connection.
-func (r *VolumeMigrationReconciler) pollValidationJobs(
+func (r *Reconciler) pollValidationJobs(
 	ctx context.Context,
-	vm *simplyblockv1alpha1.VolumeMigration,
+	p *migrationPass,
+	sm *statemachine.Machine[phase],
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	vm := p.vm
 
-	patch := client.MergeFrom(vm.DeepCopy())
-	pending, newlyPassed := 0, false
-
+	pending := 0
 	for i := range vm.Status.ValidationJobs {
 		vj := &vm.Status.ValidationJobs[i]
 		// A node whose validation already passed is not looked at again. Its Job is
@@ -525,11 +568,11 @@ func (r *VolumeMigrationReconciler) pollValidationJobs(
 				return ctrl.Result{}, fmt.Errorf("get validation job %q: %w", vj.JobName, err)
 			}
 			// The Job vanished before we observed a terminal state (eviction, manual
-			// deletion, ...). Drop the entry and requeue so reconcileValidating rebuilds
+			// deletion, ...). Drop the entry and requeue so validateMigration rebuilds
 			// it instead of getting wedged in Validating.
 			log.Info("Validation job no longer exists; recreating",
 				"job", vj.JobName, "node", vj.Node, "migration", vm.Status.MigrationUUID)
-			return r.forgetValidationJob(ctx, vm, vj.JobName)
+			return r.forgetValidationJob(vm, vj.JobName), nil
 		}
 
 		// Determine terminal state from Job conditions (set by the Job controller).
@@ -549,24 +592,17 @@ func (r *VolumeMigrationReconciler) pollValidationJobs(
 			r.collectAndLogJobPodLogs(ctx, job)
 			log.Error(nil, "Validation job failed; cancelling migration",
 				"job", vj.JobName, "node", vj.Node, "migration", vm.Status.MigrationUUID)
-			return r.cancelAndFail(ctx, vm, fmt.Sprintf(
+			return r.cancelAndFail(ctx, p, sm, fmt.Sprintf(
 				"NVMe path validation failed on node %s; migration cancelled", vj.Node))
 		case succeeded:
 			r.collectAndLogJobPodLogs(ctx, job)
+			// Recorded, not merely observed: the pass is persisted with the rest of
+			// this reconcile, so an operator restart does not re-run validation on a
+			// node that already passed.
 			vj.Succeeded = true
-			newlyPassed = true
 		default:
 			// Still in progress — we will be re-triggered via Owns(&batchv1.Job{}).
 			pending++
-		}
-	}
-
-	// Persist the passes before acting on them: an operator restart must not re-run
-	// validation on nodes that already passed, and the count below must be the
-	// recorded one, not one this pass happens to have observed.
-	if newlyPassed {
-		if err := r.Status().Patch(ctx, vm, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("record validation passes: %w", err)
 		}
 	}
 
@@ -576,10 +612,10 @@ func (r *VolumeMigrationReconciler) pollValidationJobs(
 		return ctrl.Result{}, nil
 	}
 
-	log.Info("All validation jobs succeeded; calling ContinueMigration",
+	log.Info("All validation jobs succeeded; cutting the migration over",
 		"nodes", len(vm.Status.ValidationJobs), "migration", vm.Status.MigrationUUID)
 
-	return r.performMigration(ctx, vm)
+	return r.cutover(ctx, p, sm)
 }
 
 // releaseMigrationPaths starts a release Job on every node this migration validated on,
@@ -603,7 +639,7 @@ func (r *VolumeMigrationReconciler) pollValidationJobs(
 // and must not become "still failing" because a cleanup Job is pending. The Jobs are
 // owned by the CR, so they are garbage-collected with it, and carry a TTL of their own.
 // What escapes this is caught by the reap that runs before the next validation.
-func (r *VolumeMigrationReconciler) releaseMigrationPaths(
+func (r *Reconciler) releaseMigrationPaths(
 	ctx context.Context,
 	vm *simplyblockv1alpha1.VolumeMigration,
 ) {
@@ -645,7 +681,7 @@ func (r *VolumeMigrationReconciler) releaseMigrationPaths(
 // deleteValidationJobs removes the validation Jobs of a migration. Called when the
 // migration leaves the Validating phase — the Jobs have served their purpose and their
 // logs are already in the operator log.
-func (r *VolumeMigrationReconciler) deleteValidationJobs(
+func (r *Reconciler) deleteValidationJobs(
 	ctx context.Context,
 	vm *simplyblockv1alpha1.VolumeMigration,
 ) {
@@ -665,11 +701,12 @@ func (r *VolumeMigrationReconciler) deleteValidationJobs(
 //
 // A node that disappeared from the set is left alone — its Job either already passed
 // (a connected path it no longer needs is harmless) or it never mattered.
-func (r *VolumeMigrationReconciler) validateLateNodes(
+func (r *Reconciler) validateLateNodes(
 	ctx context.Context,
-	vm *simplyblockv1alpha1.VolumeMigration,
+	p *migrationPass,
 ) (ctrl.Result, bool, error) {
 	log := logf.FromContext(ctx)
+	vm := p.vm
 
 	// Nothing was validated (idle subsystem) — nothing to re-check either.
 	if len(vm.Status.ValidationJobs) == 0 {
@@ -702,46 +739,33 @@ func (r *VolumeMigrationReconciler) validateLateNodes(
 	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "ValidationExtended", "ValidationExtended",
 		"Subsystem %s gained consumer(s) on %s during validation; validating before cutover",
 		vm.Status.SubsystemNQN, strings.Join(late, ", "))
-	res, err := r.startValidationJobs(ctx, vm, nodes)
+	res, err := r.startValidationJobs(ctx, p, nodes)
 	return res, err == nil, err
 }
 
 // forgetValidationJob removes one Job from status and requeues, so the next
 // reconcile recreates it for that node.
-func (r *VolumeMigrationReconciler) forgetValidationJob(
-	ctx context.Context,
+func (r *Reconciler) forgetValidationJob(
 	vm *simplyblockv1alpha1.VolumeMigration,
 	jobName string,
-) (ctrl.Result, error) {
+) ctrl.Result {
 	kept := make([]simplyblockv1alpha1.ValidationJob, 0, len(vm.Status.ValidationJobs))
 	for _, vj := range vm.Status.ValidationJobs {
 		if vj.JobName != jobName {
 			kept = append(kept, vj)
 		}
 	}
-	patch := client.MergeFrom(vm.DeepCopy())
 	vm.Status.ValidationJobs = kept
-	if err := r.Status().Patch(ctx, vm, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("drop validation job %q from status: %w", jobName, err)
-	}
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{Requeue: true}
 }
 
-// performMigration advances a validated (or validation-skipped) migration to
-// the Running phase. Used both after a successful validation job and when
-// validation is skipped (no running consumer).
-//
-// The backend's ContinueMigration is not idempotent: it only accepts a migration
-// in phase "pre_created" and rejects any later call. If a prior reconcile already
-// continued the migration but crashed before persisting phase=Running, blindly
-// re-issuing ContinueMigration would fail and — with the old logic — cancel a
-// perfectly healthy, running migration. To keep the transition crash-safe we
-// first read the backend phase and only continue when it hasn't advanced yet.
-// Per-object reconcile serialization (a key is processed by at most one worker at
-// a time) makes the read-then-continue window race-free within the operator.
-func (r *VolumeMigrationReconciler) performMigration(
+// cutover moves a validated (or validation-skipped) migration to Running, which is
+// where the data actually starts moving. The work of getting there is the Running
+// phase's entry hook; this decides whether it is time.
+func (r *Reconciler) cutover(
 	ctx context.Context,
-	vm *simplyblockv1alpha1.VolumeMigration,
+	p *migrationPass,
+	sm *statemachine.Machine[phase],
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -749,70 +773,36 @@ func (r *VolumeMigrationReconciler) performMigration(
 	// control plane lets a new volume join the subsystem until the migration is
 	// activated, and a consumer pod can be rescheduled while we validate — either way
 	// a node can appear that was not validated. Validate it too before cutting over.
-	if res, wait, err := r.validateLateNodes(ctx, vm); err != nil {
+	if res, wait, err := r.validateLateNodes(ctx, p); err != nil {
 		return res, err
 	} else if wait {
 		return res, nil
 	}
 
-	m, err := r.apiClient.GetMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID)
-	if err != nil {
-		// Transient read failure: requeue without failing or cancelling.
-		log.Error(err, "Cannot read migration before continue; requeuing", "migration", vm.Status.MigrationUUID)
+	err := sm.TransitionTo(ctx, phaseRunning)
+	switch {
+	case err == nil:
+		return ctrl.Result{RequeueAfter: MigrationInitialDelay}, nil
+	case errors.Is(err, errMigrationStartFailed):
+		// The migration provably never left pre_created and the hook has already
+		// cancelled it on the control plane; the host-side paths are still ours to give
+		// back. There is nothing to retry — this migration is not going to start.
+		p.releasePaths = true
+		return r.fail(ctx, p, sm, err.Error())
+	default:
+		// The storage API did not answer, so whether the migration was continued is
+		// unknown. Stay in Validating — paths connected, phase bound still running —
+		// and ask again; the hook re-reads the backend phase and will not continue
+		// twice.
+		log.Error(err, "Cannot cut the migration over yet; requeuing",
+			"migration", p.vm.Status.MigrationUUID)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
-
-	switch {
-	case webapi.MigrationIsTerminal(m.Status):
-		// The migration reached a terminal state out-of-band. Do not cancel or
-		// re-continue; advance to Running and let reconcileRunning classify it.
-		log.Info("Migration already terminal before continue; advancing to Running for classification",
-			"migration", vm.Status.MigrationUUID, "status", m.Status)
-	case m.Phase == webapi.MigrationPhasePreCreated:
-		if err := r.apiClient.ContinueMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID); err != nil {
-			// The continue may have taken effect despite the error. Only a
-			// migration still stuck in pre_created is a genuine start failure
-			// worth cancelling; anything else means it already advanced.
-			if m2, gerr := r.apiClient.GetMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID); gerr == nil && m2.Phase == webapi.MigrationPhasePreCreated {
-				// Best-effort: the CR fails either way, but a failed cancel leaves
-				// target-side objects behind, so it must not be silent.
-				if cerr := r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID); cerr != nil {
-					log.Error(cerr, "Cannot cancel migration that failed to continue; target-side objects may remain",
-						"migration", vm.Status.MigrationUUID, "subsystem", vm.Status.SubsystemNQN)
-				}
-				return r.setFailed(ctx, vm, fmt.Sprintf("ContinueMigration: %v", err))
-			}
-			log.Info("ContinueMigration errored but migration has advanced past pre_created; treating as continued",
-				"migration", vm.Status.MigrationUUID, "error", err.Error())
-		}
-	default:
-		// Already past pre_created: a prior reconcile continued the migration but
-		// did not persist Running. Skip the (now-invalid) continue call.
-		log.Info("Migration already continued (past pre_created); skipping ContinueMigration",
-			"migration", vm.Status.MigrationUUID, "phase", m.Phase)
-	}
-
-	// The validation Jobs have served their purpose and their logs are already in the
-	// operator log; reap them as the migration leaves the Validating phase.
-	r.deleteValidationJobs(ctx, vm)
-
-	patch := client.MergeFrom(vm.DeepCopy())
-	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseRunning
-	vm.Status.Connections = nil
-	vm.Status.ValidationJobs = nil
-	if err := r.Status().Patch(ctx, vm, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch status Running: %w", err)
-	}
-
-	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationStarted", "MigrationStarted",
-		"Migration %s started: volume %s → node %s",
-		vm.Status.MigrationUUID, vm.Status.VolumeUUID, vm.Spec.TargetNodeUUID)
-	return ctrl.Result{RequeueAfter: vmigration.MigrationInitialDelay}, nil
 }
 
 // buildValidationJob constructs the Job that connects NVMe paths and validates
 // ANA state on the target node using the simplyblock-rebalancer binary.
-func (r *VolumeMigrationReconciler) buildValidationJob(
+func (r *Reconciler) buildValidationJob(
 	vm *simplyblockv1alpha1.VolumeMigration,
 	hostname, image string,
 ) *batchv1.Job {
@@ -828,7 +818,7 @@ func (r *VolumeMigrationReconciler) buildValidationJob(
 
 // buildReleaseJob constructs the Job that gives a migration's target paths back on one
 // node, for the nodes the operator has to tell because their own Job cannot know.
-func (r *VolumeMigrationReconciler) buildReleaseJob(
+func (r *Reconciler) buildReleaseJob(
 	vm *simplyblockv1alpha1.VolumeMigration,
 	hostname, image string,
 ) *batchv1.Job {
@@ -871,7 +861,7 @@ func migrationPathJob(
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			// One Job per node, so the name carries both the migration and the node.
-			Name:      js.namePrefix + safeNodeID(vm.Status.MigrationUUID) + "-" + nodeSuffix(hostname),
+			Name:      js.namePrefix + utils.SafeNodeID(vm.Status.MigrationUUID) + "-" + utils.NodeNameSuffix(hostname),
 			Namespace: vm.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(vm, simplyblockv1alpha1.GroupVersion.WithKind("VolumeMigration")),
@@ -931,31 +921,12 @@ func migrationPathJob(
 	}
 }
 
-// nodeSuffix produces a DNS-label-safe, collision-resistant suffix for a node name.
-// Node names can be long FQDNs and are not label-safe, so the short host part is kept
-// for readability and a hash of the full name for uniqueness.
-func nodeSuffix(nodeName string) string {
-	sum := sha256.Sum256([]byte(nodeName))
-	short := strings.ToLower(strings.SplitN(nodeName, ".", 2)[0])
-	short = nonLabelChars.ReplaceAllString(short, "")
-	if len(short) > 16 {
-		short = short[:16]
-	}
-	if short == "" {
-		return hex.EncodeToString(sum[:6])
-	}
-	return short + "-" + hex.EncodeToString(sum[:4])
-}
-
-// nonLabelChars matches everything not allowed inside a DNS-1123 label.
-var nonLabelChars = regexp.MustCompile(`[^a-z0-9-]`)
-
 // connectionsToValidation converts MigrationConnection status entries to the
-// vmigration.Connection type consumed by the simplyblock-rebalancer validate-migration mode.
-func connectionsToValidation(conns []simplyblockv1alpha1.MigrationConnection) []vmigration.Connection {
-	out := make([]vmigration.Connection, len(conns))
+// Connection type consumed by the simplyblock-rebalancer validate-migration mode.
+func connectionsToValidation(conns []simplyblockv1alpha1.MigrationConnection) []Connection {
+	out := make([]Connection, len(conns))
 	for i, c := range conns {
-		out[i] = vmigration.Connection{
+		out[i] = Connection{
 			NQN:            c.NQN,
 			IP:             c.IP,
 			Port:           c.Port,
@@ -968,15 +939,6 @@ func connectionsToValidation(conns []simplyblockv1alpha1.MigrationConnection) []
 		}
 	}
 	return out
-}
-
-// safeNodeID produces a DNS-label-safe suffix from a node UUID.
-func safeNodeID(nodeUUID string) string {
-	s := strings.ReplaceAll(nodeUUID, "-", "")
-	if len(s) > 20 {
-		s = s[:20]
-	}
-	return s
 }
 
 // resolveConsumerNodeName finds the Kubernetes node name of the worker node
@@ -1009,7 +971,7 @@ func safeNodeID(nodeUUID string) string {
 //
 // The returned node list is sorted, so a Job set built from it is stable across
 // reconciles.
-func (r *VolumeMigrationReconciler) resolveValidationNodes(
+func (r *Reconciler) resolveValidationNodes(
 	ctx context.Context,
 	vm *simplyblockv1alpha1.VolumeMigration,
 ) ([]string, error) {
@@ -1063,7 +1025,7 @@ func (r *VolumeMigrationReconciler) resolveValidationNodes(
 
 // pvNamesForVolumes maps backend volume UUIDs to the PersistentVolumes that front
 // them, by parsing each PV's CSI volume handle ("<cluster>:<pool>:<volume>").
-func (r *VolumeMigrationReconciler) pvNamesForVolumes(
+func (r *Reconciler) pvNamesForVolumes(
 	ctx context.Context,
 	volumeUUIDs map[string]struct{},
 ) ([]string, error) {
@@ -1089,7 +1051,7 @@ func (r *VolumeMigrationReconciler) pvNamesForVolumes(
 	return names, nil
 }
 
-func (r *VolumeMigrationReconciler) resolveConsumerNodeName(
+func (r *Reconciler) resolveConsumerNodeName(
 	ctx context.Context,
 	pvName string,
 ) (*string, error) {
@@ -1140,7 +1102,7 @@ func (r *VolumeMigrationReconciler) resolveConsumerNodeName(
 // collectAndLogJobPodLogs fetches stdout/stderr from every pod that belongs to
 // the given Job and emits them as operator log lines. Must be called before
 // deleting the Job, since pod deletion follows immediately after.
-func (r *VolumeMigrationReconciler) collectAndLogJobPodLogs(ctx context.Context, job *batchv1.Job) {
+func (r *Reconciler) collectAndLogJobPodLogs(ctx context.Context, job *batchv1.Job) {
 	log := logf.FromContext(ctx).WithValues("job", job.Name)
 
 	var podList corev1.PodList
@@ -1165,16 +1127,17 @@ func (r *VolumeMigrationReconciler) collectAndLogJobPodLogs(ctx context.Context,
 	}
 }
 
-// defaultRebalancerImage is used when a StorageCluster enables volume migration
-// (explicitly, or by default via an omitted settings block) without pinning a
-// specific rebalancer image. The image must include nvme-cli.
-const defaultRebalancerImage = "docker.io/simplyblock/simplyblock-rebalancer:main"
-
 // resolveRebalancerImage returns the simplyblock-rebalancer image for the StorageCluster
 // that owns the migration's volume. Volume migration is enabled by default: an omitted
-// VolumeMigrationSettings block (or one without an image) resolves to defaultRebalancerImage;
-// only an explicit Enabled=false disables it.
-func (r *VolumeMigrationReconciler) resolveRebalancerImage(
+// VolumeMigrationSettings block (or one without an image) resolves to
+// [defaultRebalancerImage]; only an explicit Enabled=false disables it.
+//
+// That default is the same one [GetConfig] hands the rebalancer deployment, so both
+// honour RebalancerImageEnvVar — which the Helm chart pins to the operator's own tag.
+// These Jobs run the rebalancer binary, so it is the tag they want: an operator that
+// validates NVMe paths with a differently-versioned binary is testing something other
+// than what it ships.
+func (r *Reconciler) resolveRebalancerImage(
 	ctx context.Context,
 	namespace, clusterUUID string,
 ) (string, error) {
@@ -1189,7 +1152,7 @@ func (r *VolumeMigrationReconciler) resolveRebalancerImage(
 		vm := cr.Spec.VolumeMigrationSettings
 		if vm == nil {
 			// No settings block: volume migration is enabled by default with the default image.
-			return defaultRebalancerImage, nil
+			return defaultRebalancerImage(), nil
 		}
 		if vm.Enabled != nil && !*vm.Enabled {
 			return "", fmt.Errorf("volume migration is disabled for cluster UUID %q", clusterUUID)
@@ -1198,94 +1161,78 @@ func (r *VolumeMigrationReconciler) resolveRebalancerImage(
 			return *vm.RebalancerImage, nil
 		}
 		// Enabled (explicitly or by default) but no image pinned: use the default image.
-		return defaultRebalancerImage, nil
+		return defaultRebalancerImage(), nil
 	}
 	return "", fmt.Errorf("no StorageCluster found for cluster UUID %q", clusterUUID)
 }
 
-// reconcileRunning polls the migration API and updates progress in status.
-func (r *VolumeMigrationReconciler) reconcileRunning(
+// pollMigration follows a migration the storage API is working on, updating progress
+// in status and moving the machine when the API reports it finished. Most passes
+// change nothing but the counters: the phase is not bounded by a deadline, because a
+// data copy takes as long as there is data, so what ends it is the storage API.
+func (r *Reconciler) pollMigration(
 	ctx context.Context,
-	vm *simplyblockv1alpha1.VolumeMigration,
+	p *migrationPass,
+	sm *statemachine.Machine[phase],
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	vm := p.vm
 
 	// StartedAt is an optional pointer and may be nil on older objects, manual
 	// edits, or partial status writes. Backfill it rather than dereferencing a
 	// nil pointer (panic) or defaulting to the zero time (instant "stuck" warning).
 	if vm.Status.StartedAt == nil {
 		now := metav1.Now()
-		patch := client.MergeFrom(vm.DeepCopy())
 		vm.Status.StartedAt = &now
-		if err := r.Status().Patch(ctx, vm, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("backfill StartedAt: %w", err)
-		}
 		log.Info("StartedAt was unset in Running phase; backfilled", "migration", vm.Status.MigrationUUID)
 	}
 
-	migrationStart := vm.Status.StartedAt.Time
-	result, err := vmigration.PollMigration(ctx, r.apiClient, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID, migrationStart)
+	result, err := PollMigration(ctx, r.apiClient, vm.Status.ClusterUUID,
+		vm.Status.SubsystemNQN, vm.Status.MigrationUUID, vm.Status.StartedAt.Time)
 	if err != nil {
 		log.Error(err, "Cannot poll migration; requeuing", "migration", vm.Status.MigrationUUID)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
 	if result.Migration != nil {
-		// Update progress fields even if not done yet.
-		patch := client.MergeFrom(vm.DeepCopy())
+		// Progress, whether or not the migration is done yet.
 		vm.Status.SourceNodeUUID = result.Migration.SourceNodeID
 		vm.Status.MemberCount = result.Migration.MemberCount
-		if err := r.Status().Patch(ctx, vm, patch); err != nil {
-			if apierrors.IsNotFound(err) {
-				return ctrl.Result{}, nil
-			}
-			return ctrl.Result{}, fmt.Errorf("patch progress: %w", err)
-		}
 	}
 
 	if result.Stuck {
 		r.Recorder.Eventf(vm, nil, corev1.EventTypeWarning, "MigrationStuck", "MigrationStuck",
-			"Migration %s has not completed after 30 minutes (phase: %s, status: %s)",
-			vm.Status.MigrationUUID, result.Migration.Phase, result.Migration.Status)
+			"Migration %s has not completed after %s (phase: %s, status: %s)",
+			vm.Status.MigrationUUID, MigrationStuckWarningTimeout,
+			result.Migration.Phase, result.Migration.Status)
 	}
 
 	if !result.Done {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	// Migration finished.
-	now := metav1.Now()
-	patch := client.MergeFrom(vm.DeepCopy())
-	vm.Status.CompletedAt = &now
-	if result.Succeeded {
-		vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseCompleted
-		if err := r.Status().Patch(ctx, vm, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("patch status Completed: %w", err)
-		}
-		r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationCompleted", "MigrationCompleted",
-			"Migration %s completed successfully", vm.Status.MigrationUUID)
-		// A volume moved: count it on the owning cluster so the rebalancer's periodic
-		// loop triggers a control-plane data realignment once enough have accumulated
-		// and the cluster is quiet. Best-effort — a missed count is picked up by the
-		// next completing migration, and realignment is idempotent.
-		r.markClusterVolumeMoved(ctx, vm.Namespace, vm.Status.ClusterUUID)
-	} else {
-		vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseFailed
-		vm.Status.ErrorMessage = result.Migration.ErrorMessage
-		if err := r.Status().Patch(ctx, vm, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("patch status Failed: %w", err)
-		}
-		r.Recorder.Eventf(vm, nil, corev1.EventTypeWarning, "MigrationFailed", "MigrationFailed",
-			"Migration %s failed: %s", vm.Status.MigrationUUID, result.Migration.ErrorMessage)
+	// Finished, one way or the other. The outcome goes to the hook, so a failure is
+	// recorded with the storage API's own error message rather than one made up here.
+	p.finished = result.Migration
+	to := phaseCompleted
+	if !result.Succeeded {
+		to = phaseFailed
+	}
+	if err := sm.TransitionTo(ctx, to); err != nil {
+		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
 }
 
-// markClusterVolumeMoved increments status.volumeMoveGeneration on the StorageCluster
-// whose backend UUID matches clusterUUID, recording that one more volume has moved and
-// a control-plane data realignment is owed. The counter is read by the
-// VolumeRebalancerReconciler's periodic loop, which compares it against
-// status.realignedGeneration.
+// MarkVolumeMoved increments status.volumeMoveGeneration on the StorageCluster whose
+// backend UUID matches clusterUUID, recording that one more volume has moved and a
+// control-plane data realignment is owed. The counter is read by the operator's
+// rebalancing loop, which compares it against status.realignedGeneration.
+//
+// Exported, and a function rather than a method, because it is the one thing a
+// completing migration tells the rest of the operator, and the loop on the other end
+// of the counter has to be able to test against the real writer rather than a
+// hand-rolled increment that could drift from it.
 //
 // A counter rather than a flag because both quantities matter: how many moves are
 // outstanding (so DataRealignment.MinMoves can batch them) and whether a move landed
@@ -1298,8 +1245,9 @@ func (r *VolumeMigrationReconciler) reconcileRunning(
 // completing at once would otherwise read the same value and one increment would
 // vanish; with MinMoves batching, a lost increment delays a realignment indefinitely
 // rather than by one cycle.
-func (r *VolumeMigrationReconciler) markClusterVolumeMoved(
+func MarkVolumeMoved(
 	ctx context.Context,
+	c client.Client,
 	namespace, clusterUUID string,
 ) {
 	log := logf.FromContext(ctx)
@@ -1310,7 +1258,7 @@ func (r *VolumeMigrationReconciler) markClusterVolumeMoved(
 	var name string
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var clusters simplyblockv1alpha1.StorageClusterList
-		if err := r.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
+		if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
 			return err
 		}
 		for i := range clusters.Items {
@@ -1321,7 +1269,7 @@ func (r *VolumeMigrationReconciler) markClusterVolumeMoved(
 			name = cr.Name
 			patch := client.MergeFromWithOptions(cr.DeepCopy(), client.MergeFromWithOptimisticLock{})
 			cr.Status.VolumeMoveGeneration = ptr.To(ptr.Int64FromOrZero(cr.Status.VolumeMoveGeneration) + 1)
-			return r.Status().Patch(ctx, cr, patch)
+			return c.Status().Patch(ctx, cr, patch)
 		}
 		return nil
 	})
@@ -1334,67 +1282,38 @@ func (r *VolumeMigrationReconciler) markClusterVolumeMoved(
 	}
 }
 
-// reconcileAbort cancels an in-progress migration.
-func (r *VolumeMigrationReconciler) reconcileAbort(
+// abort stops a migration the user asked to stop, by moving it to Aborted.
+//
+// Because the graph declares which phases can be aborted, an abort arriving for a
+// phase that never submitted anything is refused by the machine rather than by a
+// hand-written check — and that is a different outcome from a backend failure, worth
+// telling apart: there is nothing to cancel, so the migration is failed outright
+// instead of being reported as an abort that never reached anything.
+func (r *Reconciler) abort(
 	ctx context.Context,
-	vm *simplyblockv1alpha1.VolumeMigration,
+	p *migrationPass,
+	sm *statemachine.Machine[phase],
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	log.Info("Aborting migration", "migration", vm.Status.MigrationUUID)
+	log.Info("Aborting migration", "migration", p.vm.Status.MigrationUUID,
+		"phase", sm.CurrentState())
 
-	// A migration that was never submitted — still pending, or deferred by a busy
-	// cluster — has nothing to cancel on the backend, and calling with an empty id
-	// would only produce errors to retry forever.
-	if vm.Status.MigrationUUID == "" {
-		log.Info("No backend migration was created yet; aborting the request only")
-	} else if err := r.apiClient.CancelMigration(ctx, vm.Status.ClusterUUID, vm.Status.SubsystemNQN, vm.Status.MigrationUUID); err != nil {
-		log.Error(err, "CancelMigration failed; requeuing")
+	err := sm.TransitionTo(ctx, phaseAborted)
+	illegal, refused := errors.AsType[*statemachine.IllegalTransitionError[phase]](err)
+	switch {
+	case err == nil:
+		return ctrl.Result{}, nil
+	case refused:
+		return r.fail(ctx, p, sm, fmt.Sprintf("aborted while still %q", illegal.From))
+	default:
+		// CancelMigration itself failed. The migration keeps running until the control
+		// plane says otherwise, so ask again rather than claim it stopped.
+		log.Error(err, "Cannot cancel migration; retrying")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-
-	now := metav1.Now()
-	patch := client.MergeFrom(vm.DeepCopy())
-
-	// Best-effort cleanup when aborting during Validating. The validation Jobs go first so
-	// that nothing is still connecting paths while the release Jobs look for them — a Job
-	// deleted here may still have a pod winding down, so this narrows the race rather than
-	// closing it, and what slips through is caught by the reap before the next validation.
-	// Both happen before status is cleared, because releasing needs the node list and the
-	// connections it is about to drop.
-	if len(vm.Status.ValidationJobs) > 0 {
-		r.deleteValidationJobs(ctx, vm)
-		r.releaseMigrationPaths(ctx, vm)
-		vm.Status.ValidationJobs = nil
-		vm.Status.Connections = nil
-	}
-
-	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseAborted
-	vm.Status.CompletedAt = &now
-	if err := r.Status().Patch(ctx, vm, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch status Aborted: %w", err)
-	}
-	r.Recorder.Eventf(vm, nil, corev1.EventTypeNormal, "MigrationAborted", "MigrationAborted",
-		"Migration %s cancelled", vm.Status.MigrationUUID)
-	return ctrl.Result{}, nil
 }
 
-// setFailed transitions the migration to Failed with the given reason.
-func (r *VolumeMigrationReconciler) setFailed(
-	ctx context.Context,
-	vm *simplyblockv1alpha1.VolumeMigration,
-	reason string,
-) (ctrl.Result, error) {
-	patch := client.MergeFrom(vm.DeepCopy())
-	vm.Status.Phase = simplyblockv1alpha1.VolumeMigrationPhaseFailed
-	vm.Status.ErrorMessage = reason
-	if err := r.Status().Patch(ctx, vm, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch status Failed: %w", err)
-	}
-	r.Recorder.Eventf(vm, nil, corev1.EventTypeWarning, "MigrationFailed", "MigrationFailed", "%s", reason)
-	return ctrl.Result{}, nil
-}
-
-func (r *VolumeMigrationReconciler) SetupWithManager(
+func (r *Reconciler) SetupWithManager(
 	mgr ctrl.Manager,
 ) error {
 	r.apiClient = webapi.NewClient()
