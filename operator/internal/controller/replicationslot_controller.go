@@ -284,13 +284,19 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 		if err := r.Status().Patch(ctx, slot, patch); err != nil {
 			return ctrl.Result{Requeue: true}, nil
 		}
-		// When the backend enters cutover_pending, the operator must create the
-		// preconnect Job immediately — the backend's REPL_CUTOVER_PROCEED_TIMEOUT_SEC
-		// safety timer (≈30 s) is shorter than replSlotRequeueReplicating (15 s is
-		// better but still not guaranteed). Jumping directly into reconcileCutoverPending
-		// in the same iteration avoids one full poll-cycle of delay.
-		if status.State == backendStateCutoverPending {
+		switch status.State {
+		case backendStateCutoverPending:
+			// The backend's REPL_CUTOVER_PROCEED_TIMEOUT_SEC safety timer (≈30 s) is
+			// shorter than even the 15 s poll interval. Jump directly into the cutover
+			// handler in this same iteration so the preconnect Job is created before
+			// the window expires.
 			return r.reconcileCutoverPending(ctx, slot, apiClient, clusterID, poolID, volumeID)
+		case backendStateCutoverDone:
+			// The 30 s cutover_pending window already closed before we polled.
+			// Attempt a late preconnect so the CSI node gets target NVMe paths even
+			// after the ANA flip — this limits IO downtime to ctrl_loss_tmo instead
+			// of indefinite path loss.
+			r.tryLatePreconnect(ctx, slot, apiClient, clusterID, poolID, volumeID)
 		}
 	}
 
@@ -671,8 +677,9 @@ func (r *ReplicationSlotReconciler) callCutoverProceed(
 	if err != nil {
 		return err
 	}
-	// 204 = signalled; 404 = no cutover_pending record (already advanced).
-	if status == http.StatusNoContent || status == http.StatusNotFound {
+	// 200/204 = signalled; 404 = no cutover_pending record (already advanced).
+	// The Flask backend may return 200 OK rather than 204 No Content.
+	if status == http.StatusOK || status == http.StatusNoContent || status == http.StatusNotFound {
 		return nil
 	}
 	return fmt.Errorf("POST cutover-proceed: status %d: %s", status, string(body))
