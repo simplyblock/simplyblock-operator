@@ -157,7 +157,8 @@ func main() {
 		}
 
 	default:
-		log.Fatalf("--mode must be baseline, probe, validate-migration, release-migration-paths, or replication-preconnect, got %q", *mode)
+		log.Fatalf("--mode must be baseline, probe, validate-migration, "+
+			"release-migration-paths, or replication-preconnect, got %q", *mode)
 	}
 }
 

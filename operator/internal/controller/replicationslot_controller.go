@@ -55,7 +55,8 @@ const (
 	// annotCutoverProceedSignaled is set on a slot once the operator has called
 	// POST .../replication/cutover-proceed. Prevents repeated calls (and log
 	// spam) while the backend transitions from cutover_pending to cutover_done.
-	annotCutoverProceedSignaled = "replication.simplyblock.io/cutover-proceed-signaled"
+	annotCutoverProceedSignaled      = "replication.simplyblock.io/cutover-proceed-signaled"
+	annotCutoverProceedSignaledValue = "true"
 )
 
 // replVolumeReplicationStatus is the response from
@@ -492,7 +493,7 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 	var existingJob batchv1.Job
 	if err := r.Get(ctx, types.NamespacedName{Namespace: slot.Namespace, Name: jobName}, &existingJob); err == nil {
 		// Already signalled on a previous reconcile — just wait for the backend to advance.
-		if slot.Annotations[annotCutoverProceedSignaled] == "true" {
+		if slot.Annotations[annotCutoverProceedSignaled] == annotCutoverProceedSignaledValue {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 		// Job exists — check its terminal state.
@@ -526,7 +527,7 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
 	}
 	if node == "" {
-		if slot.Annotations[annotCutoverProceedSignaled] != "true" {
+		if slot.Annotations[annotCutoverProceedSignaled] != annotCutoverProceedSignaledValue {
 			// No active consumer; nothing to pre-connect — signal immediately.
 			log.Info("No active consumer for preconnect; signalling backend to proceed", "slot", slot.Name)
 			if err := r.callCutoverProceed(ctx, apiClient, clusterID, poolID, volumeID); err != nil {
@@ -582,7 +583,7 @@ func (r *ReplicationSlotReconciler) markCutoverProceedSignaled(
 	if slot.Annotations == nil {
 		slot.Annotations = map[string]string{}
 	}
-	slot.Annotations[annotCutoverProceedSignaled] = "true"
+	slot.Annotations[annotCutoverProceedSignaled] = annotCutoverProceedSignaledValue
 	if err := r.Patch(ctx, slot, patch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
