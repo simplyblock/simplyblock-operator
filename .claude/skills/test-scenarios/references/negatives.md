@@ -47,6 +47,10 @@ do something," it is a row.
 
 ### Dependencies (control plane, Prometheus, webhooks)
 
+Every row below asserts **this repository's** response, never the dependency's
+behavior. The dependency is faked; what is under test is the reconciler or the
+driver reacting to it.
+
 | Mutation                                                      | Row asserts                                                          |
 |---------------------------------------------------------------|----------------------------------------------------------------------|
 | 4xx (403, 404, 409)                                           | Requeue vs fail — the design must say which, the row must prove it   |

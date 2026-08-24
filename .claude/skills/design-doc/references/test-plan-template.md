@@ -16,6 +16,10 @@ the HTML comments say what belongs there and are not part of the output.
 Related design: [`designs/design-<slug>.md`](../designs/design-<slug>.md)
 Harness: [`<path/to/suite>`](../../../<path/to/suite>)
 
+Scope: the operator, the CSI driver, and the Kubernetes surface of this
+repository. Control-plane (`sbcli`) and SPDK behavior is a dependency, faked at
+the boundary — see the `test-scenarios` skill.
+
 Scenario IDs are permanent: `U-` unit (no cluster — pure functions, fake
 `client.Client`, mock HTTP), `I-` integration (full reconcile loop against
 `envtest` + a mock backend), `E-` end-to-end (live cluster, real data path),
@@ -184,9 +188,12 @@ matrix needs to be exhaustive rather than adequate.
   side effect (the `Triggered` / write-ahead guard).
 - User cancels or clears the action in this state — is the target restored?
 
-**Control-plane interaction**
+**Control-plane interaction** — every item asserts this repository's response to
+a faked control plane, never the control plane's own behavior
 
 - Mutating call returns 4xx (403, 404, 409) → requeue vs fail, and which.
+- The endpoint the design depends on does not exist yet → a clean, reported
+  failure rather than a panic or a silent success.
 - Mutating call returns 5xx → retried, no state advance.
 - Connection refused / timeout mid-call → no lost or duplicated operation.
 - Retried call is idempotent (assert the mock's call count).

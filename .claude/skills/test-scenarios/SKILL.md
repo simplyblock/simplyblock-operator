@@ -24,12 +24,43 @@ before emitting a matrix; do not restate the format here. Scenario wording
 follows the `house-style` skill — American English, the Oxford comma, and the
 `simplyblock` brand spelling apply to a table cell as much as to a paragraph.
 
+## Scope: this repository's components only
+
+Scenarios cover what this repository builds and deploys — the Kubernetes API
+surface, the operator's reconcilers and webhooks, the CSI driver, and the Helm
+chart's behavior. **The control plane (`sbcli`), SPDK, and every other repository
+are dependencies, not subjects.** They have their own suites, and a scenario
+written here against their internals cannot be run from this repository, cannot
+be kept honest, and quietly claims coverage that nobody owns.
+
+That boundary is a reframing, not a blind spot. A backend behavior that matters
+becomes a scenario **at the boundary**, asserted against a mock control plane:
+
+| Not a scenario here | The scenario here |
+|---|---|
+| `bdev_lvol_create` passes `persist_reservation` through | The CSI driver sends `"pr": true` in the create body, and surfaces a clean error when the endpoint rejects it |
+| The group snapshot is atomic across members | The operator issues one group call for all `n` members, and fails the whole request rather than committing a partial group when the call returns an error |
+| A node reports `nfs_capable` correctly | The reconciler marks a node ineligible when the field is absent, `false`, or the endpoint 404s |
+| SPDK holds a freeze for the length of a copy | The reconciler issues exactly one freeze-inducing call per migration, and reports the failure when the call times out |
+
+The pattern is the same each time: the dependency's behavior becomes an input,
+and what is asserted is this repository's response to it — including the
+responses to a 4xx, a 5xx, a timeout, a missing field, and an endpoint that does
+not exist yet.
+
+An unimplemented backend capability is a **design dependency**, recorded in the
+design document's Backend API Requirements table as an external blocker, not a
+row in the test plan.
+
 ## Workflow
 
 ### 1. Establish the surface
 
 Determine, from the design doc and the code, before enumerating anything:
 
+- **The boundary.** Which decisions this repository makes, and which it only
+  reacts to. Everything on the far side of the control-plane API is a dependency
+  whose responses are inputs (see Scope above).
 - **The behaviors.** One per decision the feature makes — each becomes a group
   of rows. Take them from the design's numbered sections so every group can cite
   `(§n.m)`; grep the controller for the branch points the design does not mention.
@@ -123,6 +154,8 @@ Do not present a matrix that fails any of these:
   behavior.
 - Every row is falsifiable: someone could run it and get a clear pass or fail.
 - Nothing is listed as covered by a test function whose name was not grepped.
+- No scenario asserts the behavior of `sbcli`, SPDK, or another repository; each
+  one is runnable from this repository.
 
 ## When invoked from the design-doc skill
 
