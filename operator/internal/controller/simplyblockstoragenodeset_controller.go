@@ -1099,8 +1099,16 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNodes(
 
 // reconcileRBAC ensures the ServiceAccount, ClusterRole, and ClusterRoleBinding
 // required by the storage-node DaemonSet are present and up to date.
+//
+// The ServiceAccount is named and owned per-StorageNodeSet (rather than shared
+// across the namespace), so its ownerReference is always 1:1 and deleting one
+// StorageNodeSet can never cascade-delete another's ServiceAccount out from
+// under its running pods. The ClusterRoleBinding is per-StorageNodeSet too,
+// for the same reason; it stays unowned since it's cluster-scoped and a
+// namespaced owner reference wouldn't be garbage-collected. The ClusterRole
+// itself stays shared with no owner, since its Rules are static.
 func (r *StorageNodeSetReconciler) reconcileRBAC(ctx context.Context, snCR *simplyblockv1alpha1.StorageNodeSet) error {
-	sa := utils.BuildStorageNodeSetServiceAccount(snCR.Namespace)
+	sa := utils.BuildStorageNodeSetServiceAccount(snCR)
 	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
 	}
@@ -1121,7 +1129,7 @@ func (r *StorageNodeSetReconciler) reconcileRBAC(ctx context.Context, snCR *simp
 		return fmt.Errorf("failed to apply ClusterRole: %w", err)
 	}
 
-	crb := utils.BuildStorageNodeSetClusterRoleBinding(snCR.Namespace)
+	crb := utils.BuildStorageNodeSetClusterRoleBinding(snCR)
 	desiredCRBSubjects := crb.Subjects
 	desiredCRBRoleRef := crb.RoleRef
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {

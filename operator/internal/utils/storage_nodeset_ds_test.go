@@ -18,18 +18,23 @@ func TestStorageNodeSetAPIAddress(t *testing.T) {
 	}
 }
 
-func TestBuildStorageNodeSetClusterRoleBindingNameIncludesNamespace(t *testing.T) {
-	cluster1Binding := BuildStorageNodeSetClusterRoleBinding("cluster1")
-	cluster2Binding := BuildStorageNodeSetClusterRoleBinding("cluster2")
+func TestBuildStorageNodeSetClusterRoleBindingNameIncludesNamespaceAndName(t *testing.T) {
+	sn1 := &simplyblockv1alpha1.StorageNodeSet{ObjectMeta: metav1.ObjectMeta{Name: "sn-a", Namespace: "cluster1"}}
+	sn2 := &simplyblockv1alpha1.StorageNodeSet{ObjectMeta: metav1.ObjectMeta{Name: "sn-b", Namespace: "cluster2"}}
+	cluster1Binding := BuildStorageNodeSetClusterRoleBinding(sn1)
+	cluster2Binding := BuildStorageNodeSetClusterRoleBinding(sn2)
 
 	if cluster1Binding.Name == cluster2Binding.Name {
-		t.Fatalf("expected per-namespace ClusterRoleBinding names, got %q", cluster1Binding.Name)
+		t.Fatalf("expected per-StorageNodeSet ClusterRoleBinding names, got %q", cluster1Binding.Name)
 	}
-	if cluster1Binding.Name != "simplyblock-storage-node-binding-cluster1" {
+	if cluster1Binding.Name != "simplyblock-storage-node-binding-cluster1-sn-a" {
 		t.Fatalf("unexpected cluster1 ClusterRoleBinding name %q", cluster1Binding.Name)
 	}
 	if len(cluster1Binding.Subjects) != 1 || cluster1Binding.Subjects[0].Namespace != "cluster1" {
 		t.Fatalf("expected cluster1 service account subject, got %#v", cluster1Binding.Subjects)
+	}
+	if cluster1Binding.Subjects[0].Name != "simplyblock-storage-node-sa-sn-a" {
+		t.Fatalf("expected per-StorageNodeSet service account subject, got %#v", cluster1Binding.Subjects)
 	}
 }
 

@@ -289,7 +289,7 @@ fi`
 					Annotations: podAnnotations,
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: "simplyblock-storage-node-sa",
+					ServiceAccountName: kube.StorageNodeSetServiceAccountName(sn.Name),
 					HostNetwork:        true,
 					Tolerations:        sn.Spec.Tolerations,
 					NodeSelector: map[string]string{
@@ -403,15 +403,19 @@ func buildStorageNodeSetTLSVolume(tlsProvider string) corev1.Volume {
 	}
 }
 
-func BuildStorageNodeSetServiceAccount(namespace string) *corev1.ServiceAccount {
+// BuildStorageNodeSetServiceAccount returns the ServiceAccount owned by sn and
+// mounted by its storage-node DaemonSet pods. It is named and owned
+// per-StorageNodeSet, not shared, so deleting one StorageNodeSet can never
+// garbage-collect another's ServiceAccount out from under its running pods.
+func BuildStorageNodeSetServiceAccount(sn *simplyblockv1alpha1.StorageNodeSet) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ServiceAccount",
 			APIVersion: "v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "simplyblock-storage-node-sa",
-			Namespace: namespace,
+			Name:      kube.StorageNodeSetServiceAccountName(sn.Name),
+			Namespace: sn.Namespace,
 		},
 	}
 }
@@ -607,20 +611,23 @@ func NodeHostnameLabel(nodeName string) string {
 	return label
 }
 
-func BuildStorageNodeSetClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
+// BuildStorageNodeSetClusterRoleBinding returns the ClusterRoleBinding that
+// grants sn's own ServiceAccount the shared ClusterRole. Named per-
+// StorageNodeSet to match its per-StorageNodeSet ServiceAccount.
+func BuildStorageNodeSetClusterRoleBinding(sn *simplyblockv1alpha1.StorageNodeSet) *rbacv1.ClusterRoleBinding {
 	return &rbacv1.ClusterRoleBinding{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ClusterRoleBinding",
 			APIVersion: "rbac.authorization.k8s.io/v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("simplyblock-storage-node-binding-%s", namespace),
+			Name: kube.StorageNodeSetClusterRoleBindingName(sn.Namespace, sn.Name),
 		},
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
-				Name:      "simplyblock-storage-node-sa",
-				Namespace: namespace,
+				Name:      kube.StorageNodeSetServiceAccountName(sn.Name),
+				Namespace: sn.Namespace,
 			},
 		},
 		RoleRef: rbacv1.RoleRef{

@@ -900,7 +900,7 @@ func TestStorageNodeSetReconcileServiceAccountHasOwnerReference(t *testing.T) {
 
 	sa := &corev1.ServiceAccount{}
 	if err := r.Get(context.Background(), client.ObjectKey{
-		Name:      "simplyblock-storage-node-sa",
+		Name:      "simplyblock-storage-node-sa-" + sn.Name,
 		Namespace: namespace,
 	}, sa); err != nil {
 		t.Fatalf("failed to fetch serviceaccount: %v", err)
@@ -911,7 +911,7 @@ func TestStorageNodeSetReconcileServiceAccountHasOwnerReference(t *testing.T) {
 	}
 }
 
-func TestStorageNodeSetReconcileCreatesNamespaceSpecificClusterRoleBindings(t *testing.T) {
+func TestStorageNodeSetReconcileCreatesPerStorageNodeSetClusterRoleBindings(t *testing.T) {
 	const clusterUUID1 = "cluster-uuid-one"
 	const clusterUUID2 = "cluster-uuid-two"
 
@@ -949,14 +949,14 @@ func TestStorageNodeSetReconcileCreatesNamespaceSpecificClusterRoleBindings(t *t
 		}
 	}
 
-	for _, namespace := range []string{"cluster1", "cluster2"} {
+	for _, sn := range []*simplyblockv1alpha1.StorageNodeSet{sn1, sn2} {
 		binding := &rbacv1.ClusterRoleBinding{}
-		key := client.ObjectKey{Name: "simplyblock-storage-node-binding-" + namespace}
+		key := client.ObjectKey{Name: "simplyblock-storage-node-binding-" + sn.Namespace + "-" + sn.Name}
 		if err := r.Get(context.Background(), key, binding); err != nil {
 			t.Fatalf("failed to fetch ClusterRoleBinding %s: %v", key.Name, err)
 		}
-		if len(binding.Subjects) != 1 || binding.Subjects[0].Namespace != namespace {
-			t.Fatalf("expected binding %s to target namespace %s, got %#v", key.Name, namespace, binding.Subjects)
+		if len(binding.Subjects) != 1 || binding.Subjects[0].Namespace != sn.Namespace {
+			t.Fatalf("expected binding %s to target namespace %s, got %#v", key.Name, sn.Namespace, binding.Subjects)
 		}
 	}
 }

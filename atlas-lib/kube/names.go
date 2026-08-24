@@ -59,6 +59,22 @@ func StorageNodeSetDaemonSetName(storageNodeSetName string) string {
 	return "simplyblock-storage-node-ds-" + storageNodeSetName
 }
 
+// StorageNodeSetServiceAccountName is the name of the ServiceAccount owned by
+// the named StorageNodeSet and mounted by its storage-node DaemonSet pods.
+// Named per-set, not shared, so it can safely carry a controller
+// ownerReference to exactly the StorageNodeSet that owns it.
+func StorageNodeSetServiceAccountName(storageNodeSetName string) string {
+	return "simplyblock-storage-node-sa-" + storageNodeSetName
+}
+
+// StorageNodeSetClusterRoleBindingName is the name of the ClusterRoleBinding
+// that grants the named StorageNodeSet's own ServiceAccount the shared
+// simplyblock-storage-node-role ClusterRole. Includes both namespace and set
+// name since ClusterRoleBindings are cluster-scoped.
+func StorageNodeSetClusterRoleBindingName(namespace, storageNodeSetName string) string {
+	return "simplyblock-storage-node-binding-" + namespace + "-" + storageNodeSetName
+}
+
 // StorageClass parameter keys. These are the operator/CSI-controller inputs
 // that describe how to provision a logical volume; the CSI controller reads
 // them at CreateVolume (see PropertiesFromStorageClass, which parses them into
