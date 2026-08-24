@@ -5581,53 +5581,6 @@
             }
           }
         }
-      },
-      "put": {
-        "summary": "Clusters:Backup-Config:Set",
-        "description": "Replace the cluster's backup configuration.\n\nBackup configuration used to be settable only at cluster-create time, which\nleft no way to correct or complete it -- notably no way to record a region\non a cluster created before it was mandatory.\n\nA full replacement rather than a patch: the fields interact (an endpoint\nimplies addressing style and TLS expectations), so merging half a config\ninto an existing one produces combinations nobody chose.",
-        "operationId": "clusters_backup_config_set_api_v2_clusters__cluster_id__backup_config_put",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BackupConfig-Input"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
       }
     },
     "/api/v2/clusters/{cluster_id}/backups/discover": {
