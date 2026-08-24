@@ -117,6 +117,38 @@ created before the first volume is attached."
 An imperative is how a procedure step or a test concept step is written and stays
 as it is: "Start drain on node A," "Power off the host."
 
+## Reference documentation, not a conversation
+
+Everything here is written to be looked something up in, by someone in the middle
+of a job. That fixes the stance: state what a thing is, what it does, what it
+requires, and how it behaves. No tutorial voice, no narrative build-up, no
+persuasion, no `in this document we will`, and nothing addressed to a reader who
+is being walked somewhere.
+
+The writer stays out of the page too. A document does not report its own history
+("this was initially designed as…"), its own process ("as discussed…"), or its own
+intentions ("this will eventually…"). Git carries the history, the date line
+carries the revision, and an intention that is not yet true belongs in Open
+Questions or a phasing table where it is marked as not-yet-true.
+
+**Prose is the default.** A paragraph carries the relation between facts — cause,
+condition, consequence — that a list drops on the floor. Use a bullet list for
+several *options* of the same kind: valid values, supported distributions, the
+transports to choose from. A list whose items are full sentences depending on each
+other is a paragraph that lost its connectives.
+
+    Instead of:
+    - The operator creates one StorageNode CR per worker.
+    - It provisions them sequentially.
+    - This protects FoundationDB from simultaneous reboots.
+
+    Write:
+    One `StorageNode` CR is created per worker and provisioned sequentially, so
+    that FoundationDB is never hit by simultaneous reboots.
+
+A table beats both when every row answers the same two or three questions. That
+is why the design documents carry so many of them.
+
 ## Names, terms, and spelling
 
 **The brand is lowercase**: `simplyblock`, mid-sentence, always. It is

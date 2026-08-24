@@ -34,6 +34,38 @@ with two spaces.
 
 ---
 
+## Phase 0 — External Prerequisites
+
+<!-- Required whenever the design depends on something this repository does not
+     build: a control-plane (`sbcli`) API, an SPDK or storage-plane capability, a
+     Kubernetes version or feature gate, a node OS or kernel requirement, an
+     ecosystem component version. Collect every one of them here, in one table,
+     rather than leaving them scattered across the sections that happen to need
+     them — this is the list someone reads to answer "can we start yet".
+
+     Kind is one of: Control plane (`sbcli`), Storage plane (SPDK), Kubernetes,
+     Node OS, Ecosystem. Blocks names the phase or the capability that cannot
+     ship without it. Status is what is known — never a guess; `Unknown` is a
+     legitimate value and a better one than an invented date.
+
+     These are dependencies, not test scenarios: the test plan asserts this
+     repository's behavior against them, faked at the boundary (see the
+     `test-scenarios` skill). A prerequisite that is missing at runtime needs a
+     negative scenario for how the operator reports it. -->
+
+| # | Prerequisite | Kind | Blocks | Status |
+|---|---|---|---|---|
+| P0-1 | <the capability, named precisely enough to verify> | Control plane (`sbcli`) | <phase or capability> | Not shipped |
+| P0-2 | <…> | Storage plane (SPDK) | <…> | Unknown |
+| P0-3 | <version floor, e.g. Kubernetes ≥ 1.32 with the group-snapshot CRDs> | Kubernetes | <…> | Available |
+
+<!-- Follow the table with one paragraph on what happens without each blocking
+     item: does the feature degrade, refuse to provision, or is it simply not
+     shippable? A prerequisite whose absence has no stated consequence is not a
+     prerequisite. -->
+
+---
+
 ## Table of Contents
 
 1. [Background](#1-background)

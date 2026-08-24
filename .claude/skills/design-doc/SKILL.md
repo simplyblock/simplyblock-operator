@@ -98,6 +98,21 @@ Follow `references/design-template.md`. Rules that matter more than the rest:
 - **Show real Go and real YAML.** Spec additions appear as annotated Go structs
   with kubebuilder markers and the doc comments they will actually carry; CR
   examples appear as YAML.
+- **The document describes the system, not the discussion that produced it.**
+  The general rule is the `house-style` skill's — reference documentation, prose
+  over lists, the writer out of the page. Three corollaries are specific to a
+  design document, and the corpus violates each of them somewhere:
+  - **It is not a changelog of its own evolution.** `Key change from initial
+    design:` is a sentence about the document; write the mechanism as it stands
+    and let the date line and git carry the rest.
+  - **A rejected alternative earns a place only when a reader would otherwise
+    propose it again.** Then it is a decision with its reason — "per-member
+    parity is not planned; the resiliency story is per-member erasure coding" —
+    never a story about how the decision was reached.
+  - **Status sets the tense.** An `Implemented` document says what the code does.
+    A `Draft` says what the design requires. Neither says what someone intends to
+    do: an intention that is not yet true is an Open Question or a phase marked
+    as not-yet-true.
 - **Every claim about behavior must be traceable** to code, an issue decision,
   or an explicit open question. When something is undecided, say so in
   `## Open Questions` — as a `| # | Question | Owner |` table when other teams
@@ -153,22 +168,64 @@ most:
   matrix reappears in the gap table with its reason. An honest gap list is the
   point of the document; do not quietly omit hard scenarios.
 
-### 5. Cross-link and verify
+### 5. Run the house style gate — always, on the files just written
+
+**This is not optional and it is not the last thing.** Every document this skill
+creates or edits goes through the gate before it is handed back, named
+explicitly:
+
+```bash
+.claude/skills/house-style/scripts/quality-gate.sh --paths \
+  operator/docs/designs/design-<slug>.md \
+  operator/docs/tests/test-plan-<slug>.md
+```
+
+Name the paths rather than relying on `--changed`. The working tree usually
+carries unrelated dirty files, and a run that reports findings in documents this
+change never touched is a run whose output gets skimmed. `--changed` is the right
+call only when the change spans more files than are convenient to list.
+
+Then:
+
+- **Clear every error.** All seven gates pass, or the work is not done.
+- **Read the diff of every `--fix`.** The fixers cannot tell a product name from
+  an identifier written without backticks, and the punctuation fixer will move a
+  comma inside a phrase that was cited rather than quoted — `"e.g.,"` becomes
+  `"e.g.,,"`. Both happen; both are the writer's to catch.
+- **Decide each warning.** Em dashes are house style here and the gate warns on
+  every one, so a design document produces hundreds. Read them for the other
+  findings mixed in.
+- **Do not retrofit** documents this change did not otherwise touch. A pre-existing
+  finding in a neighboring doc is not this change's work.
+
+### 6. Cross-link and verify
 
 - Design doc metadata block links to the test plan; test plan header links back
   to the design doc. Use relative paths (`../tests/…`, `../designs/…`) and check
   they resolve from the file's own directory.
 - Verify TOC anchors match the headings (GitHub slugifies to lowercase, spaces to
   hyphens, punctuation dropped — an em dash becomes an extra hyphen).
+- **Check that a `§n` reference means what the reader will assume.** In a test
+  plan, a bare `§11` reads as the plan's own section 11; write `design §11` for
+  the design's. The two documents have overlapping numbering.
+- **Recount anything the document counts.** A scenario total, a per-class count,
+  a "17 of 17" claim — derive it from the file rather than from the edit that
+  produced it, because a count written by hand goes stale on the next row.
 - Keep tables and ASCII diagrams inside a reasonable width and make sure box
   borders line up; misaligned diagrams are the most common defect in these docs.
-- **Run the house style gate** over the files the change touched:
-  `.claude/skills/house-style/scripts/quality-gate.sh --changed`. Clear the
-  errors, read the diff of every `--fix`, and decide each warning. Do not
-  retrofit documents the change does not otherwise touch.
 - MegaLinter also runs a spell check over the repo. If the doc introduces new
   technical terms, add them to `.cspell.json`'s `words` list rather than
   rewording the doc.
+
+### Before handing the work back
+
+1. All seven house style gates pass on every file this change created or edited.
+2. Both documents exist and link to each other.
+3. Every TOC anchor and relative link resolves.
+4. Every `§` reference is unambiguous about which document it means.
+5. Every count in the text matches the file.
+6. Every test function named in the plan's `Test` column exists (grepped, not
+   recalled).
 
 ## Updating an existing document
 

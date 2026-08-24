@@ -71,3 +71,5 @@ Load the one that matches the task; each carries the detail this file leaves out
 | `design-doc` | A design document under `operator/docs/designs` and its test plan |
 | `test-scenarios` | Enumerating test scenarios: paired positive and negative, across topologies |
 | `regression-test` | Fixing a bug: the failing test comes first, red for the bug's reason |
+| `reconciler-patterns` | Writing or reviewing a controller: phases, never blocking, generations, locks |
+| `api-design` | Adding or changing a CRD: the Entity and Ops split, markers, what is breaking |

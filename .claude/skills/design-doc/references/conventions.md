@@ -72,6 +72,25 @@ Immediately under the H1, one blank line, then two-space line breaks:
   section — append, or use a decimal sub-section.
 - Cross-reference sections in prose as `§5.2`, `(§9)`, `see §4`.
 
+## External prerequisites
+
+A design that depends on something this repository does not build — a control
+plane (`sbcli`) API, an SPDK or storage-plane capability, a Kubernetes version, a
+kernel or distribution requirement, an ecosystem component version — collects
+**all** of them in one `## Phase 0 — External Prerequisites` table, unnumbered,
+directly under the metadata block or the phasing overview.
+
+Scattering them across the sections that need them is the failure mode: the
+control-plane flag ends up in the API section, the kernel floor in a
+compatibility subsection, the Kubernetes version in a feature-gate aside, and
+nobody can answer whether the work can start. The per-section detail stays where
+it is; the table is the index, and each row points at the section that specifies
+it.
+
+The same table is what the test plan refers to when it declines to test a
+dependency: those suites belong to the dependency's own repository, and what this
+repository tests is its behavior at the boundary.
+
 ## Phasing
 
 When the work lands in stages, put a `## Phasing Overview` table directly under
@@ -257,6 +276,10 @@ usefully — a leading comment in the Go test itself (`// U-27: …`).
 - Third person, present tense, declarative. "The reconciler requeues" — not
   "we will requeue" or "the reconciler should requeue" (unless it genuinely is a
   requirement on someone else's component).
+- The document is reference documentation about a system, not a record of the
+  conversation that designed it. The `house-style` skill owns that rule; what it
+  means here is no self-changelog, no deliberation narrative, and a tense that
+  follows the `Status:` line.
 - Em dashes (`—`) for asides, not double hyphens.
 - Bold lead-ins carry the weight of a claim: `**Key change:**`,
   `**Current behaviour:**`, `**Recommended fix:**`, `**What to verify:**`.
