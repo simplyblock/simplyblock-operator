@@ -59,6 +59,9 @@ const (
 	// spam) while the backend transitions from cutover_pending to cutover_done.
 	annotCutoverProceedSignaled      = "replication.simplyblock.io/cutover-proceed-signaled"
 	annotCutoverProceedSignaledValue = "true"
+
+	backendStateCutoverPending = "cutover_pending"
+	backendStateCutoverDone    = "cutover_done"
 )
 
 // replVolumeReplicationStatus is the response from
@@ -250,13 +253,13 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 	switch status.State {
 	case utils.ReplicationBackendStateReplicating:
 		// Steady state — update timestamp below.
-	case "cutover_pending":
+	case backendStateCutoverPending:
 		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending)
 		slot.Status.Message = "Cutover pending — awaiting replication_commit"
 		changed = true
 		r.Recorder.Eventf(slot, nil, corev1.EventTypeNormal, "CutoverPending", "CutoverPending",
 			"Volume %s cutover is pending", volumeID)
-	case "cutover_done":
+	case backendStateCutoverDone:
 		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone)
 		slot.Status.Message = "Cutover done"
 		changed = true
@@ -286,7 +289,7 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 		// safety timer (≈30 s) is shorter than replSlotRequeueReplicating (15 s is
 		// better but still not guaranteed). Jumping directly into reconcileCutoverPending
 		// in the same iteration avoids one full poll-cycle of delay.
-		if status.State == "cutover_pending" {
+		if status.State == backendStateCutoverPending {
 			return r.reconcileCutoverPending(ctx, slot, apiClient, clusterID, poolID, volumeID)
 		}
 	}
@@ -477,12 +480,12 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		log.Error(err, "GET replication failed in cutover_pending", "slot", slot.Name)
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
 	}
-	if status == nil || status.State != "cutover_pending" {
+	if status == nil || status.State != backendStateCutoverPending {
 		// Backend advanced past cutover_pending before the preconnect Job could be
 		// created (safety timer fired, or we missed the window entirely). Attempt a
 		// late preconnect so the CSI node gets target NVMe paths even after the ANA
 		// flip — this limits IO downtime to ctrl_loss_tmo instead of indefinite.
-		if status != nil && status.State == "cutover_done" {
+		if status != nil && status.State == backendStateCutoverDone {
 			r.tryLatePreconnect(ctx, slot, apiClient, clusterID, poolID, volumeID)
 		}
 		return r.applyAdvancedBackendState(ctx, slot, status)
@@ -895,7 +898,7 @@ func (r *ReplicationSlotReconciler) applyAdvancedBackendState(
 
 	patch := client.MergeFrom(slot.DeepCopy())
 	switch status.State {
-	case "cutover_done":
+	case backendStateCutoverDone:
 		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone)
 		slot.Status.Message = "Cutover done"
 		slot.Status.TargetNQN = status.TargetNQN
