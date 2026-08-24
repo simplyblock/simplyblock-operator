@@ -51,6 +51,11 @@ const (
 	replSlotRequeueError = 30 * time.Second
 
 	replMsgSlotReplicating = "Replicating"
+
+	// annotCutoverProceedSignaled is set on a slot once the operator has called
+	// POST .../replication/cutover-proceed. Prevents repeated calls (and log
+	// spam) while the backend transitions from cutover_pending to cutover_done.
+	annotCutoverProceedSignaled = "replication.simplyblock.io/cutover-proceed-signaled"
 )
 
 // replVolumeReplicationStatus is the response from
@@ -486,6 +491,10 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 	// Check if the preconnect Job already exists.
 	var existingJob batchv1.Job
 	if err := r.Get(ctx, types.NamespacedName{Namespace: slot.Namespace, Name: jobName}, &existingJob); err == nil {
+		// Already signalled on a previous reconcile — just wait for the backend to advance.
+		if slot.Annotations[annotCutoverProceedSignaled] == "true" {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
 		// Job exists — check its terminal state.
 		for _, c := range existingJob.Status.Conditions {
 			if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
@@ -494,14 +503,14 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 					log.Error(err, "POST cutover-proceed failed", "slot", slot.Name)
 					return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
 				}
-				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				return r.markCutoverProceedSignaled(ctx, slot)
 			}
 			if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
 				log.Info("Preconnect job failed; signalling backend to proceed anyway", "job", jobName)
 				if err := r.callCutoverProceed(ctx, apiClient, clusterID, poolID, volumeID); err != nil {
 					log.Error(err, "POST cutover-proceed failed after job failure", "slot", slot.Name)
 				}
-				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				return r.markCutoverProceedSignaled(ctx, slot)
 			}
 		}
 		// Still running.
@@ -517,11 +526,14 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
 	}
 	if node == "" {
-		// No active consumer; nothing to pre-connect — signal immediately.
-		log.Info("No active consumer for preconnect; signalling backend to proceed", "slot", slot.Name)
-		if err := r.callCutoverProceed(ctx, apiClient, clusterID, poolID, volumeID); err != nil {
-			log.Error(err, "POST cutover-proceed failed (no consumer)", "slot", slot.Name)
-			return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+		if slot.Annotations[annotCutoverProceedSignaled] != "true" {
+			// No active consumer; nothing to pre-connect — signal immediately.
+			log.Info("No active consumer for preconnect; signalling backend to proceed", "slot", slot.Name)
+			if err := r.callCutoverProceed(ctx, apiClient, clusterID, poolID, volumeID); err != nil {
+				log.Error(err, "POST cutover-proceed failed (no consumer)", "slot", slot.Name)
+				return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+			}
+			return r.markCutoverProceedSignaled(ctx, slot)
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
@@ -557,6 +569,24 @@ func replSlotPreconnectJobName(volumeID string) string {
 		s = s[:20]
 	}
 	return "replslot-preconnect-" + s
+}
+
+// markCutoverProceedSignaled sets annotCutoverProceedSignaled on the slot so
+// subsequent reconciles skip the callCutoverProceed call while waiting for the
+// backend to transition from cutover_pending to cutover_done.
+func (r *ReplicationSlotReconciler) markCutoverProceedSignaled(
+	ctx context.Context,
+	slot *simplyblockv1alpha1.ReplicationSlot,
+) (ctrl.Result, error) {
+	patch := client.MergeFrom(slot.DeepCopy())
+	if slot.Annotations == nil {
+		slot.Annotations = map[string]string{}
+	}
+	slot.Annotations[annotCutoverProceedSignaled] = "true"
+	if err := r.Patch(ctx, slot, patch); err != nil {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
 // callCutoverProceed signals the backend that target NVMe paths are connected
@@ -747,6 +777,12 @@ func (r *ReplicationSlotReconciler) buildPreconnectJob(
 					HostNetwork:   true,
 					Volumes: []corev1.Volume{
 						{
+							Name: "host-dev",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{Path: "/dev"},
+							},
+						},
+						{
 							Name: "host-sys",
 							VolumeSource: corev1.VolumeSource{
 								HostPath: &corev1.HostPathVolumeSource{Path: "/sys"},
@@ -765,6 +801,8 @@ func (r *ReplicationSlotReconciler) buildPreconnectJob(
 							},
 							SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
 							VolumeMounts: []corev1.VolumeMount{
+								// /dev/nvme-fabrics is the kernel interface for nvme connect.
+								{Name: "host-dev", MountPath: "/dev"},
 								{Name: "host-sys", MountPath: "/host/sys", ReadOnly: readOnly},
 							},
 						},
