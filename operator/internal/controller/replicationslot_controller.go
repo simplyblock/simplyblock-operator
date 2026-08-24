@@ -657,7 +657,7 @@ func (r *ReplicationSlotReconciler) fetchVolumeConnections(
 			Transport:      c.Transport,
 			NrIoQueues:     c.NrIoQueues,
 			ReconnectDelay: c.ReconnectDelay,
-			CtrlLossTmo:    c.CtrlLossTmo,
+			CtrlLossTmo:    vmigration.CtrlLossTmoSec,
 			FastIOFailTmo:  c.FastIOFailTmo,
 			KeepAliveTmo:   c.KeepAliveTmo,
 		}
