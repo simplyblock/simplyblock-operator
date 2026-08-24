@@ -46,7 +46,9 @@ import (
 const (
 	// replSlotRequeueReplicating is how often the reconciler syncs lastReplicatedAt
 	// from the backend while a slot is in the steady-state replicating state.
-	replSlotRequeueReplicating = 60 * time.Second
+	// 15s gives a reasonable chance of catching the cutover_pending state before
+	// the backend's REPL_CUTOVER_PROCEED_TIMEOUT_SEC safety timeout fires.
+	replSlotRequeueReplicating = 15 * time.Second
 	// replSlotRequeueError is the back-off interval after a backend call fails.
 	replSlotRequeueError = 30 * time.Second
 
@@ -279,6 +281,14 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 		if err := r.Status().Patch(ctx, slot, patch); err != nil {
 			return ctrl.Result{Requeue: true}, nil
 		}
+		// When the backend enters cutover_pending, the operator must create the
+		// preconnect Job immediately — the backend's REPL_CUTOVER_PROCEED_TIMEOUT_SEC
+		// safety timer (≈30 s) is shorter than replSlotRequeueReplicating (15 s is
+		// better but still not guaranteed). Jumping directly into reconcileCutoverPending
+		// in the same iteration avoids one full poll-cycle of delay.
+		if status.State == "cutover_pending" {
+			return r.reconcileCutoverPending(ctx, slot, apiClient, clusterID, poolID, volumeID)
+		}
 	}
 
 	return ctrl.Result{RequeueAfter: replSlotRequeueReplicating}, nil
@@ -468,9 +478,13 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
 	}
 	if status == nil || status.State != "cutover_pending" {
-		// Backend advanced past cutover_pending — transition the K8s state to match.
-		// We cannot call reconcileSyncStatus here because it only handles replicating;
-		// it would leave the slot stuck in cutover_pending forever.
+		// Backend advanced past cutover_pending before the preconnect Job could be
+		// created (safety timer fired, or we missed the window entirely). Attempt a
+		// late preconnect so the CSI node gets target NVMe paths even after the ANA
+		// flip — this limits IO downtime to ctrl_loss_tmo instead of indefinite.
+		if status != nil && status.State == "cutover_done" {
+			r.tryLatePreconnect(ctx, slot, apiClient, clusterID, poolID, volumeID)
+		}
 		return r.applyAdvancedBackendState(ctx, slot, status)
 	}
 
@@ -561,6 +575,55 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		"Connecting target NVMe paths on node %s before cutover of volume %s", node, volumeID)
 
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+}
+
+// tryLatePreconnect creates the preconnect Job after the backend has already
+// flipped the ANA to cutover_done. It does NOT call cutover-proceed (the ANA
+// flip already happened). Connecting target paths now limits IO downtime to
+// at most ctrl_loss_tmo seconds instead of indefinitely. Errors are logged
+// but not returned — the caller still advances the slot state.
+func (r *ReplicationSlotReconciler) tryLatePreconnect(
+	ctx context.Context,
+	slot *simplyblockv1alpha1.ReplicationSlot,
+	apiClient *webapi.Client,
+	clusterID, poolID, volumeID string,
+) {
+	log := logf.FromContext(ctx)
+	jobName := replSlotPreconnectJobName(volumeID)
+
+	// Skip if the Job was already created (e.g. by a concurrent reconcile).
+	var existing batchv1.Job
+	if err := r.Get(ctx, types.NamespacedName{Namespace: slot.Namespace, Name: jobName}, &existing); err == nil {
+		return
+	}
+
+	conns, err := r.fetchVolumeConnections(ctx, apiClient, clusterID, poolID, volumeID)
+	if err != nil || len(conns) == 0 {
+		log.Error(err, "Late preconnect: cannot fetch connections", "slot", slot.Name)
+		return
+	}
+	node, err := r.findPreconnectConsumerNode(ctx, volumeID)
+	if err != nil || node == "" {
+		return // no active consumer; nothing to connect
+	}
+	image, err := r.resolvePreconnectImage(ctx, slot.Namespace, clusterID)
+	if err != nil {
+		log.Error(err, "Late preconnect: cannot resolve rebalancer image", "slot", slot.Name)
+		return
+	}
+	connsJSON, err := json.Marshal(conns)
+	if err != nil {
+		return
+	}
+	job := r.buildPreconnectJob(slot, jobName, node, image, string(connsJSON))
+	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+		log.Error(err, "Late preconnect: job creation failed", "slot", slot.Name)
+		return
+	}
+	log.Info("Late preconnect job created after ANA flip (cutover_done)",
+		"job", jobName, "node", node, "connections", len(conns))
+	r.Recorder.Eventf(slot, nil, corev1.EventTypeWarning, "LatePreconnect", "LatePreconnect",
+		"Connecting target NVMe paths after ANA flip on node %s (preconnect window was missed)", node)
 }
 
 // replSlotPreconnectJobName returns a stable, unique Job name for a volume's preconnect Job.
