@@ -1444,9 +1444,6 @@ type ClustersUpdateApiV2ClustersClusterIdPutJSONRequestBody = UpdatableClusterPa
 // ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody defines body for ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost for application/json ContentType.
 type ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody = UnderscoreReplicationParams
 
-// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody defines body for ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut for application/json ContentType.
-type ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody = BackupConfigInput
-
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostJSONRequestBody defines body for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost for application/json ContentType.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostJSONRequestBody = UnderscoreBackupSnapshotParams
 
@@ -1861,40 +1858,6 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet` operationId).
 	ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBody Clusters:Backup-Config:Set
-	//
-	// Replace the cluster's backup configuration.
-	//
-	// Backup configuration used to be settable only at cluster-create time, which
-	// left no way to correct or complete it -- notably no way to record a region
-	// on a cluster created before it was mandatory.
-	//
-	// A full replacement rather than a patch: the fields interact (an endpoint
-	// implies addressing style and TLS expectations), so merging half a config
-	// into an existing one produces combinations nobody chose.
-	//
-	// Takes any type of body and a specified content type.
-	//
-	// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
-	ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut Clusters:Backup-Config:Set
-	//
-	// Replace the cluster's backup configuration.
-	//
-	// Backup configuration used to be settable only at cluster-create time, which
-	// left no way to correct or complete it -- notably no way to record a region
-	// on a cluster created before it was mandatory.
-	//
-	// A full replacement rather than a patch: the fields interact (an endpoint
-	// implies addressing style and TLS expectations), so merging half a config
-	// into an existing one produces combinations nobody chose.
-	//
-	// Takes a body of the `application/json` content type.
-	//
-	// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
-	ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersBackupsListApiV2ClustersClusterIdBackupsGet Clusters:Backups:List
 	//
@@ -2766,60 +2729,6 @@ func (c *Client) ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost(
 // Corresponds with GET /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet` operationId).
 func (c *Client) ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetRequest(c.Server, clusterId)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBody Clusters:Backup-Config:Set
-//
-// Replace the cluster's backup configuration.
-//
-// Backup configuration used to be settable only at cluster-create time, which
-// left no way to correct or complete it -- notably no way to record a region
-// on a cluster created before it was mandatory.
-//
-// A full replacement rather than a patch: the fields interact (an endpoint
-// implies addressing style and TLS expectations), so merging half a config
-// into an existing one produces combinations nobody chose.
-//
-// Takes any type of body and a specified content type.
-//
-// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
-func (c *Client) ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequestWithBody(c.Server, clusterId, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut Clusters:Backup-Config:Set
-//
-// Replace the cluster's backup configuration.
-//
-// Backup configuration used to be settable only at cluster-create time, which
-// left no way to correct or complete it -- notably no way to record a region
-// on a cluster created before it was mandatory.
-//
-// A full replacement rather than a patch: the fields interact (an endpoint
-// implies addressing style and TLS expectations), so merging half a config
-// into an existing one produces combinations nobody chose.
-//
-// Takes a body of the `application/json` content type.
-//
-// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
-func (c *Client) ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequest(c.Server, clusterId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -5015,53 +4924,6 @@ func NewClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetRequest(serv
 	if err != nil {
 		return nil, err
 	}
-
-	return req, nil
-}
-
-// NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequest calls the generic ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut builder with application/json body
-func NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequest(server string, clusterId openapi_types.UUID, body ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequestWithBody(server, clusterId, "application/json", bodyReader)
-}
-
-// NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequestWithBody constructs an http.Request for the ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut method, with any body, and a specified content type
-func NewClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/api/v2/clusters/%s/backup-config", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest(http.MethodPut, queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -9966,40 +9828,6 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet` operationId).
 	ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse, error)
 
-	// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBodyWithResponse Clusters:Backup-Config:Set
-	//
-	// Replace the cluster's backup configuration.
-	//
-	// Backup configuration used to be settable only at cluster-create time, which
-	// left no way to correct or complete it -- notably no way to record a region
-	// on a cluster created before it was mandatory.
-	//
-	// A full replacement rather than a patch: the fields interact (an endpoint
-	// implies addressing style and TLS expectations), so merging half a config
-	// into an existing one produces combinations nobody chose.
-	//
-	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
-	ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse, error)
-
-	// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithResponse Clusters:Backup-Config:Set
-	//
-	// Replace the cluster's backup configuration.
-	//
-	// Backup configuration used to be settable only at cluster-create time, which
-	// left no way to correct or complete it -- notably no way to record a region
-	// on a cluster created before it was mandatory.
-	//
-	// A full replacement rather than a patch: the fields interact (an endpoint
-	// implies addressing style and TLS expectations), so merging half a config
-	// into an existing one produces combinations nobody chose.
-	//
-	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
-	//
-	// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
-	ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse, error)
-
 	// ClustersBackupsListApiV2ClustersClusterIdBackupsGetWithResponse Clusters:Backups:List
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -11212,47 +11040,6 @@ func (r ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse) St
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse) ContentType() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Header.Get("Content-Type")
-	}
-	return ""
-}
-
-type ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	// JSON422 the response for an HTTP 422 `application/json` response
-	JSON422 *HTTPValidationError
-}
-
-// GetJSON422 returns the response for an HTTP 422 `application/json` response
-func (r ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse) GetJSON422() *HTTPValidationError {
-	return r.JSON422
-}
-
-// GetBody returns the raw response body bytes
-func (r ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse) GetBody() []byte {
-	return r.Body
-}
-
-// Status returns HTTPResponse.Status
-func (r ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -15395,52 +15182,6 @@ func (c *ClientWithResponses) ClustersBackupConfigGetApiV2ClustersClusterIdBacku
 	return ParseClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse(rsp)
 }
 
-// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBodyWithResponse Clusters:Backup-Config:Set
-//
-// Replace the cluster's backup configuration.
-//
-// Backup configuration used to be settable only at cluster-create time, which
-// left no way to correct or complete it -- notably no way to record a region
-// on a cluster created before it was mandatory.
-//
-// A full replacement rather than a patch: the fields interact (an endpoint
-// implies addressing style and TLS expectations), so merging half a config
-// into an existing one produces combinations nobody chose.
-//
-// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
-//
-// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
-func (c *ClientWithResponses) ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse, error) {
-	rsp, err := c.ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithBody(ctx, clusterId, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse(rsp)
-}
-
-// ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithResponse Clusters:Backup-Config:Set
-//
-// Replace the cluster's backup configuration.
-//
-// Backup configuration used to be settable only at cluster-create time, which
-// left no way to correct or complete it -- notably no way to record a region
-// on a cluster created before it was mandatory.
-//
-// A full replacement rather than a patch: the fields interact (an endpoint
-// implies addressing style and TLS expectations), so merging half a config
-// into an existing one produces combinations nobody chose.
-//
-// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
-//
-// Corresponds with PUT /api/v2/clusters/{cluster_id}/backup-config (the `ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut` operationId).
-func (c *ClientWithResponses) ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse, error) {
-	rsp, err := c.ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPut(ctx, clusterId, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse(rsp)
-}
-
 // ClustersBackupsListApiV2ClustersClusterIdBackupsGetWithResponse Clusters:Backups:List
 //
 // Returns a wrapper object for the known response body format(s).
@@ -17167,35 +16908,6 @@ func ParseClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetResponse(r
 			return nil, err
 		}
 		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest HTTPValidationError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON422 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse parses an HTTP response from a ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutWithResponse call
-func ParseClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse(rsp *http.Response) (*ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &ClustersBackupConfigSetApiV2ClustersClusterIdBackupConfigPutResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case rsp.StatusCode == 204:
-		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError
