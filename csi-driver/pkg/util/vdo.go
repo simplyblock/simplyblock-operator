@@ -18,13 +18,11 @@ package util
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/lvm"
 	"k8s.io/klog"
 )
 
@@ -38,6 +36,12 @@ const (
 	poolLVName = "vdopool"
 	lvsCmd     = "lvs"
 )
+
+// lvmInspector runs every LVM/dm-vdo command in this file, scoped to a device and
+// content-identity-aware where it matters -- see github.com/simplyblock/atlas/lvm's package
+// doc comment for why: a simplyblock NVMe-oF HA volume's two redundant local device nodes
+// present byte-identical content, which an unscoped, name-based LVM lookup cannot tell apart.
+var lvmInspector = lvm.NewInspector()
 
 // vgName returns the VG name this volume's VDO stack lives in.
 func vgName(lvolID string) string {
@@ -57,98 +61,17 @@ func yn(b bool) string {
 	return "n"
 }
 
-// runLVMCommand runs an LVM/dm-vdo management command with a bounded timeout, logging and
-// error-wrapping consistent with initiator.go's execWithTimeout, but also returning output
-// since callers here need to parse vgs/lvs/pvs/dmsetup output, not just a success/failure.
-func runLVMCommand(ctx context.Context, timeoutSeconds int, args ...string) (string, error) {
-	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
-	defer cancel()
-
-	klog.Infof("running command: %v", args)
-	//nolint:gosec // runLVMCommand assumes valid cmd arguments
-	cmd := exec.CommandContext(execCtx, args[0], args[1:]...)
-	// This container has no udev daemon, so device-mapper's usual wait-for-udev-to-create-
-	// the-device-node handshake never completes -- confirmed live ("device not cleared,
-	// Aborting. Failed to wipe start of new LV" from lvcreate). DM_DISABLE_UDEV tells
-	// device-mapper to create/manage nodes itself instead of waiting on udev, the standard
-	// fix for running LVM tools inside a container.
-	cmd.Env = append(os.Environ(), "DM_DISABLE_UDEV=1")
-	output, err := cmd.CombinedOutput()
-
-	if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
-		return string(output), fmt.Errorf("timed out running %v", args)
-	}
-	if err != nil {
-		return string(output), fmt.Errorf("%v: %w: %s", args, err, strings.TrimSpace(string(output)))
-	}
-	return string(output), nil
+// withVDOTimeout and withVDOGrowTimeout bound one LVM/dm-vdo invocation. A field on
+// lvm.Inspector's Runner would have to pick one timeout for every call an Inspector ever
+// makes; per-call context.WithTimeout keeps the same per-command granularity the original
+// direct-exec implementation had (a quick identity probe and a multi-hundred-second
+// lvextend need very different budgets).
+func withVDOTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, vdoCmdTimeoutSeconds*time.Second)
 }
 
-// devicesArgs scopes an LVM command to exactly one device via LVM's --devices option,
-// bypassing its normal system-wide device scan entirely. Required because a volume's two
-// redundant NVMe-oF HA paths each surface as their own local device node while presenting
-// byte-identical backend data -- confirmed live via "PV /dev/nvme2n1 ... is duplicate for
-// PVID ... on /dev/nvme3n1" -- so an unscoped pvscan/pvs/vgs/lvcreate can resolve against
-// whichever duplicate LVM's cache happens to pick, non-deterministically, including one that
-// was never actually written to by this volume's own CreateOrAttachVDO call.
-func devicesArgs(devicePath string) []string {
-	return []string{"--devices", devicePath}
-}
-
-// vgExists reports whether devicePath's own on-disk PV signature already belongs to vg.
-// Content-based (via pvVGName), not a name-based `vgs <name>` lookup -- confirmed live that
-// `vgs --devices devicePath vgname` can report success for a VG name that was never actually
-// created on that device (this host has an LVM devices file restricting default visibility
-// to unrelated devices; querying by name alone, even with --devices, does not reliably tie
-// the answer back to devicePath specifically). Content-based matching is what
-// ResolveClonedVDO already relies on for the same class of identity question.
-func vgExists(ctx context.Context, devicePath, vg string) bool {
-	return pvVGName(ctx, devicePath) == vg
-}
-
-// vgHasLV reports whether vg already contains a logical volume named lvName. Distinguishes a
-// fully-created VDO stack from an orphaned VG left behind by an interrupted create (pvcreate
-// and vgcreate completed, lvcreate did not) -- confirmed live: such a VG reports #LV 0 and
-// vgchange -ay against it "succeeds" while producing no mountable device at all.
-func vgHasLV(ctx context.Context, devicePath, vg, lvName string) bool {
-	args := append([]string{lvsCmd}, devicesArgs(devicePath)...)
-	args = append(args, "--noheadings", "-o", "lv_name", vg)
-	out, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, args...)
-	if err != nil {
-		return false
-	}
-	for name := range strings.FieldsSeq(out) {
-		if name == lvName {
-			return true
-		}
-	}
-	return false
-}
-
-// pvVGName returns the VG name a device's on-disk PV signature currently belongs to, or ""
-// if the device carries no LVM signature at all (a genuinely blank device, or the probe
-// itself failing -- both are treated the same way by callers: nothing to resolve). Scoped to
-// devicePath -- see devicesArgs.
-func pvVGName(ctx context.Context, devicePath string) string {
-	args := append([]string{"pvs"}, devicesArgs(devicePath)...)
-	args = append(args, "--noheadings", "-o", "vg_name", devicePath)
-	out, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, args...)
-	if err != nil {
-		return ""
-	}
-	// runLVMCommand merges stdout+stderr, and pvs can print WARNING: lines ahead of the
-	// actual field value (e.g. duplicate-PV warnings on a byte-level clone, confirmed
-	// live) -- take the first non-empty, non-warning line rather than trusting the whole
-	// trimmed blob, which would otherwise pollute both the identity comparison below and
-	// any log message built from it.
-	for line := range strings.SplitSeq(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "WARNING:") {
-			continue
-		}
-		return line
-	}
-	return ""
+func withVDOGrowTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, vdoGrowTimeoutSeconds*time.Second)
 }
 
 // CreateOrAttachVDO idempotently ensures a VDO-backed logical volume exists on top of
@@ -160,23 +83,38 @@ func CreateOrAttachVDO(
 	ctx context.Context, devicePath, lvolID string, compression, deduplication bool,
 ) (string, error) {
 	vg := vgName(lvolID)
+	devices := []string{devicePath}
 
 	// LVM discovers PVs by content-scanning visible devices, not by remembering a path --
 	// refresh its view before checking, since devicePath may have just reappeared under a
-	// new device node (reconnect) or be genuinely new. Scoped to devicePath -- see
-	// devicesArgs -- so this never registers the volume's other (redundant HA) local device
-	// node into LVM's cache alongside it.
-	pvscanArgs := append([]string{"pvscan"}, devicesArgs(devicePath)...)
-	pvscanArgs = append(pvscanArgs, "--cache", devicePath)
-	if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, pvscanArgs...); err != nil {
+	// new device node (reconnect) or be genuinely new. Scoped to devicePath so this never
+	// registers the volume's other (redundant HA) local device node into LVM's cache
+	// alongside it.
+	rescanCtx, cancel := withVDOTimeout(ctx)
+	if err := lvmInspector.Rescan(rescanCtx, devices); err != nil {
 		klog.Warningf("CreateOrAttachVDO: pvscan --cache %s: %v", devicePath, err)
 	}
+	cancel()
 
-	if vgExists(ctx, devicePath, vg) {
-		if vgHasLV(ctx, devicePath, vg, lvolID) {
-			vgchangeArgs := append([]string{"vgchange"}, devicesArgs(devicePath)...)
-			vgchangeArgs = append(vgchangeArgs, "-ay", vg)
-			if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, vgchangeArgs...); err != nil {
+	existsCtx, cancel := withVDOTimeout(ctx)
+	currentVG, err := lvmInspector.VolumeGroup(existsCtx, devicePath)
+	cancel()
+	if err != nil {
+		return "", fmt.Errorf("probe VG identity of %s: %w", devicePath, err)
+	}
+
+	if currentVG == vg {
+		hasLVCtx, cancel := withVDOTimeout(ctx)
+		hasLV, err := lvmInspector.HasLogicalVolume(hasLVCtx, devices, vg, lvolID)
+		cancel()
+		if err != nil {
+			return "", fmt.Errorf("check %s for logical volume %s: %w", vg, lvolID, err)
+		}
+		if hasLV {
+			vgchangeCtx, cancel := withVDOTimeout(ctx)
+			_, err := lvmInspector.Run(vgchangeCtx, devices, "vgchange", "-ay", vg)
+			cancel()
+			if err != nil {
 				return "", fmt.Errorf("reactivate VG %s: %w", vg, err)
 			}
 			return vdoDevicePath(lvolID), nil
@@ -190,25 +128,29 @@ func CreateOrAttachVDO(
 			"CreateOrAttachVDO: VG %s exists but has no %s logical volume -- removing orphaned VG and recreating", //nolint:lll
 			vg, lvolID,
 		)
-		vgremoveArgs := append([]string{"vgremove", "-f"}, devicesArgs(devicePath)...)
-		vgremoveArgs = append(vgremoveArgs, vg)
-		if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, vgremoveArgs...); err != nil {
+		vgremoveCtx, cancel := withVDOTimeout(ctx)
+		_, err = lvmInspector.Run(vgremoveCtx, devices, "vgremove", "-f", vg)
+		cancel()
+		if err != nil {
 			return "", fmt.Errorf("remove orphaned empty VG %s: %w", vg, err)
 		}
 	}
 
-	pvcreateArgs := append([]string{"pvcreate"}, devicesArgs(devicePath)...)
-	pvcreateArgs = append(pvcreateArgs, devicePath)
-	if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, pvcreateArgs...); err != nil {
+	pvcreateCtx, cancel := withVDOTimeout(ctx)
+	_, err = lvmInspector.Run(pvcreateCtx, devices, "pvcreate", devicePath)
+	cancel()
+	if err != nil {
 		return "", fmt.Errorf("pvcreate %s: %w", devicePath, err)
 	}
-	vgcreateArgs := append([]string{"vgcreate"}, devicesArgs(devicePath)...)
-	vgcreateArgs = append(vgcreateArgs, vg, devicePath)
-	if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, vgcreateArgs...); err != nil {
+	vgcreateCtx, cancel := withVDOTimeout(ctx)
+	_, err = lvmInspector.Run(vgcreateCtx, devices, "vgcreate", vg, devicePath)
+	cancel()
+	if err != nil {
 		return "", fmt.Errorf("vgcreate %s on %s: %w", vg, devicePath, err)
 	}
-	lvcreateArgs := append([]string{"lvcreate"}, devicesArgs(devicePath)...)
-	lvcreateArgs = append(lvcreateArgs,
+	lvcreateCtx, cancel := withVDOTimeout(ctx)
+	_, err = lvmInspector.Run(lvcreateCtx, devices,
+		"lvcreate",
 		"--type", "vdo",
 		"--config", "activation{checks=0}",
 		"-n", lvolID,
@@ -218,7 +160,8 @@ func CreateOrAttachVDO(
 		vg+"/"+poolLVName,
 		"--yes",
 	)
-	if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, lvcreateArgs...); err != nil {
+	cancel()
+	if err != nil {
 		return "", fmt.Errorf("lvcreate --type vdo for %s: %w", vg, err)
 	}
 
@@ -231,14 +174,21 @@ func CreateOrAttachVDO(
 // detect (the VG on disk is still named after the source). Must run BEFORE
 // CreateOrAttachVDO whenever the volume was provisioned from a VolumeContentSource.
 func ResolveClonedVDO(ctx context.Context, devicePath, lvolID string) error {
-	pvscanArgs := append([]string{"pvscan"}, devicesArgs(devicePath)...)
-	pvscanArgs = append(pvscanArgs, "--cache", devicePath)
-	if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, pvscanArgs...); err != nil {
+	devices := []string{devicePath}
+
+	rescanCtx, cancel := withVDOTimeout(ctx)
+	if err := lvmInspector.Rescan(rescanCtx, devices); err != nil {
 		klog.Warningf("ResolveClonedVDO: pvscan --cache %s: %v", devicePath, err)
 	}
+	cancel()
 
 	vg := vgName(lvolID)
-	currentVG := pvVGName(ctx, devicePath)
+	identityCtx, cancel := withVDOTimeout(ctx)
+	currentVG, err := lvmInspector.VolumeGroup(identityCtx, devicePath)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("probe VG identity of %s: %w", devicePath, err)
+	}
 	if currentVG == "" || currentVG == vg {
 		// Blank device, or already carries this volume's own identity -- nothing to do.
 		return nil
@@ -249,19 +199,20 @@ func ResolveClonedVDO(ctx context.Context, devicePath, lvolID string) error {
 		devicePath, lvolID, currentVG, vg,
 	)
 
-	vgimportcloneArgs := append([]string{"vgimportclone"}, devicesArgs(devicePath)...)
-	vgimportcloneArgs = append(vgimportcloneArgs, "--basevgname", vg, devicePath)
-	if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, vgimportcloneArgs...); err != nil {
+	importCtx, cancel := withVDOTimeout(ctx)
+	_, err = lvmInspector.Run(importCtx, devices, "vgimportclone", "--basevgname", vg, devicePath)
+	cancel()
+	if err != nil {
 		return fmt.Errorf("vgimportclone %s to %s: %w", devicePath, vg, err)
 	}
 
 	// vgimportclone renames the VG but leaves the VDO logical volume inside named after the
 	// source volume. Rename it to lvolID so every subsequent operation (CreateOrAttachVDO's
-	// vgs/lvs check, mount, grow, remove) can address it consistently by this volume's own
+	// identity check, mount, grow, remove) can address it consistently by this volume's own
 	// identity, not the source's.
-	lvsArgs := append([]string{lvsCmd}, devicesArgs(devicePath)...)
-	lvsArgs = append(lvsArgs, "--noheadings", "-o", "lv_name", vg)
-	out, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, lvsArgs...)
+	lvsCtx, cancel := withVDOTimeout(ctx)
+	out, err := lvmInspector.Run(lvsCtx, devices, lvsCmd, "--noheadings", "-o", "lv_name", vg)
+	cancel()
 	if err != nil {
 		return fmt.Errorf("list LVs in %s after clone resolution: %w", vg, err)
 	}
@@ -269,9 +220,10 @@ func ResolveClonedVDO(ctx context.Context, devicePath, lvolID string) error {
 		if name == poolLVName || name == lvolID {
 			continue
 		}
-		lvrenameArgs := append([]string{"lvrename"}, devicesArgs(devicePath)...)
-		lvrenameArgs = append(lvrenameArgs, vg, name, lvolID)
-		if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, lvrenameArgs...); err != nil {
+		renameCtx, cancel := withVDOTimeout(ctx)
+		_, err := lvmInspector.Run(renameCtx, devices, "lvrename", vg, name, lvolID)
+		cancel()
+		if err != nil {
 			return fmt.Errorf("rename cloned LV %s/%s to %s: %w", vg, name, lvolID, err)
 		}
 		break
@@ -287,9 +239,15 @@ func ResolveClonedVDO(ctx context.Context, devicePath, lvolID string) error {
 // a volume's VDO metadata/data on an ordinary pod recreate, well before the volume was
 // ever meant to be removed. CreateOrAttachVDO's own vgchange -ay reactivates this exact
 // state later without recreating anything.
+//
+// Unscoped (no device list): by the time this runs the backing device may already be
+// unreachable (see the dmsetup fallback below), so it addresses the VG by name alone, the
+// same as the original direct-exec implementation did.
 func DeactivateVDO(ctx context.Context, lvolID string) error {
 	vg := vgName(lvolID)
-	_, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, "vgchange", "-an", vg)
+	vgchangeCtx, cancel := withVDOTimeout(ctx)
+	_, err := lvmInspector.Run(vgchangeCtx, nil, "vgchange", "-an", vg)
+	cancel()
 	if err == nil {
 		return nil
 	}
@@ -309,7 +267,9 @@ func DeactivateVDO(ctx context.Context, lvolID string) error {
 		"vgchange -an %s failed (backing device unreachable) -- falling back to direct dmsetup removal of any live dm nodes", //nolint:lll
 		vg,
 	)
-	return removeOrphanedDMNodes(ctx, vg)
+	removeCtx, cancel := withVDOTimeout(ctx)
+	defer cancel()
+	return lvmInspector.RemoveOrphanedDMNodes(removeCtx, vg)
 }
 
 // RemoveVDO deactivates and removes the VG/LV stack for lvolID, destroying its data. Only
@@ -321,8 +281,14 @@ func DeactivateVDO(ctx context.Context, lvolID string) error {
 // back to direct dmsetup removal of any live dm nodes in that case.
 func RemoveVDO(ctx context.Context, lvolID string) error {
 	vg := vgName(lvolID)
-	_, _ = runLVMCommand(ctx, vdoCmdTimeoutSeconds, "vgchange", "-an", vg)
-	if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, "vgremove", "-f", vg); err == nil {
+	deactivateCtx, cancel := withVDOTimeout(ctx)
+	_, _ = lvmInspector.Run(deactivateCtx, nil, "vgchange", "-an", vg)
+	cancel()
+
+	removeCtx, cancel := withVDOTimeout(ctx)
+	_, err := lvmInspector.Run(removeCtx, nil, "vgremove", "-f", vg)
+	cancel()
+	if err == nil {
 		return nil
 	}
 
@@ -330,81 +296,35 @@ func RemoveVDO(ctx context.Context, lvolID string) error {
 		"vgremove %s failed (backing device likely unreachable) -- falling back to direct dmsetup removal of any live dm nodes", //nolint:lll
 		vg,
 	)
-	return removeOrphanedDMNodes(ctx, vg)
+	dmCtx, cancel := withVDOTimeout(ctx)
+	defer cancel()
+	return lvmInspector.RemoveOrphanedDMNodes(dmCtx, vg)
 }
 
-// removeOrphanedDMNodes clears any live device-mapper nodes for vg directly, for the case
-// where the backing device is gone and vgremove can no longer read the metadata it needs.
-// The VDO target depends on its backing dm mapping, so removal order matters, but the exact
-// dependency chain isn't worth hardcoding -- retry across a few passes so removing a
-// dependent unblocks what it was blocking, mirroring how this was resolved by hand during
-// the design's own spike investigation.
-func removeOrphanedDMNodes(ctx context.Context, vg string) error {
-	out, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, "dmsetup", "ls")
-	if err != nil {
-		return fmt.Errorf("dmsetup ls: %w", err)
-	}
-
-	// device-mapper flattens "<vg>-<lv>" into a single dm device name by doubling every
-	// literal "-" within the VG/LV name components and using a single "-" as the separator
-	// -- confirmed live: matching against the unescaped VG name found nothing, leaving the
-	// stack orphaned even though this exact fallback had just been chosen specifically to
-	// clean it up.
-	escapedVG := strings.ReplaceAll(vg, "-", "--")
-
-	var names []string
-	for line := range strings.SplitSeq(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || line == "No devices found" {
-			continue
-		}
-		name := strings.Fields(line)[0]
-		if strings.HasPrefix(name, escapedVG+"-") {
-			names = append(names, name)
-		}
-	}
-	if len(names) == 0 {
-		return nil
-	}
-
-	var lastErr error
-	for pass := 0; pass < 3 && len(names) > 0; pass++ {
-		var remaining []string
-		for _, name := range names {
-			if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, "dmsetup", "remove", name); err != nil {
-				remaining = append(remaining, name)
-				lastErr = err
-			}
-		}
-		names = remaining
-	}
-	if len(names) > 0 {
-		return fmt.Errorf("failed to remove orphaned dm nodes %v: %w", names, lastErr)
-	}
-	return nil
-}
-
-// GrowVDO extends the VG's pool LV to consume all newly-available physical space on
+// GrowVDO extends the VG's pool LV to consume all newly available physical space on
 // devicePath (matching the 100%FREE convention used at creation time), then grows the VDO
 // logical volume's own size to match, and returns its device path. Must be called with the
 // pool LV inactive-safe (it is always active during a live grow -- lvextend supports this
 // online).
 func GrowVDO(ctx context.Context, devicePath, lvolID string) (string, error) {
 	vg := vgName(lvolID)
+	devices := []string{devicePath}
 
-	pvresizeArgs := append([]string{"pvresize"}, devicesArgs(devicePath)...)
-	pvresizeArgs = append(pvresizeArgs, devicePath)
-	if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, pvresizeArgs...); err != nil {
+	pvresizeCtx, cancel := withVDOTimeout(ctx)
+	_, err := lvmInspector.Run(pvresizeCtx, devices, "pvresize", devicePath)
+	cancel()
+	if err != nil {
 		return "", fmt.Errorf("pvresize %s: %w", devicePath, err)
 	}
 	// lvextend's -l (unlike lvcreate's) treats a bare "100%FREE" as an ABSOLUTE target size
 	// (100% of what's currently free), not "grow by" -- confirmed live ("New size given
 	// (1024 extents) not larger than existing size (1535 extents)"), since free-space-alone
 	// is smaller than the pool's current size. The "+" prefix makes it additive (current
-	// size + free space), which is what "grow to consume all newly-available space" means.
-	lvextendPoolArgs := append([]string{"lvextend"}, devicesArgs(devicePath)...)
-	lvextendPoolArgs = append(lvextendPoolArgs, "-l+100%FREE", vg+"/"+poolLVName)
-	if _, err := runLVMCommand(ctx, vdoGrowTimeoutSeconds, lvextendPoolArgs...); err != nil {
+	// size + free space), which is what "grow to consume all newly available space" means.
+	lvextendPoolCtx, cancel := withVDOGrowTimeout(ctx)
+	_, err = lvmInspector.Run(lvextendPoolCtx, devices, "lvextend", "-l+100%FREE", vg+"/"+poolLVName)
+	cancel()
+	if err != nil {
 		return "", fmt.Errorf("grow VDO pool LV %s/%s: %w", vg, poolLVName, err)
 	}
 
@@ -412,16 +332,19 @@ func GrowVDO(ctx context.Context, devicePath, lvolID string) (string, error) {
 	// safely be sized up to the pool's own capacity without relying on dedup/compression
 	// savings, matching how creation omits -V to get the same "largest safe size" default).
 	// Read the pool's new size back and extend the logical volume to match it.
-	lvsArgs := append([]string{lvsCmd}, devicesArgs(devicePath)...)
-	lvsArgs = append(lvsArgs, "--noheadings", "--units", "b", "--nosuffix", "-o", "lv_size", vg+"/"+poolLVName)
-	poolSize, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds, lvsArgs...)
+	sizeCtx, cancel := withVDOTimeout(ctx)
+	poolSize, err := lvmInspector.Run(
+		sizeCtx, devices, lvsCmd, "--noheadings", "--units", "b", "--nosuffix", "-o", "lv_size", vg+"/"+poolLVName,
+	)
+	cancel()
 	if err != nil {
 		return "", fmt.Errorf("read grown pool size for %s/%s: %w", vg, poolLVName, err)
 	}
 	newSize := strings.TrimSpace(poolSize)
-	lvextendLVArgs := append([]string{"lvextend"}, devicesArgs(devicePath)...)
-	lvextendLVArgs = append(lvextendLVArgs, "-L"+newSize+"B", vg+"/"+lvolID)
-	if _, err := runLVMCommand(ctx, vdoGrowTimeoutSeconds, lvextendLVArgs...); err != nil {
+	lvextendLVCtx, cancel := withVDOGrowTimeout(ctx)
+	_, err = lvmInspector.Run(lvextendLVCtx, devices, "lvextend", "-L"+newSize+"B", vg+"/"+lvolID)
+	cancel()
+	if err != nil {
 		return "", fmt.Errorf("grow VDO logical volume %s/%s to %sB: %w", vg, lvolID, newSize, err)
 	}
 	return vdoDevicePath(lvolID), nil
@@ -433,7 +356,9 @@ func GrowVDO(ctx context.Context, devicePath, lvolID string) (string, error) {
 // update path is added.
 func SetVDOFeatures(ctx context.Context, lvolID string, compression, deduplication bool) error {
 	vg := vgName(lvolID)
-	if _, err := runLVMCommand(ctx, vdoCmdTimeoutSeconds,
+	lvchangeCtx, cancel := withVDOTimeout(ctx)
+	defer cancel()
+	if _, err := lvmInspector.Run(lvchangeCtx, nil,
 		"lvchange", "--compression", yn(compression), "--deduplication", yn(deduplication), vg+"/"+poolLVName,
 	); err != nil {
 		return fmt.Errorf("set VDO features on %s/%s: %w", vg, poolLVName, err)
