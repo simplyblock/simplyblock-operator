@@ -15,15 +15,34 @@ References:
   deadlines, converting a hand-rolled switch.
 - `references/concurrency.md` — generation, resourceVersion, conflicts, locks,
   cache staleness, per-cluster state.
+- `scripts/check-reconcilers.py` — checks the invariants below that can be
+  checked, and follows the call graph out of `Reconcile` to do it:
+
+  ```bash
+  .claude/skills/reconciler-patterns/scripts/check-reconcilers.py --changed
+  .claude/skills/reconciler-patterns/scripts/check-reconcilers.py --graph Reconcile
+  ```
+
+  `scripts/testdata/violations.go.txt` violates every rule once, so a rule that
+  stops firing is visible: running the checker over it must report five errors
+  and two warnings.
 
 ## The invariants
 
 ### 1. Never block in `Reconcile`
 
 No `time.Sleep`, no polling loop, no waiting on a channel or a Job to finish.
-Compute what is true now, write it, and return — either with an error or with a
-`RequeueAfter`. There is no `time.Sleep` in any reconciler today; keep it that
-way.
+Compute what is true now, write it, and return, either with an error or with a
+`RequeueAfter`.
+
+**A `time.Sleep` grep is not how this is verified, and believing otherwise is how
+the current violation survived.** There is no `time.Sleep` in any controller, and
+`StorageNodeSetReconciler.Reconcile` still blocks for two minutes: it calls
+`maybeActivateCluster`, which waits on `<-time.After` through the
+`waitForNodeOnlineSleepFn` variable and then blocks again in
+`utils.WaitForClusterActive`. Waiting spelled as a channel receive, a poll, or a
+`WaitGroup` is the same stalled worker. `scripts/check-reconcilers.py` follows the
+calls and reports both paths; a grep reports neither.
 
 Blocking is not a slow reconcile, it is a stalled controller: a worker holds its
 key while it sleeps, and the default concurrency is one, so every other object of
@@ -162,7 +181,11 @@ cadence of a controller can be read or tuned.
 
 ## Before handing a reconciler back
 
-1. No sleep, no blocking wait, no unbounded loop.
+0. `scripts/check-reconcilers.py --changed` reports no errors, and its warnings
+   are resolved or named as pre-existing. It cannot check items 2, 3, 5, 8, or 9
+   below — those stay a reading job.
+1. No sleep, no blocking wait, no unbounded loop, on any path the call graph
+   reaches and not only in the reconcile body.
 2. Every step it can be interrupted in is readable from status.
 3. Every external call is either idempotent or preceded by a read.
 4. Terminal state returns immediately; the finalizer is removed on all paths.

@@ -1,0 +1,21 @@
+package controller
+
+// Fixture: every rule the reconciler checker claims to enforce, violated once,
+// so a tightened rule that no longer fires is visible as a regression.
+
+func (r *BadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	var thing Thing
+	thing.Status.Phase = "Running"
+	if err := r.Update(ctx, &thing); err != nil {
+		return ctrl.Result{RequeueAfter: time.Minute}, err
+	}
+	controllerutil.AddFinalizer(&thing, "x")
+	job := &batchv1.Job{}
+	_ = job
+	time.Sleep(time.Second)
+	log.Fatal("gone")
+	switch thing.Status.Phase {
+	case "Running":
+	}
+	return ctrl.Result{}, nil
+}
