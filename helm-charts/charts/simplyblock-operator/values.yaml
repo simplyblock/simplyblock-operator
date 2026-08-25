@@ -104,10 +104,6 @@ externallyManagedSecret:
   # Specifies whether a externallyManagedSecret should be created
   create: true
 
-spdkdev:
-  # Specifies whether a spdkdev should be created
-  create: false
-
 # Configuration for the CSI to connect to the cluster
 csiConfig:
   simplybk:
@@ -144,8 +140,6 @@ podAnnotations: {}
 # SimplyBlock Daemonset, Deployment, Statefulset annotations
 simplyBlockAnnotations: {}
 
-benchmarks: 0
-
 # FIXME: this will not work if there are group of nodes with different AMI types like: AL2, AL2023
 # AL2_x86_64: eth0
 # AL2023_x86_64_STANDARD: ens5
@@ -177,8 +171,6 @@ node:
 storagenode:
   create: false
   ifname: eth0
-  numDataChunks: "1"
-  numParityChunks: "1"
   spdkImage:
   spdkProxyImage:
   maxLogicalVolumes: 10
@@ -186,7 +178,6 @@ storagenode:
   maxSize:
   numPartitions: 1
   isolateCores: false
-  journalManager:
   dataNic:
   pciAllowed:
   pciBlocked:
@@ -251,21 +242,17 @@ controlplane:
     graylog:
       repository: quay.io/simplyblock-io/graylog
       tag: "5.0"
-      pullPolicy: Always 
       rootPasswordSha2: "b87c15a8ae4736d771ca60a7cc2014baaeab19b11c31f5fedef9421958a403c9"
       passwordSecret: "is6SP2EdWg0NdmVGv6CEp5hRHNL7BKVMFem4t9pouMqDQnHwXMSomas1qcbKSt5yISr8eBHv4Y7Dbswhyz84Ut0TW6kqsiPs"
       maxNumberIndex: "3"
-      retentionPeriod: "7d"
     grafana:
       repository: quay.io/simplyblock-io/grafana
       tag: 10.0.12
-      pullPolicy: IfNotPresent
       endpoint: ""
       contactPoint: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
     thanos:
       repository: quay.io/simplyblock-io/thanos
       tag: v0.31.0
-      pullPolicy: IfNotPresent
     minio:
       repository: quay.io/simplyblock-io/minio
       tag: RELEASE.2024-01-16T16-07-38Z
