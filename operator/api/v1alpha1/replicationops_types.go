@@ -86,6 +86,11 @@ type ReplicationOpsSpec struct {
 	// SourceClusterID is used for failback only. Omit to recover to the original source.
 	// +optional
 	SourceClusterID string `json:"sourceClusterID,omitempty"`
+
+	// DeleteSource instructs the backend to delete the source volume after a
+	// successful migration cutover. Only meaningful when action=migration.
+	// +optional
+	DeleteSource bool `json:"deleteSource,omitempty"`
 }
 
 // ReplicationOpsStatus holds the observed state of a ReplicationOps.

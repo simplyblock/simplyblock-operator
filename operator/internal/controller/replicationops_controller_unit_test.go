@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"testing"
 
@@ -520,6 +522,42 @@ func TestOps_Migration_ScopePolicy_Success(t *testing.T) {
 	}
 	if gotSlot.Status.State != string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending) {
 		t.Errorf("slot state = %q, want CutoverPending after commit accepted", gotSlot.Status.State)
+	}
+}
+
+func TestOps_Migration_DeleteSource_PassedInBody(t *testing.T) {
+	pol := readyPolicyForOps("pol")
+	slot := slotForPolicy()
+	ops := &simplyblockv1alpha1.ReplicationOps{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ops1", Namespace: "default",
+			Finalizers: []string{finalizerReplicationOps},
+		},
+		Spec: simplyblockv1alpha1.ReplicationOpsSpec{
+			Action: "migration", Scope: utils.ReplicationOpsScopePolicy, Ref: "pol",
+			DeleteSource: true,
+		},
+	}
+	r, _ := newOpsReplReconciler(t, readyPairForOps(), pol, slot, ops)
+
+	var gotBody map[string]interface{}
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodPost {
+			raw, _ := io.ReadAll(req.Body)
+			_ = json.Unmarshal(raw, &gotBody)
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v, ok := gotBody["delete_source"]; !ok || v != true {
+		t.Errorf("commit body = %v, want delete_source=true", gotBody)
 	}
 }
 

@@ -556,7 +556,11 @@ func (r *ReplicationOpsReconciler) reconcileMigration(
 
 		endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/commit",
 			clusterUUID, poolID, volumeID)
-		_, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, nil)
+		var commitBody interface{}
+		if ops.Spec.DeleteSource {
+			commitBody = map[string]interface{}{"delete_source": true}
+		}
+		_, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, commitBody)
 		if err != nil || (status != 202 && status >= 300) {
 			if err == nil {
 				err = fmt.Errorf("status %d", status)

@@ -76,6 +76,11 @@ spec:
                 - failback
                 - migration
                 type: string
+              deleteSource:
+                description: |-
+                  DeleteSource instructs the backend to delete the source volume after a
+                  successful migration cutover. Only meaningful when action=migration.
+                type: boolean
               ref:
                 description: |-
                   Ref is the name of the resource identified by Scope:
