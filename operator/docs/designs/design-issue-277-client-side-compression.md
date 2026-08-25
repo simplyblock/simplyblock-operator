@@ -450,15 +450,9 @@ that cost.
   an LVM reactivation, not a VDO-specific operation — `pvscan --cache`
   rediscovers the PV regardless of which device node it lands on, and
   `vgchange -ay` reactivates the VG/LV without recreating or reformatting
-  anything.
-
-  *Reproduced by removing the backing device entirely (confirmed via
-  `losetup -a` returning empty) and reattaching via a new device node backed
-  by the same data: `pvscan --cache` found the PV under its new path,
-  `vgchange -ay` reactivated it, and a canary file's SHA-256 matched exactly
-  before and after. The same sequence reattaches cleanly across a full node
-  reboot as well — the VG is invisible immediately after boot, since its PV
-  isn't present until NVMe-oF reconnects, with no ghost state in between.*
+  anything. This holds across a full node reboot too: the VG is invisible
+  immediately after boot, since its PV isn't present until NVMe-oF
+  reconnects, with no ghost state in between.
 
 - **Clone/snapshot identity collision — why `ResolveClonedVDO` must run
   before `CreateOrAttachVDO`'s own check**: a cloned or snapshot-restored
@@ -496,15 +490,6 @@ that cost.
   (Sections 9-10); this is a one-time disambiguation at first stage, not an
   ongoing behavioral difference.
 
-  *Reproduced against a real cluster: a clone's raw device reported the
-  identical PV UUID as its source; LVM's own device scanner silently skipped
-  the duplicate rather than surfacing an error, and mounting the volume by
-  its own path returned the source's data instead of the clone's.
-  `vgimportclone`, plus a forced `lvmdevices --adddev` to register the
-  previously skipped device, resolved the collision by giving the clone its
-  own PV/VG UUIDs — but left the clone's LV still named after the source, so
-  a complete implementation also needs an explicit LV rename.*
-
 - **Multi-instance memory scaling:** `KVDO module bytes used` is a
   module-wide total, not per-instance. Two simultaneous VDO-backed volumes
   (both with compression and deduplication enabled) reported combined memory
@@ -516,110 +501,31 @@ that cost.
   volumes, which do not carry deduplication's index cost, would scale at a
   much smaller figure instead.
 
-- **Multiple instances across a restart:** now verified in combination, via
-  the real implementation (`CreateOrAttachVDO`/`NodeStageVolume`), not just
-  raw LVM commands.
-
-  **Tested:**
-  - Multiple VDO instances in parallel — two simultaneous VDO-backed volumes
-    on the same node, no naming/dm collisions, linear memory scaling (see
-    "Multi-instance memory scaling" above).
-  - A single VDO instance surviving a node restart — `pvscan --cache` +
-    `vgchange -ay` reattach cleanly across a full reboot, with no ghost state
-    in between (see "Reattaching after a lost connection" above).
-  - **The combination:** two real PVCs (`clientCompression`/
-    `clientDeduplication` both true) provisioned against real NVMe-oF-backed
-    lvols on the same node, each written with distinct, checksummed data,
-    then the node rebooted. Both VDO instances reattached cleanly: `vgs`
-    showed both VGs intact post-reboot, `kvdo`'s module-wide usage count
-    matched exactly 2 (no leak, no orphan, no duplicate), both LVs reported
-    `VDOOperatingMode: normal` with compression and deduplication still
-    enabled, and both files' SHA-256 checksums matched exactly before and
-    after. Driver logs confirm the actual sequence: post-reboot, kubelet
-    calls `NodeStageVolume` fresh for both volumes (not `restageVolume` —
-    kubelet's own bookkeeping resets on reboot too), each independently
-    running `pvscan --cache` → `vgs` → `vgchange -ay` → mount, with no errors
-    and no lock-contention symptoms.
-  - **Caveat:** in this run, the two `NodeStageVolume` calls' underlying LVM
-    command sequences happened to complete one after the other rather than
-    genuinely overlapping (confirmed from log timestamps — each device's full
-    `pvscan`/`vgs`/`vgchange` sequence finished before the next one's
-    started). This confirms clean *sequential* reactivation of multiple
-    instances after a reboot, but does not by itself prove safety under
-    LVM commands that are genuinely racing at the same instant — that
-    narrower race window remains unexercised.
-
-  **Scenarios to be tested:**
-  - Genuinely concurrent (not just closely timed) `vgchange -ay`/
-    `pvscan --cache` calls actually overlapping in execution, to exercise
-    LVM's internal command locking (`/run/lock/lvm`) directly — not achieved
-    by the test above, where the sequences happened not to overlap.
-  - A boot-time activation race across several VGs becoming visible in close
-    succession, ahead of or interleaved with the CSI driver's own controlled
-    reconnect logic (kubelet's own reconnect timing meant this didn't
-    manifest in the run above, but wasn't deliberately forced either).
+- **Multiple instances across a restart:** each VDO instance reattaches
+  independently on reboot, since kubelet calls `NodeStageVolume` fresh for
+  every volume after a restart, not `restageVolume` (kubelet's own
+  bookkeeping resets on reboot too), and reattachment is already idempotent
+  per instance. Coverage status and the specific gaps (a genuinely
+  overlapping, not just closely timed, `vgchange`/`pvscan` race, and a
+  boot-time activation race across several VGs) are tracked in the test
+  plan, not restated here.
 
 - **Stale VDO/LVM state after a node loses a volume without a clean
   unstage** (e.g., a pod force-rescheduled off a node that goes NotReady, or
   the storage side disconnecting the initiator while the node itself stays
   up): the correct teardown sequence depends on whether the node rebooted.
-
-  **Tested:**
-  - The dangerous variant — node stays up, backing device disappears without
-    a clean disconnect — originally reproduced by accident during the
-    memory-scaling measurement above (an orphaned VDO stack from an earlier
-    real-cluster migration spike had its backing lvol deleted server-side
-    while its dm-mapper entries were still live in the kernel; `vgremove`
-    failed outright, "VG not found").
-  - **Now reproduced deliberately, against the real implementation (PR
-    #402), and the full self-healing path confirmed end-to-end**: created a
-    real VDO-backed PVC/pod, wrote data, then forcibly disconnected the
-    backing NVMe-oF subsystem at the host level (`nvme disconnect`) while the
-    node and pod both stayed up — simulating "the storage side disconnecting
-    the initiator while the node itself stays up" directly. Kernel logs
-    confirmed the actual failure sequence: for roughly 19 seconds, reads and
-    even a new write both *appeared* to succeed (silently absorbed by
-    caching), before the real I/O failure surfaced ("attempt to access
-    beyond end of device") once something actually needed to reach the
-    vanished device. At that point VDO correctly fenced itself into
-    **read-only mode** rather than corrupting anything, and ext4
-    independently aborted its own journal for the same reason — both layers
-    protected data correctly on their own, with no wiring from this design
-    needed for that part. The pod stayed reported as `1/1 Running` by
-    Kubernetes throughout, with no visible signal anything was wrong.
-  - Deleting the pod after this point **found two real bugs, both now
-    fixed**: (1) `NodeUnstageVolume`'s `DeactivateVDO` call had no fallback
-    for an unreachable device — `vgchange -an` failed with the identical
-    "Volume group ... not found" `vgremove` hits, on every one of 18 retries,
-    until kubelet gave up and force-removed the pod anyway, leaving the
-    orphaned stack permanently stuck with nothing left to clean it up. (2)
-    once a `dmsetup remove` fallback was added to `DeactivateVDO` (mirroring
-    `RemoveVDO`'s existing one), it *still* didn't work at first: the
-    orphaned-device name matching compared against the plain VG name, but
-    device-mapper flattens `<vg>-<lv>` into a dm device name by doubling
-    every literal `-` in the VG/LV name components, so the match silently
-    found nothing. With both fixed, the full sequence — disconnect, pod
-    delete, `vgchange -an` failing correctly, falling back to `dmsetup
-    remove`, clean final state — was reproduced a second time and confirmed
-    fully automatic, no manual intervention needed.
-
-  **Scenarios to be tested:**
-  - The clean-reboot variant end-to-end: in-kernel dm tables are RAM-only and
-    a reboot clears them, so this should reduce to stale
-    `/etc/lvm/devices/system.devices` bookkeeping only (harmless per the
-    skip-on-missing behavior above) — not yet deliberately reproduced.
-  - Whether kubelet's own volume reconciler reliably re-invokes
-    `NodeUnstageVolume` on the *original* node specifically after that node
-    itself goes NotReady and later rejoins — the test above forced the
-    device to disappear while the node and kubelet stayed healthy the whole
-    time, then deleted the pod normally; kubelet's behavior when the node
-    itself was unreachable for a period and the pod was rescheduled
-    elsewhere in the meantime is a different, still-unverified code path.
-  - Whether cleanup should also prune the corresponding `system.devices`
-    entry (`lvmdevices --deldev`/`--delpvid`) to stop it from accumulating
-    dead entries across repeated node-failure cycles over a node's lifetime
-    — not exercised by the fix above, which only addressed the live
-    dm-mapper state, not any host-level LVM devices-file bookkeeping.
+  When the device disappears without a clean disconnect, `DeactivateVDO`'s
+  `vgchange -an` fails ("Volume group ... not found") because there is no
+  device left to read the VG's metadata from, and the fallback is a direct
+  `dmsetup remove` of the live dm nodes (see `RemoveOrphanedDMNodes` in
+  Section 7) rather than the normal LVM teardown path. Separately, VDO fences
+  itself into read-only mode on the underlying I/O failure rather than
+  corrupting anything, and ext4 independently aborts its own journal for the
+  same reason, neither needing wiring from this design. Coverage status and
+  the still-open questions (the clean-reboot variant, whether kubelet
+  reliably re-invokes `NodeUnstageVolume` on the original node after a
+  NotReady/rejoin cycle, and `system.devices` bookkeeping hygiene) are
+  tracked in the test plan.
 
 - **The ~390MB deduplication cost is constant with respect to volume size, by
   construction, not by coincidence of the sizes tested.** The measurements
@@ -663,50 +569,21 @@ that cost.
   on instead.
 
 - **Write policy (`sync`/`async`/`auto`):** `auto` (LVM's default, and what
-  every example command in this doc uses — none override it) picks `sync` or
+  every example command in this doc uses, none override it) picks `sync` or
   `async` based on whether the backing device reports a volatile write cache.
-  A loop device typically doesn't report one, so any measurement taken
-  against a loop device (as in earlier drafts of this doc, since removed) was
-  most likely exercising `sync`, not what real deployments actually get.
+  Real simplyblock-backed storage does advertise one, so `auto` resolves to a
+  real choice rather than defaulting to the safest option by accident.
+  Measured against a real NVMe-oF-backed lvol, throughput was statistically
+  indistinguishable across `sync`/`async`/`auto`, so there's no performance
+  case for forcing a non-default policy. **Recommendation: leave
+  `vdo_write_policy` at `auto`**, which is also what production gets with
+  zero deliberate configuration.
 
-  *Checked against a real NVMe-oF-backed lvol on `vm04`*: `nvme id-ctrl`
-  reports `vwc: 0x5` (volatile-write-cache-present bit set), and the kernel
-  agrees (`/sys/block/nvme0n1/queue/write_cache` = `write back`) — real
-  simplyblock-backed storage does advertise a write cache to the client,
-  unlike a loop device. The same VDO volume was then created three times on
-  that real device, forcing `sync`, `async`, and `auto` in turn, each put
-  through an identical `fio` sequential-write test (1MB blocks, `iodepth=16`,
-  direct I/O, 2000MB): `sync` 37.3 MiB/s, `async` 35.7 MiB/s, `auto`
-  34.5 MiB/s — within one run-to-run standard deviation of each other, i.e.,
-  **no measurable throughput difference** between policies on real hardware.
-  Something other than the local sync-vs-cache-ack decision dominates cost
-  here; the large gap seen in earlier loop-device numbers doesn't generalize.
-
-  **Recommendation**: don't force a non-default write policy for tests or for
-  this feature. There's no throughput upside to justify it — the measurement
-  above removes the "async is much faster" argument. Leave `vdo_write_policy`
-  at its `auto` default — it's also the most representative choice for
-  tests, since it's exactly what production gets with zero deliberate
-  configuration.
-
-  **Crash-consistency, now tested for real**: forced `vdo_write_policy=async`
-  explicitly on a real NVMe-oF-backed lvol on `vm04`, wrote one file with an
-  explicit `fsync()` and a second file without one, then genuinely crashed
-  the node (`echo 1 > /proc/sys/kernel/sysrq && echo b > /proc/sysrq-trigger`
-  — an immediate hard reboot with zero filesystem sync, run with direct VM
-  access rather than through a container, since triggering a real kernel
-  reboot needs `CAP_SYS_BOOT`, which neither `kubectl debug node`'s
-  `sysadmin` profile nor an ordinary `privileged: true` pod's default
-  capability set reliably includes). Confirmed via a genuinely new
-  `who -b` boot timestamp that this was a real crash, not a graceful reboot
-  that would have flushed everything anyway and told us nothing. Result: the
-  `fsync()`'d file survived with an exact checksum match; the file written
-  without `fsync()` was lost entirely (didn't exist after remount) — exactly
-  the POSIX-correct outcome, and useful confirmation the test genuinely
-  distinguished durable from non-durable writes rather than everything
-  simply surviving by luck. **`async` correctly honors flush/FUA durability
-  end-to-end through NVMe-oF to the simplyblock backend — an acknowledged
-  (`fsync()`'d) write is safe under `async`, not just under `sync`.**
+  Crash-consistency under `async` is real: an `fsync()`'d write survives a
+  genuine, unclean node crash with an exact checksum match, and a write
+  without `fsync()` is correctly lost. `async` honors flush/FUA durability
+  end-to-end through NVMe-oF to the simplyblock backend: an acknowledged
+  write is safe under `async`, not just under `sync`.
 
 ### Wiring into `nodeserver.go`
 
