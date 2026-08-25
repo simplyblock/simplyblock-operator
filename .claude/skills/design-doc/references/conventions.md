@@ -10,6 +10,7 @@ document you are editing.
 |-------------------------------|-------------------------------|-------------------------------------------------------|
 | Design doc                    | `design-<slug>.md`            | `design-node-removal-draining.md`, `design-dhchap.md` |
 | Test plan                     | `test-plan-<slug>.md`         | `test-plan-drain-remove.md`                           |
+| Work plan                     | `work-plan-<slug>.md`         | `work-plan-drain-remove.md`, in `operator/docs/tasks/` |
 | Scenario catalog (not a plan) | `<area>-scenario-catalog.md`  | `csi-e2e-scenario-catalog.md`                         |
 | Diagrams / images             | `designs/assets/<name>.<ext>` | `assets/crd-overview.jpg`                             |
 | Long YAML examples            | `designs/<name>.yaml`         | `cluster-config.yaml`                                 |
@@ -51,6 +52,11 @@ Immediately under the H1, one blank line, then two-space line breaks:
   capability, not the issue — do not write `(Issue #131)` into a new title.
 - **Test Plan:** relative link. Add it even if the plan is written in the same
   change; it is how readers find the coverage.
+- **Work Plan:** relative link to `../tasks/work-plan-<slug>.md`, **added by the
+  `work-plan` skill when the plan is written**, not by the change that writes the
+  design. A design carries no such line until it has been split, and one that was
+  never split never carries it. When the plan's issues are all closed the line
+  stays, pointing at the record of what was built.
 
 ## Section structure
 
@@ -203,7 +209,7 @@ Every implemented-or-required scenario row carries a `Type`:
 
 | Type         | Covers                                                                                             |
 |--------------|----------------------------------------------------------------------------------------------------|
-| `Positive`   | The documented behavior under valid input and expected state                                      |
+| `Positive`   | The documented behavior under valid input and expected state                                       |
 | `Negative`   | Invalid input, error response, exclusion, or a required no-op ("nothing should happen")            |
 | `Boundary`   | Exactly at-threshold, strict-vs-inclusive comparison, zero, empty, single element, clamped maximum |
 | `Regression` | Pins a specific previously fixed defect — cite the issue or commit in the scenario text            |

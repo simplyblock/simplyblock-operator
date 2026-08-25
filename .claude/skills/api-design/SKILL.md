@@ -1,6 +1,6 @@
 ---
 name: api-design
-description: Designing this operator's CRDs — the Entity and Ops split for imperative operations, when a new field beats a new kind, spec against status, the marker set every type carries (validation, enum, immutability, defaults, printcolumns, short names), observedGeneration and conditions, and what counts as a breaking change once a field has shipped. Use when adding or changing a CRD, adding an action to an Ops kind, or reviewing an API change.
+description: Designing this operator's CRDs and keeping them consistent with each other — the Entity and Ops split for imperative operations, when a new field beats a new kind, spec against status, the marker set every type carries (validation, enum, immutability, defaults, printcolumns, short names), typed phases, observedGeneration and conditions, and what counts as a breaking change once a field has shipped. Carries a checker that audits every type against those conventions. Use when adding a CRD, changing or reviewing one, adding a field or an action to an existing kind, or auditing the API surface for consistency.
 ---
 
 # CRD and API design
@@ -15,17 +15,29 @@ References:
 
 - `references/ops-crds.md` — the `<Entity>Ops` shape, field by field, and how an
   action is added to an existing one.
-- `references/markers.md` — the marker set, what each is for, and the current
-  adoption in this repository.
+- `references/markers.md` — the marker set and what each is for.
+- `references/consistency.md` — what the checker checks, the three spellings of
+  immutability that work and the one that does not, and the current backlog.
+- `scripts/check-crds.py` — audits the types against the conventions below and
+  prints the marker adoption. Run it on any API change:
+
+  ```bash
+  .claude/skills/api-design/scripts/check-crds.py --changed
+  ```
+
+  **Do not read adoption numbers out of this skill's prose.** They went stale
+  within weeks the last time they were written by hand: short names were
+  documented as absent while ten types carried one. `--adoption` reads them from
+  the code.
 
 ## The first decision: field, action, or kind
 
-| The change is | Model it as | Because |
-|---|---|---|
-| Something the system should *be* | A field on the entity CRD | Desired state converges and is safe in Git |
-| Something to *do once* to one entity | An action on that entity's `<Entity>Ops` kind | "Restart this node" is not a desired state, and once done it is indistinguishable from before |
-| A new thing with its own lifecycle, watched and reconciled on its own | A new entity CRD | It has status of its own, and something else references it |
-| A new thing with no independent lifecycle | A field or a nested struct on its owner | A CRD costs a controller, RBAC, a chart entry, and a place in the ownership spine |
+| The change is                                                         | Model it as                                   | Because                                                                                       |
+|-----------------------------------------------------------------------|-----------------------------------------------|-----------------------------------------------------------------------------------------------|
+| Something the system should *be*                                      | A field on the entity CRD                     | Desired state converges and is safe in Git                                                    |
+| Something to *do once* to one entity                                  | An action on that entity's `<Entity>Ops` kind | "Restart this node" is not a desired state, and once done it is indistinguishable from before |
+| A new thing with its own lifecycle, watched and reconciled on its own | A new entity CRD                              | It has status of its own, and something else references it                                    |
+| A new thing with no independent lifecycle                             | A field or a nested struct on its owner       | A CRD costs a controller, RBAC, a chart entry, and a place in the ownership spine             |
 
 The bar for a new CRD is that **something watches it or references it by name**.
 `ReplicationSlot` clears it — the policy creates slots and reconciles each one.
@@ -70,25 +82,43 @@ The full table with adoption numbers is in `references/markers.md`. The minimum:
 - **`printcolumn`** for the two or three fields that answer "what is happening"
   without a `describe`. There are 83 across the API today, and the Ops kinds are
   the model: target, action, phase, sub-phase, message, age.
-- **`shortName`:** three design documents specify one (`scops`, `relpair`,
-  `repl`) and **no type carries the marker**, so a test plan scenario asserting
-  `kubectl get scops` currently cannot pass. Add it when the design names one.
-- **A typed enum for every closed set.** The `action` verb on all three Ops kinds
-  is `+kubebuilder:validation:Enum=…`, which is what makes an unknown action a
-  rejection at admission instead of a `Failed` phase discovered later. Phases and
-  sub-phases are typed Go string types with their constants beside them.
-- **`observedGeneration` in status.** No type has it. New ones do — see
-  `reconciler-patterns`, which explains what breaks without it.
+- **`shortName`:** ten of seventeen types carry one, including the `scops`,
+  `relpair`, and `repl` that their designs name. Seven do not, so a scenario
+  asserting `kubectl get sc-something` on one of those cannot pass. Declare one
+  whenever the design names one.
+- **A typed enum for every closed set**, and the Go type to go with it. An
+  `Enum` marker makes an unknown value a rejection at admission instead of a
+  `Failed` phase discovered later, and a named Go type makes it a compile error
+  before that. Both matter, and the checker reports each separately:
+  `enumless-closed-set` for a named type whose constants the API server does not
+  constrain, `untyped-phase` for a `Phase string` that should be a
+  `<Kind>Phase`. Seven phases are still plain strings.
+- **`observedGeneration` in status.** No type has it, in any of the seventeen.
+  New ones carry it — see `reconciler-patterns` for what breaks without it.
+- **A phase, and conditions when something waits.** Ten kinds report progress
+  through `status.phase` and a message, three through `status.conditions`, and
+  none through both. For a new type: a typed phase always, because that is what
+  the printcolumns and the reconcilers read, and `conditions` in addition when a
+  user or another controller waits on the object. A `conditions` field carries
+  `+listType=map` and `+listMapKey=type` or server-side apply replaces the whole
+  list instead of merging it — none of the three existing ones do.
 
 ## Immutability is a marker, not a sentence
 
-Eight fields across four types enforce immutability with CEL. **All three Ops
-kinds say "Immutable." in a doc comment and enforce nothing** — eight such
-comments, zero `XValidation` rules. A mutable `action` or target on a running
-operation is the "spec changed mid-flight" failure the reconciler then has to
-detect and fail on, when admission could have refused the edit.
+A doc comment reading `// Immutable.` enforces nothing. Six fields across
+`ReplicationOps` and `ReplicationSlot` are immutable in prose only, and a mutable
+action or target on a running operation is the "spec changed mid-flight" failure
+the reconciler then has to detect and fail on, when admission could have refused
+the edit. `check-crds.py` reports each as `unenforced-immutability`.
 
-Two shapes, and the difference matters:
+**The shortest correct spelling is `// +k8s:immutable`.** controller-gen emits
+`x-kubernetes-validations: rule: self == oldSelf` from it; 29 fields use it and
+the generated CRDs carry 30 such rules. It is easy to assume otherwise, because
+it does not look like a `+kubebuilder:` marker — `references/consistency.md`
+tabulates which spellings reach the schema.
+
+Reach for CEL when `self == oldSelf` is not what is meant. Two shapes, and the
+difference matters:
 
 ```go
 // Always immutable, from creation:
@@ -126,9 +156,11 @@ the least forgiving place to get it wrong.
 1. The change is a field, an action, or a kind — and the reason is stated.
 2. Closed sets are typed enums; immutable fields carry a CEL rule, not a comment.
 3. Status carries `observedGeneration`, the phase, and whatever a restart needs.
-4. Printcolumns answer "what is happening"; a short name exists if the design
-   named one.
-5. `make -C operator manifests generate`, then `make helm-sync`, then the
+4. Printcolumns answer "what is happening," and a short name exists if the
+   design named one.
+5. `check-crds.py --changed` reports no errors for the type being changed, and
+   its warnings are either resolved or named as pre-existing backlog.
+6. `make -C operator manifests generate`, then `make helm-sync`, then the
    hand-wired list in the `new-files` skill (the CRD kustomization entry is not
    generated).
-6. The design document and its test plan are updated in the same change.
+7. The design document and its test plan are updated in the same change.

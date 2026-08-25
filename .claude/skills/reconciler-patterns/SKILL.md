@@ -112,12 +112,12 @@ Canonical: `storageclusterops_controller.go:568` (`releaseClusterLock`),
 
 ### 7. Requeue against error
 
-| Situation | Return |
-|---|---|
-| Work finished, nothing to watch | `ctrl.Result{}, nil` |
-| Waiting on something outside the cluster | `ctrl.Result{RequeueAfter: <named constant>}, nil` |
-| A transient failure worth retrying | `ctrl.Result{}, err` — controller-runtime backs off exponentially and logs it |
-| A permanent failure | record it in status, emit an event, return `ctrl.Result{}, nil` — retrying a 400 forever is noise |
+| Situation                                | Return                                                                                            |
+|------------------------------------------|---------------------------------------------------------------------------------------------------|
+| Work finished, nothing to watch          | `ctrl.Result{}, nil`                                                                              |
+| Waiting on something outside the cluster | `ctrl.Result{RequeueAfter: <named constant>}, nil`                                                |
+| A transient failure worth retrying       | `ctrl.Result{}, err` — controller-runtime backs off exponentially and logs it                     |
+| A permanent failure                      | record it in status, emit an event, return `ctrl.Result{}, nil` — retrying a 400 forever is noise |
 
 Classify with `atlas-lib/errs/class`, which answers exactly that question and is
 used in 4 files. Do not decide by feel, and do not return an error for a

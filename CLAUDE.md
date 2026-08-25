@@ -72,6 +72,7 @@ Load the one that matches the task; each carries the detail this file leaves out
 | `test-scenarios`       | Enumerating test scenarios: paired positive and negative, across topologies     |
 | `regression-test`      | Fixing a bug: the failing test comes first, red for the bug's reason            |
 | `reconciler-patterns`  | Writing or reviewing a controller: phases, never blocking, generations, locks   |
-| `api-design`           | Adding or changing a CRD: the Entity and Ops split, markers, what is breaking   |
+| `api-design`           | Adding or changing a CRD, and auditing the API for consistency                  |
 | `code-cleanup`         | Cleaning up, refactoring, modernizing, or restructuring code that already works |
 | `extract-to-atlas-lib` | Moving a shared primitive into `atlas-lib` and deleting both copies             |
+| `work-plan`            | Splitting a settled design into issue-ready, dependency-ordered work items      |

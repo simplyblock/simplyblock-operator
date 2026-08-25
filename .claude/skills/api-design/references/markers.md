@@ -1,31 +1,51 @@
 # The marker set
 
-What each marker is for, and what this repository currently does with it. Counts
-are over `operator/api/v1alpha1`.
+What each marker is for. **The counts come from the code, not from this page:**
+
+```bash
+.claude/skills/api-design/scripts/check-crds.py --adoption
+```
+
+The numbers that used to be written out here were wrong within weeks. Anything
+below that looks like a count is a rule of thumb, and the script is the fact.
 
 ## Type level
 
-| Marker | Count | Use |
-|---|---|---|
-| `+kubebuilder:object:root=true` | 34 | On every root type and its `List` companion |
-| `+kubebuilder:subresource:status` | 17 | On every type. Without it, a status write needs spec write permission and bumps `generation` |
-| `+kubebuilder:resource:scope=…,shortName=…` | 0 short names | Scope is Namespaced unless the object genuinely has no namespace. **Three designs name a short name that no type declares** (`scops`, `relpair`, `repl`) |
-| `+kubebuilder:printcolumn` | 83 | Two or three per type, answering "what is happening" — for an Ops kind: target, action, phase, sub-phase, message, age |
-| `+kubebuilder:validation:XValidation` | 10, in 4 types | Cross-field and immutability rules that field markers cannot express |
+| Marker                                      | Use                                                                                                                    |
+|---------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| `+kubebuilder:object:root=true`             | On every root type and its `List` companion                                                                            |
+| `+kubebuilder:subresource:status`           | On every type. Without it, a status write needs spec write permission and bumps `generation`                           |
+| `+kubebuilder:resource:scope=…,shortName=…` | Scope is Namespaced unless the object genuinely has no namespace. Declare the short name the design names              |
+| `+kubebuilder:printcolumn`                  | Two or three per type, answering "what is happening" — for an Ops kind: target, action, phase, sub-phase, message, age |
+| `+kubebuilder:validation:XValidation`       | Cross-field and immutability rules that field markers cannot express                                                   |
 
 ## Field level
 
-| Marker | Count | Use |
-|---|---|---|
-| `+optional` | 173 | Every field that is not required. A pointer plus `omitempty` when "unset" differs from "zero" |
-| `+kubebuilder:validation:Required` | 17 | The fields without which the object is meaningless |
-| `+kubebuilder:validation:Enum=a;b;c` | 18 | Every closed set, and every action verb |
-| `+kubebuilder:default=…` | 17 | A default the API server applies. It is part of the API: tightening one later is a breaking change |
-| `+kubebuilder:validation:Minimum` / `Maximum` | 7 | Numeric bounds. A vCPU or size floor belongs here, not in a reconciler's error path |
+| Marker                                        | Use                                                                                                    |
+|-----------------------------------------------|--------------------------------------------------------------------------------------------------------|
+| `+optional`                                   | Every field that is not required. A pointer plus `omitempty` when "unset" differs from "zero"          |
+| `+kubebuilder:validation:Required`            | The fields without which the object is meaningless                                                     |
+| `+kubebuilder:validation:Enum=a;b;c`          | Every closed set, and every action verb                                                                |
+| `+kubebuilder:default=…`                      | A default the API server applies. It is part of the API: tightening one later is a breaking change     |
+| `+kubebuilder:validation:Minimum` / `Maximum` | Numeric bounds. A vCPU or size floor belongs here, not in a reconciler's error path                    |
+| `+k8s:immutable`                              | Always-immutable fields. controller-gen turns it into `self == oldSelf`; see below                     |
+| `+listType=map` with `+listMapKey=type`       | On a `[]metav1.Condition`, so server-side apply merges by condition type instead of replacing the list |
+
+`omitempty` in the JSON tag already makes controller-gen treat a field as
+optional, so `+optional` is for saying so out loud. A field with neither, and no
+`Required`, gets whichever answer the tag happens to imply — the checker reports
+that as `unspecified-spec-field`.
 
 ## Immutability
 
-Two shapes, both CEL, one on the field and one on the type:
+**Start with the marker.** `// +k8s:immutable` on the field is the whole job for
+anything that is immutable from creation: controller-gen emits
+`x-kubernetes-validations: rule: self == oldSelf` into the schema. It is not
+spelled `+kubebuilder:`, which is why it is repeatedly assumed to be inert
+documentation; it is not.
+
+Reach for CEL when `self == oldSelf` is not what is meant. Two shapes, both CEL,
+one on the field and one on the type:
 
 ```go
 // Field: immutable from creation.
@@ -40,8 +60,10 @@ reference, an action verb, a pool or cluster binding. Use the second for
 configuration that a controller or a user fills in once, where an empty value is
 a legitimate starting state (`fabricType`, `stripe`, a KMS binding).
 
-`backuprestore_types.go`, `replicationpair_types.go`, `storagecluster_types.go`,
-and `storagenodeset_types.go` are the four types that enforce anything today.
+A doc comment reading `// Immutable.` is the fourth spelling and the only one
+that enforces nothing. `references/consistency.md` tabulates all four, and
+`check-crds.py` reports every field that claims immutability in prose without
+backing it with one of the first three.
 
 ## Cross-field rules worth writing
 

@@ -119,9 +119,9 @@ nothing else.
 
 ## What is still missing across all three kinds
 
-| Gap | Consequence |
-|---|---|
-| No CEL immutability on target, action, or parameters | A running operation can be rewritten under the reconciler |
-| No `observedGeneration` | Nothing distinguishes a status from the spec it was computed from |
-| No `phaseDeadline` | A phase has no bound that survives a restart |
-| No TTL or auto-cleanup of finished operations | Terminal Ops objects accumulate as audit records with no retention policy; the `StorageClusterOps` test plan records this as a known gap |
+| Gap                                                  | Consequence                                                                                                                              |
+|------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
+| No CEL immutability on target, action, or parameters | A running operation can be rewritten under the reconciler                                                                                |
+| No `observedGeneration`                              | Nothing distinguishes a status from the spec it was computed from                                                                        |
+| No `phaseDeadline`                                   | A phase has no bound that survives a restart                                                                                             |
+| No TTL or auto-cleanup of finished operations        | Terminal Ops objects accumulate as audit records with no retention policy; the `StorageClusterOps` test plan records this as a known gap |

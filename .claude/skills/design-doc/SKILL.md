@@ -1,19 +1,29 @@
 ---
 name: design-doc
-description: Author or update a simplyblock-operator design document in operator/docs/designs/ plus its companion test plan in operator/docs/tests/. Use when the user asks for a design document, design doc, RFC, architecture write-up, or test plan for a feature, CRD, controller, or GitHub issue in this repo, or asks to bring an existing design doc / test plan back in sync with the code.
+description: Author or update a simplyblock-operator design document in operator/docs/designs/ plus its companion test plan in operator/docs/tests/. Use when the user asks for a design document, design doc, RFC, architecture write-up, or test plan for a feature, CRD, controller, or GitHub issue in this repo, or asks to bring an existing design doc or test plan back in sync with the code. Breaking a settled design into issue-ready work items is the separate `work-plan` skill.
 ---
 
 # Design Documents and Test Plans
 
-Every substantial operator feature gets two documents that travel together:
+Every substantial operator feature gets three documents, each answering a
+question the others must not. This skill owns the first two:
 
 | Document   | Path                                      | Answers                                                                                                         |
 |------------|-------------------------------------------|-----------------------------------------------------------------------------------------------------------------|
 | Design doc | `operator/docs/designs/design-<slug>.md`  | What are we building, why, and how does it behave                                                               |
 | Test plan  | `operator/docs/tests/test-plan-<slug>.md` | How do we know it works, and what is still uncovered — the numbered scenario matrix lives here and nowhere else |
+| Work plan  | `operator/docs/tasks/work-plan-<slug>.md` | What has to be done, in what order, and what can run at the same time — the **`work-plan`** skill, not this one |
 
-Write both unless the user explicitly asks for only one. A design doc whose
-"Testing Strategy" section has no companion test plan is incomplete.
+The design doc and the test plan are written together unless the user explicitly
+asks for only one. A design doc whose "Testing Strategy" section has no companion
+test plan is incomplete.
+
+**The work plan is a different skill because it has a different trigger.** A
+design is reviewed and revised before it is sound; work items cite its sections
+and its decisions, so splitting one that is still moving produces packages a
+later revision merges or deletes. `work-plan` is invoked once the design has
+stopped changing shape, and it applies its own readiness test before splitting
+anything. §5 below is the hand-off.
 
 Reference material in this skill:
 
@@ -83,6 +93,8 @@ genuinely cannot determine, and ask it in one batch:
   `## Phasing Overview` table right under the metadata block).
 - Scope boundaries — the Non-Goals list is where reviews are won or lost, so
   confirm anything ambiguous about what is *out* of scope.
+- Nothing about work breakdown. Whether the design is ready to be split, and
+  into what, is `work-plan`'s question and is asked after this document settles.
 
 ### 3. Write the design doc
 
@@ -168,7 +180,23 @@ most:
   matrix reappears in the gap table with its reason. An honest gap list is the
   point of the document; do not quietly omit hard scenarios.
 
-### 5. Run the house style gate — always, on the files just written
+### 5. Hand off to the work plan, do not write it here
+
+A design that describes unimplemented work needs a work plan: dependency-ordered
+work items, each ready to become one GitHub issue. That document is owned by the
+**`work-plan`** skill and is deliberately not written in this step.
+
+The reason is the review loop. A design goes back and forth before it is sound,
+and work items cite its section numbers and its decisions. Splitting a design
+that is still moving produces items that name sections which renumber under them
+and packages that a later revision merges or deletes. The split waits until the
+design has stopped changing shape.
+
+So: say that the work plan is the next step and what would gate it, then stop.
+Invoke `work-plan` when the design is settled, or when the user asks for the
+breakdown regardless. `work-plan` carries the readiness test it applies.
+
+### 6. Run the house style gate — always, on the files just written
 
 **This is not optional and it is not the last thing.** Every document this skill
 creates or edits goes through the gate before it is handed back, named
@@ -217,11 +245,13 @@ Then:
 - **Do not retrofit** documents this change did not otherwise touch. A pre-existing
   finding in a neighboring doc is not this change's work.
 
-### 6. Cross-link and verify
+### 7. Cross-link and verify
 
-- Design doc metadata block links to the test plan; test plan header links back
-  to the design doc. Use relative paths (`../tests/…`, `../designs/…`) and check
-  they resolve from the file's own directory.
+- The three documents link to each other. The design's metadata block carries
+  `**Test Plan:**` and, when one exists, `**Work Plan:**`. The test plan's header
+  links back to the design, and the work plan's header links to both. Use relative
+  paths (`../tests/…`, `../designs/…`, `../tasks/…`) and check that each resolves
+  from its own file's directory.
 - Verify TOC anchors match the headings (GitHub slugifies to lowercase, spaces to
   hyphens, punctuation dropped — an em dash becomes an extra hyphen).
 - **Check that a `§n` reference means what the reader will assume.** In a test
@@ -241,12 +271,14 @@ Then:
 1. All seven house style gates pass on every file this change created or edited.
 2. Every punctuation warning outside a code block is either fixed or listed with
    a reason that survives scrutiny.
-3. Both documents exist and link to each other.
+3. Every document this change owes exists, and each links to the others.
 4. Every TOC anchor and relative link resolves.
 5. Every `§` reference is unambiguous about which document it means.
 6. Every count in the text matches the file.
-7. Every test function named in the plan's `Test` column exists (grepped, not
-   recalled).
+7. Every test function named in the test plan's `Test` column exists (grepped,
+   not recalled).
+8. The reply says whether a work plan is the next step, and what still has to
+   settle before the design can be split.
 
 ## Updating an existing document
 
@@ -264,3 +296,8 @@ are cited from review history and commit messages. An obsolete scenario keeps it
 row, struck through with the ID that superseded it. When a test lands, fill in the
 `Test` column and delete the matching row from the gap table — those two edits
 always happen together.
+
+When a re-sync changes what still has to be built, the design's work plan is
+affected and is not this skill's to edit. Say which sections moved and hand the
+consequences to `work-plan`, which owns whether the existing plan is amended or
+superseded.
