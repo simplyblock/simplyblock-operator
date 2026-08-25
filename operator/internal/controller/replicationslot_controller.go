@@ -522,20 +522,28 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		}
 		// Job exists — check its terminal state.
 		for _, c := range existingJob.Status.Conditions {
-			if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
-				log.Info("Preconnect job succeeded; signalling backend to proceed", "job", jobName)
+			if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
+				// Claim the signal by writing the annotation before the API call.
+				// Two concurrent reconciles may both see the job complete before
+				// either patch lands; the one whose patch wins becomes the sole
+				// caller of callCutoverProceed — the loser sees the annotation on
+				// its next read and falls through to the wait-5s branch above.
+				result, patchErr := r.markCutoverProceedSignaled(ctx, slot)
+				if patchErr != nil {
+					// Conflict: another reconcile already claimed it.
+					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+				}
+				if c.Type == batchv1.JobComplete {
+					log.Info("Preconnect job succeeded; signalling backend to proceed", "job", jobName)
+				} else {
+					log.Info("Preconnect job failed; signalling backend to proceed anyway", "job", jobName)
+				}
 				if err := r.callCutoverProceed(ctx, apiClient, clusterID, poolID, volumeID); err != nil {
 					log.Error(err, "POST cutover-proceed failed", "slot", slot.Name)
-					return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
+					// Annotation is already set; a later reconcile will wait for
+					// the backend to advance rather than re-sending the signal.
 				}
-				return r.markCutoverProceedSignaled(ctx, slot)
-			}
-			if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-				log.Info("Preconnect job failed; signalling backend to proceed anyway", "job", jobName)
-				if err := r.callCutoverProceed(ctx, apiClient, clusterID, poolID, volumeID); err != nil {
-					log.Error(err, "POST cutover-proceed failed after job failure", "slot", slot.Name)
-				}
-				return r.markCutoverProceedSignaled(ctx, slot)
+				return result, nil
 			}
 		}
 		// Still running.
@@ -658,7 +666,9 @@ func (r *ReplicationSlotReconciler) markCutoverProceedSignaled(
 	}
 	slot.Annotations[annotCutoverProceedSignaled] = annotCutoverProceedSignaledValue
 	if err := r.Patch(ctx, slot, patch); err != nil {
-		return ctrl.Result{Requeue: true}, nil
+		// Return the error so callers that patch-before-signal can detect the
+		// conflict and skip the API call (another reconcile already owns it).
+		return ctrl.Result{Requeue: true}, err
 	}
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
