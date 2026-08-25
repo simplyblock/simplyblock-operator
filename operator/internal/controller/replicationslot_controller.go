@@ -261,6 +261,7 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 			"Volume %s cutover is pending", volumeID)
 	case backendStateCutoverDone:
 		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone)
+		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
 		slot.Status.Message = "Cutover done"
 		changed = true
 	case "failed_over":
@@ -907,6 +908,7 @@ func (r *ReplicationSlotReconciler) applyAdvancedBackendState(
 	switch status.State {
 	case backendStateCutoverDone:
 		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone)
+		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
 		slot.Status.Message = "Cutover done"
 		slot.Status.TargetNQN = status.TargetNQN
 		slot.Status.TargetLvolID = status.TargetLvolID

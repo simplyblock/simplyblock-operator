@@ -899,7 +899,45 @@ func TestSlot_CutoverPending_BackendAlreadyCutoverDone_AppliesState(t *testing.T
 	if got.Status.State != string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone) {
 		t.Errorf("State = %q, want CutoverDone when backend reports cutover_done", got.Status.State)
 	}
+	if got.Status.Direction != string(simplyblockv1alpha1.ReplicationSlotDirectionTarget) {
+		t.Errorf("Direction = %q, want Target after cutover_done", got.Status.Direction)
+	}
 	if got.Status.TargetNQN != "nqn.target" {
 		t.Errorf("TargetNQN = %q, want nqn.target", got.Status.TargetNQN)
+	}
+}
+
+func TestSlot_ReconcileReplicating_DetectsCutoverDone_SetsDirectionTarget(t *testing.T) {
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateReplicating))
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{
+				State: backendStateCutoverDone, TargetNQN: "nqn.target",
+			})
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, cl := newSlotReconciler(t, slot, pol)
+
+	_, err := r.Reconcile(context.Background(), slotRequest("slot1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getSlot(t, cl)
+	if got.Status.State != string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone) {
+		t.Errorf("State = %q, want CutoverDone", got.Status.State)
+	}
+	if got.Status.Direction != string(simplyblockv1alpha1.ReplicationSlotDirectionTarget) {
+		t.Errorf("Direction = %q, want Target after cutover_done", got.Status.Direction)
 	}
 }
