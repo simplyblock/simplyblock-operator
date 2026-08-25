@@ -196,6 +196,10 @@ func (c *ClusterClient) VolumeInfo(ctx context.Context, lvolID string, hostNQN s
 	return c.API.getVolumeInfo(ctx, c.poolID, lvolID, hostNQN)
 }
 
+func (c *ClusterClient) GetRelationship(ctx context.Context, lvolID string) (*ReplicationRelationship, error) {
+	return c.API.getReplicationRelationship(ctx, lvolID)
+}
+
 // CreateLVolData is the data structure for creating a logical volume
 type CreateLVolData struct {
 	LvolName     string `json:"name"`
