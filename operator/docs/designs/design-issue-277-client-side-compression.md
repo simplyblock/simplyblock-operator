@@ -932,17 +932,18 @@ this failure mode does not occur here. **No design change needed.**
   misdetection node-wide, merely from both devices being *visible* to the
   same node — not even requiring both to be mounted simultaneously (common in
   Kubernetes: clones are frequently scheduled onto the same node as their
-  source). **Fix**: a `vgimportclone`-equivalent UUID-regeneration step
-  (`ResolveClonedVDO`, added to Section 7) must run before any LVM activation
-  whenever `VolumeContentSource` is set. This is the single most important
-  finding from this review — it's a correctness gap, not a tuning question.
+  source). **Fix (implemented and live-verified):** a `vgimportclone`-equivalent
+  UUID-regeneration step (`ResolveClonedVDO`, added to Section 7) runs before
+  any LVM activation whenever `VolumeContentSource` is set. This was the
+  single most important finding from this review — it's a correctness gap,
+  not a tuning question.
 - **🟡 Existing XFS stripe-alignment tuning (`xfs_su`/`xfs_sw`,
   `xfsStripeOptions`) becomes meaningless — and actively misleading — under
   VDO.** VDO virtualizes and relocates blocks for deduplication, so a
   filesystem on a VDO device is no longer directly on the erasure-coded
-  backend device the stripe hints were computed for. **Fix**: skip
-  `xfsStripeOptions` entirely when `client_compression` is set (added to
-  Section 7's wiring notes).
+  backend device the stripe hints were computed for. **Fix (implemented and
+  live-verified):** `stageVolume` skips `xfsStripeOptions` entirely whenever
+  either client-side VDO flag is set.
 - ~~Server-side `encryption=true` + `client_compression=true` likely defeats
   compression~~ **Retracted — spiked and confirmed wrong; moved to "Confirmed
   compatible" above.** The client always receives plaintext for an encrypted
@@ -951,9 +952,12 @@ this failure mode does not occur here. **No design change needed.**
 - **🟡 Server-side `compression=true` + `client_compression=true` is
   redundant, not harmful.** Compressing already-compressed data wastes CPU on
   both ends for negligible additional savings — a much milder version of the
-  encryption issue. Same recommendation: worth a warning, lower priority than
-  the encryption case. `client_deduplication` has no server-side counterpart
-  to worry about here — the existing server-side feature is compression-only.
+  encryption issue. **Fix: not yet implemented.** No warning exists anywhere
+  in the codebase today for this combination; it silently runs both layers.
+  Still lower priority than the encryption case, since it wastes CPU rather
+  than breaking anything. `client_deduplication` has no server-side
+  counterpart to worry about here — the existing server-side feature is
+  compression-only.
 
 ### Needs a one-line confirmation, not a design change
 - ~~Placement webhook / volume placement injector~~ **Resolved (read the
