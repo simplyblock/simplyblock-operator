@@ -65,6 +65,7 @@ Load the one that matches the task; each carries the detail this file leaves out
 
 | Skill                  | For                                                                             |
 |------------------------|---------------------------------------------------------------------------------|
+| `brainstorming`        | Exploring an idea before anything is built; ends in a design or a no            |
 | `new-files`            | Creating a file: separation of concerns, the opening comment, where it goes     |
 | `house-style`          | Writing or fixing prose, comments, and names; resolving a gate finding          |
 | `build-system`         | Building, regenerating, syncing the chart, the OLM bundle, drift failures       |
