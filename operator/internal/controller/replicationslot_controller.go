@@ -543,6 +543,11 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 					// Annotation is already set; a later reconcile will wait for
 					// the backend to advance rather than re-sending the signal.
 				}
+				// Delete the job immediately now that the signal is sent — don't
+				// leave completed jobs accumulating when there are many PVCs.
+				if delErr := r.Delete(ctx, &existingJob, client.PropagationPolicy(metav1.DeletePropagationBackground)); delErr != nil && !apierrors.IsNotFound(delErr) {
+					log.Error(delErr, "Failed to delete preconnect job after signal", "job", jobName)
+				}
 				return result, nil
 			}
 		}
@@ -839,7 +844,7 @@ func (r *ReplicationSlotReconciler) buildPreconnectJob(
 ) *batchv1.Job {
 	privileged := true
 	readOnly := true
-	ttl := int32(3600)
+	ttl := int32(150)
 	deadline := int64(120)
 	backoffLimit := int32(1)
 
