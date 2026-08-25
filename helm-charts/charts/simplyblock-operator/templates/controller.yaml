@@ -36,7 +36,7 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       {{- if .Values.controller.tolerations.create }}
       tolerations:
-      {{- range .Values.node.tolerations.list }}
+      {{- range .Values.controller.tolerations.list }}
       - operator: {{ .operator | quote }}
         {{- if .effect }}
         effect: {{ .effect | quote }}
@@ -74,7 +74,7 @@ spec:
         - "--v=5"
         - "--timeout=150s"
         - "--leader-election=false"
-        imagePullPolicy: {{ .Values.image.csiProvisioner.pullPolicy }}
+        imagePullPolicy: {{ .Values.image.csiSnapshotter.pullPolicy }}
         securityContext:
           privileged: true
         volumeMounts:
