@@ -116,6 +116,7 @@ type initiatorNVMf struct {
 	hostIface      string
 	hostNQN        string
 	poolID         string
+	clusterID      string // explicit cluster override; empty means derive from NQN
 }
 
 type path struct {
@@ -343,6 +344,7 @@ func NewSpdkCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, err
 			hostIface:      volumeContext["hostIface"],
 			hostNQN:        volumeContext["hostNQN"],
 			poolID:         volumeContext["poolID"],
+			clusterID:      volumeContext["cluster_id"],
 			lvolID:         srcLvolID,
 			deviceLvolID:   deviceLvolID,
 		}, nil
@@ -395,7 +397,10 @@ func (nvmf *initiatorNVMf) connectOnce(ctx context.Context) (string, error) {
 	}
 
 	if !alreadyConnected {
-		clusterID, _ := getLvolIDFromNQN(nvmf.nqn)
+		clusterID := nvmf.clusterID
+		if clusterID == "" {
+			clusterID, _ = getLvolIDFromNQN(nvmf.nqn)
+		}
 		// the lvolID from NQN gives the master LvolID of the subsystem
 		// Although the connection string is same for all the lvols in the subsystem,
 		// volume/<lvol-id>/connect/ connect API return 404 if master lvol is deleted
