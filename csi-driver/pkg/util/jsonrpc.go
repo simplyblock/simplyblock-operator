@@ -622,7 +622,9 @@ func (client APIClient) getLvolConnections(
 // getReplicationRelationship fetches the replication relationship for a volume
 // by its UUID. This endpoint survives source volume deletion, making it usable
 // for redirect lookups after replication-commit --delete-source.
-func (client APIClient) getReplicationRelationship(ctx context.Context, lvolID string) (*ReplicationRelationship, error) {
+func (client APIClient) getReplicationRelationship(
+	ctx context.Context, lvolID string,
+) (*ReplicationRelationship, error) {
 	path := fmt.Sprintf("api/v2/clusters/%s/replication/relationships/%s", client.ClusterID, lvolID)
 	raw, err := client.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
