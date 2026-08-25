@@ -171,7 +171,8 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	if err := r.reconcileRBAC(ctx, snCR); err != nil {
+	serviceAccountName, err := r.reconcileRBAC(ctx, snCR)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -196,7 +197,7 @@ func (r *StorageNodeSetReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		log.Error(err, "failed to reconcile per-node ConfigMap")
 	}
 
-	if err := r.reconcileDaemonSet(ctx, snCR); err != nil {
+	if err := r.reconcileDaemonSet(ctx, snCR, serviceAccountName); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -589,6 +590,7 @@ func labelWorkerNodes(
 func (r *StorageNodeSetReconciler) reconcileDaemonSet(
 	ctx context.Context,
 	snCR *simplyblockv1alpha1.StorageNodeSet,
+	serviceAccountName string,
 ) error {
 
 	if snCR.Spec.ClusterImage == "" {
@@ -608,7 +610,7 @@ func (r *StorageNodeSetReconciler) reconcileDaemonSet(
 		return err
 	}
 
-	ds := utils.BuildStorageNodeSetDaemonSet(snCR, r.TLSEnabled, r.TLSMutualEnabled, r.TLSProvider, tlsSecretRV)
+	ds := utils.BuildStorageNodeSetDaemonSet(snCR, serviceAccountName, r.TLSEnabled, r.TLSMutualEnabled, r.TLSProvider, tlsSecretRV)
 
 	if err := controllerutil.SetControllerReference(snCR, ds, r.Scheme); err != nil {
 		return err
@@ -1099,17 +1101,30 @@ func (r *StorageNodeSetReconciler) reconcileWorkerNodes(
 
 // reconcileRBAC ensures the ServiceAccount, ClusterRole, and ClusterRoleBinding
 // required by the storage-node DaemonSet are present and up to date.
-func (r *StorageNodeSetReconciler) reconcileRBAC(ctx context.Context, snCR *simplyblockv1alpha1.StorageNodeSet) error {
-	sa := utils.BuildStorageNodeSetServiceAccount(snCR.Namespace)
+//
+// The ServiceAccount is named and owned per-StorageNodeSet (rather than shared
+// across the namespace), so its ownerReference is always 1:1 and deleting one
+// StorageNodeSet can never cascade-delete another's ServiceAccount out from
+// under its running pods. The ClusterRoleBinding is per-StorageNodeSet too,
+// for the same reason; it stays unowned since it's cluster-scoped and a
+// namespaced owner reference wouldn't be garbage-collected. The ClusterRole
+// itself stays shared with no owner, since its Rules are static.
+func (r *StorageNodeSetReconciler) reconcileRBAC(ctx context.Context, snCR *simplyblockv1alpha1.StorageNodeSet) (string, error) {
+	saName, crbName, err := r.resolveStorageNodeSetRBACNames(ctx, snCR)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve RBAC object names: %w", err)
+	}
+
+	sa := utils.BuildStorageNodeSetServiceAccount(snCR, saName)
 	if err := controllerutil.SetControllerReference(snCR, sa, r.Scheme); err != nil {
-		return fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
+		return "", fmt.Errorf("failed to set ServiceAccount owner reference: %w", err)
 	}
 	desiredSAOwnerRefs := sa.OwnerReferences
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
 		sa.OwnerReferences = desiredSAOwnerRefs
 		return nil
 	}); err != nil {
-		return fmt.Errorf("failed to apply ServiceAccount: %w", err)
+		return "", fmt.Errorf("failed to apply ServiceAccount: %w", err)
 	}
 
 	cr := utils.BuildStorageNodeSetClusterRole(ptr.BoolFromOrFalse(snCR.Spec.OpenShiftCluster))
@@ -1118,10 +1133,10 @@ func (r *StorageNodeSetReconciler) reconcileRBAC(ctx context.Context, snCR *simp
 		cr.Rules = desiredCRRules
 		return nil
 	}); err != nil {
-		return fmt.Errorf("failed to apply ClusterRole: %w", err)
+		return "", fmt.Errorf("failed to apply ClusterRole: %w", err)
 	}
 
-	crb := utils.BuildStorageNodeSetClusterRoleBinding(snCR.Namespace)
+	crb := utils.BuildStorageNodeSetClusterRoleBinding(snCR, crbName, saName)
 	desiredCRBSubjects := crb.Subjects
 	desiredCRBRoleRef := crb.RoleRef
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
@@ -1129,9 +1144,51 @@ func (r *StorageNodeSetReconciler) reconcileRBAC(ctx context.Context, snCR *simp
 		crb.RoleRef = desiredCRBRoleRef
 		return nil
 	}); err != nil {
-		return fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
+		return "", fmt.Errorf("failed to apply ClusterRoleBinding: %w", err)
 	}
-	return nil
+	return saName, nil
+}
+
+// resolveStorageNodeSetRBACNames decides whether snCR keeps the legacy
+// ServiceAccount/ClusterRoleBinding names it shared with every other
+// StorageNodeSet in the namespace pre-migration, or gets its own
+// per-StorageNodeSet names.
+//
+// Before this fix, every StorageNodeSet in a namespace shared one
+// ServiceAccount, and reconcileRBAC unconditionally pointed its
+// ownerReference at whichever StorageNodeSet reconciled last — the bug this
+// fix addresses. On upgrade, that legacy ServiceAccount's ownerReference
+// still names exactly one already-existing StorageNodeSet: that one keeps
+// the legacy names, so its DaemonSet's pod template — and thus its already
+// running pods — is untouched by this upgrade. Every other StorageNodeSet
+// (including any created after this fix ships) gets its own names.
+func (r *StorageNodeSetReconciler) resolveStorageNodeSetRBACNames(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+) (saName, crbName string, err error) {
+	perSetSAName := kube.StorageNodeSetServiceAccountName(snCR.Name)
+	perSetCRBName := kube.StorageNodeSetClusterRoleBindingName(snCR.Namespace, snCR.Name)
+
+	legacySA := &corev1.ServiceAccount{}
+	err = r.Get(ctx, client.ObjectKey{
+		Name:      kube.LegacyStorageNodeSetServiceAccountName,
+		Namespace: snCR.Namespace,
+	}, legacySA)
+	if apierrors.IsNotFound(err) {
+		return perSetSAName, perSetCRBName, nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+
+	for _, ref := range legacySA.OwnerReferences {
+		if ref.Kind == "StorageNodeSet" && ref.UID == snCR.UID {
+			return kube.LegacyStorageNodeSetServiceAccountName,
+				kube.LegacyStorageNodeSetClusterRoleBindingName(snCR.Namespace), nil
+		}
+	}
+
+	return perSetSAName, perSetCRBName, nil
 }
 
 // fdbWorkerSet returns the set of worker node names (from snCR.Spec.WorkerNodes)
