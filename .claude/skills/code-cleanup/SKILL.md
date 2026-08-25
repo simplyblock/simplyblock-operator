@@ -13,8 +13,8 @@ behavior alone and takes mechanism away is the whole deliverable. Anything that
 changes behavior is a different task with a different skill, however small it
 looks.
 
-Vocabulary and gate structure adapted from prior art. See
-`references/source-notes.md`.
+Vocabulary and gate structure adapted from prior art, and the technique and
+smell names from Fowler's refactoring catalog. See `references/source-notes.md`.
 
 ## Scope
 
@@ -127,6 +127,12 @@ extracting anything.
 In this order, because each pass makes the next one's diff smaller and safer.
 `references/passes.md` carries each pass in full: the repository's rule, what to
 preserve, how to find candidates, and the mistake it usually makes.
+
+The passes are entered from a measurement. **A cleanup is also entered from a
+smell**, which is the other half and the one reading code produces:
+`references/catalog.md` indexes the named code smells onto these passes and onto
+the refactoring techniques that resolve each one, filtered to the subset that
+applies to Go.
 
 | # | Pass                     | Removes                                                             | Delegates to           |
 |---|--------------------------|---------------------------------------------------------------------|------------------------|

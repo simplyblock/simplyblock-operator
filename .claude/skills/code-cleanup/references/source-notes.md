@@ -12,7 +12,9 @@ be told apart from the upstream ones.
 | [`code-yeongyu/oh-my-openagent` → `refactor`](https://github.com/code-yeongyu/oh-my-openagent/tree/dev/packages/shared-skills/skills/refactor)                                                                                                                         | Sustainable Use License (GitHub reports `NOASSERTION`) — not an open source license | Phase ordering read as prior art only; no text copied      |
 | [`code-yeongyu/oh-my-openagent` → `remove-ai-slops`](https://github.com/code-yeongyu/oh-my-openagent/tree/dev/packages/shared-skills/skills/remove-ai-slops)                                                                                                           | Sustainable Use License (`NOASSERTION`)                                             | Ladder ordering and the preserve-list idea; no text copied |
 
-Because two of the three sources are not open source licensed, nothing was
+| [Fowler's refactoring catalog](https://refactoring.guru/refactoring/catalog), as published by refactoring.guru | proprietary content, freely readable | Technique and smell **names** only, as shared vocabulary. No text reproduced |
+
+Because two of the three skill sources are not open source licensed, nothing was
 reproduced from them. What was taken is structural: the order in which passes
 are safe to apply, and the idea that each pass owes a list of what it must not
 remove.
@@ -37,6 +39,11 @@ remove.
 - **Per-pass preserve-lists**, on the grounds that a cleanup pass is at least as
   likely to remove something load-bearing as to remove something useless.
 - A **test-coverage gate** before editing, borrowed from `refactor`'s phase 3.
+- The **names** of the refactoring techniques and code smells, and the catalog's
+  own organizing idea that a smell indexes onto the techniques that resolve it.
+  `references/catalog.md` carries that index. Only the names are borrowed: each
+  entry is written here in its Go form, and roughly a third of the catalog is
+  excluded with its reason, because Go has no inheritance and no exceptions.
 
 ## Local adaptations
 

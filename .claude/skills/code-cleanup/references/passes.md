@@ -8,6 +8,10 @@ Counts below were measured over `operator/internal/controller` (30 files, 18,041
 lines, 424 functions) unless another scope is named. Re-measure rather than
 trusting them. That is what `scripts/measure.sh` is for.
 
+Each pass below names a goal. `catalog.md` names the moves: which refactoring
+technique resolves which smell, in its Go form, and which of the classical
+techniques do not apply here at all.
+
 ## 1. Dead code
 
 **Rule.** Code that nothing reaches is deleted, not commented out, not moved to
