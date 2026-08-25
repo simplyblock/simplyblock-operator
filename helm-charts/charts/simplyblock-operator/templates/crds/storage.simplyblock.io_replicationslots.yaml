@@ -3,29 +3,34 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+    helm.sh/resource-policy: keep
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: replicationpairs.storage.simplyblock.io
+  name: replicationslots.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
   names:
-    kind: ReplicationPair
-    listKind: ReplicationPairList
-    plural: replicationpairs
+    kind: ReplicationSlot
+    listKind: ReplicationSlotList
+    plural: replicationslots
     shortNames:
-    - relpair
-    singular: replicationpair
+    - relslot
+    singular: replicationslot
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.sourceCluster
-      name: Source
+    - jsonPath: .spec.policyRef
+      name: Policy
       type: string
-    - jsonPath: .spec.targetCluster
-      name: Target
+    - jsonPath: .spec.pvcRef
+      name: PVC
       type: string
-    - jsonPath: .status.ready
-      name: Ready
-      type: boolean
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .status.direction
+      name: Direction
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -33,11 +38,12 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          ReplicationPair defines the source and target clusters for a replication relationship.
-          It is reusable configuration — multiple ReplicationPolicies may reference the same pair
-          to replicate volumes between the same two clusters with different schedules or retention.
-          The operator ensures the corresponding backend ReplicationTarget exists and stores its ID
-          in status.backendTargetID for use by ReplicationPolicy resources.
+          ReplicationSlot tracks the live replication state for a single PVC.
+          One ReplicationSlot is created per PVC by the PVCAnnotationWatcher controller when
+          a PVC references a ReplicationPolicy via annotation. It is owned by its PVC, so
+          deleting the PVC cascades deletion and triggers a backend detach via the slot finalizer.
+          The ReplicationSlot reconciler drives all backend calls: attach, monitor, cutover,
+          failover, and detach.
         properties:
           apiVersion:
             description: |-
@@ -57,38 +63,29 @@ spec:
           metadata:
             type: object
           spec:
-            description: ReplicationPairSpec defines the source and target clusters
-              for a replication relationship.
+            description: ReplicationSlotSpec defines the identity of a per-volume
+              replication slot.
             properties:
-              sourceCluster:
-                description: SourceCluster is the name of the local StorageCluster
-                  (the replication source).
+              policyRef:
+                description: PolicyRef is the name of the ReplicationPolicy governing
+                  this slot. Immutable.
                 type: string
-              targetCluster:
+              pvcRef:
+                description: PVCRef is the name of the PVC being replicated. Immutable.
+                type: string
+              volumeID:
                 description: |-
-                  TargetCluster is the name or UUID of the remote cluster (the replication target).
-                  Immutable after creation.
+                  VolumeID is the backend lvol UUID of the source volume. Immutable.
+                  Format: "<clusterUUID>:<poolUUID>:<volumeUUID>"
                 type: string
-                x-kubernetes-validations:
-                - message: targetCluster is immutable
-                  rule: self == oldSelf
             required:
-            - sourceCluster
-            - targetCluster
+            - policyRef
+            - pvcRef
+            - volumeID
             type: object
           status:
-            description: ReplicationPairStatus holds the observed state of a ReplicationPair.
+            description: ReplicationSlotStatus holds the observed state of a ReplicationSlot.
             properties:
-              activeOpsRef:
-                description: |-
-                  ActiveOpsRef is the name of the ReplicationOps currently holding the
-                  target-scope lock on this pair. Only one scope=target ReplicationOps may
-                  be active per pair at a time.
-                type: string
-              backendTargetID:
-                description: BackendTargetID is the UUID of the backend ReplicationTarget
-                  resource.
-                type: string
               conditions:
                 description: Conditions holds standard Kubernetes condition types.
                 items:
@@ -146,14 +143,45 @@ spec:
                   - type
                   type: object
                 type: array
+              direction:
+                description: Direction is which side of the replication relationship
+                  this cluster holds.
+                enum:
+                - source
+                - target
+                type: string
+              lastReplicatedAt:
+                description: LastReplicatedAt is the timestamp of the last successful
+                  replication snapshot.
+                format: date-time
+                type: string
               message:
                 description: Message provides a human-readable description of the
                   current state.
                 type: string
-              ready:
-                description: Ready is true when the backend ReplicationTarget has
-                  been created and is available.
-                type: boolean
+              sourceLvolID:
+                description: SourceLvolID is the UUID of the source volume on the
+                  source cluster.
+                type: string
+              state:
+                description: State is the current replication state for this slot.
+                enum:
+                - attaching
+                - replicating
+                - cutover_pending
+                - cutover_done
+                - failed_over
+                - detaching
+                - error
+                type: string
+              targetLvolID:
+                description: TargetLvolID is the UUID of the replicated volume on
+                  the target cluster.
+                type: string
+              targetNQN:
+                description: TargetNQN is the NVMe NQN on the target cluster (populated
+                  after failover).
+                type: string
             type: object
         type: object
     served: true

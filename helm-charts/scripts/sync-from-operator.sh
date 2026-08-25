@@ -10,7 +10,12 @@ fi
 OPERATOR_DIR="$1"
 
 CRD_SRC="$OPERATOR_DIR/config/crd/bases"
-CRD_DST="$HELM_CHARTS_DIR/charts/simplyblock-operator/crds"
+# Lives under templates/, not the special crds/ directory, so GitOps tooling
+# (and `helm upgrade` itself) actually tracks and updates CRD changes — the
+# crds/ directory is install-only and silently never upgrades or deletes.
+# helm.sh/resource-policy: keep preserves crds/'s original never-delete-on-
+# uninstall behavior now that these are regular, deletable templates.
+CRD_DST="$HELM_CHARTS_DIR/charts/simplyblock-operator/templates/crds"
 RBAC_SRC="$OPERATOR_DIR/config/rbac"
 ROLES_DST="$HELM_CHARTS_DIR/charts/simplyblock-operator/templates/roles"
 WEBHOOK_SRC="$OPERATOR_DIR/config/webhook"
@@ -31,7 +36,14 @@ done
 
 for src in "$CRD_SRC"/storage.simplyblock.io_*.yaml; do
   name=$(basename "$src")
-  cp "$src" "$CRD_DST/$name"
+  # Tag each CRD with sync-wave ordering so a multi-resource GitOps sync
+  # applies CRDs before the resources that reference them, and preserve
+  # crds/'s original never-delete-on-uninstall behavior now that these
+  # live under templates/.
+  sed '/^  annotations:$/a\
+    argocd.argoproj.io/sync-wave: "-1"\
+    helm.sh/resource-policy: keep
+' "$src" > "$CRD_DST/$name"
   echo "  copied: $name"
 done
 
