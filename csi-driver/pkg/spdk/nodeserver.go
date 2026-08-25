@@ -41,6 +41,7 @@ import (
 	mount "k8s.io/mount-utils"
 	"k8s.io/utils/exec"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -58,6 +59,18 @@ const vdoCapableMarkerPath = "/var/run/simplyblock/vdo-capable/marker"
 // vdoCapableLabelValue is the value of vdoCapableLabelKey (and the marker file's own
 // contents) when a node is VDO-capable.
 const vdoCapableLabelValue = "true"
+
+// vdoCapableManagedByAnnotationKey marks a vdoCapableLabelKey value as owned by
+// advertiseVDOCapability's own auto-detection. Its absence -- or any value other than
+// vdoCapableManagedByAnnotationValue -- means an operator set the label by hand (a golden
+// image, or a node without BaseOS repo access where the postStart hook's install can never
+// succeed), and advertiseVDOCapability leaves it alone rather than clobbering a deliberate
+// override with its own probe result.
+const vdoCapableManagedByAnnotationKey = "simplyblock.io/vdo-capable-managed-by"
+
+// vdoCapableManagedByAnnotationValue is the vdoCapableManagedByAnnotationKey value
+// advertiseVDOCapability writes alongside every label it sets itself.
+const vdoCapableManagedByAnnotationValue = "auto-detect"
 
 // vdoParams parses the two client-side VDO parameters out of a volume context, tolerating
 // the same boolean string forms kube.BoolParam already accepts for encryption/replicate
@@ -125,6 +138,11 @@ func newNodeServer(d *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*no
 // with a bounded timeout, since the postStart hook (a dnf install on first run) can take
 // longer than node-server startup should block on -- without the retry, a fast-starting
 // node server could read "marker not found yet" and wrongly label the node incapable.
+//
+// An operator-set label (one lacking vdoCapableManagedByAnnotationKey) is left untouched --
+// this is the escape hatch for nodes the auto-install path can never reach: airgapped
+// clusters with no BaseOS repo access, or a distro the postStart hook doesn't know how to
+// provision at all. See vdoCapableManagedByAnnotationKey.
 func (ns *nodeServer) advertiseVDOCapability(ctx context.Context) {
 	const (
 		maxWait  = 5 * time.Minute
@@ -134,6 +152,19 @@ func (ns *nodeServer) advertiseVDOCapability(ctx context.Context) {
 	nodeName := ns.Driver.GetNodeID()
 	if nodeName == "" {
 		klog.Warning("advertiseVDOCapability: no node ID, skipping")
+		return
+	}
+
+	node, err := ns.kubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+	if err != nil {
+		klog.Errorf("advertiseVDOCapability: failed to get node %s, skipping: %v", nodeName, err)
+		return
+	}
+	if vdoCapableOperatorManaged(node) {
+		klog.Infof(
+			"advertiseVDOCapability: node %s has an operator-set %s label, leaving it alone",
+			nodeName, vdoCapableLabelKey,
+		)
 		return
 	}
 
@@ -161,13 +192,26 @@ func (ns *nodeServer) advertiseVDOCapability(ctx context.Context) {
 	}
 }
 
+// vdoCapableOperatorManaged reports whether node's vdoCapableLabelKey was set by an
+// operator rather than advertiseVDOCapability's own auto-detection -- i.e., the label is
+// present without the annotation advertiseVDOCapability always writes alongside its own
+// updates. Such a label must never be overwritten by a fresh probe result.
+func vdoCapableOperatorManaged(node *corev1.Node) bool {
+	_, labeled := node.Labels[vdoCapableLabelKey]
+	return labeled && node.Annotations[vdoCapableManagedByAnnotationKey] != vdoCapableManagedByAnnotationValue
+}
+
 func (ns *nodeServer) patchVDOCapableLabel(ctx context.Context, nodeName string, capable bool) error {
 	patch := struct {
 		Metadata struct {
-			Labels map[string]string `json:"labels"`
+			Labels      map[string]string `json:"labels"`
+			Annotations map[string]string `json:"annotations"`
 		} `json:"metadata"`
 	}{}
 	patch.Metadata.Labels = map[string]string{vdoCapableLabelKey: strconv.FormatBool(capable)}
+	patch.Metadata.Annotations = map[string]string{
+		vdoCapableManagedByAnnotationKey: vdoCapableManagedByAnnotationValue,
+	}
 
 	body, err := json.Marshal(patch)
 	if err != nil {
