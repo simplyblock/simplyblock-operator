@@ -871,11 +871,11 @@ func migrationPathJob(
 	deadline := int64(validationJobDeadline.Seconds())
 	return buildRebalancerJob(rebalancerJobParams{
 		// One Job per node: name carries both migration ID and node.
-		Name:      js.namePrefix + safeNodeID(vm.Status.MigrationUUID) + "-" + nodeSuffix(hostname),
-		Namespace: vm.Namespace,
-		OwnerRef:  *metav1.NewControllerRef(vm, simplyblockv1alpha1.GroupVersion.WithKind("VolumeMigration")),
-		Hostname:  hostname,
-		Image:     image,
+		Name:          js.namePrefix + safeNodeID(vm.Status.MigrationUUID) + "-" + nodeSuffix(hostname),
+		Namespace:     vm.Namespace,
+		OwnerRef:      *metav1.NewControllerRef(vm, simplyblockv1alpha1.GroupVersion.WithKind("VolumeMigration")),
+		Hostname:      hostname,
+		Image:         image,
 		ContainerName: js.container,
 		Mode:          js.mode,
 		Env: []corev1.EnvVar{
