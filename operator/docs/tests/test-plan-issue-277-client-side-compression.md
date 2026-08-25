@@ -3,16 +3,17 @@
 Related design: [`designs/design-issue-277-client-side-compression.md`](../designs/design-issue-277-client-side-compression.md)
 Spike transcript: [`designs/spike-log-issue-277-client-side-compression.md`](../designs/spike-log-issue-277-client-side-compression.md)
 
-None of the CSI-side code in this plan exists yet (`csi-driver/pkg/util/vdo.go` and the
-`nodeserver.go` wiring are still design, not implementation) — this is a forward test plan
-to build against while implementing, not a report of what's already covered.
+The CSI-side code this plan describes (`csi-driver/pkg/util/vdo.go` and the `nodeserver.go`
+wiring) is implemented and live-verified end-to-end on a real cluster (`config-israel`) —
+this plan started as a forward plan to build against and now also reports what's covered.
+Rows marked "done"/"Verified" cite real evidence; unmarked rows are still forward-looking.
 
 Each scenario is classified two ways:
 
-- **Type**: **Positive** (the mechanism works as intended) or **Negative** (an error,
+- **Type:** **Positive** (the mechanism works as intended) or **Negative** (an error,
   edge case, or adverse condition is handled correctly rather than corrupting data,
   crashing, or silently degrading).
-- **Level**: **Unit** (no cluster; mocked `lvm`/`vdo`/exec calls, mirroring
+- **Level:** **Unit** (no cluster; mocked `lvm`/`vdo`/exec calls, mirroring
   `initiator_test.go`/`nodeserver_test.go` patterns), **Integration** (live cluster, a real
   NVMe-oF-backed lvol, non-destructive), or **E2E** (full path: StorageClass → scheduler →
   `NodeStageVolume`, requires the CSI-integrated code to exist).
@@ -30,9 +31,12 @@ Each scenario is classified two ways:
 | `compression=false, deduplication=true` | `lvcreate --type vdo --compression n --deduplication y` | Positive | Unit |
 | `compression=true, deduplication=true` | `lvcreate --type vdo --compression y --deduplication y` | Positive | Unit |
 | Device smaller than the ~4.72GiB VDO floor | Returns an explicit error before ever invoking `lvcreate` | Negative | Unit |
-| `lvcreate` itself fails (e.g. host reports insufficient space) | Error propagated; no partial PV/VG left registered | Negative | Unit + Integration |
+| `lvcreate` itself fails (e.g., host reports insufficient space) | Error propagated; no partial PV/VG left registered | Negative | Unit + Integration |
 | `devicePath` doesn't exist / isn't a block device | Returns error before invoking any LVM command | Negative | Unit |
-| `vgs`/`lvs` probe itself errors (e.g. LVM lock contention) | Error surfaced, not misread as "VG doesn't exist" (which would trigger a destructive `lvcreate` over live data) | Negative | Unit |
+| `vgs`/`lvs` probe itself errors (e.g., LVM lock contention) | Error surfaced, not misread as "VG doesn't exist" (which would trigger a destructive `lvcreate` over live data) | Negative | Unit |
+| A volume's two redundant NVMe-oF HA paths are both visible on the node as separate local devices | **Verified, found and fixed a real bug**: an unscoped `pvscan`/`pvs`/`vgs`/`lvcreate` hit a genuine "duplicate PV" ambiguity between the two paths. Fixed by scoping every LVM command to exactly one device via `--devices`. Confirmed on `config-israel`: two independently toggled VDO pools mounted successfully end-to-end afterward | Negative | Unit + E2E (done) |
+| `vgExists` on a host with an `/etc/lvm/devices/system.devices` file restricting default visibility | **Verified, found and fixed a real bug**: the original name-based `vgs --devices <path> <name>` lookup reported a VG as existing when it had never been created on that device. Fixed by making `vgExists` content-based (`pvVGName(devicePath) == vg`) | Negative | Unit + E2E (done) |
+| VG exists but has zero logical volumes (orphaned by an interrupted `pvcreate`/`vgcreate` that never reached `lvcreate`) | **Verified**: `vgHasLV` correctly detects the orphan (`vgchange -ay` against it "succeeds" but produces no mountable device), and `CreateOrAttachVDO` removes it and falls through to a fresh create rather than reactivating it forever | Negative | Unit + E2E (done) |
 
 ## 2. `ResolveClonedVDO`
 
@@ -59,7 +63,7 @@ Each scenario is classified two ways:
 
 | Test | Scenario | Type | Level |
 |---|---|---|---|
-| Grow while the volume is mounted and in use | `lvextend` (physical, pool LV) then `lvextend` (logical, VDO LV), filesystem stays intact and newly-available space is genuinely usable | Positive | Unit + Integration |
+| Grow while the volume is mounted and in use | `lvextend` (physical, pool LV) then `lvextend` (logical, VDO LV), filesystem stays intact and newly available space is genuinely usable | Positive | Unit + Integration |
 | `growPhysical`-equivalent (`lvextend` on the pool LV) succeeds, logical `lvextend` fails | Filesystem resize must NOT proceed against an inconsistent physical/logical state | Negative | Unit |
 | Growth starting exactly at/near the ~4.72GiB minimum-size floor | Not yet spiked (existing spike started from an already-above-floor 5.5G pool) — needs its own pass | Negative (edge case) | Integration |
 | Requested `newSize` smaller than current size | Rejected/no-op — VDO/LVM don't support online shrink | Negative | Unit |
@@ -74,7 +78,9 @@ Each scenario is classified two ways:
 | `modprobe kvdo` fails (kernel/`kmod-kvdo` NVR mismatch — already reproduced once against the original spike cluster) | Same failure/labeling path as above | Negative | Integration |
 | `buildAccessibleTopology` with `vdo-capable=true` node label present | Surfaced as a CSI topology segment via `NodeGetInfo` | Positive | Unit |
 | `buildAccessibleTopology` with the label absent/false | Segment omitted — node not advertised as VDO-capable | Negative | Unit |
-| Node's capability regresses **after** a VDO-backed PVC is already bound and running there (e.g. an OS update removes `kvdo` compatibility) | `NodeStageVolume`/`restageVolume` must hard-fail loudly on the next stage/restage rather than silently mounting the raw device (which could already carry a VDO container on-disk) | Negative | Unit + Integration |
+| Node's capability regresses **after** a VDO-backed PVC is already bound and running there (e.g., an OS update removes `kvdo` compatibility) | `NodeStageVolume`/`restageVolume` must hard-fail loudly on the next stage/restage rather than silently mounting the raw device (which could already carry a VDO container on-disk) | Negative | Unit + Integration |
+| Operator hand-labels `simplyblock.io/vdo-capable` on a node (airgapped, or a golden image), and `advertiseVDOCapability`'s own probe must not clobber it | **Verified — unit + live**: `TestAdvertiseVDOCapability_RespectsOperatorOverride`, `TestVDOCapableOperatorManaged` (`csi-driver/pkg/spdk/nodeserver_vdo_capability_test.go`). Live on `config-israel`: a label present without the `vdo-capable-managed-by: auto-detect` annotation survives a `csi-node` pod restart unchanged, and the change is reflected correctly in the CSI `NodeGetInfo` topology response | Positive | Unit + E2E (done) |
+| Pod naturally reschedules onto a **different** `vdo-capable` node (not delete/recreate on the same node), and `PersistentVolume.spec.nodeAffinity` correctly restricts it | **Verified**: cordoned the pod's original node and recreated it, and the scheduler excluded the one non-`vdo-capable` node available and landed on a `vdo-capable` node that had never hosted this volume's VDO stack before. CSI log confirms the reactivate path (`lvs` then `vgchange -ay`, no `lvcreate`), with restart count `0` and checksum matched | Positive | E2E (done) |
 
 ## 6. StorageClass Parameters / CRD (design doc Section 6)
 
@@ -99,7 +105,7 @@ Each scenario is classified two ways:
 | `restageVolume`/`ensureDeviceConnected` reconnect path, VDO was in use | Existing VDO device reattached (`pvscan --cache`, `vgchange -ay`) — never recreated/reformatted | Positive | Unit + Integration |
 | Reconnect path encounters a device that looks blank/uninitialized where VDO was expected | Must fail loudly, not silently `lvcreate` a fresh VDO container over what should already hold data | Negative | Unit |
 | `NodeExpandVolume`, VDO in use | `GrowVDO` called before the existing filesystem-resize logic | Positive | Unit |
-| `NodeExpandVolume`, VDO in use, `GrowVDO` fails | Filesystem resize NOT attempted against a not-actually-grown device | Negative | Unit |
+| `NodeExpandVolume`, VDO in use, `GrowVDO` fails | Filesystem resize NOT attempted against a not-actually grown device | Negative | Unit |
 | `stageVolume` with `fsType=="xfs"` and either client flag true | **Verified end-to-end**: `mkfs.xfs` ran with only `[-f <device>]`, no stripe-alignment flags; mounted cleanly with `nouuid` intact, compression/dedup stayed enabled, data round-tripped correctly, reattach-on-recreate confirmed | Positive | Unit + E2E (done) |
 | `stageVolume` with `fsType=="ext4"` and either client flag true | Unaffected — `xfsStripeOptions` path never applies to ext4 regardless | Negative (no-regression) | Unit |
 
@@ -110,7 +116,7 @@ Each scenario is classified two ways:
 | Single VDO instance survives a full node reboot | Already verified in the spike log (§12) — port into a repeatable Integration test | Positive | Integration |
 | Multiple VDO instances in parallel on one node | Already verified (§9 of the spike log) — no naming/dm collision, linear memory scaling — port into an Integration test | Positive | Integration |
 | Multiple VDO instances present, then the node reboots together | **Verified** against the real implementation and a real reboot: two real PVCs on one node, distinct checksummed data, node rebooted — both reattached cleanly (`kvdo` usage count exactly 2, both `VDOOperatingMode: normal`, both checksums matched). Caveat: the two `NodeStageVolume` LVM sequences happened not to overlap in execution, so genuinely concurrent `vgchange`/`pvscan` locking remains unexercised (see design doc Notes) | Positive | Integration (done) |
-| Genuinely concurrent (overlapping, not just closely-timed) `vgchange -ay`/`pvscan --cache` calls racing at the LVM level | Not yet forced — the reboot test above happened to serialize naturally | Negative | Integration |
+| Genuinely concurrent (overlapping, not just closely timed) `vgchange -ay`/`pvscan --cache` calls racing at the LVM level | Not yet forced — the reboot test above happened to serialize naturally | Negative | Integration |
 | Backing device disappears without a clean unstage while the node stays up (storage-side force-disconnect) | **Verified end-to-end** (see §3 above) — deliberately reproduced, found and fixed two real bugs, confirmed fully automatic recovery on a second run | Positive | E2E (done) |
 | Original node itself goes NotReady and later rejoins as Ready, pod meanwhile rescheduled elsewhere | Still open — the test above kept the node and kubelet healthy throughout (only the storage connection was severed) and deleted the pod normally; whether kubelet's volume reconciler reliably re-invokes `NodeUnstageVolume` on the *original* node specifically after a NotReady/rejoin cycle is a different, unverified code path | Negative | E2E |
 | `system.devices` bookkeeping after repeated node-failure cycles | Stale entries pruned (`lvmdevices --deldev`) rather than accumulating indefinitely across a node's lifetime | Negative (hygiene, not correctness) | Integration |
@@ -123,8 +129,10 @@ Each scenario is classified two ways:
 | Clone/snapshot-restored volume scheduled onto the same node as its still-live source | **Verified** (see Section 2 above) — byte-duplicate PV/VG UUID resolved by `ResolveClonedVDO` before either device's LVM activation collides node-wide | Positive | E2E (done) |
 | XFS requested as `fsType` with either client flag true | **Verified** (see Section 7 above) — end-to-end pass with XFS on top of a real VDO device, no bugs found | Positive | Integration (done) |
 | Server-side `compression=true` + `client_compression=true` on the same volume | Redundant but not harmful — confirm no double-compression correctness issue, just wasted CPU | Negative | Integration |
-| Server-side `encryption=true` + `client_compression=true` | Confirmed compatible via architecture research (crypto bdev sits below the nvmf attach point) — port the plaintext-vs-ciphertext compression-ratio check into a repeatable test | Positive | Integration |
-| Placement webhook / volume placement injector co-locating a workload with a non-`vdo-capable` storage node | Confirm the two placement constraints compose as AND rather than conflicting | Negative | Integration |
+| Server-side `encryption=true` + `client_compression=true` | Confirmed compatible via architecture research (crypto bdev sits below the NVMf attach point) — port the plaintext-vs-ciphertext compression-ratio check into a repeatable test | Positive | Integration |
+| `VolumeMigration` moving a VDO-backed volume's storage node to a different node | **Verified end-to-end**: migrated a VDO-backed volume via a real `VolumeMigration` CR, `Phase: Completed` in under 30s, pod restart count `0`, checksum matched. Confirmed via `nvme list-subsys` on the consumer node that `dm-vdo` is unaffected by the migration, since it sits on the consumer's NVMe-oF client connection, not the backend node the migration moves. `CreateOrAttachVDO` is never re-invoked | Positive | E2E (done) |
+| `VolumeMigration` target node's `vdo-capable` status | **Verified, no check exists, and none is needed**: grepped `volumemigration_controller.go` for any `vdo` reference, zero matches. Correct, since VDO never runs on the storage backend node a migration moves | Positive (no design change needed) | Code review + E2E (done) |
+| Placement webhook / volume placement injector co-locating a workload with a non-`vdo-capable` storage node | **Verified, no conflict exists**: `SimplyblockVolumePlacementInjector` only selects which storage backend node hosts the lvol (a `host_id` hint annotation). It never touches pod scheduling or injects pod affinity, so it cannot conflict with the `vdo-capable` topology gate | Negative | Code review (done) |
 
 ---
 
@@ -132,9 +140,13 @@ Each scenario is classified two ways:
 
 | Gap | Reason |
 |---|---|
-| Full CSI-integrated E2E (`client_compression=true` PVC through the real StorageClass → topology gate → `NodeStageVolume` path) | Blocked on the implementation itself existing — design only today |
+| Node/pod dies **during** initial VDO creation (mid-`lvcreate`), leaving a partially created PV/VG/pool | Every live test let `CreateOrAttachVDO` complete. Three separate interrupt attempts at the raw-LVM level failed to catch a genuinely partial state (design doc Section 13), so the code path is defensively written but unverified against a real partial state |
+| Node's `kvdo` module becomes unloadable **after** a VDO-backed PVC is already bound and running there | A safe, reversible proxy test (`lvmlocal.conf` activation restriction) was blocked before it could run. The underlying guarantee is proven indirectly by other failure-injection tests reaching the same `NodeStageVolume` hard-fail code path, but not this specific trigger |
+| 10-30+ VDO-backed PVCs provisioned concurrently on one node | Not attempted. Load Case #1 (two simultaneous instances) already found a real per-node memory ceiling that likely bounds this lower than expected on similarly sized nodes |
+| Sustained high-throughput writes to a VDO volume (real CPU/memory overhead under load) | Only small (~100MB), non-sustained writes have been used to demonstrate data-reduction ratios |
+| Large volume (10s of GB) with a realistic mix of compressible/duplicate/random data at scale | All data-savings verification so far used small, synthetic, highly duplicate data |
 | `lvm2`/VDO segtype availability detection as part of node capability checks | Open question in design doc Section 13, not yet decided |
-| Standalone `vdo` CLI vs. LVM-integrated VDO as the long-term management interface | Open risk noted in design doc Non-Goals; affects `vdo.go`'s shape if it changes |
 | `atlas-lib` placement of VDO/LVM primitives (vs. `csi-driver/pkg/util/vdo.go`) | Design suggestion under discussion, not yet decided |
-| Multi-socket / multi-VDO-instance memory pressure at fleet scale (many volumes, one node) | Only 2-instance parallel scaling has been measured; no stress test at realistic fleet density |
-| VolumeMigration's actual cutover moment (old paths going inaccessible, new paths becoming primary) | Spike observation window ended before cutover completed (see design doc Section 12) |
+| Whether VDO's overhead ratio improves for larger pools/slab configurations | Only measured at the minimum viable pool size. Unverified whether the ~390MB/3.5GiB fixed tax becomes proportionally smaller at scale beyond the growth test's own before/after `Data%` observation |
+| In-tree `dm-vdo` fast path for kernel ≥6.9 (skip install/modprobe entirely) | Explicitly deferred: the auto-detect mechanism still only tries the legacy `kmod-kvdo` install path (design doc Section 13) |
+| Non-RHEL distro coverage (e.g., Ubuntu-based node images) | Not evaluated. The install path assumes `dnf`/RHEL-family packaging throughout |
