@@ -39,7 +39,6 @@ backed by evidence) should calibrate for that difference going in.
   - [6. StorageClass Parameter and CRD Changes](#6-storageclass-parameter-and-crd-changes)
   - [7. VDO Device Management (CSI Node Plugin)](#7-vdo-device-management-csi-node-plugin)
     - [Device creation](#device-creation)
-    - [Compression vs. deduplication cost](#compression-vs-deduplication-cost)
     - [Notes](#notes)
     - [Wiring into `nodeserver.go`](#wiring-into-nodeservergo)
   - [8. Re-Provisioning and Failure Handling](#8-re-provisioning-and-failure-handling)
@@ -392,33 +391,11 @@ dedup-only) mounted successfully end-to-end on the same cluster where this was
 first found, confirming the fix chain works together. See the test plan's
 Error-case coverage for the live evidence.
 
-### Compression vs. deduplication cost
-
-Isolated by creating four VDO instances, one for each `--compression y|n
---deduplication y|n` combination, and writing the same ~1GB dataset to each
-(500MB of real, repeated journal-log text plus an exact duplicate copy of it,
-to exercise both internal compressibility and cross-block duplication):
-
-| Compression | Dedup | Data blocks used (physical) | `KVDO module bytes used` (RAM) |
-|---|---|---|---|
-| Y | N | 74,017 (~289MB) | **182MB** |
-| N | Y | 116,733 (~456MB) | **390MB** |
-| Y | Y | 34,014 (~133MB) | **390MB** |
-| N | N | 254,299 (~993MB) | **182MB** |
-
-RAM cost tracks deduplication only — 182MB regardless of compression state,
-jumping to 390MB whenever deduplication is enabled. Compression adds no
-measurable memory overhead in either direction: it is a pure CPU cost with no
-persistent index structure, consistent with LZ4 being a lightweight streaming
-codec. Best space savings require both together (133MB vs. 289MB
-compression-only vs. 456MB dedup-only for the same data) — the two are
-complementary, not redundant.
-
-*The same behavior — independent flags at creation, and independent flags via
-`lvchange` on an already-mounted volume without recreating it — was
-reproduced against a real NVMe-oF-connected simplyblock lvol: `--compression y
---deduplication n` measured ~182MB, and live-enabling deduplication
-afterward via `lvchange` measured ~391MB, matching the isolated figures above.*
+Compression and deduplication have different cost profiles: deduplication
+carries a measurably larger, fixed per-volume memory cost than compression
+does, independent of whichever combination of the two is enabled. See
+[§13](#13-open-questions-and-discussion) for a real-hardware measurement of
+that cost.
 
 ### Notes
 
@@ -533,10 +510,11 @@ afterward via `lvchange` measured ~391MB, matching the isolated figures above.*
   (both with compression and deduplication enabled) reported combined memory
   within 0.0003% of exactly double the single-instance figure — there is no
   shared-memory benefit across instances; each additional
-  deduplication-enabled volume adds the full ~390MB. Since deduplication is
-  what drives that figure (see the isolated-cost measurement above), this is
-  a deduplication-scaling risk specifically — a fleet of compression-only
-  volumes would scale the much smaller ~182MB figure instead.
+  deduplication-enabled volume adds the full ~390MB (see
+  [§13](#13-open-questions-and-discussion) for that measurement). This is a
+  deduplication-scaling risk specifically — a fleet of compression-only
+  volumes, which do not carry deduplication's index cost, would scale at a
+  much smaller figure instead.
 
 - **Multiple instances across a restart:** now verified in combination, via
   the real implementation (`CreateOrAttachVDO`/`NodeStageVolume`), not just
@@ -1009,7 +987,7 @@ this failure mode does not occur here. **No design change needed.**
   deduplication?** Per team discussion, deduplication is meant to be
   restricted to "specific volumes" rather than freely available anywhere
   compression is — a deliberate choice given the measured, fixed ~390MB/volume
-  RAM cost (Section 7) that compression alone doesn't carry. But the concrete
+  RAM cost (below) that compression alone doesn't carry. But the concrete
   rule hasn't been decided. Candidates, each implying different plumbing:
   - **Pool/StorageClass-level allowlist:** an admin explicitly enables
     `clientDeduplication` on specific pools (mirrors the existing
