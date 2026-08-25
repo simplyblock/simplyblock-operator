@@ -190,11 +190,30 @@ Then:
 - **Clear every error.** All seven gates pass, or the work is not done.
 - **Read the diff of every `--fix`.** The fixers cannot tell a product name from
   an identifier written without backticks, and the punctuation fixer will move a
-  comma inside a phrase that was cited rather than quoted — `"e.g.,"` becomes
-  `"e.g.,,"`. Both happen; both are the writer's to catch.
-- **Decide each warning.** Em dashes are house style here and the gate warns on
-  every one, so a design document produces hundreds. Read them for the other
-  findings mixed in.
+  comma inside a phrase that was cited rather than quoted, turning `"e.g.,"` into
+  `"e.g.,,"`. Both happen, and both are the writer's to catch.
+- **Adjudicate every warning, one at a time.** A warning is not noise to skim
+  past. Semicolons and em dashes in running prose read as machine-written, and a
+  document built out of them does not read as though a person wrote it. The
+  default disposition is to fix: two full stops in place of a semicolon, and a
+  comma, a parenthesis, or a fresh sentence in place of an em dash.
+  - **Code is exempt.** A warning inside a fenced block, a command, a path, a
+    table of literals, or any other quoted value is not prose. Skip it and move
+    on without comment.
+  - **Every prose warning is either fixed or justified in writing.** The
+    justification has to say why this sentence is the exception, not why the mark
+    was convenient. Valid reasons are rare and specific: a semicolon separating
+    items of a series that already carry commas, which house style keeps, or a
+    mark that belongs to quoted source text or to a proper name. "It reads
+    better" and "the rest of the corpus does it" are not reasons.
+  - **Say what happened.** Report how many warnings the gate raised, how many
+    were fixed, and list each one kept with its reason. A bare "the gate passed"
+    hides the findings this step exists to surface, because the gate fails on
+    errors and never on warnings.
+
+  This is deliberately stricter than the "Em dashes stay" note in
+  `house-style/SKILL.md`. For the documents this skill writes, the rule above
+  wins.
 - **Do not retrofit** documents this change did not otherwise touch. A pre-existing
   finding in a neighboring doc is not this change's work.
 
@@ -220,11 +239,13 @@ Then:
 ### Before handing the work back
 
 1. All seven house style gates pass on every file this change created or edited.
-2. Both documents exist and link to each other.
-3. Every TOC anchor and relative link resolves.
-4. Every `§` reference is unambiguous about which document it means.
-5. Every count in the text matches the file.
-6. Every test function named in the plan's `Test` column exists (grepped, not
+2. Every punctuation warning outside a code block is either fixed or listed with
+   a reason that survives scrutiny.
+3. Both documents exist and link to each other.
+4. Every TOC anchor and relative link resolves.
+5. Every `§` reference is unambiguous about which document it means.
+6. Every count in the text matches the file.
+7. Every test function named in the plan's `Test` column exists (grepped, not
    recalled).
 
 ## Updating an existing document

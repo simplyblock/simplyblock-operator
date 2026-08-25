@@ -4,12 +4,12 @@ A monorepo of four components. `atlas-lib` is the shared library, and the two
 consumers depend on it through a `replace` directive rather than a published
 version:
 
-| Component | Directory | Role |
-|---|---|---|
-| atlas-lib | `atlas-lib/` | Shared library: node-level storage primitives and the control-plane client |
-| operator | `operator/` | The kubebuilder operator: CRDs, reconcilers, webhooks |
-| csi-driver | `csi-driver/` | The `spdkcsi` CSI driver |
-| helm-charts | `helm-charts/` | Chart sources; `charts/simplyblock-operator` is the development chart |
+| Component   | Directory      | Role                                                                       |
+|-------------|----------------|----------------------------------------------------------------------------|
+| atlas-lib   | `atlas-lib/`   | Shared library: node-level storage primitives and the control-plane client |
+| operator    | `operator/`    | The kubebuilder operator: CRDs, reconcilers, webhooks                      |
+| csi-driver  | `csi-driver/`  | The `spdkcsi` CSI driver                                                   |
+| helm-charts | `helm-charts/` | Chart sources; `charts/simplyblock-operator` is the development chart      |
 
 ## Shared code lives in atlas-lib
 
@@ -63,13 +63,15 @@ module would need that wiring everywhere.
 
 Load the one that matches the task; each carries the detail this file leaves out.
 
-| Skill | For |
-|---|---|
-| `new-files` | Creating a file: separation of concerns, the opening comment, where it goes |
-| `house-style` | Writing or fixing prose, comments, and names; resolving a gate finding |
-| `build-system` | Building, regenerating, syncing the chart, the OLM bundle, drift failures |
-| `design-doc` | A design document under `operator/docs/designs` and its test plan |
-| `test-scenarios` | Enumerating test scenarios: paired positive and negative, across topologies |
-| `regression-test` | Fixing a bug: the failing test comes first, red for the bug's reason |
-| `reconciler-patterns` | Writing or reviewing a controller: phases, never blocking, generations, locks |
-| `api-design` | Adding or changing a CRD: the Entity and Ops split, markers, what is breaking |
+| Skill                  | For                                                                             |
+|------------------------|---------------------------------------------------------------------------------|
+| `new-files`            | Creating a file: separation of concerns, the opening comment, where it goes     |
+| `house-style`          | Writing or fixing prose, comments, and names; resolving a gate finding          |
+| `build-system`         | Building, regenerating, syncing the chart, the OLM bundle, drift failures       |
+| `design-doc`           | A design document under `operator/docs/designs` and its test plan               |
+| `test-scenarios`       | Enumerating test scenarios: paired positive and negative, across topologies     |
+| `regression-test`      | Fixing a bug: the failing test comes first, red for the bug's reason            |
+| `reconciler-patterns`  | Writing or reviewing a controller: phases, never blocking, generations, locks   |
+| `api-design`           | Adding or changing a CRD: the Entity and Ops split, markers, what is breaking   |
+| `code-cleanup`         | Cleaning up, refactoring, modernizing, or restructuring code that already works |
+| `extract-to-atlas-lib` | Moving a shared primitive into `atlas-lib` and deleting both copies             |
