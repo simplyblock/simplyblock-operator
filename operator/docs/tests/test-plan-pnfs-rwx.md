@@ -4,7 +4,7 @@ Related design: [`designs/design-pnfs-rwx.md`](../designs/design-pnfs-rwx.md)
 Striped volumes and group snapshots: [`test-plan-pnfs-striped.md`](test-plan-pnfs-striped.md)
 Harness: `csi-driver` (`make -C csi-driver unit-test`, `e2e-test`) and
 `operator` (`make -C operator test`). The pNFS work is unimplemented, so every
-`Test` cell is `—` and every scenario is listed in §13 as a gap.
+`Test` cell is `—` and every scenario is listed in §12 as a gap.
 
 Scope: the CSI driver, the operator, and the Kubernetes surface of this
 repository. Control-plane (`sbcli`) and SPDK behavior is a dependency, faked at
@@ -41,19 +41,19 @@ Pure functions and server helpers, covered without external dependencies (mock `
 
 #### StorageClass Parsing & CreateVolume Planning (design §9.2–9.3) — `pkg/spdk/controllerserver_test.go`
 
-| #    | Scenario                                                                                    | Type     | Test |
-|------|---------------------------------------------------------------------------------------------|----------|------|
-| U-01 | `pnfs=true` + `stripe_count=n` → plan with `n` members and `PR=true`                        | Positive | —    |
-| U-02 | Size split: requested `S` → `n` members each `ceil(S/n)` GiB-aligned; `sum ≥ S`             | Positive | —    |
-| U-03 | `stripe_count` omitted → defaults to `1`                                                    | Positive | —    |
-| U-04 | `MULTI_NODE_MULTI_WRITER` → pNFS path; `SINGLE_NODE_WRITER` → RWO path unchanged            | Positive | —    |
-| U-05 | Idempotency: repeated `CreateVolume` (same name) → same handle/record, no extra lvols       | Positive | —    |
-| U-06 | `stripe_count == #eligible nodes` exactly → accepted                                        | Boundary | —    |
-| U-07 | `stripe_count = 0` or negative → `InvalidArgument`                                          | Negative | —    |
-| U-08 | `stripe_count > #eligible nodes` → `InvalidArgument`/`ResourceExhausted` with clear message | Negative | —    |
-| U-09 | `pnfs=true` with `fsType=ext4` → rejected (XFS required)                                    | Negative | —    |
-| U-10 | `pnfs=true` with `volumeMode=Block` → rejected                                              | Negative | —    |
-| U-11 | Non-integer `stripe_count` → `InvalidArgument`                                              | Negative | —    |
+| #    | Scenario                                                                                                           | Type     | Test |
+|------|--------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-01 | `pnfs=true` + `stripe_count=n` → plan with `n` members and `PR=true`                                               | Positive | —    |
+| U-02 | Size split: requested `S` → `n` members each `ceil(S/n)` GiB-aligned; `sum ≥ S`                                    | Positive | —    |
+| U-03 | `stripe_count` omitted → defaults to `1`                                                                           | Positive | —    |
+| U-04 | `MULTI_NODE_MULTI_WRITER` → pNFS path; `SINGLE_NODE_WRITER` → RWO path unchanged                                   | Positive | —    |
+| U-05 | Idempotency: repeated `CreateVolume` (same name) → same handle/record, no extra lvols                              | Positive | —    |
+| U-06 | `stripe_count == #eligible nodes` exactly → accepted                                                               | Boundary | —    |
+| U-07 | `stripe_count = 0` or negative → `InvalidArgument`                                                                 | Negative | —    |
+| U-08 | A request the design does not support returns exactly `InvalidArgument` with a message naming the unsupported mode | Negative | —    |
+| U-09 | `pnfs=true` with `fsType=ext4` → rejected (XFS required)                                                           | Negative | —    |
+| U-10 | `pnfs=true` with `volumeMode=Block` → rejected                                                                     | Negative | —    |
+| U-11 | Non-integer `stripe_count` → `InvalidArgument`                                                                     | Negative | —    |
 
 #### Volume Handle (design §11) — `pkg/kubernetes/volumehandle/index_test.go`
 
@@ -64,7 +64,7 @@ Pure functions and server helpers, covered without external dependencies (mock `
 | U-14 | Malformed pNFS handle (wrong part count, non-UUID export) → `(Nil, false)` | Negative | —    |
 | U-15 | Empty / whitespace handle → `(Nil, false)`                                 | Negative | —    |
 
-#### CreateLVolData / API Client (design §6.2–6.3) — `pkg/util/*_test.go` (mock HTTP)
+#### CreateLVolData / API Client (design §6.2) — `csi-driver/pkg/util/nvmf_test.go` and `jsonrpc_test.go` (mock HTTP)
 
 | #    | Scenario                                                                                 | Type     | Test |
 |------|------------------------------------------------------------------------------------------|----------|------|
@@ -75,16 +75,16 @@ Pure functions and server helpers, covered without external dependencies (mock `
 
 #### Node Stage / Publish Planning (design §10) — `pkg/spdk/nodeserver_test.go` (new)
 
-| # | Scenario | Type | Test |
-|---|---|---|---|
-| U-20 | pNFS `VolumeContext` parses into `n` members, `mds_ip`, `export_path`, `fsid` | Positive | — |
-| U-21 | NFS mount command is `mount -t nfs -o v4.1 {mds_ip}:{export_path} {stage}` (+ extra opts) | Positive | — |
-| U-22 | `eui64` symlink target computed correctly from an `nvme id-ns` NGUID fixture | Positive | — |
-| U-23 | Publish refcount: two publishes then one unpublish keeps staging mount; 2nd unpublish+unstage tears down | Boundary | — |
-| U-24 | Missing `mds_ip`/`fsid` in context → `InvalidArgument` | Negative | — |
-| U-25 | `access_protocol=nfs` but empty member list → error | Negative | — |
+| #    | Scenario                                                                                                 | Type     | Test |
+|------|----------------------------------------------------------------------------------------------------------|----------|------|
+| U-20 | pNFS `VolumeContext` parses into `n` members, `mds_ip`, `export_path`, `fsid`                            | Positive | —    |
+| U-21 | NFS mount command is `mount -t nfs -o v4.1 {mds_ip}:{export_path} {stage}` (+ extra opts)                | Positive | —    |
+| U-22 | `eui64` symlink target computed correctly from an `nvme id-ns` NGUID fixture                             | Positive | —    |
+| U-23 | Publish refcount: two publishes then one unpublish keeps staging mount; 2nd unpublish+unstage tears down | Boundary | —    |
+| U-24 | Missing `mds_ip`/`fsid` in context → `InvalidArgument`                                                   | Negative | —    |
+| U-25 | `access_protocol=nfs` but empty member list → error                                                      | Negative | —    |
 
-#### Export Record / Migration State Machine (design §7.1, design §13) — new package
+#### NFSExport reconciler and failover state machine (design §7.1, design §13) — `operator/internal/controller/nfsexport_controller_unit_test.go` (new)
 
 | #    | Scenario                                                       | Type     | Test |
 |------|----------------------------------------------------------------|----------|------|
@@ -196,7 +196,6 @@ stubbed rather than left to the backend.
 
 - Kubernetes cluster with worker + storage nodes on kernel ≥ 6.11, `nfs-utils`/`nfs-common` installed, storage data network reachable.
 - Backend (`sbcli`) build with `-pr` and consistency-group APIs (Phase 0); operator build with the CRD/reconciler changes (design §14.2).
-- For VolumeGroupSnapshot e2e (design §20.10): Kubernetes ≥ 1.32 with `external-snapshotter`/`snapshot-controller` ≥ 8.2, `external-provisioner` ≥ 5.1, and the group-snapshot CRDs installed.
 - Distro matrix: at least one RHEL-family and one Debian-family node pool.
 - Fault-injection tooling consistent with the existing reconnect e2e suites (network partition, process kill, node drain).
 
@@ -207,7 +206,7 @@ stubbed rather than left to the backend.
 ## 10. Axis Coverage
 
 Which topologies the matrix exercises. An axis value with no IDs is a gap, not an
-omission — see §13.
+omission, see §12.
 
 | Axis              | Values covered                                                   | IDs                           | Not covered                                                                                                                                        |
 |-------------------|------------------------------------------------------------------|-------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -233,8 +232,7 @@ omission — see §13.
 | Failure injection (`F-`)     | 10        | 0       | all         |
 | Security (`SEC-`)            | 6         | 0       | all         |
 | Load and soak (`L-`)         | 6         | 0       | all         |
-| VolumeGroupSnapshot (`VGS-`) | 11        | 0       | all         |
-| **Total**                    | **94**    | **0**   | **all**     |
+| **Total**                    | **83**    | **0**   | **all**     |
 
 Nothing is implemented yet, by design: the document is a Draft and the feature
 depends on backend work that has not landed (the design's §6.1). The number to
@@ -245,11 +243,11 @@ what turns this plan from a proposal into coverage.
 
 ## 12. What Is Not Yet Covered
 
-| #      | Gap                                                                                                      | Reason                                                                                                                                                                                                                                                                           |
-|--------|----------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| all 94 | Every scenario in this plan                                                                              | The feature is unimplemented: no pNFS code exists in `csi-driver` or `operator`, so no test can be written against it yet                                                                                                                                                        |
-| —      | Multi-namespace RWX provisioning                                                                         | No scenario exists. Two PVCs of the same name in different namespaces sharing an MDS host is exactly where the export path and the `fsid` can collide, and the design's §11 volume handle is the only thing separating them. Needs rows before implementation starts             |
-| —      | Single-node cluster                                                                                      | `stripe_count=1` on a one-node cluster leaves the MDS host and the only member host identical; whether that is supported or rejected is undecided (design §18)                                                                                                                   |
-| —      | Two `StorageCluster`s with RWX exports                                                                   | `fsid` allocation is per MDS host (design §18); with two clusters on one host the allocator's scope is undefined                                                                                                                                                                 |
-| —      | Operator restart during export assembly                                                                  | `I-05` covers a record stuck in `Provisioning`; nothing covers the operator dying between the backend call and the record write                                                                                                                                                  |
-| —      | Backend behavior (`-pr` on lvol create, consistency-group atomicity, `/snode/info` capability reporting) | Out of scope for this repository: those suites live in the `sbcli` repository. The design tracks them as external blockers in design §6.1, and this plan covers only the boundary against them — `U-16`, `U-19`, `O-08`, `O-09`, and the outcome assertions in `E-06` and `E-07` |
+| #         | Gap                                                                                                      | Reason                                                                                                                                                                                                                                                                           |
+|-----------|----------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-01…L-06 | Every scenario in this plan                                                                              | The feature is unimplemented: no pNFS code exists in `csi-driver` or `operator`, so no test can be written against it yet                                                                                                                                                        |
+| —         | Multi-namespace RWX provisioning                                                                         | No scenario exists. Two PVCs of the same name in different namespaces sharing an MDS host is exactly where the export path and the `fsid` can collide, and the design's §11 volume handle is the only thing separating them. Needs rows before implementation starts             |
+| —         | Single-node cluster                                                                                      | `stripe_count=1` on a one-node cluster leaves the MDS host and the only member host identical; whether that is supported or rejected is undecided (design §18)                                                                                                                   |
+| —         | Two `StorageCluster`s with RWX exports                                                                   | `fsid` allocation is per MDS host (design §18); with two clusters on one host the allocator's scope is undefined                                                                                                                                                                 |
+| —         | Operator restart during export assembly                                                                  | `I-05` covers a record stuck in `Provisioning`; nothing covers the operator dying between the backend call and the record write                                                                                                                                                  |
+| —         | Backend behavior (`-pr` on lvol create, consistency-group atomicity, `/snode/info` capability reporting) | Out of scope for this repository: those suites live in the `sbcli` repository. The design tracks them as external blockers in design §6.1, and this plan covers only the boundary against them — `U-16`, `U-19`, `O-08`, `O-09`, and the outcome assertions in `E-06` and `E-07` |
