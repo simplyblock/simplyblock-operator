@@ -36,12 +36,9 @@ done
 
 for src in "$CRD_SRC"/storage.simplyblock.io_*.yaml; do
   name=$(basename "$src")
-  # Tag each CRD with sync-wave ordering so a multi-resource GitOps sync
-  # applies CRDs before the resources that reference them, and preserve
-  # crds/'s original never-delete-on-uninstall behavior now that these
-  # live under templates/.
+  # Preserve crds/'s original never-delete-on-uninstall behavior now that
+  # these live under templates/.
   sed '/^  annotations:$/a\
-    argocd.argoproj.io/sync-wave: "-1"\
     helm.sh/resource-policy: keep
 ' "$src" > "$CRD_DST/$name"
   echo "  copied: $name"
