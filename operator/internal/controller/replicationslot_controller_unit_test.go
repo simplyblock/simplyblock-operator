@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,9 +32,11 @@ func (f *fakeRecorder) AnnotatedEventf(_ runtime.Object, _ map[string]string, _ 
 
 // newSlotReconciler creates a ReplicationSlotReconciler backed by a fake client.
 // Status for both ReplicationSlot and ReplicationPolicy is pre-seeded via WithObjects.
+// The same client is used as apiReader so tests can seed PVs and Pods for consumer-node
+// lookup without needing a separate uncached reader.
 func newSlotReconciler(t *testing.T, objects ...client.Object) (*ReplicationSlotReconciler, client.Client) {
 	t.Helper()
-	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme)
+	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme, corev1.AddToScheme, batchv1.AddToScheme)
 	cl := newTestClient(t, scheme,
 		[]client.Object{
 			&simplyblockv1alpha1.ReplicationSlot{},
@@ -41,9 +45,10 @@ func newSlotReconciler(t *testing.T, objects ...client.Object) (*ReplicationSlot
 		objects...,
 	)
 	return &ReplicationSlotReconciler{
-		Client:   cl,
-		Scheme:   scheme,
-		Recorder: &fakeRecorder{},
+		Client:    cl,
+		Scheme:    scheme,
+		Recorder:  &fakeRecorder{},
+		apiReader: cl,
 	}, cl
 }
 
@@ -538,5 +543,363 @@ func TestSlot_ErrorState_RetriesAttach(t *testing.T) {
 	}
 	if res.RequeueAfter != replSlotRequeueReplicating {
 		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, replSlotRequeueReplicating)
+	}
+}
+
+// ---------- reconcileReplicating detects cutover_pending and jumps into handler ----------
+
+func TestSlot_ReconcileReplicating_DetectsCutoverPending_TransitionsSlot(t *testing.T) {
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateReplicating))
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			// Both reconcileReplicating and reconcileCutoverPending call fetchReplicationStatus.
+			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending})
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
+			// reconcileCutoverPending fetches connections; returning empty causes an early requeue.
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, cl := newSlotReconciler(t, slot, pol)
+
+	res, err := r.Reconcile(context.Background(), slotRequest("slot1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// reconcileCutoverPending with empty connections returns a 5 s requeue.
+	if res.RequeueAfter != 5*time.Second {
+		t.Errorf("RequeueAfter = %v, want 5s", res.RequeueAfter)
+	}
+
+	got := getSlot(t, cl)
+	if got.Status.State != string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending) {
+		t.Errorf("State = %q, want CutoverPending after backend reported cutover_pending", got.Status.State)
+	}
+}
+
+// ---------- reconcileCutoverPending: no connections yet → requeue ----------
+
+func TestSlot_CutoverPending_NoConnections_Requeues(t *testing.T) {
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending})
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, _ := newSlotReconciler(t, slot, pol)
+
+	res, err := r.Reconcile(context.Background(), slotRequest("slot1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter != 5*time.Second {
+		t.Errorf("RequeueAfter = %v, want 5s when connections not yet available", res.RequeueAfter)
+	}
+}
+
+// ---------- reconcileCutoverPending: no consumer → signals backend immediately ----------
+
+func TestSlot_CutoverPending_NoConsumer_SignalsImmediately(t *testing.T) {
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
+
+	var proceedCalled bool
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending})
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
+			_ = json.NewEncoder(w).Encode([]backendVolumeConnection{{Transport: "tcp", IP: "1.2.3.4", Port: 4420, NQN: "nqn.test"}})
+		case req.Method == http.MethodPost && strings.HasSuffix(path, "/cutover-proceed"):
+			proceedCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	// apiReader (= cl) has no PVs → findPreconnectConsumerNode returns ""
+	r, cl := newSlotReconciler(t, slot, pol)
+
+	res, err := r.Reconcile(context.Background(), slotRequest("slot1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !proceedCalled {
+		t.Error("expected POST cutover-proceed to be called when no active consumer exists")
+	}
+	if res.RequeueAfter != 5*time.Second {
+		t.Errorf("RequeueAfter = %v, want 5s", res.RequeueAfter)
+	}
+
+	got := getSlot(t, cl)
+	if got.Annotations[annotCutoverProceedSignaled] != annotCutoverProceedSignaledValue {
+		t.Errorf("annotation %q = %q, want %q", annotCutoverProceedSignaled,
+			got.Annotations[annotCutoverProceedSignaled], annotCutoverProceedSignaledValue)
+	}
+}
+
+// ---------- reconcileCutoverPending: active consumer → creates preconnect Job ----------
+
+func TestSlot_CutoverPending_CreatesJobForConsumer(t *testing.T) {
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
+
+	// The VolumeID is "cluster-id:pool-id:vol-id"; findPreconnectConsumerNode looks for
+	// a PV whose CSI handle's third segment matches "vol-id".
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pv1"},
+		Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{VolumeHandle: "cluster-id:pool-id:vol-id"},
+			},
+			ClaimRef: &corev1.ObjectReference{Name: "pvc1", Namespace: "default"},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			NodeName: "worker-1",
+			Volumes: []corev1.Volume{
+				{Name: "data", VolumeSource: corev1.VolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "pvc1"},
+				}},
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending})
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
+			_ = json.NewEncoder(w).Encode([]backendVolumeConnection{{Transport: "tcp", IP: "1.2.3.4", Port: 4420, NQN: "nqn.test"}})
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, cl := newSlotReconciler(t, slot, pol, pv, pod)
+
+	res, err := r.Reconcile(context.Background(), slotRequest("slot1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter != 5*time.Second {
+		t.Errorf("RequeueAfter = %v, want 5s after creating preconnect Job", res.RequeueAfter)
+	}
+
+	expectedJobName := replSlotPreconnectJobName("vol-id")
+	var job batchv1.Job
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: expectedJobName}, &job); err != nil {
+		t.Fatalf("preconnect Job %q not created: %v", expectedJobName, err)
+	}
+	if job.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"] != "worker-1" {
+		t.Errorf("Job NodeSelector hostname = %q, want worker-1",
+			job.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"])
+	}
+}
+
+// ---------- reconcileCutoverPending: Job completed → signals proceed, marks annotation ----------
+
+func TestSlot_CutoverPending_JobComplete_Signals(t *testing.T) {
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
+	jobName := replSlotPreconnectJobName("vol-id")
+	existingJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default"},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{
+				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+
+	var proceedCalled bool
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending})
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
+			_ = json.NewEncoder(w).Encode([]backendVolumeConnection{{Transport: "tcp", IP: "1.2.3.4", Port: 4420, NQN: "nqn.test"}})
+		case req.Method == http.MethodPost && strings.HasSuffix(path, "/cutover-proceed"):
+			proceedCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, cl := newSlotReconciler(t, slot, pol, existingJob)
+
+	res, err := r.Reconcile(context.Background(), slotRequest("slot1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !proceedCalled {
+		t.Error("expected POST cutover-proceed after preconnect Job completed successfully")
+	}
+	if res.RequeueAfter != 5*time.Second {
+		t.Errorf("RequeueAfter = %v, want 5s", res.RequeueAfter)
+	}
+	got := getSlot(t, cl)
+	if got.Annotations[annotCutoverProceedSignaled] != annotCutoverProceedSignaledValue {
+		t.Errorf("annotation %q not set after job completion", annotCutoverProceedSignaled)
+	}
+}
+
+// ---------- reconcileCutoverPending: Job failed → signals proceed anyway ----------
+
+func TestSlot_CutoverPending_JobFailed_SignalsAnyway(t *testing.T) {
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
+	jobName := replSlotPreconnectJobName("vol-id")
+	existingJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default"},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{
+				{Type: batchv1.JobFailed, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+
+	var proceedCalled bool
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending})
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
+			_ = json.NewEncoder(w).Encode([]backendVolumeConnection{{Transport: "tcp", IP: "1.2.3.4", Port: 4420, NQN: "nqn.test"}})
+		case req.Method == http.MethodPost && strings.HasSuffix(path, "/cutover-proceed"):
+			proceedCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, cl := newSlotReconciler(t, slot, pol, existingJob)
+
+	res, err := r.Reconcile(context.Background(), slotRequest("slot1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !proceedCalled {
+		t.Error("expected POST cutover-proceed even after preconnect Job failed")
+	}
+	if res.RequeueAfter != 5*time.Second {
+		t.Errorf("RequeueAfter = %v, want 5s", res.RequeueAfter)
+	}
+	got := getSlot(t, cl)
+	if got.Annotations[annotCutoverProceedSignaled] != annotCutoverProceedSignaledValue {
+		t.Errorf("annotation %q not set after failed job signalling", annotCutoverProceedSignaled)
+	}
+}
+
+// ---------- reconcileCutoverPending: annotation already set → waits without re-signalling ----------
+
+func TestSlot_CutoverPending_AlreadySignaled_Waits(t *testing.T) {
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
+	slot.Annotations = map[string]string{annotCutoverProceedSignaled: annotCutoverProceedSignaledValue}
+	jobName := replSlotPreconnectJobName("vol-id")
+	// A still-running job (no terminal conditions) triggers the annotation check first.
+	existingJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default"},
+		Status:     batchv1.JobStatus{},
+	}
+
+	var proceedCalled bool
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending})
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
+			_ = json.NewEncoder(w).Encode([]backendVolumeConnection{{Transport: "tcp", IP: "1.2.3.4", Port: 4420, NQN: "nqn.test"}})
+		case req.Method == http.MethodPost && strings.HasSuffix(path, "/cutover-proceed"):
+			proceedCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, _ := newSlotReconciler(t, slot, pol, existingJob)
+
+	res, err := r.Reconcile(context.Background(), slotRequest("slot1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if proceedCalled {
+		t.Error("POST cutover-proceed must not be called again when annotation is already set")
+	}
+	if res.RequeueAfter != 5*time.Second {
+		t.Errorf("RequeueAfter = %v, want 5s while waiting for backend to advance", res.RequeueAfter)
+	}
+}
+
+// ---------- reconcileCutoverPending: backend already cutover_done → advances slot state ----------
+
+func TestSlot_CutoverPending_BackendAlreadyCutoverDone_AppliesState(t *testing.T) {
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{
+				State: backendStateCutoverDone, TargetNQN: "nqn.target",
+			})
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
+			// tryLatePreconnect fetches connections; return empty to short-circuit it.
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, cl := newSlotReconciler(t, slot, pol)
+
+	_, err := r.Reconcile(context.Background(), slotRequest("slot1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getSlot(t, cl)
+	if got.Status.State != string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone) {
+		t.Errorf("State = %q, want CutoverDone when backend reports cutover_done", got.Status.State)
+	}
+	if got.Status.TargetNQN != "nqn.target" {
+		t.Errorf("TargetNQN = %q, want nqn.target", got.Status.TargetNQN)
 	}
 }
