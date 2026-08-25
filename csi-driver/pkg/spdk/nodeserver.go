@@ -284,6 +284,11 @@ func (ns *nodeServer) redirectToActiveVolume(
 	}
 	klog.Infof("redirected deleted volume %s → active volume %s on cluster %s",
 		volumeID, activeLvolID, targetClusterID)
+	// Override cluster_id and poolID so the initiator uses the target cluster
+	// for any subsequent API calls — without this the initiator inherits the
+	// source cluster_id from vc and fails looking up the target volume there.
+	connInfo["cluster_id"] = targetClusterID
+	connInfo["poolID"] = targetPoolID
 	return connInfo
 }
 
