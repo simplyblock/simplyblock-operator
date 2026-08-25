@@ -3,35 +3,30 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
+    helm.sh/resource-policy: keep
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: replicationpolicies.storage.simplyblock.io
+  name: replicationpairs.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
   names:
-    kind: ReplicationPolicy
-    listKind: ReplicationPolicyList
-    plural: replicationpolicies
+    kind: ReplicationPair
+    listKind: ReplicationPairList
+    plural: replicationpairs
     shortNames:
-    - repl
-    singular: replicationpolicy
+    - relpair
+    singular: replicationpair
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.pairRef
-      name: Pair
+    - jsonPath: .spec.sourceCluster
+      name: Source
       type: string
-    - jsonPath: .spec.mode
-      name: Mode
-      type: string
-    - jsonPath: .spec.interval
-      name: Interval
+    - jsonPath: .spec.targetCluster
+      name: Target
       type: string
     - jsonPath: .status.ready
       name: Ready
       type: boolean
-    - jsonPath: .status.slotCount
-      name: Slots
-      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -39,11 +34,11 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          ReplicationPolicy defines the replication schedule and retention for volumes replicated
-          between the clusters defined by a ReplicationPair.
-          A StorageClass or PVC references a policy via the storage.simplyblock.io/replication-policy
-          annotation. The operator automatically creates one ReplicationSlot per bound PVC.
-          Deletion is blocked while any ReplicationSlots reference this policy.
+          ReplicationPair defines the source and target clusters for a replication relationship.
+          It is reusable configuration — multiple ReplicationPolicies may reference the same pair
+          to replicate volumes between the same two clusters with different schedules or retention.
+          The operator ensures the corresponding backend ReplicationTarget exists and stores its ID
+          in status.backendTargetID for use by ReplicationPolicy resources.
         properties:
           apiVersion:
             description: |-
@@ -63,49 +58,36 @@ spec:
           metadata:
             type: object
           spec:
-            description: ReplicationPolicySpec defines the desired replication schedule
-              and retention.
+            description: ReplicationPairSpec defines the source and target clusters
+              for a replication relationship.
             properties:
-              interval:
-                default: 5m
-                description: Interval is how often a replication snapshot is taken
-                  (e.g. "5m", "1h").
+              sourceCluster:
+                description: SourceCluster is the name of the local StorageCluster
+                  (the replication source).
                 type: string
-              mode:
-                default: failover
+              targetCluster:
                 description: |-
-                  Mode controls replication semantics.
-                  failover: target is a DR standby; volumes are read-only on the target.
-                  migration: planned online cutover to the target cluster.
-                enum:
-                - failover
-                - migration
+                  TargetCluster is the name or UUID of the remote cluster (the replication target).
+                  Immutable after creation.
                 type: string
-              pairRef:
-                description: |-
-                  PairRef is the name of the ReplicationPair that defines the source and target clusters.
-                  Multiple ReplicationPolicies may reference the same pair with different schedules.
-                type: string
-              snapshotRetention:
-                default: 3
-                description: SnapshotRetention is the minimum number of snapshots
-                  to retain on the target.
-                format: int32
-                minimum: 2
-                type: integer
+                x-kubernetes-validations:
+                - message: targetCluster is immutable
+                  rule: self == oldSelf
             required:
-            - pairRef
+            - sourceCluster
+            - targetCluster
             type: object
           status:
-            description: ReplicationPolicyStatus holds the observed state of a ReplicationPolicy.
+            description: ReplicationPairStatus holds the observed state of a ReplicationPair.
             properties:
               activeOpsRef:
                 description: |-
-                  ActiveOpsRef is the name of the currently running ReplicationOps CR.
-                  Empty when no operation is in progress.
+                  ActiveOpsRef is the name of the ReplicationOps currently holding the
+                  target-scope lock on this pair. Only one scope=target ReplicationOps may
+                  be active per pair at a time.
                 type: string
-              backendPolicyID:
-                description: BackendPolicyID is the UUID of the backend ReplicationPolicy
+              backendTargetID:
+                description: BackendTargetID is the UUID of the backend ReplicationTarget
                   resource.
                 type: string
               conditions:
@@ -165,15 +147,14 @@ spec:
                   - type
                   type: object
                 type: array
+              message:
+                description: Message provides a human-readable description of the
+                  current state.
+                type: string
               ready:
-                description: Ready is true when the backend ReplicationPolicy has
-                  been created.
+                description: Ready is true when the backend ReplicationTarget has
+                  been created and is available.
                 type: boolean
-              slotCount:
-                description: SlotCount is the number of ReplicationSlot CRs currently
-                  managed by this policy.
-                format: int32
-                type: integer
             type: object
         type: object
     served: true

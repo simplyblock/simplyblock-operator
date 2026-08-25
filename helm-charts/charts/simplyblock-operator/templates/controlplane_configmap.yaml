@@ -114,8 +114,7 @@ data:
 
 ---
 
-{{- $name := "simplyblock-prometheus-config" -}}
-{{- $existing := (lookup "v1" "ConfigMap" .Release.Namespace $name) }}
+{{- $name := "simplyblock-prometheus-config" }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -124,10 +123,6 @@ metadata:
     app: simplyblock-prometheus
   namespace: {{ .Release.Namespace }}
 data:
-  {{- if $existing }}
-  prometheus.yml: |
-{{ index $existing.data "prometheus.yml" | indent 4 }}
-  {{- else }}
   prometheus.yml: |
     global:
       scrape_interval: 30s
@@ -165,8 +160,7 @@ data:
         honor_labels: true
         metrics_path: '/metrics'
       {{- end }}
-  {{- end }}
-  
+
 ---
 apiVersion: v1
 kind: ConfigMap
