@@ -58,10 +58,6 @@ image:
     repository: quay.io/simplyblock-io/numa-resource-plugin
     tag: latest
     pullPolicy: Always
-  mgmtAPI:
-    repository: quay.io/simplyblock-io/python
-    tag: "3.9-slim"
-    pullPolicy: Always
 serviceAccount:
   # Specifies whether a serviceAccount should be created
   create: true
@@ -149,11 +145,6 @@ benchmarks: 0
 # FIXME: this will not work if there are group of nodes with different AMI types like: AL2, AL2023
 # AL2_x86_64: eth0
 # AL2023_x86_64_STANDARD: ens5
-
-# not recommended to use it in production, use it only for testing purposes
-# automatic cluster activate is disabled by default because of core isolation
-# set this to true if you want to activate the cluster automatically after the NDCS + NPCS + 1 storage nodes ares up and running.
-autoClusterActivate: false 
 
 node:
   serviceAccountAuth:
