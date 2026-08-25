@@ -39,6 +39,7 @@ backed by evidence) should calibrate for that difference going in.
   - [6. StorageClass Parameter and CRD Changes](#6-storageclass-parameter-and-crd-changes)
   - [7. VDO Device Management (CSI Node Plugin)](#7-vdo-device-management-csi-node-plugin)
     - [Device creation](#device-creation)
+    - [Clone and snapshot restore handling](#clone-and-snapshot-restore-handling)
     - [Notes](#notes)
     - [Wiring into `nodeserver.go`](#wiring-into-nodeservergo)
   - [8. Re-Provisioning and Failure Handling](#8-re-provisioning-and-failure-handling)
@@ -397,6 +398,32 @@ does, independent of whichever combination of the two is enabled. See
 [§13](#13-open-questions-and-discussion) for a real-hardware measurement of
 that cost.
 
+### Clone and snapshot restore handling
+
+A PVC clone or a VolumeSnapshot restore is a byte-level copy-on-write copy at
+the storage layer, not a reformat, so a clone of a VDO-backed volume carries
+the exact same on-disk LVM metadata as its source: the same PV UUID, VG UUID,
+and VG name. LVM identifies a PV/VG by that on-disk UUID, not by which CSI
+volume it logically belongs to, so without correction the clone is
+indistinguishable from its source to LVM, and `CreateOrAttachVDO`'s own "does
+a VG named `<this-volumeID>` exist?" check answers no (the VG on disk is
+still named after the source), which would either destroy the cloned data via
+a fresh `lvcreate`, or collide with the source once both devices are visible
+on the same node.
+
+`ResolveClonedVDO` fixes this before `CreateOrAttachVDO` ever runs: on every
+stage, it checks the device's own on-disk identity (not a volume-context
+flag, so it works regardless of whether the content-source fact survived into
+that context), and if the VG it finds belongs to a different volume, it
+regenerates fresh PV/VG UUIDs and renames the VG (`vgimportclone` +
+`lvrename`) to this volume's own identity before any activation happens. It's
+a no-op for a genuinely fresh device or one already resolved. Once renamed,
+the device is indistinguishable from any other VDO volume, so every later
+reattach, reconnect, or grow uses the same logic as any other volume: this
+is a one-time disambiguation at first stage, not an ongoing difference.
+Verified live for both a direct PVC clone and a snapshot restore, each
+scheduled onto the same node as its still-live source. See the test plan.
+
 ### Notes
 
 - **Stable device identifier — two independent layers of resilience to
@@ -453,42 +480,6 @@ that cost.
   anything. This holds across a full node reboot too: the VG is invisible
   immediately after boot, since its PV isn't present until NVMe-oF
   reconnects, with no ghost state in between.
-
-- **Clone/snapshot identity collision — why `ResolveClonedVDO` must run
-  before `CreateOrAttachVDO`'s own check**: a cloned or snapshot-restored
-  volume needs VDO applied just as much as its source — the VDO container is
-  physically part of the copied bytes, not something the driver chooses. The
-  problem is identity, not necessity: LVM identifies a PV/VG by a UUID stored
-  in its on-disk metadata, not by which CSI volume it logically belongs to. A
-  byte-level clone copies that metadata verbatim, so the clone's device
-  reports the same PV UUID, VG UUID, and VG name (the source volume's ID) as
-  the original.
-
-  `CreateOrAttachVDO`'s normal check ("does a VG named `<this-volumeID>`
-  exist?") answers **no** for a fresh clone, because the VG on disk is still
-  named after the source — indistinguishable from a genuinely blank device.
-  Proceeding on that answer is unsafe in both directions: `lvcreate` on a
-  device that already holds a VDO container destroys the cloned data;
-  activating the device under its inherited identity risks an LVM collision
-  the moment the source volume's own device is also visible on the same node.
-
-  **Detection — implemented more simply than originally planned**: rather
-  than threading `VolumeContentSource` through the volume context, the
-  implementation detects a clone unconditionally, on every stage, purely from
-  the device's own on-disk identity (`pvs` on `devicePath` reports a VG name
-  that isn't this volume's own ID). This is correct regardless of whether the
-  content-source fact survived into the volume context, and is a no-op
-  (returns immediately) for a genuinely fresh device or one already resolved
-  to its own identity — so no separate "is this a clone" plumbing was needed
-  at all.
-
-  **Ordering**: `ResolveClonedVDO` must complete — regenerating fresh PV/VG
-  UUIDs and renaming the VG to `volumeID` — before `CreateOrAttachVDO`'s
-  `vgs`/`lvs` check ever runs. Once renamed, the device is indistinguishable
-  from a normal, uniquely identified VDO volume, and every subsequent
-  reattach, reconnect, or grow for it uses the same logic as any other volume
-  (Sections 9-10); this is a one-time disambiguation at first stage, not an
-  ongoing behavioral difference.
 
 - **Multi-instance memory scaling:** `KVDO module bytes used` is a
   module-wide total, not per-instance. Two simultaneous VDO-backed volumes
