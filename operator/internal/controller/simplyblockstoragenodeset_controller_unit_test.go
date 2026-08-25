@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/simplyblock/atlas/kube"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -343,7 +345,7 @@ func TestStorageNodeSetDaemonSetReconcileCreatesWhenMissing(t *testing.T) {
 	}
 	r := newStorageNodeSetStateTestReconciler(t, sn)
 
-	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+	if err := r.reconcileDaemonSet(context.Background(), sn, "sa-name"); err != nil {
 		t.Fatalf("reconcileDaemonSet returned error: %v", err)
 	}
 
@@ -373,7 +375,7 @@ func TestStorageNodeSetDaemonSetReconcileUpdatesExisting(t *testing.T) {
 	}
 	r := newStorageNodeSetStateTestReconciler(t, sn, existing)
 
-	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+	if err := r.reconcileDaemonSet(context.Background(), sn, "sa-name"); err != nil {
 		t.Fatalf("reconcileDaemonSet returned error: %v", err)
 	}
 
@@ -394,7 +396,7 @@ func TestStorageNodeSetDaemonSetReconcileTLSDisabled(t *testing.T) {
 	r := newStorageNodeSetStateTestReconciler(t, sn)
 	r.TLSEnabled = false
 
-	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+	if err := r.reconcileDaemonSet(context.Background(), sn, "sa-name"); err != nil {
 		t.Fatalf("reconcileDaemonSet returned error: %v", err)
 	}
 
@@ -470,7 +472,7 @@ func TestStorageNodeSetDaemonSetReconcileTLSEnabled(t *testing.T) {
 	r.TLSProvider = utils.TLSProviderOpenShift
 	r.TLSMutualEnabled = true
 
-	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+	if err := r.reconcileDaemonSet(context.Background(), sn, "sa-name"); err != nil {
 		t.Fatalf("reconcileDaemonSet returned error: %v", err)
 	}
 
@@ -539,7 +541,7 @@ func TestStorageNodeSetDaemonSetReconcileTLSCertManagerProvider(t *testing.T) {
 	r.TLSProvider = utils.TLSProviderCertManager
 	r.TLSMutualEnabled = false
 
-	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+	if err := r.reconcileDaemonSet(context.Background(), sn, "sa-name"); err != nil {
 		t.Fatalf("reconcileDaemonSet returned error: %v", err)
 	}
 
@@ -908,6 +910,101 @@ func TestStorageNodeSetReconcileServiceAccountHasOwnerReference(t *testing.T) {
 
 	if len(sa.OwnerReferences) == 0 {
 		t.Fatalf("expected ServiceAccount to carry ownerReference to storagenodeset CR")
+	}
+}
+
+// TestStorageNodeSetReconcileGrandfathersLegacyServiceAccountName simulates
+// upgrading from the pre-fix shared-ServiceAccount design: a legacy
+// ServiceAccount already exists, owned by one already-existing
+// StorageNodeSet (as reconcileRBAC always set it, pre-fix). That
+// StorageNodeSet must keep the legacy names — so its DaemonSet's
+// ServiceAccountName, and thus its already-running pods, are untouched by
+// the upgrade — while any other StorageNodeSet gets its own per-instance
+// names.
+func TestStorageNodeSetReconcileGrandfathersLegacyServiceAccountName(t *testing.T) {
+	const namespace = "default"
+	const clusterName = "cluster-legacy-sa"
+	const clusterUUID = "cluster-uuid-legacy-sa"
+
+	cluster := &simplyblockv1alpha1.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: namespace},
+		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: clusterUUID},
+	}
+	existing := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "sn-existing",
+			Namespace:  namespace,
+			UID:        "uid-existing",
+			Finalizers: []string{utils.FinalizerStorageNodeSet},
+		},
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: clusterName, WorkerNodes: []string{}},
+	}
+	newSet := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "sn-new",
+			Namespace:  namespace,
+			UID:        "uid-new",
+			Finalizers: []string{utils.FinalizerStorageNodeSet},
+		},
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: clusterName, WorkerNodes: []string{}},
+	}
+	isController := true
+	legacySA := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      kube.LegacyStorageNodeSetServiceAccountName,
+			Namespace: namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: simplyblockv1alpha1.GroupVersion.String(),
+					Kind:       "StorageNodeSet",
+					Name:       existing.Name,
+					UID:        existing.UID,
+					Controller: &isController,
+				},
+			},
+		},
+	}
+
+	r := newStorageNodeSetStateTestReconciler(t, existing, newSet, cluster, legacySA)
+	for _, sn := range []*simplyblockv1alpha1.StorageNodeSet{existing, newSet} {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sn)}); err != nil {
+			t.Fatalf("reconcile %s returned error: %v", sn.Name, err)
+		}
+	}
+
+	var existingDS appsv1.DaemonSet
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-existing", Namespace: namespace}, &existingDS); err != nil {
+		t.Fatalf("failed to fetch existing DaemonSet: %v", err)
+	}
+	if got := existingDS.Spec.Template.Spec.ServiceAccountName; got != kube.LegacyStorageNodeSetServiceAccountName {
+		t.Fatalf("expected grandfathered StorageNodeSet to keep the legacy ServiceAccount name, got %q", got)
+	}
+	if err := r.Get(context.Background(), client.ObjectKey{Name: kube.LegacyStorageNodeSetClusterRoleBindingName(namespace)}, &rbacv1.ClusterRoleBinding{}); err != nil {
+		t.Fatalf("expected legacy ClusterRoleBinding to still exist: %v", err)
+	}
+
+	var newDS appsv1.DaemonSet
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-ds-sn-new", Namespace: namespace}, &newDS); err != nil {
+		t.Fatalf("failed to fetch new DaemonSet: %v", err)
+	}
+	if got, want := newDS.Spec.Template.Spec.ServiceAccountName, "simplyblock-storage-node-sa-sn-new"; got != want {
+		t.Fatalf("expected new StorageNodeSet to get its own ServiceAccount name, got %q want %q", got, want)
+	}
+
+	var newSA corev1.ServiceAccount
+	if err := r.Get(context.Background(), client.ObjectKey{Name: "simplyblock-storage-node-sa-sn-new", Namespace: namespace}, &newSA); err != nil {
+		t.Fatalf("expected new StorageNodeSet's own ServiceAccount to exist: %v", err)
+	}
+	if len(newSA.OwnerReferences) != 1 || newSA.OwnerReferences[0].UID != newSet.UID {
+		t.Fatalf("expected new StorageNodeSet's ServiceAccount to be owned by it, got %#v", newSA.OwnerReferences)
+	}
+
+	var refreshedLegacySA corev1.ServiceAccount
+	if err := r.Get(context.Background(), client.ObjectKey{Name: kube.LegacyStorageNodeSetServiceAccountName, Namespace: namespace}, &refreshedLegacySA); err != nil {
+		t.Fatalf("expected legacy ServiceAccount to still exist: %v", err)
+	}
+	if len(refreshedLegacySA.OwnerReferences) != 1 || refreshedLegacySA.OwnerReferences[0].UID != existing.UID {
+		t.Fatalf("expected legacy ServiceAccount ownership to remain with sn-existing, got %#v", refreshedLegacySA.OwnerReferences)
 	}
 }
 
@@ -2104,7 +2201,7 @@ func TestStorageNodeSetDaemonSetTLSSecretRevisionAnnotation(t *testing.T) {
 			r.TLSEnabled = tc.tlsEnabled
 			r.TLSProvider = utils.TLSProviderCertManager
 
-			if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+			if err := r.reconcileDaemonSet(context.Background(), sn, "sa-name"); err != nil {
 				t.Fatalf("reconcileDaemonSet returned error: %v", err)
 			}
 
@@ -2143,7 +2240,7 @@ func TestStorageNodeSetDaemonSetReconcileRollsOnTLSSecretRevisionChange(t *testi
 	r.TLSEnabled = true
 	r.TLSProvider = utils.TLSProviderCertManager
 
-	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+	if err := r.reconcileDaemonSet(context.Background(), sn, "sa-name"); err != nil {
 		t.Fatalf("first reconcileDaemonSet: %v", err)
 	}
 
@@ -2163,7 +2260,7 @@ func TestStorageNodeSetDaemonSetReconcileRollsOnTLSSecretRevisionChange(t *testi
 		t.Fatalf("rotate secret: %v", err)
 	}
 
-	if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+	if err := r.reconcileDaemonSet(context.Background(), sn, "sa-name"); err != nil {
 		t.Fatalf("second reconcileDaemonSet: %v", err)
 	}
 
@@ -2227,7 +2324,7 @@ func TestStorageNodeSetDaemonSetSBTLSServeEnv(t *testing.T) {
 			r.TLSEnabled = tc.tlsEnabled
 			r.TLSProvider = tc.tlsProvider
 
-			if err := r.reconcileDaemonSet(context.Background(), sn); err != nil {
+			if err := r.reconcileDaemonSet(context.Background(), sn, "sa-name"); err != nil {
 				t.Fatalf("reconcileDaemonSet returned error: %v", err)
 			}
 

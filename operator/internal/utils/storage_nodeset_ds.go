@@ -45,7 +45,7 @@ var defaultContainerResources = corev1.ResourceRequirements{
 	},
 }
 
-func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
+func BuildStorageNodeSetDaemonSet(sn *simplyblockv1alpha1.StorageNodeSet, serviceAccountName string, tlsEnabled bool, tlsMutualEnabled bool, tlsProvider, tlsSecretResourceVersion string) *appsv1.DaemonSet {
 
 	labels := map[string]string{
 		kube.LabelApp:                kube.AppStorageNode,
@@ -289,7 +289,7 @@ fi`
 					Annotations: podAnnotations,
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: kube.StorageNodeSetServiceAccountName(sn.Name),
+					ServiceAccountName: serviceAccountName,
 					HostNetwork:        true,
 					Tolerations:        sn.Spec.Tolerations,
 					NodeSelector: map[string]string{
@@ -403,18 +403,19 @@ func buildStorageNodeSetTLSVolume(tlsProvider string) corev1.Volume {
 	}
 }
 
-// BuildStorageNodeSetServiceAccount returns the ServiceAccount owned by sn and
-// mounted by its storage-node DaemonSet pods. It is named and owned
-// per-StorageNodeSet, not shared, so deleting one StorageNodeSet can never
-// garbage-collect another's ServiceAccount out from under its running pods.
-func BuildStorageNodeSetServiceAccount(sn *simplyblockv1alpha1.StorageNodeSet) *corev1.ServiceAccount {
+// BuildStorageNodeSetServiceAccount returns the ServiceAccount mounted by
+// sn's storage-node DaemonSet pods, under the given name. The caller resolves
+// name to either the per-StorageNodeSet name or, for whichever StorageNodeSet
+// already owned it pre-migration, the legacy shared name — see
+// StorageNodeSetReconciler.resolveStorageNodeSetRBACNames.
+func BuildStorageNodeSetServiceAccount(sn *simplyblockv1alpha1.StorageNodeSet, name string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ServiceAccount",
 			APIVersion: "v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      kube.StorageNodeSetServiceAccountName(sn.Name),
+			Name:      name,
 			Namespace: sn.Namespace,
 		},
 	}
@@ -611,22 +612,24 @@ func NodeHostnameLabel(nodeName string) string {
 	return label
 }
 
-// BuildStorageNodeSetClusterRoleBinding returns the ClusterRoleBinding that
-// grants sn's own ServiceAccount the shared ClusterRole. Named per-
-// StorageNodeSet to match its per-StorageNodeSet ServiceAccount.
-func BuildStorageNodeSetClusterRoleBinding(sn *simplyblockv1alpha1.StorageNodeSet) *rbacv1.ClusterRoleBinding {
+// BuildStorageNodeSetClusterRoleBinding returns the ClusterRoleBinding named
+// name that grants serviceAccountName the shared ClusterRole. The caller
+// resolves both to either the per-StorageNodeSet names or, for whichever
+// StorageNodeSet already owned them pre-migration, the legacy shared names —
+// see StorageNodeSetReconciler.resolveStorageNodeSetRBACNames.
+func BuildStorageNodeSetClusterRoleBinding(sn *simplyblockv1alpha1.StorageNodeSet, name, serviceAccountName string) *rbacv1.ClusterRoleBinding {
 	return &rbacv1.ClusterRoleBinding{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ClusterRoleBinding",
 			APIVersion: "rbac.authorization.k8s.io/v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: kube.StorageNodeSetClusterRoleBindingName(sn.Namespace, sn.Name),
+			Name: name,
 		},
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
-				Name:      kube.StorageNodeSetServiceAccountName(sn.Name),
+				Name:      serviceAccountName,
 				Namespace: sn.Namespace,
 			},
 		},

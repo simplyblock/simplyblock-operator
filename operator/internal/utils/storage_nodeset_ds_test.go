@@ -18,23 +18,15 @@ func TestStorageNodeSetAPIAddress(t *testing.T) {
 	}
 }
 
-func TestBuildStorageNodeSetClusterRoleBindingNameIncludesNamespaceAndName(t *testing.T) {
-	sn1 := &simplyblockv1alpha1.StorageNodeSet{ObjectMeta: metav1.ObjectMeta{Name: "sn-a", Namespace: "cluster1"}}
-	sn2 := &simplyblockv1alpha1.StorageNodeSet{ObjectMeta: metav1.ObjectMeta{Name: "sn-b", Namespace: "cluster2"}}
-	cluster1Binding := BuildStorageNodeSetClusterRoleBinding(sn1)
-	cluster2Binding := BuildStorageNodeSetClusterRoleBinding(sn2)
+func TestBuildStorageNodeSetClusterRoleBindingUsesGivenNames(t *testing.T) {
+	sn := &simplyblockv1alpha1.StorageNodeSet{ObjectMeta: metav1.ObjectMeta{Name: "sn-a", Namespace: "cluster1"}}
+	binding := BuildStorageNodeSetClusterRoleBinding(sn, "binding-name", "sa-name")
 
-	if cluster1Binding.Name == cluster2Binding.Name {
-		t.Fatalf("expected per-StorageNodeSet ClusterRoleBinding names, got %q", cluster1Binding.Name)
+	if binding.Name != "binding-name" {
+		t.Fatalf("expected ClusterRoleBinding name %q, got %q", "binding-name", binding.Name)
 	}
-	if cluster1Binding.Name != "simplyblock-storage-node-binding-cluster1-sn-a" {
-		t.Fatalf("unexpected cluster1 ClusterRoleBinding name %q", cluster1Binding.Name)
-	}
-	if len(cluster1Binding.Subjects) != 1 || cluster1Binding.Subjects[0].Namespace != "cluster1" {
-		t.Fatalf("expected cluster1 service account subject, got %#v", cluster1Binding.Subjects)
-	}
-	if cluster1Binding.Subjects[0].Name != "simplyblock-storage-node-sa-sn-a" {
-		t.Fatalf("expected per-StorageNodeSet service account subject, got %#v", cluster1Binding.Subjects)
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Name != "sa-name" || binding.Subjects[0].Namespace != "cluster1" {
+		t.Fatalf("expected subject sa-name in namespace cluster1, got %#v", binding.Subjects)
 	}
 }
 
@@ -106,7 +98,7 @@ func TestBuildStorageNodeSetDaemonSetUserResourcesOverrideDefaults(t *testing.T)
 		},
 	}
 
-	ds := BuildStorageNodeSetDaemonSet(sn, false, false, "", "")
+	ds := BuildStorageNodeSetDaemonSet(sn, "sa-name", false, false, "", "")
 
 	main := ds.Spec.Template.Spec.Containers[0]
 	mainMem := main.Resources.Limits[corev1.ResourceMemory]
