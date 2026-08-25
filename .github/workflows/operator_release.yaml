@@ -109,3 +109,11 @@ jobs:
             operator/bundle/manifests/
             operator/bundle/metadata/
           retention-days: 90
+
+      - name: Notify release-automation
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/simplyblock/release-automation/dispatches \
+            -f event_type=operator-release \
+            -f "client_payload[tag]=${{ steps.version.outputs.tag }}"
