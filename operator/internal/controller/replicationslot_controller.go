@@ -21,11 +21,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
-	vmigration "github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -297,7 +295,7 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 			// Attempt a late preconnect so the CSI node gets target NVMe paths even
 			// after the ANA flip — this limits IO downtime to ctrl_loss_tmo instead
 			// of indefinite path loss.
-			r.tryLatePreconnect(ctx, slot, apiClient, clusterID, poolID, volumeID)
+			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, poolID, volumeID)
 		}
 	}
 
@@ -493,7 +491,7 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		// late preconnect so the CSI node gets target NVMe paths even after the ANA
 		// flip — this limits IO downtime to ctrl_loss_tmo instead of indefinite.
 		if status != nil && status.State == backendStateCutoverDone {
-			r.tryLatePreconnect(ctx, slot, apiClient, clusterID, poolID, volumeID)
+			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, poolID, volumeID)
 		}
 		return r.applyAdvancedBackendState(ctx, slot, status)
 	}
@@ -501,11 +499,12 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 	// Fetch connection strings. During cutover_pending the backend returns both
 	// target and source paths (target first). EnsureMigrationPaths is idempotent
 	// for already-connected source paths, so passing all 4 is safe.
-	conns, err := r.fetchVolumeConnections(ctx, apiClient, clusterID, poolID, volumeID)
+	rawConns, err := apiClient.GetVolumeConnections(ctx, clusterID, poolID, volumeID)
 	if err != nil {
 		log.Error(err, "GET volume/connect failed in cutover_pending", "slot", slot.Name)
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
 	}
+	conns := lvolConnRespToVmigConns(rawConns)
 	if len(conns) == 0 {
 		// No connections returned; backend may not have populated them yet.
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -558,7 +557,7 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 	}
 
 	// Find the node running a pod that has this volume mounted.
-	node, err := r.findPreconnectConsumerNode(ctx, volumeID)
+	node, err := findConsumerNode(ctx, r.apiReader, volumeID)
 	if err != nil {
 		log.Error(err, "Cannot resolve consuming node for preconnect", "slot", slot.Name)
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
@@ -576,7 +575,7 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	image, err := r.resolvePreconnectImage(ctx, slot.Namespace, clusterID)
+	image, err := resolveRebalancerImage(ctx, r.Client, slot.Namespace, clusterID)
 	if err != nil {
 		log.Error(err, "Cannot resolve rebalancer image for preconnect", "slot", slot.Name)
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
@@ -587,7 +586,22 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		return ctrl.Result{}, fmt.Errorf("marshal connections for preconnect job: %w", err)
 	}
 
-	job := r.buildPreconnectJob(slot, jobName, node, image, string(connsJSON))
+	job := buildRebalancerJob(rebalancerJobParams{
+		Name:          jobName,
+		Namespace:     slot.Namespace,
+		OwnerRef:      *metav1.NewControllerRef(slot, simplyblockv1alpha1.GroupVersion.WithKind("ReplicationSlot")),
+		Hostname:      node,
+		Image:         image,
+		ContainerName: "replication-preconnect",
+		Mode:          "replication-preconnect",
+		Env: []corev1.EnvVar{
+			{Name: "REPL_CONNECTIONS", Value: string(connsJSON)},
+			{Name: "VMIG_SYS_ROOT", Value: "/host/sys"},
+		},
+		BackoffLimit: 1,
+		TTL:          150,
+		Deadline:     120,
+	})
 	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 		return ctrl.Result{}, fmt.Errorf("create preconnect job %q: %w", jobName, err)
 	}
@@ -600,12 +614,12 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
-// tryLatePreconnect creates the preconnect Job after the backend has already
-// flipped the ANA to cutover_done. It does NOT call cutover-proceed (the ANA
-// flip already happened). Connecting target paths now limits IO downtime to
-// at most ctrl_loss_tmo seconds instead of indefinitely. Errors are logged
-// but not returned — the caller still advances the slot state.
-func (r *ReplicationSlotReconciler) tryLatePreconnect(
+// reconcilePreconnect creates the preconnect Job that connects target NVMe paths
+// on the consumer node. Called both during cutover_pending and as a fallback when
+// the backend has already flipped to cutover_done (the "late" case — ANA already
+// happened, limiting IO downtime to ctrl_loss_tmo instead of indefinitely).
+// Errors are logged but not returned — the caller still advances slot state.
+func (r *ReplicationSlotReconciler) reconcilePreconnect(
 	ctx context.Context,
 	slot *simplyblockv1alpha1.ReplicationSlot,
 	apiClient *webapi.Client,
@@ -620,25 +634,41 @@ func (r *ReplicationSlotReconciler) tryLatePreconnect(
 		return
 	}
 
-	conns, err := r.fetchVolumeConnections(ctx, apiClient, clusterID, poolID, volumeID)
-	if err != nil || len(conns) == 0 {
-		log.Error(err, "Late preconnect: cannot fetch connections", "slot", slot.Name)
+	rawConns, err := apiClient.GetVolumeConnections(ctx, clusterID, poolID, volumeID)
+	if err != nil || len(rawConns) == 0 {
+		log.Error(err, "Preconnect: cannot fetch connections", "slot", slot.Name)
 		return
 	}
-	node, err := r.findPreconnectConsumerNode(ctx, volumeID)
+	conns := lvolConnRespToVmigConns(rawConns)
+	node, err := findConsumerNode(ctx, r.apiReader, volumeID)
 	if err != nil || node == "" {
 		return // no active consumer; nothing to connect
 	}
-	image, err := r.resolvePreconnectImage(ctx, slot.Namespace, clusterID)
+	image, err := resolveRebalancerImage(ctx, r.Client, slot.Namespace, clusterID)
 	if err != nil {
-		log.Error(err, "Late preconnect: cannot resolve rebalancer image", "slot", slot.Name)
+		log.Error(err, "Preconnect: cannot resolve rebalancer image", "slot", slot.Name)
 		return
 	}
 	connsJSON, err := json.Marshal(conns)
 	if err != nil {
 		return
 	}
-	job := r.buildPreconnectJob(slot, jobName, node, image, string(connsJSON))
+	job := buildRebalancerJob(rebalancerJobParams{
+		Name:          jobName,
+		Namespace:     slot.Namespace,
+		OwnerRef:      *metav1.NewControllerRef(slot, simplyblockv1alpha1.GroupVersion.WithKind("ReplicationSlot")),
+		Hostname:      node,
+		Image:         image,
+		ContainerName: "replication-preconnect",
+		Mode:          "replication-preconnect",
+		Env: []corev1.EnvVar{
+			{Name: "REPL_CONNECTIONS", Value: string(connsJSON)},
+			{Name: "VMIG_SYS_ROOT", Value: "/host/sys"},
+		},
+		BackoffLimit: 1,
+		TTL:          150,
+		Deadline:     120,
+	})
 	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 		log.Error(err, "Late preconnect: job creation failed", "slot", slot.Name)
 		return
@@ -699,208 +729,6 @@ func (r *ReplicationSlotReconciler) callCutoverProceed(
 		return nil
 	}
 	return fmt.Errorf("POST cutover-proceed: status %d: %s", status, string(body))
-}
-
-// backendVolumeConnection is the JSON shape of one entry from GET .../volumes/{id}/connect.
-// The backend serialises NvmeConnectEntry with hyphenated field names (alias_generator).
-type backendVolumeConnection struct {
-	Transport      string `json:"transport"`
-	IP             string `json:"ip"`
-	Port           int    `json:"port"`
-	NQN            string `json:"nqn"`
-	NrIoQueues     int    `json:"nr-io-queues"`
-	ReconnectDelay int    `json:"reconnect-delay"`
-	CtrlLossTmo    int    `json:"ctrl-loss-tmo"`
-	FastIOFailTmo  int    `json:"fast-io-fail-tmo"`
-	KeepAliveTmo   int    `json:"keep-alive-tmo"`
-}
-
-// fetchVolumeConnections calls GET .../volumes/{id}/connect and returns the paths
-// as volumemigration.Connection objects ready for the preconnect Job.
-func (r *ReplicationSlotReconciler) fetchVolumeConnections(
-	ctx context.Context,
-	apiClient *webapi.Client,
-	clusterID, poolID, volumeID string,
-) ([]vmigration.Connection, error) {
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/connect",
-		clusterID, poolID, volumeID)
-	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	if status >= 300 {
-		return nil, fmt.Errorf("GET connect: status %d: %s", status, string(body))
-	}
-
-	var raw []backendVolumeConnection
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("parse connect response: %w", err)
-	}
-
-	out := make([]vmigration.Connection, len(raw))
-	for i, c := range raw {
-		out[i] = vmigration.Connection{
-			NQN:            c.NQN,
-			IP:             c.IP,
-			Port:           c.Port,
-			Transport:      c.Transport,
-			NrIoQueues:     c.NrIoQueues,
-			ReconnectDelay: c.ReconnectDelay,
-			CtrlLossTmo:    vmigration.CtrlLossTmoSec,
-			FastIOFailTmo:  c.FastIOFailTmo,
-			KeepAliveTmo:   c.KeepAliveTmo,
-		}
-	}
-	return out, nil
-}
-
-// findPreconnectConsumerNode finds the Kubernetes node name running a pod that
-// has the given volume's PVC mounted. Returns "" when no active consumer exists.
-func (r *ReplicationSlotReconciler) findPreconnectConsumerNode(
-	ctx context.Context,
-	volumeID string,
-) (string, error) {
-	// Find the PersistentVolume whose CSI handle encodes this volume.
-	var pvList corev1.PersistentVolumeList
-	if err := r.apiReader.List(ctx, &pvList); err != nil {
-		return "", fmt.Errorf("list PersistentVolumes: %w", err)
-	}
-
-	var pvName, pvcName, pvcNamespace string
-	for i := range pvList.Items {
-		pv := &pvList.Items[i]
-		if pv.Spec.CSI == nil {
-			continue
-		}
-		parts := strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)
-		if len(parts) != 3 || parts[2] != volumeID {
-			continue
-		}
-		if pv.Spec.ClaimRef == nil {
-			continue
-		}
-		pvName = pv.Name
-		pvcName = pv.Spec.ClaimRef.Name
-		pvcNamespace = pv.Spec.ClaimRef.Namespace
-		break
-	}
-	if pvName == "" {
-		return "", nil // no PV for this volume
-	}
-
-	// Find a Running pod that uses the PVC.
-	var podList corev1.PodList
-	if err := r.apiReader.List(ctx, &podList, client.InNamespace(pvcNamespace)); err != nil {
-		return "", fmt.Errorf("list pods in %s: %w", pvcNamespace, err)
-	}
-
-	var nodes []string
-	for _, pod := range podList.Items {
-		if pod.Status.Phase != corev1.PodRunning || pod.Spec.NodeName == "" {
-			continue
-		}
-		for _, vol := range pod.Spec.Volumes {
-			if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == pvcName {
-				nodes = append(nodes, pod.Spec.NodeName)
-				break
-			}
-		}
-	}
-	sort.Strings(nodes)
-	if len(nodes) == 0 {
-		return "", nil
-	}
-	return nodes[0], nil
-}
-
-// resolvePreconnectImage returns the simplyblock-rebalancer image from the
-// StorageCluster, falling back to the default image when none is configured.
-func (r *ReplicationSlotReconciler) resolvePreconnectImage(
-	ctx context.Context,
-	namespace, clusterUUID string,
-) (string, error) {
-	var clusters simplyblockv1alpha1.StorageClusterList
-	if err := r.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
-		return "", fmt.Errorf("list StorageClusters: %w", err)
-	}
-	for _, cr := range clusters.Items {
-		if cr.Status.UUID != clusterUUID {
-			continue
-		}
-		vm := cr.Spec.VolumeMigrationSettings
-		if vm != nil && vm.RebalancerImage != nil && *vm.RebalancerImage != "" {
-			return *vm.RebalancerImage, nil
-		}
-		break
-	}
-	return defaultRebalancerImage, nil
-}
-
-// buildPreconnectJob creates the Job that connects target NVMe paths on the
-// consuming node before the cutover ANA flip.
-func (r *ReplicationSlotReconciler) buildPreconnectJob(
-	slot *simplyblockv1alpha1.ReplicationSlot,
-	jobName, hostname, image, connsJSON string,
-) *batchv1.Job {
-	privileged := true
-	readOnly := true
-	ttl := int32(150)
-	deadline := int64(120)
-	backoffLimit := int32(1)
-
-	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      jobName,
-			Namespace: slot.Namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(slot, simplyblockv1alpha1.GroupVersion.WithKind("ReplicationSlot")),
-			},
-		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit:            &backoffLimit,
-			TTLSecondsAfterFinished: &ttl,
-			ActiveDeadlineSeconds:   &deadline,
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					NodeSelector:  map[string]string{"kubernetes.io/hostname": hostname},
-					HostNetwork:   true,
-					Volumes: []corev1.Volume{
-						{
-							Name: "host-dev",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{Path: "/dev"},
-							},
-						},
-						{
-							Name: "host-sys",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{Path: "/sys"},
-							},
-						},
-					},
-					Containers: []corev1.Container{
-						{
-							Name:            "replication-preconnect",
-							Image:           image,
-							ImagePullPolicy: corev1.PullAlways,
-							Command:         []string{"simplyblock-rebalancer", "--mode=replication-preconnect"},
-							Env: []corev1.EnvVar{
-								{Name: "REPL_CONNECTIONS", Value: connsJSON},
-								{Name: "VMIG_SYS_ROOT", Value: "/host/sys"},
-							},
-							SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
-							VolumeMounts: []corev1.VolumeMount{
-								// /dev/nvme-fabrics is the kernel interface for nvme connect.
-								{Name: "host-dev", MountPath: "/dev"},
-								{Name: "host-sys", MountPath: "/host/sys", ReadOnly: readOnly},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
 }
 
 // applyAdvancedBackendState transitions the slot from cutover_pending to whatever

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"time"
 
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 )
@@ -44,12 +45,39 @@ func runReplicationPreconnect() {
 	}
 
 	sysRoot := os.Getenv("VMIG_SYS_ROOT")
+	// All connections in one preconnect job share the same subsystem NQN.
+	nqn := conns[0].NQN
 
 	ctx := context.Background()
-	log.Printf("replication-preconnect: connecting %d paths (sysRoot=%q)", len(conns), sysRoot)
+	log.Printf("replication-preconnect: connecting %d paths for %s (sysRoot=%q)", len(conns), nqn, sysRoot)
 
-	if err := volumemigration.EnsureMigrationPaths(ctx, sysRoot, conns); err != nil {
-		log.Fatalf("replication-preconnect: %v", err)
+	// Clear any dead controllers left by a previous failed attempt. A half-connected
+	// controller with no live namespace blocks a fresh nvme-connect for the same
+	// address; clearing it here prevents one bad Job from poisoning subsequent ones.
+	if reaped, err := volumemigration.ReapDeadControllers(ctx, sysRoot, nqn); err != nil {
+		log.Printf("replication-preconnect: reap dead controllers: %v (continuing)", err)
+	} else if len(reaped) > 0 {
+		log.Printf("replication-preconnect: reaped %d dead controller(s): %s",
+			len(reaped), volumemigration.FormatReleased(reaped))
 	}
-	log.Printf("replication-preconnect: %d paths connected successfully", len(conns))
+
+	const (
+		attempts   = 3
+		retryDelay = 5 * time.Second
+	)
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := volumemigration.EnsureMigrationPaths(ctx, sysRoot, conns); err != nil {
+			lastErr = err
+			log.Printf("replication-preconnect: attempt %d/%d failed: %v", attempt, attempts, err)
+			if attempt < attempts {
+				time.Sleep(retryDelay)
+			}
+			continue
+		}
+		log.Printf("replication-preconnect: %d paths connected (attempt %d/%d)", len(conns), attempt, attempts)
+		return
+	}
+	log.Fatalf("replication-preconnect: failed after %d attempt(s): %v", attempts, lastErr)
 }

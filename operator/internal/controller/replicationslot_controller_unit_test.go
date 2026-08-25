@@ -19,6 +19,7 @@ import (
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // fakeRecorder satisfies events.EventRecorder for tests.
@@ -627,7 +628,7 @@ func TestSlot_CutoverPending_NoConsumer_SignalsImmediately(t *testing.T) {
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
 			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending})
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
-			_ = json.NewEncoder(w).Encode([]backendVolumeConnection{{Transport: "tcp", IP: "1.2.3.4", Port: 4420, NQN: "nqn.test"}})
+			_ = json.NewEncoder(w).Encode([]webapi.LvolConnectResp{{TargetType: "tcp", IP: "1.2.3.4", Port: 4420, Nqn: "nqn.test"}})
 		case req.Method == http.MethodPost && strings.HasSuffix(path, "/cutover-proceed"):
 			proceedCalled = true
 			w.WriteHeader(http.StatusOK)
@@ -637,7 +638,7 @@ func TestSlot_CutoverPending_NoConsumer_SignalsImmediately(t *testing.T) {
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
-	// apiReader (= cl) has no PVs → findPreconnectConsumerNode returns ""
+	// apiReader (= cl) has no PVs → findConsumerNode returns ""
 	r, cl := newSlotReconciler(t, slot, pol)
 
 	res, err := r.Reconcile(context.Background(), slotRequest("slot1"))
@@ -664,7 +665,7 @@ func TestSlot_CutoverPending_CreatesJobForConsumer(t *testing.T) {
 	pol := readyReplicationPolicy()
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
 
-	// The VolumeID is "cluster-id:pool-id:vol-id"; findPreconnectConsumerNode looks for
+	// The VolumeID is "cluster-id:pool-id:vol-id"; findConsumerNode looks for
 	// a PV whose CSI handle's third segment matches "vol-id".
 	pv := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: "pv1"},
@@ -694,7 +695,7 @@ func TestSlot_CutoverPending_CreatesJobForConsumer(t *testing.T) {
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
 			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending})
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
-			_ = json.NewEncoder(w).Encode([]backendVolumeConnection{{Transport: "tcp", IP: "1.2.3.4", Port: 4420, NQN: "nqn.test"}})
+			_ = json.NewEncoder(w).Encode([]webapi.LvolConnectResp{{TargetType: "tcp", IP: "1.2.3.4", Port: 4420, Nqn: "nqn.test"}})
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
@@ -744,7 +745,7 @@ func TestSlot_CutoverPending_JobComplete_Signals(t *testing.T) {
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
 			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending})
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
-			_ = json.NewEncoder(w).Encode([]backendVolumeConnection{{Transport: "tcp", IP: "1.2.3.4", Port: 4420, NQN: "nqn.test"}})
+			_ = json.NewEncoder(w).Encode([]webapi.LvolConnectResp{{TargetType: "tcp", IP: "1.2.3.4", Port: 4420, Nqn: "nqn.test"}})
 		case req.Method == http.MethodPost && strings.HasSuffix(path, "/cutover-proceed"):
 			proceedCalled = true
 			w.WriteHeader(http.StatusOK)
@@ -794,7 +795,7 @@ func TestSlot_CutoverPending_JobFailed_SignalsAnyway(t *testing.T) {
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
 			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending})
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
-			_ = json.NewEncoder(w).Encode([]backendVolumeConnection{{Transport: "tcp", IP: "1.2.3.4", Port: 4420, NQN: "nqn.test"}})
+			_ = json.NewEncoder(w).Encode([]webapi.LvolConnectResp{{TargetType: "tcp", IP: "1.2.3.4", Port: 4420, Nqn: "nqn.test"}})
 		case req.Method == http.MethodPost && strings.HasSuffix(path, "/cutover-proceed"):
 			proceedCalled = true
 			w.WriteHeader(http.StatusOK)
@@ -842,7 +843,7 @@ func TestSlot_CutoverPending_AlreadySignaled_Waits(t *testing.T) {
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
 			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending})
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
-			_ = json.NewEncoder(w).Encode([]backendVolumeConnection{{Transport: "tcp", IP: "1.2.3.4", Port: 4420, NQN: "nqn.test"}})
+			_ = json.NewEncoder(w).Encode([]webapi.LvolConnectResp{{TargetType: "tcp", IP: "1.2.3.4", Port: 4420, Nqn: "nqn.test"}})
 		case req.Method == http.MethodPost && strings.HasSuffix(path, "/cutover-proceed"):
 			proceedCalled = true
 			w.WriteHeader(http.StatusOK)
@@ -880,7 +881,7 @@ func TestSlot_CutoverPending_BackendAlreadyCutoverDone_AppliesState(t *testing.T
 				State: backendStateCutoverDone, TargetNQN: "nqn.target",
 			})
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
-			// tryLatePreconnect fetches connections; return empty to short-circuit it.
+			// reconcilePreconnect fetches connections; return empty to short-circuit it.
 			_, _ = w.Write([]byte(`[]`))
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)

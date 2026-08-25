@@ -164,7 +164,7 @@ func (r *VolumeMigrationReconciler) reconcileStart(
 	}
 	clusterUUID, poolUUID, volumeUUID := parts[0], parts[1], parts[2]
 
-	if _, err := r.resolveRebalancerImage(ctx, vm.Namespace, clusterUUID); err != nil {
+	if err := checkVolumeMigrationEnabled(ctx, r.Client, vm.Namespace, clusterUUID); err != nil {
 		return r.setFailed(ctx, vm, fmt.Sprintf("volume migration not enabled/configured for cluster %q: %v", clusterUUID, err))
 	}
 
@@ -417,8 +417,13 @@ func (r *VolumeMigrationReconciler) startValidationJobs(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
+	// Verify migration is enabled and the StorageCluster is known before doing any work.
+	if err := checkVolumeMigrationEnabled(ctx, r.Client, vm.Namespace, vm.Status.ClusterUUID); err != nil {
+		log.Error(err, "Cannot start validation jobs; requeuing")
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
 	// Get the simplyblock-rebalancer image from the StorageCluster (it contains nvme-cli).
-	image, err := r.resolveRebalancerImage(ctx, vm.Namespace, vm.Status.ClusterUUID)
+	image, err := resolveRebalancerImage(ctx, r.Client, vm.Namespace, vm.Status.ClusterUUID)
 	if err != nil {
 		log.Error(err, "Cannot resolve simplyblock-rebalancer image; requeuing")
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
@@ -614,7 +619,7 @@ func (r *VolumeMigrationReconciler) releaseMigrationPaths(
 		return
 	}
 
-	image, err := r.resolveRebalancerImage(ctx, vm.Namespace, vm.Status.ClusterUUID)
+	image, err := resolveRebalancerImage(ctx, r.Client, vm.Namespace, vm.Status.ClusterUUID)
 	if err != nil {
 		log.Error(err, "Cannot resolve simplyblock-rebalancer image; migration target paths are left connected",
 			"migration", vm.Status.MigrationUUID, "subsystem", vm.Status.SubsystemNQN)
@@ -854,81 +859,36 @@ type pathJobSpec struct {
 	backoffLimit int32
 }
 
-// migrationPathJob builds one node-pinned Job running simplyblock-rebalancer against the
-// host's NVMe fabric.
+// migrationPathJob builds one node-pinned Job running simplyblock-rebalancer
+// against the host's NVMe fabric, using the shared buildRebalancerJob builder.
 func migrationPathJob(
 	vm *simplyblockv1alpha1.VolumeMigration,
 	hostname, image string,
 	js pathJobSpec,
 ) *batchv1.Job {
-	privileged := true
-	readOnly := true
+	connsJSON, _ := json.Marshal(connectionsToValidation(vm.Status.Connections))
 	ttl := int32(3600)
 	deadline := int64(validationJobDeadline.Seconds())
-
-	connsJSON, _ := json.Marshal(connectionsToValidation(vm.Status.Connections))
-
-	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			// One Job per node, so the name carries both the migration and the node.
-			Name:      js.namePrefix + safeNodeID(vm.Status.MigrationUUID) + "-" + nodeSuffix(hostname),
-			Namespace: vm.Namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(vm, simplyblockv1alpha1.GroupVersion.WithKind("VolumeMigration")),
-			},
+	return buildRebalancerJob(rebalancerJobParams{
+		// One Job per node: name carries both migration ID and node.
+		Name:      js.namePrefix + safeNodeID(vm.Status.MigrationUUID) + "-" + nodeSuffix(hostname),
+		Namespace: vm.Namespace,
+		OwnerRef:  *metav1.NewControllerRef(vm, simplyblockv1alpha1.GroupVersion.WithKind("VolumeMigration")),
+		Hostname:  hostname,
+		Image:     image,
+		ContainerName: js.container,
+		Mode:          js.mode,
+		Env: []corev1.EnvVar{
+			{Name: "VMIG_CONNECTIONS", Value: string(connsJSON)},
+			// Which subsystem this node is expected to be connected to; empty = skip check.
+			{Name: "VMIG_SUBSYSTEM_NQN", Value: vm.Status.SubsystemNQN},
+			// The host's sysfs, mounted into the Job — the container's /sys is not the host's.
+			{Name: "VMIG_SYS_ROOT", Value: "/host/sys"},
 		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit:            &js.backoffLimit,
-			TTLSecondsAfterFinished: &ttl,
-			ActiveDeadlineSeconds:   &deadline,
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					NodeSelector:  map[string]string{"kubernetes.io/hostname": hostname},
-					HostNetwork:   true,
-					Volumes: []corev1.Volume{
-						{
-							Name: "host-dev",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{Path: "/dev"},
-							},
-						},
-						{
-							// The subsystem presence check reads the host's NVMe sysfs
-							// (/sys/class/nvme-subsystem); the container's own /sys is
-							// not the host's.
-							Name: "host-sys",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{Path: "/sys"},
-							},
-						},
-					},
-					Containers: []corev1.Container{
-						{
-							Name:            js.container,
-							Image:           image,
-							ImagePullPolicy: corev1.PullAlways,
-							Command:         []string{"simplyblock-rebalancer", "--mode=" + js.mode},
-							Env: []corev1.EnvVar{
-								{Name: "VMIG_CONNECTIONS", Value: string(connsJSON)},
-								// Which subsystem this node is expected to have a
-								// connection to; empty means "skip the check".
-								{Name: "VMIG_SUBSYSTEM_NQN", Value: vm.Status.SubsystemNQN},
-								// The host's sysfs, mounted below — the container's own
-								// /sys is not guaranteed to be it.
-								{Name: "VMIG_SYS_ROOT", Value: "/host/sys"},
-							},
-							SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
-							VolumeMounts: []corev1.VolumeMount{
-								{Name: "host-dev", MountPath: "/dev"},
-								{Name: "host-sys", MountPath: "/host/sys", ReadOnly: readOnly},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
+		BackoffLimit: js.backoffLimit,
+		TTL:          ttl,
+		Deadline:     deadline,
+	})
 }
 
 // nodeSuffix produces a DNS-label-safe, collision-resistant suffix for a node name.
@@ -1169,39 +1129,6 @@ func (r *VolumeMigrationReconciler) collectAndLogJobPodLogs(ctx context.Context,
 // (explicitly, or by default via an omitted settings block) without pinning a
 // specific rebalancer image. The image must include nvme-cli.
 const defaultRebalancerImage = "docker.io/simplyblock/simplyblock-rebalancer:main"
-
-// resolveRebalancerImage returns the simplyblock-rebalancer image for the StorageCluster
-// that owns the migration's volume. Volume migration is enabled by default: an omitted
-// VolumeMigrationSettings block (or one without an image) resolves to defaultRebalancerImage;
-// only an explicit Enabled=false disables it.
-func (r *VolumeMigrationReconciler) resolveRebalancerImage(
-	ctx context.Context,
-	namespace, clusterUUID string,
-) (string, error) {
-	var clusters simplyblockv1alpha1.StorageClusterList
-	if err := r.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
-		return "", fmt.Errorf("list StorageClusters: %w", err)
-	}
-	for _, cr := range clusters.Items {
-		if cr.Status.UUID != clusterUUID {
-			continue
-		}
-		vm := cr.Spec.VolumeMigrationSettings
-		if vm == nil {
-			// No settings block: volume migration is enabled by default with the default image.
-			return defaultRebalancerImage, nil
-		}
-		if vm.Enabled != nil && !*vm.Enabled {
-			return "", fmt.Errorf("volume migration is disabled for cluster UUID %q", clusterUUID)
-		}
-		if vm.RebalancerImage != nil && *vm.RebalancerImage != "" {
-			return *vm.RebalancerImage, nil
-		}
-		// Enabled (explicitly or by default) but no image pinned: use the default image.
-		return defaultRebalancerImage, nil
-	}
-	return "", fmt.Errorf("no StorageCluster found for cluster UUID %q", clusterUUID)
-}
 
 // reconcileRunning polls the migration API and updates progress in status.
 func (r *VolumeMigrationReconciler) reconcileRunning(
