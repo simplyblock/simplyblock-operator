@@ -8,9 +8,6 @@
 
 ---
 
-Hands-on experiment transcript (exact commands and output run against the live
-test cluster): [`spike-log-issue-277-client-side-compression.md`](spike-log-issue-277-client-side-compression.md).
-
 **Reader expectations**: this document is weighted toward hands-on validation
 over top-down design. It grew out of testing whether specific mechanisms work
 (VDO creation and reattach, clone/snapshot handling, migration, kernel/OS
@@ -1175,4 +1172,4 @@ this failure mode does not occur here. **No design change needed.**
   window. `CreateOrAttachVDO`'s check-then-act idempotency (Section 7) should
   still handle a genuinely half-created VG defensively (detect and clean up
   rather than error unrecoverably), even though this session couldn't
-  reproduce that state to verify it end-to-end. See spike log §11.
+  reproduce that state to verify it end-to-end.

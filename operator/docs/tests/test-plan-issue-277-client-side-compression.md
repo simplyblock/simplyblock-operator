@@ -1,7 +1,6 @@
 # Test Plan: Client-Side Compression / Deduplication (Issue #277)
 
 Related design: [`designs/design-issue-277-client-side-compression.md`](../designs/design-issue-277-client-side-compression.md)
-Spike transcript: [`designs/spike-log-issue-277-client-side-compression.md`](../designs/spike-log-issue-277-client-side-compression.md)
 
 The CSI-side code this plan describes (`csi-driver/pkg/util/vdo.go` and the `nodeserver.go`
 wiring) is implemented and live-verified end-to-end on a real cluster (`config-israel`) —
@@ -113,8 +112,8 @@ Each scenario is classified two ways:
 
 | Test | Scenario | Type | Level |
 |---|---|---|---|
-| Single VDO instance survives a full node reboot | Already verified in the spike log (§12) — port into a repeatable Integration test | Positive | Integration |
-| Multiple VDO instances in parallel on one node | Already verified (§9 of the spike log) — no naming/dm collision, linear memory scaling — port into an Integration test | Positive | Integration |
+| Single VDO instance survives a full node reboot | Already verified in an earlier hands-on spike (raw LVM commands, pre-implementation); superseded by the combined test below against the real implementation | Positive | Integration (superseded) |
+| Multiple VDO instances in parallel on one node | Already verified in an earlier hands-on spike — no naming/dm collision, linear memory scaling; superseded by the combined test below against the real implementation | Positive | Integration (superseded) |
 | Multiple VDO instances present, then the node reboots together | **Verified** against the real implementation and a real reboot: two real PVCs on one node, distinct checksummed data, node rebooted — both reattached cleanly (`kvdo` usage count exactly 2, both `VDOOperatingMode: normal`, both checksums matched). Caveat: the two `NodeStageVolume` LVM sequences happened not to overlap in execution, so genuinely concurrent `vgchange`/`pvscan` locking remains unexercised (see design doc Notes) | Positive | Integration (done) |
 | Genuinely concurrent (overlapping, not just closely timed) `vgchange -ay`/`pvscan --cache` calls racing at the LVM level | Not yet forced — the reboot test above happened to serialize naturally | Negative | Integration |
 | Backing device disappears without a clean unstage while the node stays up (storage-side force-disconnect) | **Verified end-to-end** (see §3 above) — deliberately reproduced, found and fixed two real bugs, confirmed fully automatic recovery on a second run | Positive | E2E (done) |
