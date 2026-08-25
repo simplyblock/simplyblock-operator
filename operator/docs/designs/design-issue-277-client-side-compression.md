@@ -38,7 +38,9 @@ backed by evidence) should calibrate for that difference going in.
   - [5. Scheduling Gate: Topology](#5-scheduling-gate-topology)
   - [6. StorageClass Parameter and CRD Changes](#6-storageclass-parameter-and-crd-changes)
   - [7. VDO Device Management (CSI Node Plugin)](#7-vdo-device-management-csi-node-plugin)
-    - [Compression vs. deduplication — isolated cost, verified hands-on](#compression-vs-deduplication--isolated-cost-verified-hands-on)
+    - [Device creation](#device-creation)
+    - [Compression vs. deduplication cost](#compression-vs-deduplication-cost)
+    - [Notes](#notes)
     - [Wiring into `nodeserver.go`](#wiring-into-nodeservergo)
   - [8. Re-Provisioning and Failure Handling](#8-re-provisioning-and-failure-handling)
   - [9. Volume Expansion](#9-volume-expansion)
@@ -205,11 +207,7 @@ stamps a second annotation, `simplyblock.io/vdo-capable-managed-by:
 auto-detect`, alongside every label value it writes itself. On startup it first
 checks whether `simplyblock.io/vdo-capable` is already present without that
 annotation and, if so, leaves it untouched rather than overwriting it with a
-fresh probe result. Confirmed live on `vm04` (`config-israel`): stripped the
-label to let auto-detect claim it fresh (`true` + the `auto-detect`
-annotation), then hand-forced it to `false` with the annotation removed and
-restarted the `csi-node` pod. The label stayed `false` across the restart, and
-the change fed through correctly into the CSI `NodeGetInfo` topology response.
+fresh probe result.
 
 ---
 
@@ -226,19 +224,6 @@ it:
 
 With this in place, a PVC requesting client compression and/or deduplication is
 simply never bound to a node lacking VDO support in the first place.
-
-**Verified end-to-end against the real implementation, including a genuine
-reschedule to a different node** (`config-israel`, five nodes, four
-`vdo-capable`): a non-`vdo-capable` control-plane node was never selected for a
-VDO-requesting PVC, confirming the exclusion side. The harder case (a pod
-naturally rescheduling onto a **different** `vdo-capable` node, not a
-delete/recreate on the same one) was confirmed by cordoning the pod's
-original node and recreating it: the scheduler correctly excluded the one
-non-`vdo-capable` node available and landed the pod on a `vdo-capable` node
-that had never hosted this volume's client-side VDO stack before. The CSI log
-there shows the reactivate path taken (`lvs` detects the existing LV, then
-`vgchange -ay`), with no `pvcreate`/`vgcreate`/`lvcreate` at all, followed by a
-successful mount, a restart count of `0`, and a matching checksum.
 
 ---
 
@@ -542,26 +527,6 @@ afterward via `lvchange` measured ~391MB, matching the isolated figures above.*
   previously skipped device, resolved the collision by giving the clone its
   own PV/VG UUIDs — but left the clone's LV still named after the source, so
   a complete implementation also needs an explicit LV rename.*
-
-  *Verified end-to-end against the real implementation (`ResolveClonedVDO` in
-  PR #402), for both clone paths: a direct PVC-to-PVC clone
-  (`dataSource: PersistentVolumeClaim`) and a snapshot restore
-  (`dataSource: VolumeSnapshot`), both scheduled onto the same node as their
-  still-live source — the specific co-location scenario this finding warns
-  about. In both cases `ResolveClonedVDO` correctly detected the foreign VG
-  identity, ran `vgimportclone --basevgname <new-vg> <device>` followed by
-  the explicit `lvrename` this finding calls out, and the resulting volume
-  mounted cleanly with data matching the source exactly (SHA-256). All three
-  volumes (source, PVC clone, snapshot restore) coexisted simultaneously on
-  one node with independent VG identities and no collisions; writing new,
-  distinct data to the clone and to the restore each left the other two
-  volumes unaffected, confirming genuine independence post-resolution, not
-  just a one-time copy that happens to look right. One bug found and fixed
-  along the way: the collision-detection log message (and the identity
-  comparison itself) was picking up `pvs`'s own stderr `WARNING:` lines
-  merged into its output, not just the actual VG name — harmless here since
-  the polluted string still differed from the target either way, but fixed
-  to parse just the actual field.*
 
 - **Multi-instance memory scaling:** `KVDO module bytes used` is a
   module-wide total, not per-instance. Two simultaneous VDO-backed volumes
@@ -1000,18 +965,6 @@ this failure mode does not occur here. **No design change needed.**
   backend device the stripe hints were computed for. **Fix**: skip
   `xfsStripeOptions` entirely when `client_compression` is set (added to
   Section 7's wiring notes).
-
-  **Now verified end-to-end against the real implementation (PR #402)**:
-  provisioned a real VDO-backed volume with `csi.storage.k8s.io/fstype: xfs`
-  (every prior hands-on spike had used `ext4`). `mkfs.xfs` ran with only
-  `[-f <device>]` — no stripe-alignment flags — confirming the skip fires
-  correctly. The volume mounted cleanly with the existing `nouuid` flag
-  intact, compression and deduplication both stayed `enabled`, a real
-  checksummed write round-tripped correctly, and deleting/recreating the pod
-  reattached the same VDO device (not a reformat) with the data still
-  intact — the same re-provisioning guarantee already confirmed for `ext4`.
-  No bugs found; this scenario just needed exercising once the fix was
-  already reasoned correctly.
 - ~~Server-side `encryption=true` + `client_compression=true` likely defeats
   compression~~ **Retracted — spiked and confirmed wrong; moved to "Confirmed
   compatible" above.** The client always receives plaintext for an encrypted
