@@ -32,6 +32,7 @@ const (
 	mgmtIP        = "10.0.0.1"
 	tlsVolumeName = "tls"
 	caVolumeName  = "certificate-authority"
+	nodeUUID1     = "node-uuid-1"
 )
 
 func TestStorageNodeSetFinalizerLifecycleHelpers(t *testing.T) {
@@ -1218,7 +1219,7 @@ func TestPollNodeOnlinePaths(t *testing.T) {
 			t.Fatalf("unexpected node status length: %d", len(sn.Status.Nodes))
 		}
 		got := sn.Status.Nodes[0]
-		if got.Status != utils.NodeStatusOnline || got.UUID != "node-uuid-1" {
+		if got.Status != utils.NodeStatusOnline || got.UUID != nodeUUID1 {
 			t.Fatalf("node status not updated as expected: %#v", got)
 		}
 	})
@@ -1618,7 +1619,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 				Nodes: []simplyblockv1alpha1.NodeStatus{
 					{
 						Hostname: "node-a",
-						UUID:     "node-uuid-1",
+						UUID:     nodeUUID1,
 						Status:   "in_creation",
 						Health:   false,
 						MgmtIp:   "10.0.0.1",
@@ -1632,7 +1633,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(apiBody("node-uuid-1", statusOnline, "10.0.0.99", true)))
+			_, _ = w.Write([]byte(apiBody(nodeUUID1, statusOnline, "10.0.0.99", true)))
 		}))
 		defer srv.Close()
 
@@ -1651,7 +1652,7 @@ func TestSyncTrackedNodesStatus(t *testing.T) {
 		if n.MgmtIp != "10.0.0.99" {
 			t.Errorf("expected MgmtIp 10.0.0.99, got %q", n.MgmtIp)
 		}
-		if n.UUID != "node-uuid-1" {
+		if n.UUID != nodeUUID1 {
 			t.Errorf("expected UUID preserved, got %q", n.UUID)
 		}
 	})
