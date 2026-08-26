@@ -339,6 +339,17 @@ func (r *ReplicationSlotReconciler) reconcileSyncStatus(
 		// and signal cutover-proceed before the ANA flip.
 		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending)
 		slot.Status.Message = "Cutover pending — failback reverse cutover in progress"
+	case backendStateCutoverDone, "failed_over":
+		if !status.IsSource {
+			// This volume is the TARGET of a completed failback: it received the
+			// replicated data and the ANA flip moved IO back here. From the slot's
+			// perspective the volume is live on the source cluster again.
+			slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateReplicating)
+			slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionSource)
+			slot.Status.Message = replMsgSlotReplicating
+			log.Info("Failback cutover detected: slot transitioning back to replicating/source",
+				"slot", slot.Name, "backendState", status.State)
+		}
 	}
 
 	if err := r.Status().Patch(ctx, slot, patch); err != nil {
