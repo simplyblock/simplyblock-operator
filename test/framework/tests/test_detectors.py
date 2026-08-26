@@ -451,6 +451,22 @@ class AttributeWindow(unittest.TestCase):
         self.assertEqual(self.named(migs, ts(10), ts(50)), "m")
 
 
+class SecretExposureArtifacts(unittest.TestCase):
+    def test_the_artifacts_are_the_files_a_reader_can_open(self):
+        """Regression: 2026-08-26-secret-artifacts-miss-the-extension (PR #445 review).
+
+        The finding listed log *names* ("operator") where the run directory holds
+        "operator.txt", so the one field that says where to look did not name a file. Every
+        other detector reporting a container log names it with its extension.
+        """
+        ev = FakeEvidence(logs={
+            "operator": ["password=hunter2hunter2"],
+            "webappapi": ["nothing to see"]})
+        found = list(build_detector("security.secret-exposure").detect(ev))
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].artifacts, ["operator.txt"])
+
+
 class NvmeStaleControllers(unittest.TestCase):
     def ctrl(self, name, state, ns, node="vm03", nqn="nqn:lvol:x", addr="10.0.0.1:4420", clt=60):
         return NvmeController(node=node, name=name, nqn=nqn, address=addr, state=state,

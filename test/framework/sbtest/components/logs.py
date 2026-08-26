@@ -383,7 +383,16 @@ class LogCollect(_GrabberBase):
             return
 
         nodes = {p.node for p, _c, _n in plan if p.node}
-        self._grabbers = self._start_grabbers(ctx, sorted(nodes), int(self.opt("ttl_s")))
+        # logs.stream publishes its grabbers for exactly this. Its TTL already covers the
+        # whole run, and by collection time its followers have stopped, so the pod is idle and
+        # free to be exec'd into — a second privileged pod per node doing the same job is what
+        # the distinct names were only ever a backstop against.
+        borrowed = {n: g for n, g in ctx.shared.get("logs.grabbers", {}).items() if n in nodes}
+        missing = sorted(nodes - set(borrowed))
+        # Recorded separately from `_grabbers`, because teardown may only delete these: a
+        # borrowed pod belongs to the component that published it.
+        self._own = self._start_grabbers(ctx, missing, int(self.opt("ttl_s"))) if missing else {}
+        self._grabbers = {**borrowed, **self._own}
 
         grouped: dict[str, list[tuple[kube.Pod, str]]] = {}
         for p, c, artifact in plan:

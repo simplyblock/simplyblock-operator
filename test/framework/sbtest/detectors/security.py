@@ -76,7 +76,9 @@ class SecretExposure(Detector):
                 detail=where,
                 evidence={"pattern": label, "total": total,
                           "per_log": {k: len(v) for k, v in per_log.items()}},
-                artifacts=sorted(per_log),
+                # The file, not the log's name: the run directory holds <name>.txt, and
+                # a pointer a reader has to complete is not a pointer.
+                artifacts=[f"{log}.txt" for log in sorted(per_log)],
                 note="The value is deliberately not quoted here — findings.json travels at "
                      "least as widely as the log. Rotate whatever this is, then stop the "
                      "component logging it; artifacts get attached to tickets and committed.",

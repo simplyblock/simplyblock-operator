@@ -151,12 +151,15 @@ class RunContext:
         filesystem shutdowns that had happened hours before it started.
         """
         self._window_start = getattr(self, "_window_start", None) or start or now_utc()
-        if end:
-            self._window_end = end
+        # The *stored* end, not the argument. A later mark without one — a second collect
+        # phase, a component closing its own books — must not rewrite the record with no end
+        # at all: the window is what bounds every ring-buffer detector to this run, and an
+        # open window makes evidence from after it count as the run's.
+        self._window_end = end or getattr(self, "_window_end", None)
         self.save_json("run.json", {
             "run_id": self.run_id,
             "start": iso(self._window_start),
-            "end": iso(end) if end else None,
+            "end": iso(self._window_end) if self._window_end else None,
         })
 
     def save_json(self, name: str, obj: Any) -> str:

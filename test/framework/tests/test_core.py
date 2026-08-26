@@ -16,11 +16,13 @@ import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from typing import cast
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sbtest  # noqa: E402,F401  (registers the bundled plugins)
 from sbtest.adapters import ArchiveEvidence  # noqa: E402
+from sbtest.components import kube  # noqa: E402
 from sbtest.core import (  # noqa: E402
     Component,
     Detector,
@@ -406,6 +408,24 @@ class RunWindowRecording(unittest.TestCase):
             self.assertIsNotNone(start)
             self.assertIsNotNone(end)
 
+    def test_a_later_mark_does_not_erase_the_recorded_end(self):
+        """Regression: 2026-08-26-mark-window-erases-end (PR #445 review).
+
+        mark_window persisted its `end` *argument* rather than the end it had stored, so any
+        later call without one rewrote run.json with end: null. Every detector that bounds
+        what it may blame on the run reads that window; with no end, evidence from after the
+        run counts as the run's.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            ctx = RunContext(run_id="t", outdir=d, log=Logger(None))
+            ctx.mark_window()
+            ctx.mark_window(end=now_utc())
+            ctx.mark_window()          # a second collect phase, a component, a retry
+            with open(os.path.join(d, "run.json")) as fh:
+                rec = json.load(fh)
+            self.assertIsNotNone(rec["end"])
+            self.assertIsNotNone(ArchiveEvidence(d).run_window()[1])
+
     def test_run_json_wins_over_inference_from_test_log(self):
         """The run's own record beats whatever happened to get logged."""
         with tempfile.TemporaryDirectory() as d:
@@ -472,55 +492,79 @@ class GrabberReuse(unittest.TestCase):
     names are the backstop for when reuse is not possible.
     """
 
-    def test_collect_reuses_published_grabbers_and_starts_only_the_rest(self):
-        from sbtest.components.logs import LogCollect
-        started: list[list[str]] = []
+    def _probe(self):
+        """A LogCollect with the cluster faked at the component's own boundaries.
 
-        class Probe(LogCollect):
+        Everything below `collect()` is stubbed and everything inside it runs, because the
+        previous version of these cases re-implemented the reuse arithmetic in the test body
+        and never called `collect()` at all — so it went on passing while the component
+        borrowed nothing and recorded nothing to tear down.
+        """
+        from sbtest.components import logs as logs_mod
+        started: list[list[str]] = []
+        deleted: list[list[str]] = []
+
+        class Probe(logs_mod.LogCollect):
             def _start_grabbers(self, ctx, nodes, ttl_s):
                 started.append(list(nodes))
                 return {n: f"own-{n}" for n in nodes}
 
-        c = Probe()
-        with tempfile.TemporaryDirectory() as d:
+            def _delete_grabbers(self, ctx, names):
+                deleted.append(list(names))
+
+        pods = [kube.Pod(name=f"snode-spdk-{i}", namespace="default", node=node,
+                         containers=("spdk-container",))
+                for i, node in enumerate(("vm02", "vm03", "vm04"))]
+        c = Probe(targets=[{"pods": ["snode-spdk"], "containers": ["spdk-container"],
+                            "name_from": "pod-container"}])
+        return c, started, deleted, pods
+
+    def test_collect_reuses_published_grabbers_and_starts_only_the_rest(self):
+        """Regression: 2026-08-26-logcollect-ignores-published-grabbers (PR #445 review).
+
+        logs.collect started its own privileged pod on every node regardless of what
+        logs.stream had already published in ctx.shared["logs.grabbers"], so a run carried two
+        privileged pods per node doing the same job.
+        """
+        c, started, _deleted, pods = self._probe()
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(kube, "list_pods", lambda *a, **k: pods), \
+                mock.patch.object(kube, "run_bytes", lambda *a, **k: b"log line\n"):
             ctx = RunContext(run_id="r", outdir=d, log=Logger(None))
             ctx.shared["logs.grabbers"] = {"vm02": "stream-vm02", "vm03": "stream-vm03"}
-            # Stand in for the pod census: two nodes already covered, one not.
-            plan_nodes = ["vm02", "vm03", "vm04"]
-            inherited = dict(ctx.shared["logs.grabbers"])
-            missing = sorted(n for n in plan_nodes if n not in inherited)
-            own = c._start_grabbers(ctx, missing, 60)
-            c._own = own
-            c._grabbers = {**{n: g for n, g in inherited.items() if n in plan_nodes}, **own}
+            c.collect(ctx)
+        self.assertEqual(started, [["vm04"]])                  # only the uncovered node
+        self.assertEqual(c._grabbers["vm02"], "stream-vm02")   # borrowed, not replaced
+        self.assertEqual(c._grabbers["vm04"], "own-vm04")
 
-            self.assertEqual(started, [["vm04"]])          # only the uncovered node
-            self.assertEqual(c._grabbers["vm02"], "stream-vm02")   # reused, not replaced
-            self.assertEqual(c._grabbers["vm04"], "own-vm04")
+    def test_teardown_removes_the_grabbers_collect_started(self):
+        """Regression: 2026-08-26-logcollect-grabber-leak (PR #445 review).
 
-            deleted: list[list[str]] = []
-            c._delete_grabbers = lambda _ctx, names: deleted.append(list(names))  # type: ignore[assignment]
+        collect() never recorded what it started in `_own`, so teardown deleted nothing and
+        every privileged pod it created outlived the run, up to its TTL.
+        """
+        c, _started, deleted, pods = self._probe()
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(kube, "list_pods", lambda *a, **k: pods), \
+                mock.patch.object(kube, "run_bytes", lambda *a, **k: b"log line\n"):
+            ctx = RunContext(run_id="r", outdir=d, log=Logger(None))
+            ctx.shared["logs.grabbers"] = {"vm02": "stream-vm02"}
+            c.collect(ctx)
             c.teardown(ctx)
-            # Only its own; deleting a borrowed pod would pull it from under its owner.
-            self.assertEqual(deleted, [["own-vm04"]])
+        # Its own three, and none of logs.stream's: deleting a borrowed pod would pull it
+        # out from under the component that owns it.
+        self.assertEqual(deleted, [["own-vm03", "own-vm04"]])
 
     def test_collect_works_standalone_when_nothing_published(self):
         """logs.stream may be disabled — collect must still start what it needs."""
-        from sbtest.components.logs import LogCollect
-        started: list[list[str]] = []
-
-        class Probe(LogCollect):
-            def _start_grabbers(self, ctx, nodes, ttl_s):
-                started.append(list(nodes))
-                return {n: f"own-{n}" for n in nodes}
-
-        c = Probe()
-        with tempfile.TemporaryDirectory() as d:
+        c, started, _deleted, pods = self._probe()
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(kube, "list_pods", lambda *a, **k: pods), \
+                mock.patch.object(kube, "run_bytes", lambda *a, **k: b"log line\n"):
             ctx = RunContext(run_id="r", outdir=d, log=Logger(None))
-            inherited = dict(ctx.shared.get("logs.grabbers", {}))
-            self.assertEqual(inherited, {})
-            own = c._start_grabbers(ctx, ["vm02", "vm03"], 60)
-            self.assertEqual(started, [["vm02", "vm03"]])
-            self.assertEqual(sorted(own), ["vm02", "vm03"])
+            c.collect(ctx)
+        self.assertEqual(started, [["vm02", "vm03", "vm04"]])
+        self.assertEqual(sorted(c._grabbers), ["vm02", "vm03", "vm04"])
 
     def test_lifecycle_order_makes_reuse_safe(self):
         """stop precedes collect, and teardown follows it — so the borrowed pod is idle and
