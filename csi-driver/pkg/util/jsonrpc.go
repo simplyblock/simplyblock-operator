@@ -98,6 +98,7 @@ type ClusterAPI interface {
 	PublishVolume(ctx context.Context, lvolID string) error
 	UnpublishVolume(ctx context.Context, lvolID string) error
 	VolumeInfo(ctx context.Context, lvolID string, hostNQN string) (map[string]string, error)
+	GetRelationship(ctx context.Context, lvolID string) (*ReplicationRelationship, error)
 	CloneVolume(ctx context.Context, lvolID, cloneName, newSize, pvcName string) (string, error)
 
 	// Snapshots
@@ -133,6 +134,23 @@ type LvolConnectResp struct {
 type connectionInfo struct {
 	IP   string `json:"ip"`
 	Port int    `json:"port"`
+}
+
+// ReplicationRelationship is the response from the cluster-level relationship
+// endpoint (/replication/relationships/{lvol_id}). It survives source volume
+// deletion and lets the CSI driver redirect to the active volume on the target
+// cluster when the source has been removed by replication-commit --delete-source.
+type ReplicationRelationship struct {
+	ReplicationID   string `json:"replication_id"`
+	SourceLvolID    string `json:"source_lvol_id"`
+	TargetLvolID    string `json:"target_lvol_id"`
+	SourceClusterID string `json:"source_cluster_id"`
+	TargetClusterID string `json:"target_cluster_id"`
+	TargetPoolID    string `json:"target_pool_id"`
+	Mode            string `json:"mode"`
+	State           string `json:"state"`
+	Active          string `json:"active"`
+	ActiveLvolID    string `json:"active_lvol_id"`
 }
 
 // LvolResp is the v2 VolumeDTO returned by the SimplyBlock API
@@ -589,6 +607,9 @@ func (client APIClient) getLvolConnections(
 	}
 	raw, err := client.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
+		if isHTTPStatus(err, http.StatusNotFound) {
+			return nil, ErrVolumeNotFound
+		}
 		return nil, err
 	}
 	var result []*LvolConnectResp
@@ -596,6 +617,24 @@ func (client APIClient) getLvolConnections(
 		return nil, fmt.Errorf("failed to unmarshal connections response: %w", err)
 	}
 	return result, nil
+}
+
+// getReplicationRelationship fetches the replication relationship for a volume
+// by its UUID. This endpoint survives source volume deletion, making it usable
+// for redirect lookups after replication-commit --delete-source.
+func (client APIClient) getReplicationRelationship(
+	ctx context.Context, lvolID string,
+) (*ReplicationRelationship, error) {
+	path := fmt.Sprintf("api/v2/clusters/%s/replication/relationships/%s", client.ClusterID, lvolID)
+	raw, err := client.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var rel ReplicationRelationship
+	if err := json.Unmarshal(raw, &rel); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal relationship response: %w", err)
+	}
+	return &rel, nil
 }
 
 // getStorageNodeStatus returns the status string for a storage node by UUID.

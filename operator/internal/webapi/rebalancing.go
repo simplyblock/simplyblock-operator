@@ -539,3 +539,28 @@ func (c *Client) CancelMigration(
 	}
 	return nil
 }
+
+// GetVolumeConnections returns the NVMe-oF connection endpoints for a volume.
+// These are the same paths the CSI driver connects on mount, and what a
+// preconnect Job uses to establish target paths before an ANA cutover.
+func (c *Client) GetVolumeConnections(
+	ctx context.Context,
+	clusterID, poolID, volumeID string,
+) ([]LvolConnectResp, error) {
+	endpoint := fmt.Sprintf(
+		"/api/v2/clusters/%s/storage-pools/%s/volumes/%s/connect",
+		clusterID, poolID, volumeID,
+	)
+	body, status, err := c.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status >= 300 {
+		return nil, fmt.Errorf("GET volume connections: status %d: %s", status, string(body))
+	}
+	var conns []LvolConnectResp
+	if err := json.Unmarshal(body, &conns); err != nil {
+		return nil, fmt.Errorf("parse volume connections: %w", err)
+	}
+	return conns, nil
+}
