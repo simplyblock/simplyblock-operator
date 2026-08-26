@@ -80,7 +80,19 @@
                       "properties": {
                         "enabled": { "type": "boolean" },
                         "url": { "type": "string" }
-                      }
+                      },
+                      "allOf": [
+                        {
+                          "if": {
+                            "properties": { "enabled": { "const": true } },
+                            "required": ["enabled"]
+                          },
+                          "then": {
+                            "required": ["url"],
+                            "properties": { "url": { "minLength": 1 } }
+                          }
+                        }
+                      ]
                     },
                     "teams": {
                       "type": "object",

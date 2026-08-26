@@ -910,7 +910,7 @@ data:
             type: slack
             settings:
               username: grafana_bot
-              url: '{{ $slack.url | default $grafana.contactPoint }}'
+              url: '{{ $slack.url }}'
               title: '{{ "{{" }} template "simplyblock.title" . {{ "}}" }}'
               text: '{{ "{{" }} template "simplyblock.message" . {{ "}}" }}'
     {{- end }}

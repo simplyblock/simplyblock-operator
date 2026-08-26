@@ -261,9 +261,6 @@ controlplane:
       tag: 10.0.12
       pullPolicy: IfNotPresent
       endpoint: ""
-      # Slack incoming webhook the default alert receiver posts to. Retained
-      # under its historical name. Setting notifications.slack.url overrides it.
-      contactPoint: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
       # Receivers Grafana provisions into the "grafana-alerts" contact point.
       # Every enabled channel is notified for every simplyblock alert. With none
       # of them enabled, no contact point and no notification policy are
@@ -274,9 +271,9 @@ controlplane:
       # them.
       notifications:
         slack:
-          enabled: true
-          # Incoming webhook URL. Defaults to grafana.contactPoint above.
-          # url: ""
+          enabled: false
+          # Incoming webhook URL of the channel the alerts are posted to.
+          url: ""
         teams:
           # Microsoft Teams, through an incoming webhook or a workflow URL.
           enabled: false
