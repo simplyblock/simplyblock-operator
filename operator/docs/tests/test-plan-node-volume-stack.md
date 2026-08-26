@@ -13,9 +13,10 @@ Scenario IDs are permanent: `U-` unit (no cluster: pure functions, fake host
 surface, mock HTTP), `I-` integration (the runner against a real temporary
 directory and a faked host, no Kubernetes), `E-` end-to-end (live cluster, real
 data path), `M-` manual (needs failure injection not yet automated). Types are
+Types are
 `Positive`, `Negative`, `Boundary`, `Regression`. The `Test` column names the
 implementing function, or `—` when the scenario is not yet covered. Every `—`
-is accounted for in §9 What Is Not Yet Covered.
+is accounted for in §8 What Is Not Yet Covered.
 
 Section references written as `§n` mean this plan. References to the design are
 written `design §n`.
