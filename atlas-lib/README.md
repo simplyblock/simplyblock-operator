@@ -39,13 +39,13 @@ atlas/
 ├── nqn/                    Build & parse simplyblock lvol NQNs
 ├── lvm/                    Device-scoped Linux LVM commands + content-based identity
 │   ├── doc.go              Why every command here is scoped by device, not by name
-│   ├── lvm.go              Manager, Runner, DeviceScope, Run (the escape hatch)
+│   ├── lvm.go              Manager, Runner, Run (the escape hatch)
 │   ├── identity.go         VolumeGroup, HasLogicalVolume, ListLogicalVolumes, Rescan
 │   ├── volume.go           Create/Activate/Deactivate/Remove a PV or VG
 │   ├── vdo.go              CreateVDOLogicalVolume, SetVDOFeatures
 │   ├── clone.go            ImportClonedVolumeGroup, RenameLogicalVolume
-│   ├── grow.go             Extend a PV or LV, read an LV's current size
-│   └── dm.go               EscapeDMName, RemoveOrphanedDMNodes
+│   ├── grow.go             Extend a PV, VG, or LV, read an LV's current size
+│   └── dm.go               RemoveOrphanedDMNodes
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)

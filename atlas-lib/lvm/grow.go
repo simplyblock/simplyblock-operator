@@ -17,6 +17,18 @@ func (m *Manager) ExtendPhysicalVolume(ctx context.Context, devices []string, de
 	return nil
 }
 
+// ExtendVolumeGroup adds devicePaths to vg (vgextend), scoped to devices. The
+// counterpart to CreateVolumeGroup for a VG that already exists: growing a
+// striped volume group by adding members, as opposed to ExtendPhysicalVolume,
+// which grows a PV already in the VG to its device's current full size.
+func (m *Manager) ExtendVolumeGroup(ctx context.Context, devices []string, vg string, devicePaths ...string) error {
+	args := append([]string{"vgextend", vg}, devicePaths...)
+	if _, err := m.Run(ctx, devices, args...); err != nil {
+		return fmt.Errorf("vgextend %s with %v: %w", vg, devicePaths, err)
+	}
+	return nil
+}
+
 // ExtendLogicalVolumeByFreeSpace grows vg's lvName logical volume to consume
 // all newly available free space in the VG (lvextend -l+100%FREE).
 //

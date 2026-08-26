@@ -19,6 +19,30 @@ func TestManager_ExtendPhysicalVolume(t *testing.T) {
 	}
 }
 
+func TestManager_ExtendVolumeGroup(t *testing.T) {
+	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
+	mgr := NewManagerWithRunner(fake.run)
+	devices := []string{"/dev/nvme0n1", "/dev/nvme1n1"}
+	if err := mgr.ExtendVolumeGroup(context.Background(), devices, "striped-vg", "/dev/nvme1n1"); err != nil {
+		t.Fatalf("ExtendVolumeGroup: %v", err)
+	}
+	want := []string{"vgextend", "--devices", "/dev/nvme0n1,/dev/nvme1n1", "striped-vg", "/dev/nvme1n1"}
+	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+		t.Errorf("recorded call = %v, want %v", fake.calls, want)
+	}
+}
+
+func TestManager_ExtendVolumeGroup_WrapsRunnerError(t *testing.T) {
+	wantErr := errors.New("insufficient free extents")
+	key := joinKey([]string{"vgextend", "striped-vg", "/dev/nvme1n1"})
+	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: wantErr}}
+	mgr := NewManagerWithRunner(fake.run)
+	err := mgr.ExtendVolumeGroup(context.Background(), nil, "striped-vg", "/dev/nvme1n1")
+	if !errors.Is(err, wantErr) {
+		t.Errorf("ExtendVolumeGroup() error = %v, want wrapping %v", err, wantErr)
+	}
+}
+
 func TestManager_ExtendLogicalVolumeByFreeSpace(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
