@@ -261,7 +261,60 @@ controlplane:
       tag: 10.0.12
       pullPolicy: IfNotPresent
       endpoint: ""
-      contactPoint: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+      # Receivers Grafana provisions into the "grafana-alerts" contact point.
+      # Every enabled channel is notified for every simplyblock alert. With none
+      # of them enabled, no contact point and no notification policy are
+      # provisioned, and Grafana's own default policy stays in place.
+      #
+      # The credentials below are rendered into the simplyblock-grafana-alerting
+      # ConfigMap, so read access to the release namespace is read access to
+      # them.
+      notifications:
+        slack:
+          enabled: false
+          # Incoming webhook URL of the channel the alerts are posted to.
+          url: ""
+        teams:
+          # Microsoft Teams, through an incoming webhook or a workflow URL.
+          enabled: false
+          url: ""
+        pagerduty:
+          enabled: false
+          # Integration key of an Events API v2 service.
+          integrationKey: ""
+          # One of info, warning, error, or critical.
+          severity: "critical"
+          # Optional PagerDuty event fields, left to PagerDuty's defaults when
+          # empty. Every one of them accepts a Grafana notification template.
+          class: ""
+          component: ""
+          group: ""
+        opsgenie:
+          enabled: false
+          apiKey: ""
+          # https://api.eu.opsgenie.com/v2/alerts for accounts in the EU region.
+          apiUrl: "https://api.opsgenie.com/v2/alerts"
+          # Close the Opsgenie alert when the Grafana alert resolves.
+          autoClose: true
+          # Derive the Opsgenie priority from an og_priority alert label.
+          overridePriority: false
+          # How alert labels are carried over: tags, details, or both.
+          sendTagsAs: "tags"
+        webhook:
+          # Generic receiver, sent Grafana's own alert JSON payload unmodified.
+          enabled: false
+          url: ""
+          # POST or PUT.
+          httpMethod: "POST"
+          # Basic authentication. Left out of the request when username is empty.
+          username: ""
+          password: ""
+          # Authorization header, as an alternative to basic authentication:
+          # scheme "Bearer" with the token as the credentials, for example.
+          authorizationScheme: ""
+          authorizationCredentials: ""
+          # Cap on the alerts in a single notification. 0 sends all of them.
+          maxAlerts: 0
     thanos:
       repository: quay.io/simplyblock-io/thanos
       tag: v0.31.0

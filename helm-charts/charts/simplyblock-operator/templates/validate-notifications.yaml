@@ -1,0 +1,14 @@
+{{/*
+Install-time guard for the Grafana alert notification values. A receiver
+configured through a value the chart no longer reads would provision an alerting
+ConfigMap that notifies nobody, which only shows up the next time an alert
+fires. The release fails here instead, next to the chart's other value guards in
+validate-tls.yaml.
+*/}}
+{{- if and .Values.operator.enabled .Values.controlplane.observability.enabled -}}
+{{-   with .Values.controlplane.observability.grafana -}}
+{{-     if .contactPoint -}}
+{{-       fail "controlplane.observability.grafana.contactPoint has been removed. Move the Slack webhook URL to controlplane.observability.grafana.notifications.slack.url and set notifications.slack.enabled to true." -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
