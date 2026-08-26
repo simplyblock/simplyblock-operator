@@ -37,6 +37,15 @@ atlas/
 │   ├── multipath.go        ConnectPaths (ordered per-path connect) + PathResult
 │   └── wait.go             ConnectDevice / WaitForDevice: attach -> nvme.Device
 ├── nqn/                    Build & parse simplyblock lvol NQNs
+├── lvm/                    Device-scoped Linux LVM commands + content-based identity
+│   ├── doc.go              Why every command here is scoped by device, not by name
+│   ├── lvm.go              Manager, Runner, DeviceScope, Run (the escape hatch)
+│   ├── identity.go         VolumeGroup, HasLogicalVolume, ListLogicalVolumes, Rescan
+│   ├── volume.go           Create/Activate/Deactivate/Remove a PV or VG
+│   ├── vdo.go              CreateVDOLogicalVolume, SetVDOFeatures
+│   ├── clone.go            ImportClonedVolumeGroup, RenameLogicalVolume
+│   ├── grow.go             Extend a PV or LV, read an LV's current size
+│   └── dm.go               EscapeDMName, RemoveOrphanedDMNodes
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)
@@ -561,6 +570,86 @@ if s, ok := nqn.Parse(dev.Subsystem.NQN); ok {
     _, _ = s.ClusterID, s.LvolID
 }
 ```
+
+#### Assemble an LVM stack on a device
+
+An HA volume is reachable over two network paths for redundancy, and each
+path shows up on the client as its own device file (say `/dev/nvme2n1` and
+`/dev/nvme3n1`), both backed by the same data. That breaks two things LVM
+normally assumes:
+
+- **A system-wide scan sees duplicates.** LVM's `pvscan` looks at every
+  device on the machine and builds its own map of "which device belongs to
+  which volume group," identifying each by an on-disk signature it writes.
+  Since `/dev/nvme2n1` and `/dev/nvme3n1` carry identical bytes, that
+  signature is identical too. LVM sees what looks like the same physical
+  volume twice, reports a "duplicate PV," and can resolve later commands
+  against whichever one its cache happens to have picked. Confirmed live.
+- **A name-based existence check isn't tied to a device.** `vgs <name>`
+  answers "does a volume group called X exist anywhere LVM is allowed to
+  look?" rather than "does it exist *on this device*." Confirmed live: this
+  reported a volume group as already present when it had never actually
+  been created on the specific device being asked about, because the check
+  wasn't pinned to that device at all.
+
+Every function here fixes both by scoping to one explicit device list
+(`--devices`, so a scan never even looks at the volume's other path) and by
+reading a device's own on-disk content to answer identity questions, instead
+of asking LVM's global, name-based cache.
+
+```go
+mgr := lvm.NewManager()
+
+// Content-based, not "vgs <name>": "" means genuinely blank, or unreadable —
+// both read the same way to a caller deciding whether to create fresh.
+vg, err := mgr.VolumeGroup(ctx, devicePath)
+if err != nil {
+    handleError(err)
+}
+switch {
+case vg != expectedVG:
+    // Genuinely blank device (or a foreign identity to resolve first, e.g. a
+    // byte-level clone) — create fresh.
+default:
+    hasLV, err := mgr.HasLogicalVolume(ctx, []string{devicePath}, vg, lvName)
+    if err != nil {
+        handleError(err)
+    } else if hasLV {
+        err = mgr.ActivateVolumeGroup(ctx, devices, vg) // reactivate, never recreate
+    } else {
+        // Orphaned: pvcreate/vgcreate completed, the final lvcreate did not.
+        err = mgr.RemoveVolumeGroup(ctx, devices, vg) // fall through to a fresh create
+    }
+}
+
+// devices scopes every command to exactly the members involved — a single
+// device for VDO, several for a striped volume group. CreateVolumeGroup's
+// device list is variadic for exactly that reason.
+if err := mgr.CreatePhysicalVolume(ctx, devices, devicePath); err != nil {
+    handleError(err)
+}
+if err := mgr.CreateVolumeGroup(ctx, devices, expectedVG, devicePath); err != nil {
+    handleError(err)
+}
+```
+
+Every named method has this shape: build the right LVM/dm-vdo command,
+scoped to `devices`, and wrap the error with the operation it was attempting.
+`Run` stays available as an escape hatch for a command that doesn't have a
+named method yet, but reaching for it first is exactly the duplication this
+package exists to prevent: a caller assembling `pvcreate`/`vgcreate`/
+`lvcreate` argument lists by hand is rebuilding what `CreatePhysicalVolume`/
+`CreateVolumeGroup`/`CreateVDOLogicalVolume` already do.
+
+`RemoveOrphanedDMNodes` is the fallback when the backing device is already
+gone and `RemoveVolumeGroup`/`DeactivateVolumeGroup` can no longer read the
+metadata they need: it clears the live dm nodes directly, retrying across a
+few passes so removing a dependent unblocks what it was blocking.
+
+_Today:_ `csi-driver/pkg/util/vdo.go` is the only consumer, wrapping VDO's
+`CreateVDOLogicalVolume` on top of this package's device scoping and identity
+checks. A striped LVM volume group across several members would use
+`CreateVolumeGroup`'s variadic device-path list the same way.
 
 ### Cross-cutting
 
