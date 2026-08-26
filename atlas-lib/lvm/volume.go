@@ -39,13 +39,17 @@ func (m *Manager) ActivateVolumeGroup(ctx context.Context, devices []string, vg 
 // DeactivateVolumeGroup deactivates (but does not destroy) vg (vgchange -an).
 // Pass nil devices to address vg by name alone.
 func (m *Manager) DeactivateVolumeGroup(ctx context.Context, devices []string, vg string) error {
-	_, err := m.Run(ctx, devices, "vgchange", "-an", vg)
-	return err
+	if _, err := m.Run(ctx, devices, "vgchange", "-an", vg); err != nil {
+		return fmt.Errorf("deactivate VG %s: %w", vg, err)
+	}
+	return nil
 }
 
 // RemoveVolumeGroup deactivates and removes vg, destroying its data
 // (vgremove -f). Pass nil devices to address vg by name alone.
 func (m *Manager) RemoveVolumeGroup(ctx context.Context, devices []string, vg string) error {
-	_, err := m.Run(ctx, devices, "vgremove", "-f", vg)
-	return err
+	if _, err := m.Run(ctx, devices, "vgremove", "-f", vg); err != nil {
+		return fmt.Errorf("remove VG %s: %w", vg, err)
+	}
+	return nil
 }
