@@ -433,13 +433,60 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 	results := make([]simplyblockv1alpha1.ReplicationOpsResult, 0, len(slots))
 	anyFailed := false
 
+	// replicationRelationship holds the fields we need from
+	// GET /api/v2/clusters/{c}/replication/relationships/{vol}
+	type replicationRelationship struct {
+		TargetLvolID    string `json:"target_lvol_id"`
+		TargetClusterID string `json:"target_cluster_id"`
+		TargetPoolID    string `json:"target_pool_id"`
+	}
+
 	for i := range slots {
 		slot := &slots[i]
-		clusterID, poolID, volumeID, ok := splitVolumeHandle(slot.Spec.VolumeID)
+		clusterID, _, volumeID, ok := splitVolumeHandle(slot.Spec.VolumeID)
 		if !ok {
 			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
 				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
 				Detail: "invalid VolumeID",
+			})
+			anyFailed = true
+			continue
+		}
+
+		// Resolve the target cluster, pool, and volume via the replication
+		// relationship. After failover the active volume is on the target cluster;
+		// the failback and commit endpoints must be called there, not on the source.
+		relEndpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/relationships/%s", clusterID, volumeID)
+		relBody, relStatus, relErr := apiClient.Do(ctx, http.MethodGet, relEndpoint, nil)
+		if relErr != nil || relStatus >= 300 {
+			if relErr == nil {
+				relErr = fmt.Errorf("status %d: %s", relStatus, string(relBody))
+			}
+			log.Error(relErr, "fetch replication relationship failed", "slot", slot.Name)
+			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
+				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
+				Detail: relErr.Error(),
+			})
+			anyFailed = true
+			continue
+		}
+		var rel replicationRelationship
+		if err := json.Unmarshal(relBody, &rel); err != nil {
+			log.Error(err, "parse replication relationship failed", "slot", slot.Name)
+			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
+				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
+				Detail: fmt.Sprintf("parse relationship: %v", err),
+			})
+			anyFailed = true
+			continue
+		}
+		if rel.TargetLvolID == "" || rel.TargetClusterID == "" || rel.TargetPoolID == "" {
+			detail := fmt.Sprintf("incomplete relationship: target_lvol=%q target_cluster=%q target_pool=%q",
+				rel.TargetLvolID, rel.TargetClusterID, rel.TargetPoolID)
+			log.Error(nil, detail, "slot", slot.Name)
+			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
+				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
+				Detail: detail,
 			})
 			anyFailed = true
 			continue
@@ -451,14 +498,14 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 		if ops.Spec.SourceClusterID != "" {
 			fbBody["source_cluster_id"] = ops.Spec.SourceClusterID
 		}
-		fbEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication_failback",
-			clusterID, poolID, volumeID)
+		fbEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/failback",
+			rel.TargetClusterID, rel.TargetPoolID, rel.TargetLvolID)
 		body, status, fbErr := apiClient.Do(ctx, http.MethodPost, fbEndpoint, fbBody)
 		if fbErr != nil || status >= 300 {
 			if fbErr == nil {
 				fbErr = fmt.Errorf("status %d: %s", status, string(body))
 			}
-			log.Error(fbErr, "replication_failback failed", "slot", slot.Name)
+			log.Error(fbErr, "replication/failback failed", "slot", slot.Name)
 			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
 				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
 				Detail: fbErr.Error(),
@@ -469,14 +516,14 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 
 		r.setSubphase(ctx, ops, "CommittingFailback")
 
-		commitEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication_commit",
-			clusterID, poolID, volumeID)
+		commitEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/commit",
+			rel.TargetClusterID, rel.TargetPoolID, rel.TargetLvolID)
 		body, status, commitErr := apiClient.Do(ctx, http.MethodPost, commitEndpoint, nil)
 		if commitErr != nil || status >= 300 {
 			if commitErr == nil {
 				commitErr = fmt.Errorf("status %d: %s", status, string(body))
 			}
-			log.Error(commitErr, "replication_commit (failback step) failed", "slot", slot.Name)
+			log.Error(commitErr, "replication/commit (failback step) failed", "slot", slot.Name)
 			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
 				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
 				Detail: commitErr.Error(),
