@@ -279,7 +279,7 @@ Every one of these came from a real defect. Defaults encode what the runs measur
 | `ana.path-churn` | More distinct path addresses per host than the topology should produce. Informational: healthy counts are topology-dependent. |
 | `fio.checksum` | **fio read back data it never wrote.** Reads succeeded, so nothing else notices. Attributes to a migration through a verify lag (see below). |
 | `fio.job-error` | An fio job ended with a non-zero errno, with the errno's meaning — 121/EREMOTEIO points straight at the ANA detectors. |
-| `fio.outage` | A pod's I/O stopped for longer than a cutover should cost. |
+| `fio.outage` | A pod's I/O stopped for longer than a cutover should cost — reported as a **freeze** when it came back and a **loss** when it never did. Both fail; only one means writes went missing. |
 | `fio.throughput-outlier` | A pod far below the run's median IOPS. Weak alone; strong next to an ANA finding on the same subject. |
 | `logs.pattern` | **User-definable regex checks over any collected log.** Ships a catalogue: undrained transfer, migration sub-task failure, host-not-allowed reconnect storm, write-to-RO-range, path-validation failure, stuck migration group, kernel reconnect loop. |
 | `migration.outcomes` | Completion rate and phase breakdown. |
@@ -302,7 +302,7 @@ Every one of these came from a real defect. Defaults encode what the runs measur
 | `evidence.inventory` | What evidence the run produced (INFO). |
 | `security.secret-exposure` | Credential-shaped strings in collected logs. Reports the location, never the value. |
 
-Two defaults are load-bearing and worth knowing:
+Three things are load-bearing and worth knowing:
 
 * **`fio.checksum` verify lag (45s).** fio detects a lost write when it next *reads* that
   block, 3–34s later in practice. Without the lag a migration's own losses are filed under
@@ -311,6 +311,12 @@ Two defaults are load-bearing and worth knowing:
   freezes look like one healthy pause on any longest-window measure), more specific (one
   migration's single 5–6s pause lost nothing), and robust to sampling granularity. Keep both;
   they catch different shapes, and `tests/test_detectors.py` pins exactly that.
+* **The fio clock is fio's own.** Every offset in `timeseries.csv` is milliseconds since
+  *that pod's* fio started, so the wall clock hangs off `job_start` from its `result.json`,
+  never off the run's start — the run begins minutes before any fio does, by a different
+  amount per pod. The base decides which migration an outage overlaps, so getting it wrong
+  does not merely shift a chart: it names the wrong migration. `ArchiveEvidence` re-derives
+  it on replay, which corrects archives written before this was fixed.
 
 ## Component catalogue
 

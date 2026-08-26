@@ -8,9 +8,20 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from ..core import Detector, Evidence, Finding, SkipDetector, attribute, critical, detector, warning
+from ..core import (
+    Detector,
+    Evidence,
+    Finding,
+    SkipDetector,
+    attribute,
+    attribute_window,
+    critical,
+    detector,
+    warning,
+)
 
 #: How long after a migration ends one of its lost writes may still surface.
 #:
@@ -163,6 +174,21 @@ class Checksum(Detector):
             )
 
 
+@dataclass(frozen=True)
+class _Window:
+    """One stretch of a pod doing no I/O.
+
+    `recovered` is the whole distinction between a freeze and a loss, so it travels with the
+    window rather than being re-derived from where it sits in the series.
+    """
+
+    seconds: int
+    from_offset_s: int
+    to_offset_s: int
+    migration: str
+    recovered: bool
+
+
 @detector
 class Outage(Detector):
     """A sustained window where a pod did no I/O at all.
@@ -171,15 +197,28 @@ class Outage(Detector):
     returned wrong data, it stopped. Short dips are normal during a cutover, so only runs
     at or above `min_seconds` count.
 
-    Reported per pod rather than per window. A pod that stalls repeatedly stalls *hundreds* of
-    times in a soak — one run produced 781 qualifying windows at a 10s threshold — and a
-    report with 781 entries for one symptom is a report nobody reads to the end. The worst
-    windows are named, the rest are counted, and the total downtime is what the finding leads
-    with, because "18% of the run did no I/O" is the fact that decides anything.
+    A stopped volume is reported as one of two things, because they are not the same defect:
+
+      * an I/O **loss** is a gap that was still open when fio stopped. I/O the volume was
+        supposed to accept and never did.
+      * an I/O **freeze** is a gap that recovered. Every write the application issued was
+        eventually taken, so nothing was lost; what the freeze measures is how long an
+        application had to survive with the volume gone. A cutover is a freeze by design,
+        which is why its *length* is the thing under test and its existence is not.
+
+    Both are CRITICAL — a volume that stops for longer than a cutover should cost is a
+    defect either way — but a run that lost I/O and a run that stalled and recovered need
+    different next steps, and a report that calls both "outage" hands the reader that work.
+
+    Reported per pod and per kind rather than per window. A pod that stalls repeatedly stalls
+    *hundreds* of times in a soak — one run produced 781 qualifying windows at a 10s
+    threshold — and a report with 781 entries for one symptom is a report nobody reads to the
+    end. The worst windows are named, the rest are counted, and the total downtime is what the
+    finding leads with, because "18% of the run did no I/O" is the fact that decides anything.
     """
 
     name = "fio.outage"
-    summary = "a pod's I/O stopped for longer than a cutover should cost"
+    summary = "a pod's I/O stopped for longer than a cutover should cost — a freeze if it came back, a loss if it did not"  # noqa: E501
 
     def defaults(self) -> dict:
         return {"min_seconds": 30, "iops_floor": 0.0, "name_worst": 6}
@@ -190,7 +229,6 @@ class Outage(Detector):
             raise SkipDetector("no fio pods")
         floor = float(self.opt("iops_floor"))
         need = int(self.opt("min_seconds"))
-        show = int(self.opt("name_worst"))
         migs = ev.migrations()
         saw_series = False
 
@@ -199,7 +237,8 @@ class Outage(Detector):
             if not series:
                 continue
             saw_series = True
-            windows: list[tuple[int, int, int, str]] = []   # dur, from, to, migration
+            wall_at = {x.offset_s: x.wall for x in series}
+            windows: list[_Window] = []
             run_start: int | None = None
             prev_off: int | None = None
             # None is a sentinel that closes a run still open at the end of the series.
@@ -210,47 +249,75 @@ class Outage(Detector):
                     if run_start is None:
                         run_start = s.offset_s
                 elif run_start is not None:
+                    # A run the sentinel closes was still down when fio stopped: nothing
+                    # observed it come back, so it is a loss rather than a freeze.
+                    recovered = s is not None
                     end = s.offset_s if s is not None else (prev_off or run_start)
                     dur = end - run_start
                     if dur >= need:
-                        wall = next((x.wall for x in series if x.offset_s == run_start), None)
-                        mig = attribute(migs, wall) if wall else None
-                        windows.append((dur, run_start, end, mig.name if mig else ""))
+                        w0, w1 = wall_at.get(run_start), wall_at.get(end)
+                        mig = attribute_window(migs, w0, w1 or w0) if w0 else None
+                        windows.append(_Window(dur, run_start, end,
+                                               mig.name if mig else "", recovered))
                     run_start = None
                 if s is not None:
                     prev_off = s.offset_s
 
             if not windows:
                 continue
-            windows.sort(key=lambda w: -w[0])
-            downtime = sum(w[0] for w in windows)
             span = series[-1].offset_s - series[0].offset_s or 1
-            named = ", ".join(
-                f"{d}s at +{a}s" + (f" ({m})" if m else " (no migration)")
-                for d, a, _, m in windows[:show])
-            during = sorted({w[3] for w in windows if w[3]})
-            yield critical(
-                self.name,
-                title=(f"I/O stopped {len(windows)}x for {downtime}s total "
-                       f"({downtime / span:.0%} of the run), worst {windows[0][0]}s"),
-                subject=pod,
-                detail=named + (f", and {len(windows) - show} more" if len(windows) > show
-                                else ""),
-                evidence={"windows": len(windows), "downtime_s": downtime,
-                          "worst_s": windows[0][0],
-                          "fraction_of_run": round(downtime / span, 4),
-                          "migrations": during,
-                          "worst_windows": [{"seconds": d, "from_offset_s": a,
-                                             "to_offset_s": b, "migration": m}
-                                            for d, a, b, m in windows[:show]]},
-                note=("Windows are attributed to the migration in flight when there was one; "
-                      f"{len(during)} migration(s) are implicated here."
-                      if during else
-                      "None of these windows fall inside a migration, so the cause is "
-                      "elsewhere — check the fabric and the node's own health."),
-            )
+            # Losses first: both fail the run, but a gap that never closed outranks one that
+            # did, and the order findings are emitted in is the order they are read in.
+            for kind in ("loss", "freeze"):
+                of_kind = [w for w in windows if (w.recovered != (kind == "loss"))]
+                if of_kind:
+                    yield self._finding(pod, kind, of_kind, span)
         if not saw_series:
             raise SkipDetector("no fio time series available")
+
+    def _finding(self, pod: str, kind: str, windows: list[_Window], span: int) -> Finding:
+        show = int(self.opt("name_worst"))
+        windows = sorted(windows, key=lambda w: -w.seconds)
+        downtime = sum(w.seconds for w in windows)
+        named = ", ".join(
+            f"{w.seconds}s at +{w.from_offset_s}s"
+            + (f" ({w.migration})" if w.migration else " (no migration)")
+            for w in windows[:show])
+        during = sorted({w.migration for w in windows if w.migration})
+        if kind == "loss":
+            title = (f"I/O LOSS: stopped {len(windows)}x for {downtime}s total "
+                     f"({downtime / span:.0%} of the run) and never resumed, "
+                     f"worst {windows[0].seconds}s")
+            meaning = ("I/O was still dead when fio stopped, so these are writes the volume "
+                       "was supposed to accept and never did. ")
+        else:
+            title = (f"I/O froze {len(windows)}x for {downtime}s total "
+                     f"({downtime / span:.0%} of the run), worst {windows[0].seconds}s, "
+                     "all recovered")
+            meaning = ("Every freeze recovered, so no I/O was lost — what this measures is "
+                       "how long an application had to survive with the volume gone. ")
+        return critical(
+            self.name,
+            title=title,
+            subject=pod,
+            detail=named + (f", and {len(windows) - show} more" if len(windows) > show else ""),
+            evidence={"kind": kind, "windows": len(windows), "downtime_s": downtime,
+                      "worst_s": windows[0].seconds,
+                      "fraction_of_run": round(downtime / span, 4),
+                      "migrations": during,
+                      "worst_windows": [{"seconds": w.seconds,
+                                         "from_offset_s": w.from_offset_s,
+                                         "to_offset_s": w.to_offset_s,
+                                         "migration": w.migration,
+                                         "recovered": w.recovered}
+                                        for w in windows[:show]]},
+            note=meaning + (
+                "Windows are attributed to the migration they share the most seconds with; "
+                f"{len(during)} migration(s) are implicated here."
+                if during else
+                "None of these windows overlap a migration, so the cause is "
+                "elsewhere — check the fabric and the node's own health."),
+        )
 
 
 @detector

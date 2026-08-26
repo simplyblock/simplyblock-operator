@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..core import Component, RunContext, component
@@ -503,7 +504,7 @@ class FioWorkload(Component):
         if not per_sec:
             return
 
-        start, _ = ctx.window()
+        start = self._fio_time_base(ctx, pod, d)
         with open(f"{d}/timeseries.csv", "w") as fh:
             fh.write("second,wall_clock,total_iops,read_iops,write_iops,active_migration\n")
             for sec in sorted(per_sec):
@@ -512,11 +513,38 @@ class FioWorkload(Component):
                 wall = ""
                 active = ""
                 if start:
-                    from datetime import timedelta
                     ts = start + timedelta(seconds=sec)
                     wall = ts.strftime("%Y-%m-%dT%H:%M:%SZ")
                     active = next((m.name for m in migs if m.covers(ts)), "")
                 fh.write(f"{sec},{wall},{total},{row['read']},{row['write']},{active}\n")
+
+    def _fio_time_base(self, ctx: RunContext, pod: str, d: str) -> datetime | None:
+        """The wall clock of second 0 of one pod's fio time series.
+
+        fio's log timestamps are milliseconds since *that job* started, so the only correct
+        base is the job's own start — `job_start` in its result.json, which fio records in
+        epoch milliseconds. The run's own window start is not that base: it is stamped when
+        the run began, before the PVCs, the pods and their fio processes existed, so it sits
+        well ahead of every pod's fio start (162-211s in fiomig-1787685649, and every pod by a
+        different amount). Using it shifts every wall clock in timeseries.csv by that much
+        and, because the same base decides which migration an outage overlaps, names the
+        wrong migration for gaps that fall within a few minutes of a real one.
+
+        Falls back to the run's start when a pod's result.json is unreadable — a wrong base
+        is still better than an empty wall_clock column, and the fallback is reported.
+        """
+        try:
+            with open(f"{d}/result.json") as fh:
+                jobs = json.load(fh).get("jobs") or []
+            start_ms = jobs[0].get("job_start") if jobs else None
+            if isinstance(start_ms, int | float) and start_ms > 0:
+                return datetime.fromtimestamp(start_ms / 1000.0, tz=UTC)
+        except (OSError, json.JSONDecodeError, AttributeError, IndexError):
+            pass
+        run_start, _ = ctx.window()
+        ctx.log.warn(f"{self.name}: {pod}: fio result.json carries no job_start; falling back "
+                     "to the run's start, which leads each pod's real fio start")
+        return run_start
 
     def teardown(self, ctx: RunContext) -> None:
         if ctx.shared.get("keep"):

@@ -359,6 +359,64 @@ class WorkloadFio(unittest.TestCase):
         self.assertEqual([s.total_iops for s in series], [500.0, 400.0])
         self.assertIsNotNone(series[0].wall)
 
+    def test_the_clock_comes_from_fio_not_from_the_run(self):
+        """fio counts from its own launch, which is minutes after the run's start: the PVCs,
+        the pods and the fio processes all have to exist first. Basing the wall clock on the
+        run shifts every sample by that gap and hands an outage to the wrong migration."""
+        raw = "1000, 500, 0, 4096"
+        run_start = datetime(2026, 8, 20, 9, 0, 0, tzinfo=UTC)
+        fio_start = run_start + timedelta(seconds=180)
+        # The migration ran while fio was running, i.e. nowhere near the run's own start.
+        migs = [Migration(name="mig-1", start=fio_start, end=fio_start + timedelta(seconds=30))]
+        with _Ctx() as ctx, _patch(kube, "exec_sh", lambda *a, **k: raw):
+            ctx.mark_window(start=run_start)
+            d = ctx.dir("fio-0")
+            with open(os.path.join(d, "result.json"), "w") as fh:
+                json.dump({"jobs": [{"job_start": int(fio_start.timestamp() * 1000)}]}, fh)
+            workload.FioWorkload()._write_timeseries(ctx, "default", "fio-0", d, migs)
+            with open(os.path.join(d, "timeseries.csv")) as fh:
+                rows = list(__import__("csv").DictReader(fh))
+        self.assertEqual(rows[0]["wall_clock"], "2026-08-20T09:03:01Z")
+        self.assertEqual(rows[0]["active_migration"], "mig-1")
+
+    def test_a_result_without_job_start_falls_back_to_the_run(self):
+        """A wrong base still beats an empty wall_clock column — but it is reported."""
+        raw = "1000, 500, 0, 4096"
+        with _Ctx() as ctx, _patch(kube, "exec_sh", lambda *a, **k: raw):
+            ctx.mark_window(start=datetime(2026, 8, 20, 9, 0, 0, tzinfo=UTC))
+            d = ctx.dir("fio-0")
+            with open(os.path.join(d, "result.json"), "w") as fh:
+                json.dump({"jobs": [{}]}, fh)
+            workload.FioWorkload()._write_timeseries(ctx, "default", "fio-0", d, [])
+            with open(os.path.join(d, "timeseries.csv")) as fh:
+                rows = list(__import__("csv").DictReader(fh))
+        self.assertEqual(rows[0]["wall_clock"], "2026-08-20T09:00:01Z")
+
+    def test_the_analyser_re_derives_the_base_from_fio(self):
+        """Replay has to correct archives written before the base was fixed: the wall_clock
+        column is only as right as whatever wrote it, and job_start is right by
+        construction."""
+        from sbtest.adapters import ArchiveEvidence
+        fio_start = datetime(2026, 8, 20, 9, 3, 0, tzinfo=UTC)
+        with _Ctx() as ctx:
+            d = ctx.dir("run1-fio-0")
+            with open(os.path.join(d, "result.json"), "w") as fh:
+                json.dump({"jobs": [{"job_start": int(fio_start.timestamp() * 1000)}]}, fh)
+            with open(os.path.join(d, "timeseries.csv"), "w") as fh:
+                fh.write("second,wall_clock,total_iops\n"
+                         "1,2026-08-20T09:00:01Z,500.0\n")   # the pre-fix, run-based clock
+            series = ArchiveEvidence(ctx.outdir).fio_timeseries("run1-fio-0")
+        self.assertEqual(series[0].wall, fio_start + timedelta(seconds=1))
+
+    def test_the_wall_clock_column_is_used_when_fio_says_nothing(self):
+        from sbtest.adapters import ArchiveEvidence
+        with _Ctx() as ctx:
+            d = ctx.dir("run1-fio-0")
+            with open(os.path.join(d, "timeseries.csv"), "w") as fh:
+                fh.write("second,wall_clock,total_iops\n1,2026-08-20T09:00:01Z,500.0\n")
+            series = ArchiveEvidence(ctx.outdir).fio_timeseries("run1-fio-0")
+        self.assertEqual(series[0].wall, datetime(2026, 8, 20, 9, 0, 1, tzinfo=UTC))
+
     def test_a_workload_with_no_pods_is_refused(self):
         with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
             workload.FioWorkload(pods=0, ns_pods=0)._create(ctx)

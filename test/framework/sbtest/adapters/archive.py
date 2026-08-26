@@ -29,7 +29,7 @@ import json
 import os
 import re
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from ..core import (
     AnaSample,
@@ -86,6 +86,7 @@ class ArchiveEvidence:
         self.run_id = self._state.get("run_id") or os.path.basename(self.outdir).replace(
             "fio-mig-", "fiomig-")
         self._ana_cache: dict[str, list[AnaSample]] = {}
+        self._fio_start_cache: dict[str, datetime | None] = {}
 
     # ── bookkeeping ────────────────────────────────────────────────────────────────
 
@@ -213,16 +214,45 @@ class ArchiveEvidence:
             d for d in os.listdir(self.outdir)
             if os.path.isdir(os.path.join(self.outdir, d)) and "-fio-" in d)
 
+    def _result_json(self, pod: str) -> dict:
+        p = os.path.join(self.outdir, pod, "result.json")
+        if not os.path.exists(p):
+            return {}
+        try:
+            with open(p) as fh:
+                loaded = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    def _fio_start(self, pod: str) -> datetime | None:
+        """The wall clock of second 0 of this pod's fio time series.
+
+        Taken from fio's own `job_start` (epoch milliseconds) rather than from the
+        wall_clock column, because the column is only as right as whatever wrote it: runs
+        archived before the base was fixed derived it from a shared run-start stamp taken
+        minutes before each pod's fio actually began. fio's offsets are milliseconds since
+        *that job* started, so the job's own start is the only base that is right by
+        construction, and it is right for old archives too — which is the point, since a
+        detector that cannot be re-run against the run that motivated it is a detector
+        nobody trusts.
+
+        Falls back to the CSV's own column when result.json is missing or carries no
+        job_start.
+        """
+        if pod not in self._fio_start_cache:
+            jobs = self._result_json(pod).get("jobs") or []
+            start_ms = jobs[0].get("job_start") if jobs else None
+            self._fio_start_cache[pod] = (
+                datetime.fromtimestamp(start_ms / 1000.0, tz=UTC)
+                if isinstance(start_ms, int | float) and start_ms > 0 else None)
+        return self._fio_start_cache[pod]
+
     def fio_jobs(self) -> list[FioJob]:
         out = []
         for pod in self.pods():
-            p = os.path.join(self.outdir, pod, "result.json")
-            if not os.path.exists(p):
-                continue
-            try:
-                with open(p) as fh:
-                    res = json.load(fh)
-            except (OSError, json.JSONDecodeError):
+            res = self._result_json(pod)
+            if not res:
                 continue
             for job in res.get("jobs", []):
                 rd, wr = job.get("read", {}), job.get("write", {})
@@ -250,6 +280,7 @@ class ArchiveEvidence:
                     return v
             return ""
 
+        base = self._fio_start(pod)
         try:
             with open(p, newline="") as fh:
                 for r in csv.DictReader(fh):
@@ -258,9 +289,9 @@ class ArchiveEvidence:
                         tot = float(_first(r, "total_iops") or 0)
                     except (TypeError, ValueError):
                         continue
-                    out.append(IopsSample(offset_s=off,
-                                          wall=_dt(_first(r, "wall", "wall_clock")),
-                                          total_iops=tot))
+                    wall = (base + timedelta(seconds=off) if base
+                            else _dt(_first(r, "wall", "wall_clock")))
+                    out.append(IopsSample(offset_s=off, wall=wall, total_iops=tot))
         except OSError:
             return []
         out.sort(key=lambda s: s.offset_s)

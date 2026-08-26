@@ -12,6 +12,7 @@ from .evidence import (
     Migration,
     NvmeController,
     attribute,
+    attribute_window,
     freeze_windows,
 )
 from .findings import Attribution, Finding, Report, Severity, critical, info, warning
@@ -33,7 +34,8 @@ __all__ = [
     "ControlEvent", "Finding", "LogSpan",
     "FioJob", "IopsSample", "Logger", "Migration", "NvmeController", "Report",
     "RunContext", "Runner", "Selection", "Severity", "SkipDetector", "Timeline",
-    "apply_cli_toggles", "attribute", "build_component", "build_detector", "component",
+    "apply_cli_toggles", "attribute", "attribute_window", "build_component",
+    "build_detector", "component",
     "critical", "detector", "findings_by_subject_table", "freeze_windows", "info", "iso",
     "known_components", "known_detectors", "load", "now_utc", "suite_path", "warning",
 ]

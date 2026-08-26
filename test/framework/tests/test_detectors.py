@@ -30,6 +30,7 @@ from sbtest.core import (  # noqa: E402
     Report,
     Severity,
     SkipDetector,
+    attribute_window,
     build_detector,
     freeze_windows,
 )
@@ -371,6 +372,83 @@ class FioOutage(unittest.TestCase):
         found = list(build_detector("fio.outage", min_seconds=30).detect(ev))
         self.assertEqual(found[0].evidence["migrations"], [])
         self.assertIn("elsewhere", found[0].note)
+
+    def test_a_gap_that_recovered_is_a_freeze_not_a_loss(self):
+        """A cutover is a freeze by design: every write was eventually taken. It still fails
+        the run at this length, but calling it loss says data went missing when none did."""
+        ev = FakeEvidence(series={"p": self.series("1" * 5 + "0" * 40 + "1" * 5)})
+        found = list(build_detector("fio.outage", min_seconds=30).detect(ev))
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].evidence["kind"], "freeze")
+        self.assertIn("froze", found[0].title)
+        self.assertIn("no I/O was lost", found[0].note)
+        self.assertTrue(found[0].evidence["worst_windows"][0]["recovered"])
+
+    def test_a_gap_still_open_when_fio_stopped_is_a_loss(self):
+        """Nothing observed the volume come back, so this is I/O it was supposed to accept
+        and never did — the finding a reader must not have to dig for."""
+        ev = FakeEvidence(series={"p": self.series("1" * 5 + "0" * 40)})
+        found = list(build_detector("fio.outage", min_seconds=30).detect(ev))
+        self.assertEqual(found[0].evidence["kind"], "loss")
+        self.assertIn("LOSS", found[0].title)
+        self.assertFalse(found[0].evidence["worst_windows"][0]["recovered"])
+
+    def test_a_pod_with_both_reports_the_loss_first(self):
+        """Both fail the run; the order they are emitted in is the order they are read in,
+        and a gap that never closed outranks one that did."""
+        ev = FakeEvidence(series={"p": self.series("1" * 5 + "0" * 40 + "1" * 5 + "0" * 40)})
+        found = list(build_detector("fio.outage", min_seconds=30).detect(ev))
+        self.assertEqual([f.evidence["kind"] for f in found], ["loss", "freeze"])
+        self.assertEqual([f.evidence["windows"] for f in found], [1, 1])
+
+    def test_a_gap_beginning_before_the_migration_still_belongs_to_it(self):
+        """The host goes dry before the operator records the migration as started. Testing
+        only the window's first second files those gaps under no migration at all."""
+        mig = Migration(name="mig-1", start=ts(20), end=ts(60))
+        ev = FakeEvidence(series={"p": self.series("1" * 10 + "0" * 40 + "1")},
+                          migrations=[mig])
+        found = list(build_detector("fio.outage", min_seconds=30).detect(ev))
+        self.assertEqual(found[0].evidence["migrations"], ["mig-1"])
+
+    def test_a_window_spanning_two_migrations_names_the_one_holding_most_of_it(self):
+        ev = FakeEvidence(
+            series={"p": self.series("1" * 10 + "0" * 40 + "1")},
+            migrations=[Migration(name="mig-a", start=ts(5), end=ts(20)),
+                        Migration(name="mig-b", start=ts(30), end=ts(70))])
+        found = list(build_detector("fio.outage", min_seconds=30).detect(ev))
+        self.assertEqual(found[0].evidence["migrations"], ["mig-b"])
+
+
+class AttributeWindow(unittest.TestCase):
+    """The primitive behind outage attribution: a symptom that lasted, not one that fired."""
+
+    def named(self, migs: list[Migration], start: datetime, end: datetime) -> str:
+        m = attribute_window(migs, start, end)
+        return m.name if m else ""
+
+    def test_a_window_wholly_inside_a_migration(self):
+        migs = [Migration(name="m", start=ts(0), end=ts(100))]
+        self.assertEqual(self.named(migs, ts(10), ts(20)), "m")
+
+    def test_a_window_that_misses_every_migration(self):
+        migs = [Migration(name="m", start=ts(0), end=ts(10))]
+        self.assertIsNone(attribute_window(migs, ts(20), ts(30)))
+
+    def test_touching_counts_as_overlapping(self):
+        """Zero is an overlap: a gap that begins the second a migration ends is the
+        migration's, and the sampling interval must not decide that."""
+        migs = [Migration(name="m", start=ts(0), end=ts(10))]
+        self.assertEqual(self.named(migs, ts(10), ts(50)), "m")
+
+    def test_the_largest_overlap_wins_not_the_first(self):
+        migs = [Migration(name="early", start=ts(0), end=ts(15)),
+                Migration(name="late", start=ts(20), end=ts(60))]
+        self.assertEqual(self.named(migs, ts(10), ts(50)), "late")
+
+    def test_a_running_migration_is_a_point_in_time(self):
+        """`end` is None while it is in flight — the same convention `covers` uses."""
+        migs = [Migration(name="m", start=ts(30), end=None)]
+        self.assertEqual(self.named(migs, ts(10), ts(50)), "m")
 
 
 class NvmeStaleControllers(unittest.TestCase):

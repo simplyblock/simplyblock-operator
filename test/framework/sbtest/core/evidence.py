@@ -275,3 +275,31 @@ def attribute(migrations: list[Migration], ts: datetime,
         if m.covers(ts, lag):
             return m
     return None
+
+
+def attribute_window(migrations: list[Migration], start: datetime, end: datetime,
+                     lag: timedelta = timedelta(0)) -> Migration | None:
+    """The migration a symptom that *lasted* belongs to: the one it shares most seconds with.
+
+    Not the same question as `attribute`, and answering it with `attribute(start)` is what
+    made outages disappear. A gap does not have to begin inside a migration's window to
+    belong to it — the host goes dry a few seconds before the operator records the migration
+    as started — so testing only the first second files those gaps under "no migration was
+    running", which reads as "the cluster is unwell" rather than "the cutover cost this".
+
+    Overlap is measured, not merely tested, because a long window can touch two migrations;
+    the one holding most of it is the one worth naming. Zero counts as an overlap: a
+    zero-length window inside a migration, and a window that only touches one, are both
+    inside rather than outside.
+    """
+    t0, t1 = start.timestamp(), end.timestamp()
+    best: Migration | None = None
+    best_overlap: float | None = None
+    for m in migrations:
+        m_end = (m.end or m.start) + lag
+        overlap = min(t1, m_end.timestamp()) - max(t0, m.start.timestamp())
+        if overlap < 0:
+            continue
+        if best_overlap is None or overlap > best_overlap:
+            best, best_overlap = m, overlap
+    return best
