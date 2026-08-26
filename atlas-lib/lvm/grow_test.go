@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-func TestManager_ExtendPhysicalVolume(t *testing.T) {
+func TestManager_ExpandPhysicalVolume(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	if err := mgr.ExtendPhysicalVolume(context.Background(), []string{"/dev/nvme0n1"}, "/dev/nvme0n1"); err != nil {
-		t.Fatalf("ExtendPhysicalVolume: %v", err)
+	if err := mgr.ExpandPhysicalVolume(context.Background(), []string{"/dev/nvme0n1"}, "/dev/nvme0n1"); err != nil {
+		t.Fatalf("ExpandPhysicalVolume: %v", err)
 	}
 	want := []string{"pvresize", "--devices", "/dev/nvme0n1", "/dev/nvme0n1"}
 	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
@@ -43,12 +43,12 @@ func TestManager_ExtendVolumeGroup_WrapsRunnerError(t *testing.T) {
 	}
 }
 
-func TestManager_ExtendLogicalVolumeByFreeSpace(t *testing.T) {
+func TestManager_ExpandLogicalVolume(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	err := mgr.ExtendLogicalVolumeByFreeSpace(context.Background(), []string{"/dev/nvme0n1"}, "vdo-abc123", "vdopool")
+	err := mgr.ExpandLogicalVolume(context.Background(), []string{"/dev/nvme0n1"}, "vdo-abc123", "vdopool")
 	if err != nil {
-		t.Fatalf("ExtendLogicalVolumeByFreeSpace: %v", err)
+		t.Fatalf("ExpandLogicalVolume: %v", err)
 	}
 	// The "+" prefix is what makes this additive rather than an absolute target. See the
 	// method's doc comment for why an unprefixed 100%FREE would be a real bug here.
