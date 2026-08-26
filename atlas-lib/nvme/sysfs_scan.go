@@ -98,8 +98,9 @@ func scanSubsystems(sysRoot, devRoot string) ([]Subsystem, error) {
 			}
 		}
 
-		// Without a multipath head (nvme_core.multipath=0) the namespaces are
-		// each controller's own block devices instead, so collect those too.
+		// A namespace can also be owned by a controller rather than by a
+		// subsystem head, which is how a stale controller surfaces, so
+		// collect those too.
 		s.Namespaces = append(s.Namespaces, controllerNamespaces(s, devRoot)...)
 
 		subs = append(subs, s)

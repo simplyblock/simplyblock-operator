@@ -45,7 +45,7 @@ func init() {
 func UpdateVolume(
 	ctx context.Context, manager *lvm.Manager, volume *Volume, compression bool, deduplication bool,
 ) error {
-	_, err := manager.Run(ctx, nil,
+	_, err := manager.Run(ctx,
 		"lvchange",
 		"--compression", yn(compression),
 		"--deduplication", yn(deduplication),

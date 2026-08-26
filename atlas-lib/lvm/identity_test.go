@@ -54,13 +54,13 @@ func TestManager_VolumeGroup_PropagatesRealProbeError(t *testing.T) {
 }
 
 func TestManager_ListLogicalVolumes(t *testing.T) {
-	key := joinKey([]string{"lvs", "--devices", "/dev/nvme0n1", "--noheadings", "-o", "lv_name", "vg1"})
+	key := joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vg1"})
 	fake := &fakeRunner{
 		out: map[string]string{key: "  vdopool\n  data1\n"},
 		err: map[string]error{},
 	}
 	mgr := NewManagerWithRunner(fake.run)
-	got, err := mgr.ListLogicalVolumes(context.Background(), []string{"/dev/nvme0n1"}, "vg1")
+	got, err := mgr.ListLogicalVolumes(context.Background(), "vg1")
 	if err != nil {
 		t.Fatalf("ListLogicalVolumes: %v", err)
 	}
@@ -72,10 +72,10 @@ func TestManager_ListLogicalVolumes(t *testing.T) {
 
 func TestManager_ListLogicalVolumes_PropagatesRunnerError(t *testing.T) {
 	wantErr := errors.New("failed to find VG")
-	key := joinKey([]string{"lvs", "--devices", "/dev/nvme0n1", "--noheadings", "-o", "lv_name", "vg1"})
+	key := joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vg1"})
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: wantErr}}
 	mgr := NewManagerWithRunner(fake.run)
-	if _, err := mgr.ListLogicalVolumes(context.Background(), []string{"/dev/nvme0n1"}, "vg1"); !errors.Is(err, wantErr) {
+	if _, err := mgr.ListLogicalVolumes(context.Background(), "vg1"); !errors.Is(err, wantErr) {
 		t.Errorf("ListLogicalVolumes() error = %v, want %v", err, wantErr)
 	}
 }
@@ -93,13 +93,13 @@ func TestManager_HasLogicalVolume(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key := joinKey([]string{"lvs", "--devices", "/dev/nvme0n1", "--noheadings", "-o", "lv_name", "vg1"})
+			key := joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vg1"})
 			fake := &fakeRunner{
 				out: map[string]string{key: tt.out},
 				err: map[string]error{key: tt.err},
 			}
 			mgr := NewManagerWithRunner(fake.run)
-			got, err := mgr.HasLogicalVolume(context.Background(), []string{"/dev/nvme0n1"}, "vg1", "data1")
+			got, err := mgr.HasLogicalVolume(context.Background(), "vg1", "data1")
 			if err != nil {
 				t.Fatalf("HasLogicalVolume: %v", err)
 			}
@@ -112,10 +112,10 @@ func TestManager_HasLogicalVolume(t *testing.T) {
 
 func TestManager_HasLogicalVolume_PropagatesRunnerError(t *testing.T) {
 	wantErr := errors.New("failed to find VG")
-	key := joinKey([]string{"lvs", "--devices", "/dev/nvme0n1", "--noheadings", "-o", "lv_name", "vg1"})
+	key := joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vg1"})
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: wantErr}}
 	mgr := NewManagerWithRunner(fake.run)
-	if _, err := mgr.HasLogicalVolume(context.Background(), []string{"/dev/nvme0n1"}, "vg1", "data1"); !errors.Is(err, wantErr) {
+	if _, err := mgr.HasLogicalVolume(context.Background(), "vg1", "data1"); !errors.Is(err, wantErr) {
 		t.Errorf("HasLogicalVolume() error = %v, want wrapping %v", err, wantErr)
 	}
 }
@@ -124,7 +124,7 @@ func TestManager_Rescan(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
 
-	if err := mgr.Rescan(context.Background(), []string{"/dev/nvme0n1", "/dev/nvme1n1"}); err != nil {
+	if err := mgr.Rescan(context.Background(), "/dev/nvme0n1", "/dev/nvme1n1"); err != nil {
 		t.Fatalf("Rescan: %v", err)
 	}
 	want := []string{"pvscan", "--devices", "/dev/nvme0n1,/dev/nvme1n1", "--cache"}
@@ -141,7 +141,7 @@ func TestManager_Rescan_PropagatesRunnerError(t *testing.T) {
 	}
 	mgr := NewManagerWithRunner(fake.run)
 
-	if err := mgr.Rescan(context.Background(), []string{"/dev/nvme0n1"}); !errors.Is(err, wantErr) {
+	if err := mgr.Rescan(context.Background(), "/dev/nvme0n1"); !errors.Is(err, wantErr) {
 		t.Errorf("Rescan() error = %v, want %v", err, wantErr)
 	}
 }

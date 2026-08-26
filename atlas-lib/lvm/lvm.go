@@ -45,17 +45,11 @@ func runCommand(ctx context.Context, args ...string) (string, error) {
 
 // deviceScope returns LVM's --devices argument pair, scoping a command to
 // exactly the given devices (comma-joined, LVM's own syntax for the flag) and
-// bypassing its default system-wide device scan entirely. See the package
-// doc comment for why every command in this package is scoped this way.
+// bypassing its default system-wide device scan entirely. See the package doc
+// comment for which commands need that and why.
 //
-// Returns nil for zero devices rather than an empty --devices value, which
-// LVM would reject: a caller that no longer has a device path to scope to
-// (a teardown addressing a VG by name after its backing device is already
-// gone) runs unscoped by passing no devices, not zero-scoped.
-//
-// Unexported: it only builds one argument fragment for Run, and every named
-// method in this package goes through Run rather than assembling --devices
-// itself.
+// Returns nil for zero devices rather than an empty --devices value, which LVM
+// would reject, so a command with no device to scope to simply runs unscoped.
 func deviceScope(devices ...string) []string {
 	if len(devices) == 0 {
 		return nil
@@ -65,13 +59,19 @@ func deviceScope(devices ...string) []string {
 
 // Manager assembles and inspects an LVM stack on top of simplyblock volumes:
 // creating and removing physical volumes, volume groups, and logical volumes
-// (including a VDO-backed one, see vdo.go), activating and growing them, and
-// answering content-based identity questions about them, every operation
-// scoped to a fixed device set. `Run` remains available as an escape hatch
-// for a command this type doesn't wrap yet, but the named methods across this
-// package's files are what a caller should reach for first: assembling a
-// stack by hand-building `Run` argument lists is exactly the duplication this
-// package exists to prevent.
+// (including a VDO-backed one, see the vdo subpackage), activating and growing
+// them, and answering content-based identity questions about them.
+//
+// Device scoping is this type's business, not its caller's. A method that
+// names a device scopes itself to that device, while a method that addresses a
+// volume group or logical volume by name runs unscoped, which is unambiguous
+// for the reasons the package doc comment gives. No method asks a caller which devices
+// LVM may look at, because no caller is in a position to answer.
+//
+// `Run` remains available as an escape hatch for a command this type doesn't
+// wrap yet, but the named methods across this package's files are what a caller
+// should reach for first: assembling a stack by hand-building `Run` argument
+// lists is exactly the duplication this package exists to prevent.
 type Manager struct {
 	run runner
 }
@@ -92,12 +92,24 @@ func NewManagerWithRunner(run runner) *Manager {
 	return &Manager{run: run}
 }
 
-// Run executes an LVM/dm-vdo command scoped to devices, inserting the
-// --devices flag immediately after args[0] (the binary). Prefer a named
-// method when one exists: this is for a command that doesn't have one yet.
-func (m *Manager) Run(ctx context.Context, devices []string, args ...string) (string, error) {
+// Run executes an LVM/dm-vdo command unscoped, the escape hatch for a command
+// this package doesn't wrap yet. Prefer a named method when one exists.
+//
+// A command that has to be scoped to a device belongs in this package as a
+// named method rather than here, because the scope follows from which device
+// the command names, and that is knowledge this package holds and its callers
+// do not. See the package doc comment.
+func (m *Manager) Run(ctx context.Context, args ...string) (string, error) {
+	return m.exec(ctx, nil, args...)
+}
+
+// exec runs an LVM/dm-vdo command scoped to devices, inserting the --devices
+// flag immediately after args[0] (the binary) and omitting it entirely when
+// devices is empty. Every method in this package goes through here, passing
+// the devices its own operands imply.
+func (m *Manager) exec(ctx context.Context, devices []string, args ...string) (string, error) {
 	if len(args) == 0 {
-		return "", errors.New("lvm: Run requires a command name")
+		return "", errors.New("lvm: a command name is required")
 	}
 	full := append([]string{args[0]}, deviceScope(devices...)...)
 	full = append(full, args[1:]...)
