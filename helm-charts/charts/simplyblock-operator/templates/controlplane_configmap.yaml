@@ -961,9 +961,7 @@ data:
             settings:
               url: '{{ $webhook.url }}'
               httpMethod: '{{ $webhook.httpMethod | default "POST" }}'
-      {{- with $webhook.maxAlerts }}
-              maxAlerts: {{ . }}
-      {{- end }}
+              maxAlerts: {{ $webhook.maxAlerts | default 0 }}
       {{- with $webhook.username }}
               username: '{{ . }}'
       {{- end }}
