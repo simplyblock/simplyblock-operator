@@ -6,7 +6,7 @@ description: Designing this operator's CRDs and keeping them consistent with eac
 # CRD and API design
 
 The conceptual model is already written down: **read
-`operator/docs/designs/crd-concepts.md` §3 first.** It argues the Entity and
+`operator/docs/designs/design-crd-model.md` §3 first.** It argues the Entity and
 Action split, the ownership spine, and the layering, and this skill does not
 restate it. What follows is the mechanics — the shapes, the markers, and the
 decisions that a design document leaves to the implementation.

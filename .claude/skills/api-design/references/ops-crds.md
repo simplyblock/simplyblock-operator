@@ -1,6 +1,6 @@
 # The `<Entity>Ops` shape
 
-`crd-concepts.md` §3 argues why the pattern exists. This is what one looks like,
+`design-crd-model.md` §3 argues why the pattern exists. This is what one looks like,
 taken from the three that exist: `StorageClusterOps`, `StorageNodeOps`,
 `ReplicationOps`.
 
