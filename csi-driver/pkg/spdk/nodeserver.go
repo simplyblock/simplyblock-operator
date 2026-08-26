@@ -18,6 +18,7 @@ package spdk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -245,6 +246,52 @@ func (ns *nodeServer) NodeGetVolumeStats(
 	}, nil
 }
 
+// redirectToActiveVolume is called when VolumeInfo returns ErrVolumeNotFound for
+// the source volume — typically after a migration with --delete-source removed it.
+// It queries the replication relationship on the source cluster (which survives
+// volume deletion) to find the active volume on the target cluster, then fetches
+// connection info from the target. Returns nil if redirection is not possible.
+func (ns *nodeServer) redirectToActiveVolume(
+	ctx context.Context,
+	srcClient util.ClusterAPI,
+	srcLvolID, volumeID string,
+	vc map[string]string,
+) map[string]string {
+	rel, err := srcClient.GetRelationship(ctx, srcLvolID)
+	if err != nil || rel == nil {
+		klog.Warningf("replication relationship lookup failed for deleted volume %s: %v", volumeID, err)
+		return nil
+	}
+	activeLvolID := rel.ActiveLvolID
+	targetClusterID := rel.TargetClusterID
+	targetPoolID := rel.TargetPoolID
+	if activeLvolID == "" || targetClusterID == "" || targetPoolID == "" {
+		klog.Warningf("relationship for %s has incomplete target info (cluster=%s pool=%s active=%s)",
+			volumeID, targetClusterID, targetPoolID, activeLvolID)
+		return nil
+	}
+	tgtClient, err := util.NewsimplyBlockClient(ctx, targetClusterID, targetPoolID)
+	if err != nil {
+		klog.Warningf("target cluster %s not in secret file for deleted volume %s: %v",
+			targetClusterID, volumeID, err)
+		return nil
+	}
+	connInfo, err := tgtClient.VolumeInfo(ctx, activeLvolID, vc["hostNQN"])
+	if err != nil {
+		klog.Warningf("failed to fetch connection info from target cluster %s for volume %s: %v",
+			targetClusterID, activeLvolID, err)
+		return nil
+	}
+	klog.Infof("redirected deleted volume %s → active volume %s on cluster %s",
+		volumeID, activeLvolID, targetClusterID)
+	// Override cluster_id and poolID so the initiator uses the target cluster
+	// for any subsequent API calls — without this the initiator inherits the
+	// source cluster_id from vc and fails looking up the target volume there.
+	connInfo["cluster_id"] = targetClusterID
+	connInfo["poolID"] = targetPoolID
+	return connInfo
+}
+
 func (ns *nodeServer) NodeStageVolume(
 	ctx context.Context,
 	req *csi.NodeStageVolumeRequest,
@@ -301,11 +348,18 @@ func (ns *nodeServer) NodeStageVolume(
 		if sbcClient, clientErr := util.NewsimplyBlockClient(ctx, spdkVol.clusterID, spdkVol.poolID); clientErr == nil {
 			connInfo, infoErr := sbcClient.VolumeInfo(ctx, spdkVol.lvolID, vc["hostNQN"])
 			if infoErr != nil {
-				klog.Warningf("failed to fetch volume connection info for %s: %v", volumeID, infoErr)
-			} else {
-				for k, v := range connInfo {
-					vc[k] = v
+				if errors.Is(infoErr, util.ErrVolumeNotFound) {
+					// Source volume was deleted (migration with --delete-source).
+					// Query the replication relationship to find the active volume
+					// on the target cluster and redirect to it.
+					connInfo = ns.redirectToActiveVolume(ctx, sbcClient, spdkVol.lvolID, volumeID, vc)
 				}
+				if connInfo == nil {
+					klog.Warningf("failed to fetch volume connection info for %s: %v", volumeID, infoErr)
+				}
+			}
+			for k, v := range connInfo {
+				vc[k] = v
 			}
 		}
 	}

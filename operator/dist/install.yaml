@@ -835,11 +835,22 @@ spec:
             description: ReplicationOpsSpec defines the desired state of a ReplicationOps.
             properties:
               action:
-                description: Action is the operation to perform. Immutable.
+                description: |-
+                  Action is the operation to perform. Immutable.
+                  failover:  unplanned — promote target clone, source may be down.
+                  failback:  restore source as primary after a prior failover.
+                  migration: planned cutover — calls replication_commit per volume; both clusters stay up.
+                             State progression: replicating → cutover_pending → cutover_done.
                 enum:
                 - failover
                 - failback
+                - migration
                 type: string
+              deleteSource:
+                description: |-
+                  DeleteSource instructs the backend to delete the source volume after a
+                  successful migration cutover. Only meaningful when action=migration.
+                type: boolean
               ref:
                 description: |-
                   Ref is the name of the resource identified by Scope:
@@ -852,7 +863,7 @@ spec:
                   Scope controls which volumes are affected. Immutable.
                   target: all volumes across every policy that uses the named ReplicationPair.
                   policy: all volumes managed by the named ReplicationPolicy CR.
-                  volume: a single ReplicationSlot (unplanned per-volume failover).
+                  volume: a single ReplicationSlot (planned or unplanned per-volume operation).
                 enum:
                 - target
                 - policy

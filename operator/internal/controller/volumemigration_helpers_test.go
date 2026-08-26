@@ -136,16 +136,16 @@ func TestResolveConsumerNodeName_PVMissing(t *testing.T) {
 	}
 }
 
-// ---- rebalancer image resolution ----
+// ---- rebalancer image resolution and migration-enabled guard ----
 
 func TestResolveRebalancerImage(t *testing.T) {
-	enabled, disabled := true, false
+	enabled := true
 	image := "pinned:v1"
 
 	t.Run("explicit image is used", func(t *testing.T) {
 		r, _ := newVMReconciler(t, unreachableAPI, clusterWithSettings(
 			&simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &enabled, RebalancerImage: &image}))
-		got, err := r.resolveRebalancerImage(context.Background(), testVMNamespace, testClusterUUID)
+		got, err := resolveRebalancerImage(context.Background(), r.Client, testVMNamespace, testClusterUUID)
 		if err != nil {
 			t.Fatalf("resolveRebalancerImage: %v", err)
 		}
@@ -157,7 +157,7 @@ func TestResolveRebalancerImage(t *testing.T) {
 	t.Run("enabled without a pinned image falls back to the default", func(t *testing.T) {
 		r, _ := newVMReconciler(t, unreachableAPI, clusterWithSettings(
 			&simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &enabled}))
-		got, err := r.resolveRebalancerImage(context.Background(), testVMNamespace, testClusterUUID)
+		got, err := resolveRebalancerImage(context.Background(), r.Client, testVMNamespace, testClusterUUID)
 		if err != nil {
 			t.Fatalf("resolveRebalancerImage: %v", err)
 		}
@@ -165,11 +165,15 @@ func TestResolveRebalancerImage(t *testing.T) {
 			t.Errorf("image is empty, want the default")
 		}
 	})
+}
+
+func TestCheckVolumeMigrationEnabled(t *testing.T) {
+	disabled := false
 
 	t.Run("disabled is an error", func(t *testing.T) {
 		r, _ := newVMReconciler(t, unreachableAPI, clusterWithSettings(
 			&simplyblockv1alpha1.VolumeMigrationSettings{Enabled: &disabled}))
-		_, err := r.resolveRebalancerImage(context.Background(), testVMNamespace, testClusterUUID)
+		err := checkVolumeMigrationEnabled(context.Background(), r.Client, testVMNamespace, testClusterUUID)
 		if err == nil {
 			t.Fatalf("expected an error when migration is disabled")
 		}
@@ -182,7 +186,7 @@ func TestResolveRebalancerImage(t *testing.T) {
 	// would then migrate against a cluster the operator does not manage.
 	t.Run("no StorageCluster for the UUID is an error", func(t *testing.T) {
 		r, _ := newVMReconciler(t, unreachableAPI)
-		_, err := r.resolveRebalancerImage(context.Background(), testVMNamespace, "unknown-cluster")
+		err := checkVolumeMigrationEnabled(context.Background(), r.Client, testVMNamespace, "unknown-cluster")
 		if err == nil {
 			t.Fatalf("expected an error for an unknown cluster UUID")
 		}

@@ -51,6 +51,12 @@ const (
 	// devByIDAnyNamespacePattern matches the by-id symlinks of every
 	// namespace of a subsystem, whatever their nsid.
 	devByIDAnyNamespacePattern = "*%s*_[0-9]*"
+	// devByIDNSUUIDPattern matches the kernel-created nvme-uuid.<uuid> symlink
+	// produced from the NVMe namespace NSUUID field. Failover clones of
+	// namespaced (multi-namespace) volumes land here: the clone's own UUID is
+	// set as NSUUID, creating nvme-uuid.<clone-uuid> with no _<nsid> suffix,
+	// so the _<nsid>-based patterns above cannot find them.
+	devByIDNSUUIDPattern = "nvme-uuid.%s"
 
 	// defaultDevDiskByID is the udev directory holding the persistent device
 	// symlinks scanned to find a namespace's block device.
@@ -110,6 +116,7 @@ type initiatorNVMf struct {
 	hostIface      string
 	hostNQN        string
 	poolID         string
+	clusterID      string // explicit cluster override; empty means derive from NQN
 }
 
 type path struct {
@@ -337,6 +344,7 @@ func NewSpdkCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, err
 			hostIface:      volumeContext["hostIface"],
 			hostNQN:        volumeContext["hostNQN"],
 			poolID:         volumeContext["poolID"],
+			clusterID:      volumeContext["cluster_id"],
 			lvolID:         srcLvolID,
 			deviceLvolID:   deviceLvolID,
 		}, nil
@@ -389,7 +397,10 @@ func (nvmf *initiatorNVMf) connectOnce(ctx context.Context) (string, error) {
 	}
 
 	if !alreadyConnected {
-		clusterID, _ := getLvolIDFromNQN(nvmf.nqn)
+		clusterID := nvmf.clusterID
+		if clusterID == "" {
+			clusterID, _ = getLvolIDFromNQN(nvmf.nqn)
+		}
 		// the lvolID from NQN gives the master LvolID of the subsystem
 		// Although the connection string is same for all the lvols in the subsystem,
 		// volume/<lvol-id>/connect/ connect API return 404 if master lvol is deleted
@@ -523,10 +534,18 @@ func listNamespaceDevices(deviceGlob string) ([]string, error) {
 	return devices, nil
 }
 
+// nsuuidDeviceGlob returns the glob matching the kernel-created nvme-uuid.<id>
+// symlink produced from the NVMe namespace NSUUID field (no nsID suffix).
+func nsuuidDeviceGlob(byIDDir, id string) string {
+	return filepath.Join(byIDDir, fmt.Sprintf(devByIDNSUUIDPattern, id))
+}
+
 // matchNamespaceDevice waits in byIDDir for the block device of namespace nsID
-// to show up. It prefers the subsystem model, which every namespace link
-// carries, and falls back to the lvol UUID for volumes whose links are named
-// after the lvol itself.
+// to show up. It tries three patterns in order:
+//  1. *<model>*_<nsID>  — subsystem model carried by every namespace link.
+//  2. *<lvolID>*_<nsID> — clone UUID with nsID suffix (_ha_N udev rule).
+//  3. nvme-uuid.<lvolID> — kernel NSUUID symlink (no nsID suffix); produced for
+//     failover clones of namespaced volumes whose NSUUID = clone UUID.
 func matchNamespaceDevice(
 	ctx context.Context,
 	byIDDir, model, lvolID string,
@@ -535,6 +554,7 @@ func matchNamespaceDevice(
 ) (string, error) {
 	deviceGlob := namespaceDeviceGlob(byIDDir, model, nsID)
 	deviceGlobFallback := namespaceDeviceGlob(byIDDir, lvolID, nsID)
+	deviceGlobNSUUID := nsuuidDeviceGlob(byIDDir, lvolID)
 
 	devicePath, primaryErr := waitForDeviceReady(ctx, deviceGlob, deviceReadyAttempts, pollInterval)
 	if primaryErr == nil {
@@ -543,14 +563,21 @@ func matchNamespaceDevice(
 
 	klog.Warningf("New device symlink not found (%s). Retrying fallback format: %s", deviceGlob, deviceGlobFallback)
 	devicePath, err := waitForDeviceReady(ctx, deviceGlobFallback, deviceReadyAttempts, pollInterval)
-	if err != nil {
-		// Both reasons are kept: the model glob failing for a different reason
-		// than the fallback glob (ambiguous match vs. nothing there at all) is
-		// what tells a stale symlink apart from a missing namespace.
-		return "", fmt.Errorf("device not found in both new (%s), and fallback (%s) formats: %w",
-			deviceGlob, deviceGlobFallback, errors.Join(primaryErr, err))
+	if err == nil {
+		return devicePath, nil
 	}
-	return devicePath, nil
+
+	// Failover clones of namespaced volumes land under nvme-uuid.<clone-uuid>
+	// (no _<nsID> suffix) because the NSUUID is set to the clone's own UUID.
+	klog.Warningf("New device symlink not found (%s). Retrying NSUUID format: %s", deviceGlobFallback, deviceGlobNSUUID)
+	devicePath, nsuuidErr := waitForDeviceReady(ctx, deviceGlobNSUUID, deviceReadyAttempts, pollInterval)
+	if nsuuidErr == nil {
+		return devicePath, nil
+	}
+
+	return "", fmt.Errorf("device not found in model (%s), fallback (%s), or NSUUID (%s) formats: %w",
+		deviceGlob, deviceGlobFallback, deviceGlobNSUUID,
+		errors.Join(primaryErr, err, nsuuidErr))
 }
 
 // waitForDeviceReady rescans deviceGlob until it resolves to a single device,

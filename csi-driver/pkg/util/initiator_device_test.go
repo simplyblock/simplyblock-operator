@@ -530,14 +530,18 @@ func TestDisconnectGlobOnLastNamespace(t *testing.T) {
 // nvme-uuid.<lvolID> with no nsid suffix, which the fallback cannot match; it
 // only helps for links that do carry one.
 func TestMatchNamespaceDeviceFallbackNeedsNsidSuffix(t *testing.T) {
-	t.Run("uuid link without nsid suffix is not found", func(t *testing.T) {
+	t.Run("uuid link without nsid suffix is found via NSUUID fallback", func(t *testing.T) {
 		f := newDeviceFixture(t)
-		f.addDevice("nvme-uuid."+testLvolID, "nvme0n2")
+		want := f.addDevice("nvme-uuid."+testLvolID, "nvme0n2")
 
-		if _, err := matchNamespaceDevice(
+		got, err := matchNamespaceDevice(
 			context.Background(), f.byIDDir, testModel, testLvolID, 2, testPoll,
-		); err == nil {
-			t.Error("expected the suffixless uuid link to be ignored")
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
 		}
 	})
 
