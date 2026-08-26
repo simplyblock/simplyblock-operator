@@ -66,11 +66,22 @@ What it does
 
 Failure criterion
 ------------------
-Losing I/O is a TOTAL FAIL. Any of the following is treated as I/O loss and makes the
-script exit non-zero, with the offending interval logged explicitly:
-  * a per-second sample where total IOPS drops to 0 during the timed run,
-  * a fio job ending in error (its JSON "error" errno; note this is an errno, not a count),
-  * a fio pod leaving Running / restarting / failing before its planned completion.
+A stopped volume fails the run either way, but not as the same finding, because the two
+are not the same defect:
+
+  * an I/O LOSS is I/O the volume was supposed to accept and never did — a gap still open
+    when fio stopped, a fio job ending in error (its JSON "error" errno; note this is an
+    errno, not a count), or a fio pod leaving Running / restarting / failing before its
+    planned completion,
+  * an I/O FREEZE is a gap of at least --outage-seconds that then recovered. Every write
+    the application issued was eventually taken, so nothing was lost; what the freeze
+    measures is how long an application had to survive with the volume gone. A migration
+    cutover is a freeze by design, which is why its length is the thing under test and its
+    existence is not.
+
+Both exit non-zero, with the offending interval logged explicitly, and a loss ranks above
+a freeze. Runs of fewer than --outage-seconds down seconds are transient dips and are
+counted but not failed on.
 
 Ranked above all of those is a DATA INTEGRITY failure — fio reading back a block whose
 checksum does not match what it wrote. It is reported separately and never folded into the
@@ -2529,6 +2540,29 @@ class FioMigrationTest:
                          "duration": tmax - start + 1, "recovered": False})
         return runs
 
+    def _fio_time_base(self, result: dict, pod: str) -> "datetime | None":
+        """The wall clock of second 0 of one pod's fio time series.
+
+        fio's log timestamps are milliseconds since *that job* started, so the only correct
+        base is the job's own start — `job_start` in its result.json, which fio records in
+        epoch milliseconds. The run's shared `_io_start_time` is not that base: it is stamped
+        once, after `wait_io_flowing()` has seen I/O on the last pod to come up, and so sits
+        well after every pod's fio began (162-211s later in fiomig-1787685649). Using it
+        shifts every wall clock in timeseries.csv by that much and, because the same base
+        decides which migration an outage overlaps, names the wrong migration for gaps that
+        fall within a few minutes of a real one.
+
+        Falls back to the shared stamp when a pod's result.json is unparsable — a wrong base
+        is still better than an empty wall_clock column, and the fallback is reported.
+        """
+        jobs = result.get("jobs") or []
+        start_ms = jobs[0].get("job_start") if jobs else None
+        if isinstance(start_ms, (int, float)) and start_ms > 0:
+            return datetime.fromtimestamp(start_ms / 1000.0, tz=timezone.utc)
+        self.log.warn(f"{pod}: fio result.json carries no job_start; falling back to the "
+                      "run's shared I/O start time, which lags each pod's real fio start")
+        return self._io_start_time
+
     @staticmethod
     def _read_fio_rc(pod_dir: str) -> "str | None":
         """Read fio's recorded exit code (written to /logs/fio.rc by the pod script)."""
@@ -2548,7 +2582,7 @@ class FioMigrationTest:
         A non-empty result means fio read back data that did not match the md5 header
         it had written — i.e. the migration lost or corrupted data. This is the single
         most important signal of the test; it is reported separately from (and ranks
-        above) I/O outages. fio prints these to stderr, e.g.:
+        above) an I/O freeze or loss. fio prints these to stderr, e.g.:
           "verify: bad magic header", "fio: verify type mismatch", "md5: verify failed".
         """
         hits: list[str] = []
@@ -2620,15 +2654,30 @@ class FioMigrationTest:
         return out
 
     @staticmethod
-    def _overlaps_migration(start_s: int, base: datetime,
-                            migs: list[MigrationRecord]) -> MigrationRecord | None:
-        ts = base.timestamp() + start_s
+    def _overlaps_migration(start_s: int, base: datetime, migs: list[MigrationRecord],
+                            end_s: "int | None" = None) -> MigrationRecord | None:
+        """The migration a fio second — or, with end_s, a whole window of them — falls in.
+
+        With end_s the answer is the migration sharing the most seconds with the window,
+        not the one holding its first second. An outage does not have to begin inside the
+        CR window to belong to it: the host can go dry a few seconds before the operator
+        records the migration as started, and testing only the first second reports those
+        gaps as belonging to no migration at all.
+        """
+        t0 = base.timestamp() + start_s
+        t1 = base.timestamp() + (end_s if end_s is not None else start_s)
+        best, best_overlap = None, None
         for m in migs:
             if m.end is None:
                 continue
-            if m.start.timestamp() <= ts <= m.end.timestamp():
-                return m
-        return None
+            # Negative for a migration the window misses entirely; exactly zero both for a
+            # single second inside a window and for two windows that only touch.
+            overlap = min(t1, m.end.timestamp()) - max(t0, m.start.timestamp())
+            if overlap < 0:
+                continue
+            if best_overlap is None or overlap > best_overlap:
+                best, best_overlap = m, overlap
+        return best
 
     # ---- offline re-analysis ------------------------------------------------------
     # analyze() reads the per-pod artifacts from disk but needs the run's own bookkeeping
@@ -2870,13 +2919,23 @@ class FioMigrationTest:
                 "migrations": list(migs.values()), "health_events": []}
 
     def analyze(self) -> bool:
-        """Returns True if I/O was continuous (PASS), False on any I/O loss (FAIL)."""
+        """Returns True if I/O was continuous (PASS), False on a freeze or a loss (FAIL).
+
+        Two verdicts come out of the per-second timeline, and they are not the same failure.
+        A *freeze* is a sustained gap that ended: I/O stopped for longer than
+        --outage-seconds and then resumed, so every write the application issued was
+        eventually taken. A *loss* is a gap that never ended, or a job that failed, or a
+        checksum that did not match — I/O the volume was supposed to accept and did not.
+        A freeze is what a migration cutover looks like from inside the application and is
+        reported as one; only a loss is called loss.
+        """
         self._reverify_ana_from_archive()
         self.log.info("=" * 78)
         self.log.info("ANALYSIS — correlating IOPS/latency with migration windows")
         self.log.info("=" * 78)
 
-        io_lost = False
+        io_lost = False    # I/O that never came back, or errored, or read back wrong
+        io_frozen = False  # I/O that stopped for longer than allowed and then resumed
         corruption_pods: list[str] = []  # pods where fio md5 verify detected data corruption
         report: dict = {"run_id": self.run_id, "pods": {}, "migrations": [], "health_events": [],
                         # Geometry the volumes were formatted with, so runs stay comparable
@@ -2888,13 +2947,13 @@ class FioMigrationTest:
 
         completed_migs = [m for m in self.migrations if m.end is not None]
 
-        base = self._io_start_time
-
         for pod in self.pods:
             pod_dir = os.path.join(self.outdir, pod)
             result = self._parse_result_json(pod_dir)
             fio_rc = self._read_fio_rc(pod_dir)
             timeline = self._parse_timeline(pod_dir)
+            # Every wall clock derived from this pod's fio seconds hangs off this one value.
+            base = self._fio_time_base(result, pod)
 
             # --- emit the per-second IOPS + latency time series as CSV ---
             csv_path = self._write_timeseries_csv(pod, pod_dir, timeline, base, completed_migs)
@@ -2904,7 +2963,10 @@ class FioMigrationTest:
                                 "volume_kind": self.kind_of.get(pod, ""),
                                 "subsystem_nqn": self.nqn_of.get(pv, ""),
                                 "subsystem_members": len(self.group_of(pv)) if pv else 0,
-                                "timeseries_csv": os.path.relpath(csv_path, self.outdir)}
+                                "timeseries_csv": os.path.relpath(csv_path, self.outdir),
+                                # The base every `second` in the time series is offset from,
+                                # so a later correlation does not have to re-derive it.
+                                "fio_start": iso(base) if base else ""}
 
             # --- latency / IOPS summary from fio JSON ---
             total_iops = 0.0
@@ -2952,17 +3014,25 @@ class FioMigrationTest:
             io_errnos = sorted(e for e in errnos if e != FIO_ERRNO_DATA_INTEGRITY)
 
             # --- I/O continuity ---
-            # A loss is a SUSTAINED outage: a contiguous run of >= outage_seconds where
-            # IOPS stays at/below stall_threshold (missing seconds count as down). A
-            # single missed log entry or a few zero-IOPS seconds is transient noise — a
-            # brief dip while I/O keeps flowing — NOT a loss.
+            # A sustained outage is a contiguous run of >= outage_seconds where IOPS stays
+            # at/below stall_threshold (missing seconds count as down). A single missed log
+            # entry or a few zero-IOPS seconds is transient noise — a brief dip while I/O
+            # keeps flowing — and is neither a freeze nor a loss.
             runs = self._detect_outages(timeline)
             outages = [r for r in runs if r["duration"] >= self.a.outage_seconds]
             transient = [r for r in runs if r["duration"] < self.a.outage_seconds]
             for r in outages:
-                mig = self._overlaps_migration(r["start"], base, completed_migs) if base else None
+                mig = (self._overlaps_migration(r["start"], base, completed_migs, r["end"])
+                       if base else None)
                 r["migration"] = mig.name if mig else None
+            # A recovered outage is a freeze and an unrecovered one is a loss; both stay
+            # in `outages` with their `recovered` flag, and the split is counted here so a
+            # reader of the report does not have to re-derive it.
+            freezes = [o for o in outages if o["recovered"]]
+            losses = [o for o in outages if not o["recovered"]]
             pod_report["outages"] = outages
+            pod_report["io_freezes"] = len(freezes)
+            pod_report["io_losses"] = len(losses)
             pod_report["transient_dips"] = len(transient)
             pod_report["samples_total"] = len(timeline)
             # full per-second timeline (also written to CSV); kept in JSON for tooling
@@ -2970,10 +3040,11 @@ class FioMigrationTest:
                 {"second": t, **timeline[t]} for t in sorted(timeline)]
 
             # --- verdicts ---
-            # Hard failures: fio reported I/O errors, fio exited non-zero (it "died"),
-            # or a sustained I/O outage. Transient dips / missing samples are not losses.
+            # Hard failures: fio reported I/O errors, fio exited non-zero (it "died"), an
+            # outage that never recovered (a loss), or one that did (a freeze). Transient
+            # dips and missing samples are neither.
             # Data integrity: fio md5 verify mismatches mean the migration corrupted or
-            # lost data — the most severe failure, ranked above I/O outages.
+            # lost data — the most severe failure, ranked above a freeze or a loss.
             verify_hits = self._scan_verify_failures(pod_dir)
             pod_report["verify_failures"] = len(verify_hits)
             pod_report["corruption_events"] = self._attribute_corruption(verify_hits)
@@ -3015,28 +3086,32 @@ class FioMigrationTest:
                     + ", ".join(f"{e} ({FIO_ERRNO_MEANING.get(e, 'errno')})" for e in io_errnos))
             if fio_rc not in (None, "", "0"):
                 problems.append(f"fio exited with rc={fio_rc}")
-            if outages:
-                perm = [o for o in outages if not o["recovered"]]
-                problems.append(
-                    f"{len(outages)} sustained I/O outage(s) (>= {self.a.outage_seconds}s)"
-                    + (f", {len(perm)} never recovered" if perm else ""))
+            if losses:
+                problems.append(f"{len(losses)} I/O LOSS: outage(s) that never recovered — "
+                                "I/O was still dead when fio stopped")
+            if freezes:
+                problems.append(f"{len(freezes)} I/O freeze(s) >= {self.a.outage_seconds}s, "
+                                "all recovered")
 
-            if errored or outages:
+            if errored or losses:
                 io_lost = True
+            if freezes:
+                io_frozen = True
+            if errored or outages:
                 self.log.crit(f"POD {pod}: " + "; ".join(problems))
                 for o in outages[:10]:
                     tag = f"during {o['migration']}" if o.get("migration") else "no migration active"
-                    rec = (f"recovered after {o['duration']}s"
-                           if o["recovered"] else "NEVER RECOVERED")
+                    kind = ("FREEZE, recovered after" if o["recovered"]
+                            else "LOSS, NEVER RECOVERED after")
                     self.log.crit(
-                        f"    I/O OUTAGE +{o['start']}s..+{o['end']}s "
-                        f"({o['duration']}s, {rec})  ({tag})")
+                        f"    I/O {kind} {o['duration']}s "
+                        f"(+{o['start']}s..+{o['end']}s)  ({tag})")
             elif not timeline:
                 self.log.warn(f"POD {pod}: no per-second samples collected — I/O "
                               "continuity could not be verified (inconclusive)")
             else:
                 msg = (f"POD {pod}: OK  total_iops={pod_report['total_iops']:.0f}  "
-                       f"samples={len(timeline)}  errors=0  no sustained outages")
+                       f"samples={len(timeline)}  errors=0  no freeze, no loss")
                 if transient:
                     msg += (f"  ({len(transient)} transient <{self.a.outage_seconds}s "
                             "dip(s) ignored)")
@@ -3240,6 +3315,14 @@ class FioMigrationTest:
         elif io_lost:
             report["result"] = "FAIL — I/O LOSS DETECTED"
             ok = False
+        elif io_frozen:
+            frozen = [p for p, pr in report["pods"].items() if pr.get("io_freezes")]
+            longest = max((o["duration"] for pr in report["pods"].values()
+                           for o in pr.get("outages", [])), default=0)
+            report["result"] = (
+                f"FAIL — I/O FROZE on {len(frozen)} pod(s), longest {longest}s "
+                f"(>= {self.a.outage_seconds}s); every freeze recovered, so no I/O was lost")
+            ok = False
         elif verify_failures:
             split = [m for m in verify_failures if m.split_group]
             report["result"] = (f"FAIL — {len(verify_failures)} migration placement "
@@ -3284,7 +3367,7 @@ class FioMigrationTest:
             json.dump(report, fh, indent=2)
         self.log.info(f"wrote machine-readable report -> {report_path}")
 
-        self._print_summary(report, io_lost)
+        self._print_summary(report, io_lost, io_frozen)
         for key, st in sorted(report.get("corruption_by_migration", {}).items()):
             vs = st["vs_cutover_s"]
             self.log.crit(
@@ -3338,7 +3421,8 @@ class FioMigrationTest:
                           "resolve via sbctl after creation and/or migration:")
             for m in snapshot_failures:
                 self.log.crit(f"    {m.name} (snapshot {m.pre_snapshot}): {m.snapshot_verify_msg}")
-        if no_data and not io_lost and not verify_failures and not cr_failures:
+        if (no_data and not io_lost and not io_frozen and not verify_failures
+                and not cr_failures):
             self.log.crit("RESULT: INCONCLUSIVE — no per-second samples collected from any "
                           "pod; cannot confirm I/O continuity")
         return ok
@@ -3369,7 +3453,7 @@ class FioMigrationTest:
                     f"{mig.name if mig else ''}\n")
         return path
 
-    def _print_summary(self, report: dict, io_lost: bool) -> None:
+    def _print_summary(self, report: dict, io_lost: bool, io_frozen: bool) -> None:
         line = "=" * 78
         self.log.info(line)
         self.log.info("SUMMARY")
@@ -3444,7 +3528,7 @@ class FioMigrationTest:
                 f"  {pod} [{pr.get('volume_kind','?')}, subsystem of {members}]: "
                 f"total_iops={pr.get('total_iops',0):>9.0f} "
                 f"failed_jobs={pr.get('fio_failed_jobs', 0)} "
-                f"outages={len(pr.get('outages',[]))} "
+                f"freezes={pr.get('io_freezes',0)} losses={pr.get('io_losses',0)} "
                 f"dips={pr.get('transient_dips',0)} | "
                 f"read p99={rd.get('p99_us','-')}us write p99={wr.get('p99_us','-')}us")
         self.log.info("")
@@ -3474,7 +3558,11 @@ class FioMigrationTest:
         self.log.info("                        kubelet still retained (see --stream-cluster-logs)")
         self.log.info(line)
         if io_lost:
-            self.log.crit("RESULT: FAIL — I/O LOSS DETECTED (see CRITICAL lines above)")
+            self.log.crit("RESULT: FAIL — I/O LOSS DETECTED: I/O that never came back, "
+                          "errored, or read back wrong (see CRITICAL lines above)")
+        elif io_frozen:
+            self.log.crit("RESULT: FAIL — I/O FROZE longer than allowed, but every freeze "
+                          "recovered and no I/O was lost (see CRITICAL lines above)")
         else:
             self.log.info("RESULT: PASS — I/O remained continuous across all migrations")
         self.log.info(line)
@@ -3706,8 +3794,9 @@ def parse_args():
     p.add_argument("--stall-threshold", type=float, default=0.0,
                    help="IOPS at/below this marks a 1s sample as 'down' (default 0)")
     p.add_argument("--outage-seconds", type=int, default=30,
-                   help="minimum consecutive 'down' seconds to count as a real I/O outage; "
-                        "shorter dips are transient noise, not a loss (default 30)")
+                   help="minimum consecutive 'down' seconds to count as a sustained outage — "
+                        "a freeze if I/O resumed, a loss if it never did; shorter dips are "
+                        "transient noise and fail nothing (default 30)")
     p.add_argument("--no-migrations", action="store_true",
                    help="run fio load only — skip the migration loop (no VolumeMigration CRs). "
                         "Use to isolate whether latency spikes come from fio load or from "
