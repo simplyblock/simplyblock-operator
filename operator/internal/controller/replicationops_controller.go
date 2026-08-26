@@ -532,13 +532,8 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 			continue
 		}
 
-		slotPatch := client.MergeFrom(slot.DeepCopy())
-		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateReplicating)
-		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionSource)
-		slot.Status.Message = fmt.Sprintf("Failed back via ReplicationOps %s", ops.Name)
-		if err := r.Status().Patch(ctx, slot, slotPatch); err != nil {
-			log.Error(err, "failed to update slot status after failback", "slot", slot.Name)
-		}
+		// The slot controller drives the state transition to replicating/source by
+		// polling the backend. Patching here would race with reconcileSyncStatus.
 		results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
 			SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultSucceeded),
 		})

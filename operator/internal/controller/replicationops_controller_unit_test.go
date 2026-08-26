@@ -418,15 +418,8 @@ func TestOps_Failback_Success(t *testing.T) {
 	if len(got.Status.Results) != 1 || got.Status.Results[0].Status != string(simplyblockv1alpha1.ReplicationOpsResultSucceeded) {
 		t.Errorf("unexpected results: %+v", got.Status.Results)
 	}
-
-	// Slot direction should be updated back to source.
-	gotSlot := &simplyblockv1alpha1.ReplicationSlot{}
-	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pol-pvc1"}, gotSlot); err != nil {
-		t.Fatalf("get slot: %v", err)
-	}
-	if gotSlot.Status.Direction != string(simplyblockv1alpha1.ReplicationSlotDirectionSource) {
-		t.Errorf("slot direction = %q, want source after failback", gotSlot.Status.Direction)
-	}
+	// Slot state transitions to replicating/source via the slot controller polling
+	// the backend; the ops controller no longer patches it directly.
 }
 
 // ---------- failback partial failure ----------

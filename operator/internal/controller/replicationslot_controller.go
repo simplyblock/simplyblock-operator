@@ -324,7 +324,8 @@ func (r *ReplicationSlotReconciler) reconcileSyncStatus(
 	slot.Status.TargetNQN = status.TargetNQN
 	slot.Status.TargetLvolID = status.TargetLvolID
 
-	if status.State == utils.ReplicationBackendStateReplicating {
+	switch status.State {
+	case utils.ReplicationBackendStateReplicating:
 		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateReplicating)
 		direction := string(simplyblockv1alpha1.ReplicationSlotDirectionSource)
 		if !status.IsSource {
@@ -332,10 +333,19 @@ func (r *ReplicationSlotReconciler) reconcileSyncStatus(
 		}
 		slot.Status.Direction = direction
 		slot.Status.Message = replMsgSlotReplicating
+	case backendStateCutoverPending:
+		// The backend entered cutover_pending during a failback reverse cutover.
+		// Advance the slot so reconcileCutoverPending can run the preconnect job
+		// and signal cutover-proceed before the ANA flip.
+		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending)
+		slot.Status.Message = "Cutover pending — failback reverse cutover in progress"
 	}
 
 	if err := r.Status().Patch(ctx, slot, patch); err != nil {
 		return ctrl.Result{Requeue: true}, nil
+	}
+	if status.State == backendStateCutoverPending {
+		return r.reconcileCutoverPending(ctx, slot, apiClient, clusterID, poolID, volumeID)
 	}
 	return ctrl.Result{RequeueAfter: replSlotRequeueReplicating}, nil
 }
