@@ -393,7 +393,15 @@ func TestOps_Failback_Success(t *testing.T) {
 	}
 	r, cl := newOpsReplReconciler(t, pol, slot, ops)
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet {
+			// Relationship lookup: return target cluster/pool/volume IDs.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"target_lvol_id":"tgt-vol-u","target_cluster_id":"tgt-cluster-u","target_pool_id":"tgt-pool-u"}`))
+			return
+		}
+		// POST failback and POST commit: accept with 200.
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("{}"))
 	})
