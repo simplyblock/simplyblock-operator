@@ -882,7 +882,16 @@ data:
                 app: simplyblock
               isPaused: false
 
+{{- $grafana := .Values.controlplane.observability.grafana }}
+{{- $notifications := $grafana.notifications | default dict }}
+{{- $slack := $notifications.slack | default dict }}
+{{- $teams := $notifications.teams | default dict }}
+{{- $pagerduty := $notifications.pagerduty | default dict }}
+{{- $opsgenie := $notifications.opsgenie | default dict }}
+{{- $webhook := $notifications.webhook | default dict }}
+{{- $anyReceiver := or $slack.enabled $teams.enabled $pagerduty.enabled $opsgenie.enabled $webhook.enabled }}
   alert_resources.yaml: |
+{{- if $anyReceiver }}
     policies:
       - orgId: 1
         receiver: grafana-alerts
@@ -896,31 +905,98 @@ data:
       - orgId: 1
         name: grafana-alerts
         receivers:
+    {{- if $slack.enabled }}
           - uid: grafana
             type: slack
             settings:
               username: grafana_bot
-              url: '{{ .Values.controlplane.observability.grafana.contactPoint }}'
-              title: |
-                '{{ "{{" }} template "slack.title" . {{ "}}" }}'
-              text: |
-                '{{ "{{" }} template "slack.message" . {{ "}}" }}'
+              url: '{{ $slack.url | default $grafana.contactPoint }}'
+              title: '{{ "{{" }} template "simplyblock.title" . {{ "}}" }}'
+              text: '{{ "{{" }} template "simplyblock.message" . {{ "}}" }}'
+    {{- end }}
+    {{- if $teams.enabled }}
+          - uid: grafana-teams
+            type: teams
+            settings:
+              url: '{{ $teams.url }}'
+              title: '{{ "{{" }} template "simplyblock.title" . {{ "}}" }}'
+              message: '{{ "{{" }} template "simplyblock.message" . {{ "}}" }}'
+    {{- end }}
+    {{- if $pagerduty.enabled }}
+          - uid: grafana-pagerduty
+            type: pagerduty
+            settings:
+              severity: '{{ $pagerduty.severity | default "critical" }}'
+              summary: '{{ "{{" }} template "simplyblock.title" . {{ "}}" }}'
+      {{- with $pagerduty.class }}
+              class: '{{ . }}'
+      {{- end }}
+      {{- with $pagerduty.component }}
+              component: '{{ . }}'
+      {{- end }}
+      {{- with $pagerduty.group }}
+              group: '{{ . }}'
+      {{- end }}
+            secureSettings:
+              integrationKey: '{{ $pagerduty.integrationKey }}'
+    {{- end }}
+    {{- if $opsgenie.enabled }}
+          - uid: grafana-opsgenie
+            type: opsgenie
+            settings:
+              apiUrl: '{{ $opsgenie.apiUrl | default "https://api.opsgenie.com/v2/alerts" }}'
+              autoClose: {{ dig "autoClose" true $opsgenie }}
+              overridePriority: {{ dig "overridePriority" false $opsgenie }}
+              sendTagsAs: '{{ $opsgenie.sendTagsAs | default "tags" }}'
+              message: '{{ "{{" }} template "simplyblock.title" . {{ "}}" }}'
+              description: '{{ "{{" }} template "simplyblock.message" . {{ "}}" }}'
+            secureSettings:
+              apiKey: '{{ $opsgenie.apiKey }}'
+    {{- end }}
+    {{- if $webhook.enabled }}
+          # No title and no message: without them Grafana posts its own alert
+          # JSON payload unmodified, which is what a generic receiver expects.
+          - uid: grafana-webhook
+            type: webhook
+            settings:
+              url: '{{ $webhook.url }}'
+              httpMethod: '{{ $webhook.httpMethod | default "POST" }}'
+      {{- with $webhook.maxAlerts }}
+              maxAlerts: {{ . }}
+      {{- end }}
+      {{- with $webhook.username }}
+              username: '{{ . }}'
+      {{- end }}
+      {{- with $webhook.authorizationScheme }}
+              authorization_scheme: '{{ . }}'
+      {{- end }}
+      {{- if or $webhook.password $webhook.authorizationCredentials }}
+            secureSettings:
+        {{- with $webhook.password }}
+              password: '{{ . }}'
+        {{- end }}
+        {{- with $webhook.authorizationCredentials }}
+              authorization_credentials: '{{ . }}'
+        {{- end }}
+      {{- end }}
+    {{- end }}
+{{- end }}
 
     templates:
       - orgId: 1
-        name: slack.title
+        name: simplyblock.title
         template: |
           [ALERT] Grafana Alerting Notification
 
       - orgId: 1
-        name: slack.message
+        name: simplyblock.message
         template: |
-          *Alert*: {{ "{{" }} .Labels.alertname {{ "}}" }}
+          {{ "{{" }} range .Alerts {{ "}}" }}*Alert*: {{ "{{" }} .Labels.alertname {{ "}}" }}
           *Summary*: {{ "{{" }} .Annotations.summary {{ "}}" }}
           *Description*: {{ "{{" }} .Annotations.description {{ "}}" }}
-          *Explore logs:* 
           *Go to dashboard:* {{ "{{" }} .DashboardURL {{ "}}" }}
           *Go to panel:* {{ "{{" }} .PanelURL {{ "}}" }}
+          {{ "{{" }} end {{ "}}" }}
 
 ---
 apiVersion: v1

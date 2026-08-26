@@ -57,6 +57,132 @@
           }
         }
       ]
+    },
+    "controlplane": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "observability": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "grafana": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "notifications": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "slack": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "enabled": { "type": "boolean" },
+                        "url": { "type": "string" }
+                      }
+                    },
+                    "teams": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "enabled": { "type": "boolean" },
+                        "url": { "type": "string" }
+                      },
+                      "allOf": [
+                        {
+                          "if": {
+                            "properties": { "enabled": { "const": true } },
+                            "required": ["enabled"]
+                          },
+                          "then": {
+                            "required": ["url"],
+                            "properties": { "url": { "minLength": 1 } }
+                          }
+                        }
+                      ]
+                    },
+                    "pagerduty": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "enabled": { "type": "boolean" },
+                        "integrationKey": { "type": "string" },
+                        "severity": { "enum": ["info", "warning", "error", "critical"] },
+                        "class": { "type": "string" },
+                        "component": { "type": "string" },
+                        "group": { "type": "string" }
+                      },
+                      "allOf": [
+                        {
+                          "if": {
+                            "properties": { "enabled": { "const": true } },
+                            "required": ["enabled"]
+                          },
+                          "then": {
+                            "required": ["integrationKey"],
+                            "properties": { "integrationKey": { "minLength": 1 } }
+                          }
+                        }
+                      ]
+                    },
+                    "opsgenie": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "enabled": { "type": "boolean" },
+                        "apiKey": { "type": "string" },
+                        "apiUrl": { "type": "string" },
+                        "autoClose": { "type": "boolean" },
+                        "overridePriority": { "type": "boolean" },
+                        "sendTagsAs": { "enum": ["tags", "details", "both"] }
+                      },
+                      "allOf": [
+                        {
+                          "if": {
+                            "properties": { "enabled": { "const": true } },
+                            "required": ["enabled"]
+                          },
+                          "then": {
+                            "required": ["apiKey"],
+                            "properties": { "apiKey": { "minLength": 1 } }
+                          }
+                        }
+                      ]
+                    },
+                    "webhook": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "enabled": { "type": "boolean" },
+                        "url": { "type": "string" },
+                        "httpMethod": { "enum": ["POST", "PUT"] },
+                        "username": { "type": "string" },
+                        "password": { "type": "string" },
+                        "authorizationScheme": { "type": "string" },
+                        "authorizationCredentials": { "type": "string" },
+                        "maxAlerts": { "type": "integer", "minimum": 0 }
+                      },
+                      "allOf": [
+                        {
+                          "if": {
+                            "properties": { "enabled": { "const": true } },
+                            "required": ["enabled"]
+                          },
+                          "then": {
+                            "required": ["url"],
+                            "properties": { "url": { "minLength": 1 } }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
