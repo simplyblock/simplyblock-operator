@@ -37,6 +37,9 @@ atlas/
 │   ├── multipath.go        ConnectPaths (ordered per-path connect) + PathResult
 │   └── wait.go             ConnectDevice / WaitForDevice: attach -> nvme.Device
 ├── nqn/                    Build & parse simplyblock lvol NQNs
+├── lvm/                    Device-scoped Linux LVM commands + content-based identity
+│   ├── doc.go              Why every command here is scoped by device, not by name
+│   └── lvm.go              Inspector (VolumeGroup/HasLogicalVolume/Rescan/Run) + dm cleanup
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)
@@ -560,6 +563,58 @@ if s, ok := nqn.Parse(dev.Subsystem.NQN); ok {
     _, _ = s.ClusterID, s.LvolID
 }
 ```
+
+#### Assemble an LVM stack on a device
+
+A simplyblock HA volume presents more than one local device node with
+byte-identical content, which breaks LVM's default behavior in two ways: a
+system-wide `pvscan` can resolve a PV against whichever duplicate its cache
+happens to pick, and a name-based `vgs <name>` existence check can report a
+VG as present when it was never created on the device being asked about. Every
+call scopes to an explicit device list instead, and answers identity questions
+from a device's own on-disk content rather than a name lookup.
+
+```go
+insp := lvm.NewInspector()
+
+// Content-based, not "vgs <name>": "" means genuinely blank, or unreadable —
+// both read the same way to a caller deciding whether to create fresh.
+vg, err := insp.VolumeGroup(ctx, devicePath)
+if err != nil {
+    handleError(err)
+}
+switch {
+case vg != expectedVG:
+    // Genuinely blank device (or a foreign identity to resolve first, e.g. a
+    // byte-level clone) — create fresh.
+default:
+    hasLV, err := insp.HasLogicalVolume(ctx, []string{devicePath}, vg, lvName)
+    if err != nil {
+        handleError(err)
+    } else if hasLV {
+        // Reactivate, never recreate.
+    } else {
+        // Orphaned: pvcreate/vgcreate completed, the final lvcreate did not.
+        // Remove and fall through to a fresh create.
+    }
+}
+
+// devices scopes every command to exactly the members involved — a single
+// device for VDO, several for a striped volume group.
+if _, err := insp.Run(ctx, devices, "pvcreate", devicePath); err != nil {
+    handleError(err)
+}
+```
+
+`RemoveOrphanedDMNodes` is the fallback when the backing device is already
+gone and a normal `vgremove`/`vgchange -an` can no longer read the metadata it
+needs: it clears the live dm nodes directly, retrying across a few passes so
+removing a dependent unblocks what it was blocking.
+
+_Today:_ `csi-driver/pkg/util/vdo.go` is the only consumer, wrapping VDO's
+`lvcreate --type vdo` on top of this package's device scoping and identity
+checks. A striped LVM volume group across several members would use the same
+primitives with more than one device in the list.
 
 ### Cross-cutting
 
