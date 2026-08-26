@@ -60,6 +60,7 @@ const (
 
 	backendStateCutoverPending = "cutover_pending"
 	backendStateCutoverDone    = "cutover_done"
+	backendStateFailedOver     = "failed_over"
 )
 
 // replVolumeReplicationStatus is the response from
@@ -262,7 +263,7 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
 		slot.Status.Message = "Cutover done"
 		changed = true
-	case "failed_over":
+	case backendStateFailedOver:
 		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateFailedOver)
 		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
 		slot.Status.TargetNQN = status.TargetNQN
@@ -339,7 +340,7 @@ func (r *ReplicationSlotReconciler) reconcileSyncStatus(
 		// and signal cutover-proceed before the ANA flip.
 		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending)
 		slot.Status.Message = "Cutover pending — failback reverse cutover in progress"
-	case backendStateCutoverDone, "failed_over":
+	case backendStateCutoverDone, backendStateFailedOver:
 		if !status.IsSource {
 			// This volume is the TARGET of a completed failback: it received the
 			// replicated data and the ANA flip moved IO back here. From the slot's
@@ -781,7 +782,7 @@ func (r *ReplicationSlotReconciler) applyAdvancedBackendState(
 		slot.Status.TargetNQN = status.TargetNQN
 		slot.Status.TargetLvolID = status.TargetLvolID
 		log.Info("Cutover completed; advancing slot state to cutover_done", "slot", slot.Name)
-	case "failed_over":
+	case backendStateFailedOver:
 		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateFailedOver)
 		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
 		slot.Status.Message = "Failed over to target cluster"
