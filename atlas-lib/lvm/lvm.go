@@ -9,16 +9,20 @@ import (
 	"strings"
 )
 
-// Runner executes a single LVM/device-mapper command and returns its combined
+// runner executes a single LVM/device-mapper command and returns its combined
 // output, which is where these tools put the reason for a failure, as well as
 // (for pvs/lvs) the fields callers scrape from stdout mixed with any
 // WARNING: lines lvm2 writes to stderr.
 //
-// A field rather than a hardcoded exec.Command so callers can test the
-// identity logic in this package without lvm2 or a kernel present.
-type Runner func(ctx context.Context, args ...string) (string, error)
+// A field rather than a hardcoded exec.Command so this package's own tests
+// can run the identity logic without lvm2 or a kernel present. Unexported:
+// nothing outside this package injects one today, and NewManagerWithRunner
+// stays usable from outside regardless, since Go allows passing a matching
+// func literal to a named func-type parameter whether or not the type name
+// itself is exported.
+type runner func(ctx context.Context, args ...string) (string, error)
 
-// runCommand is the default Runner: it execs args[0] with the rest as
+// runCommand is the default runner: it execs args[0] with the rest as
 // arguments, and disables udev's device-node handshake (DM_DISABLE_UDEV)
 // since a container running these tools typically has no udev daemon to
 // complete it. Confirmed live: "device not cleared, Aborting. Failed to wipe
@@ -69,7 +73,7 @@ func deviceScope(devices ...string) []string {
 // stack by hand-building `Run` argument lists is exactly the duplication this
 // package exists to prevent.
 type Manager struct {
-	run Runner
+	run runner
 }
 
 // NewManager returns a Manager that runs real LVM/dm-vdo commands.
@@ -78,8 +82,10 @@ func NewManager() *Manager {
 }
 
 // NewManagerWithRunner is NewManager with the command execution supplied by
-// the caller (see Runner). A nil run means the real one NewManager uses.
-func NewManagerWithRunner(run Runner) *Manager {
+// the caller: a func(ctx, args...) (string, error), for a caller that wants
+// to test the identity logic in this package without lvm2 or a kernel
+// present. A nil run means the real one NewManager uses.
+func NewManagerWithRunner(run runner) *Manager {
 	if run == nil {
 		run = runCommand
 	}
@@ -99,7 +105,7 @@ func (m *Manager) Run(ctx context.Context, devices []string, args ...string) (st
 }
 
 // firstRealLine returns the first non-empty, non-WARNING: line of out.
-// Runner implementations typically merge stdout+stderr, and pvs/lvs can print
+// A runner typically merges stdout+stderr, and pvs/lvs can print
 // WARNING: lines ahead of the actual field value (e.g., duplicate-PV warnings
 // on a byte-level clone). Trusting the whole trimmed blob would pollute both
 // an identity comparison and any log message built from it.

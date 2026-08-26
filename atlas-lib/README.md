@@ -39,7 +39,7 @@ atlas/
 ├── nqn/                    Build & parse simplyblock lvol NQNs
 ├── lvm/                    Device-scoped Linux LVM commands + content-based identity
 │   ├── doc.go              Why every command here is scoped by device, not by name
-│   ├── lvm.go              Manager, Runner, Run (the escape hatch)
+│   ├── lvm.go              Manager, Run (the escape hatch)
 │   ├── identity.go         VolumeGroup, HasLogicalVolume, ListLogicalVolumes, Rescan
 │   ├── volume.go           Create/Activate/Deactivate/Remove a PV or VG
 │   ├── vdo.go              CreateVDOLogicalVolume, SetVDOFeatures
