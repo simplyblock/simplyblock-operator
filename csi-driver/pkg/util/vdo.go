@@ -34,14 +34,13 @@ const (
 	// per-volume -- uniqueness comes from the VG name (vdo-<lvolID>), matching the design's
 	// one-VG-per-volume convention.
 	poolLVName = "vdopool"
-	lvsCmd     = "lvs"
 )
 
-// lvmInspector runs every LVM/dm-vdo command in this file, scoped to a device and
+// lvmManager runs every LVM/dm-vdo command in this file, scoped to a device and
 // content-identity-aware where it matters -- see github.com/simplyblock/atlas/lvm's package
 // doc comment for why: a simplyblock NVMe-oF HA volume's two redundant local device nodes
 // present byte-identical content, which an unscoped, name-based LVM lookup cannot tell apart.
-var lvmInspector = lvm.NewInspector()
+var lvmManager = lvm.NewManager()
 
 // vgName returns the VG name this volume's VDO stack lives in.
 func vgName(lvolID string) string {
@@ -54,15 +53,8 @@ func vdoDevicePath(lvolID string) string {
 	return fmt.Sprintf("/dev/%s/%s", vgName(lvolID), lvolID)
 }
 
-func yn(b bool) string {
-	if b {
-		return "y"
-	}
-	return "n"
-}
-
 // withVDOTimeout and withVDOGrowTimeout bound one LVM/dm-vdo invocation. A field on
-// lvm.Inspector's Runner would have to pick one timeout for every call an Inspector ever
+// lvm.Manager's Runner would have to pick one timeout for every call a Manager ever
 // makes; per-call context.WithTimeout keeps the same per-command granularity the original
 // direct-exec implementation had (a quick identity probe and a multi-hundred-second
 // lvextend need very different budgets).
@@ -91,13 +83,13 @@ func CreateOrAttachVDO(
 	// registers the volume's other (redundant HA) local device node into LVM's cache
 	// alongside it.
 	rescanCtx, cancel := withVDOTimeout(ctx)
-	if err := lvmInspector.Rescan(rescanCtx, devices); err != nil {
+	if err := lvmManager.Rescan(rescanCtx, devices); err != nil {
 		klog.Warningf("CreateOrAttachVDO: pvscan --cache %s: %v", devicePath, err)
 	}
 	cancel()
 
 	existsCtx, cancel := withVDOTimeout(ctx)
-	currentVG, err := lvmInspector.VolumeGroup(existsCtx, devicePath)
+	currentVG, err := lvmManager.VolumeGroup(existsCtx, devicePath)
 	cancel()
 	if err != nil {
 		return "", fmt.Errorf("probe VG identity of %s: %w", devicePath, err)
@@ -105,14 +97,14 @@ func CreateOrAttachVDO(
 
 	if currentVG == vg {
 		hasLVCtx, cancel := withVDOTimeout(ctx)
-		hasLV, err := lvmInspector.HasLogicalVolume(hasLVCtx, devices, vg, lvolID)
+		hasLV, err := lvmManager.HasLogicalVolume(hasLVCtx, devices, vg, lvolID)
 		cancel()
 		if err != nil {
 			return "", fmt.Errorf("check %s for logical volume %s: %w", vg, lvolID, err)
 		}
 		if hasLV {
-			vgchangeCtx, cancel := withVDOTimeout(ctx)
-			_, err := lvmInspector.Run(vgchangeCtx, devices, "vgchange", "-ay", vg)
+			activateCtx, cancel := withVDOTimeout(ctx)
+			err := lvmManager.ActivateVolumeGroup(activateCtx, devices, vg)
 			cancel()
 			if err != nil {
 				return "", fmt.Errorf("reactivate VG %s: %w", vg, err)
@@ -129,7 +121,7 @@ func CreateOrAttachVDO(
 			vg, lvolID,
 		)
 		vgremoveCtx, cancel := withVDOTimeout(ctx)
-		_, err = lvmInspector.Run(vgremoveCtx, devices, "vgremove", "-f", vg)
+		err = lvmManager.RemoveVolumeGroup(vgremoveCtx, devices, vg)
 		cancel()
 		if err != nil {
 			return "", fmt.Errorf("remove orphaned empty VG %s: %w", vg, err)
@@ -137,32 +129,22 @@ func CreateOrAttachVDO(
 	}
 
 	pvcreateCtx, cancel := withVDOTimeout(ctx)
-	_, err = lvmInspector.Run(pvcreateCtx, devices, "pvcreate", devicePath)
+	err = lvmManager.CreatePhysicalVolume(pvcreateCtx, devices, devicePath)
 	cancel()
 	if err != nil {
-		return "", fmt.Errorf("pvcreate %s: %w", devicePath, err)
+		return "", err
 	}
 	vgcreateCtx, cancel := withVDOTimeout(ctx)
-	_, err = lvmInspector.Run(vgcreateCtx, devices, "vgcreate", vg, devicePath)
+	err = lvmManager.CreateVolumeGroup(vgcreateCtx, devices, vg, devicePath)
 	cancel()
 	if err != nil {
-		return "", fmt.Errorf("vgcreate %s on %s: %w", vg, devicePath, err)
+		return "", err
 	}
 	lvcreateCtx, cancel := withVDOTimeout(ctx)
-	_, err = lvmInspector.Run(lvcreateCtx, devices,
-		"lvcreate",
-		"--type", "vdo",
-		"--config", "activation{checks=0}",
-		"-n", lvolID,
-		"-l", "100%FREE",
-		"--compression", yn(compression),
-		"--deduplication", yn(deduplication),
-		vg+"/"+poolLVName,
-		"--yes",
-	)
+	err = lvmManager.CreateVDOLogicalVolume(lvcreateCtx, devices, vg, poolLVName, lvolID, compression, deduplication)
 	cancel()
 	if err != nil {
-		return "", fmt.Errorf("lvcreate --type vdo for %s: %w", vg, err)
+		return "", err
 	}
 
 	return vdoDevicePath(lvolID), nil
@@ -177,14 +159,14 @@ func ResolveClonedVDO(ctx context.Context, devicePath, lvolID string) error {
 	devices := []string{devicePath}
 
 	rescanCtx, cancel := withVDOTimeout(ctx)
-	if err := lvmInspector.Rescan(rescanCtx, devices); err != nil {
+	if err := lvmManager.Rescan(rescanCtx, devices); err != nil {
 		klog.Warningf("ResolveClonedVDO: pvscan --cache %s: %v", devicePath, err)
 	}
 	cancel()
 
 	vg := vgName(lvolID)
 	identityCtx, cancel := withVDOTimeout(ctx)
-	currentVG, err := lvmInspector.VolumeGroup(identityCtx, devicePath)
+	currentVG, err := lvmManager.VolumeGroup(identityCtx, devicePath)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("probe VG identity of %s: %w", devicePath, err)
@@ -200,31 +182,31 @@ func ResolveClonedVDO(ctx context.Context, devicePath, lvolID string) error {
 	)
 
 	importCtx, cancel := withVDOTimeout(ctx)
-	_, err = lvmInspector.Run(importCtx, devices, "vgimportclone", "--basevgname", vg, devicePath)
+	err = lvmManager.ImportClonedVolumeGroup(importCtx, devices, vg, devicePath)
 	cancel()
 	if err != nil {
-		return fmt.Errorf("vgimportclone %s to %s: %w", devicePath, vg, err)
+		return err
 	}
 
 	// vgimportclone renames the VG but leaves the VDO logical volume inside named after the
 	// source volume. Rename it to lvolID so every subsequent operation (CreateOrAttachVDO's
 	// identity check, mount, grow, remove) can address it consistently by this volume's own
 	// identity, not the source's.
-	lvsCtx, cancel := withVDOTimeout(ctx)
-	out, err := lvmInspector.Run(lvsCtx, devices, lvsCmd, "--noheadings", "-o", "lv_name", vg)
+	listCtx, cancel := withVDOTimeout(ctx)
+	names, err := lvmManager.ListLogicalVolumes(listCtx, devices, vg)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("list LVs in %s after clone resolution: %w", vg, err)
 	}
-	for name := range strings.FieldsSeq(out) {
+	for _, name := range names {
 		if name == poolLVName || name == lvolID {
 			continue
 		}
 		renameCtx, cancel := withVDOTimeout(ctx)
-		_, err := lvmInspector.Run(renameCtx, devices, "lvrename", vg, name, lvolID)
+		err := lvmManager.RenameLogicalVolume(renameCtx, devices, vg, name, lvolID)
 		cancel()
 		if err != nil {
-			return fmt.Errorf("rename cloned LV %s/%s to %s: %w", vg, name, lvolID, err)
+			return err
 		}
 		break
 	}
@@ -245,8 +227,8 @@ func ResolveClonedVDO(ctx context.Context, devicePath, lvolID string) error {
 // same as the original direct-exec implementation did.
 func DeactivateVDO(ctx context.Context, lvolID string) error {
 	vg := vgName(lvolID)
-	vgchangeCtx, cancel := withVDOTimeout(ctx)
-	_, err := lvmInspector.Run(vgchangeCtx, nil, "vgchange", "-an", vg)
+	deactivateCtx, cancel := withVDOTimeout(ctx)
+	err := lvmManager.DeactivateVolumeGroup(deactivateCtx, nil, vg)
 	cancel()
 	if err == nil {
 		return nil
@@ -269,7 +251,7 @@ func DeactivateVDO(ctx context.Context, lvolID string) error {
 	)
 	removeCtx, cancel := withVDOTimeout(ctx)
 	defer cancel()
-	return lvmInspector.RemoveOrphanedDMNodes(removeCtx, vg)
+	return lvmManager.RemoveOrphanedDMNodes(removeCtx, vg)
 }
 
 // RemoveVDO deactivates and removes the VG/LV stack for lvolID, destroying its data. Only
@@ -282,11 +264,11 @@ func DeactivateVDO(ctx context.Context, lvolID string) error {
 func RemoveVDO(ctx context.Context, lvolID string) error {
 	vg := vgName(lvolID)
 	deactivateCtx, cancel := withVDOTimeout(ctx)
-	_, _ = lvmInspector.Run(deactivateCtx, nil, "vgchange", "-an", vg)
+	_ = lvmManager.DeactivateVolumeGroup(deactivateCtx, nil, vg)
 	cancel()
 
 	removeCtx, cancel := withVDOTimeout(ctx)
-	_, err := lvmInspector.Run(removeCtx, nil, "vgremove", "-f", vg)
+	err := lvmManager.RemoveVolumeGroup(removeCtx, nil, vg)
 	cancel()
 	if err == nil {
 		return nil
@@ -298,7 +280,7 @@ func RemoveVDO(ctx context.Context, lvolID string) error {
 	)
 	dmCtx, cancel := withVDOTimeout(ctx)
 	defer cancel()
-	return lvmInspector.RemoveOrphanedDMNodes(dmCtx, vg)
+	return lvmManager.RemoveOrphanedDMNodes(dmCtx, vg)
 }
 
 // GrowVDO extends the VG's pool LV to consume all newly available physical space on
@@ -311,21 +293,22 @@ func GrowVDO(ctx context.Context, devicePath, lvolID string) (string, error) {
 	devices := []string{devicePath}
 
 	pvresizeCtx, cancel := withVDOTimeout(ctx)
-	_, err := lvmInspector.Run(pvresizeCtx, devices, "pvresize", devicePath)
+	err := lvmManager.ExtendPhysicalVolume(pvresizeCtx, devices, devicePath)
 	cancel()
 	if err != nil {
-		return "", fmt.Errorf("pvresize %s: %w", devicePath, err)
+		return "", err
 	}
 	// lvextend's -l (unlike lvcreate's) treats a bare "100%FREE" as an ABSOLUTE target size
 	// (100% of what's currently free), not "grow by" -- confirmed live ("New size given
 	// (1024 extents) not larger than existing size (1535 extents)"), since free-space-alone
-	// is smaller than the pool's current size. The "+" prefix makes it additive (current
-	// size + free space), which is what "grow to consume all newly available space" means.
+	// is smaller than the pool's current size. ExtendLogicalVolumeByFreeSpace's "+" prefix
+	// makes it additive (current size + free space), which is what "grow to consume all
+	// newly available space" means.
 	lvextendPoolCtx, cancel := withVDOGrowTimeout(ctx)
-	_, err = lvmInspector.Run(lvextendPoolCtx, devices, "lvextend", "-l+100%FREE", vg+"/"+poolLVName)
+	err = lvmManager.ExtendLogicalVolumeByFreeSpace(lvextendPoolCtx, devices, vg, poolLVName)
 	cancel()
 	if err != nil {
-		return "", fmt.Errorf("grow VDO pool LV %s/%s: %w", vg, poolLVName, err)
+		return "", err
 	}
 
 	// The VDO logical volume's size is independent of the pool's physical size (it can
@@ -333,19 +316,16 @@ func GrowVDO(ctx context.Context, devicePath, lvolID string) (string, error) {
 	// savings, matching how creation omits -V to get the same "largest safe size" default).
 	// Read the pool's new size back and extend the logical volume to match it.
 	sizeCtx, cancel := withVDOTimeout(ctx)
-	poolSize, err := lvmInspector.Run(
-		sizeCtx, devices, lvsCmd, "--noheadings", "--units", "b", "--nosuffix", "-o", "lv_size", vg+"/"+poolLVName,
-	)
+	poolSize, err := lvmManager.LogicalVolumeSize(sizeCtx, devices, vg, poolLVName)
 	cancel()
 	if err != nil {
 		return "", fmt.Errorf("read grown pool size for %s/%s: %w", vg, poolLVName, err)
 	}
-	newSize := strings.TrimSpace(poolSize)
 	lvextendLVCtx, cancel := withVDOGrowTimeout(ctx)
-	_, err = lvmInspector.Run(lvextendLVCtx, devices, "lvextend", "-L"+newSize+"B", vg+"/"+lvolID)
+	err = lvmManager.ExtendLogicalVolumeToSize(lvextendLVCtx, devices, vg, lvolID, poolSize)
 	cancel()
 	if err != nil {
-		return "", fmt.Errorf("grow VDO logical volume %s/%s to %sB: %w", vg, lvolID, newSize, err)
+		return "", err
 	}
 	return vdoDevicePath(lvolID), nil
 }
@@ -358,10 +338,5 @@ func SetVDOFeatures(ctx context.Context, lvolID string, compression, deduplicati
 	vg := vgName(lvolID)
 	lvchangeCtx, cancel := withVDOTimeout(ctx)
 	defer cancel()
-	if _, err := lvmInspector.Run(lvchangeCtx, nil,
-		"lvchange", "--compression", yn(compression), "--deduplication", yn(deduplication), vg+"/"+poolLVName,
-	); err != nil {
-		return fmt.Errorf("set VDO features on %s/%s: %w", vg, poolLVName, err)
-	}
-	return nil
+	return lvmManager.SetVDOFeatures(lvchangeCtx, nil, vg, poolLVName, compression, deduplication)
 }
