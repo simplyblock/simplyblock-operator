@@ -85,6 +85,11 @@ CODE_FENCE_PATTERN = re.compile(r"^\s*```")
 # The info string of an opening fence, e.g. 'bash title="Create a cluster"'.
 CODE_FENCE_TITLE_PATTERN = re.compile(r"title\s*=\s*\"([^\"]*)\"")
 
+# A table needs its separator row, otherwise every row runs together as one
+# paragraph.
+TABLE_ROW_PATTERN = re.compile(r"^\s*\|")
+TABLE_SEPARATOR_PATTERN = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
+
 # Regions that are not prose: inline code spans (a run of backticks closed by a
 # run of the same length) and mkdocs-macros template expressions. The latter cover
 # both placeholders declared under "extra" in mkdocs.yml ({{ cliname }}) and
