@@ -5,6 +5,22 @@ import (
 	"fmt"
 )
 
+type LogicalVolumeDefinition struct {
+	Deduplication bool
+	Compression   bool
+}
+
+type VolumeProvisioning interface {
+	Name() string
+	CreateVolumeArgs(def LogicalVolumeDefinition) []string
+}
+
+var volumeProvisioning = map[string]VolumeProvisioning{}
+
+func RegisterVolumeProvisioning(handler VolumeProvisioning) {
+	volumeProvisioning[handler.Name()] = handler
+}
+
 // CreatePhysicalVolume writes an LVM PV signature onto devicePath (pvcreate),
 // scoped to devices.
 func (m *Manager) CreatePhysicalVolume(ctx context.Context, devices []string, devicePath string) error {
@@ -52,4 +68,22 @@ func (m *Manager) RemoveVolumeGroup(ctx context.Context, devices []string, vg st
 		return fmt.Errorf("remove VG %s: %w", vg, err)
 	}
 	return nil
+}
+
+func (m *Manager) CreateLogicalVolume(ctx context.Context, devices []string, vg, pv, lvName string, def LogicalVolumeDefinition) error {
+	args := []string{
+		"lvcreate",
+		"-n", lvName,
+		"-l", "100%FREE",
+		vg + "/" + pv,
+		"--yes",
+	}
+
+	if handler, ok := volumeProvisioning["vdo"]; ok {
+		if additionalArgs := handler.CreateVolumeArgs(def); len(additionalArgs) > 0 {
+			args = append(args, additionalArgs...)
+		}
+	}
+	_, err := m.Run(ctx, devices, args...)
+	return err
 }
