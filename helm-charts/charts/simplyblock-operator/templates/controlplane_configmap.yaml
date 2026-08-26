@@ -968,13 +968,15 @@ data:
       {{- with $webhook.authorizationScheme }}
               authorization_scheme: '{{ . }}'
       {{- end }}
-      {{- if or $webhook.password $webhook.authorizationCredentials }}
+      {{- $useBasicAuth := and $webhook.username $webhook.password }}
+      {{- $useAuthHeader := and $webhook.authorizationScheme $webhook.authorizationCredentials }}
+      {{- if or $useBasicAuth $useAuthHeader }}
             secureSettings:
-        {{- with $webhook.password }}
-              password: '{{ . }}'
+        {{- if $useBasicAuth }}
+              password: '{{ $webhook.password }}'
         {{- end }}
-        {{- with $webhook.authorizationCredentials }}
-              authorization_credentials: '{{ . }}'
+        {{- if $useAuthHeader }}
+              authorization_credentials: '{{ $webhook.authorizationCredentials }}'
         {{- end }}
       {{- end }}
     {{- end }}
