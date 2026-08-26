@@ -45,8 +45,8 @@ func TestDeviceScope(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := DeviceScope(tt.devices...); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("DeviceScope(%v) = %v, want %v", tt.devices, got, tt.want)
+			if got := deviceScope(tt.devices...); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("deviceScope(%v) = %v, want %v", tt.devices, got, tt.want)
 			}
 		})
 	}

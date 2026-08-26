@@ -13,8 +13,8 @@ func TestEscapeDMName(t *testing.T) {
 		{"a-b-c", "a--b--c"},
 	}
 	for _, tt := range tests {
-		if got := EscapeDMName(tt.name); got != tt.want {
-			t.Errorf("EscapeDMName(%q) = %q, want %q", tt.name, got, tt.want)
+		if got := escapeDMName(tt.name); got != tt.want {
+			t.Errorf("escapeDMName(%q) = %q, want %q", tt.name, got, tt.want)
 		}
 	}
 }

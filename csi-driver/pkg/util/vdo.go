@@ -293,7 +293,7 @@ func GrowVDO(ctx context.Context, devicePath, lvolID string) (string, error) {
 	devices := []string{devicePath}
 
 	pvresizeCtx, cancel := withVDOTimeout(ctx)
-	err := lvmManager.ExtendPhysicalVolume(pvresizeCtx, devices, devicePath)
+	err := lvmManager.ExpandPhysicalVolume(pvresizeCtx, devices, devicePath)
 	cancel()
 	if err != nil {
 		return "", err
@@ -301,11 +301,11 @@ func GrowVDO(ctx context.Context, devicePath, lvolID string) (string, error) {
 	// lvextend's -l (unlike lvcreate's) treats a bare "100%FREE" as an ABSOLUTE target size
 	// (100% of what's currently free), not "grow by" -- confirmed live ("New size given
 	// (1024 extents) not larger than existing size (1535 extents)"), since free-space-alone
-	// is smaller than the pool's current size. ExtendLogicalVolumeByFreeSpace's "+" prefix
-	// makes it additive (current size + free space), which is what "grow to consume all
-	// newly available space" means.
+	// is smaller than the pool's current size. ExpandLogicalVolume's "+" prefix makes it
+	// additive (current size + free space), which is what "grow to consume all newly
+	// available space" means.
 	lvextendPoolCtx, cancel := withVDOGrowTimeout(ctx)
-	err = lvmManager.ExtendLogicalVolumeByFreeSpace(lvextendPoolCtx, devices, vg, poolLVName)
+	err = lvmManager.ExpandLogicalVolume(lvextendPoolCtx, devices, vg, poolLVName)
 	cancel()
 	if err != nil {
 		return "", err

@@ -22,7 +22,7 @@ func TestManager_VolumeGroup(t *testing.T) {
 			nil,
 			"vdo-abc123",
 		},
-		{"probe itself fails", "", errors.New("device or resource busy"), ""},
+		{"no PV signature on the device", "", errors.New(`Failed to find physical volume "/dev/nvme0n1"`), ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -40,6 +40,16 @@ func TestManager_VolumeGroup(t *testing.T) {
 				t.Errorf("VolumeGroup() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestManager_VolumeGroup_PropagatesRealProbeError(t *testing.T) {
+	wantErr := errors.New("device or resource busy")
+	key := joinKey([]string{"pvs", "--devices", "/dev/nvme0n1", "--noheadings", "-o", "vg_name", "/dev/nvme0n1"})
+	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: wantErr}}
+	mgr := NewManagerWithRunner(fake.run)
+	if _, err := mgr.VolumeGroup(context.Background(), "/dev/nvme0n1"); !errors.Is(err, wantErr) {
+		t.Errorf("VolumeGroup() error = %v, want wrapping %v", err, wantErr)
 	}
 }
 
@@ -80,7 +90,6 @@ func TestManager_HasLogicalVolume(t *testing.T) {
 		{"lv present among others", "  poolvol\n  data1\n", nil, true},
 		{"orphaned VG, zero LVs", "", nil, false},
 		{"lv absent", "  poolvol\n", nil, false},
-		{"unreadable VG", "", errors.New("failed to find VG"), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -98,6 +107,16 @@ func TestManager_HasLogicalVolume(t *testing.T) {
 				t.Errorf("HasLogicalVolume() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestManager_HasLogicalVolume_PropagatesRunnerError(t *testing.T) {
+	wantErr := errors.New("failed to find VG")
+	key := joinKey([]string{"lvs", "--devices", "/dev/nvme0n1", "--noheadings", "-o", "lv_name", "vg1"})
+	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: wantErr}}
+	mgr := NewManagerWithRunner(fake.run)
+	if _, err := mgr.HasLogicalVolume(context.Background(), []string{"/dev/nvme0n1"}, "vg1", "data1"); !errors.Is(err, wantErr) {
+		t.Errorf("HasLogicalVolume() error = %v, want wrapping %v", err, wantErr)
 	}
 }
 

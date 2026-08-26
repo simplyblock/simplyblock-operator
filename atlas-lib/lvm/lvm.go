@@ -39,7 +39,7 @@ func runCommand(ctx context.Context, args ...string) (string, error) {
 	return string(output), nil
 }
 
-// DeviceScope returns LVM's --devices argument pair, scoping a command to
+// deviceScope returns LVM's --devices argument pair, scoping a command to
 // exactly the given devices (comma-joined, LVM's own syntax for the flag) and
 // bypassing its default system-wide device scan entirely. See the package
 // doc comment for why every command in this package is scoped this way.
@@ -48,7 +48,11 @@ func runCommand(ctx context.Context, args ...string) (string, error) {
 // LVM would reject: a caller that no longer has a device path to scope to
 // (a teardown addressing a VG by name after its backing device is already
 // gone) runs unscoped by passing no devices, not zero-scoped.
-func DeviceScope(devices ...string) []string {
+//
+// Unexported: it only builds one argument fragment for Run, and every named
+// method in this package goes through Run rather than assembling --devices
+// itself.
+func deviceScope(devices ...string) []string {
 	if len(devices) == 0 {
 		return nil
 	}
@@ -89,7 +93,7 @@ func (m *Manager) Run(ctx context.Context, devices []string, args ...string) (st
 	if len(args) == 0 {
 		return "", errors.New("lvm: Run requires a command name")
 	}
-	full := append([]string{args[0]}, DeviceScope(devices...)...)
+	full := append([]string{args[0]}, deviceScope(devices...)...)
 	full = append(full, args[1:]...)
 	return m.run(ctx, full...)
 }

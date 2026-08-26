@@ -99,6 +99,18 @@ func TestManager_DeactivateVolumeGroup(t *testing.T) {
 	}
 }
 
+func TestManager_DeactivateVolumeGroup_WrapsRunnerError(t *testing.T) {
+	wantErr := errors.New("device busy")
+	fake := &fakeRunner{
+		out: map[string]string{},
+		err: map[string]error{joinKey([]string{"vgchange", "-an", "vg1"}): wantErr},
+	}
+	mgr := NewManagerWithRunner(fake.run)
+	if err := mgr.DeactivateVolumeGroup(context.Background(), nil, "vg1"); !errors.Is(err, wantErr) {
+		t.Errorf("DeactivateVolumeGroup() error = %v, want wrapping %v", err, wantErr)
+	}
+}
+
 func TestManager_RemoveVolumeGroup(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
@@ -108,5 +120,17 @@ func TestManager_RemoveVolumeGroup(t *testing.T) {
 	want := []string{"vgremove", "-f", "vg1"}
 	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
+	}
+}
+
+func TestManager_RemoveVolumeGroup_WrapsRunnerError(t *testing.T) {
+	wantErr := errors.New("volume group not found")
+	fake := &fakeRunner{
+		out: map[string]string{},
+		err: map[string]error{joinKey([]string{"vgremove", "-f", "vg1"}): wantErr},
+	}
+	mgr := NewManagerWithRunner(fake.run)
+	if err := mgr.RemoveVolumeGroup(context.Background(), nil, "vg1"); !errors.Is(err, wantErr) {
+		t.Errorf("RemoveVolumeGroup() error = %v, want wrapping %v", err, wantErr)
 	}
 }

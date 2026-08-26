@@ -6,29 +6,31 @@ import (
 	"strings"
 )
 
-// EscapeDMName escapes name the way device-mapper flattens a compound name
-// (doubling every literal "-"), so a caller matching dmsetup's own output
-// (e.g., "<vg>-<lv>") against a known VG or LV name compares correctly.
-// Confirmed live: matching against an unescaped name found nothing in
-// `dmsetup ls` output, leaving an orphaned stack stuck with nothing left to
-// clean it up.
-func EscapeDMName(name string) string {
+// escapeDMName escapes name the way device-mapper flattens a compound name
+// (doubling every literal "-"), so matching dmsetup's own output (e.g.,
+// "<vg>-<lv>") against a known VG or LV name compares correctly. Confirmed
+// live: matching against an unescaped name found nothing in `dmsetup ls`
+// output, leaving an orphaned stack stuck with nothing left to clean it up.
+//
+// Unexported: RemoveOrphanedDMNodes is the only caller a device-mapper name
+// match needs. Nothing outside this package parses dmsetup output directly.
+func escapeDMName(name string) string {
 	return strings.ReplaceAll(name, "-", "--")
 }
 
 // RemoveOrphanedDMNodes clears any live device-mapper nodes whose name starts
-// with namePrefix (escaped internally via EscapeDMName), for when the backing
-// device is gone and the higher-level removal (RemoveVolumeGroup, etc.) can no
-// longer read the metadata it needs to deactivate cleanly. Retries across a
-// few passes so removing a dependent node unblocks what it was blocking,
-// rather than hardcoding the dependency chain.
+// with namePrefix (escaped internally), for when the backing device is gone
+// and the higher-level removal (RemoveVolumeGroup, etc.) can no longer read
+// the metadata it needs to deactivate cleanly. Retries across a few passes so
+// removing a dependent node unblocks what it was blocking, rather than
+// hardcoding the dependency chain.
 func (m *Manager) RemoveOrphanedDMNodes(ctx context.Context, namePrefix string) error {
 	out, err := m.run(ctx, "dmsetup", "ls")
 	if err != nil {
 		return fmt.Errorf("dmsetup ls: %w", err)
 	}
 
-	escaped := EscapeDMName(namePrefix)
+	escaped := escapeDMName(namePrefix)
 
 	var names []string
 	for line := range strings.SplitSeq(out, "\n") {

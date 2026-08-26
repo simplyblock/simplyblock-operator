@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// ExtendPhysicalVolume grows devicePath's PV to its device's current full
+// ExpandPhysicalVolume grows devicePath's PV to its device's current full
 // size (pvresize), after the backing device itself has grown.
-func (m *Manager) ExtendPhysicalVolume(ctx context.Context, devices []string, devicePath string) error {
+func (m *Manager) ExpandPhysicalVolume(ctx context.Context, devices []string, devicePath string) error {
 	_, err := m.Run(ctx, devices, "pvresize", devicePath)
 	if err != nil {
 		return fmt.Errorf("pvresize %s: %w", devicePath, err)
@@ -17,8 +17,22 @@ func (m *Manager) ExtendPhysicalVolume(ctx context.Context, devices []string, de
 	return nil
 }
 
-// ExtendLogicalVolumeByFreeSpace grows vg's lvName logical volume to consume
-// all newly available free space in the VG (lvextend -l+100%FREE).
+// ExtendVolumeGroup adds devicePaths to vg (vgextend), scoped to devices. The
+// counterpart to CreateVolumeGroup for a VG that already exists: growing a
+// striped volume group by adding members, as opposed to ExpandPhysicalVolume,
+// which grows a PV already in the VG to its device's current full size.
+func (m *Manager) ExtendVolumeGroup(ctx context.Context, devices []string, vg string, devicePaths ...string) error {
+	args := append([]string{"vgextend", vg}, devicePaths...)
+	if _, err := m.Run(ctx, devices, args...); err != nil {
+		return fmt.Errorf("vgextend %s with %v: %w", vg, devicePaths, err)
+	}
+	return nil
+}
+
+// ExpandLogicalVolume grows vg's lvName logical volume to consume all newly
+// available free space in the VG (lvextend -l+100%FREE). Always the full
+// free space: unlike ExtendLogicalVolumeToSize, there is no partial-expand
+// use case for this package's callers.
 //
 // The "+" prefix matters: lvextend's -l (unlike lvcreate's) treats a bare
 // "100%FREE" as an ABSOLUTE target size (100% of what's currently free), not
@@ -26,7 +40,7 @@ func (m *Manager) ExtendPhysicalVolume(ctx context.Context, devices []string, de
 // existing size (1535 extents)," since free-space-alone is smaller than the
 // volume's current size. "+100%FREE" is additive (current size + free
 // space), which is what "grow to consume all newly available space" means.
-func (m *Manager) ExtendLogicalVolumeByFreeSpace(ctx context.Context, devices []string, vg, lvName string) error {
+func (m *Manager) ExpandLogicalVolume(ctx context.Context, devices []string, vg, lvName string) error {
 	_, err := m.Run(ctx, devices, "lvextend", "-l+100%FREE", vg+"/"+lvName)
 	if err != nil {
 		return fmt.Errorf("grow LV %s/%s to consume free space: %w", vg, lvName, err)
