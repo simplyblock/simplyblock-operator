@@ -253,7 +253,10 @@ Then:
   paths (`../tests/…`, `../designs/…`, `../tasks/…`) and check that each resolves
   from its own file's directory.
 - Verify TOC anchors match the headings (GitHub slugifies to lowercase, spaces to
-  hyphens, punctuation dropped — an em dash becomes an extra hyphen).
+  hyphens, punctuation dropped — an em dash becomes an extra hyphen). An appendix
+  heading therefore reads `## Appendix A: \`Thing\``, with a colon: written with
+  an em dash, the dropped dash leaves both of its spaces behind and the anchor
+  needs two hyphens where a writer will type one.
 - **Check that a `§n` reference means what the reader will assume.** In a test
   plan, a bare `§11` reads as the plan's own section 11; write `design §11` for
   the design's. The two documents have overlapping numbering.
@@ -266,6 +269,46 @@ Then:
   technical terms, add them to `.cspell.json`'s `words` list rather than
   rewording the doc.
 
+### 8. Close the iteration: the gate, then a reference-voice pass
+
+**Every iteration ends here, not only the first.** A revision made in answer to
+review feedback is an iteration: rerun step 6's gate over the files it touched,
+then read what the iteration added.
+
+No gate checks this part and none can. Step 3's rule — the document describes the
+system, not the discussion that produced it — is easy to hold while writing a
+section and easy to lose while answering a question about one, because prose
+written in reply to a reviewer carries the reviewer into the page. Read every
+paragraph the iteration added and look for that second voice:
+
+- **A rebuttal of a position the document never takes.** A paragraph arguing
+  against an alternative that appears nowhere else in the document. A reader
+  arriving cold finds the design defending itself against nothing.
+- **Comparative phrasing whose other half was spoken, not written.** `rather than
+  merely supporting it`, `which is what settles it`, or a `not X but Y` whose X
+  appears in no other section. The reader never saw X.
+- **The decision's history in place of the decision.** `originally`, `this used
+  to`, `we considered`. Step 3's changelog corollary, arriving one edit at a time.
+- **A defense that grew with the review.** A paragraph carrying three reasons for
+  one choice usually accumulated one per round of feedback. Keep the reason the
+  design turns on.
+- **A rhetorical question.** The document answers questions. It does not ask them
+  outside `## Open Questions`.
+
+**The fix is not to strip the rationale.** The corpus voice is "**X is Y because
+Z**" and that voice stays. What goes is the other half of an argument: state the
+constraint that makes the alternative wrong instead of arguing against the
+alternative. A rejected alternative that genuinely has to be recorded already has
+two homes, a Non-Goal or an Open Question, and step 3's corollary sets the bar for
+earning one.
+
+**An unsettled proposal belongs in an appendix, not in the body.** A mechanism the
+document has not committed to reads as contract when it sits among the sections
+that are. Give it an appendix, say in the body what holds until it is adopted, and
+point at it from the Open Question that owns the decision.
+
+Report what the pass found: which paragraphs were rewritten, or that none were.
+
 ### Before handing the work back
 
 1. All seven house style gates pass on every file this change created or edited.
@@ -277,7 +320,10 @@ Then:
 6. Every count in the text matches the file.
 7. Every test function named in the test plan's `Test` column exists (grepped,
    not recalled).
-8. The reply says whether a work plan is the next step, and what still has to
+8. Every paragraph this iteration added has been read for the second voice of
+   step 8, and every unsettled proposal sits in an appendix rather than in the
+   body.
+9. The reply says whether a work plan is the next step, and what still has to
    settle before the design can be split.
 
 ## Updating an existing document
@@ -296,6 +342,10 @@ are cited from review history and commit messages. An obsolete scenario keeps it
 row, struck through with the ID that superseded it. When a test lands, fill in the
 `Test` column and delete the matching row from the gap table — those two edits
 always happen together.
+
+A re-sync is an iteration and ends at step 8, gate included. The voice pass
+matters more here than on a first draft: a re-sync is written against feedback,
+which is exactly the prose that carries an interlocutor.
 
 When a re-sync changes what still has to be built, the design's work plan is
 affected and is not this skill's to edit. Say which sections moved and hand the
