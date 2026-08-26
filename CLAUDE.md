@@ -47,6 +47,21 @@ Public package under `atlas-lib/<concern>/` when a consumer imports it, under
 already carry `replace github.com/simplyblock/atlas => ../atlas-lib`, and a third
 module would need that wiring everywhere.
 
+## Tests are written first and proven red before the fix
+
+For every bug fix and every behavior change:
+
+1. **Write the test first**, describing the behavior that is wanted.
+2. **Run it and show it fail** — the actual failure output, against the unchanged code.
+   A test that was never red proves nothing: it may be asserting what the code already did,
+   or asserting nothing at all.
+3. **Then** write the fix, and run the test again to show it green.
+4. Run the full suite / quality gate before reporting the work done.
+
+The red run is not a formality — it is the only evidence that the test covers the defect.
+If a test cannot be made red first (it covers something already correct, or the failure only
+reproduces on a cluster), say so explicitly rather than skipping the step silently.
+
 ## House rules that hold in every edit
 
 - **No license headers in new files:** no Apache block, no copyright line, no
