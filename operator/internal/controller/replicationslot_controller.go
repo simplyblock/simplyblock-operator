@@ -515,18 +515,17 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 	// Check if the preconnect Job already exists.
 	var existingJob batchv1.Job
 	if err := r.Get(ctx, types.NamespacedName{Namespace: slot.Namespace, Name: jobName}, &existingJob); err == nil {
-		// Already signalled on a previous reconcile — just wait for the backend to advance.
-		if slot.Annotations[annotCutoverProceedSignaled] == annotCutoverProceedSignaledValue {
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		}
-		// Job exists — check its terminal state.
+		// Job exists — check its terminal state. We always check, even when the
+		// annotation is already set, so that a previously-failed callCutoverProceed
+		// is retried rather than silently dropped: the backend waits indefinitely for
+		// the proceed signal, so a missed call leaves the slot permanently stuck.
 		for _, c := range existingJob.Status.Conditions {
 			if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
 				// Claim the signal by writing the annotation before the API call.
 				// Two concurrent reconciles may both see the job complete before
 				// either patch lands; the one whose patch wins becomes the sole
-				// caller of callCutoverProceed — the loser sees the annotation on
-				// its next read and falls through to the wait-5s branch above.
+				// caller of callCutoverProceed — the loser's patch fails (conflict),
+				// and it falls back to the 5 s wait.
 				result, patchErr := r.markCutoverProceedSignaled(ctx, slot)
 				if patchErr != nil {
 					// Conflict: another reconcile already claimed it.
@@ -539,8 +538,6 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 				}
 				if err := r.callCutoverProceed(ctx, apiClient, clusterID, poolID, volumeID); err != nil {
 					log.Error(err, "POST cutover-proceed failed", "slot", slot.Name)
-					// Annotation is already set; a later reconcile will wait for
-					// the backend to advance rather than re-sending the signal.
 				}
 				// Delete the job immediately now that the signal is sent — don't
 				// leave completed jobs accumulating when there are many PVCs.
@@ -550,10 +547,17 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 				return result, nil
 			}
 		}
-		// Still running.
+		// Job is still running or pending — wait for it.
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	} else if !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, fmt.Errorf("get preconnect job %q: %w", jobName, err)
+	}
+
+	// Job not found — either the signal was already sent and the job was deleted,
+	// or the job was never created yet. If we already signalled, don't create a new
+	// job: just wait for the backend to advance (a new job can't help at this point).
+	if slot.Annotations[annotCutoverProceedSignaled] == annotCutoverProceedSignaledValue {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
 	// Find the node running a pod that has this volume mounted.

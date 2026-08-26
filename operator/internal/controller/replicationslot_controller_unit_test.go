@@ -823,14 +823,14 @@ func TestSlot_CutoverPending_JobFailed_SignalsAnyway(t *testing.T) {
 	}
 }
 
-// ---------- reconcileCutoverPending: annotation already set → waits without re-signalling ----------
+// ---------- reconcileCutoverPending: job still running → waits without signalling ----------
 
-func TestSlot_CutoverPending_AlreadySignaled_Waits(t *testing.T) {
+func TestSlot_CutoverPending_JobStillRunning_Waits(t *testing.T) {
 	pol := readyReplicationPolicy()
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
 	slot.Annotations = map[string]string{annotCutoverProceedSignaled: annotCutoverProceedSignaledValue}
 	jobName := replSlotPreconnectJobName("vol-id")
-	// A still-running job (no terminal conditions) triggers the annotation check first.
+	// Job exists but has no terminal conditions — still running.
 	existingJob := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default"},
 		Status:     batchv1.JobStatus{},
@@ -860,10 +860,56 @@ func TestSlot_CutoverPending_AlreadySignaled_Waits(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if proceedCalled {
-		t.Error("POST cutover-proceed must not be called again when annotation is already set")
+		t.Error("POST cutover-proceed must not be called while the preconnect job is still running")
 	}
 	if res.RequeueAfter != 5*time.Second {
-		t.Errorf("RequeueAfter = %v, want 5s while waiting for backend to advance", res.RequeueAfter)
+		t.Errorf("RequeueAfter = %v, want 5s while waiting for job to finish", res.RequeueAfter)
+	}
+}
+
+// ---------- reconcileCutoverPending: previously-failed proceed retried when job completes again ----------
+
+func TestSlot_CutoverPending_ProceedRetried_WhenJobTerminates(t *testing.T) {
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
+	// Annotation already set (from a previous cycle where callCutoverProceed failed).
+	slot.Annotations = map[string]string{annotCutoverProceedSignaled: annotCutoverProceedSignaledValue}
+	jobName := replSlotPreconnectJobName("vol-id")
+	// A completed job — simulates a new job created after the first proceed failed.
+	completedJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default"},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{
+				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+
+	var proceedCalled bool
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{State: backendStateCutoverPending})
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
+			_ = json.NewEncoder(w).Encode([]webapi.LvolConnectResp{{TargetType: "tcp", IP: "1.2.3.4", Port: 4420, Nqn: "nqn.test"}})
+		case req.Method == http.MethodPost && strings.HasSuffix(path, "/cutover-proceed"):
+			proceedCalled = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, _ := newSlotReconciler(t, slot, pol, completedJob)
+
+	_, err := r.Reconcile(context.Background(), slotRequest("slot1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !proceedCalled {
+		t.Error("POST cutover-proceed must be retried when a completed job is seen, even if annotation was already set (prior proceed may have failed)")
 	}
 }
 
