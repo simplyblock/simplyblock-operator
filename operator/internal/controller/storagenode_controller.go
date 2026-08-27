@@ -387,7 +387,7 @@ func (r *StorageNodeReconciler) provisionNode(
 		CRPlural:         "storagenodesets",
 		Format4K:         ptr.BoolFromOrFalse(sns.Spec.ForceFormat4K),
 		SpdkSystemMemory: eff.SpdkSystemMemory,
-		FailureDomain:    effectiveFailureDomain(sn, sns),
+		FailureDomain:    effectiveFailureDomainPtr(sn, sns),
 		Expand:           ptr.BoolFromOrFalse(eff.Expand),
 	}
 
@@ -726,7 +726,11 @@ func effectiveFailureDomainSet(sn *simplyblockv1alpha1.StorageNode, sns *simplyb
 
 // effectiveFailureDomain returns the failure domain for the node:
 // StorageNode.spec.overrides.failureDomain takes precedence over
-// StorageNodeSet.spec.nodeFailureDomains[worker].
+// StorageNodeSet.spec.nodeFailureDomains[worker]. Only meaningful when
+// effectiveFailureDomainSet reports true -- the zero return here also covers
+// "unset", so callers that must distinguish the two (e.g. anything crossing
+// a JSON boundary, where 0 and absent are different wire values) should use
+// effectiveFailureDomainPtr instead.
 func effectiveFailureDomain(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1alpha1.StorageNodeSet) int {
 	if sn.Spec.Overrides != nil && sn.Spec.Overrides.FailureDomain != nil {
 		return int(*sn.Spec.Overrides.FailureDomain)
@@ -735,6 +739,19 @@ func effectiveFailureDomain(sn *simplyblockv1alpha1.StorageNode, sns *simplybloc
 		return int(v)
 	}
 	return 0
+}
+
+// effectiveFailureDomainPtr returns the same value as effectiveFailureDomain,
+// but as *int so "domain 0" and "not configured" stay distinguishable across
+// a JSON boundary (nil is omitted by `omitempty`; Ptr(0) serializes as 0).
+// Use this instead of effectiveFailureDomain wherever the result crosses
+// such a boundary, e.g. StorageNodeSetAddParams.FailureDomain.
+func effectiveFailureDomainPtr(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1alpha1.StorageNodeSet) *int {
+	if !effectiveFailureDomainSet(sn, sns) {
+		return nil
+	}
+	v := effectiveFailureDomain(sn, sns)
+	return &v
 }
 
 // handleDeletion ensures a StorageNodeOps(action=remove) exists for this node
