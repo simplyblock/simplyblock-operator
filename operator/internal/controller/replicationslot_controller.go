@@ -324,7 +324,7 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 			// Attempt a late preconnect so the CSI node gets target NVMe paths even
 			// after the ANA flip — this limits IO downtime to ctrl_loss_tmo instead
 			// of indefinite path loss.
-			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, poolID, volumeID)
+			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, poolID, volumeID, clusterID, poolID, volumeID)
 		}
 	}
 
@@ -552,15 +552,17 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		// late preconnect so the CSI node gets target NVMe paths even after the ANA
 		// flip — this limits IO downtime to ctrl_loss_tmo instead of indefinite.
 		if status != nil && status.State == backendStateCutoverDone {
-			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, poolID, volumeID)
+			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, poolID, volumeID, proceedClusterID, proceedPoolID, proceedVolumeID)
 		}
 		return r.applyAdvancedBackendStateForFailback(ctx, slot, status, proceedClusterID != clusterID)
 	}
 
-	// Fetch connection strings from the source cluster volume. During cutover_pending
-	// the backend returns both paths (the ones to pre-connect first). For migration
-	// these are target paths; for failback these are source paths — both correct.
-	rawConns, err := apiClient.GetVolumeConnections(ctx, clusterID, poolID, volumeID)
+	// Fetch connection strings. During cutover_pending the backend returns both
+	// paths (the ones to pre-connect first). For migration the source cluster has
+	// the cutover_pending record, so clusterID/poolID/volumeID is correct. For
+	// failback the cutover_pending record lives on the target cluster (proceedClusterID),
+	// so we must call its /connect endpoint to get the cluster-1 paths to pre-connect.
+	rawConns, err := apiClient.GetVolumeConnections(ctx, proceedClusterID, proceedPoolID, proceedVolumeID)
 	if err != nil {
 		log.Error(err, "GET volume/connect failed in cutover_pending", "slot", slot.Name)
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
@@ -684,11 +686,18 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 // the backend has already flipped to cutover_done (the "late" case — ANA already
 // happened, limiting IO downtime to ctrl_loss_tmo instead of indefinitely).
 // Errors are logged but not returned — the caller still advances slot state.
+//
+// clusterID/poolID/volumeID identify the slot's own volume (job naming, consumer
+// node lookup, image resolution). connClusterID/connPoolID/connVolumeID identify
+// the cluster to fetch connection strings from — for normal migration these are
+// the same; for failback the cutover_pending record lives on the target cluster
+// so connCluster* points there while cluster* still points at the source.
 func (r *ReplicationSlotReconciler) reconcilePreconnect(
 	ctx context.Context,
 	slot *simplyblockv1alpha1.ReplicationSlot,
 	apiClient *webapi.Client,
 	clusterID, poolID, volumeID string,
+	connClusterID, connPoolID, connVolumeID string,
 ) {
 	log := logf.FromContext(ctx)
 	jobName := replSlotPreconnectJobName(volumeID)
@@ -699,7 +708,7 @@ func (r *ReplicationSlotReconciler) reconcilePreconnect(
 		return
 	}
 
-	rawConns, err := apiClient.GetVolumeConnections(ctx, clusterID, poolID, volumeID)
+	rawConns, err := apiClient.GetVolumeConnections(ctx, connClusterID, connPoolID, connVolumeID)
 	if err != nil || len(rawConns) == 0 {
 		log.Error(err, "Preconnect: cannot fetch connections", "slot", slot.Name)
 		return
