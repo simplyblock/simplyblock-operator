@@ -416,7 +416,20 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 	return r.succeedOps(ctx, ops, "Failover completed successfully", results)
 }
 
-// reconcileFailback drives a failback to completion.
+// reconcileFailback drives a live failback to completion.
+//
+// After failover the active volume lives on the target cluster. The two-step
+// sequence mirrors how migration works:
+//  1. POST .../replication/failback — syncs the final snapshot from target back
+//     to the source volume.
+//  2. POST .../replication/commit — queues an async backend job that fetches
+//     the source connection string and switches ANA so the source becomes the
+//     active path again (202 Accepted; the job runs asynchronously).
+//
+// The ReplicationOps succeeds as soon as the commit is accepted. Each slot is
+// marked cutover_pending so the slot controller starts polling; it drives the
+// slot to replicating/source once the backend reports cutover_done.
+// No source cluster shutdown is required.
 func (r *ReplicationOpsReconciler) reconcileFailback(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.ReplicationOps,
@@ -494,6 +507,7 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 
 		r.setSubphase(ctx, ops, "StartingFailback")
 
+		// Step 1: sync the final snapshot from the target back to the source volume.
 		fbBody := map[string]interface{}{}
 		if ops.Spec.SourceClusterID != "" {
 			fbBody["source_cluster_id"] = ops.Spec.SourceClusterID
@@ -516,18 +530,21 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 
 		r.setSubphase(ctx, ops, "CommittingFailback")
 
+		// Step 2: queue the async commit job that fetches the source connection
+		// string and switches ANA to make the source the active path again.
+		// Accepts 202 — the actual ANA switch happens asynchronously on the backend.
 		commitEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/commit",
 			rel.TargetClusterID, rel.TargetPoolID, rel.TargetLvolID)
 		var commitBody map[string]interface{}
 		if ops.Spec.DeleteSource {
 			commitBody = map[string]interface{}{"delete_source": true}
 		}
-		body, status, commitErr := apiClient.Do(ctx, http.MethodPost, commitEndpoint, commitBody)
-		if commitErr != nil || status >= 300 {
+		_, status, commitErr := apiClient.Do(ctx, http.MethodPost, commitEndpoint, commitBody)
+		if commitErr != nil || (status != 202 && status >= 300) {
 			if commitErr == nil {
-				commitErr = fmt.Errorf("status %d: %s", status, string(body))
+				commitErr = fmt.Errorf("status %d", status)
 			}
-			log.Error(commitErr, "replication/commit (failback step) failed", "slot", slot.Name)
+			log.Error(commitErr, "replication/commit (failback) failed", "slot", slot.Name)
 			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
 				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
 				Detail: commitErr.Error(),
@@ -536,19 +553,28 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 			continue
 		}
 
-		// The slot controller drives the state transition to replicating/source by
-		// polling the backend. Patching here would race with reconcileSyncStatus.
+		// Commit accepted — mark the slot cutover_pending so the slot controller
+		// begins polling. The backend drives it through cutover_done; the slot
+		// controller then transitions to replicating/source once ANA has switched.
+		slotPatch := client.MergeFrom(slot.DeepCopy())
+		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending)
+		slot.Status.Message = fmt.Sprintf("Failback commit queued via ReplicationOps %s", ops.Name)
+		if err := r.Status().Patch(ctx, slot, slotPatch); err != nil {
+			log.Error(err, "failed to update slot status to cutover_pending", "slot", slot.Name)
+		}
+
 		results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
 			SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultSucceeded),
 		})
 	}
 
 	if anyFailed {
-		return r.failOps(ctx, ops, "Failback completed with errors; see results for details")
+		return r.failOps(ctx, ops, "Failback failed for one or more volumes; see results for details")
 	}
-	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "FailbackSucceeded", "FailbackSucceeded",
-		"Failback completed for policy %s (%d volumes)", policy.Name, len(slots))
-	return r.succeedOps(ctx, ops, "Failback completed successfully", results)
+	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "FailbackCommitQueued", "FailbackCommitQueued",
+		"Failback commit queued for policy %s (%d volumes); slots transitioning to cutover_done",
+		policy.Name, len(slots))
+	return r.succeedOps(ctx, ops, "Failback accepted; slots transitioning to replicating/source", results)
 }
 
 // reconcileMigration drives a planned online cutover (mode=migration).
