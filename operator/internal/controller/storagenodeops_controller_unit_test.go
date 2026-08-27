@@ -154,7 +154,12 @@ func newTestStorageClusterWithFD(name, ns string, enableFD bool) *simplyblockv1a
 }
 
 // sevenNodeTopology returns the live 2026-08-13 incident's exact topology: 7
-// nodes split FD1=2/FD2=2/FD3=3, sn-1 in FD1 at mgmtIP.
+// nodes split FD1=2/FD2=2/FD3=3, sn-1 in FD1 at mgmtIP. The entry at mgmtIP
+// gets UUID=opsTestNodeUUID -- matching sn.Status.UUID in every caller --
+// so hostHasSurvivingSibling correctly recognizes it as sn-1 itself rather
+// than an unrelated sibling on the same host (the other six entries are
+// distinct hosts at distinct IPs, so their empty UUID never collides with
+// a real lookup at a different IP).
 func sevenNodeTopology(mgmtIP string, snFD int32) []simplyblockv1alpha1.NodeStatus {
 	fd := func(v int32) *int32 { return &v }
 	all := []struct {
@@ -168,10 +173,12 @@ func sevenNodeTopology(mgmtIP string, snFD int32) []simplyblockv1alpha1.NodeStat
 	nodes := make([]simplyblockv1alpha1.NodeStatus, 0, len(all))
 	for _, n := range all {
 		domain := n.domain
+		uuid := ""
 		if n.ip == mgmtIP {
 			domain = snFD // let the caller override sn-1's own domain
+			uuid = opsTestNodeUUID
 		}
-		nodes = append(nodes, simplyblockv1alpha1.NodeStatus{MgmtIp: n.ip, FailureDomain: fd(domain)})
+		nodes = append(nodes, simplyblockv1alpha1.NodeStatus{MgmtIp: n.ip, FailureDomain: fd(domain), UUID: uuid})
 	}
 	return nodes
 }
@@ -229,6 +236,74 @@ func TestFdRemovalBalanceCheck_NoOpWhenFailureDomainsDisabled(t *testing.T) {
 	}
 	if reason != "" {
 		t.Errorf("expected no-op with failure domains disabled, got blocked: %q", reason)
+	}
+}
+
+// TestFdRemovalBalanceCheck_MultiNodeHostSiblingSurvivesAllowsRemoval is a
+// regression for the 2026-08-26 finding: a host running more than one
+// StorageNode (spec.socketsToUse / spec.nodesPerSocket > 1) must not vanish
+// from the failure-domain host count when only one of its nodes is removed
+// -- the sibling node still lives there. 3 domains, 2 hosts each (balanced
+// 2/2/2); FD3's second host (10.0.0.6) runs two StorageNodes sharing that
+// management IP. Removing one of them must leave FD3 at 2 hosts, not drop
+// it to 1 -- the old delete(hostDomains, ip) removed the whole host and
+// produced a spurious "failure domain 3 would drop to 1 host(s)" block.
+func TestFdRemovalBalanceCheck_MultiNodeHostSiblingSurvivesAllowsRemoval(t *testing.T) {
+	fd := func(v int32) *int32 { return &v }
+	const siblingUUID = "bbbb0000-0000-0000-0000-000000000002"
+	nodes := []simplyblockv1alpha1.NodeStatus{
+		{MgmtIp: "10.0.0.1", FailureDomain: fd(1), UUID: "n1"},
+		{MgmtIp: "10.0.0.2", FailureDomain: fd(1), UUID: "n2"},
+		{MgmtIp: "10.0.0.3", FailureDomain: fd(2), UUID: "n3"},
+		{MgmtIp: "10.0.0.4", FailureDomain: fd(2), UUID: "n4"},
+		{MgmtIp: "10.0.0.5", FailureDomain: fd(3), UUID: "n5"},
+		{MgmtIp: "10.0.0.6", FailureDomain: fd(3), UUID: opsTestNodeUUID}, // node being removed
+		{MgmtIp: "10.0.0.6", FailureDomain: fd(3), UUID: siblingUUID},     // surviving sibling, same host
+	}
+	sn := newTestStorageNode("sn-1", opsTestNS, "sns", opsTestWorker, opsTestNodeUUID)
+	sn.Status.Ports = &simplyblockv1alpha1.StorageNodePorts{Management: "10.0.0.6"}
+	sns := newTestStorageNodeSet("sns", opsTestNS, opsTestCluster, nodes...)
+	cluster := newTestStorageClusterWithFD(opsTestCluster, opsTestNS, true)
+	r := newOpsReconciler(t, sn, sns, cluster)
+
+	reason, err := r.fdRemovalBalanceCheck(context.Background(), sn)
+	if err != nil {
+		t.Fatalf("fdRemovalBalanceCheck returned error: %v", err)
+	}
+	if reason != "" {
+		t.Errorf("expected removal to be allowed (sibling survives on the host), got blocked: %q", reason)
+	}
+}
+
+// TestFdRemovalBalanceCheck_DomainDroppingToZeroBlocked is a regression for
+// the 2026-08-26 finding: A=2,B=2,C=1 -- removing C's only host must be
+// blocked. It would drop the cluster from 3 domains to 2, exactly the
+// topology fdActivationDomainCountViolation itself calls unsupported; the
+// removal gate must not permit what the activation gate would refuse. The
+// old code derived counts from a hostDomains map with C's key deleted, so C
+// vanished from the map instead of appearing at count zero, and neither the
+// +/-1 spread nor the 2-per-domain floor check ever saw it.
+func TestFdRemovalBalanceCheck_DomainDroppingToZeroBlocked(t *testing.T) {
+	fd := func(v int32) *int32 { return &v }
+	nodes := []simplyblockv1alpha1.NodeStatus{
+		{MgmtIp: "10.0.0.1", FailureDomain: fd(1), UUID: "n1"},
+		{MgmtIp: "10.0.0.2", FailureDomain: fd(1), UUID: "n2"},
+		{MgmtIp: "10.0.0.3", FailureDomain: fd(2), UUID: "n3"},
+		{MgmtIp: "10.0.0.4", FailureDomain: fd(2), UUID: "n4"},
+		{MgmtIp: "10.0.0.5", FailureDomain: fd(3), UUID: opsTestNodeUUID}, // domain 3's only host
+	}
+	sn := newTestStorageNode("sn-1", opsTestNS, "sns", opsTestWorker, opsTestNodeUUID)
+	sn.Status.Ports = &simplyblockv1alpha1.StorageNodePorts{Management: "10.0.0.5"}
+	sns := newTestStorageNodeSet("sns", opsTestNS, opsTestCluster, nodes...)
+	cluster := newTestStorageClusterWithFD(opsTestCluster, opsTestNS, true)
+	r := newOpsReconciler(t, sn, sns, cluster)
+
+	reason, err := r.fdRemovalBalanceCheck(context.Background(), sn)
+	if err != nil {
+		t.Fatalf("fdRemovalBalanceCheck returned error: %v", err)
+	}
+	if reason == "" {
+		t.Error("expected removal to be blocked (would drop domain 3 to zero hosts), got allowed")
 	}
 }
 

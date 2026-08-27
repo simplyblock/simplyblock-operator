@@ -1123,10 +1123,29 @@ func (r *StorageNodeOpsReconciler) fdRemovalBalanceCheck(
 	if err != nil {
 		return "", fmt.Errorf("computing failure-domain host map: %w", err)
 	}
-	if sn.Status.Ports != nil {
-		delete(hostDomains, sn.Status.Ports.Management)
+	// Counts are built from the PRE-removal host map so every domain that
+	// currently has a host stays represented -- including at zero, once
+	// decremented below -- rather than being derived from a post-removal
+	// hostDomains that has the affected host's key deleted outright (which
+	// would drop the domain from the map entirely once it had no
+	// surviving host, and hide that from fdRemovalBalanceViolation).
+	counts := map[int32]int{}
+	for _, fd := range hostDomains {
+		counts[fd]++
 	}
-	return fdRemovalBalanceViolation(hostDomains), nil
+	if sn.Status.Ports != nil {
+		if removedDomain, ok := hostDomains[sn.Status.Ports.Management]; ok &&
+			!hostHasSurvivingSibling(ctx, r.Client, sn.Namespace, sns.Spec.ClusterName, sn.Status.Ports.Management, sn.Status.UUID) {
+			// Multi-node hosts (spec.socketsToUse / spec.nodesPerSocket > 1)
+			// run more than one StorageNode per physical host, all sharing
+			// this management IP -- only decrement the domain's count when
+			// no sibling StorageNode at this IP survives the removal, so
+			// removing one node on a shared host doesn't make the whole
+			// host (and a sibling still running on it) vanish from the count.
+			counts[removedDomain]--
+		}
+	}
+	return fdRemovalBalanceViolation(counts), nil
 }
 
 func (r *StorageNodeOpsReconciler) drainSuspend(

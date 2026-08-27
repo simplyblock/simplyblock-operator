@@ -451,44 +451,43 @@ func TestClusterFailureDomainHosts(t *testing.T) {
 func TestFdRemovalBalanceViolation(t *testing.T) {
 	tests := []struct {
 		name        string
-		hostDomains map[string]int32
+		counts      map[int32]int
 		wantBlocked bool
 	}{
 		{
 			name:        "empty (feature unused) is fine",
-			hostDomains: map[string]int32{},
+			counts:      map[int32]int{},
 			wantBlocked: false,
 		},
 		{
-			name: "balanced 2/2/3 stays within +/-1",
-			hostDomains: map[string]int32{
-				"h1": 0, "h2": 0,
-				"h3": 1, "h4": 1,
-				"h5": 2, "h6": 2, "h7": 2,
-			},
+			name:        "balanced 2/2/3 stays within +/-1",
+			counts:      map[int32]int{0: 2, 1: 2, 2: 3},
 			wantBlocked: false,
 		},
 		{
-			name: "1/2/3 exceeds +/-1 spread",
-			hostDomains: map[string]int32{
-				"h1": 0,
-				"h2": 1, "h3": 1,
-				"h4": 2, "h5": 2, "h6": 2,
-			},
+			name:        "1/2/3 exceeds +/-1 spread",
+			counts:      map[int32]int{0: 1, 1: 2, 2: 3},
 			wantBlocked: true,
 		},
 		{
-			name: "single host in a domain violates the 2-per-domain floor even within +/-1",
-			hostDomains: map[string]int32{
-				"h1": 0,
-				"h2": 1, "h3": 1,
-			},
+			name:        "single host in a domain violates the 2-per-domain floor even within +/-1",
+			counts:      map[int32]int{0: 1, 1: 2},
+			wantBlocked: true,
+		},
+		{
+			name: "a domain present with count zero violates the floor",
+			// Regression for the 2026-08-26 finding: A=2,B=2,C=1, C's only
+			// host removed. The caller must decrement C to 0 rather than
+			// drop it from the map entirely -- a dropped key would leave
+			// counts={A:2,B:2}, which both the +/-1 and floor checks below
+			// would wrongly accept.
+			counts:      map[int32]int{0: 2, 1: 2, 2: 0},
 			wantBlocked: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reason := fdRemovalBalanceViolation(tt.hostDomains)
+			reason := fdRemovalBalanceViolation(tt.counts)
 			if tt.wantBlocked && reason == "" {
 				t.Errorf("expected a violation reason, got none")
 			}
