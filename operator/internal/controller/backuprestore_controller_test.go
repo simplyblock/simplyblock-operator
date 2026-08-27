@@ -339,3 +339,96 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
+
+// A cross-cluster restore — one whose backup came from another cluster — used to
+// repoint the target cluster at the source's bucket first, through an endpoint
+// that no longer exists. The backup now carries its own location and the control
+// plane attaches a device for it, so the restore submits directly.
+func TestBackupRestoreCrossClusterSubmitsWithoutSourceSwitch(t *testing.T) {
+	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+
+	cluster := testCluster("default", "mycluster", "cluster-uuid")
+	backup := &simplyblockv1alpha1.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: "backup-sample", Namespace: "default"},
+		Status: simplyblockv1alpha1.StorageBackupStatus{
+			Phase:    simplyblockv1alpha1.BackupPhaseDone,
+			BackupID: "backup-uuid",
+			// Imported from elsewhere: this is what used to trigger source-switch.
+			SourceClusterUUID: "other-cluster-uuid",
+			PoolName:          "pool-a",
+			PoolUUID:          "pool-uuid",
+			Size:              1024,
+		},
+	}
+	restore := &simplyblockv1alpha1.BackupRestore{
+		ObjectMeta: metav1.ObjectMeta{Name: "restore-sample", Namespace: "default"},
+		Spec: simplyblockv1alpha1.BackupRestoreSpec{
+			ClusterName: "mycluster",
+			BackupRef:   simplyblockv1alpha1.BackupRef{Name: "backup-sample"},
+			PVCTemplate: simplyblockv1alpha1.PVCTemplate{
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resourceMustParse(t, "10Gi"),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	var paths []string
+	apiClient := &webapi.Client{
+		BaseURL: "http://simplyblock.test",
+		HttpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				paths = append(paths, req.URL.Path)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"lvol_id":"restored-lvol-uuid"}`)),
+				}, nil
+			}),
+		},
+	}
+
+	k8sClient := newTestClient(t, scheme,
+		[]client.Object{&simplyblockv1alpha1.BackupRestore{}},
+		cluster, backup, restore,
+	)
+
+	r := &BackupRestoreReconciler{
+		Client:    k8sClient,
+		Scheme:    scheme,
+		Recorder:  events.NewFakeRecorder(10),
+		APIClient: apiClient,
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "restore-sample", Namespace: "default"},
+	}); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	if !contains(paths, "/api/v2/clusters/cluster-uuid/backups/restore") {
+		t.Fatalf("restore was never submitted; calls: %v", paths)
+	}
+	for _, path := range paths {
+		if strings.Contains(path, "source-switch") || strings.HasSuffix(path, "/backups/sources") {
+			t.Errorf("called removed endpoint %s", path)
+		}
+	}
+
+	got := &simplyblockv1alpha1.BackupRestore{}
+	if err := k8sClient.Get(context.Background(),
+		client.ObjectKey{Name: "restore-sample", Namespace: "default"}, got); err != nil {
+		t.Fatalf("failed to get restore: %v", err)
+	}
+	if got.Status.RestoredLvolID != "restored-lvol-uuid" {
+		t.Fatalf("RestoredLvolID = %q", got.Status.RestoredLvolID)
+	}
+	if got.Status.Phase != simplyblockv1alpha1.RestorePhaseInProgress {
+		t.Fatalf("Phase = %q, want %q", got.Status.Phase, simplyblockv1alpha1.RestorePhaseInProgress)
+	}
+}
