@@ -184,6 +184,8 @@ func (r *StorageClusterOpsReconciler) reconcileActivate(
 		if reason := fdActivationDomainCountViolation(npcs, hostDomains); reason != "" {
 			log.Info("Cluster not ready for activation yet, waiting on failure-domain readiness",
 				"cluster", cluster.Name, "reason", reason)
+			r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, "FailureDomainNotReady", "FailureDomainNotReady",
+				"activation waiting on failure-domain readiness: %s", reason)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 	}

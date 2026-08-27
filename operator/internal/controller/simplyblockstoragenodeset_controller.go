@@ -1680,6 +1680,8 @@ func maybeActivateCluster(
 			if reason := fdActivationDomainCountViolation(npcs, hostDomains); reason != "" {
 				log.Info("Not activating yet, waiting on failure-domain readiness",
 					"cluster", clusterCR.Name, "reason", reason)
+				r.Recorder.Eventf(snCR, nil, corev1.EventTypeWarning, "FailureDomainNotReady", "FailureDomainNotReady",
+					"activation waiting on failure-domain readiness: %s", reason)
 				return nil
 			}
 		}
