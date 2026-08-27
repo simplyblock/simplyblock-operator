@@ -82,7 +82,7 @@ const (
 // (phases shutdown_called, draining, restart_called) simultaneously. When
 // failure domains are enabled (StorageCluster.spec.enableFailureDomains),
 // MaxFaultTolerance counts distinct active failure domains instead of raw
-// node count — see handleDetected for the full gating rule, including the
+// node count — see fdDrainGate for the full gating rule, including the
 // under-provisioned-domains fallback.
 //
 // OpenShift MachineConfigPool (MCP) pausing is not implemented here; instead,
@@ -155,15 +155,16 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 	// Failure-domain mode changes what MaxFaultTolerance counts against: with FD
 	// enabled, placement guarantees at most one erasure-coding chunk per domain,
 	// so the tolerable unit of loss is a whole domain, not an individual node
-	// (see handleDetected/activeDrainDomains).
+	// (see handleDetected, which delegates the accounting to fdDrainGate).
 	fdEnabled := clusterCR.Spec.EnableFailureDomains != nil && *clusterCR.Spec.EnableFailureDomains
 
 	// domainsNeededForFullDisjoint (ndcs+npcs) is the number of distinct failure
 	// domains required to place every stripe's chunks one-per-domain. Below that,
 	// at least one domain necessarily carries more than one chunk, so losing
-	// more than one domain at once can no longer be assumed safe — see the
-	// under-provisioned branch in handleDetected. 0 means "unknown" (scheme not
-	// yet reported), which handleDetected treats as not-enough-domains.
+	// more than one domain at once can no longer be assumed safe — see
+	// fdDrainGate's chunksPerDomain calculation. 0 means "unknown" (scheme not
+	// yet reported); fdDrainGate currently clamps that to chunksPerDomain=1 (the
+	// same as a fully-disjoint layout) rather than treating it conservatively.
 	domainsNeededForFullDisjoint := 0
 	// npcs is the failure-domain risk budget fdDrainGate spends against —
 	// see fdDrainGate for the full accounting rule.
@@ -1328,24 +1329,10 @@ func workerFailureDomain(snCR *simplyblockv1alpha1.StorageNodeSet, hostname stri
 	return 0, false
 }
 
-// activeDrainDomains maps a set of active worker hostnames to their
-// failure-domain groups. Workers with no domain assignment are excluded — the
-// caller falls back to the plain node-count gate for those.
-func activeDrainDomains(snCR *simplyblockv1alpha1.StorageNodeSet, activeWorkers map[string]bool) map[int32]bool {
-	domains := map[int32]bool{}
-	for w := range activeWorkers {
-		if d, ok := workerFailureDomain(snCR, w); ok {
-			domains[d] = true
-		}
-	}
-	return domains
-}
-
 // activeDrainDomainCounts maps a set of active worker hostnames to how many
 // of them fall in each failure domain — the per-domain node count fdDrainGate
-// needs to compute risk (as opposed to activeDrainDomains' mere presence
-// check). Workers with no domain assignment are excluded — the caller falls
-// back to the plain node-count gate for those.
+// needs to compute risk. Workers with no domain assignment are excluded — the
+// caller falls back to the plain node-count gate for those.
 func activeDrainDomainCounts(snCR *simplyblockv1alpha1.StorageNodeSet, activeWorkers map[string]bool) map[int32]int {
 	counts := map[int32]int{}
 	for w := range activeWorkers {
