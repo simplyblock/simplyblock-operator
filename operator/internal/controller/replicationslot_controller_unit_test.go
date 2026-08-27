@@ -362,11 +362,13 @@ func TestSlot_ReconcileReplicating_FailedOver_UpdatesState(t *testing.T) {
 	pol := readyReplicationPolicy()
 	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateReplicating))
 
+	// is_source=true: the source cluster's slot detects that its volume has
+	// failed over to the target cluster (forward failover path).
 	backendStatus := replVolumeReplicationStatus{
 		State:     "failed_over",
 		Direction: "target",
 		TargetNQN: "nqn.test",
-		IsSource:  false,
+		IsSource:  true,
 	}
 	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
 		if req.Method == http.MethodGet {
@@ -962,8 +964,10 @@ func TestSlot_ReconcileReplicating_DetectsCutoverDone_SetsDirectionTarget(t *tes
 		path := req.URL.Path
 		switch {
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			// is_source=true: this slot is the migration source; cutover_done means
+			// IO has moved to the target cluster (forward migration path).
 			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{
-				State: backendStateCutoverDone, TargetNQN: "nqn.target",
+				State: backendStateCutoverDone, TargetNQN: "nqn.target", IsSource: true,
 			})
 		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
 			_, _ = w.Write([]byte(`[]`))
@@ -986,5 +990,87 @@ func TestSlot_ReconcileReplicating_DetectsCutoverDone_SetsDirectionTarget(t *tes
 	}
 	if got.Status.Direction != string(simplyblockv1alpha1.ReplicationSlotDirectionTarget) {
 		t.Errorf("Direction = %q, want Target after cutover_done", got.Status.Direction)
+	}
+}
+
+// ---------- reconcileReplicating: failback completion (is_source=false) ----------
+
+// TestSlot_ReconcileReplicating_CutoverDone_Failback_SetsReplicatingSource verifies
+// that when the backend reports cutover_done with is_source=false — meaning this
+// volume is the TARGET of a completed failback — the slot transitions to
+// replicating/source rather than cutover_done/target.
+func TestSlot_ReconcileReplicating_CutoverDone_Failback_SetsReplicatingSource(t *testing.T) {
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateReplicating))
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Path
+		switch {
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/replication"):
+			// is_source=false: this volume received data back during failback;
+			// it is now the active source again.
+			_ = json.NewEncoder(w).Encode(replVolumeReplicationStatus{
+				State: backendStateCutoverDone, IsSource: false,
+			})
+		case req.Method == http.MethodGet && strings.HasSuffix(path, "/connect"):
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, cl := newSlotReconciler(t, slot, pol)
+
+	_, err := r.Reconcile(context.Background(), slotRequest("slot1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getSlot(t, cl)
+	if got.Status.State != string(simplyblockv1alpha1.ReplicationSlotStateReplicating) {
+		t.Errorf("State = %q, want Replicating (failback complete)", got.Status.State)
+	}
+	if got.Status.Direction != string(simplyblockv1alpha1.ReplicationSlotDirectionSource) {
+		t.Errorf("Direction = %q, want Source (failback complete)", got.Status.Direction)
+	}
+}
+
+// TestSlot_ReconcileReplicating_FailedOver_Failback_SetsReplicatingSource verifies
+// that when the backend reports failed_over with is_source=false — this volume is
+// the target of a completed failback cutover — the slot transitions to
+// replicating/source instead of failed_over/target.
+func TestSlot_ReconcileReplicating_FailedOver_Failback_SetsReplicatingSource(t *testing.T) {
+	pol := readyReplicationPolicy()
+	slot := newTestSlot(string(simplyblockv1alpha1.ReplicationSlotStateReplicating))
+
+	backendStatus := replVolumeReplicationStatus{
+		State:    "failed_over",
+		IsSource: false,
+	}
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			body, _ := json.Marshal(backendStatus)
+			_, _ = w.Write(body)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	r, cl := newSlotReconciler(t, slot, pol)
+
+	_, err := r.Reconcile(context.Background(), slotRequest("slot1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getSlot(t, cl)
+	if got.Status.State != string(simplyblockv1alpha1.ReplicationSlotStateReplicating) {
+		t.Errorf("State = %q, want Replicating (failback complete)", got.Status.State)
+	}
+	if got.Status.Direction != string(simplyblockv1alpha1.ReplicationSlotDirectionSource) {
+		t.Errorf("Direction = %q, want Source (failback complete)", got.Status.Direction)
 	}
 }
