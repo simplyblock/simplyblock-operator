@@ -324,7 +324,7 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 			// Attempt a late preconnect so the CSI node gets target NVMe paths even
 			// after the ANA flip — this limits IO downtime to ctrl_loss_tmo instead
 			// of indefinite path loss.
-			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, poolID, volumeID, clusterID, poolID, volumeID)
+			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, volumeID, clusterID, poolID, volumeID)
 		}
 	}
 
@@ -552,7 +552,7 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		// late preconnect so the CSI node gets target NVMe paths even after the ANA
 		// flip — this limits IO downtime to ctrl_loss_tmo instead of indefinite.
 		if status != nil && status.State == backendStateCutoverDone {
-			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, poolID, volumeID, proceedClusterID, proceedPoolID, proceedVolumeID)
+			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, volumeID, proceedClusterID, proceedPoolID, proceedVolumeID)
 		}
 		return r.applyAdvancedBackendStateForFailback(ctx, slot, status, proceedClusterID != clusterID)
 	}
@@ -687,16 +687,16 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 // happened, limiting IO downtime to ctrl_loss_tmo instead of indefinitely).
 // Errors are logged but not returned — the caller still advances slot state.
 //
-// clusterID/poolID/volumeID identify the slot's own volume (job naming, consumer
-// node lookup, image resolution). connClusterID/connPoolID/connVolumeID identify
-// the cluster to fetch connection strings from — for normal migration these are
-// the same; for failback the cutover_pending record lives on the target cluster
-// so connCluster* points there while cluster* still points at the source.
+// clusterID/volumeID identify the slot's own volume (job naming, consumer node
+// lookup, image resolution). connClusterID/connPoolID/connVolumeID identify the
+// cluster to fetch connection strings from — for normal migration these are the
+// same; for failback the cutover_pending record lives on the target cluster so
+// connCluster* points there while clusterID still points at the source.
 func (r *ReplicationSlotReconciler) reconcilePreconnect(
 	ctx context.Context,
 	slot *simplyblockv1alpha1.ReplicationSlot,
 	apiClient *webapi.Client,
-	clusterID, poolID, volumeID string,
+	clusterID, volumeID string,
 	connClusterID, connPoolID, connVolumeID string,
 ) {
 	log := logf.FromContext(ctx)
