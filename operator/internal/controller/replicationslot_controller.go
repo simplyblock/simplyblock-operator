@@ -259,18 +259,33 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 		r.Recorder.Eventf(slot, nil, corev1.EventTypeNormal, "CutoverPending", "CutoverPending",
 			"Volume %s cutover is pending", volumeID)
 	case backendStateCutoverDone:
-		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone)
-		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
-		slot.Status.Message = "Cutover done"
+		if !status.IsSource {
+			// This volume is the TARGET of a completed failback — it is live again as
+			// the source. Treat identically to reconcileSyncStatus so both paths agree.
+			slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateReplicating)
+			slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionSource)
+			slot.Status.Message = replMsgSlotReplicating
+		} else {
+			slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone)
+			slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
+			slot.Status.Message = "Cutover done"
+		}
 		changed = true
 	case backendStateFailedOver:
-		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateFailedOver)
-		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
-		slot.Status.TargetNQN = status.TargetNQN
-		slot.Status.Message = "Failed over to target cluster"
+		if !status.IsSource {
+			// Failback completed — IO returned to this volume; treat as replicating/source.
+			slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateReplicating)
+			slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionSource)
+			slot.Status.Message = replMsgSlotReplicating
+		} else {
+			slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateFailedOver)
+			slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
+			slot.Status.TargetNQN = status.TargetNQN
+			slot.Status.Message = "Failed over to target cluster"
+			r.Recorder.Eventf(slot, nil, corev1.EventTypeNormal, "FailedOver", "FailedOver",
+				"Volume %s has failed over; target NQN: %s", volumeID, status.TargetNQN)
+		}
 		changed = true
-		r.Recorder.Eventf(slot, nil, corev1.EventTypeNormal, "FailedOver", "FailedOver",
-			"Volume %s has failed over; target NQN: %s", volumeID, status.TargetNQN)
 	}
 
 	if ts := parseLastSnapshotAt(status.LastSnapshotAt); ts != nil {
