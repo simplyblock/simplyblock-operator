@@ -196,6 +196,60 @@ func TestEffectiveFailureDomain_ZeroWhenNotSet(t *testing.T) {
 	}
 }
 
+// ── TestEffectiveFailureDomainPtr ─────────────────────────────────────────────
+//
+// Regression for the 2026-08-27 incident: StorageNodeSetAddParams.FailureDomain
+// used to be a plain int with `omitempty`, so a node explicitly assigned
+// domain 0 had the field silently dropped from the JSON POSTed to the
+// backend -- the backend then saw no failure_domain at all, and that node's
+// add_node never completed (it sat with no status forever, blocking every
+// FDB worker queued behind it). effectiveFailureDomainPtr exists so the
+// caller can tell "domain 0" (a real, valid *int) apart from "not
+// configured" (nil, correctly omitted).
+
+func TestEffectiveFailureDomainPtr_NilWhenNotSet(t *testing.T) {
+	sns := &simplyblockv1alpha1.StorageNodeSet{}
+	sn := &simplyblockv1alpha1.StorageNode{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{WorkerNode: snTestWorker},
+	}
+	if got := effectiveFailureDomainPtr(sn, sns); got != nil {
+		t.Errorf("expected nil (not configured), got %v", *got)
+	}
+}
+
+func TestEffectiveFailureDomainPtr_NonNilForDomainZero(t *testing.T) {
+	sns := &simplyblockv1alpha1.StorageNodeSet{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			NodeFailureDomains: map[string]int32{snTestWorker: 0},
+		},
+	}
+	sn := &simplyblockv1alpha1.StorageNode{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{WorkerNode: snTestWorker},
+	}
+	got := effectiveFailureDomainPtr(sn, sns)
+	if got == nil {
+		t.Fatal("expected a non-nil pointer to 0 (explicitly configured), got nil")
+	}
+	if *got != 0 {
+		t.Errorf("expected *got == 0, got %d", *got)
+	}
+}
+
+func TestEffectiveFailureDomainPtr_NonNilForNonZeroDomain(t *testing.T) {
+	sns := &simplyblockv1alpha1.StorageNodeSet{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			NodeFailureDomains: map[string]int32{snTestWorker: 2},
+		},
+	}
+	sn := &simplyblockv1alpha1.StorageNode{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{WorkerNode: snTestWorker},
+	}
+	got := effectiveFailureDomainPtr(sn, sns)
+	if got == nil || *got != 2 {
+		t.Errorf("expected pointer to 2, got %v", got)
+	}
+}
+
 // ── TestCheckFailureDomain ────────────────────────────────────────────────────
 
 func TestCheckFailureDomain_BlocksWhenEnabledAndNotSet(t *testing.T) {
