@@ -47,6 +47,7 @@ const (
 	eventReasonImportSourceClusterLookupError  = "ImportSourceClusterLookupError"
 	eventReasonImportTargetClusterLookupError  = "ImportTargetClusterLookupError"
 	eventReasonImportExportFailed              = "ImportExportFailed"
+	eventReasonImportLocationLookupFailed      = "ImportLocationLookupFailed"
 	eventReasonImportFailed                    = "ImportFailed"
 	eventReasonImportStorageBackupCreateFailed = "ImportStorageBackupCreateFailed"
 )
@@ -59,8 +60,32 @@ type BackupImportReconciler struct {
 	APIClient *webapi.Client
 }
 
+// backupLocation is where a set of backups lives, in the control plane's own
+// wire vocabulary. Exactly the fields of its BackupLocation and no others: the
+// import endpoint forbids extras, and the backup-config response this is decoded
+// from carries credentials the import must not echo back.
+//
+// Pointers throughout so an absent field stays absent rather than being sent as
+// a zero the control plane would read as a deliberate choice — an unset region
+// means "let the SDK resolve it", which is not the same as "".
+type backupLocation struct {
+	BucketName      string  `json:"bucket_name"`
+	Region          *string `json:"region,omitempty"`
+	Endpoint        *string `json:"endpoint,omitempty"`
+	SecondaryTarget *int    `json:"secondary_target,omitempty"`
+	WithCompression *bool   `json:"with_compression,omitempty"`
+	SnapshotBackups *bool   `json:"snapshot_backups,omitempty"`
+	VerifyTLS       *bool   `json:"verify_tls,omitempty"`
+	UsePathStyle    *bool   `json:"use_path_style,omitempty"`
+}
+
+// importBackupsRequest carries the manifests and, separately, the bucket they
+// describe. A manifest states what its objects are but not how to reach them —
+// deliberately, so a replicated bucket imports as itself — so the reader has to
+// name the bucket, and here that is the source cluster's own.
 type importBackupsRequest struct {
 	Metadata json.RawMessage `json:"metadata"`
+	Location backupLocation  `json:"location"`
 }
 
 type importBackupsResponse struct {
@@ -139,13 +164,27 @@ func (r *BackupImportReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
 		}
 
+		// Where those manifests' objects actually are. Read from the source
+		// cluster, which is the only party that knows: the manifests describe
+		// their objects without saying which bucket holds them.
+		location, err := r.fetchBackupLocation(ctx, apiClient, srcClusterUUID)
+		if err != nil {
+			if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending,
+				fmt.Sprintf("Backup location lookup failed: %v", err)); patchErr != nil {
+				return ctrl.Result{}, patchErr
+			}
+			r.Recorder.Eventf(importCR, nil, corev1.EventTypeWarning, eventReasonImportLocationLookupFailed, eventReasonImportLocationLookupFailed,
+				"Failed to resolve the source cluster's backup location: %v", err)
+			return ctrl.Result{RequeueAfter: importReconcileRequeue}, nil
+		}
+
 		// Phase: Importing — register backup chain in target cluster.
 		if err := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhaseImporting,
 			"Importing backup chain into target cluster"); err != nil {
 			return ctrl.Result{}, err
 		}
 
-		imported, err := r.importBackup(ctx, apiClient, targetClusterUUID, exportedData)
+		imported, err := r.importBackup(ctx, apiClient, targetClusterUUID, exportedData, location)
 		if err != nil {
 			if patchErr := r.patchPhase(ctx, importCR, simplyblockv1alpha1.BackupImportPhasePending,
 				fmt.Sprintf("Import failed: %v", err)); patchErr != nil {
@@ -221,14 +260,50 @@ func (r *BackupImportReconciler) exportBackup(
 	return body, nil
 }
 
+// fetchBackupLocation reads where a cluster's backups live from its own backup
+// configuration.
+//
+// The source cluster is asked rather than the BackupImport CR because nothing in
+// the CR says: StorageCluster's spec.backup has no bucket field, so the bucket is
+// derived control-plane side and this endpoint is the only place it is stated.
+// The response also carries credentials; they are masked on the wire and dropped
+// here regardless, since backupLocation cannot hold them.
+func (r *BackupImportReconciler) fetchBackupLocation(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	clusterUUID string,
+) (backupLocation, error) {
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backup-config", url.PathEscape(clusterUUID))
+	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return backupLocation{}, err
+	}
+	if status == http.StatusNotFound {
+		return backupLocation{}, fmt.Errorf("source cluster %s has no backup configuration", clusterUUID)
+	}
+	if status >= 300 {
+		return backupLocation{}, fmt.Errorf("get backup config failed: status=%d body=%s", status, string(body))
+	}
+
+	var location backupLocation
+	if err := json.Unmarshal(body, &location); err != nil {
+		return backupLocation{}, fmt.Errorf("unmarshal backup config: %w", err)
+	}
+	if location.BucketName == "" {
+		return backupLocation{}, fmt.Errorf("source cluster %s reports no backup bucket", clusterUUID)
+	}
+	return location, nil
+}
+
 func (r *BackupImportReconciler) importBackup(
 	ctx context.Context,
 	apiClient *webapi.Client,
 	targetClusterUUID string,
 	exportedData json.RawMessage,
+	location backupLocation,
 ) (int, error) {
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/backups/import", url.PathEscape(targetClusterUUID))
-	reqBody := importBackupsRequest{Metadata: exportedData}
+	reqBody := importBackupsRequest{Metadata: exportedData, Location: location}
 	body, status, err := apiClient.Do(ctx, http.MethodPost, endpoint, reqBody)
 	if err != nil {
 		return 0, err
