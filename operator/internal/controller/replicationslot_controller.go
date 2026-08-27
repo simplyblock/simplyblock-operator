@@ -284,6 +284,12 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 			slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateReplicating)
 			slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionSource)
 			slot.Status.Message = replMsgSlotReplicating
+		} else if slot.Status.Direction == string(simplyblockv1alpha1.ReplicationSlotDirectionSource) {
+			// Slot is already on the source side — the source cluster is reporting a
+			// stale failed_over record from before the failback completed. The failback
+			// ANA flip has already moved IO back here; don't revert the slot.
+			log.Info("Source cluster reports stale failed_over; slot already replicating/source — ignoring",
+				"slot", slot.Name)
 		} else {
 			slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateFailedOver)
 			slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
