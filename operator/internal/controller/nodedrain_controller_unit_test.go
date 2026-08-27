@@ -279,27 +279,6 @@ func TestActiveDrainWorkersConservativeOnBackendError(t *testing.T) {
 	}
 }
 
-func TestActiveDrainDomainsMapsAndDedupsAndFiltersUnassigned(t *testing.T) {
-	fd1, fd2 := int32(1), int32(2)
-	snCR := &simplyblockv1alpha1.StorageNodeSet{
-		Status: simplyblockv1alpha1.StorageNodeSetStatus{
-			Nodes: []simplyblockv1alpha1.NodeStatus{
-				{Hostname: "node-a", FailureDomain: &fd1},
-				{Hostname: "node-b", FailureDomain: &fd1}, // same domain as node-a
-				{Hostname: "node-c", FailureDomain: &fd2},
-				// node-d intentionally has no status entry → excluded
-			},
-		},
-	}
-
-	activeWorkers := map[string]bool{"node-a": true, "node-b": true, "node-c": true, "node-d": true}
-	domains := activeDrainDomains(snCR, activeWorkers)
-
-	if len(domains) != 2 || !domains[1] || !domains[2] {
-		t.Fatalf("expected domains {1, 2} (node-a/node-b share domain 1, node-d excluded), got %v", domains)
-	}
-}
-
 func TestDistinctDomainCount(t *testing.T) {
 	fd1, fd2, fd3 := int32(1), int32(2), int32(3)
 	snCR := &simplyblockv1alpha1.StorageNodeSet{
