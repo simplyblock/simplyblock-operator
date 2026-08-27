@@ -848,8 +848,9 @@ spec:
                 type: string
               deleteSource:
                 description: |-
-                  DeleteSource instructs the backend to delete the source volume after a
-                  successful migration cutover. Only meaningful when action=migration.
+                  DeleteSource instructs the backend to delete the old volume after a
+                  successful cutover. For migration it deletes the original source volume;
+                  for failback it deletes the failed-over volume on the target cluster.
                 type: boolean
               ref:
                 description: |-

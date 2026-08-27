@@ -518,7 +518,11 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 
 		commitEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/commit",
 			rel.TargetClusterID, rel.TargetPoolID, rel.TargetLvolID)
-		body, status, commitErr := apiClient.Do(ctx, http.MethodPost, commitEndpoint, nil)
+		var commitBody map[string]interface{}
+		if ops.Spec.DeleteSource {
+			commitBody = map[string]interface{}{"delete_source": true}
+		}
+		body, status, commitErr := apiClient.Do(ctx, http.MethodPost, commitEndpoint, commitBody)
 		if commitErr != nil || status >= 300 {
 			if commitErr == nil {
 				commitErr = fmt.Errorf("status %d: %s", status, string(body))
