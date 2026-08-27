@@ -554,8 +554,19 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 		}
 
 		// Commit accepted — mark the slot cutover_pending so the slot controller
-		// begins polling. The backend drives it through cutover_done; the slot
-		// controller then transitions to replicating/source once ANA has switched.
+		// begins polling. Store the target volume handle so reconcileCutoverPending
+		// polls the target cluster (where the task runs) rather than the source
+		// cluster (which only sees the old failed_over state).
+		metaPatch := client.MergeFrom(slot.DeepCopy())
+		if slot.Annotations == nil {
+			slot.Annotations = make(map[string]string)
+		}
+		slot.Annotations[annotFailbackTarget] = fmt.Sprintf("%s:%s:%s",
+			rel.TargetClusterID, rel.TargetPoolID, rel.TargetLvolID)
+		if err := r.Patch(ctx, slot, metaPatch); err != nil {
+			log.Error(err, "failed to set failback-target annotation", "slot", slot.Name)
+		}
+
 		slotPatch := client.MergeFrom(slot.DeepCopy())
 		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending)
 		slot.Status.Message = fmt.Sprintf("Failback commit queued via ReplicationOps %s", ops.Name)
