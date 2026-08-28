@@ -552,18 +552,22 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
 	}
 	if status == nil || status.State != backendStateCutoverPending {
+		// During failback the target cluster always has the stale failed_over record
+		// from the original failover. That record exists from the moment the slot is
+		// placed in cutover_pending K8s state — spanning the entire shrink phase —
+		// until _prepare_cutover creates the new cutover_pending record. Treating
+		// failed_over as "ANA flip done" here would transition the slot to
+		// replicating/source while IO is still on the target cluster and shrink rounds
+		// are still running. Return and wait until cutover_pending or cutover_done
+		// actually appears.
+		if proceedClusterID != clusterID && status != nil && status.State == backendStateFailedOver {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
 		// Backend advanced past cutover_pending before the preconnect Job could be
 		// created (safety timer fired, or we missed the window entirely). Attempt a
-		// late preconnect so the CSI node gets target NVMe paths even after the ANA
-		// flip — this limits IO downtime to ctrl_loss_tmo instead of indefinite.
-		//
-		// For failback the target-cluster API always reports failed_over (the old
-		// failover record), never cutover_done — that state lives on the source
-		// cluster (clusterID) after _finalize runs the UUID swap. So both states
-		// signal "ANA flip done" and we pre-connect source-cluster paths in both
-		// cases. For non-failback proceedClusterID == clusterID, so the distinction
-		// is irrelevant.
-		if status != nil && (status.State == backendStateCutoverDone || status.State == backendStateFailedOver) {
+		// late preconnect so the CSI node gets source-cluster NVMe paths even after
+		// the ANA flip — limits IO downtime to ctrl_loss_tmo instead of indefinite.
+		if status != nil && status.State == backendStateCutoverDone {
 			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, volumeID, clusterID, poolID, volumeID)
 		}
 		return r.applyAdvancedBackendStateForFailback(ctx, slot, status, proceedClusterID != clusterID)
@@ -587,45 +591,12 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 
 	jobName := replSlotPreconnectJobName(volumeID)
 
-	// Check if the preconnect Job already exists.
 	var existingJob batchv1.Job
-	if err := r.Get(ctx, types.NamespacedName{Namespace: slot.Namespace, Name: jobName}, &existingJob); err == nil {
-		// Job exists — check its terminal state. We always check, even when the
-		// annotation is already set, so that a previously-failed callCutoverProceed
-		// is retried rather than silently dropped: the backend waits indefinitely for
-		// the proceed signal, so a missed call leaves the slot permanently stuck.
-		for _, c := range existingJob.Status.Conditions {
-			if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
-				// Claim the signal by writing the annotation before the API call.
-				// Two concurrent reconciles may both see the job complete before
-				// either patch lands; the one whose patch wins becomes the sole
-				// caller of callCutoverProceed — the loser's patch fails (conflict),
-				// and it falls back to the 5 s wait.
-				result, patchErr := r.markCutoverProceedSignaled(ctx, slot)
-				if patchErr != nil {
-					// Conflict: another reconcile already claimed it.
-					return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-				}
-				if c.Type == batchv1.JobComplete {
-					log.Info("Preconnect job succeeded; signalling backend to proceed", "job", jobName)
-				} else {
-					log.Info("Preconnect job failed; signalling backend to proceed anyway", "job", jobName)
-				}
-				if err := r.callCutoverProceed(ctx, apiClient, proceedClusterID, proceedPoolID, proceedVolumeID); err != nil {
-					log.Error(err, "POST cutover-proceed failed", "slot", slot.Name)
-				}
-				// Delete the job immediately now that the signal is sent — don't
-				// leave completed jobs accumulating when there are many PVCs.
-				if delErr := r.Delete(ctx, &existingJob, client.PropagationPolicy(metav1.DeletePropagationBackground)); delErr != nil && !apierrors.IsNotFound(delErr) {
-					log.Error(delErr, "Failed to delete preconnect job after signal", "job", jobName)
-				}
-				return result, nil
-			}
-		}
-		// Job is still running or pending — wait for it.
-		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-	} else if !apierrors.IsNotFound(err) {
-		return ctrl.Result{}, fmt.Errorf("get preconnect job %q: %w", jobName, err)
+	switch getErr := r.Get(ctx, types.NamespacedName{Namespace: slot.Namespace, Name: jobName}, &existingJob); {
+	case getErr == nil:
+		return r.handleExistingPreconnectJob(ctx, slot, apiClient, &existingJob, proceedClusterID, proceedPoolID, proceedVolumeID)
+	case !apierrors.IsNotFound(getErr):
+		return ctrl.Result{}, fmt.Errorf("get preconnect job %q: %w", jobName, getErr)
 	}
 
 	// Job not found — either the signal was already sent and the job was deleted,
@@ -690,6 +661,50 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 	r.Recorder.Eventf(slot, nil, corev1.EventTypeNormal, "PreconnectStarted", "PreconnectStarted",
 		"Connecting target NVMe paths on node %s before cutover of volume %s", node, volumeID)
 
+	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+}
+
+// handleExistingPreconnectJob inspects a preconnect Job that already exists and
+// signals the backend to proceed once the Job has completed (pass or fail).
+//
+// We always re-check the job state even when the annotation is set, so that a
+// previously-failed callCutoverProceed is retried rather than silently dropped:
+// the backend waits indefinitely for the proceed signal, so a missed call leaves
+// the slot permanently stuck.
+//
+// The annotation is written before the API call to serialise concurrent reconciles:
+// the one whose patch wins becomes the sole caller of callCutoverProceed; the
+// loser's patch fails with a conflict and falls back to the 5 s wait.
+func (r *ReplicationSlotReconciler) handleExistingPreconnectJob(
+	ctx context.Context,
+	slot *simplyblockv1alpha1.ReplicationSlot,
+	apiClient *webapi.Client,
+	job *batchv1.Job,
+	proceedClusterID, proceedPoolID, proceedVolumeID string,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	for _, c := range job.Status.Conditions {
+		if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
+			result, patchErr := r.markCutoverProceedSignaled(ctx, slot)
+			if patchErr != nil {
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+			if c.Type == batchv1.JobComplete {
+				log.Info("Preconnect job succeeded; signalling backend to proceed", "job", job.Name)
+			} else {
+				log.Info("Preconnect job failed; signalling backend to proceed anyway", "job", job.Name)
+			}
+			if err := r.callCutoverProceed(ctx, apiClient, proceedClusterID, proceedPoolID, proceedVolumeID); err != nil {
+				log.Error(err, "POST cutover-proceed failed", "slot", slot.Name)
+			}
+			// Delete the job immediately — don't leave completed jobs accumulating.
+			if delErr := r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground)); delErr != nil && !apierrors.IsNotFound(delErr) {
+				log.Error(delErr, "Failed to delete preconnect job after signal", "job", job.Name)
+			}
+			return result, nil
+		}
+	}
+	// Job still running or pending.
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
@@ -886,8 +901,8 @@ func (r *ReplicationSlotReconciler) applyAdvancedBackendStateForFailback(
 	}
 
 	switch status.State {
-	case backendStateCutoverDone, backendStateFailedOver:
-		// Failback ANA flip complete — IO is back on the original source cluster.
+	case backendStateCutoverDone:
+		// Failback ANA flip confirmed — IO is back on the original source cluster.
 		// Clear the failback annotations first (metadata patch), then update status.
 		// Doing them in one r.Status().Patch() would silently discard the annotation
 		// changes because the status subresource ignores metadata writes.
@@ -908,6 +923,14 @@ func (r *ReplicationSlotReconciler) applyAdvancedBackendStateForFailback(
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{RequeueAfter: replSlotRequeueReplicating}, nil
+	case backendStateFailedOver:
+		// The target cluster is returning the stale failed_over record from the
+		// original failover. This is the normal state throughout the shrink phase
+		// — _prepare_cutover has not run yet and no cutover_pending record exists.
+		// Do not transition the slot; wait for the real cutover_done to appear.
+		log.Info("Failback: target cluster still shows old failed_over record; shrink phase pending",
+			"slot", slot.Name)
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	default:
 		// Still in an intermediate state (e.g. backend not yet cutover_done); wait.
 		log.Info("Failback: unexpected backend state while waiting for cutover_done",

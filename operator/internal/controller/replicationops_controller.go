@@ -426,9 +426,13 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 //     the source connection string and switches ANA so the source becomes the
 //     active path again (202 Accepted; the job runs asynchronously).
 //
-// The ReplicationOps succeeds as soon as the commit is accepted. Each slot is
-// marked cutover_pending so the slot controller starts polling; it drives the
-// slot to replicating/source once the backend reports cutover_done.
+// Phases:
+//   - CommitPhase (subphase != "WaitingForSlots"): POST failback + commit per
+//     slot, mark slots cutover_pending, advance subphase to WaitingForSlots.
+//   - WaitPhase (subphase == "WaitingForSlots"): poll slots until every slot
+//     is replicating/source, then succeed. This means Succeeded only appears
+//     once the ANA flip and UUID swap are complete end-to-end.
+//
 // No source cluster shutdown is required.
 func (r *ReplicationOpsReconciler) reconcileFailback(
 	ctx context.Context,
@@ -437,6 +441,10 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 	apiClient *webapi.Client,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+
+	if ops.Status.Subphase == "WaitingForSlots" {
+		return r.reconcileFailbackWait(ctx, ops, policy)
+	}
 
 	slots, err := r.collectAffectedSlots(ctx, ops, policy)
 	if err != nil {
@@ -583,9 +591,52 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 		return r.failOps(ctx, ops, "Failback failed for one or more volumes; see results for details")
 	}
 	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "FailbackCommitQueued", "FailbackCommitQueued",
-		"Failback commit queued for policy %s (%d volumes); slots transitioning to cutover_done",
+		"Failback commit queued for policy %s (%d volumes); waiting for slots to reach replicating/source",
 		policy.Name, len(slots))
-	return r.succeedOps(ctx, ops, "Failback accepted; slots transitioning to replicating/source", results)
+	r.setSubphase(ctx, ops, "WaitingForSlots")
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+// reconcileFailbackWait polls slots until every one is replicating/source, then
+// marks the ReplicationOps Succeeded. It is entered on every reconcile when
+// subphase == "WaitingForSlots".
+func (r *ReplicationOpsReconciler) reconcileFailbackWait(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	policy *simplyblockv1alpha1.ReplicationPolicy,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	slots, err := r.collectAffectedSlots(ctx, ops, policy)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	results := make([]simplyblockv1alpha1.ReplicationOpsResult, 0, len(slots))
+	allDone := true
+	for i := range slots {
+		slot := &slots[i]
+		if slot.Status.State == string(simplyblockv1alpha1.ReplicationSlotStateReplicating) &&
+			slot.Status.Direction == string(simplyblockv1alpha1.ReplicationSlotDirectionSource) {
+			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
+				SlotRef: slot.Name,
+				Status:  string(simplyblockv1alpha1.ReplicationOpsResultSucceeded),
+			})
+		} else {
+			allDone = false
+		}
+	}
+
+	if !allDone {
+		log.Info("Failback: waiting for slots to reach replicating/source",
+			"ops", ops.Name, "total", len(slots), "done", len(results))
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "FailbackComplete", "FailbackComplete",
+		"Failback complete for policy %s (%d volumes); all slots replicating/source",
+		policy.Name, len(slots))
+	return r.succeedOps(ctx, ops, "Failback complete; all volumes are replicating/source", results)
 }
 
 // reconcileMigration drives a planned online cutover (mode=migration).
