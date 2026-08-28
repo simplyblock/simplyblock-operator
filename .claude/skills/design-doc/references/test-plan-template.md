@@ -1,11 +1,11 @@
 # Test Plan Template
 
 The test plan is the **only** home for test scenarios. The design doc points
-here; nothing about a scenario is restated there. Table style follows
-`design-issue-130-auto-rebalancing.md` §15 — numbered rows, a `Type` column,
+here, and nothing about a scenario is restated there. Table style follows
+`design-issue-130-auto-rebalancing.md` §15: numbered rows, a `Type` column,
 grouped per unit under test, each group citing the design section it verifies.
 
-Copy the skeleton, drop what does not apply. Bracketed `<…>` is a placeholder;
+Copy the skeleton, drop what does not apply. Bracketed `<…>` is a placeholder,
 the HTML comments say what belongs there and are not part of the output.
 
 ---
@@ -120,7 +120,7 @@ File: `<internal/<pkg>/<pkg>_test.go>`
 **Test concept:**
 1. <setup>
 2. <the injection or action>
-3. <the assertion, as an observable — status field, event, CR count, I/O result>
+3. <the assertion, as an observable: status field, event, CR count, I/O result>
 
 **Recommended fix:**
 ```go
@@ -175,9 +175,9 @@ File: `<internal/<pkg>/<pkg>_test.go>`
 
 Walk this list against the design before declaring the plan complete. Each item
 becomes a numbered row with a `Type`, or a row in "What Is Not Yet Covered."
-Nothing on this list may simply go unmentioned — most `Boundary` and `Negative`
+Nothing on this list may simply go unmentioned, because most `Boundary` and `Negative`
 rows come from here. The `test-scenarios` skill's `references/axes.md` and
-`references/negatives.md` are the long form of this list; use them when the
+`references/negatives.md` are the long form of this list. Use them when the
 matrix needs to be exhaustive rather than adequate.
 
 **Per state / sub-phase**
@@ -186,9 +186,9 @@ matrix needs to be exhaustive rather than adequate.
 - Terminal state re-reconcile is a no-op (`Succeeded`, `Failed`).
 - Operator restart in this state resumes correctly and does not duplicate the
   side effect (the `Triggered` / write-ahead guard).
-- User cancels or clears the action in this state — is the target restored?
+- User cancels or clears the action in this state: is the target restored?
 
-**Control-plane interaction** — every item asserts this repository's response to
+**Control-plane interaction:** every item asserts this repository's response to
 a faked control plane, never the control plane's own behavior
 
 - Mutating call returns 4xx (403, 404, 409) → requeue vs fail, and which.
@@ -201,7 +201,7 @@ a faked control plane, never the control plane's own behavior
 
 **Concurrency**
 
-- Two operations targeting the same object — second blocks, does not interleave.
+- Two operations targeting the same object: second blocks, does not interleave.
 - Operations on two different objects run independently, no cross-locking.
 - Spec mutated mid-operation (target changed under a running action).
 - Stale informer cache does not trigger a spurious re-run.
@@ -212,16 +212,16 @@ a faked control plane, never the control plane's own behavior
   long inputs.
 - Filtering rules (system volumes, pinned objects, unmanaged objects) exclude
   and surface exactly what the design says.
-- Defaults applied when optional fields are unset; immutable fields rejected.
+- Defaults applied when optional fields are unset, and immutable fields rejected.
 
 **Kubernetes surface**
 
 - Events emitted with the reasons the design's Observability table promises.
 - Status conditions and phases match the state machine.
-- RBAC is sufficient — the controller does not fail on a forbidden verb.
+- RBAC is sufficient: the controller does not fail on a forbidden verb.
 - Finalizer removed on every terminal path, including the failure paths.
 
-**Boundaries** — the rows most often missing
+**Boundaries:** the rows most often missing
 
 - Exactly at a threshold (`==`), and one ε either side.
 - Empty collection, single element, two elements.
@@ -231,6 +231,6 @@ a faked control plane, never the control plane's own behavior
 **Under load and over time**
 
 - Sustained fio workload across the operation: no I/O errors and verified data
-  integrity — say how correctness is checked, not just that I/O continued.
-- Scale: many objects (100+ volumes/CRs) — no limits hit, note time-to-complete.
+  integrity. Say how correctness is checked, not just that I/O continued.
+- Scale: many objects (100+ volumes/CRs), where no limits are hit. Note the time to complete.
 - Idle cost: reconcile churn and API request rate when nothing is happening.

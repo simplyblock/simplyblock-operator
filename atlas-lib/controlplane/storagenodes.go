@@ -83,7 +83,7 @@ func (c *Client) GetStorageNode(ctx context.Context, clusterID, nodeID string) (
 	if err != nil {
 		return StorageNode{}, fmt.Errorf("get storage node %s: %w", nodeID, err)
 	}
-	// Detail is untyped in the spec; the body is a StorageNodeDTO.
+	// Detail is untyped in the spec, and the body is a StorageNodeDTO.
 	d, err := decodeBody[cpapi.StorageNodeDTO]("storage node "+nodeID, resp.StatusCode(), resp.Body)
 	if err != nil {
 		return StorageNode{}, err
@@ -105,7 +105,7 @@ func (c *Client) ListStorageNodeNICs(ctx context.Context, clusterID, nodeID stri
 	if err != nil {
 		return nil, fmt.Errorf("list NICs for node %s: %w", nodeID, err)
 	}
-	// The `/nics` body is untyped in the spec; decode its documented shape.
+	// The `/nics` body is untyped in the spec, so decode its documented shape.
 	raw, err := decodeBody[[]nicEntry]("NICs for node "+nodeID, resp.StatusCode(), resp.Body)
 	if err != nil {
 		return nil, err

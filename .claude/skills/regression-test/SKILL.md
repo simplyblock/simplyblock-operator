@@ -12,7 +12,7 @@ exist, it has to be **red before the fix**, and it has to say which bug it
 belongs to.
 
 The order is not a style preference. A test written after the fix proves only
-that the code passes its own author's expectations; it never demonstrated it can
+that the code passes its own author's expectations. It never demonstrated it can
 fail, so it may assert nothing. A test that goes red first, for the reason the
 bug describes, is the only kind that pins the behavior.
 
@@ -52,7 +52,7 @@ Identifier, in order of preference:
 
 - A GitHub issue number: `Regression: #444`.
 - A date-based id when there is no issue:
-  `Regression: 2026-08-17-vmig-validate-path-leak` — the date the bug was
+  `Regression: 2026-08-17-vmig-validate-path-leak`, with the date the bug was
   diagnosed plus a short slug. Unique, sortable, and it survives being copied
   into a commit message.
 - Add the fixing commit once it exists, if it helps a reader:
@@ -69,14 +69,14 @@ rg -n 'Regression:' --type go
 
 **Also add the row to the test plan.** `operator/docs/tests/test-plan-<area>.md`
 carries a numbered scenario matrix whose `Type` column has a `Regression` value
-for exactly this — the scenario, the type, and the test function name, with the
+for exactly this: the scenario, the type, and the test function name, with the
 issue cited in the scenario text. A regression test that is not in the matrix is
 invisible to the next person auditing coverage. See the `design-doc` and
 `test-scenarios` skills.
 
 ## What behavioral means
 
-Valid — the reconciler runs and the test asserts what it did:
+Valid, because the reconciler runs and the test asserts what it did:
 
 ```go
 res, err := r.Reconcile(ctx, req)
@@ -88,7 +88,7 @@ g.Expect(c.Get(ctx, key, updated)).To(Succeed())
 g.Expect(updated.Status.ActionStatus.SubPhase).To(Equal("Suspending"))
 ```
 
-Valid — an API contract, asserted by what the control plane saw. The call count
+Valid: an API contract, asserted by what the control plane saw. The call count
 is the point: it is what distinguishes "never acted" from "acted twice":
 
 ```go
@@ -98,21 +98,21 @@ g.Expect(suspendCalls).To(Equal(1))
 g.Expect(recorder.Events).To(ContainElement(ContainSubstring("NodeSuspended")))
 ```
 
-Valid — a shared contract helper, when several reconcilers owe the same
+Valid: a shared contract helper, when several reconcilers owe the same
 behavior. `operator/internal/controller/reconcile_contract_test.go` is the
 existing example (`expectIgnoreNotFoundNoRequeue`).
 
-**Invalid** — asserting the shape of the fix rather than the absence of the bug:
+**Invalid:** asserting the shape of the fix rather than the absence of the bug:
 
 ```go
 // NEVER. This passes if the helper is called and the paths still leak.
 g.Expect(releasePathsCalled).To(BeTrue())
 ```
 
-**Invalid** — asserting on source text, a log line's exact wording, or a
+**Invalid:** asserting on source text, a log line's exact wording, or a
 generated file's contents when the behavior is what broke. If the only test you
 can think of is one of those, the behavior is not observable yet: make it
-observable — a status field, a condition, an event, a counter on the fake — and
+observable (a status field, a condition, an event, or a counter on the fake) and
 assert that.
 
 ## Choosing the level
@@ -127,11 +127,11 @@ assert that.
 
 Prefer the lowest level that can still fail for the bug's reason. A unit test
 with a fake client and a mock control plane can drive states a live cluster
-reaches only by luck — an operator restart mid-sub-phase, a 5xx on the third
-call, a stale informer cache — and it runs in milliseconds.
+reaches only by luck (an operator restart mid-sub-phase, a 5xx on the third
+call, or a stale informer cache) and it runs in milliseconds.
 
 `internal/controller/test_helpers_test.go` provides `newTestScheme`,
-`newTestClient`, and `testCluster`; use them rather than rebuilding a scheme.
+`newTestClient`, and `testCluster`. Use them rather than rebuilding a scheme.
 `sigs.k8s.io/controller-runtime/pkg/client/interceptor` is how an existing test
 injects a client error, and `httptest.NewServer` with a route-counting handler is
 how it fakes the control plane.
@@ -157,12 +157,12 @@ make -C csi-driver e2e-test E2E_TEST_ARGS='--focus=SPDKCSI-NVMEOF'
 ```
 
 `make -C operator test` runs `manifests generate fmt vet` first, so it can change
-tracked files — check `git status` after, not before.
+tracked files, so check `git status` after, not before.
 
 ### Race and order
 
 - **`-race` is not on by default in the operator suite.** `atlas-lib` and
-  `csi-driver` run with it; the operator does not. For a bug about concurrent
+  `csi-driver` run with it, and the operator does not. For a bug about concurrent
   reconciles, a shared map, or a cached client, run
   `go test -race ./internal/...` explicitly. A regression test for a data race
   that is not run under `-race` is not a regression test.
@@ -178,7 +178,7 @@ tracked files — check `git status` after, not before.
 1. **Reproduce first.** Get the bug to fail in front of you: the failing CI job,
    the operator log, the control-plane log, the `kubectl describe` output, the
    artifact directory of the run that broke. Understand the mechanism before
-   writing an assertion — a test written against a guess pins the guess.
+   writing an assertion, because a test written against a guess pins the guess.
 2. **Write the failing test**, with its `Regression:` marker, at the lowest level
    that can fail for the bug's reason.
 3. **Run it against the unfixed tree.** Confirm red, and read the message: it
@@ -186,7 +186,7 @@ tracked files — check `git status` after, not before.
 4. **Write the fix.**
 5. **Run it again.** Green.
 6. **Run the whole package, then the component.** `go test ./internal/...`, then
-   `make -C operator test`. A new case can expose an old leak; that is the
+   `make -C operator test`. A new case can expose an old leak, and that is the
    feature working, and it is this change's problem.
 7. **Add the matrix row** to the relevant test plan: ID, scenario, `Regression`,
    and the test function name.
@@ -206,13 +206,13 @@ Do this instead:
 - **Test the nearest observable contract.** The mechanism may be out of reach
   while its precondition is not. If the bug was that more than one freeze window
   per migration silently loses writes, the operator-side contract is how many
-  freeze-inducing calls the reconciler issues for one migration — countable
+  freeze-inducing calls the reconciler issues for one migration, countable
   against a mock control plane. If it was a validation Job leaving NVMe paths
   connected, the contract is that the reconciler issues the disconnect for every
   path it connected, on every terminal path including failure and cancellation.
   That is what keeps the fix from being undone.
 - **Write the live-cluster scenario down** as an `E-nn` or `M-nn` row in the test
-  plan, with the reproduction recipe as a numbered test concept — see
+  plan, with the reproduction recipe as a numbered test concept. See
   `test-scenarios`. An honest "not automated, verified on a 3-node cluster with
   fio verify over 40 migrations" is worth more than a test that cannot fail, as
   long as it is written where the next person looks.
@@ -223,11 +223,11 @@ Do this instead:
 
 - **Test after fix.** It never demonstrated it can fail.
 - **Asserting the fix's shape instead of the bug's absence.** Assert the paths
-  are released; do not assert that the release helper was called — unless the
+  are released. Do not assert that the release helper was called, unless the
   call itself is the contract, as with an idempotent POST's call count.
 - **Loosening an assertion to get green.** If the test is wrong, fix the test and
   say why. If the fix is wrong, fix the fix.
-- **A test that passes on the unfixed tree.** Delete it and start again; it is
+- **A test that passes on the unfixed tree.** Delete it and start again, because it is
   worse than nothing, because it looks like coverage.
 - **A concurrency regression test that never runs under `-race`.**
 - **A regression test with no marker and no matrix row.** In a year it is

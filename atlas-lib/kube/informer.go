@@ -15,8 +15,8 @@ import (
 )
 
 // ResolverConfig holds the inputs for an informer-backed Resolver. It is a
-// struct (rather than positional parameters) so new options — additional
-// informers, namespace scoping, custom index names — can be added later
+// struct (rather than positional parameters) so new options such as additional
+// informers, namespace scoping, or custom index names can be added later
 // without breaking callers.
 type ResolverConfig struct {
 	// PersistentVolumes is the shared informer for cluster PVs. Required.
@@ -36,9 +36,9 @@ type ResolverConfig struct {
 }
 
 // InformerResolver implements Resolver against client-go shared informers.
-// It works with any source whose informers satisfy cache.SharedIndexInformer
-// — a standalone SharedInformerFactory (CSI driver) or a controller-runtime
-// manager cache (operator) — so both consumers share one resolution
+// It works with any source whose informers satisfy cache.SharedIndexInformer,
+// whether a standalone SharedInformerFactory (CSI driver) or a controller-runtime
+// manager cache (operator), so both consumers share one resolution
 // implementation instead of keeping a second cache.
 type InformerResolver struct {
 	pv  cache.SharedIndexInformer
@@ -146,7 +146,7 @@ func (r *InformerResolver) AttachmentsForPV(ctx context.Context, pvName string) 
 
 // StorageClassByName returns the StorageClass named name from the cache. Only
 // simplyblock-provisioned classes are indexed (see StorageClassNameKeys), so a
-// foreign class — even if present in the informer store — resolves to
+// foreign class, even if present in the informer store, resolves to
 // errs.ErrNotFound. It returns errs.ErrUnsupported if the resolver was built
 // without a StorageClass informer.
 func (r *InformerResolver) StorageClassByName(ctx context.Context, name string) (*storagev1.StorageClass, error) {

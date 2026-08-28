@@ -7,16 +7,16 @@ import (
 
 // DeviceSelector narrows a set of attached namespace devices. Every field is
 // optional and all set fields are ANDed, so the zero selector matches
-// everything; each one on its own is a lookup key the resolvers already expose
+// everything. Each one on its own is a lookup key the resolvers already expose
 // (ByUUID, ByNamespace, ByDevicePath), and combined they express the cases a
-// single key cannot — notably "namespace N of subsystem NQN," which is how
+// single key cannot, notably "namespace N of subsystem NQN," which is how
 // simplyblock's namespaced lvols share one subsystem.
 //
 // UUID comparison is case-insensitive: sysfs reports namespace UUIDs in lower
 // case while the control plane may hand them over upper-cased.
 type DeviceSelector struct {
 	NQN        string      // subsystem NQN
-	NSID       NamespaceID // namespace id; 0: any
+	NSID       NamespaceID // namespace id, where 0 means any
 	UUID       string      // namespace UUID (simplyblock: the lvol UUID)
 	DevicePath string      // block device node, e.g., "/dev/nvme0n1"
 }

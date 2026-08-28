@@ -110,8 +110,8 @@ func TestInformerResolver_StorageClassByName_ManagedOnly(t *testing.T) {
 		t.Errorf("got %q, want sb", got.Name)
 	}
 
-	// A foreign class is in the store but not indexed, so it never resolves —
-	// the informer only surfaces simplyblock-provisioned StorageClasses.
+	// A foreign class is in the store but not indexed, so it never resolves. The
+	// informer only surfaces simplyblock-provisioned StorageClasses.
 	if _, err := r.StorageClassByName(context.Background(), "foreign"); !errors.Is(err, errs.ErrNotFound) {
 		t.Errorf("foreign class: err = %v, want ErrNotFound", err)
 	}

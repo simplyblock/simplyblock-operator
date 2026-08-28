@@ -9,7 +9,7 @@ import (
 	"github.com/simplyblock/atlas/errs"
 )
 
-// dev builds a Device with the given namespace name/uuid; the sysfs path is
+// dev builds a Device with the given namespace name and UUID. The sysfs path is
 // derived from the name so distinct names are distinct identities.
 func dev(name, uuid string) Device {
 	return Device{
@@ -179,8 +179,8 @@ func TestCoTenants(t *testing.T) {
 	})
 
 	t.Run("the same namespace per controller is one volume", func(t *testing.T) {
-		// Without a multipath head a namespace appears once per controller;
-		// those repeats are the same volume, not another tenant.
+		// Without a multipath head a namespace appears once per controller,
+		// and those repeats are the same volume, not another tenant.
 		repeated := Subsystem{ID: "nvme-subsys2", NQN: "nqn.test:repeated", Namespaces: []Namespace{
 			{ID: 1, Name: "nvme2c0n1", UUID: "vol-y"},
 			{ID: 1, Name: "nvme2c1n1", UUID: "vol-y"},
@@ -203,7 +203,7 @@ func TestCoTenants(t *testing.T) {
 	})
 
 	t.Run("the method sees a namespace attached since the snapshot", func(t *testing.T) {
-		// d was resolved when it was alone on its subsystem — the very case
+		// d was resolved when it was alone on its subsystem, the very case
 		// where reading the carried snapshot would wrongly allow a disconnect.
 		alone := Subsystem{ID: sharedSubsys.ID, NQN: sharedSubsys.NQN,
 			Namespaces: sharedSubsys.Namespaces[:1]}
@@ -283,7 +283,7 @@ func (c *countingResolver) ListWithSelector(ctx context.Context, sel DeviceSelec
 	return c.fakeDeviceResolver.ListWithSelector(ctx, sel)
 }
 
-// fakeDeviceResolver returns a fixed device list from List; other methods are
+// fakeDeviceResolver returns a fixed device list from List. Other methods are
 // unused here.
 type fakeDeviceResolver struct{ devs []Device }
 
@@ -307,7 +307,7 @@ func TestDeviceSiblings_ReScans(t *testing.T) {
 	a2 := dev("nvme1n1", volA)
 	r := &fakeDeviceResolver{devs: []Device{a1, dev("nvme2n1", "other")}}
 
-	// The device was resolved when it was the volume's only block device; the
+	// The device was resolved when it was the volume's only block device, so the
 	// method must see the path that showed up since, not that snapshot.
 	bound := a1.WithResolver(r)
 	if got, err := bound.Siblings(context.Background()); err != nil || len(got) != 0 {

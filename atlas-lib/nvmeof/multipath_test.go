@@ -84,8 +84,8 @@ func TestConnectPaths_AttachesInPriorityOrder(t *testing.T) {
 	}
 }
 
-// The primary node is restarting: its path is unreachable, but the secondary —
-// the current leader — must still be attached before the tertiary.
+// The primary node is restarting: its path is unreachable, but the secondary,
+// the current leader, must still be attached before the tertiary.
 func TestConnectPaths_SkipsUnreachablePrimaryKeepingOrder(t *testing.T) {
 	f := &fabric{fail: map[string]error{"10.0.0.1": errors.New("connection refused")}}
 	res, err := f.connector().ConnectPaths(context.Background(), targets("10.0.0.1", "10.0.0.2", "10.0.0.3"))
@@ -182,7 +182,7 @@ func TestConnectPaths_LeavesExistingPathsAlone(t *testing.T) {
 }
 
 // A controller the kernel is still connecting must be waited for, not
-// connected again — a second write would add a duplicate path.
+// connected again, because a second write would add a duplicate path.
 func TestConnectPaths_WaitsForConnectingPathWithoutReconnecting(t *testing.T) {
 	looks := 0
 	c := &FabricsConnector{connector: connector{
@@ -335,7 +335,7 @@ func TestDisconnectOrder(t *testing.T) {
 }
 
 // A controller can be optimized for one namespace and inaccessible for
-// another; its best state decides, because it may still be carrying I/O.
+// another. Its best state decides, because it may still be carrying I/O.
 func TestDisconnectOrder_RanksControllerByBestNamespaceState(t *testing.T) {
 	s := nvme.Subsystem{
 		NQN: testNQN,
@@ -435,8 +435,8 @@ func TestTargets_PreservesControlPlaneOrder(t *testing.T) {
 	}
 }
 
-// The control plane picks the connect parameters per path; all of them have to
-// reach the target, not just the address.
+// The control plane picks the connect parameters per path, and all of them have
+// to reach the target, not just the address.
 func TestTargets_CarriesPerPathConnectParameters(t *testing.T) {
 	clt, fiof := 60, 0
 	conn := lvol.Connection{
@@ -476,7 +476,7 @@ func TestTargets_CarriesPerPathConnectParameters(t *testing.T) {
 
 // The DHCHAP secrets come from the control plane with the rest of the path and
 // have to reach the Target, since they are the only key material the connect
-// can authenticate with — and no option may rewrite them, because each was
+// can authenticate with, and no option may rewrite them, because each was
 // issued for the host the connection was resolved for.
 func TestTargets_CarriesDHCHAPSecrets(t *testing.T) {
 	conn := lvol.Connection{NQN: testNQN, Endpoints: []lvol.Endpoint{{
@@ -530,7 +530,7 @@ func TestTargets_OptionsOverrideEndpointTunables(t *testing.T) {
 	if got.HostIface != "eth0" || got.TLS {
 		t.Errorf("host_iface/tls = %q/%v, want eth0/false", got.HostIface, got.TLS)
 	}
-	// The endpoint identity stays untouched — options cannot rewrite the path.
+	// The endpoint identity stays untouched: options cannot rewrite the path.
 	if got.NQN != testNQN || got.Transport != TransportTCP || got.Address != "10.0.0.1" || got.Port != 4420 {
 		t.Errorf("endpoint identity changed: %+v", got)
 	}

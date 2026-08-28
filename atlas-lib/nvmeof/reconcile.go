@@ -24,15 +24,15 @@ type PathState struct {
 	// Results is the per-path outcome, in priority order (primary first).
 	Results []PathResult
 	// Stale are attached controllers whose endpoint is not in the control
-	// plane's current answer — typically the old primary after a migration.
-	// They are reported, never removed; see ReconcilePaths.
+	// plane's current answer, typically the old primary after a migration.
+	// They are reported, never removed. See ReconcilePaths.
 	Stale []nvme.Controller
 }
 
 // Complete reports whether every published path is live.
 func (s PathState) Complete() bool { return s.Expected > 0 && s.Live >= s.Expected }
 
-// Degraded reports whether the volume is usable but short of paths — I/O still
+// Degraded reports whether the volume is usable but short of paths: I/O still
 // flows, with less redundancy than the control plane published.
 func (s PathState) Degraded() bool { return s.Live > 0 && s.Live < s.Expected }
 
@@ -44,7 +44,7 @@ func (s PathState) Down() bool { return s.Live == 0 }
 //
 // This is the loop a node-side guardian runs: the control plane's Connection is
 // the desired state, the kernel's controllers are the actual state, and the two
-// drift — a path drops when its storage node restarts, and the published set
+// drift. A path drops when its storage node restarts, and the published set
 // itself changes after a migration or a node replacement. Reconciling means
 // establishing the published paths that are not up (in priority order, skipping
 // the ones that cannot be reached) and reporting what is left over.
@@ -54,8 +54,8 @@ func (s PathState) Down() bool { return s.Live == 0 }
 // per path and changes nothing.
 //
 // Stale paths are reported, not removed. A path missing from the control plane's
-// answer right now is not necessarily gone for good — a node in restart is the
-// obvious case — and tearing down a controller is a change to a live data path,
+// answer right now is not necessarily gone for good (a node in restart is the
+// obvious case) and tearing down a controller is a change to a live data path,
 // so that decision stays with the caller. Pass subs as nil to skip the check.
 //
 // The error is non-nil only when no path could be established at all: a volume
@@ -86,7 +86,7 @@ func ReconcilePaths(
 		}
 	}
 	if err != nil {
-		// Nothing is up; which attached paths are stale is noise next to that.
+		// Nothing is up, and which attached paths are stale is noise next to that.
 		return state, err
 	}
 

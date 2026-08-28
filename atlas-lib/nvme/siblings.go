@@ -14,17 +14,17 @@ import (
 //	CoTenants / HasCoTenants  *other* volumes sharing the same subsystem
 //
 // The package-level functions are pure filters over a device snapshot the
-// caller owns — the cheap form, since one List answers all four questions for
+// caller owns, the cheap form, since one List answers all four questions for
 // every device in it. The Device methods are the convenience form: they re-scan
 // through the resolver the device came from, so the answer reflects current
 // kernel state rather than the snapshot the device was taken from.
 
 // Siblings returns the devices in all that back the same logical volume as
-// d — those sharing d's namespace UUID — excluding d itself.
+// d, those sharing d's namespace UUID, excluding d itself.
 //
 // Simplyblock identifies a volume by its namespace UUID (the lvol UUID). When
-// a volume is reachable as more than one block device — e.g., native NVMe
-// multipath is disabled and each path exposes its own /dev/nvmeXnY — those
+// a volume is reachable as more than one block device (native NVMe multipath
+// is disabled and each path exposes its own /dev/nvmeXnY, say), those
 // block devices all carry that UUID and are siblings. With native multipath a
 // volume has a single multipath head, so Siblings returns nothing.
 //
@@ -58,15 +58,15 @@ func HasSiblings(d Device, all []Device) bool {
 	return false
 }
 
-// CoTenants returns the volumes in all that share d's subsystem — the other
+// CoTenants returns the volumes in all that share d's subsystem: the other
 // namespaces of a multi-namespace subsystem (simplyblock's "namespaced" lvols),
 // excluding d's own namespace. It is empty for a single-namespace subsystem.
 //
 // Unlike Siblings (the same volume via different paths, keyed by UUID),
 // CoTenants are *different* volumes that merely coexist on one subsystem. They
-// share its controllers, so disconnecting the subsystem — e.g., writing any
-// controller's delete_controller — tears every co-tenant down together; check
-// for them before doing so.
+// share its controllers, so disconnecting the subsystem (writing any
+// controller's delete_controller, say) tears every co-tenant down together.
+// Check for them before doing so.
 //
 // A device with no subsystem NQN has no determinable subsystem, so CoTenants
 // returns nil for it.
@@ -89,7 +89,7 @@ func CoTenants(d Device, all []Device) []Device {
 	return out
 }
 
-// HasCoTenants reports whether all holds another volume on d's subsystem — the
+// HasCoTenants reports whether all holds another volume on d's subsystem, the
 // question a teardown asks, since disconnecting the subsystem takes every
 // co-tenant down with it, so a device that has any must not be disconnected on
 // its own. It is the question-only form of CoTenants.
@@ -121,12 +121,12 @@ func IsCoTenant(d, o Device) bool {
 
 // Siblings returns the other block devices backing the same volume as d. It is
 // the convenience form of the package-level Siblings: it re-scans through the
-// resolver d was resolved by — so the answer reflects current kernel state, not
-// the snapshot d was taken from — and filters that. A caller that already holds
+// resolver d was resolved by, so the answer reflects current kernel state
+// rather than the snapshot d was taken from, and filters that. A caller that already holds
 // a snapshot, or asks about several devices, should call Siblings directly.
 //
-// It returns errs.ErrUnsupported for a device carrying no resolver — one
-// assembled by hand rather than resolved; bind it with WithResolver. A device
+// It returns errs.ErrUnsupported for a device carrying no resolver, one
+// assembled by hand rather than resolved. Bind it with WithResolver. A device
 // with no namespace UUID yields nil without scanning.
 func (d Device) Siblings(ctx context.Context) ([]Device, error) {
 	all, err := d.sameVolume(ctx)
@@ -148,7 +148,7 @@ func (d Device) HasSiblings(ctx context.Context) (bool, error) {
 
 // IsSibling reports whether o is another block device backing the same volume as
 // d. It is the method form of the package-level IsSibling, for a call site that
-// reads as a question about d; both are pure, comparing the two snapshots.
+// reads as a question about d. Both are pure, comparing the two snapshots.
 func (d Device) IsSibling(o Device) bool {
 	return IsSibling(d, o)
 }
@@ -178,10 +178,10 @@ func (d Device) HasCoTenants(ctx context.Context) (bool, error) {
 	return HasCoTenants(d, all), nil
 }
 
-// IsCoTenant reports whether o is a *different* volume sharing d's subsystem —
+// IsCoTenant reports whether o is a *different* volume sharing d's subsystem,
 // the relation that forbids disconnecting the subsystem for d alone. It is the
-// method form of the package-level IsCoTenant; both are pure, comparing the two
-// snapshots.
+// method form of the package-level IsCoTenant. Both are pure, comparing the
+// two snapshots.
 func (d Device) IsCoTenant(o Device) bool {
 	return IsCoTenant(d, o)
 }

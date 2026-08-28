@@ -13,8 +13,8 @@ import (
 type Binding struct {
 	VolumeHandle          lvol.VolumeHandle    // == PV.Spec.CSI.VolumeHandle
 	PersistentVolumeName  string               // PersistentVolumeName name
-	PersistentVolumeClaim types.NamespacedName // bound claim; zero if unbound
-	Node                  string               // node it is attached to; empty if none
+	PersistentVolumeClaim types.NamespacedName // bound claim, zero if unbound
+	Node                  string               // node it is attached to, empty if none
 	Attached              bool                 // VolumeAttachment reports Status.Attached
 }
 

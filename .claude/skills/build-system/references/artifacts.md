@@ -45,13 +45,13 @@ stale copy is a defect a reviewer can see.
 | A deepcopy compile error after adding a field                        | `zz_generated.deepcopy.go`                                                                    | `make -C operator generate`                                     |
 | An OpenShift install shows the wrong image or misses `relatedImages` | the OLM bundle                                                                                | `make -C operator bundle` (image must be pushed)                |
 | A control-plane call sends the wrong field name                      | the atlas client                                                                              | update `shared/openapi.json`, then `make -C atlas-lib generate` |
-| A Helm release does not appear in the repo index                     | `Chart.yaml` `version:` was not bumped                                                        | bump it; the release workflow triggers on that file             |
+| A Helm release does not appear in the repo index                     | `Chart.yaml` `version:` was not bumped                                                        | bump it, since the release workflow triggers on that file       |
 
 ## Staleness rules that actually bite
 
 - **Phony targets cannot be stale.** `manifests`, `generate`, `build-installer`,
   and `helm-sync` re-run unconditionally. When their output still looks wrong,
-  the input is wrong — a missing marker, a type outside `./...`, or an edit to a
+  the input is wrong: a missing marker, a type outside `./...`, or an edit to a
   chart file that the sync script overwrites on the next run. Never hand-edit a
   file under `helm-charts/charts/simplyblock-operator/crds/` or
   `templates/roles/`.
@@ -98,6 +98,6 @@ request that touches `operator/**`.
   artifacts are merged into one index by
   `helm-charts/scripts/merge_helm_repos.py`.
 
-The chart's `version:` is the release trigger; `appVersion:` is `latest` and the
+The chart's `version:` is the release trigger, `appVersion:` is `latest`, and the
 component image tags live in `values.yaml`, so a new operator image needs both
 the chart `values.yaml` tag and the chart `version:` bumped.

@@ -20,7 +20,7 @@ var errAmbiguousSelector = errors.New("selector matches several namespaces of th
 // ConnectDevice attaches t through c and returns the local namespace device
 // that came up for it, which is what a CSI NodeStage actually needs: Connect
 // alone only guarantees a live controller, not that the block device is already
-// visible. nsid picks the namespace on a multi-namespace subsystem; 0 means
+// visible. nsid picks the namespace on a multi-namespace subsystem, and 0 means
 // "the subsystem's only namespace."
 //
 // It is idempotent to the same degree Connect is: an already-attached target
@@ -39,20 +39,20 @@ func ConnectDevice(
 }
 
 // ConnectMultipathDevice attaches a volume over all of its fabric paths and
-// returns the local namespace device that came up for it — the whole of what a
+// returns the local namespace device that came up for it, the whole of what a
 // CSI NodeStage does, in one call. It is the multipath form of ConnectDevice,
 // and the one to reach for by default: a volume published over several paths
 // that is attached over one is a volume one node failure away from losing I/O.
 //
 // The paths are established in the order given, which is the control plane's
 // priority order (build targets with Targets to keep it). A path that cannot be
-// established does not stop the others; its reason is in the returned
+// established does not stop the others, and its reason is in the returned
 // PathResult, which is returned even on error so a caller can report or retry
 // per path. The error is non-nil only when no path came up at all, or when the
 // paths came up but no block device followed.
 //
-// nsid picks the namespace on a multi-namespace subsystem — pass
-// lvol.Connection.NSID; 0 means "the subsystem's only namespace."
+// nsid picks the namespace on a multi-namespace subsystem. Pass
+// lvol.Connection.NSID. A nsid of 0 means "the subsystem's only namespace."
 func ConnectMultipathDevice(
 	ctx context.Context,
 	c Connector,
@@ -77,21 +77,22 @@ func ConnectMultipathDevice(
 // WaitForDevice polls devs until the namespace selected by sel is attached and
 // returns it. The block device shows up a moment after the controller goes
 // live, so a caller that connected and immediately looked it up would race the
-// kernel; the wait ends on ctx (deadline or cancellation), and the first probe
+// kernel. The wait ends on ctx (deadline or cancellation), and the first probe
 // happens before any waiting, so an already-expired ctx still gets one attempt.
-// sel must name at least the NQN — waiting for "any device" is meaningless.
+// sel must name at least the NQN, because waiting for "any device" is
+// meaningless.
 //
 // Several devices can match at once, which is why this goes through
 // nvme.DeviceResolver.ListWithSelector rather than a By* lookup: those return
 // the first match and would hide the case below. Multiple matches are harmless
 // when they are the same device seen more than once, but a stale namespace left
 // behind by an earlier connect to the same NQN is a *different* device, and
-// handing back whichever one came first would be the wrong block device — a
+// handing back whichever one came first would be the wrong block device, a
 // data-corruption-grade mistake. So a divergent match set counts as "not
 // settled yet" and is polled again, since the kernel still has to reap the
-// stale subsystem; if it never does, the returned error names the conflicting
-// devices. The one divergence waiting cannot fix — distinct namespaces of a
-// single subsystem, meaning sel needs an NSID or UUID — fails immediately
+// stale subsystem. If it never does, the returned error names the conflicting
+// devices. The one divergence waiting cannot fix, distinct namespaces of a
+// single subsystem where sel needs an NSID or UUID, fails immediately
 // instead.
 func WaitForDevice(ctx context.Context, devs nvme.DeviceResolver, sel nvme.DeviceSelector) (nvme.Device, error) {
 	if sel.NQN == "" {
@@ -135,13 +136,13 @@ func WaitForDevice(ctx context.Context, devs nvme.DeviceResolver, sel nvme.Devic
 // reachable narrows a match set to the devices that can actually serve I/O,
 // which is what separates a freshly connected subsystem from the stale one the
 // kernel has yet to reap: the stale head's paths have gone inaccessible, or its
-// controller is no longer live. It only ever narrows — a set with nothing
+// controller is no longer live. It only ever narrows: a set with nothing
 // reachable is returned untouched, so this decides between candidates and never
 // discards the caller's only one.
 //
 // It cannot resolve every duplicate. A stale head can go on reporting an
 // optimized path for a while after a migration, and then both candidates look
-// reachable and the caller waits rather than guesses; reachability says which
+// reachable and the caller waits rather than guesses. Reachability says which
 // devices are usable, not which one this connect created.
 func reachable(matched []nvme.Device) []nvme.Device {
 	out := make([]nvme.Device, 0, len(matched))

@@ -20,15 +20,15 @@
 // and they do different jobs: the one passed to [New] bounds the machine, and
 // through it every state deadline, while the one passed to
 // [Machine.TransitionTo] bounds only that call's entry hook. They are
-// deliberately unconnected — a caller's short-lived request context must not
-// silently become a state's deadline.
+// deliberately unconnected, so that a caller's short-lived request context does
+// not silently become a state's deadline.
 //
 // # Concurrency
 //
 // A Machine is not safe for concurrent use. It is meant to be driven from a
-// single goroutine, typically a poll or reconcile loop; guard it with a mutex if
+// single goroutine, typically a poll or reconcile loop. Guard it with a mutex if
 // you need more. Holding that mutex across [Machine.TransitionTo] is safe,
-// because a hook cannot re-enter the machine that is calling it — see
+// because a hook cannot re-enter the machine that is calling it. See
 // [ErrReentrantTransition].
 //
 // # Example
@@ -41,7 +41,7 @@
 //	   └───────────┴───────────┴────── Failed
 //	               └───────────┴────── Aborted
 //
-// The CRD's own phase type is the state type; no parallel enum is needed.
+// The CRD's own phase type is the state type, so no parallel enum is needed.
 //
 //	// A type alias keeps the map literal readable.
 //	type phase = v1alpha1.VolumeMigrationPhase
@@ -127,7 +127,7 @@
 // into that phase already happened and CreateMigration should not be called
 // twice.
 //
-// This assumes one field beyond the existing status.phase — a phaseDeadline
+// This assumes one field beyond the existing status.phase: a phaseDeadline
 // timestamp for the bound to survive in.
 //
 //	func (r *VolumeMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -183,7 +183,7 @@
 //	}
 //
 // Not every reconcile is a transition. Most passes of a Running migration just
-// poll the storage API and update the snapshot counters; the machine only moves
+// poll the storage API and update the snapshot counters. The machine only moves
 // when the backend reports something new:
 //
 //	func (r *VolumeMigrationReconciler) advance(ctx context.Context, vm *v1alpha1.VolumeMigration, sm *statemachine.Machine[phase]) error {
@@ -254,13 +254,13 @@
 //	migrate: Preparing  ── Restarting ── Promoting
 //	shutdown, restart, suspend, resume: no sub-phases at all
 //
-// Written as one graph, that union is unenforceable — nothing stops a remove op
-// from reporting Promoting. Written as a MultiConfig, the graph for the action in
+// Written as one graph, that union is unenforceable, since nothing stops a
+// remove op from reporting Promoting. Written as a MultiConfig, the graph for the action in
 // hand is the only one in play, and Promoting during a remove is an
 // [IllegalTransitionError] rather than an accepted status write.
 //
-// The outer phase — Pending, Running, Succeeded, Failed — is identical for all
-// six, so it stays a plain [Config]. Such a controller runs two machines: one for
+// The outer phase (Pending, Running, Succeeded, and Failed) is identical for
+// all six, so it stays a plain [Config]. Such a controller runs two machines: one for
 // the phase, and one for the sub-phase of the action it is executing.
 package statemachine
 
@@ -275,7 +275,7 @@ import (
 )
 
 // ErrUnknownState reports a state never declared in [Config.States].
-// [New] returns it for an edge into nowhere or a missing initial state;
+// [New] returns it for an edge into nowhere or a missing initial state, and
 // [Machine.TransitionTo] returns it if the machine somehow holds a state the
 // configuration does not describe.
 var ErrUnknownState = errors.New("statemachine: unknown state")
@@ -334,7 +334,7 @@ func (e *IllegalTransitionError[S]) Error() string {
 // changes. It receives both endpoints, so a single hook can serve several
 // inbound edges.
 //
-// The returned duration bounds how long the machine may remain in state to; zero
+// The returned duration bounds how long the machine may remain in state to. Zero
 // or less means the state has no deadline. The clock starts when the hook
 // returns, not when the transition was requested, so a hook that blocks for
 // twenty seconds and then asks for a minute yields a state that expires eighty
@@ -344,12 +344,12 @@ func (e *IllegalTransitionError[S]) Error() string {
 // its existing deadline, and [Machine.TransitionTo] wraps the error. A failing
 // hook must therefore not leave its subject half-moved.
 //
-// A hook must not call [Machine.TransitionTo] on the machine that invoked it;
-// such a call fails with [ErrReentrantTransition] rather than corrupting the
+// A hook must not call [Machine.TransitionTo] on the machine that invoked it.
+// Such a call fails with [ErrReentrantTransition] rather than corrupting the
 // machine. It may, of course, drive some other machine.
 //
 // ctx is the context passed to [Machine.TransitionTo] and bounds only this call.
-// It is deliberately not the new state's own context — that one does not exist
+// It is deliberately not the new state's own context, which does not exist
 // yet, since this hook's return value defines it. Use [Machine.Context] for work
 // that should outlive the transition and be bounded by the state.
 type TransitionFunc[S comparable] func(ctx context.Context, from, to S) (time.Duration, error)
@@ -375,7 +375,7 @@ type StateDef[S comparable] struct {
 type Config[S comparable] struct {
 	// Initial is the state the machine starts in, and the state [Machine.Reset]
 	// returns to. It must be a key of States. Its OnEnter hook does not run at
-	// construction time — a machine is born already in its initial state.
+	// construction time, because a machine is born already in its initial state.
 	Initial S
 
 	// States is the state graph, keyed by state. Because it is a map, a
@@ -407,8 +407,8 @@ func (config Config[S]) validate() error {
 //
 //	statemachine.Machine[v1alpha1.VolumeMigrationPhase]
 //
-// It must be created by [New] or [Must] — the zero Machine is not usable — and
-// released with [Machine.Close]. It is not safe for concurrent use; see the
+// It must be created by [New] or [Must], since the zero Machine is not usable,
+// and released with [Machine.Close]. It is not safe for concurrent use. See the
 // package documentation.
 type Machine[S comparable] struct {
 	base       context.Context
@@ -419,7 +419,7 @@ type Machine[S comparable] struct {
 	current S
 
 	// entering is the state whose hook is currently running, if any. It guards
-	// against a hook transitioning the machine underneath its own caller; see
+	// against a hook transitioning the machine underneath its own caller. See
 	// [ErrReentrantTransition].
 	entering *S
 
@@ -478,9 +478,9 @@ func Must[S comparable](ctx context.Context, cfg Config[S]) *Machine[S] {
 // the transition into that state already happened in an earlier process.
 //
 // An empty snapshot yields a machine in [Config.Initial] rather than an error,
-// which is the point of this constructor. Persisted phases start out unset —
-// status.phase is empty until the first pass writes one — so every caller of
-// [Machine.Restore] otherwise has to guard it:
+// which is the point of this constructor. Persisted phases start out unset,
+// since status.phase is empty until the first pass writes one, so every caller
+// of [Machine.Restore] otherwise has to guard it:
 //
 //	// What this replaces.
 //	sm := statemachine.Must(ctx, config)
@@ -493,8 +493,8 @@ func Must[S comparable](ctx context.Context, cfg Config[S]) *Machine[S] {
 // Precisely: a [Snapshot.State] that is both the zero value of S and not a
 // declared state means "fresh," and the snapshot's deadline is dropped with it,
 // because a deadline without a state is incoherent and the state is what decides.
-// A zero state that *is* declared — as the first constant of an int-backed phase
-// type usually is — restores as written, deadline included. A non-zero undeclared
+// A zero state that *is* declared, as the first constant of an int-backed phase
+// type usually is, restores as written, deadline included. A non-zero undeclared
 // state stays an error, since that is a downgrade or a hand-edited resource and
 // silently starting the workflow over would be the wrong answer.
 //
@@ -559,7 +559,7 @@ func (sm *Machine[S]) CurrentState() S {
 
 // Context returns the current state's context. It is canceled when the machine
 // leaves the state, when the state's deadline expires, or when the machine is
-// closed — whichever comes first.
+// closed, whichever comes first.
 //
 // Carry it for work that is only meaningful while the machine remains in this
 // state, and that work unwinds on its own:
@@ -596,7 +596,7 @@ func (sm *Machine[S]) Deadline() (time.Time, bool) {
 
 // TimeoutReached reports whether the current state's deadline has passed. It is
 // false for a state without a deadline, and false for a machine that was closed
-// or whose context was canceled — neither is a timeout, and callers there
+// or whose context was canceled. Neither is a timeout, and callers there
 // generally want to unwind rather than retry.
 //
 // It keeps reporting true until the machine transitions away or the deadline is
@@ -627,7 +627,7 @@ func (sm *Machine[S]) ClearTimeout() {
 // re-arm from the duration the hook returned. Nothing is mutated on any failure
 // path.
 //
-// ctx bounds the hook, not the resulting state; see [TransitionFunc]. The
+// ctx bounds the hook, not the resulting state. See [TransitionFunc]. The
 // returned error is one of:
 //
 //   - [ErrClosed], joined with the machine context's error if the machine is
@@ -689,8 +689,8 @@ func (sm *Machine[S]) enter(ctx context.Context, from, to S) (time.Duration, err
 //	sm.Reset()
 //
 // Because it runs no hooks, whatever [Config.Initial]'s OnEnter would have done
-// is the caller's responsibility. Do not call it from inside a [TransitionFunc];
-// the in-flight transition would overwrite it on the way out.
+// is the caller's responsibility. Do not call it from inside a [TransitionFunc],
+// because the in-flight transition would overwrite it on the way out.
 func (sm *Machine[S]) Reset() {
 	sm.current = sm.initial
 	sm.arm(0)
@@ -715,12 +715,12 @@ type Snapshot[S comparable] struct {
 
 	// Deadline is when that state expires, or the zero time if it has none.
 	// It is an absolute wall-clock instant because it has to survive a process
-	// restart; see [Machine.Restore] for what that costs.
+	// restart. See [Machine.Restore] for what that costs.
 	Deadline time.Time `json:"deadline,omitzero"`
 }
 
 // Snapshot returns the machine's durable state, to be persisted and later handed
-// to [Machine.Restore]. Take it after reconciling, and write both fields — a
+// to [Machine.Restore]. Take it after reconciling, and write both fields: a
 // snapshot that drops the deadline restores as a state that never times out.
 func (sm *Machine[S]) Snapshot() Snapshot[S] {
 	var snap Snapshot[S]
@@ -739,7 +739,7 @@ func (sm *Machine[S]) Snapshot() Snapshot[S] {
 // A zero [Snapshot.State] restores nothing and reports [ErrUnknownState] unless
 // the zero value is itself a declared state. A controller restoring a resource
 // that may never have been reconciled therefore has to guard the call, which is
-// what [NewFromSnapshot] exists to absorb — prefer it when the machine is being
+// what [NewFromSnapshot] exists to absorb. Prefer it when the machine is being
 // built in the same breath:
 //
 //	if vm.Status.Phase != "" {
@@ -791,7 +791,7 @@ func (sm *Machine[S]) restoreOrStart(snap Snapshot[S]) error {
 //	return ctrl.Result{}, nil
 //
 // The second result is false when the state has no deadline, and also when that
-// deadline has already passed — an expired state needs handling now, not another
+// deadline has already passed. An expired state needs handling now, not another
 // requeue, and controller-runtime would treat a non-positive RequeueAfter as no
 // requeue at all. Check [Machine.TimeoutReached] before requeueing.
 func (sm *Machine[S]) RequeueAfter() (time.Duration, bool) {
@@ -814,7 +814,7 @@ func (sm *Machine[S]) RequeueAfter() (time.Duration, bool) {
 //	defer sm.Close()
 //
 // It returns nothing, deliberately. Closing only cancels contexts, so there is
-// no operation that could fail and nothing a caller could do about it; an error
+// no operation that could fail and nothing a caller could do about it. An error
 // return that is always nil would oblige every call site to write
 // `defer func() { _ = sm.Close() }()` to satisfy errcheck. This follows
 // [context.CancelFunc] and [time.Ticker.Stop] rather than [io.Closer], which is

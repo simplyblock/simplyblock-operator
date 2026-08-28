@@ -9,19 +9,19 @@ A work plan turns a design into the work: one item per unit of work, each ready
 to be filed as a GitHub issue without editing, with the ordering constraints
 declared so that the parallelism is derived rather than guessed.
 
-| Document   | Path                                       | Owned by            |
-|------------|--------------------------------------------|---------------------|
-| Design doc | `operator/docs/designs/design-<slug>.md`   | `design-doc`        |
-| Test plan  | `operator/docs/tests/test-plan-<slug>.md`  | `design-doc`        |
-| Work plan  | `operator/docs/tasks/work-plan-<slug>.md`  | this skill          |
+| Document   | Path                                      | Owned by     |
+|------------|-------------------------------------------|--------------|
+| Design doc | `operator/docs/designs/design-<slug>.md`  | `design-doc` |
+| Test plan  | `operator/docs/tests/test-plan-<slug>.md` | `design-doc` |
+| Work plan  | `operator/docs/tasks/work-plan-<slug>.md` | this skill   |
 
 Reference material:
 
-- `references/template.md` — the skeleton, the per-item field rules, and what
+- `references/template.md`: the skeleton, the per-item field rules, and what
   makes one item one item.
-- `scripts/check-work-plan.py` — validates the plan, derives the waves and the
+- `scripts/check-work-plan.py`: validates the plan, derives the waves and the
   critical path, and emits the `gh issue create` script.
-- `design-doc/references/conventions.md` — the shared house conventions these
+- `design-doc/references/conventions.md`: the shared house conventions these
   documents follow: file naming, the metadata block, section numbering.
 
 ## 0. Is the design ready to be split?
@@ -37,8 +37,8 @@ Five checks. Each has an answer for what a failure means.
 
 | Check                      | Ready when                                                         | A failure means                                                                   |
 |----------------------------|--------------------------------------------------------------------|-----------------------------------------------------------------------------------|
-| **Status**                 | `Accepted`, `Partially Implemented`, or a phase-implemented status | `Draft` and `Proposed` are still under review; the shape can still change         |
-| **Open questions**         | none that would change the decomposition                           | see the distinction below — this is the check that takes judgment                 |
+| **Status**                 | `Accepted`, `Partially Implemented`, or a phase-implemented status | `Draft` and `Proposed` are still under review, and the shape can still change     |
+| **Open questions**         | none that would change the decomposition                           | see the distinction below. This is the check that takes judgment                  |
 | **Section numbering**      | the numbered sections are settled                                  | items cite `§n.m`, and a renumber silently invalidates every citation in the plan |
 | **Test plan**              | exists, with its scenario matrix                                   | the `Scenarios` column would be invented, and an item's proof is part of the item |
 | **External prerequisites** | the design's `## Phase 0` table is complete, or there are none     | prerequisites surface as mid-plan surprises rather than as `blocked` items        |
@@ -76,7 +76,7 @@ conversation. An item to add a field that already exists is worse than no item.
 - **The test plan** supplies the `Scenarios` column. Use the IDs it already
   defines. When an item needs a scenario that does not exist, the test plan owes
   a row, which is a `design-doc` edit and not something to paper over here.
-- **`## Phase 0 — External Prerequisites`** becomes §2 of the plan and the
+- **`## Phase 0: External Prerequisites`** becomes §2 of the plan and the
   `blocked` label on the items that wait for it.
 
 ## 2. What makes one item one item

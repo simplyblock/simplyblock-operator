@@ -1,6 +1,6 @@
 ---
 name: brainstorming
-description: Explore an idea for this product before any of it is built — deciding which component owns the behavior, whether it is desired state or a one-shot operation, what it would do to a live cluster with data on it, and which of two or three genuinely different approaches to take. Ends by handing a settled decision to the design-doc skill, or by concluding not to build the thing. Use when asked to brainstorm, discuss or explore an idea, weigh approaches, or answer "what if," "how should we," "is it worth," or "can we" — and before writing a design document, a CRD, or a controller.
+description: Explore an idea for this product before any of it is built: deciding which component owns the behavior, whether it is desired state or a one-shot operation, what it would do to a live cluster with data on it, and which of two or three genuinely different approaches to take. Ends by handing a settled decision to the design-doc skill, or by concluding not to build the thing. Use when asked to brainstorm, discuss or explore an idea, weigh approaches, or answer "what if," "how should we," "is it worth," or "can we," and before writing a design document, a CRD, or a controller.
 ---
 
 # Brainstorming
@@ -50,12 +50,12 @@ in a way that no amount of good design later recovers.
 
 ### 1. Which component owns the behavior?
 
-| Owner                       | Owns                                                                                      |
-|-----------------------------|-------------------------------------------------------------------------------------------|
-| The control plane (`sbcli`) | Volume, pool, and node lifecycle; migration and rebalancing mechanics; the storage engine |
-| `atlas-lib`                 | Node-level primitives and the control-plane client, shared by both consumers              |
-| The operator                | Kubernetes-shaped logic: CRDs, reconcilers, webhooks, what the cluster should look like   |
-| The CSI driver              | The CSI RPC surface and the node's data path                                              |
+| Owner                       | Owns                                                                                                   |
+|-----------------------------|--------------------------------------------------------------------------------------------------------|
+| The control plane (`sbcli`) | Volume and pool lifecycle, node lifecycle, migration and rebalancing mechanics, and the storage engine |
+| `atlas-lib`                 | Node-level primitives and the control-plane client, shared by both consumers                           |
+| The operator                | Kubernetes-shaped logic: CRDs, reconcilers, webhooks, what the cluster should look like                |
+| The CSI driver              | The CSI RPC surface and the node's data path                                                           |
 
 The most expensive brainstorming mistake here is designing operator behavior for
 something the control plane owns. It is also the easiest to make, because the
@@ -85,16 +85,16 @@ change, and the brainstorm has to treat it as one.
 
 Ideas that sound right, appeal for a good reason, and are wrong here.
 
-| The idea                                 | Why it appeals                   | What is actually true                                                                                                                                                                                          |
-|------------------------------------------|----------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| "This needs its own CRD"                 | it is a distinct concept         | the bar is that something *watches it or references it by name*. Otherwise, it is a field or a nested struct. A CRD costs a controller, RBAC, a chart entry, and a place in the ownership spine — `api-design` |
-| "The reconciler can just wait for it"    | the code reads top to bottom     | that is a stalled controller at concurrency one. Waiting is state plus a requeue — `reconciler-patterns`                                                                                                       |
-| "Add a helper in the operator"           | it is needed in the operator     | if the CSI driver could need it, it belongs in `atlas-lib`. A second copy is worse than an awkward import — `extract-to-atlas-lib`                                                                             |
-| "Make it configurable"                   | it defers the decision           | a shipped field is an API forever. Everything is `v1alpha1` with no conversion webhook, so a rename has no migration path — `api-design`                                                                       |
-| "Just an annotation for now"             | annotations feel informal        | an annotation a user sets is as much an API as a spec field, and less validated                                                                                                                                |
-| "Parallelize it to make it faster"       | the operations look independent  | on the data path they usually are not. See question 3                                                                                                                                                          |
-| "The operator should reconcile that too" | the operator has the credentials | breadth in the operator's role is the ceiling on everything it grants — `rbac-hardening`                                                                                                                       |
-| "We can add the tests after"             | the shape is still moving        | for a bug, the failing test comes first, always — `regression-test`                                                                                                                                            |
+| The idea                                 | Why it appeals                   | What is actually true                                                                                                                                                                                              |
+|------------------------------------------|----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "This needs its own CRD"                 | it is a distinct concept         | the bar is that something *watches it or references it by name*. Otherwise, it is a field or a nested struct. A CRD costs a controller, RBAC, a chart entry, and a place in the ownership spine (see `api-design`) |
+| "The reconciler can just wait for it"    | the code reads top to bottom     | that is a stalled controller at concurrency one. Waiting is state plus a requeue (see `reconciler-patterns`)                                                                                                       |
+| "Add a helper in the operator"           | it is needed in the operator     | if the CSI driver could need it, it belongs in `atlas-lib`. A second copy is worse than an awkward import (see `extract-to-atlas-lib`)                                                                             |
+| "Make it configurable"                   | it defers the decision           | a shipped field is an API forever. Everything is `v1alpha1` with no conversion webhook, so a rename has no migration path (see `api-design`)                                                                       |
+| "Just an annotation for now"             | annotations feel informal        | an annotation a user sets is as much an API as a spec field, and less validated                                                                                                                                    |
+| "Parallelize it to make it faster"       | the operations look independent  | on the data path they usually are not. See question 3                                                                                                                                                              |
+| "The operator should reconcile that too" | the operator has the credentials | breadth in the operator's role is the ceiling on everything it grants (see `rbac-hardening`)                                                                                                                       |
+| "We can add the tests after"             | the shape is still moving        | for a bug, the failing test comes first, always (see `regression-test`)                                                                                                                                            |
 
 Naming a trap is not a refusal. It is the thing to say out loud so the idea can be
 reshaped into the version that works, which usually exists.

@@ -24,7 +24,7 @@ func StorageNodeSetAPIEndpointSliceName(storageNodeSetName string) string {
 // Centralized here because a rename that updates some sites but not others has
 // silently broken storage-node scheduling and migration before.
 const (
-	// LabelApp marks the storage-node workload; value AppStorageNode. Carried by
+	// LabelApp marks the storage-node workload, with value AppStorageNode. Carried by
 	// the DaemonSet and its pods.
 	LabelApp       = "app"
 	AppStorageNode = "storage-node"
@@ -34,9 +34,10 @@ const (
 	// StorageNodeSet in the cluster.
 	LabelSimplyblockCluster = "simplyblock-cluster"
 
-	// LabelNodeType marks a worker Node as part of a cluster's storage plane;
-	// value is NodeTypeStoragePlaneValue(clusterName). Cluster-scoped — do not
-	// use it to select a single StorageNodeSet's workers; use LabelStorageNodeSet.
+	// LabelNodeType marks a worker Node as part of a cluster's storage plane.
+	// Its value is NodeTypeStoragePlaneValue(clusterName). It is cluster-scoped,
+	// so do not use it to select a single StorageNodeSet's workers. Use
+	// LabelStorageNodeSet for that.
 	LabelNodeType = "io.simplyblock.node-type"
 
 	// LabelStorageNodeSet scopes a worker Node, pod, and DaemonSet to a single
@@ -60,7 +61,7 @@ func StorageNodeSetDaemonSetName(storageNodeSetName string) string {
 }
 
 // StorageClass parameter keys. These are the operator/CSI-controller inputs
-// that describe how to provision a logical volume; the CSI controller reads
+// that describe how to provision a logical volume. The CSI controller reads
 // them at CreateVolume (see PropertiesFromStorageClass, which parses them into
 // a typed Properties). The values match the wire keys the CSI driver uses.
 const (
@@ -82,7 +83,7 @@ const (
 )
 
 // VolumeContext keys. The CSI controller sets these in
-// PV.Spec.CSI.VolumeAttributes at CreateVolume; the node service reads
+// PV.Spec.CSI.VolumeAttributes at CreateVolume, and the node service reads
 // them at NodeStageVolume.
 const (
 	VolCtxNQN  = "nqn"
@@ -90,7 +91,7 @@ const (
 )
 
 // PublishContext keys. Returned by ControllerPublishVolume and passed to
-// NodeStageVolume — for NVMe-oF, where to reach the target.
+// NodeStageVolume: for NVMe-oF, where to reach the target.
 const (
 	PubCtxTransport = "transport"
 	PubCtxAddress   = "address"
@@ -121,8 +122,8 @@ const (
 	// AnnoPlacementHint is a one-shot creation-time placement hint: the volume-
 	// placement webhook writes it with the least-loaded node it picked, the CSI
 	// controller sends it as host_id at CreateVolume, and then removes it once the
-	// volume exists. Unlike AnnoSelectedStorageNode it is not a pin — the volume
-	// stays eligible for rebalancing.
+	// volume exists. Unlike AnnoSelectedStorageNode it is not a pin, and the
+	// volume stays eligible for rebalancing.
 	AnnoPlacementHint = "simplyblock.io/placement-hint"
 	// AnnoHostID is the legacy per-PVC placement annotation. It is honored by the
 	// CSI controller as a lowest-priority host_id fallback for pre-existing PVCs,

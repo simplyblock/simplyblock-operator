@@ -23,7 +23,7 @@ type QoSLimits struct {
 	WMBytes int
 }
 
-// Properties are the provisioning parameters parsed from a StorageClass — the
+// Properties are the provisioning parameters parsed from a StorageClass: the
 // full set the CSI controller reads at CreateVolume, in typed form. It is the
 // control-plane-side view of how a volume was provisioned, available to any
 // component with StorageClass access (e.g., the operator's rebalancer), as
@@ -33,17 +33,17 @@ type Properties struct {
 	Pool string
 	// Fabric is the transport fabric (`fabric`), e.g., `tcp`.
 	Fabric string
-	// ClusterID pins provisioning to a specific storage cluster (cluster_id);
-	// empty when the class does not target one explicitly.
+	// ClusterID pins provisioning to a specific storage cluster (`cluster_id`),
+	// and is empty when the class does not target one explicitly.
 	ClusterID string
-	// MaxSize caps volume growth (max_size); empty when unset. Kept as the raw
+	// MaxSize caps volume growth (`max_size`), and is empty when unset. Kept as the raw
 	// string because the control plane accepts size suffixes (e.g., "10G").
 	MaxSize string
 	// LvolPriorityClass is the logical-volume priority class (lvol_priority_class).
 	LvolPriorityClass int
 	// MaxNamespacePerSubsys is how many NVMe namespaces may share one subsystem
 	// (max_namespace_per_subsys). A value > 1 makes volumes of this class
-	// "namespaced" — they share a subsystem with siblings; see IsMultiNamespace.
+	// "namespaced": they share a subsystem with siblings. See IsMultiNamespace.
 	MaxNamespacePerSubsys int
 	// Compression enables volume compression (compression).
 	Compression bool
@@ -57,8 +57,8 @@ type Properties struct {
 
 // IsMultiNamespace reports whether volumes provisioned by this class share an
 // NVMe subsystem with sibling volumes (max_namespace_per_subsys > 1). Such a
-// volume cannot be migrated or rebalanced on its own — moving it would disturb
-// every other volume sharing the subsystem.
+// volume cannot be migrated or rebalanced on its own, because moving it would
+// disturb every other volume sharing the subsystem.
 //
 // This is the StorageClass-based counterpart to nvme.Subsystem.IsMultiNamespace:
 // same question, answered from the provisioning parameters the operator can read

@@ -15,7 +15,7 @@ import (
 // survives a downgrade and a hand-edited object.
 //
 // It is also what a caller gets for an action that legitimately has no states at
-// all — the StorageNodeOps shutdown, restart, suspend, and resume actions have no
+// all: the StorageNodeOps shutdown, restart, suspend, and resume actions have no
 // sub-phases to track. That is a normal condition rather than a failure, so ask
 // the map instead of reading the error, which [MultiConfig] being a map type is
 // partly for:
@@ -25,7 +25,7 @@ import (
 //	}
 var ErrUnknownAction = errors.New("statemachine: unknown action")
 
-// Action names one variant of a [MultiConfig] — here, the value of an Ops
+// Action names one variant of a [MultiConfig], here the value of an Ops
 // resource's spec.action field.
 //
 // It is a concrete string type rather than a second type parameter, so that
@@ -81,8 +81,8 @@ type Action string
 //		}
 //	}
 //
-// The outer phase — Pending, Running, Succeeded, Failed — is the same for every
-// action, so it stays an ordinary [Config] and an ordinary [Machine]. Two
+// The outer phase (Pending, Running, Succeeded, and Failed) is the same for
+// every action, so it stays an ordinary [Config] and an ordinary [Machine]. Two
 // machines, not one merged graph: folding the shared phases into each action's
 // map would copy that spine once per action, and a fix would land in one of them.
 //
@@ -96,7 +96,7 @@ type MultiConfig[S comparable] map[Action]Config[S]
 // Validating all of them, rather than only the selected one, is most of what
 // distinguishes this type from a switch over spec.action. A switch validates the
 // branch it takes, so a typo in the migrate graph goes undiscovered until someone
-// migrates; here, constructing a machine for any action proves every action
+// migrates. Here, constructing a machine for any action proves every action
 // sound. The graphs are literals in the binary, so the cost is a map walk and the
 // failure surfaces on the first test that builds a machine.
 //
@@ -118,11 +118,12 @@ func (mc MultiConfig[S]) configFor(action Action) (Config[S], error) {
 
 // New returns a machine for one action's graph, sitting in that graph's initial
 // state with no deadline. The machine is an ordinary [Machine] and must be closed
-// to release its contexts; ctx bounds it exactly as it does in [New].
+// to release its contexts, and ctx bounds it exactly as it does in [New].
 //
 // There is no Must counterpart, deliberately. Must exists because a malformed
-// graph is a bug in the program, whereas an unrecognised action is user input —
-// offering it would invite panicking a controller on a hand-edited spec.action. A
+// graph is a bug in the program, whereas an unrecognized action is user input,
+// so offering it would invite panicking a controller on a hand-edited
+// spec.action. A
 // malformed graph still fails here, through the returned error rather than a
 // panic, and it fails whichever action was asked for.
 //
@@ -149,7 +150,7 @@ func (mc MultiConfig[S]) New(ctx context.Context, action Action) (*Machine[S], e
 // resource on every pass and nothing about it belongs in status.
 //
 // An empty snapshot means a resource nobody has reconciled yet, and yields a
-// machine in [Config.Initial] — see [NewFromSnapshot], whose rules this shares.
+// machine in [Config.Initial]. See [NewFromSnapshot], whose rules this shares.
 // Restoring runs no entry hook.
 func (mc MultiConfig[S]) FromSnapshot(
 	ctx context.Context,

@@ -68,8 +68,8 @@ which patterns are wired and which are available but unadopted.
 
 | What the search finds                  | What to do                                                                |
 |----------------------------------------|---------------------------------------------------------------------------|
-| The primitive exists and is exported   | Not an extraction. Adopt it and delete the copy — `code-cleanup` pass 3   |
-| It exists but is unexported            | Export it in place, with its documentation; then adopt. No new code       |
+| The primitive exists and is exported   | Not an extraction. Adopt it and delete the copy, in `code-cleanup` pass 3 |
+| It exists but is unexported            | Export it in place, with its documentation, then adopt. No new code       |
 | It exists with different edge behavior | Read both. Reconcile deliberately, and if one is wrong, `regression-test` |
 | Nothing like it exists                 | Extract, from here on                                                     |
 
@@ -87,9 +87,9 @@ be able to say why the seam is there, in one sentence, without an "and also."
 
 | Decision           | The rule                                                                                                                              |
 |--------------------|---------------------------------------------------------------------------------------------------------------------------------------|
-| Public or internal | `atlas-lib/<concern>/` when a consumer imports it; `atlas-lib/internal/` when only the library does                                   |
+| Public or internal | `atlas-lib/<concern>/` when a consumer imports it, and `atlas-lib/internal/` when only the library does                               |
 | Extend or add      | Extend the package that owns the concern. A new one needs a one-sentence reason for its own existence                                 |
-| Layering           | A package may import one below it — `lvol` imports `nvme`, `nvmeof` imports `nvme` — and never the reverse                            |
+| Layering           | A package may import one below it (`lvol` imports `nvme`, `nvmeof` imports `nvme`) and never the reverse                              |
 | Naming             | The package reads like the problem (`nvme`, `nvmeof`, `lvol`, `nqn`), no `pkg/` prefix, and never a name like `util` or `common`      |
 | Seams              | Every public API is an interface or takes a config, so a consumer test needs no kernel, `/sys`, `nvme-cli`, cluster, or control plane |
 

@@ -33,8 +33,8 @@ type DetachOutcome struct {
 // from under every co-tenant, on nodes where nothing looks wrong until I/O
 // fails. So the question is asked here, once, rather than left to each caller.
 //
-// The question asked is nvme.Device.IsMultiNamespace — *can* this subsystem hold
-// other volumes — and not whether it currently does. Enumerating the neighbors
+// The question asked is nvme.Device.IsMultiNamespace, meaning *can* this
+// subsystem hold other volumes, and not whether it currently does. Enumerating the neighbors
 // only describes the moment it was looked at: a namespace can join a shared
 // subsystem at any time, including between the check and the disconnect, and
 // then a "no co-tenants right now" answer would have been correct and still
@@ -48,7 +48,7 @@ type DetachOutcome struct {
 // (errs.ErrNotConnected without one) and Linux (errs.ErrUnsupported elsewhere),
 // and either way DetachDevice returns the error without touching the fabric.
 // Reaping a subsystem whose controllers are all dead is therefore an explicit
-// act — Connector.Disconnect — not something this function does by default.
+// act, Connector.Disconnect, and not something this function does by default.
 //
 // Unmounting, and releasing the block devices of a volume that surfaced more
 // than once (see nvme.Device.Siblings), stay with the caller: this function

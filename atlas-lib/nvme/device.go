@@ -33,14 +33,14 @@ type Subsystem struct {
 // Address is a parsed NVMe-oF controller address (the `address` attribute),
 // e.g., `traddr=192.168.10.69,trsvcid=4426,src_addr=192.168.10.67`.
 type Address struct {
-	TrAddr  string // `traddr`   — target transport address
-	TrSvcID string // `trsvcid`  — target service id (port)
-	SrcAddr string // `src_addr` — host source address (may be empty)
+	TrAddr  string // `traddr`, the target transport address
+	TrSvcID string // `trsvcid`, the target service port
+	SrcAddr string // `src_addr`, the host source address (may be empty)
 }
 
 // Controller is one path into a subsystem, exposed under
 // /sys/class/nvme/nvmeN. For NVMe-oF the transport/address fields describe
-// the fabric link; a subsystem with multiple live controllers is multipath.
+// the fabric link, and a subsystem with multiple live controllers is multipath.
 type Controller struct {
 	ID         ControllerID // `nvme0`
 	SysfsPath  string       // `/sys/class/nvme/nvme0`
@@ -48,7 +48,7 @@ type Controller struct {
 	Dev        string       // `dev`, major:minor, e.g., `238:0`
 
 	NQN       string  // `subsysnqn`
-	CntlID    uint16  // `cntlid` — controller id within the subsystem
+	CntlID    uint16  // `cntlid`, the controller id within the subsystem
 	Type      string  // `cntrltype`, e.g., `io`, `discovery`, or `admin`
 	Transport string  // `transport`, e.g., `tcp`, `rdma`, `fc`, or `pcie`
 	State     string  // `state`, e.g., `live`, `connecting`, or `resetting`
@@ -86,10 +86,10 @@ func (s ANAState) Accessible() bool {
 	return s == ANAOptimized || s == ANANonOptimized
 }
 
-// Path is one controller's access path to a namespace — the per-controller
+// Path is one controller's access path to a namespace, the per-controller
 // leg exposed under /sys/class/nvme/nvmeN/nvmeXcYnZ. With multiple
 // controllers (multipath/HA) a namespace has one Path per controller, each
-// with its own ANA state; the kernel routes I/O to optimized paths first.
+// with its own ANA state, and the kernel routes I/O to optimized paths first.
 type Path struct {
 	Controller ControllerID // owning controller, e.g., `nvme1`
 	Name       string       // leg name, e.g., `nvme0c1n1`
@@ -101,7 +101,7 @@ type Path struct {
 }
 
 // Namespace is a block namespace exported by a subsystem, exposed under
-// /sys/class/nvme-subsystem/nvme-subsysN/nvmeXnY — the multipath block
+// /sys/class/nvme-subsystem/nvme-subsysN/nvmeXnY, the multipath block
 // head whose device node is DevicePath.
 type Namespace struct {
 	ID         NamespaceID // `nsid`
@@ -110,10 +110,10 @@ type Namespace struct {
 	DevicePath string      // `/dev/nvme0n1`
 	Dev        string      // `dev`, major:minor, e.g., `259:1`
 
-	UUID  string // `uuid`  — namespace UUID (simplyblock: the lvol UUID)
+	UUID  string // `uuid`, the namespace UUID (simplyblock: the lvol UUID)
 	NGUID string // `nguid`
 	WWID  string // `wwid`, e.g., `uuid.<uuid>`
-	CSI   int    // `csi` — command set identifier (0 = NVM)
+	CSI   int    // `csi`, the command set identifier (0 = NVM)
 
 	LogicalBlockSize uint32 // `queue/logical_block_size`, in bytes
 	// Capacity and Used are in 512-byte sectors (the sysfs `size` and
@@ -143,13 +143,13 @@ type Namespace struct {
 }
 
 // Device is a resolved, attachable namespace together with the subsystem
-// that exports it — and thus all of its controller paths. It is the unit a
+// that exports it, and thus all of its controller paths. It is the unit a
 // CSI NodeStage/NodePublish operation acts on.
 //
 // The exported fields stay an immutable snapshot of kernel state at scan time.
 // A device also remembers the resolver it came out of, so the questions worth
-// asking about what else is attached — Siblings, CoTenants, and their predicates
-// — need no resolver threaded back in at the call site. That reference is a
+// asking about what else is attached (Siblings, CoTenants, and their
+// predicates) need no resolver threaded back in at the call site. That reference is a
 // handle for a fresh lookup, not part of the snapshot: the data never changes
 // under a caller, and a method that uses the handle re-scans and says so by
 // returning an error.
@@ -160,13 +160,14 @@ type Device struct {
 	// resolver is the DeviceResolver this device was resolved through, or nil
 	// for a device built by hand (a test fixture, say). Methods that need it
 	// fail with errs.ErrUnsupported rather than silently answering from an
-	// empty world; see WithResolver.
+	// empty world. See WithResolver.
 	resolver DeviceResolver
 }
 
 // WithResolver returns a copy of d bound to r, so the methods that have to
 // re-scan (Siblings, CoTenants, HasSiblings, HasCoTenants) can. Devices from a
-// resolver are already bound; this is for the ones a caller assembled itself.
+// resolver are already bound, and this is for the ones a caller assembled
+// itself.
 func (d Device) WithResolver(r DeviceResolver) Device {
 	d.resolver = r
 	return d

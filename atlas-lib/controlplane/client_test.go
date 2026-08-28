@@ -92,8 +92,8 @@ func TestClientConnection(t *testing.T) {
 }
 
 // The /connect entries carry the connect parameters the control plane picked
-// for each path (hyphenated keys, matching the `nvme connect` options); all of
-// them have to survive decoding.
+// for each path (hyphenated keys, matching the `nvme connect` options), and all
+// of them have to survive decoding.
 func TestClientConnectionCarriesConnectParameters(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

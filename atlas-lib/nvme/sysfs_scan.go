@@ -10,11 +10,11 @@ import (
 
 // nsNameRE matches a block-namespace directory such as `nvme0n1`. It
 // deliberately excludes per-controller legs (`nvme0c0n1`) and the generic
-// char namespace (`ng0n1`); the host I/O device is the subsystem-level one.
+// char namespace (`ng0n1`), and the host I/O device is the subsystem-level one.
 var nsNameRE = regexp.MustCompile(`^nvme\d+n\d+$`)
 
-// legNameRE matches a per-controller namespace leg such as "nvme0c1n1" —
-// the ANA-bearing path under a controller directory.
+// legNameRE matches a per-controller namespace leg such as `nvme0c1n1`, the
+// ANA-bearing path under a controller directory.
 var legNameRE = regexp.MustCompile(`^nvme\d+c\d+n\d+$`)
 
 // ctrlNameRE matches a controller entry such as `nvme0`. The kernel links
@@ -28,8 +28,8 @@ var ctrlNameRE = regexp.MustCompile(`^nvme\d+$`)
 var legHeadRE = regexp.MustCompile(`^(nvme\d+)c\d+(n\d+)$`)
 
 // legHead returns the name of the namespace head a leg serves, or "" if leg is
-// not a leg name. Two subsystems can front the same NQN — a stale one the
-// kernel has yet to reap next to a fresh one — and their namespaces then have
+// not a leg name. Two subsystems can front the same NQN (a stale one the
+// kernel has yet to reap next to a fresh one) and their namespaces then have
 // the same NSID, so NSID alone cannot say which head a leg belongs to.
 func legHead(leg string) string {
 	m := legHeadRE.FindStringSubmatch(leg)
@@ -88,7 +88,7 @@ func scanSubsystems(sysRoot, devRoot string) ([]Subsystem, error) {
 
 		// Attach each ANA path to the namespace head it serves. The head is
 		// named by the leg itself, so two subsystems fronting one NQN keep
-		// their own ANA view instead of inheriting each other's paths — which
+		// their own ANA view instead of inheriting each other's paths, which
 		// is what lets a caller tell a live subsystem from a stale one.
 		for i := range s.Namespaces {
 			for _, p := range paths {
@@ -142,7 +142,7 @@ func subsystemControllers(s Subsystem, entries []string, ctrls []Controller) []C
 }
 
 // controllerNamespaces returns the namespaces owned by s's controllers rather
-// than by s itself — the layout when native NVMe multipath is off
+// than by s itself, the layout when native NVMe multipath is off
 // (nvme_core.multipath=0): the kernel builds no subsystem-level head, and each
 // controller exposes its own block device for a namespace, so one volume
 // reached over several paths becomes several devices sharing a namespace UUID

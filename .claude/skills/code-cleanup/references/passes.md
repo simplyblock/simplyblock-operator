@@ -22,7 +22,7 @@ have to.
 
 | Kind                              | How to prove it                                                     |
 |-----------------------------------|---------------------------------------------------------------------|
-| Unused unexported symbol          | `make lint` — the `unused` linter already reports it                |
+| Unused unexported symbol          | `make lint`, where the `unused` linter already reports it           |
 | Unused exported symbol            | `go run golang.org/x/tools/cmd/deadcode@latest ./...` per module    |
 | Unreachable branch                | the condition is a constant, or the guard above it already returned |
 | Orphaned constant, error, or type | `grep -rn '\bName\b' --include='*.go'` across all three modules     |
@@ -100,15 +100,15 @@ client" is a modernization target the library has already documented.
 **What to look for.** `scripts/find-twins.sh --handrolled` reports each of these
 with its call sites:
 
-| Written by hand                                 | Owned by       | Current count                                                                                        |
-|-------------------------------------------------|----------------|------------------------------------------------------------------------------------------------------|
-| `fmt.Sprintf("nqn.2014-08.io.simplyblock:...")` | `nqn`          | `nqn.Host(nodeUID)`; the package has 0 importers                                                     |
-| `strings.Split(handle, ":")`                    | `lvol`         | `lvol.VolumeHandle.Split()`; 0 importers                                                             |
-| `strings.Contains(err.Error(), ...)`, `== 503`  | `errs/class`   | one classifier, one retry policy; 0 importers                                                        |
-| `switch ops.Status.SubPhase`                    | `statemachine` | 12 phase switches in 7 controller files                                                              |
-| reading `/sys/class/nvme` directly              | `nvme`         | centralized in `atlas-lib/internal/sysfs`                                                            |
-| `"nvme", "connect"` and friends                 | `nvmeof`       | nvme-cli shelled out to from the CSI initiator and the rebalancer; `nvmeof` uses `/dev/nvme-fabrics` |
-| a second control-plane client                   | `controlplane` | `operator/internal/webapi` (2,065 lines, retiring)                                                   |
+| Written by hand                                 | Owned by       | Current count                                                                                              |
+|-------------------------------------------------|----------------|------------------------------------------------------------------------------------------------------------|
+| `fmt.Sprintf("nqn.2014-08.io.simplyblock:...")` | `nqn`          | `nqn.Host(nodeUID)`, and the package has 0 importers                                                       |
+| `strings.Split(handle, ":")`                    | `lvol`         | `lvol.VolumeHandle.Split()`, 0 importers                                                                   |
+| `strings.Contains(err.Error(), ...)`, `== 503`  | `errs/class`   | one classifier, one retry policy, 0 importers                                                              |
+| `switch ops.Status.SubPhase`                    | `statemachine` | 12 phase switches in 7 controller files                                                                    |
+| reading `/sys/class/nvme` directly              | `nvme`         | centralized in `atlas-lib/internal/sysfs`                                                                  |
+| `"nvme", "connect"` and friends                 | `nvmeof`       | nvme-cli shelled out to from the CSI initiator and the rebalancer, while `nvmeof` uses `/dev/nvme-fabrics` |
+| a second control-plane client                   | `controlplane` | `operator/internal/webapi` (2,065 lines, retiring)                                                         |
 
 **Direction of travel for the control-plane client.** `operator/internal/webapi`
 is being retired in favor of `atlas-lib/controlplane`, which already covers its
@@ -146,11 +146,11 @@ bodies.
 
 **Three cases, three homes:**
 
-| Copies                             | Where the single version belongs                                         |
-|------------------------------------|--------------------------------------------------------------------------|
-| Inside one package                 | a helper in that package                                                 |
-| Across packages in one module      | the package that owns the concern; `new-files` decides whether it is new |
-| Across the operator and the driver | `atlas-lib` — hand off to `extract-to-atlas-lib`                         |
+| Copies                             | Where the single version belongs                                             |
+|------------------------------------|------------------------------------------------------------------------------|
+| Inside one package                 | a helper in that package                                                     |
+| Across packages in one module      | the package that owns the concern, and `new-files` decides whether it is new |
+| Across the operator and the driver | `atlas-lib`, handed off to `extract-to-atlas-lib`                            |
 
 Live examples: `apiClient()` is copied verbatim in five controllers, and
 `controlPlaneToStorageNodeSetRequests`, `tlsSecretToStorageNodeSetRequests`, and
@@ -287,8 +287,8 @@ for controllers, `atlas-lib/README.md` for library flows, `api-design` for CRDs.
 | An untyped `phase` or `subPhase` string | a typed `FooPhase string` with its constants beside it                 |
 | Error wrapping style, sentinel choice   | `errs` sentinels, `errors.Is` across package boundaries                |
 | Status write style                      | one `patchStatus` shape, not four                                      |
-| Requeue and backoff choices             | requeue against error, `RequeueAfter` for waiting; never a sleep       |
-| Logging keys and levels                 | whatever the majority of controllers already do; pick one and state it |
+| Requeue and backoff choices             | requeue against error, `RequeueAfter` for waiting, never a sleep       |
+| Logging keys and levels                 | whatever the majority of controllers already do. Pick one and state it |
 
 **Preserve.** A deliberate difference with a reason is not divergence. When a
 controller does something unlike its siblings and a comment says why, unifying it

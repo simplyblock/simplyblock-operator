@@ -2,8 +2,8 @@
 // (an io.Closer's Close, or a func() error teardown/cancel) and log any error
 // instead of silently dropping it.
 //
-// Each log records the caller that scheduled the deferred call — the function,
-// file and line — so a failing cleanup (often the sign of a leak) is visible
+// Each log records the caller that scheduled the deferred call (the function,
+// file, and line) so a failing cleanup, often the sign of a leak, is visible
 // with its origin, rather than disappearing behind `defer f.Close()`.
 //
 // Typical use:

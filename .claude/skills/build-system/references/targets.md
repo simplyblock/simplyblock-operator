@@ -1,7 +1,7 @@
 # Target Reference
 
 Every target, what it actually runs, and the variables that change it. Read the
-Makefile when in doubt — this is a map, not a substitute.
+Makefile when in doubt, because this is a map, not a substitute.
 
 ## Root Makefile
 
@@ -23,7 +23,7 @@ prerequisites run serially. `make` with no target prints the help.
 | `operator-build\|test\|lint\|fmt\|vet` | `make -C operator <t>`                                                                |
 | `helm-sync`                            | `operator-manifests`, then `bash helm-charts/scripts/sync-from-operator.sh operator`  |
 
-`helm-sync` exists **only** at the root — there is no `helm-charts/Makefile`.
+`helm-sync` exists **only** at the root, and there is no `helm-charts/Makefile`.
 
 ## operator/Makefile
 
@@ -33,19 +33,19 @@ recipe.
 
 ### Development
 
-| Target                            | Runs                                                                                                                | Notes                                                 |
-|-----------------------------------|---------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------|
-| `manifests`                       | `controller-gen rbac:roleName=manager-role crd:allowDangerousTypes=true webhook paths="./..."`                      | CRDs to `config/crd/bases`; phony, always re-runs     |
-| `generate`                        | `controller-gen object:headerFile=hack/boilerplate.go.txt paths="./..."`                                            | the `zz_generated.deepcopy.go` files                  |
-| `fmt` / `vet`                     | `go fmt ./...` / `go vet ./...`                                                                                     |                                                       |
-| `test`                            | `manifests generate fmt vet setup-envtest`, then `go test $(go list ./... \| grep -v /e2e) -coverprofile cover.out` | writes `cover.out`; **regenerates and formats first** |
-| `setup-test-e2e`                  | creates the Kind cluster `$(KIND_CLUSTER)` if absent                                                                | needs `kind` on `PATH`                                |
-| `test-e2e`                        | `go test -tags=e2e ./test/e2e/`, then `cleanup-test-e2e`                                                            |                                                       |
-| `lint`, `lint-fix`, `lint-config` | pinned `golangci-lint`                                                                                              |                                                       |
+| Target                            | Runs                                                                                                                | Notes                                                     |
+|-----------------------------------|---------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------|
+| `manifests`                       | `controller-gen rbac:roleName=manager-role crd:allowDangerousTypes=true webhook paths="./..."`                      | CRDs to `config/crd/bases`, phony, always re-runs         |
+| `generate`                        | `controller-gen object:headerFile=hack/boilerplate.go.txt paths="./..."`                                            | the `zz_generated.deepcopy.go` files                      |
+| `fmt` / `vet`                     | `go fmt ./...` / `go vet ./...`                                                                                     |                                                           |
+| `test`                            | `manifests generate fmt vet setup-envtest`, then `go test $(go list ./... \| grep -v /e2e) -coverprofile cover.out` | writes `cover.out`, **regenerating and formatting first** |
+| `setup-test-e2e`                  | creates the Kind cluster `$(KIND_CLUSTER)` if absent                                                                | needs `kind` on `PATH`                                    |
+| `test-e2e`                        | `go test -tags=e2e ./test/e2e/`, then `cleanup-test-e2e`                                                            |                                                           |
+| `lint`, `lint-fix`, `lint-config` | pinned `golangci-lint`                                                                                              |                                                           |
 
 `ENVTEST_VERSION` and `ENVTEST_K8S_VERSION` are derived from `go.mod`
-(controller-runtime's release branch, `k8s.io/api`'s minor) rather than pinned;
-the envtest assets land in `.bin` (`LOCALBIN := $(BIN_DIR)`).
+(controller-runtime's release branch, `k8s.io/api`'s minor) rather than pinned.
+The envtest assets land in `.bin` (`LOCALBIN := $(BIN_DIR)`).
 
 ### Build
 
@@ -96,10 +96,10 @@ Includes `../scripts/tools.mk`. Default goal `all` is `spdkcsi lint test`.
 | `lint` → `golangci`                          | pinned `golangci-lint run ./...`                                                             |                                                                                               |
 | `fmt`, `vet`                                 | `go fmt` / `go vet`                                                                          |                                                                                               |
 | `yamllint`, `shellcheck`, `mdl`, `codespell` | skip with a message when the tool is absent (`mdl` and `codespell` fail instead)             | not part of `lint`                                                                            |
-| `test`                                       | `mod-check unit-test`                                                                        | `go mod verify`, then `go test -race -cover` over `cmd` and `pkg`; `SKIP_TESTS=<regex>` skips |
+| `test`                                       | `mod-check unit-test`                                                                        | `go mod verify`, then `go test -race -cover` over `cmd` and `pkg`. `SKIP_TESTS=<regex>` skips |
 | `e2e-test`                                   | `go test -race -timeout 30m ./e2e`, or ginkgo with `E2E_PROCS=N`                             | `E2E_TEST_ARGS` passes ginkgo flags                                                           |
 | `helm-test`                                  | `scripts/install-helm.sh` up, install, cleanup, clean                                        |                                                                                               |
-| `image`                                      | `sudo docker build -f deploy/image/Dockerfile ..` plus an `arm64` buildx pass                | uses `sudo` and `apt-get`; **Linux only**                                                     |
+| `image`                                      | `sudo docker build -f deploy/image/Dockerfile ..` plus an `arm64` buildx pass                | uses `sudo` and `apt-get`. **Linux only**                                                     |
 | `clean`                                      | removes the binary, `go clean -testcache`                                                    |                                                                                               |
 
 Variables: `GOARCH` (host default), `CSI_IMAGE_REGISTRY` (`simplyblock`),
@@ -110,15 +110,15 @@ Variables: `GOARCH` (host default), `CSI_IMAGE_REGISTRY` (`simplyblock`),
 Includes `../scripts/tools.mk`. Default goal `all` is `build test`. The only
 component with **file targets**, so make's staleness rules apply.
 
-| Target                             | Runs                                                                                                                    |
-|------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
-| `generate`                         | the two generated files below, when out of date                                                                         |
-| `internal/cpapi/cpapi.gen.go`      | `go generate ./internal/cpapi/...` — depends on `../shared/openapi.json`, `oapi-codegen.yaml`, `overlay.yaml`, `gen.go` |
-| `internal/cpapi/validation.gen.go` | `cd internal/cpapi && go run ./gen` — depends on the client, `validation.yaml`, `gen/main.go`                           |
-| `build`                            | the generated files, then `go build ./...`                                                                              |
-| `test`                             | `vet`, then `go test -race -coverprofile=coverage.out ./...`                                                            |
-| `lint`                             | pinned `golangci-lint run ./...`                                                                                        |
-| `vet`, `fmt`                       | `go vet` / `go fmt`                                                                                                     |
+| Target                             | Runs                                                                                                                     |
+|------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `generate`                         | the two generated files below, when out of date                                                                          |
+| `internal/cpapi/cpapi.gen.go`      | `go generate ./internal/cpapi/...`, depending on `../shared/openapi.json`, `oapi-codegen.yaml`, `overlay.yaml`, `gen.go` |
+| `internal/cpapi/validation.gen.go` | `cd internal/cpapi && go run ./gen`, depending on the client, `validation.yaml`, `gen/main.go`                           |
+| `build`                            | the generated files, then `go build ./...`                                                                               |
+| `test`                             | `vet`, then `go test -race -coverprofile=coverage.out ./...`                                                             |
+| `lint`                             | pinned `golangci-lint run ./...`                                                                                         |
+| `vet`, `fmt`                       | `go vet` / `go fmt`                                                                                                      |
 
 The `oapi-codegen` version is pinned in `go.mod` through
 `internal/cpapi/tools.go`, not in the tool manifest.
@@ -127,10 +127,10 @@ The `oapi-codegen` version is pinned in `go.mod` through
 
 `tools.mk` resolves the repo root from its own path, so it works from any
 component directory. It exposes `$(GOLANGCI_LINT)`, `$(KUSTOMIZE)`,
-`$(CONTROLLER_GEN)`, `$(ENVTEST)`, `$(YQ)` — all under `$(BIN_DIR)` = `.bin` —
+`$(CONTROLLER_GEN)`, `$(ENVTEST)`, and `$(YQ)`, all under `$(BIN_DIR)` = `.bin`,
 and one phony install target per tool that defers to `tools.sh`. No versions live
 in the fragment: `scripts/tools.manifest` is the single source of truth, with
-`scripts/tools.lock` holding the checksums. `setup-envtest` is the exception —
+`scripts/tools.lock` holding the checksums. `setup-envtest` is the exception:
 its version comes from the caller (`$(ENVTEST_VERSION)`, derived from `go.mod`).
 
 ```bash

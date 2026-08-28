@@ -38,7 +38,7 @@ import (
 
 // payloadField matches the fields a generated response struct exposes for a
 // success body: JSON200, JSON201, … Error bodies (JSON422) are deliberately
-// not validated — a strict decode there would mask the error it carries.
+// not validated, because a strict decode there would mask the error it carries.
 var payloadField = regexp.MustCompile(`^JSON2[0-9]{2}$`)
 
 // goTypeName matches an exported Go type name, which is what an endpoint-scoped
@@ -46,7 +46,7 @@ var payloadField = regexp.MustCompile(`^JSON2[0-9]{2}$`)
 var goTypeName = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*$`)
 
 const (
-	// presentRule means "this key must appear in the body"; it is checked
+	// presentRule means "this key must appear in the body." It is checked
 	// against the raw body rather than by the validator.
 	presentRule = "present"
 	// asKey names the Go type an endpoint-scoped variant compiles to. It is
@@ -152,7 +152,7 @@ func responseTypes(structs map[string]*ast.StructType, unmarshalers map[string]b
 	types := make([]string, 0, len(found))
 	for name := range found {
 		// A response struct reached through a payload field (they nest) is
-		// plumbing, not a model; the union types decode themselves.
+		// plumbing, not a model, and the union types decode themselves.
 		if unmarshalers[name] || strings.HasSuffix(name, "Response") {
 			continue
 		}
@@ -183,8 +183,8 @@ func typeName(expr ast.Expr) string {
 
 // rule is one type's compiled rules: validator tags by Go field name, and the
 // JSON keys that must be present in the body. For an endpoint-scoped variant,
-// base is the schema it is a flavor of and endpoint is where it comes from;
-// both are empty for a schema's own rules.
+// base is the schema it is a flavor of and endpoint is where it comes from.
+// Both are empty for a schema's own rules.
 type rule struct {
 	typ      string
 	tags     map[string]string
@@ -210,7 +210,7 @@ type spec struct {
 	Paths map[string]map[string]json.RawMessage `json:"paths"`
 }
 
-// readSpec reads the spec — the authority on what the control plane's models
+// readSpec reads the spec, the authority on what the control plane's models
 // are called, which of their properties it promises to send, and which
 // endpoints exist to scope a rule to.
 func readSpec(path string) (spec, error) {
@@ -272,7 +272,7 @@ func compile(rulesYAML []byte, structs map[string]*ast.StructType, doc spec, spe
 			continue
 		}
 		// Without the base's block there is nothing to merge, and the variant
-		// would quietly enforce only its own rules — the shared ones would look
+		// would quietly enforce only its own rules, and the shared ones would look
 		// inherited and not be. An empty `<schema>: {}` says "no shared rules"
 		// deliberately.
 		base, ok := bases[b.schema]
@@ -381,9 +381,9 @@ func compileRules(b block, name string, structs map[string]*ast.StructType, doc 
 // with this endpoint's applied on top, under the Go type its `as` names.
 //
 // The endpoint has to exist in the spec, but the spec cannot confirm that it
-// answers with this schema — the endpoints whose promises diverge from the
+// answers with this schema, because the endpoints whose promises diverge from the
 // shared model are exactly the ones FastAPI declares no response model for. The
-// association is this client's claim; what generation checks is that everything
+// association is this client's claim. What generation checks is that everything
 // the claim names is still there.
 func compileVariant(b block, base rule, structs map[string]*ast.StructType, doc spec, specPath string) (rule, error) {
 	method, path, ok := strings.Cut(b.endpoint, " ")
@@ -521,7 +521,7 @@ var responseRules = []responseRule{
 {{range .Variants}}
 // {{.Type}} is a {{.Base}} as answered by {{.Endpoint}}, which promises more
 // than the shared model does. Same fields, own identity, so it can carry its
-// own rules; convert to {{.Base}} where the difference does not matter.
+// own rules. Convert to {{.Base}} where the difference does not matter.
 type {{.Type}} {{.Base}}
 {{end}}{{range .Decoders}}
 // UnmarshalJSON decodes and validates a {{.}}.

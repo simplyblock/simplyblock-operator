@@ -4,7 +4,7 @@
 // It holds what both consumers need and neither should re-implement. Most of it
 // is node-level storage: NVMe device discovery, NVMe-oF fabric connection
 // management, NQN handling, and the mapping between a logical volume and the
-// local NVMe namespace that backs it. The rest is the vocabulary around that —
+// local NVMe namespace that backs it. The rest is the vocabulary around that:
 // the control-plane client, the classification of a failure into what a caller
 // should do about it, and the small helpers both sides would otherwise write
 // twice.
@@ -28,12 +28,12 @@
 //	ptr             Pointers to values, for the optional fields of generated
 //	                request bodies and Kubernetes types.
 //
-// Everything under internal/ — sysfs scanning, the generated control-plane API
-// client, and build metadata — is implementation detail and carries no
+// Everything under internal/ (sysfs scanning, the generated control-plane API
+// client, and build metadata) is implementation detail and carries no
 // compatibility guarantee.
 //
 // README.md next to this file carries the worked flows both consumers actually
-// perform — the idiomatic call sequence for each, a file-level index of every
+// perform: the idiomatic call sequence for each, a file-level index of every
 // package, and a note on which patterns are already wired at a live call site.
 // Read it before writing a helper.
 //

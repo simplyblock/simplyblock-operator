@@ -1,6 +1,6 @@
 ---
 name: house-style
-description: The writing house style of this repository and the gates that enforce it — American English, the Oxford comma, the lowercase simplyblock brand, product-name spelling, punctuation, and impersonal third-person voice. Applies to the design documents and test plans below operator/docs/ and to the prose in Go, Python, and YAML comments. Use when writing or editing any of those, and when a gate reports a finding that has to be resolved.
+description: The writing house style of this repository and the gates that enforce it: American English, the Oxford comma, the lowercase simplyblock brand, product-name spelling, punctuation, and impersonal third-person voice. Applies to the design documents and test plans below operator/docs/ and to the prose in Go, Python, and YAML comments. Use when writing or editing any of those, and when a gate reports a finding that has to be resolved.
 ---
 
 # House style
@@ -9,20 +9,20 @@ Ported from the simplyblock documentation repository
 (`documentation/.claude/skills/documentation-writing`) and adapted for an
 engineering repository. The rules that are about the words are unchanged, so a
 sentence reads the same here as it does on the website. The rules that were about
-`mkdocs` pages are gone, and the voice rule is narrower — see
+`mkdocs` pages are gone, and the voice rule is narrower. See
 **Deviations from the documentation repository** below.
 
 ## Scope
 
-| Where                                                    | What is checked                                                |
-|----------------------------------------------------------|----------------------------------------------------------------|
-| `operator/docs/designs/*.md`, `operator/docs/tests/*.md` | Everything below                                               |
-| Any `.md` in the repository                              | Everything below, when passed to the gate                      |
-| `.go`, `.py`, `.yaml`                                    | **Comments and docstrings** — every rule except voice          |
-| `.go`, `.py`, `.yaml`                                    | **The names they declare** — American English and brand casing |
+| Where                                                    | What is checked                                               |
+|----------------------------------------------------------|---------------------------------------------------------------|
+| `operator/docs/designs/*.md`, `operator/docs/tests/*.md` | Everything below                                              |
+| Any `.md` in the repository                              | Everything below, when passed to the gate                     |
+| `.go`, `.py`, `.yaml`                                    | **Comments and docstrings:** every rule except voice          |
+| `.go`, `.py`, `.yaml`                                    | **The names they declare:** American English and brand casing |
 
 **The development chart is in scope.**
-`helm-charts/charts/simplyblock-operator/` is hand-written source — its
+`helm-charts/charts/simplyblock-operator/` is hand-written source. Its
 `Chart.yaml`, `values.yaml`, `operator_customresources.yaml`, and `templates/`
 are checked like anything else, because its values keys and comments are what a
 user reads and types.
@@ -35,7 +35,7 @@ Excluded around it:
 - **The vendored subcharts** under the development chart's own `charts/`.
 - **The three paths `make helm-sync` writes:** `crds/`, `templates/roles/`, and
   `templates/simplyblock-operator-webhook.yaml`. A finding there belongs to the
-  operator's markers and types; fix it at the source and sync.
+  operator's markers and types, so fix it at the source and sync.
 
 Two chart-specific rules keep that scope usable:
 
@@ -93,8 +93,8 @@ defaults to the source trees (`operator`, `csi-driver`, `atlas-lib`, `shared`,
 
 **Run `--changed` before handing work back.** The repository predates these
 gates, so a full run over `operator/docs` reports pre-existing findings in
-documents nobody is editing. Fix what the current change touches; leave the rest
-until it is cleaned up deliberately.
+documents nobody is editing. Fix what the current change touches, and leave the
+rest until it is cleaned up deliberately.
 
 ## Voice
 
@@ -105,8 +105,8 @@ code behaves rather than hedging about how it should.
 No first or second person: no "we," "our," "us," "you," "your," "I," "my," and
 none of their contractions. "We resume the node before we fail the action" is
 "the operator resumes the node before it marks the action failed." This is gated
-in Markdown only — a code comment is written for the next person to read the
-function and may address them.
+in Markdown only, because a code comment is written for the next person to read
+the function and may address them.
 
 Name the actor. The operator, the reconciler, the CSI driver, the control plane,
 the user: an active third-person sentence with a named actor is clearer than a
@@ -131,8 +131,8 @@ intentions ("this will eventually…"). Git carries the history, the date line
 carries the revision, and an intention that is not yet true belongs in Open
 Questions or a phasing table where it is marked as not-yet-true.
 
-**Prose is the default.** A paragraph carries the relation between facts — cause,
-condition, consequence — that a list drops on the floor. Use a bullet list for
+**Prose is the default.** A paragraph carries the relation between facts (cause,
+condition, consequence) that a list drops on the floor. Use a bullet list for
 several *options* of the same kind: valid values, supported distributions, the
 transports to choose from. A list whose items are full sentences depending on each
 other is a paragraph that lost its connectives.
@@ -162,9 +162,9 @@ replaced.
 **Every other product keeps the spelling its owner uses**: `Kubernetes`,
 `OpenShift`, `NVMe`, `NVMe-oF`, `NVMe/TCP`, `Docker`, `Helm`, `Prometheus`,
 `Grafana`, `Graylog`, `FoundationDB`, `MinIO`, `SPDK`, `QoS`, `systemd`, `K8s`.
-The full list is `TERMS` in `scripts/check-terminology.py`; add a term there
+The full list is `TERMS` in `scripts/check-terminology.py`. Add a term there
 rather than accepting a new spelling. `I/O` carries its slash, and a protocol has
-no plural — write `NVMe devices`, never `NVMEs`.
+no plural: write `NVMe devices`, never `NVMEs`.
 
 Put an identifier, a field path, a CR kind, a command, or a value in backticks
 and every spelling gate leaves it alone. That is the mechanism, not a workaround:
@@ -175,7 +175,7 @@ and every spelling gate leaves it alone. That is the mechanism, not a workaround
 `afterward`, `toward`. `Fibre Channel` is the name of a standard and keeps its
 spelling.
 
-**A compound with two accepted spellings is written the house way** —
+**A compound with two accepted spellings is written the house way:**
 `datacenter` is one word. The list is `ONE_WORD_COMPOUNDS` in
 `scripts/check-prose.py`.
 
@@ -187,7 +187,7 @@ punctuation, and "graceful and ungraceful shutdowns" is two items.
 ## Names in code
 
 A name outlives the sentence around it. A field called `behaviourMode` reaches
-the CRD, the Helm values, and every manifest a user writes; a helper called
+the CRD, the Helm values, and every manifest a user writes. A helper called
 `analyseNode` is read by everyone who touches the package afterward. **The
 spelling rules apply to identifiers exactly as they apply to prose.**
 
@@ -199,7 +199,7 @@ of a Helm chart. Names are split into words first, so `camelCase`, `PascalCase`,
 acronym stays whole: `parseHTTPColorCode` is `parse`, `HTTP`, `Color`, `Code`.
 
 - **American English:** `analyzeNode`, `normalizedScore`, `MigrationStatusCanceled`,
-  `sanitizeDNSLabel` — never `analyse`, `normalised`, `Cancelled`, `sanitise`.
+  `sanitizeDNSLabel`, never `analyse`, `normalised`, `Cancelled`, or `sanitise`.
 - **The brand is one word:** `simplyblock` where it opens a lowerCamel name or
   follows a `_`, `Simplyblock` where it opens a word inside a camelCase or
   PascalCase name, `SIMPLYBLOCK` in an all-caps constant. So
@@ -211,10 +211,10 @@ call into a dependency spells that dependency's name the way its owner does.
 Three things to know before renaming:
 
 - **Use a refactoring tool** (`gopls rename`, the IDE's rename), never a
-  search-and-replace. The gate reports; it does not rewrite.
+  search-and-replace. The gate reports rather than rewrites.
 - **An exported name is an API change**, and the finding says so. For a CRD field
   or a Helm value the rename reaches users, so it needs a migration path or a
-  deliberate decision to leave it — record that decision rather than silencing
+  deliberate decision to leave it. Record that decision rather than silencing
   the gate.
 - **A value is not a name.** `MigrationStatusCanceled = "cancelled"` is correct
   when `"cancelled"` is the literal the control plane sends: the constant is
@@ -231,22 +231,48 @@ so it is left to review.
 
 - **A comma after an abbreviation or an opening connective:** `e.g.,`, `i.e.,`,
   `However,`, `By default,`, `Internally,`. Without it the reader parses the word
-  as the subject and starts over. "Then" and "First" take none — they number
-  steps.
-- **A comma and a full stop go inside a closing quotation mark**; a colon and a
-  semicolon stay outside. A value or an identifier takes backticks rather than
+  as the subject and starts over. "Then" and "First" take none, because they
+  number steps.
+- **A comma and a full stop go inside a closing quotation mark**, and a colon and
+  a semicolon stay outside. A value or an identifier takes backticks rather than
   quotation marks, which settles the question before it arises.
 - **A mark sits against its word:** no space before a comma, none just inside a
   parenthesis.
 - **A compound before a noun is hyphenated**, the same words as a noun are not:
   "a high-availability cluster," but "the cluster provides high availability." An
   adverb is never hyphenated to its adjective: "highly available."
-- **A semicolon between two clauses** is a warning: two full stops read easier.
-  It stays where it separates items of a series that already carry commas.
+- **A semicolon between two clauses is almost always the wrong mark.** Two full
+  stops read easier, and a subordinate clause reads easier still. It survives
+  only where it separates items of a series that already carry commas.
+
+  ```plain
+  Instead of: the reconciler requeues on error; the phase is left untouched.
+  Write:      the reconciler requeues on error and leaves the phase untouched.
+  ```
+
+- **An em dash is rarer still, and a double hyphen standing in for one is the
+  same mark.** Written prose reaches for it far less often than a generated draft
+  does, so a page dense with em dashes reads as machine-written whatever else is
+  true of it. One of four marks is nearly always the one that was meant: a colon
+  introduces what follows, a comma joins, parentheses hold an aside, and a full
+  stop ends the sentence.
+
+  ```plain
+  Instead of: the drain blocks — the pinned volume has not been released.
+  Write:      the drain blocks because the pinned volume has not been released.
+  ```
+
+  Both of these are warnings rather than errors, because the sentence that
+  genuinely wants one exists and a check cannot recognize it. That is the only
+  reason. The expected answer to either warning is a rewrite, and keeping the
+  mark is the case that owes the next reader a reason.
+
 - **The subject of a list item is bold with its colon inside the asterisks:**
-  `- **Foo:** the text`, never `- **Foo** - the text`.
+  `- **Foo:** the text`, never `- **Foo** - the text` and never
+  `- **Foo** — the text`. Introducing a description is what a colon is for, and
+  handing that job to a dash is the single most common way em dashes accumulate.
 - **An item continues the sentence above it.** After a heading, a full stop, or a
-  colon the item opens a new sentence in upper case; after a line that runs on
+  colon the item opens a new sentence in upper case. After a line that runs on
   into the list, the item is the rest of that sentence and stays lower case.
 - No repeated words, no double spaces, no trailing whitespace, and one final
   newline.
@@ -254,12 +280,12 @@ so it is left to review.
 ## Short sentences
 
 One idea per sentence. The house median is 16 words and nine in ten stay under
-27; past 30, the split is almost always already there at a comma or a colon.
+27. Past 30, the split is almost always already there at a comma or a colon.
 Three signals that one is due: three or more commas before the main verb, a chain
 of "which … that … where …" hanging off one noun, or a subordinate clause opening
 the sentence and running past the second comma.
 
-Put the fact first and the condition after it. Short does not mean clipped — vary
+Put the fact first and the condition after it. Short does not mean clipped: vary
 the length around a short average.
 
 ## Deviations from the documentation repository
@@ -268,7 +294,7 @@ These are deliberate, and they are why this skill is a copy rather than a
 reference:
 
 - **The passive voice is not mandated.** Customer documentation describes a
-  system to an operator; a design document explains a mechanism to an engineer,
+  system to an operator. A design document explains a mechanism to an engineer,
   and naming the actor is what makes it precise. The pronoun ban stays, the
   passive default does not.
 - **The voice gate is Markdown-only, and skips instructions.** Code comments
@@ -276,16 +302,10 @@ reference:
   `.claude/` and `.github/`, `CLAUDE.md`, `CONTRIBUTING.md`, and `README.md`: an
   instruction addresses whoever follows it. The rule is about the documents that
   get written.
-- **Em dashes stay.** The documentation style replaces them with parentheses or
-  a full stop. Design documents here use them in headings, in table cells, and
-  for asides, and the corpus is consistent about it. The punctuation gate still
-  reports every one as a warning, which is why that gate is loud: a run over a
-  design document produces hundreds of them and fails on none. Read them for the
-  other findings mixed in, not for the dashes.
 - **No `mkdocs` gate.** No frontmatter (`title`, `weight`, `description`), no
   admonitions, content tabs, macros, or snippet includes, so
-  `check-mkdocs-syntax.py` was not ported. Generic Markdown structure — nested
-  list indentation, table separators, blank lines before lists and fences — is
+  `check-mkdocs-syntax.py` was not ported. Generic Markdown structure (nested
+  list indentation, table separators, and blank lines before lists and fences) is
   covered by MegaLinter's markdownlint, configured in `.mega-linter.yml`.
 - **Code fences carry no `title=` attribute.** A fence declares its language
   (`go`, `yaml`, `bash`, `json`, `plain`), and a bare fence is correct for an
@@ -297,8 +317,8 @@ reference:
 - **The identifier gate is new here.** The documentation repository has no code
   to name, so `check-identifiers.py` has no upstream counterpart.
 
-Document structure — section numbering, the metadata block, tables, diagrams — is
-not here. It lives in the `design-doc` skill, which owns those documents.
+Document structure (section numbering, the metadata block, tables, and diagrams)
+is not here. It lives in the `design-doc` skill, which owns those documents.
 
 ## The last pass
 

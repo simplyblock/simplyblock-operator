@@ -10,7 +10,7 @@ import (
 )
 
 // nvmeIoctlAdminCmd is NVME_IOCTL_ADMIN_CMD: _IOWR('N', 0x41, struct
-// nvme_passthru_cmd) with a 72-byte command struct — i.e.
+// nvme_passthru_cmd) with a 72-byte command struct, i.e.,
 // (3<<30)|(72<<16)|('N'<<8)|0x41.
 const nvmeIoctlAdminCmd = 0xC0484E41
 
@@ -21,7 +21,7 @@ const (
 
 // nvmePassthruCmd mirrors the kernel's struct nvme_passthru_cmd from
 // include/uapi/linux/nvme_ioctl.h (72 bytes). Field order and widths must
-// match exactly; the ioctl copies this struct in and out
+// match exactly, because the ioctl copies this struct in and out
 type nvmePassthruCmd struct {
 	opcode      uint8
 	flags       uint8
@@ -45,7 +45,7 @@ type nvmePassthruCmd struct {
 
 // identifyControllerMNAN issues an NVMe Identify Controller admin command on
 // the controller character device (e.g., "/dev/nvme0") and returns its MNAN
-// field (Maximum Number of Allowed Namespaces) — the most namespaces the
+// field (Maximum Number of Allowed Namespaces), the most namespaces the
 // controller's subsystem may hold.
 func identifyControllerMNAN(devicePath string) (uint32, error) {
 	f, err := os.OpenFile(devicePath, os.O_RDONLY, 0)

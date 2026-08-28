@@ -42,7 +42,7 @@ Four rules the existing kinds follow:
   optional fields, nine irrelevant to the chosen action, is unreadable and
   unvalidatable.
 - **The whole spec is immutable.** The object is a request. None of the three
-  kinds enforces this today — eight doc comments claim it and no CEL
+  kinds enforces this today: eight doc comments claim it and no CEL
   rule backs any of them, which leaves the reconciler to detect a mid-flight
   rewrite it could have refused. Add the rules on the next change to each.
 
@@ -74,8 +74,8 @@ type StorageNodeOpsStatus struct {
 ```
 
 Add for a new kind: `ObservedGeneration int64`, and `PhaseDeadline *metav1.Time`
-when the phases are bounded (see the `reconciler-patterns` skill — the deadline
-is what makes a per-phase timeout survive a restart).
+when the phases are bounded (see the `reconciler-patterns` skill, where the
+deadline is what makes a per-phase timeout survive a restart).
 
 `Message` carries the reason a phase is what it is, and it is the field a
 `printcolumn` shows. It is not a log: one sentence, the current reason, replaced
@@ -94,7 +94,7 @@ ActiveOpsRef string `json:"activeOpsRef,omitempty"`
 
 The Ops controller acquires it before the first side effect, and releases it on
 every terminal path, only if it owns it. That is what makes "one operation at a
-time" enforceable rather than hoped for — see `reconciler-patterns` §6.
+time" enforceable rather than hoped for. See `reconciler-patterns` §6.
 
 ## Printcolumns
 
@@ -105,12 +105,12 @@ nothing else.
 ## Adding an action to an existing kind
 
 1. **Add the verb to the `Enum`** on `action`. Adding an enum value is
-   backward-compatible; removing one is not.
+   backward-compatible, and removing one is not.
 2. **Add its parameters** as an optional nested struct, with a CEL rule tying
    them to the action where possible.
 3. **Add the phase or sub-phase constants** the action needs, typed.
 4. **Dispatch it** in the controller's action switch, and fail unknown actions
-   terminally — admission catches them first, but an older CRD in a cluster may
+   terminally. Admission catches them first, but an older CRD in a cluster may
    not have the new enum.
 5. **Regenerate and sync:** `make -C operator manifests generate`, then
    `make helm-sync`.
@@ -124,4 +124,4 @@ nothing else.
 | No CEL immutability on target, action, or parameters | A running operation can be rewritten under the reconciler                                                                                |
 | No `observedGeneration`                              | Nothing distinguishes a status from the spec it was computed from                                                                        |
 | No `phaseDeadline`                                   | A phase has no bound that survives a restart                                                                                             |
-| No TTL or auto-cleanup of finished operations        | Terminal Ops objects accumulate as audit records with no retention policy; the `StorageClusterOps` test plan records this as a known gap |
+| No TTL or auto-cleanup of finished operations        | Terminal Ops objects accumulate as audit records with no retention policy. The `StorageClusterOps` test plan records this as a known gap |

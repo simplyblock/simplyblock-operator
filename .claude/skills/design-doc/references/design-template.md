@@ -1,11 +1,11 @@
 # Design Doc Template
 
 Copy the skeleton, keep the section order, drop the sections the design does not
-need, renumber accordingly. Bracketed `<…>` text is a placeholder; the
+need, renumber accordingly. Bracketed `<…>` text is a placeholder, and the
 parenthesised italics under each heading say what belongs there and are not part
 of the output.
 
-Line breaks inside the metadata block are hard breaks — end each of those lines
+Line breaks inside the metadata block are hard breaks, so end each of those lines
 with two spaces.
 
 ---
@@ -226,17 +226,17 @@ with two spaces.
          every sub-phase", "no I/O error under sustained fio during cutover");
        - the harness each class needs (fake client + mock HTTP / `envtest` /
          live cluster with fio) and anything that does not exist yet;
-       - where the risk concentrates — the sections whose scenarios must not be
+       - where the risk concentrates: the sections whose scenarios must not be
          cut when the schedule slips;
        - the link. -->
 
 Full scenario matrix, coverage status, and hand-off test concepts:
 [`tests/test-plan-<slug>.md`](../tests/test-plan-<slug>.md)
 
-- **Unit** — <what must be proven without a cluster>
-- **Integration** — <what needs the reconcile loop against `envtest` + mock backend>
-- **E2E** — <what needs a live cluster, and the data-path correctness assertion>
-- **Load / long-running** — <scale and duration claims, if any>
+- **Unit:** <what must be proven without a cluster>
+- **Integration:** <what needs the reconcile loop against `envtest` + mock backend>
+- **E2E:** <what needs a live cluster, and the data-path correctness assertion>
+- **Load / long-running:** <scale and duration claims, if any>
 
 <!-- If the work is phased, say which classes only become testable in a later
      phase and why (§<n>). -->
@@ -272,11 +272,11 @@ Full scenario matrix, coverage status, and hand-off test concepts:
 
 ## Which sections a design actually needs
 
-| Design shape | Load-bearing sections |
-|---|---|
-| New CRD + controller | Overview, API Design, State Machine, Controller Design, Mutual Exclusion, Observability, Migration Strategy |
-| Algorithm / policy change | Overview, Core Mechanism (formulas, weights, defaults), Configuration, Failure Modes, Cool-down or hysteresis |
-| Long-running operation (drain, restart, migrate) | State Machine, sub-phase persistence, resume-on-failure, cancellation, Backend API idempotency |
-| Placement / scheduling | Tier or precedence table in Overview, per-tier gates, opt-out annotations, Failure Modes and Fallback |
-| Cross-component protocol (CSI ↔ operator ↔ control plane) | Architecture diagram with the trust boundary, Backend API Requirements, auth model, version skew |
-| Small, self-contained mechanism | H1 + Overview + mechanism + examples + failure mode is enough — `design-dhchap.md` is 129 lines and complete |
+| Design shape                                              | Load-bearing sections                                                                                         |
+|-----------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+| New CRD + controller                                      | Overview, API Design, State Machine, Controller Design, Mutual Exclusion, Observability, Migration Strategy   |
+| Algorithm / policy change                                 | Overview, Core Mechanism (formulas, weights, defaults), Configuration, Failure Modes, Cool-down or hysteresis |
+| Long-running operation (drain, restart, migrate)          | State Machine, sub-phase persistence, resume-on-failure, cancellation, Backend API idempotency                |
+| Placement / scheduling                                    | Tier or precedence table in Overview, per-tier gates, opt-out annotations, Failure Modes and Fallback         |
+| Cross-component protocol (CSI ↔ operator ↔ control plane) | Architecture diagram with the trust boundary, Backend API Requirements, auth model, version skew              |
+| Small, self-contained mechanism                           | H1 + Overview + mechanism + examples + failure mode is enough. `design-dhchap.md` is 129 lines and complete   |

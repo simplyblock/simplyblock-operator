@@ -21,7 +21,7 @@ const (
 	// controller goes live, with no udev in the way, so a few hundred
 	// milliseconds is the normal case and anything beyond this window is a
 	// defect worth diagnosing rather than waiting out. Diagnosis is what decides
-	// whether to act — the window only says when to look.
+	// whether to act, and the window only says when to look.
 	defaultSettleWindow = 3 * time.Second
 
 	// defaultRepairCooldown bounds how often the same repair may be applied to
@@ -44,7 +44,7 @@ const (
 // not publishing the namespace: the connection works, so reconnecting cannot
 // change the answer, and every namespace that *is* there belongs to another
 // volume. DefectStaleEndpoint means the control plane stopped publishing an
-// endpoint, which a node in restart also looks like — dropping a live data path
+// endpoint, which a node in restart also looks like. Dropping a live data path
 // on that evidence is the caller's call, and has been since ReconcilePaths.
 // Both are reported so a caller can act, and Repair will act on either when
 // explicitly asked.
@@ -56,8 +56,8 @@ var autoRepairKinds = []DefectKind{
 
 // RepairAction records one defect Attach considered and what became of it.
 // A defect that was diagnosed and deliberately left alone is as much a part of
-// the outcome as one that was repaired — more, when a volume stays degraded
-// because repairing it would have taken someone else's volume down.
+// the outcome as one that was repaired, and more so when a volume stays
+// degraded because repairing it would have taken someone else's volume down.
 type RepairAction struct {
 	// Defect is what was considered.
 	Defect Defect
@@ -85,7 +85,7 @@ func (a RepairAction) String() string {
 //
 // The diagnostics are returned rather than only logged because their absence was
 // itself an incident: a cluster ran for 42 hours with volumes routinely below
-// their configured redundancy — hundreds of degraded reports per volume — and
+// their configured redundancy (hundreds of degraded reports per volume), and
 // nothing above the node plugin could see it. A caller that surfaces Defects as
 // events or status conditions turns that into something operable.
 type AttachResult struct {
@@ -102,7 +102,7 @@ type AttachResult struct {
 }
 
 // Degraded reports whether the device came up on fewer paths than were asked
-// for — usable, with less redundancy than the control plane published.
+// for: usable, with less redundancy than the control plane published.
 func (r AttachResult) Degraded() bool {
 	return r.live() > 0 && r.live() < len(r.Paths)
 }
@@ -121,9 +121,9 @@ func (r AttachResult) live() int {
 // cannot, applying a policy Inspect deliberately does not have.
 //
 // It sits above Connector rather than inside it: the connector stays mechanical,
-// and the decisions that need judgment — how narrow a repair to prefer, whether
-// a repair may disturb another volume, how often the same repair may be
-// retried — live here, on a value, together with the state they need. That state
+// and the decisions that need judgment (how narrow a repair to prefer, whether
+// a repair may disturb another volume, and how often the same repair may be
+// retried) live here, on a value, together with the state they need. That state
 // is why this is a type and not a function: cooldowns have to outlive a single
 // attach to do anything, and a package-level map of them would be shared by
 // every caller in the process and never pruned.
@@ -152,8 +152,8 @@ type Repairer struct {
 // same target, recognized again on a later attempt.
 //
 // What may go in subject is constrained from both sides. It has to be narrow
-// enough that two repairs outstanding at once do not collide — or applying one
-// would silently mask the other — and stable enough to survive a repair that did
+// enough that two repairs outstanding at once do not collide (or applying one
+// would silently mask the other), and stable enough to survive a repair that did
 // not stick, since a key the teardown itself changes would see a brand-new repair
 // every time, which is the disconnect/reconnect loop the cooldown exists to
 // prevent. Neither the controller id nor the kernel subsystem id satisfies both
@@ -170,7 +170,7 @@ type RepairOption func(*Repairer)
 
 // WithSettleWindow bounds how long Attach waits for the block device before
 // diagnosing why it is not there. Too short and a healthy connect gets
-// diagnosed while the kernel is still publishing the namespace; too long and a
+// diagnosed while the kernel is still publishing the namespace. Too long and a
 // broken one stays broken for exactly that much longer. Zero or less restores
 // the default.
 func WithSettleWindow(d time.Duration) RepairOption {
@@ -183,30 +183,30 @@ func WithSettleWindow(d time.Duration) RepairOption {
 
 // WithRepairCooldown bounds how often the same repair may be applied to the same
 // target. Zero disables the cooldown, which lets a repair that does not stick
-// run at whatever cadence the caller attaches — appropriate for a one-shot
-// NodeStage, not for a monitor loop.
+// run at whatever cadence the caller attaches, which is appropriate for a
+// one-shot NodeStage and not for a monitor loop.
 func WithRepairCooldown(d time.Duration) RepairOption {
 	return func(r *Repairer) { r.cooldown = max(d, 0) }
 }
 
 // WithRepairRounds bounds how many repairs a single Attach may apply. Zero or
 // less disables repair entirely, leaving Attach a connect that diagnoses but
-// never acts — the shape a controller wants when it needs to report a fabric
-// state without changing it.
+// never acts. That is the shape a controller wants when it needs to report a
+// fabric state without changing it.
 func WithRepairRounds(n int) RepairOption {
 	return func(r *Repairer) { r.rounds = max(n, 0) }
 }
 
 // WithMaxRepairScope caps how much of the fabric a repair may tear down.
 // ScopeController allows single-path repairs only, which can never remove a
-// namespace device that another path still serves; ScopeNone disables repair as
-// WithRepairRounds(0) does.
+// namespace device that another path still serves. ScopeNone disables repair
+// as WithRepairRounds(0) does.
 func WithMaxRepairScope(s Scope) RepairOption {
 	return func(r *Repairer) { r.maxScope = s }
 }
 
 // WithDisruptiveRepairs allows repairs that leave another volume's namespace
-// with no usable path — that is, ones which take a block device away from a
+// with no usable path, that is, ones which take a block device away from a
 // volume that is not the caller's.
 //
 // It is off by default, and turning it on should be a deliberate answer to a
@@ -263,7 +263,7 @@ func NewRepairer(
 //
 // The diagnosis runs even when the block device is already there, which is the
 // difference between this and waiting for a device. The worst of these states is
-// not the volume with no device — that one at least fails visibly. It is the
+// not the volume with no device, which at least fails visibly. It is the
 // volume that has a device and silently runs a path short: a live controller
 // contributing nothing, redundancy quietly below what the control plane
 // published, and every connect answering "already connected." Nothing about the
@@ -273,16 +273,17 @@ func NewRepairer(
 // Repairs are narrowest-first: a single controller before a whole subsystem, so
 // the fabric is disturbed as little as the fix allows. A repair is not carried
 // out when it would leave another volume without a usable path, when it would
-// take the caller's own device down, or when the same repair ran recently — all
-// three overridable, and every one of them reported in AttachResult.Repairs. A
+// take the caller's own device down, or when the same repair ran recently. All
+// three are overridable, and every one of them is reported in
+// AttachResult.Repairs. A
 // volume deliberately left degraded is something the caller needs to be told.
 //
-// nsid picks the namespace on a multi-namespace subsystem — pass
-// lvol.Connection.NSID; 0 means "the subsystem's only namespace," which is
-// enough for a plain lvol but ambiguous for a shared subsystem.
+// nsid picks the namespace on a multi-namespace subsystem. Pass
+// lvol.Connection.NSID. A nsid of 0 means "the subsystem's only namespace,"
+// which is enough for a plain lvol but ambiguous for a shared subsystem.
 //
 // The returned error is non-nil only when no device came up. AttachResult is
-// populated either way — including its Defects on the success path, which is
+// populated either way, including its Defects on the success path, which is
 // where a caller that reports fabric health gets it from.
 func (r *Repairer) Attach(ctx context.Context, targets []Target, nsid nvme.NamespaceID) (AttachResult, error) {
 	if len(targets) == 0 {
@@ -355,10 +356,10 @@ func (r *Repairer) probe(ctx context.Context, sel nvme.DeviceSelector) (nvme.Dev
 	return WaitForDevice(ctx, r.devs, sel)
 }
 
-// choose picks the defect to act on this round — the narrowest repairable one
-// the policy permits — and returns it as a pending action. A defect that is
+// choose picks the defect to act on this round, the narrowest repairable one
+// the policy permits, and returns it as a pending action. A defect that is
 // repairable in principle but barred by policy is returned with Skipped set, so
-// the reason reaches the caller instead of being dropped; ok is false only when
+// the reason reaches the caller instead of being dropped. ok is false only when
 // there is nothing to say at all.
 //
 // dev is the caller's own device when one is attached (attached says whether it
@@ -430,8 +431,8 @@ func (r *Repairer) barrier(d Defect, dev nvme.Device, attached bool) string {
 //
 // Two states are not at risk and must not be treated as such. A defect about a
 // different kernel subsystem instance cannot touch this device however the
-// controller ids read — that is the whole point of cleaning up a stale head next
-// to a live one. And a device that is already unable to serve I/O has nothing
+// controller ids read, which is the whole point of cleaning up a stale head
+// next to a live one. And a device that is already unable to serve I/O has nothing
 // left to lose, which is what lets the stale head be torn down when it is the
 // only thing a lookup found.
 func ownDeviceAtRisk(d Defect, dev nvme.Device) bool {
@@ -491,8 +492,8 @@ func (r *Repairer) mark(d Defect) {
 // keyOf is d's cooldown identity.
 //
 // A controller-scope repair is keyed by its fabric endpoint. The controller id
-// is exactly what the repair changes — tearing down nvme3 and reconnecting
-// yields nvme7 at the same address — while the endpoint survives, and it keeps
+// is exactly what the repair changes (tearing down nvme3 and reconnecting
+// yields nvme7 at the same address) while the endpoint survives, and it keeps
 // the paths distinct: three broken paths of one subsystem are three repairs, not
 // one.
 //
@@ -502,7 +503,7 @@ func (r *Repairer) mark(d Defect) {
 // reconnect produced a different one.
 //
 // DefectAmbiguousHead is the exception and does key on the instance, because it
-// is the one defect Inspect can report several times for a single NQN — one per
+// is the one defect Inspect can report several times for a single NQN, one per
 // stale head. Sharing a key there would let repairing the first mark the rest as
 // already handled and leave them attached. The instance is stable in the way
 // that matters here: a repair that fails leaves that same head in place, and one
@@ -519,13 +520,13 @@ func keyOf(d Defect) repairKey {
 }
 
 // outcome turns the end of the repair loop into a result. A device that came up
-// is a success however much was diagnosed on the way — a volume attached over two
-// of its three paths is degraded, not failed, and failing it would take away the
-// two paths it has.
+// is a success however much was diagnosed on the way. A volume attached over
+// two of its three paths is degraded, not failed, and failing it would take
+// away the two paths it has.
 //
 // Otherwise, it builds the error, naming what was diagnosed and what was or was
-// not done about it. The wait error alone — "no device turned up" — is what made
-// the original incidents so hard to read; the diagnosis is the part that says
+// not done about it. The wait error alone, "no device turned up," is what made
+// the original incidents so hard to read. The diagnosis is the part that says
 // whether anyone can do anything about it.
 func (r *Repairer) outcome(sel nvme.DeviceSelector, waitErr error, res AttachResult, why string) error {
 	if waitErr == nil {
@@ -549,16 +550,16 @@ func (r *Repairer) outcome(sel nvme.DeviceSelector, waitErr error, res AttachRes
 // teardown order Inspect put them in, so that the next connect re-runs the
 // controller and namespace scan the kernel got wrong.
 //
-// It applies no policy whatsoever — not the cooldown, not the blast-radius
-// check, not the scope cap. It will take down a whole subsystem, and every
+// It applies no policy whatsoever: not the cooldown, not the blast-radius
+// check, and not the scope cap. It will take down a whole subsystem, and every
 // co-tenant volume on it, if that is what the defect it is handed says. Repairer
-// is what decides; this is what acts, and it is exported for callers that make
+// is what decides. This is what acts, and it is exported for callers that make
 // that decision themselves: a migration controller repairing a stale endpoint it
 // knows is genuinely gone, say, which Attach will never do on its own.
 //
 // Reconnecting is not part of it. A repair leaves the fabric torn down, and what
-// to reconnect — one path, every path, in which order — is the caller's; go
-// through Attach to have both done together.
+// to reconnect, whether one path or every path and in which order, is the
+// caller's. Go through Attach to have both done together.
 //
 // A defect with no local remedy (ScopeNone) is refused with errs.ErrUnsupported
 // rather than silently doing nothing.
@@ -568,9 +569,9 @@ func Repair(ctx context.Context, d ControllerDetacher, defect Defect) error {
 
 // ControllerDetacher is the single operation a repair performs. Repair takes
 // this rather than a whole Connector because tearing one controller down is all
-// it does, and demanding the rest would make every caller that cannot attach —
-// a driver whose connect path lives elsewhere, a diagnostic tool — supply four
-// methods it has no implementation for. Connector satisfies it.
+// it does, and demanding the rest would make every caller that cannot attach
+// (a driver whose connect path lives elsewhere, or a diagnostic tool) supply
+// four methods it has no implementation for. Connector satisfies it.
 type ControllerDetacher interface {
 	// DisconnectController detaches a single controller, leaving the
 	// subsystem's other paths in place. It must be idempotent: a controller

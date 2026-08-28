@@ -106,8 +106,8 @@ func TestUnmarshalValidatesNestedDTOs(t *testing.T) {
 		t.Errorf("error %q does not name the nested key", err)
 	}
 
-	// A migration's pre-connect strings have no namespace yet — the target
-	// namespace does not exist at that point — so a null ns-id is legitimate
+	// A migration's pre-connect strings have no namespace yet, because the target
+	// namespace does not exist at that point, so a null ns-id is legitimate
 	// here, unlike in the /connect response.
 	if err := json.Unmarshal([]byte(migration(
 		`{"transport":"tcp","ip":"10.0.0.1","port":4420,"nqn":"nqn.x","ns-id":null}`)), &d); err != nil {

@@ -25,7 +25,7 @@ type kernel struct {
 	nsids  []nvme.NamespaceID
 	uuids  map[nvme.NamespaceID]string
 	orphan map[string]bool
-	// serves narrows which namespaces a given address serves; nil means all.
+	// serves narrows which namespaces a given address serves. nil means all.
 	serves   func(addr string, nsid nvme.NamespaceID) bool
 	pathless bool
 	// sticky keeps a teardown from clearing the fault, modeling a repair that
@@ -105,7 +105,7 @@ func (k *kernel) ConnectPaths(_ context.Context, targets []Target) ([]PathResult
 }
 
 // attach creates a live controller for addr and joins it to the namespaces it
-// serves — none at all when the address is an orphan.
+// serves, and none at all when the address is an orphan.
 func (k *kernel) attach(addr string) {
 	id := fmt.Sprintf("nvme%d", k.inst)
 	k.inst++
@@ -171,7 +171,7 @@ func (k *kernel) subsystem() nvme.Subsystem {
 	return s
 }
 
-// kernelSubs and kernelDevs are the two resolver views of one kernel; they are
+// kernelSubs and kernelDevs are the two resolver views of one kernel. They are
 // separate types because SubsystemResolver.List and DeviceResolver.List differ
 // only in return type.
 type kernelSubs struct{ k *kernel }
@@ -307,7 +307,7 @@ func TestAttach_RepairsSubsystemExportingNoNamespace(t *testing.T) {
 	}
 }
 
-// The f99b5b5 incident: the volume HAS a device — it runs at two of three paths —
+// The f99b5b5 incident: the volume HAS a device, running at two of three paths,
 // which is why waiting for a device never notices, and why the repair has to
 // happen on an already-attached volume.
 func TestAttach_RepairsOrphanedControllerWhileDeviceIsPresent(t *testing.T) {
@@ -430,7 +430,7 @@ func TestAttach_RepairsAgainAfterTheCooldownExpires(t *testing.T) {
 	}
 }
 
-// The cooldown governs repeats across attaches; within one attach a repair is
+// The cooldown governs repeats across attaches. Within one attach a repair is
 // applied at most once whatever the cooldown says, so a caller that disables it
 // gets a fresh attempt per call and not a loop inside one.
 func TestAttach_CooldownCanBeDisabled(t *testing.T) {
@@ -454,8 +454,8 @@ func TestAttach_CooldownCanBeDisabled(t *testing.T) {
 	}
 }
 
-// A caller that knows an endpoint is genuinely gone — a migration controller,
-// say — can ask for the repair Attach refuses to make on its own.
+// A caller that knows an endpoint is genuinely gone, a migration controller
+// say, can ask for the repair Attach refuses to make on its own.
 func TestAttach_AutoRepairKindsCanOptIntoStaleEndpoints(t *testing.T) {
 	k := newKernel(1)
 	for _, addr := range []string{"10.0.0.1", "10.0.0.2", "10.0.0.9"} {
@@ -492,7 +492,7 @@ func TestKeyOf(t *testing.T) {
 		}
 	}
 
-	// A repair renames the controller; the endpoint is what it cannot change.
+	// A repair renames the controller, and the endpoint is what it cannot change.
 	t.Run("controller scope follows the endpoint, not the name", func(t *testing.T) {
 		if keyOf(ctrlDefect("nvme3", "10.0.0.3")) != keyOf(ctrlDefect("nvme7", "10.0.0.3")) {
 			t.Error("a re-created controller at the same endpoint got a new key; the cooldown would never fire")
@@ -503,7 +503,7 @@ func TestKeyOf(t *testing.T) {
 	})
 
 	// Only one of these can be outstanding per NQN, and the teardown itself may
-	// change the instance id — so the id must not be part of the key.
+	// change the instance id, so the id must not be part of the key.
 	t.Run("subsystem scope ignores the instance", func(t *testing.T) {
 		for _, kind := range []DefectKind{DefectNoNamespace, DefectNamespaceMissing} {
 			if keyOf(subDefect(kind, "nvme-subsys0", "nvme0")) != keyOf(subDefect(kind, "nvme-subsys4", "nvme5")) {
@@ -515,7 +515,7 @@ func TestKeyOf(t *testing.T) {
 
 	// The one defect Inspect can report several times for one NQN. Sharing a key
 	// would let repairing the first mark the rest as handled, leaving stale heads
-	// attached — a lookup by NQN can then still return the wrong block device.
+	// attached, and a lookup by NQN can then still return the wrong block device.
 	t.Run("ambiguous heads stay distinct", func(t *testing.T) {
 		first := subDefect(DefectAmbiguousHead, "nvme-subsys1", "nvme8")
 		second := subDefect(DefectAmbiguousHead, "nvme-subsys2", "nvme9")
@@ -678,7 +678,7 @@ func TestRepair_RefusesADefectWithNoRemedy(t *testing.T) {
 	}
 }
 
-// Repair applies no policy at all — that is Repairer's job — and tears down in
+// Repair applies no policy at all, which is Repairer's job, and tears down in
 // the order Inspect put the controllers in, so the optimized path goes last.
 func TestRepair_TearsDownInTheGivenOrder(t *testing.T) {
 	c := &recordingConnector{}
@@ -691,7 +691,7 @@ func TestRepair_TearsDownInTheGivenOrder(t *testing.T) {
 			liveCtrl("nvme1", "10.0.0.2"),
 			liveCtrl("nvme0", "10.0.0.1"),
 		},
-		CoTenants: []nvme.Namespace{{ID: 2, UUID: volB}}, // policy would refuse; Repair does not
+		CoTenants: []nvme.Namespace{{ID: 2, UUID: volB}}, // policy would refuse, Repair does not
 	}
 	if err := Repair(context.Background(), c, d); err != nil {
 		t.Fatal(err)

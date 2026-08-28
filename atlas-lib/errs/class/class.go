@@ -1,7 +1,7 @@
 // Package class classifies an error into what a caller should do about it: the
 // gRPC status code to answer with, and whether retrying can help.
 //
-// Both consumers face the same question and used to answer it separately — the
+// Both consumers face the same question and used to answer it separately: the
 // CSI driver mapping control-plane failures to RPC statuses, the operator
 // deciding whether to requeue a reconcile. Answering it in one place is the point
 // of a classifier: it is how a 503 stays retryable and a 400 stays permanent
@@ -25,7 +25,7 @@
 //
 // 404 and 409 are deliberately not classified generically: their meaning depends
 // on the operation. A 404 is success for a delete and NotFound for a create from
-// a snapshot; a 409 is idempotent-success for a create with the same source and
+// a snapshot, and a 409 is idempotent-success for a create with the same source and
 // AlreadyExists otherwise. Of marks them RPCSpecific with Code Internal, so an
 // unresolved one surfaces as a bug in the caller rather than being silently
 // mislabeled. A per-operation layer resolves them and fills in Success or
@@ -58,21 +58,21 @@ type Class struct {
 	RPCSpecific bool
 
 	// Success means the error is a no-op for this operation, which should report
-	// success — e.g., a 404 on a delete: the object is already gone. Only a
-	// per-operation layer sets it; Of never does.
+	// success, e.g., a 404 on a delete, where the object is already gone. Only a
+	// per-operation layer sets it, and Of never does.
 	Success bool
 
 	// Idempotent means the operation must resolve a conflict by looking up the
-	// existing object before deciding — e.g., a 409 on a create: same source and
+	// existing object before deciding, e.g., a 409 on a create: same source and
 	// parameters means return the existing object, otherwise AlreadyExists.
-	// Classification cannot decide that; only a per-operation layer sets it.
+	// Classification cannot decide that, so only a per-operation layer sets it.
 	Idempotent bool
 }
 
 // Permanent reports whether retrying is pointless.
 func (c Class) Permanent() bool { return !c.Retryable }
 
-// httpStatuser is implemented by errors that carry an HTTP status —
+// httpStatuser is implemented by errors that carry an HTTP status, as
 // controlplane.StatusError does. The classifier looks for the method rather than
 // a concrete type so it works for any client that reports one, and so this
 // package depends on no other atlas package than errs.
@@ -118,7 +118,7 @@ func Of(err error) Class {
 		return Class{Code: codes.Unavailable, Retryable: true}
 	}
 
-	// An error that already carries a gRPC status keeps its code — it was
+	// An error that already carries a gRPC status keeps its code, since it was
 	// classified by whoever produced it, quite possibly this package on the
 	// other side of a link.
 	if s, ok := statusOf(err); ok {
@@ -132,7 +132,7 @@ func Of(err error) Class {
 // Code is Of(err).Code, for callers that need nothing else.
 func Code(err error) codes.Code { return Of(err).Code }
 
-// Retryable is Of(err).Retryable — the operator's requeue-or-fail decision.
+// Retryable is Of(err).Retryable, the operator's requeue-or-fail decision.
 func Retryable(err error) bool { return Of(err).Retryable }
 
 // Status returns err as a gRPC status error carrying Of(err).Code and err's
@@ -172,7 +172,7 @@ func FromStatus(err error) error {
 // ofHTTPStatus applies the policy to a raw HTTP status.
 func ofHTTPStatus(code int) Class {
 	switch code {
-	// Operation-specific — only a per-operation layer can resolve these.
+	// Operation-specific: only a per-operation layer can resolve these.
 	case http.StatusNotFound, // 404
 		http.StatusConflict: // 409
 		return Class{Code: codes.Internal, RPCSpecific: true}
@@ -185,7 +185,7 @@ func ofHTTPStatus(code int) Class {
 		http.StatusRequestTimeout:     // 408
 		return Class{Code: codes.Unavailable, Retryable: true}
 
-	// Backpressure / capacity — retry with backoff.
+	// Backpressure and capacity: retry with backoff.
 	case http.StatusTooManyRequests, // 429
 		http.StatusInsufficientStorage: // 507
 		return Class{Code: codes.ResourceExhausted, Retryable: true}
@@ -246,7 +246,7 @@ func sentinelFor(code codes.Code) error {
 
 // statusOf returns the gRPC status err actually carries. status.FromError
 // classifies *any* non-nil error (an unclassified one as codes.Unknown), so it
-// cannot be used to tell "carries a status" from "is an ordinary error"; the
+// cannot be used to tell "carries a status" from "is an ordinary error." The
 // GRPCStatus method can.
 func statusOf(err error) (*status.Status, bool) {
 	var gs interface{ GRPCStatus() *status.Status }

@@ -11,7 +11,7 @@
 ### `metadata.generation`
 
 It bumps on a spec write and not on a status write, which is what makes it safe
-for a reconciler to update status inside `Reconcile` — the update does not
+for a reconciler to update status inside `Reconcile`, because the update does not
 retrigger a spec-driven pass. It also means a spec-change watch is the reliable
 trigger for a change of intent, while status churn is not.
 
@@ -31,10 +31,10 @@ ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 ```
 
 Set it in the same status write that reports the outcome, and read it before
-trusting status — in the reconciler, in a webhook, and in a test.
+trusting status, in the reconciler, in a webhook, and in a test.
 
 Where a spec change must interrupt a running operation, the comparison is the
-trigger for that decision; where it must not, the running operation's own copy of
+trigger for that decision. Where it must not, the running operation's own copy of
 what it is acting on (`status.actionStatus.nodeUUID`, the ops CR's `spec`) is the
 authority, and a mismatch is a detected mid-flight spec change. The drain design
 carries exactly this case.
@@ -95,13 +95,13 @@ An imperative operation holds a lock field on its target for its whole life:
   target and looks exactly like a hung controller.
 - **Only the owner releases.** `releaseClusterLock` compares the reference before
   clearing it, or a slow loser clears the winner's lock.
-- **A lock is not a queue.** A blocked operation stays `Pending` and requeues;
+- **A lock is not a queue.** A blocked operation stays `Pending` and requeues,
   nothing preserves submission order, and nothing should pretend to.
 
 ## Per-object state on the reconciler
 
-State cached on the reconciler struct — a cool-down map, a last-seen timestamp,
-a per-cluster counter — needs the key that makes it unambiguous, and a closure
+State cached on the reconciler struct (a cool-down map, a last-seen timestamp,
+or a per-cluster counter) needs the key that makes it unambiguous, and a closure
 that captures it must capture the *value*:
 
 ```go
@@ -114,12 +114,12 @@ for _, cluster := range clusters {
 ```
 
 Under Go 1.22 and later the loop variable is per-iteration, so this is no longer
-the classic capture bug — but the *keying* still is: a map indexed by volume
+the classic capture bug. The *keying* still is: a map indexed by volume
 alone, or a counter without a cluster label, reads back another cluster's state.
-`copyloopvar` in the lint config catches the old shape; nothing catches the
+`copyloopvar` in the lint config catches the old shape, and nothing catches the
 missing key, which is why the autobalancing tests assert it explicitly
 (`A-06` in the rebalancing plan).
 
 Anything a second CPU or goroutine touches needs `-race` in the test that covers
-it. The operator suite does not run with `-race` by default — see the
+it. The operator suite does not run with `-race` by default. See the
 `regression-test` skill.

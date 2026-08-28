@@ -153,7 +153,7 @@ func TestNewRejectsBadConfig(t *testing.T) {
 }
 
 func TestNewAcceptsTerminalAndSelfEdges(t *testing.T) {
-	// A nil To and an empty To are both terminal; a self-edge is legal.
+	// A nil To and an empty To are both terminal, and a self-edge is legal.
 	sm, err := New(context.Background(), Config[st]{
 		Initial: off,
 		States: map[st]StateDef[st]{
@@ -204,7 +204,7 @@ func TestConfigIsDeeplyCopied(t *testing.T) {
 	cfg := graph(nil)
 
 	// Keep a reference to the exact To slice New will clone. It has to be taken
-	// before New, and before the map entry holding it is replaced below —
+	// before New, and before the map entry holding it is replaced below, because
 	// reaching for cfg.States[off].To afterward would find a different slice.
 	offEdges := cfg.States[off].To
 	if len(offEdges) == 0 || offEdges[0] != off {
@@ -243,7 +243,7 @@ func TestConfigIsDeeplyCopied(t *testing.T) {
 }
 
 func TestNonStringStateType(t *testing.T) {
-	// The machine is generic over any comparable; ints and structs are as valid
+	// The machine is generic over any comparable. Ints and structs are as valid
 	// as strings, and the zero value is a perfectly good state.
 	type phase int
 	const (
@@ -306,7 +306,7 @@ func TestTransitionRunsHookWithBothEndpoints(t *testing.T) {
 
 func TestTransitionWithoutHook(t *testing.T) {
 	sm := newTest(t, nil)
-	// off has no hook at all; entering it must still succeed.
+	// off has no hook at all, and entering it must still succeed.
 	mustTransition(t, sm, off)
 	if sm.CurrentState() != off {
 		t.Errorf("CurrentState() = %v", sm.CurrentState())
@@ -401,7 +401,7 @@ func TestHookErrorLeavesMachineUntouched(t *testing.T) {
 	h := &hook{timeout: time.Hour, err: sentinel}
 	sm := newTest(t, h.fn)
 
-	// The hook asks for an hour and then fails; neither may take effect.
+	// The hook asks for an hour and then fails. Neither may take effect.
 	err := sm.TransitionTo(context.Background(), on)
 
 	if !errors.Is(err, sentinel) {
@@ -769,7 +769,7 @@ func TestCallerContextDoesNotBoundTheState(t *testing.T) {
 		// The caller's own budget is far shorter than the state's.
 		callCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		mustTransition2(t, sm, on, callCtx)
-		cancel() // the request is over; the state must not be
+		cancel() // the request is over, the state must not be
 
 		if err := sm.Context().Err(); err != nil {
 			t.Fatalf("the caller's cancel killed the state context: %v", err)
@@ -856,7 +856,7 @@ func TestParentCancellationClosesMachine(t *testing.T) {
 
 func TestParentDeadlineIsNotAStateTimeout(t *testing.T) {
 	// The base context expiring means the machine is done, not that the current
-	// state ran out of time — the distinction TimeoutReached exists to make.
+	// state ran out of time, which is the distinction TimeoutReached exists to make.
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -1026,7 +1026,7 @@ func TestSnapshotWithoutDeadline(t *testing.T) {
 }
 
 func TestRestoreExpiredDeadlineFiresImmediately(t *testing.T) {
-	// The controller was down while the phase ran out of time; it must find out
+	// The controller was down while the phase ran out of time, and it must find out
 	// on its first pass back.
 	synctest.Test(t, func(t *testing.T) {
 		sm := newTest(t, nil)

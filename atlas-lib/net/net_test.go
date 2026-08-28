@@ -9,7 +9,7 @@ func TestValidateExternalURL(t *testing.T) {
 	tests := []struct {
 		name    string
 		url     string
-		wantErr string // substring; empty means no error expected
+		wantErr string // substring, where empty means no error expected
 	}{
 		{name: "empty is ok", url: ""},
 		{name: "valid https public IP", url: "https://8.8.8.8:8200"},

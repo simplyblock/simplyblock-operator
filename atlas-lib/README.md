@@ -1,9 +1,9 @@
 # Atlas
 
 Shared Go library for the simplyblock **Kubernetes operator** and **CSI
-driver**. It holds the node-level storage primitives both consumers need —
-NVMe discovery, NVMe-oF fabric management, NQN handling, and the
-logical-volume ↔ NVMe-device mapping — so neither re-implements them.
+driver**. It holds the node-level storage primitives both consumers need
+(NVMe discovery, NVMe-oF fabric management, NQN handling, and the
+logical-volume ↔ NVMe-device mapping) so neither re-implements them.
 
 ![](../assets/simplyblock-logo.svg)
 
@@ -11,7 +11,7 @@ logical-volume ↔ NVMe-device mapping — so neither re-implements them.
 > and contribution guidelines, see the [root README](../README.md).
 
 The library lives in this monorepo and is consumed by the operator and CSI driver via a Go
-`replace` directive (module path `github.com/simplyblock/atlas` → `../atlas-lib`); it is not
+`replace` directive (module path `github.com/simplyblock/atlas` → `../atlas-lib`). It is not
 published or installed independently.
 
 ## Layout
@@ -74,7 +74,7 @@ atlas/
 ## Use cases
 
 The flows below are the ones the operator and CSI driver actually perform. Each
-shows the atlas-idiomatic implementation; a _Today_ note points at the live call
+shows the atlas-idiomatic implementation, and a _Today_ note points at the live call
 site where one exists, so it is visible which patterns are already wired and
 which are available but not yet adopted.
 
@@ -123,8 +123,8 @@ handle, err := client.CreateVolume(ctx, clusterID, pool.ID, controlplane.CreateV
 ```
 
 `ResizeVolume`, `DeleteVolume`, `CloneVolume` and `ListVolumes` complete the
-lifecycle. `DeleteVolume` is idempotent — an already-absent volume is not an
-error — so a retried `DeleteVolume` RPC needs no pre-check.
+lifecycle. `DeleteVolume` is idempotent, since an already-absent volume is not
+an error, so a retried `DeleteVolume` RPC needs no pre-check.
 
 _Today:_ `csi-driver/pkg/spdk/controllerserver.go` uses the `kube` param helpers
 but still calls the control plane through its own `pkg/util/nvmf.go` client.
@@ -170,7 +170,7 @@ exactly this sequence against the operator's own `internal/webapi` client.
 
 #### Choose or validate a placement target
 
-The volume-placement webhook picks the least-loaded node at creation time; the
+The volume-placement webhook picks the least-loaded node at creation time. The
 PVC pin controller only needs to confirm that a user-supplied node exists.
 
 ```go
@@ -198,7 +198,7 @@ nics, err := client.ListStorageNodeNICs(ctx, clusterID, best.ID)
 #### Wire the resolver once per consumer
 
 `kube.Resolver` is the single seam for every PV/PVC/VolumeAttachment/StorageClass
-lookup; pick the implementation that matches the consumer's caching, and keep the
+lookup. Pick the implementation that matches the consumer's caching, and keep the
 rest of the code on the interface.
 
 ```go
@@ -260,7 +260,7 @@ clusterID, poolID, volumeID, err := handle.Split()
 ```
 
 _Today:_ several operator call sites still do `strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)`
-(`logical_volume_selector.go`, `persistentvolumeclaim_controller.go`);
+(`logical_volume_selector.go`, `persistentvolumeclaim_controller.go`).
 `VolumeHandle.Split` is the typed replacement and rejects malformed handles.
 
 #### Read how a volume was provisioned
@@ -291,7 +291,7 @@ if props.IsMultiNamespace() { // max_namespace_per_subsys > 1
 ```
 
 An unresolvable StorageClass is treated as single-namespace and logged in both
-consumers — one unreadable class must not stall a migration.
+consumers, because one unreadable class must not stall a migration.
 
 _Today:_ `volumemigration_controller.go:isMultiNamespaceMigration` and the
 rebalancer's namespaced-set collection in `logical_volume_selector.go`.
@@ -395,8 +395,9 @@ if err != nil {
 stage(dev.Namespace.DevicePath) // /dev/nvme0n1 — the multipath head, not a leg
 ```
 
-Connecting is idempotent per path — a controller already fronting an endpoint is
-left alone rather than duplicated — so a retried NodeStage re-establishes only
+Connecting is idempotent per path, since a controller already fronting an
+endpoint is left alone rather than duplicated, so a retried NodeStage
+re-establishes only
 what is missing. `Connector.Connect` is the single-path form (`ConnectPaths` with
 one target), and `nvmeof.ConnectDevice` pairs it with the device wait for the
 cases that genuinely have one path.
@@ -411,7 +412,7 @@ matched, err := devices.ListWithSelector(ctx, sel)
 ```
 
 _Today:_ the CSI node service still connects, repairs, and ANA-reconciles paths
-with nvme-cli in `csi-driver/pkg/util/initiator.go`; `FabricsConnector` is the
+with nvme-cli in `csi-driver/pkg/util/initiator.go`. `FabricsConnector` is the
 kernel-direct replacement (it needs no nvme-cli binary in the node image).
 
 #### Detach without collateral damage
@@ -431,8 +432,8 @@ if out.SharedSubsystem {
 }
 ```
 
-The gate is `nvme.Device.IsMultiNamespace` — *can* this subsystem hold other
-volumes — not whether it currently does. Enumerating the neighbors describes
+The gate is `nvme.Device.IsMultiNamespace`, meaning *can* this subsystem hold
+other volumes, not whether it currently does. Enumerating the neighbors describes
 only the moment it was looked at: a namespace can join a shared subsystem
 between the check and the disconnect, and then a correct "none right now" answer
 is still destructive. So a subsystem provisioned to be shared is never
@@ -441,15 +442,15 @@ disconnected on one volume's behalf, even while it happens to hold only that one
 That answer sometimes needs an Identify Controller command, which wants a live
 controller and Linux. `DetachDevice` returns the error rather than assuming, so
 reaping a subsystem whose controllers are all dead is an explicit
-`connector.Disconnect` — never a default.
+`connector.Disconnect`, never a default.
 
 `Disconnect` takes down every path of the subsystem, releasing them in ANA order
-— unusable and non-optimized legs first, the optimized one last — so I/O still in
+(unusable and non-optimized legs first, the optimized one last) so I/O still in
 flight keeps the best path it has until the end.
 
 Every one of these questions also has a pure form taking a snapshot the caller
-owns, which is the cheap way to sweep many devices — one `List` answers all four
-for all of them:
+owns, which is the cheap way to sweep many devices, since one `List` answers all
+four for all of them:
 
 ```go
 all, err := devices.List(ctx)
@@ -537,7 +538,7 @@ go, co-tenants are *other* volumes that must be left alone. `nvme.IsSibling` and
 
 #### Detect a namespaced volume host-side
 
-Where no StorageClass is in reach. Conclusive sysfs cases cost nothing; only a
+Where no StorageClass is in reach. Conclusive sysfs cases cost nothing, and only a
 lone namespace at NSID 1 needs an Identify Controller command (Linux only, live
 controller required):
 
@@ -585,7 +586,7 @@ func status(err error) error {
 
 #### Handle optional fields
 
-Generated request bodies and Kubernetes types are full of them; read them without
+Generated request bodies and Kubernetes types are full of them. Read them without
 one-off nil checks:
 
 ```go
@@ -643,20 +644,20 @@ resolver := kube.NewLiveResolver(kfake.NewSimpleClientset(pv, pvc, sc))
   `lvol.Mapper`) so the operator and CSI driver can unit-test against
   fakes without a kernel, `/sys`, or `nvme-cli` present.
 - **The Linux grunt work hides in `internal/`** (sysfs parsing, command
-  execution). It can change freely; consumers depend on behavior, not
+  execution). It can change freely, and consumers depend on behavior, not
   mechanism.
 - **Dependency direction flows one way:** `kube`/`controlplane`/`nvmeof` →
   `lvol` → `nvme`, with `errs`/`nqn`/`ptr`/`net` as leaf utilities. No import
   cycles. `nvmeof` depends on `lvol` only to turn a control-plane `Connection`
-  into fabric targets; the fabric mechanics know nothing about volumes.
+  into fabric targets, and the fabric mechanics know nothing about volumes.
 - **Kubernetes deps are confined to `kube`.** Only that package imports
-  `k8s.io/api` and `k8s.io/client-go`; importing `nvme`/`nvmeof`/etc.
+  `k8s.io/api` and `k8s.io/client-go`, and importing `nvme`/`nvmeof`/etc.
   pulls no Kubernetes deps. (client-go is already in both the operator and
   CSI driver, so this adds nothing to either consumer's graph.)
 - **One shared resolution implementation.** `kube.NewResolver(ResolverConfig)`
-  returns an `InformerResolver` that works off any `cache.SharedIndexInformer`
-  — a standalone client-go `SharedInformerFactory` (CSI driver) or a
-  controller-runtime manager cache (operator) — so PV/PVC/VolumeAttachment
+  returns an `InformerResolver` that works off any `cache.SharedIndexInformer`,
+  whether a standalone client-go `SharedInformerFactory` (CSI driver) or a
+  controller-runtime manager cache (operator), so PV/PVC/VolumeAttachment
   caching lives here once instead of being reimplemented per consumer. The
   pure index key funcs in `index.go` are reused by both the client-go
   indexer and a controller-runtime `FieldIndexer`.

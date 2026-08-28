@@ -31,7 +31,7 @@ func addresses(ctrls []nvme.Controller) []string {
 
 func TestReconcilePaths_AttachesWhatIsMissing(t *testing.T) {
 	f := &fabric{}
-	// One path already up; the reconcile must add the other two and touch the
+	// One path is already up, so the reconcile must add the other two and touch the
 	// first one not at all.
 	f.ctrls = append(f.ctrls, ctrl("nvme0", "10.0.0.1", "live"))
 

@@ -66,7 +66,7 @@ func (c *Client) GetStoragePool(ctx context.Context, clusterID, poolID string) (
 }
 
 // StoragePoolByName returns the pool with the given name in a cluster. The v2
-// API has no by-name lookup, so this lists and filters; it wraps
+// API has no by-name lookup, so this lists and filters. It wraps
 // errs.ErrNotFound when no pool matches.
 func (c *Client) StoragePoolByName(ctx context.Context, clusterID, name string) (StoragePool, error) {
 	pools, err := c.ListStoragePools(ctx, clusterID)
@@ -85,10 +85,10 @@ func (c *Client) StoragePoolByName(ctx context.Context, clusterID, name string) 
 // Name is required.
 type CreateStoragePoolParams struct {
 	Name               string
-	MaxSizeBytes       uint64 // pool_max; 0 = unlimited
-	VolumeMaxSizeBytes uint64 // per-volume cap; 0 = unset
+	MaxSizeBytes       uint64 // `pool_max`, where 0 is unlimited
+	VolumeMaxSizeBytes uint64 // per-volume cap, where 0 is unset
 
-	// QoS limits; 0 means unset.
+	// QoS limits, where 0 means unset.
 	MaxRWIOPS   int
 	MaxRWMbytes int
 	MaxRMbytes  int

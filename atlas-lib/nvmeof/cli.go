@@ -19,15 +19,15 @@ import (
 // talking to the kernel directly.
 //
 // It exists for callers that already drive the fabric with nvme-cli and cannot
-// switch to sysfs writes in one step — the simplyblock CSI node plugin, whose
+// switch to sysfs writes in one step, such as the simplyblock CSI node plugin, whose
 // connect path is nvme-cli today. Sharing this type is what lets such a caller
 // move onto atlas's path handling incrementally rather than keeping a second
 // implementation of it.
 //
 // Only two operations are nvme-cli's: establishing a path, and tearing a
-// controller down. Everything that decides *what* happens — priority order on
+// controller down. Everything that decides *what* happens (priority order on
 // attach, per-path timeouts, waiting for a controller to reach live, skipping a
-// path that already exists, ANA teardown order on release — comes from the
+// path that already exists, and ANA teardown order on release) comes from the
 // shared connector, the same machinery FabricsConnector runs on. Those are the
 // parts with the subtle behavior, and a second copy of them would be the
 // duplication this type exists to avoid.
@@ -49,7 +49,7 @@ type CLIConnector struct {
 //
 // It exists so a caller can wrap the invocation without reimplementing any of
 // the path handling around it. The case it was added for is privilege: an image
-// that runs nvme-cli as a non-root user — as a Red Hat certified image must —
+// that runs nvme-cli as a non-root user, as a Red Hat certified image must,
 // reaches the fabric through a setuid helper, and which helper that is, is the
 // image's business rather than this package's.
 type CommandRunner func(ctx context.Context, args ...string) ([]byte, error)
@@ -58,8 +58,8 @@ var _ Connector = (*CLIConnector)(nil)
 
 // cliTimeout is a backstop on a single nvme-cli invocation, not the normal
 // bound. Ordinarily connectPath's per-path deadline is much tighter and wins,
-// since context.WithTimeout keeps the earlier of the two; this exists for the
-// case where there is no tighter one — WithPathTimeout(0) and a caller context
+// since context.WithTimeout keeps the earlier of the two. This exists for the
+// case where there is no tighter one: WithPathTimeout(0) and a caller context
 // carrying no deadline of its own. Without it, nvme-cli against an unreachable
 // target would block for as long as it likes, which is what the per-path budget
 // exists to prevent.
@@ -75,8 +75,8 @@ func NewCLIConnector(subs nvme.SubsystemResolver, opts ...Option) *CLIConnector 
 }
 
 // NewCLIConnectorWithRunner is NewCLIConnector with the nvme-cli invocation
-// supplied by the caller, for an image that cannot exec the binary directly —
-// see CommandRunner. A nil runner means the plain one NewCLIConnector uses.
+// supplied by the caller, for an image that cannot exec the binary directly.
+// See CommandRunner. A nil runner means the plain one NewCLIConnector uses.
 func NewCLIConnectorWithRunner(
 	subs nvme.SubsystemResolver,
 	run CommandRunner,
@@ -110,12 +110,12 @@ func SudoRunner(ctx context.Context, args ...string) ([]byte, error) {
 // controller level it is the truth: a controller for this endpoint exists, which
 // is exactly what establishing the path was for, so failing here would turn a
 // satisfied request into an error. What it does *not* mean is that the path
-// works — the controller can be live and still serve no namespace — and that is
-// a different question, asked by Inspect and answered by a repair. Conflating
+// works, since the controller can be live and still serve no namespace, and
+// that is a different question, asked by Inspect and answered by a repair. Conflating
 // the two is what made the original incident unreadable: the connect looked
 // fine, so nothing looked wrong.
 func (c *CLIConnector) connect(ctx context.Context, t Target) (string, error) {
-	// The caller's deadline still wins when it is the earlier one; this only
+	// The caller's deadline still wins when it is the earlier one. This only
 	// ensures there is one at all.
 	ctx, cancel := context.WithTimeout(ctx, cliTimeout)
 	defer cancel()
@@ -136,7 +136,7 @@ func (c *CLIConnector) connect(ctx context.Context, t Target) (string, error) {
 }
 
 // connectArgs renders the flags for one target. It mirrors fabricsOptions field
-// for field, so the two mechanisms ask the kernel for the same thing; a value
+// for field, so the two mechanisms ask the kernel for the same thing. A value
 // the fabrics-device line omits is omitted here too, leaving the kernel
 // default.
 func (c *CLIConnector) connectArgs(t Target) ([]string, error) {
@@ -179,7 +179,7 @@ func (c *CLIConnector) connectArgs(t Target) ([]string, error) {
 		args = append(args, "--tls")
 	}
 	// nvme-cli reads a secret straight from the argument, so it stands in this
-	// command line — which is why nothing here logs one.
+	// command line, which is why nothing here logs one.
 	if t.DHCHAPSecret != "" {
 		args = append(args, "--dhchap-secret", t.DHCHAPSecret)
 	}
@@ -190,7 +190,7 @@ func (c *CLIConnector) connectArgs(t Target) ([]string, error) {
 }
 
 // disconnectController releases one controller with `nvme disconnect -d`, which
-// addresses it by kernel name — the last path component of its sysfs directory.
+// addresses it by kernel name, the last path component of its sysfs directory.
 //
 // `nvme disconnect -n <nqn>` is the wrong tool here and worth naming: it takes
 // the whole subsystem, and on a subsystem shared by several volumes that is

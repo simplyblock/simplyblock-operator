@@ -14,7 +14,7 @@ import (
 )
 
 // fakeDevs is a nvme.DeviceResolver whose List returns one scripted snapshot
-// per call, repeating the last one once the script runs out — modeling a
+// per call, repeating the last one once the script runs out, modeling a
 // kernel state that changes between polls.
 type fakeDevs struct {
 	snapshots [][]nvme.Device
@@ -72,7 +72,7 @@ func reachableDev(subsysID, nqn, name, majorMinor string, nsid nvme.NamespaceID)
 	return d
 }
 
-// staleDev is a device the kernel still lists but that can serve no I/O — the
+// staleDev is a device the kernel still lists but that can serve no I/O, the
 // leftover of an earlier connect to the same NQN.
 func staleDev(subsysID, nqn, name, majorMinor string, nsid nvme.NamespaceID) nvme.Device {
 	d := dev(subsysID, nqn, name, majorMinor, nsid)
@@ -117,7 +117,7 @@ func TestWaitForDevice_DuplicateEntriesForSameDevice(t *testing.T) {
 }
 
 // A stale namespace from an earlier connect to the same NQN is a different
-// device; the wait must not return either until the kernel has reaped it.
+// device, and the wait must not return either until the kernel has reaped it.
 func TestWaitForDevice_WaitsOutStaleDuplicate(t *testing.T) {
 	stale := dev("nvme-subsys0", "nqn.x", "nvme0n1", "259:1", 1)
 	fresh := dev("nvme-subsys1", "nqn.x", "nvme2n1", "259:7", 1)
@@ -153,9 +153,9 @@ func TestWaitForDevice_SkipsUnreachableRival(t *testing.T) {
 	}
 }
 
-// Reachability decides between candidates; it does not pick a favorite among
-// equals. Two live-looking rivals — a stale head that has not lost its paths
-// yet — must still be waited out rather than guessed at.
+// Reachability decides between candidates. It does not pick a favorite among
+// equals: two live-looking rivals, such as a stale head that has not lost its
+// paths yet, must still be waited out rather than guessed at.
 func TestWaitForDevice_WaitsWhenRivalsBothReachable(t *testing.T) {
 	devs := &fakeDevs{snapshots: [][]nvme.Device{{
 		reachableDev("nvme-subsys0", "nqn.x", "nvme0n1", "259:1", 1),
@@ -203,8 +203,8 @@ func TestWaitForDevice_TimesOutOnPersistentConflict(t *testing.T) {
 	}
 }
 
-// Distinct namespaces of one subsystem cannot be disambiguated by waiting —
-// the selector is under-specified, so fail immediately.
+// Distinct namespaces of one subsystem cannot be disambiguated by waiting. The
+// selector is under-specified, so fail immediately.
 func TestWaitForDevice_AmbiguousSelectorFailsFast(t *testing.T) {
 	devs := &fakeDevs{snapshots: [][]nvme.Device{{
 		dev("nvme-subsys0", "nqn.ns", "nvme0n1", "259:1", 1),
@@ -252,7 +252,7 @@ func TestWaitForDevice_UUIDDisambiguates(t *testing.T) {
 }
 
 // Without a major:minor from sysfs, identity comes from the resolved device
-// node — so a symlink and its target count as one device.
+// node, so a symlink and its target count as one device.
 func TestWaitForDevice_ResolvesSymlinkedDeviceNodes(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "nvme0n1")

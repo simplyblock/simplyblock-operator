@@ -18,9 +18,9 @@ import (
 // LiveResolver implements Resolver with direct,
 // uncached reads against the API server via a client-go clientset. It is the
 // counterpart to InformerResolver for consumers that have no shared-informer
-// cache — one-shot CLIs, tests, or paths where a stale cache is unacceptable.
+// cache: one-shot CLIs, tests, or paths where a stale cache is unacceptable.
 //
-// Every call hits the API server; the queries with no server-side selector
+// Every call hits the API server, and the queries with no server-side selector
 // (PVByVolumeHandle, AttachmentsForPV) list and filter in memory, so on hot
 // paths prefer InformerResolver, which answers the same queries from an index.
 type LiveResolver struct {

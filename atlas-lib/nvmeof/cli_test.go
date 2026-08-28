@@ -43,7 +43,7 @@ func cliConnector(t *testing.T, run *cliRun, subs nvme.SubsystemResolver) *CLICo
 	t.Helper()
 	c := NewCLIConnector(subs, WithPollInterval(time.Millisecond), WithPathTimeout(200*time.Millisecond))
 	c.run = run.run
-	// The constructor reads the node's identity; pin it so the rendering is the
+	// The constructor reads the node's identity, so pin it and the rendering is the
 	// test's and not the machine's.
 	c.hostNQN, c.hostID = "", ""
 	c.attach = c.connect
@@ -151,7 +151,7 @@ func TestCLIConnectArgs_OmitsDHCHAPWhenUnset(t *testing.T) {
 }
 
 // A zero value means "leave the kernel default," exactly as the fabrics-device
-// line omits it — not "send zero."
+// line omits it, not "send zero."
 func TestCLIConnectArgs_OmitsUnsetTunables(t *testing.T) {
 	c := cliConnector(t, &cliRun{}, fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) {
 		return notFound()
@@ -172,8 +172,8 @@ func TestCLIConnectArgs_OmitsUnsetTunables(t *testing.T) {
 }
 
 // "already connected" is the message at the heart of the bug this package
-// exists for. At the controller level it is the truth — the path is there — so
-// the connect has to succeed; whether that controller serves a namespace is
+// exists for. At the controller level it is the truth, since the path is there,
+// so the connect has to succeed. Whether that controller serves a namespace is
 // Inspect's question, not this one.
 func TestCLIConnect_AlreadyConnectedIsSuccess(t *testing.T) {
 	run := &cliRun{
@@ -330,7 +330,7 @@ func TestCLIConnectPaths_InheritsThePathHandling(t *testing.T) {
 // nvme-cli against an unreachable target blocks for as long as it likes, so
 // every invocation needs a deadline. The per-path one normally supplies it, but
 // WithPathTimeout(0) turns that off by design, and a caller context need not
-// carry one either — so the connector has to guarantee it itself.
+// carry one either, so the connector has to guarantee it itself.
 func TestCLIConnect_BoundsEveryInvocation(t *testing.T) {
 	t.Run("no per-path bound and no caller deadline", func(t *testing.T) {
 		var deadline time.Time
@@ -393,7 +393,7 @@ func TestNewCLIConnector_AppliesSharedOptions(t *testing.T) {
 	}
 }
 
-// Nothing here should need the fabrics device; the whole point is a caller that
+// Nothing here should need the fabrics device. The whole point is a caller that
 // cannot write it.
 func TestCLIConnector_NeverRendersFabricsOptions(t *testing.T) {
 	c := cliConnector(t, &cliRun{}, fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) {

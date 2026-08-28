@@ -3,7 +3,7 @@
 # tables in validation.gen.go, and each response type checks itself against
 # them as it is deserialized (see validation.go for the why).
 #
-# Keys are the wire names, so this file reads as the contract it is; the
+# Keys are the wire names, so this file reads as the contract it is. The
 # generator resolves them to the generated Go fields and fails if a key is not
 # one the type decodes from, so a spec change cannot leave a rule silently
 # validating nothing.
@@ -45,10 +45,10 @@ VolumeDTO:
 #
 # `ns-id` is deliberately absent here even though it is what prompted all this:
 # the two paths that build this model promise different things (sbcli
-# simplyblock_core/utils/nvme.py). The lvol connect path always sets it; the
+# simplyblock_core/utils/nvme.py). The lvol connect path always sets it, and the
 # migration pre-connect path never does, since the target namespace does not
 # exist yet. A rule here would reject every migration response, so it belongs to
-# the endpoint that makes the promise — see the scoped block below.
+# the endpoint that makes the promise. See the scoped block below.
 NvmeConnectEntry:
   transport: required
   # Present, not required: connect_lvol emits an entry per data NIC without
@@ -60,12 +60,12 @@ NvmeConnectEntry:
 
 # An endpoint-scoped variant: the rules above, plus what this one endpoint
 # promises on top. It compiles to its own Go type (`as`), because rules are
-# registered per type — so this is also the type to decode that endpoint's body
+# registered per type, so this is also the type to decode that endpoint's body
 # into. Only usable for a body the client decodes itself, which is the case
 # here: the spec declares no response model for /connect.
 #
 # Namespace ids start at 1, so a missing or zero one from here means the wrong
-# key was decoded — the `ns-id` to `ns_id` rename this all started with.
+# key was decoded: the `ns-id` to `ns_id` rename this all started with.
 NvmeConnectEntry@GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/connect:
   as: LvolConnectEntry
   ns-id: required,gt=0

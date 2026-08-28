@@ -16,20 +16,20 @@ import (
 // live cluster, replayed from the snapshots in testdata/sysfs.
 //
 // They exist because the expensive failure mode of this package is not missing a
-// defect — it is inventing one. Every repair tears down a live data path, so a
+// defect. It is inventing one. Every repair tears down a live data path, so a
 // diagnosis that fires on a healthy volume is worse than no diagnosis at all.
 // Hand-built fixtures cannot rule that out: they encode what we believe sysfs
 // looks like, which is exactly the belief under test. Only real kernel output
 // can, which is why these snapshots are worth carrying.
 //
-// The defect snapshots were produced with two nvmet targets on two nodes — see
-// hack/nvmet/nvmet-lab.sh — and reproducing them by hand costs a
+// The defect snapshots were produced with two nvmet targets on two nodes (see
+// hack/nvmet/nvmet-lab.sh) and reproducing them by hand costs a
 // cluster and a kernel. Replaying them costs nothing, so a state that took real
 // hardware to reach is asserted on every ordinary `go test` run from here on.
 //
 // The snapshots are sanitized (capture-sysfs.sh sanitize): UUIDs and addresses
 // are stand-ins, substituted consistently so the relationships that matter
-// survive — the model still equals the master lvol UUID, which still appears in
+// survive: the model still equals the master lvol UUID, which still appears in
 // the NQN and in namespace 1's `uuid`.
 //
 // They also pin the identity the fabric actually presents:
@@ -88,9 +88,9 @@ func resolvers(root string) (nvme.SubsystemResolver, nvme.DeviceResolver) {
 }
 
 // TestSysfsSnapshot_HealthyClusterHasNoDefects is the false-positive guard. The
-// snapshot is a production node carrying four subsystems and eight namespaces —
-// three plain volumes and one five-namespace shared subsystem — every path live
-// on two controllers. Not one of them may be diagnosed as anything.
+// snapshot is a production node carrying four subsystems and eight namespaces
+// (three plain volumes and one five-namespace shared subsystem) with every path
+// live on two controllers. Not one of them may be diagnosed as anything.
 func TestSysfsSnapshot_HealthyClusterHasNoDefects(t *testing.T) {
 	subs, devs := resolvers(loadSysfs(t, "healthy"))
 	ctx := context.Background()
@@ -108,7 +108,7 @@ func TestSysfsSnapshot_HealthyClusterHasNoDefects(t *testing.T) {
 		for _, ns := range s.Namespaces {
 			namespaces++
 			// A dropped ANA leg would read as "this controller contributes no
-			// path" — the exact false positive worth guarding, and one a
+			// path," the exact false positive worth guarding, and one a
 			// resolver bug would produce silently.
 			if got, want := len(ns.Paths), len(s.Controllers); got != want {
 				t.Errorf("%s namespace %s: %d ANA leg(s), want one per controller (%d)",
@@ -142,7 +142,7 @@ func TestSysfsSnapshot_HealthyClusterHasNoDefects(t *testing.T) {
 func TestSysfsSnapshot_ForcedDefects(t *testing.T) {
 	// Both storage nodes are published, as for a real multipath volume. Passing
 	// only the primary would reclassify the orphaned controller as a stale
-	// endpoint — correct, but a different verdict with a different remedy.
+	// endpoint, which is correct but a different verdict with a different remedy.
 	targetsFor := func(nqn string) []Target {
 		return []Target{
 			{NQN: nqn, Transport: TransportTCP, Address: "127.0.0.1", Port: 14420},

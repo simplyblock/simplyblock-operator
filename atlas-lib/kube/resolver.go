@@ -14,13 +14,13 @@ import (
 
 // Resolver performs the live Kubernetes lookups needed to correlate a logical
 // volume with its PV/PVC/VolumeAttachment/StorageClass. A consumer implements it
-// with a client-go lister or a controller-runtime client; this package supplies
+// with a client-go lister or a controller-runtime client, and this package supplies
 // the pure extraction/aggregation logic on top and ships two implementations
 // (LiveResolver, InformerResolver).
 //
 // A consumer that needs only a subset (e.g., only StorageClassByName) should
 // declare its own narrow interface at the point of use rather than expect this
-// package to pre-split — both shipped implementations provide every method.
+// package to pre-split, since both shipped implementations provide every method.
 type Resolver interface {
 	// PVByVolumeHandle finds the PV whose CSI volume handle equals h.
 	PVByVolumeHandle(ctx context.Context, h lvol.VolumeHandle) (*corev1.PersistentVolume, error)
@@ -51,7 +51,7 @@ func ResolveBinding(ctx context.Context, r Resolver, h lvol.VolumeHandle) (Bindi
 
 	attachments, err := r.AttachmentsForPV(ctx, pv.Name)
 	if errors.Is(err, errs.ErrUnsupported) {
-		// Resolver has no VolumeAttachment informer; leave Node/Attached zero.
+		// Resolver has no VolumeAttachment informer, so leave Node/Attached zero.
 		return b, nil
 	}
 	if err != nil {

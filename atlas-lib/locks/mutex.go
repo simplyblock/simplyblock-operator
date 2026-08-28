@@ -16,7 +16,7 @@
 // never ran, and any accompanying error or value is the zero value.
 //
 // Because sync.Mutex is not reentrant, a transaction must not lock the same
-// mutex again — directly or through another helper — or it deadlocks.
+// mutex again, directly or through another helper, or it deadlocks.
 package locks
 
 import "sync"
@@ -29,7 +29,7 @@ func WithLock(lock *sync.Mutex, transaction func() error) error {
 }
 
 // WithTryLock runs transaction while holding lock, but only if lock is
-// available right away. It reports whether the lock was acquired; when it was
+// available right away. It reports whether the lock was acquired. When it was
 // not, transaction is skipped and the error is nil.
 func WithTryLock(lock *sync.Mutex, transaction func() error) (bool, error) {
 	if !lock.TryLock() {
@@ -48,7 +48,7 @@ func WithLockValue[R any](lock *sync.Mutex, transaction func() (R, error)) (R, e
 }
 
 // WithTryLockValue runs transaction while holding lock, but only if lock is
-// available right away. It reports whether the lock was acquired; when it was
+// available right away. It reports whether the lock was acquired. When it was
 // not, transaction is skipped and the zero value of R and a nil error are
 // returned.
 func WithTryLockValue[R any](lock *sync.Mutex, transaction func() (R, error)) (bool, R, error) {

@@ -25,14 +25,14 @@ type PathResult struct {
 	// AlreadyPresent is true when a controller for this exact path existed
 	// before the attempt, so no new connect was issued.
 	AlreadyPresent bool
-	// Err is why the path did not come up; nil when Live is true.
+	// Err is why the path did not come up, and nil when Live is true.
 	Err error
 }
 
 // ConnectPaths attaches a subsystem over an ordered list of fabric paths.
 //
-// The control plane returns a volume's paths in descending priority —
-// primary, secondary, tertiary — and that order is significant: the first
+// The control plane returns a volume's paths in descending priority
+// (primary, secondary, and tertiary), and that order is significant: the first
 // path to come up is the one carrying I/O until the kernel has the full ANA
 // picture. ConnectPaths therefore attaches them strictly in the order given,
 // one at a time, waiting for each to reach a live state before starting the
@@ -44,7 +44,7 @@ type PathResult struct {
 // next path in priority order follows. Waiting for a single path is bounded
 // by WithPathTimeout so one unreachable node cannot consume the whole
 // context. Re-establishing a path that failed here is the caller's job (a
-// reconcile loop); retrying must re-issue that path alone, so the paths that
+// reconcile loop). Retrying must re-issue that path alone, so the paths that
 // did come up keep their relative order.
 //
 // It is idempotent: a path whose controller already exists is left alone
@@ -52,7 +52,7 @@ type PathResult struct {
 // controller for the same endpoint.
 //
 // The returned error is non-nil only when no path at all could be
-// established — with one live path the subsystem is attached and usable, and
+// established. With one live path the subsystem is attached and usable, and
 // per-path failures are reported through the results. All targets must name
 // the same subsystem NQN.
 func (c *connector) ConnectPaths(ctx context.Context, targets []Target) ([]PathResult, error) {
@@ -98,8 +98,8 @@ func (c *connector) ConnectPaths(ctx context.Context, targets []Target) ([]PathR
 }
 
 // connectPath establishes a single path and waits for it to go live. The
-// per-path timeout covers the whole attempt — the controller-state lookups,
-// the connect write and the wait for live — so no single step can hold up the
+// per-path timeout covers the whole attempt (the controller-state lookups,
+// the connect write, and the wait for live) so no single step can hold up the
 // paths behind this one, whichever one is slow.
 func (c *connector) connectPath(parent context.Context, t Target) PathResult {
 	r := PathResult{Target: t}
@@ -121,7 +121,7 @@ func (c *connector) connectPath(parent context.Context, t Target) PathResult {
 		r.AlreadyPresent, r.Live = true, true
 		return r
 	case found:
-		// The controller exists but is not live yet — the kernel is still
+		// The controller exists but is not live yet, because the kernel is still
 		// connecting or reconnecting it. Writing the fabrics device again
 		// would add a second controller for the same endpoint, so only wait.
 		r.AlreadyPresent = true
@@ -199,7 +199,7 @@ func matchesTarget(ctrl nvme.Controller, t Target) bool {
 const (
 	rankUnusable     = iota // inaccessible, persistent-loss, change
 	rankUnknown             // no ANA information reported for this controller
-	rankNonOptimized        // non-optimized — accessible, not preferred
+	rankNonOptimized        // non-optimized: accessible, not preferred
 	rankOptimized           // the path the kernel prefers for I/O
 )
 
@@ -220,7 +220,7 @@ func anaRank(s nvme.ANAState) int {
 // disconnectOrder returns s's controllers in the order they must be torn
 // down: by ANA state (unusable and non-optimized paths first, the optimized
 // one last) and, among paths of equal rank, in reverse of the order they
-// were connected — the kernel hands out controller instance numbers in
+// were connected. The kernel hands out controller instance numbers in
 // creation order, so the path attached first is released last.
 //
 // A controller serving several namespaces is ranked by its best ANA state

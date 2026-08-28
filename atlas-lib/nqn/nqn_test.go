@@ -55,7 +55,7 @@ func TestHost(t *testing.T) {
 	if got := Host(nodeUID); got != want {
 		t.Errorf("Host = %q, want %q", got, want)
 	}
-	// The host prefix is not the subsystem one; deriving either from the other
+	// The host prefix is not the subsystem one, and deriving either from the other
 	// would authorize the wrong name.
 	if HostPrefix == DefaultPrefix {
 		t.Error("HostPrefix == DefaultPrefix, want the host and subsystem prefixes distinct")

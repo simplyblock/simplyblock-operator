@@ -1,6 +1,6 @@
 # Generated client for the simplyblock control-plane v2 API.
 # The non-/api/v2 paths (legacy /{resource}/{full_path} catch-all proxies
-# and the root redirect) are excluded — they are not part of the typed v2
+# and the root redirect) are excluded, because they are not part of the typed v2
 # surface and their {full_path} param is undeclared in the spec.
 package: cpapi
 output: cpapi.gen.go

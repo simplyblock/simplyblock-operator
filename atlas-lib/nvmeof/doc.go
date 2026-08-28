@@ -2,15 +2,15 @@
 // disconnecting from remote subsystems (TCP transport for simplyblock).
 //
 // It is the write-side counterpart to package nvme, which only reads.
-// FabricsConnector talks to the kernel directly — it writes a connect
-// options line to /dev/nvme-fabrics and tears a controller down through its
-// delete_controller sysfs attribute — so no nvme-cli binary is required. It
+// FabricsConnector talks to the kernel directly, writing a connect
+// options line to /dev/nvme-fabrics and tearing a controller down through its
+// delete_controller sysfs attribute, so no nvme-cli binary is required. It
 // reads controller state back through a nvme.SubsystemResolver. The Connector
 // interface keeps these mechanics out of callers and out of tests.
 //
 // Path order is part of the contract. Except on a single-node installation,
 // the control plane answers a volume's connect request with several paths in
-// descending priority — primary, secondary, tertiary — and both directions
+// descending priority (primary, secondary, and tertiary), and both directions
 // respect an order:
 //
 //   - Attaching (ConnectPaths) walks the paths in the order given, one at a
@@ -26,13 +26,13 @@
 // Connecting is only half of an attach: the namespace block device surfaces a
 // moment after the controller goes live. WaitForDevice (and ConnectDevice,
 // which connects and then waits) bridges that gap and refuses to guess when
-// several namespaces match — see wait.go.
+// several namespaces match. See wait.go.
 // # Two mechanisms, one set of rules
 //
 // Attaching can be done two ways, and which one a caller needs is a property of
 // the caller rather than of the fabric: FabricsConnector writes the kernel's
 // fabrics device directly, CLIConnector shells out to nvme-cli. Only those two
-// operations differ — establishing a path, and tearing a controller down — and
+// operations differ, establishing a path and tearing a controller down, and
 // everything above them, the path order above included, is shared. A caller that
 // has to speak nvme-cli today therefore gets the same behavior as one that does
 // not, and can change mechanism later without changing what it asks for.
@@ -42,8 +42,8 @@
 // and no control plane, which makes it the cheapest honest test of a connector.
 // # Who is connecting
 //
-// An access-controlled volume — one in a pool with an allowed-hosts list, with
-// or without DHCHAP — is reachable only by a named host, so the identity a
+// An access-controlled volume, one in a pool with an allowed-hosts list and
+// with or without DHCHAP, is reachable only by a named host, so the identity a
 // connect presents stops being a detail and becomes part of whether it works at
 // all. Three things have to name the same host, and none can be derived from
 // the others after the fact:
@@ -68,10 +68,10 @@
 // # A connect that succeeds is not a fabric that works
 //
 // The states that cause outages are the ones where a connect is satisfied at one
-// layer of the NVMe object tree while the layer below it is unusable — and the
+// layer of the NVMe object tree while the layer below it is unusable, and the
 // check that gates the retry sits at the higher layer, so nothing looks missing
 // and the retry spins. A subsystem whose controllers are live but which exports
-// no namespace; a live controller at a published endpoint that serves no path to
+// no namespace, or a live controller at a published endpoint that serves no path to
 // the namespace, so the volume runs below its published redundancy while every
 // connect answers "already connected." Neither is visible to Connect,
 // IsConnected or a wait for a device.

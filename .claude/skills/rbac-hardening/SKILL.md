@@ -1,6 +1,6 @@
 ---
 name: rbac-hardening
-description: Grant and audit Kubernetes permissions in this repository under least privilege — the kubebuilder RBAC markers that generate the manager's ClusterRole, the roles the operator builds in Go and applies to what it deploys, the charts' hand-written roles and bindings, and the privileged security contexts of the storage node and CSI plugins. Covers the escalation primitives that are cluster-admin in effect, what privilege this product genuinely requires and why, and the justification a reviewed grant carries. Use when adding or widening a permission, adding an RBAC marker, writing a chart role or binding, setting a security context, or running a privilege or security audit.
+description: Grant and audit Kubernetes permissions in this repository under least privilege: the kubebuilder RBAC markers that generate the manager's ClusterRole, the roles the operator builds in Go and applies to what it deploys, the charts' hand-written roles and bindings, and the privileged security contexts of the storage node and CSI plugins. Covers the escalation primitives that are cluster-admin in effect, what privilege this product genuinely requires and why, and the justification a reviewed grant carries. Use when adding or widening a permission, adding an RBAC marker, writing a chart role or binding, setting a security context, or running a privilege or security audit.
 ---
 
 # RBAC and privilege hardening
@@ -11,11 +11,11 @@ that cannot answer all four is wider than the work.
 
 References:
 
-- `references/escalation-primitives.md` — the grants that are cluster-admin in
+- `references/escalation-primitives.md`: the grants that are cluster-admin in
   effect, who holds each one today, and what contains it.
-- `references/workload-hardening.md` — security contexts, host mounts, and
+- `references/workload-hardening.md`: security contexts, host mounts, and
   capabilities: which are required by the storage data path and which are not.
-- `scripts/check-rbac.py` — audits all four sources below:
+- `scripts/check-rbac.py`: audits all four sources below:
 
   ```bash
   .claude/skills/rbac-hardening/scripts/check-rbac.py --changed
@@ -72,7 +72,7 @@ socket, and mount propagation so a mount inside the container reaches the host.
 **"Required" is not the same as "unexamined."** For each one the rule is:
 
 - The narrowest form that works. A specific capability set beats `privileged:
-  true`; a read-only mount of `/sys` beats a writable one; one host path beats
+  true`, a read-only mount of `/sys` beats a writable one, and one host path beats
   the parent directory.
 - A `rbac-justified:` note next to it saying what needs it, so the next reader
   does not have to re-derive it and the checker stops reporting it.

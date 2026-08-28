@@ -232,7 +232,7 @@ func TestClampToIntPanic(t *testing.T) {
 	})
 
 	// The underflow branch is a last-resort guard that only fires where int is
-	// narrower than int64 (32-bit builds); int64 is the widest signed type in
+	// narrower than int64 (32-bit builds). int64 is the widest signed type in
 	// the constraint, so on 64-bit no value can drop below math.MinInt and it
 	// is unreachable. We keep the check but do not exercise it here.
 }

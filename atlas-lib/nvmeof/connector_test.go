@@ -20,7 +20,7 @@ const (
 
 // The kernel keeps hostid and hostnqn strictly 1:1, so the two are resolved as
 // a pair. The case that matters is the one in the middle: a target naming its
-// own host NQN — every access-controlled volume — must not be handed the node's
+// own host NQN, which every access-controlled volume does, must not be handed the node's
 // file hostid, which any plain volume on that node has already bound to the
 // node's default host NQN.
 func TestHostIdentity(t *testing.T) {
@@ -89,7 +89,7 @@ func TestHostIdentity(t *testing.T) {
 // A host NQN with no UUID in it and no explicit id beside it has to fail the
 // connect rather than send the NQN with the hostid left off. Omitting it is not
 // "no hostid": nvme-cli reads /etc/nvme/hostid and the kernel supplies its own
-// default, which is the mismatched pairing — so a quiet connect here is a
+// default, which is the mismatched pairing, so a quiet connect here is a
 // connect under the wrong identity, and it breaks later on some other volume.
 func TestHostIdentity_NoDerivableID(t *testing.T) {
 	const hostNQN = "nqn.2014-08.org.nvmexpress:client-42"

@@ -22,7 +22,7 @@
 //	  ro, hidden, dev, queue/logical_block_size, ...
 //
 // Per-controller namespace legs appear as nvmeXcYnZ under the controller
-// (e.g., nvme0c0n1); the host I/O device is the subsystem-level nvmeXnY.
+// (e.g., nvme0c0n1), and the host I/O device is the subsystem-level nvmeXnY.
 package sysfs
 
 import (
@@ -56,7 +56,7 @@ func ReadAttr(elem ...string) (string, error) {
 }
 
 // List returns the entry names of the joined directory path. A missing
-// directory yields an empty slice and no error — the common case on hosts
+// directory yields an empty slice and no error, the common case on hosts
 // with no NVMe devices.
 func List(elem ...string) ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(elem...))
@@ -78,7 +78,7 @@ func List(elem ...string) ([]string, error) {
 // These wrap ReadAttr with the parsing sysfs values commonly need. A
 // missing or unparsable attribute falls back to the zero value (or the
 // supplied default), matching the kernel's own "absent means unset"
-// convention; callers that must distinguish absence use ReadAttr directly.
+// convention. Callers that must distinguish absence use ReadAttr directly.
 
 // String reads a sysfs attribute and returns its trimmed contents, or the
 // empty string if the attribute is missing or unreadable.

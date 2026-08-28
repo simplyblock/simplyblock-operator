@@ -11,13 +11,13 @@ below that looks like a count is a rule of thumb, and the script is the fact.
 
 ## Type level
 
-| Marker                                      | Use                                                                                                                    |
-|---------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
-| `+kubebuilder:object:root=true`             | On every root type and its `List` companion                                                                            |
-| `+kubebuilder:subresource:status`           | On every type. Without it, a status write needs spec write permission and bumps `generation`                           |
-| `+kubebuilder:resource:scope=…,shortName=…` | Scope is Namespaced unless the object genuinely has no namespace. Declare the short name the design names              |
-| `+kubebuilder:printcolumn`                  | Two or three per type, answering "what is happening" — for an Ops kind: target, action, phase, sub-phase, message, age |
-| `+kubebuilder:validation:XValidation`       | Cross-field and immutability rules that field markers cannot express                                                   |
+| Marker                                      | Use                                                                                                                   |
+|---------------------------------------------|-----------------------------------------------------------------------------------------------------------------------|
+| `+kubebuilder:object:root=true`             | On every root type and its `List` companion                                                                           |
+| `+kubebuilder:subresource:status`           | On every type. Without it, a status write needs spec write permission and bumps `generation`                          |
+| `+kubebuilder:resource:scope=…,shortName=…` | Scope is Namespaced unless the object genuinely has no namespace. Declare the short name the design names             |
+| `+kubebuilder:printcolumn`                  | Two or three per type, answering "what is happening." For an Ops kind: target, action, phase, sub-phase, message, age |
+| `+kubebuilder:validation:XValidation`       | Cross-field and immutability rules that field markers cannot express                                                  |
 
 ## Field level
 
@@ -28,13 +28,13 @@ below that looks like a count is a rule of thumb, and the script is the fact.
 | `+kubebuilder:validation:Enum=a;b;c`          | Every closed set, and every action verb                                                                |
 | `+kubebuilder:default=…`                      | A default the API server applies. It is part of the API: tightening one later is a breaking change     |
 | `+kubebuilder:validation:Minimum` / `Maximum` | Numeric bounds. A vCPU or size floor belongs here, not in a reconciler's error path                    |
-| `+k8s:immutable`                              | Always-immutable fields. controller-gen turns it into `self == oldSelf`; see below                     |
+| `+k8s:immutable`                              | Always-immutable fields. controller-gen turns it into `self == oldSelf`, as below                      |
 | `+listType=map` with `+listMapKey=type`       | On a `[]metav1.Condition`, so server-side apply merges by condition type instead of replacing the list |
 
 `omitempty` in the JSON tag already makes controller-gen treat a field as
 optional, so `+optional` is for saying so out loud. A field with neither, and no
-`Required`, gets whichever answer the tag happens to imply — the checker reports
-that as `unspecified-spec-field`.
+`Required`, gets whichever answer the tag happens to imply, and the checker
+reports that as `unspecified-spec-field`.
 
 ## Immutability
 
@@ -42,7 +42,7 @@ that as `unspecified-spec-field`.
 anything that is immutable from creation: controller-gen emits
 `x-kubernetes-validations: rule: self == oldSelf` into the schema. It is not
 spelled `+kubebuilder:`, which is why it is repeatedly assumed to be inert
-documentation; it is not.
+documentation. It is not.
 
 Reach for CEL when `self == oldSelf` is not what is meant. Two shapes, both CEL,
 one on the field and one on the type:
@@ -55,8 +55,8 @@ one on the field and one on the type:
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType",message="fabricType is immutable once set"
 ```
 
-Use the first for anything that identifies what the object is about — a target
-reference, an action verb, a pool or cluster binding. Use the second for
+Use the first for anything that identifies what the object is about: a target
+reference, an action verb, or a pool or cluster binding. Use the second for
 configuration that a controller or a user fills in once, where an empty value is
 a legitimate starting state (`fabricType`, `stripe`, a KMS binding).
 
@@ -84,7 +84,7 @@ and a test that becomes an admission scenario instead of a reconcile scenario.
 
 `make -C operator manifests` turns these markers into the CRD schema, and
 `make helm-sync` copies the result into the chart. Neither adds the new CRD to
-`config/crd/kustomization.yaml` — that list is hand-maintained, and a CRD missing
+`config/crd/kustomization.yaml`, which is hand-maintained, and a CRD missing
 from it never reaches the installer or the chart. See the `build-system` and
 `new-files` skills.
 

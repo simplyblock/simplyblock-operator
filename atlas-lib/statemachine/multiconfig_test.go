@@ -171,7 +171,7 @@ func TestMultiConfigValidatesEveryGraph(t *testing.T) {
 }
 
 func TestMultiConfigNewRunsNoHook(t *testing.T) {
-	// A machine is born already in its initial state; New must not enter it.
+	// A machine is born already in its initial state, and New must not enter it.
 	h := &subHook{timeout: time.Minute}
 	mc := multiActions(nil, h.fn)
 
@@ -247,7 +247,7 @@ func TestMultiConfigFromSnapshotZeroStateStartsAtInitial(t *testing.T) {
 }
 
 func TestMultiConfigFromSnapshotZeroStateIgnoresDeadline(t *testing.T) {
-	// A deadline without a state is incoherent input; the state field decides.
+	// A deadline without a state is incoherent input, and the state field decides.
 	synctest.Test(t, func(t *testing.T) {
 		sm, err := multiActions(nil, nil).FromSnapshot(context.Background(), migrate,
 			Snapshot[sub]{Deadline: time.Now().Add(-time.Hour)})
@@ -267,8 +267,8 @@ func TestMultiConfigFromSnapshotZeroStateIgnoresDeadline(t *testing.T) {
 
 func TestMultiConfigFromSnapshotRestoresADeclaredZeroState(t *testing.T) {
 	// "Zero means fresh" is a rule about undeclared states only. For an int-backed
-	// phase whose zero value is a real state, the snapshot is restored as written
-	// — deadline included, which is what tells this apart from starting over.
+	// phase whose zero value is a real state, the snapshot is restored as written,
+	// deadline included, which is what tells this apart from starting over.
 	type phase int
 	const (
 		start phase = iota

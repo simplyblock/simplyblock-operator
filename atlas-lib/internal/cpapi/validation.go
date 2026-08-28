@@ -1,21 +1,21 @@
 package cpapi
 
-// Response validation — the mechanism. What is validated lives in
-// validation.yaml; the tables and the UnmarshalJSON methods below are compiled
+// Response validation, the mechanism. What is validated lives in
+// validation.yaml, and the tables and the UnmarshalJSON methods below are compiled
 // from it into validation.gen.go by internal/cpapi/gen. Only cpapi.gen.go comes
 // from oapi-codegen, so regenerating the client cannot clobber any of this.
 //
 // The generated client happily decodes a response body whose keys no longer
 // match the spec it was generated from: a renamed key (`ns-id` becoming
 // `ns_id`, say) leaves the Go field at its zero value, and callers then act on
-// a plausible-looking zero — connect to namespace 0, publish a 0-byte volume —
+// a plausible-looking zero (connect to namespace 0, publish a 0-byte volume)
 // instead of noticing the version skew.
 //
 // So every response type validates itself as it is deserialized: its generated
 // UnmarshalJSON decodes and then calls Validate. Nothing has to be remembered
-// at a call site — validation fires wherever a body is decoded, including
+// at a call site, because validation fires wherever a body is decoded, including
 // inside the generated ParseXxxResponse functions and for DTOs nested in other
-// DTOs — and failures wrap errs.ErrInvalidResponse, surfacing as the error of
+// DTOs, and failures wrap errs.ErrInvalidResponse, surfacing as the error of
 // the client call itself.
 
 import (
@@ -46,7 +46,7 @@ type responseRule struct {
 // JSON keys that did not hold up.
 //
 // It is exported for the hand-written response types in the controlplane
-// package, whose constraints live in `validate` struct tags; the generated
+// package, whose constraints live in `validate` struct tags. The generated
 // UnmarshalJSON methods call it for everything modeled in the spec.
 func Validate(data []byte, v any) error {
 	t := reflect.TypeOf(v)
@@ -77,7 +77,7 @@ func checkKeys(t reflect.Type, data []byte) error {
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil // not an object; the decode itself will have said so
+		return nil // not an object, and the decode itself will have said so
 	}
 	missing := make([]string, 0, len(keys))
 	for _, k := range keys {
@@ -106,7 +106,7 @@ func keysByType() map[reflect.Type][]string {
 }
 
 // validate is the shared validator. It is configured once here and only read
-// afterward, which is what makes concurrent use safe — registering rules on a
+// afterward, which is what makes concurrent use safe. Registering rules on a
 // validator already in use is not.
 var validate = newValidator()
 

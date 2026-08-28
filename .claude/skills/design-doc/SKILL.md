@@ -8,18 +8,18 @@ description: Author or update a simplyblock-operator design document in operator
 Every substantial operator feature gets three documents, each answering a
 question the others must not. This skill owns the first two:
 
-| Document   | Path                                      | Answers                                                                                                         |
-|------------|-------------------------------------------|-----------------------------------------------------------------------------------------------------------------|
-| Design doc | `operator/docs/designs/design-<slug>.md`  | What are we building, why, and how does it behave                                                               |
-| Test plan  | `operator/docs/tests/test-plan-<slug>.md` | How do we know it works, and what is still uncovered — the numbered scenario matrix lives here and nowhere else |
-| Work plan  | `operator/docs/tasks/work-plan-<slug>.md` | What has to be done, in what order, and what can run at the same time — the **`work-plan`** skill, not this one |
+| Document   | Path                                      | Answers                                                                                                        |
+|------------|-------------------------------------------|----------------------------------------------------------------------------------------------------------------|
+| Design doc | `operator/docs/designs/design-<slug>.md`  | What are we building, why, and how does it behave                                                              |
+| Test plan  | `operator/docs/tests/test-plan-<slug>.md` | How do we know it works, and what is still uncovered. The numbered scenario matrix lives here and nowhere else |
+| Work plan  | `operator/docs/tasks/work-plan-<slug>.md` | What has to be done, in what order, and what can run at the same time. The **`work-plan`** skill, not this one |
 
 The design doc and the test plan are written together unless the user explicitly
 asks for only one. A design doc whose "Testing Strategy" section has no companion
 test plan is incomplete.
 
 **The work plan is a different skill because it has a different trigger.** A
-design is reviewed and revised before it is sound; work items cite its sections
+design is reviewed and revised before it is sound, and work items cite its sections
 and its decisions, so splitting one that is still moving produces packages a
 later revision merges or deletes. `work-plan` is invoked once the design has
 stopped changing shape, and it applies its own readiness test before splitting
@@ -27,14 +27,14 @@ anything. §5 below is the hand-off.
 
 Reference material in this skill:
 
-- `references/conventions.md` — house style: metadata block, section numbering,
+- `references/conventions.md`: house style, covering the metadata block, section numbering,
   diagrams, tables, cross-references, naming. **Read this before writing.**
-- `references/design-template.md` — the design doc skeleton, section by section.
-- `references/test-plan-template.md` — the test plan skeleton.
+- `references/design-template.md`: the design doc skeleton, section by section.
+- `references/test-plan-template.md`: the test plan skeleton.
 
 Scenario enumeration itself lives in the **`test-scenarios`** skill (coverage
 axes, positive/negative derivation, exhaustiveness audit). This skill owns the
-documents; that one owns the matrix content.
+documents, and that one owns the matrix content.
 
 Wording is owned by the **`house-style`** skill: American English, the Oxford
 comma, the lowercase `simplyblock` brand, product-name spelling, punctuation, and
@@ -43,13 +43,13 @@ what the change touched before handing the work back.
 
 The canonical examples in the repo, in rough order of usefulness:
 
-- `design-issue-130-auto-rebalancing.md` — the fullest example (phasing, algorithm,
+- `design-issue-130-auto-rebalancing.md`: the fullest example (phasing, algorithm,
   pseudocode, metrics provider interface, backend API protocol). Its
-  issue-numbered filename is legacy — new docs are named `design-<slug>.md` and
+  issue-numbered filename is legacy. New docs are named `design-<slug>.md` and
   name their issues in the metadata block only.
-- `design-node-removal-draining.md` — clean state machine + sub-phase controller doc.
-- `design-primary-node-placement.md` — layered-algorithm doc with a strong `## Overview`.
-- `design-storageclusterops.md`, `design-storagenodeset-storagenode.md` — CRD-introduction docs.
+- `design-node-removal-draining.md`: clean state machine + sub-phase controller doc.
+- `design-primary-node-placement.md`: layered-algorithm doc with a strong `## Overview`.
+- `design-storageclusterops.md`, `design-storagenodeset-storagenode.md`: CRD-introduction docs.
 - `test-plan-storagenode-ops.md`, `test-plan-storageclusterops.md`, `test-plan-drain-remove.md`.
 
 ## Workflow
@@ -69,7 +69,8 @@ Before drafting, establish:
   than no design.
 - **What is already implemented.** This decides the `**Status:**` line and the
   per-section `(Implemented)` / `(Planned)` markers. Check git log and the
-  controller code — do not assume a design is aspirational just because it is new.
+  controller code, and do not assume a design is aspirational just because it is
+  new.
 - **Neighboring designs.** Read the design docs that overlap yours and reuse
   their vocabulary, CR names, annotation keys, and event reasons. Link to them
   rather than restating their mechanisms.
@@ -77,7 +78,7 @@ Before drafting, establish:
   `TestXxx` function names: `ls operator/internal/controller/*_unit_test.go`,
   then grep `^func Test` in the relevant files. Never invent a test name and
   list it under "implemented."
-- **Existing scenario IDs**, when updating a test plan — the highest `U-`, `I-`,
+- **Existing scenario IDs**, when updating a test plan: the highest `U-`, `I-`,
   `E-`, and `M-` number already assigned, so new scenarios append instead of
   colliding.
 
@@ -88,10 +89,10 @@ genuinely cannot determine, and ask it in one batch:
 
 - Title and file slug.
 - GitHub issue(s), if any.
-- Author name (default to the current git user; check `git config user.name`).
+- Author name (default to the current git user, from `git config user.name`).
 - Status, and whether the work is phased (a phased design gets a
   `## Phasing Overview` table right under the metadata block).
-- Scope boundaries — the Non-Goals list is where reviews are won or lost, so
+- Scope boundaries: the Non-Goals list is where reviews are won or lost, so
   confirm anything ambiguous about what is *out* of scope.
 - Nothing about work breakdown. Whether the design is ready to be split, and
   into what, is `work-plan`'s question and is asked after this document settles.
@@ -104,38 +105,38 @@ Follow `references/design-template.md`. Rules that matter more than the rest:
   `## N. Open Questions`, with `---` between top-level sections and a Table of
   Contents linking every one. Cross-reference sections as `§5.2` in prose.
 - **Include only the sections the design needs**, in template order. A doc with
-  no state machine should not carry an empty State Machine section; a doc with
+  no state machine should not carry an empty State Machine section, and a doc with
   three CRDs needs an `## API Design — New CRDs` section instead of a thin
   `## Data Model Changes`.
 - **Show real Go and real YAML.** Spec additions appear as annotated Go structs
-  with kubebuilder markers and the doc comments they will actually carry; CR
+  with kubebuilder markers and the doc comments they will actually carry, and CR
   examples appear as YAML.
 - **The document describes the system, not the discussion that produced it.**
-  The general rule is the `house-style` skill's — reference documentation, prose
-  over lists, the writer out of the page. Three corollaries are specific to a
+  The general rule is the `house-style` skill's: reference documentation, prose
+  over lists, and the writer out of the page. Three corollaries are specific to a
   design document, and the corpus violates each of them somewhere:
   - **It is not a changelog of its own evolution.** `Key change from initial
-    design:` is a sentence about the document; write the mechanism as it stands
+    design:` is a sentence about the document. Write the mechanism as it stands
     and let the date line and git carry the rest.
   - **A rejected alternative earns a place only when a reader would otherwise
-    propose it again.** Then it is a decision with its reason — "per-member
-    parity is not planned; the resiliency story is per-member erasure coding" —
-    never a story about how the decision was reached.
+    propose it again.** Then it is a decision with its reason ("per-member
+    parity is not planned, because the resiliency story is per-member erasure
+    coding") and never a story about how the decision was reached.
   - **Status sets the tense.** An `Implemented` document says what the code does.
     A `Draft` says what the design requires. Neither says what someone intends to
     do: an intention that is not yet true is an Open Question or a phase marked
     as not-yet-true.
 - **Every claim about behavior must be traceable** to code, an issue decision,
   or an explicit open question. When something is undecided, say so in
-  `## Open Questions` — as a `| # | Question | Owner |` table when other teams
-  owe the answer, otherwise as `**Qn: <question>**` prose — and do not paper over
-  it with prose that reads as settled.
+  `## Open Questions`, as a `| # | Question | Owner |` table when other teams
+  owe the answer and otherwise as `**Qn: <question>**` prose, and do not paper
+  over it with prose that reads as settled.
 - **Backend API dependencies get their own table** (method, endpoint, notes),
   including idempotency requirements. Flag endpoints the control plane does not
-  yet provide as such — these are the design's external blockers.
+  yet provide as such, since these are the design's external blockers.
 - **Observability is not optional.** Kubernetes events (event, type, reason) and
   Prometheus metrics (metric, labels, description) as two tables.
-- The `## Testing Strategy` section is a **pointer, not a catalog** — a few
+- The `## Testing Strategy` section is a **pointer, not a catalog:** a few
   lines on what each class of test must prove, the harness each needs, where the
   risk concentrates, and a link to the test plan. No scenario tables, no IDs:
   scenarios live in the test plan and only there, because a duplicated list is a
@@ -144,7 +145,7 @@ Follow `references/design-template.md`. Rules that matter more than the rest:
 ### 4. Write the test plan
 
 Follow `references/test-plan-template.md`. **Enumerate the scenarios with the
-`test-scenarios` skill** — it owns the exhaustiveness method: paired
+`test-scenarios` skill**, which owns the exhaustiveness method: paired
 positive/negative derivation and expansion across the coverage axes
 (single- vs multi-namespace, single-node / three-node / larger clusters,
 single- vs multi-cluster and cross-cluster). Invoke it with the design doc and
@@ -154,31 +155,31 @@ most:
 - Open with the `Related design:` back-link and the ID/type legend.
 - **This document owns the scenario matrix.** One section per test class, opening
   with one sentence on the harness boundary, then `###` groups per unit under
-  test — each naming its test file and citing the design section it verifies
+  test, each naming its test file and citing the design section it verifies
   (`### Latency Deviation (§5.2)`). Rows are
   `| # | Scenario | Type | Test |`: a permanent ID, the scenario, one of
   `Positive` / `Negative` / `Boundary` / `Regression`, and the verbatim test
-  function name — or `—` when nothing covers it yet. Numbering runs continuously
+  function name, or `—` when nothing covers it yet. Numbering runs continuously
   across the groups of a class. See `references/conventions.md` § "Test scenario
-  matrices" for the full rules; `design-issue-130-auto-rebalancing.md` §15 is the
+  matrices" for the full rules. `design-issue-130-auto-rebalancing.md` §15 is the
   style reference.
 - **Grep the test names.** Every function in the `Test` column must exist. One
-  function may satisfy several IDs; a test satisfying no listed scenario means a
+  function may satisfy several IDs, and a test satisfying no listed scenario means a
   row is missing, so add the row.
 - **`Boundary` rows are the ones that get skipped.** Thresholds (`==` vs `>`),
-  empty collections, single-element clusters, `k = 0`, clamped maxima — walk the
+  empty collections, single-element clusters, `k = 0`, and clamped maxima. Walk the
   checklist at the end of the template rather than trusting recall.
 - **Include the axis coverage table** the `test-scenarios` skill produces: one
   row per axis with the IDs covering each value. It is what makes "exhaustive"
   checkable instead of claimed, and it turns the combinations you did not test
   into explicit gap rows.
-- **Manual scenarios** get prose blocks (`### M-01 — <situation>`) with a design
+- **Manual scenarios** get prose blocks (`### M-01: <situation>`) with a design
   reference, **What to verify**, a numbered **Test concept**, and where relevant
   **Current behavior**, **Open question**, or a **Recommended fix** code block.
-  This is the hand-off section — it must be executable from the page alone.
+  This is the hand-off section, and it must be executable from the page alone.
 - **Close with Coverage Summary and What Is Not Yet Covered.** Every `—` in the
   matrix reappears in the gap table with its reason. An honest gap list is the
-  point of the document; do not quietly omit hard scenarios.
+  point of the document, so do not quietly omit hard scenarios.
 
 ### 5. Hand off to the work plan, do not write it here
 
@@ -196,7 +197,7 @@ So: say that the work plan is the next step and what would gate it, then stop.
 Invoke `work-plan` when the design is settled, or when the user asks for the
 breakdown regardless. `work-plan` carries the readiness test it applies.
 
-### 6. Run the house style gate — always, on the files just written
+### 6. Run the house style gate, always, on the files just written
 
 **This is not optional and it is not the last thing.** Every document this skill
 creates or edits goes through the gate before it is handed back, named
@@ -215,7 +216,7 @@ call only when the change spans more files than are convenient to list.
 
 Then:
 
-- **Clear every error.** All seven gates pass, or the work is not done.
+- **Clear every error.** All eight gates pass, or the work is not done.
 - **Read the diff of every `--fix`.** The fixers cannot tell a product name from
   an identifier written without backticks, and the punctuation fixer will move a
   comma inside a phrase that was cited rather than quoted, turning `"e.g.,"` into
@@ -239,9 +240,9 @@ Then:
     hides the findings this step exists to surface, because the gate fails on
     errors and never on warnings.
 
-  This is deliberately stricter than the "Em dashes stay" note in
-  `house-style/SKILL.md`. For the documents this skill writes, the rule above
-  wins.
+  `house-style/SKILL.md` states the same rule. What is added here is the
+  procedure: adjudicate one at a time, and write down the reason for each mark
+  kept.
 - **Do not retrofit** documents this change did not otherwise touch. A pre-existing
   finding in a neighboring doc is not this change's work.
 
@@ -253,18 +254,18 @@ Then:
   paths (`../tests/…`, `../designs/…`, `../tasks/…`) and check that each resolves
   from its own file's directory.
 - Verify TOC anchors match the headings (GitHub slugifies to lowercase, spaces to
-  hyphens, punctuation dropped — an em dash becomes an extra hyphen). An appendix
+  hyphens, punctuation dropped, so an em dash becomes an extra hyphen). An appendix
   heading therefore reads `## Appendix A: \`Thing\``, with a colon: written with
   an em dash, the dropped dash leaves both of its spaces behind and the anchor
   needs two hyphens where a writer will type one.
 - **Check that a `§n` reference means what the reader will assume.** In a test
-  plan, a bare `§11` reads as the plan's own section 11; write `design §11` for
+  plan, a bare `§11` reads as the plan's own section 11, so write `design §11` for
   the design's. The two documents have overlapping numbering.
 - **Recount anything the document counts.** A scenario total, a per-class count,
-  a "17 of 17" claim — derive it from the file rather than from the edit that
+  a "17 of 17" claim: derive it from the file rather than from the edit that
   produced it, because a count written by hand goes stale on the next row.
 - Keep tables and ASCII diagrams inside a reasonable width and make sure box
-  borders line up; misaligned diagrams are the most common defect in these docs.
+  borders line up. Misaligned diagrams are the most common defect in these docs.
 - MegaLinter also runs a spell check over the repo. If the doc introduces new
   technical terms, add them to `.cspell.json`'s `words` list rather than
   rewording the doc.
@@ -275,8 +276,8 @@ Then:
 review feedback is an iteration: rerun step 6's gate over the files it touched,
 then read what the iteration added.
 
-No gate checks this part and none can. Step 3's rule — the document describes the
-system, not the discussion that produced it — is easy to hold while writing a
+No gate checks this part and none can. Step 3's rule, that the document describes
+the system and not the discussion that produced it, is easy to hold while writing a
 section and easy to lose while answering a question about one, because prose
 written in reply to a reviewer carries the reviewer into the page. Read every
 paragraph the iteration added and look for that second voice:
@@ -328,19 +329,19 @@ Report what the pass found: which paragraphs were rewritten, or that none were.
 
 ## Updating an existing document
 
-Re-sync rather than rewrite. Preserve section numbering and existing anchors —
-other docs and commit messages reference them. Update `**Status:**`, extend the
+Re-sync rather than rewrite. Preserve section numbering and existing anchors,
+because other docs and commit messages reference them. Update `**Status:**`, extend the
 date line to `**Date:** <original> (last updated <today>)`, flip section markers
 from `(Planned)` to `(Implemented)`, move resolved items out of
 `## Open Questions` into the body as decisions, and add newly discovered tests to
 the test plan's implemented tables while striking them from the gap list. Say in
 your reply which sections you changed and which open questions were resolved.
 
-New scenarios append to the end of their class section with the next free ID —
-never renumber a matrix to keep it thematically ordered, because those numbers
+New scenarios append to the end of their class section with the next free ID.
+Never renumber a matrix to keep it thematically ordered, because those numbers
 are cited from review history and commit messages. An obsolete scenario keeps its
 row, struck through with the ID that superseded it. When a test lands, fill in the
-`Test` column and delete the matching row from the gap table — those two edits
+`Test` column and delete the matching row from the gap table. Those two edits
 always happen together.
 
 A re-sync is an iteration and ends at step 8, gate included. The voice pass

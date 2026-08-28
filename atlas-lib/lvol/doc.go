@@ -9,6 +9,6 @@
 // It sits one layer above package nvme (which it imports) and is the
 // natural home for the lvol <-> NVMe mapping logic shared by the operator
 // and CSI driver. The Resolver interface is implemented by
-// controlplane.Client; Mapper is wired by the consumer over a
+// controlplane.Client, and Mapper is wired by the consumer over a
 // nvme.DeviceResolver.
 package lvol

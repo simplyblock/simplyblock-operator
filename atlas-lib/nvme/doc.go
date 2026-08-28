@@ -1,19 +1,19 @@
 // Package nvme discovers and looks up local NVMe controllers and namespaces
 // (for simplyblock, typically NVMe-oF/TCP attachments).
 //
-// It is read-only — connecting and disconnecting is package nvmeof — and
+// It is read-only, since connecting and disconnecting is package nvmeof, and it
 // delegates enumeration to internal/sysfs. The model types (Subsystem,
 // Controller, Namespace, Path, Device) are immutable snapshots of kernel state
-// at scan time; re-resolve to observe changes rather than mutating a value.
+// at scan time. Re-resolve to observe changes rather than mutating a value.
 //
 // A Device additionally remembers the resolver it came out of, so a question it
 // cannot answer from its own snapshot re-scans without the caller threading a
 // resolver back in (Device.HasSiblings). A device assembled by hand carries
-// none; bind one with Device.WithResolver.
+// none, so bind one with Device.WithResolver.
 //
 // # Resolving devices
 //
-// Resolvers read the local sysfs tree and re-scan per call; the zero
+// Resolvers read the local sysfs tree and re-scan per call. The zero
 // SysfsConfig uses /sys and /dev.
 //
 //	devices := nvme.NewSysfsDeviceResolver(nvme.SysfsConfig{})
@@ -25,7 +25,7 @@
 //	fmt.Println(dev.Namespace.DevicePath) // /dev/nvme0n1
 //
 // DeviceSelector combines those keys and, via ListWithSelector, returns every
-// match rather than the first — for when "several matched" is meaningful: one
+// match rather than the first, for when "several matched" is meaningful: one
 // namespace of a multi-namespace subsystem, or a fresh device beside a stale
 // same-NQN one (see nvmeof.WaitForDevice). Filter applies it to a snapshot
 // already held.
@@ -45,7 +45,7 @@
 //
 // # Multipath paths
 //
-// A device's ANA paths are its multipath/HA legs; the kernel routes I/O to
+// A device's ANA paths are its multipath/HA legs, and the kernel routes I/O to
 // optimized ones first.
 //
 //	for _, p := range dev.Namespace.Paths {
@@ -55,12 +55,12 @@
 // # Siblings (same volume)
 //
 // With native multipath disabled a volume surfaces as one device per path, all
-// sharing its namespace UUID; siblings are those other devices (none under
+// sharing its namespace UUID. Siblings are those other devices (none under
 // native multipath, which has a single head). Co-tenants are the opposite
 // relation: *other* volumes on the same subsystem, the namespaces of a
-// multi-namespace subsystem. A teardown asks about both — every sibling has to
-// be released, and a co-tenant forbids disconnecting the subsystem — and often
-// only needs to know whether there are any.
+// multi-namespace subsystem. A teardown asks about both, since every sibling
+// has to be released and a co-tenant forbids disconnecting the subsystem, and
+// often only needs to know whether there are any.
 //
 // Each question comes as a pure filter over a snapshot the caller owns, which is
 // the cheap form since one List answers all four for every device in it:
@@ -80,8 +80,8 @@
 // # Multi-namespace subsystems
 //
 // simplyblock "namespaced" volumes share one subsystem (max_namespaces > 1).
-// IsMultiNamespace answers from sysfs where it can — several NSIDs, or any
-// NSID > 1 — and only for the ambiguous single-namespace-at-NSID-1 case issues
+// IsMultiNamespace answers from sysfs where it can (several NSIDs, or any
+// NSID > 1) and only for the ambiguous single-namespace-at-NSID-1 case issues
 // an Identify Controller command (Linux only) to read MNAN.
 //
 //	// errs.ErrUnsupported off Linux; errs.ErrNotConnected without a live path.

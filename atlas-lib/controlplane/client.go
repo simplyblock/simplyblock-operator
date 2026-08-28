@@ -15,12 +15,12 @@ import (
 type Config struct {
 	Endpoint string        // base URL of the control-plane API
 	Token    string        // cluster secret / bearer token
-	Timeout  time.Duration // per-request timeout; zero means a sane default
+	Timeout  time.Duration // per-request timeout, where zero means a sane default
 }
 
 // Client talks to the simplyblock control-plane v2 API. It wraps the
 // generated, spec-validated client (see internal/cpapi) and exposes clean,
-// domain-typed calls; the generated client is never surfaced. Resource methods
+// domain-typed calls, and the generated client is never surfaced. Resource methods
 // live in per-resource files (volumes.go, pools.go, …).
 type Client struct {
 	cfg Config

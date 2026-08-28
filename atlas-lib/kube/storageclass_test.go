@@ -201,7 +201,7 @@ func TestPendingPin(t *testing.T) {
 			want: "n2", wantOK: true,
 		},
 		{
-			// A node id refused once can become valid; re-validating is the
+			// A node id refused once can become valid, so re-validating is the
 			// caller's decision, so the pin stays pending.
 			name: "rejected pin is still pending",
 			anns: map[string]string{

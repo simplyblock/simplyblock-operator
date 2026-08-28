@@ -12,7 +12,7 @@ import (
 
 // A connect can succeed at one layer of the NVMe object tree and still leave
 // the layer below it unusable, and the check that gates a retry sits at the
-// higher layer — so the retry sees nothing missing and spins forever. Every
+// higher layer, so the retry sees nothing missing and spins forever. Every
 // incident this file diagnoses has that shape:
 //
 //   - the subsystem is attached and its controllers are live, but it exports no
@@ -33,8 +33,8 @@ import (
 //
 // Diagnosis is separate from repair on purpose. A migration controller wants to
 // report that a volume is short of paths without healing it mid-migration, and
-// the node-side attach wants the opposite; see Repairer for the policy layer and
-// Repair for the mechanism.
+// the node-side attach wants the opposite. See Repairer for the policy layer
+// and Repair for the mechanism.
 
 // DefectKind names a way an attached subsystem can be inconsistent with what the
 // caller asked for.
@@ -42,14 +42,14 @@ type DefectKind string
 
 const (
 	// DefectNoNamespace is a subsystem with at least one live controller that
-	// exports no namespace at all — the leftover of a half-completed or broken
+	// exports no namespace at all, the leftover of a half-completed or broken
 	// connection. Connect is satisfied by it, since the controllers really are
 	// live, so every retry short-circuits and waits for a block device that
 	// will never appear.
 	DefectNoNamespace DefectKind = "no-namespace"
 
 	// DefectNamespaceMissing is a subsystem that exports namespaces, but not
-	// the one selected. Unlike DefectNoNamespace the connection works — the
+	// the one selected. Unlike DefectNoNamespace the connection works, and the
 	// target simply is not publishing this namespace to this host, which no
 	// amount of local reconnecting changes. It is reported, never repaired
 	// automatically: the other namespaces belong to other volumes.
@@ -62,13 +62,13 @@ const (
 	DefectControllerNotContributing DefectKind = "controller-not-contributing"
 
 	// DefectAmbiguousHead is more than one kernel subsystem instance answering
-	// for a single NQN — a stale head the kernel has not reaped sitting beside
+	// for a single NQN: a stale head the kernel has not reaped sitting beside
 	// the fresh one. Returning either block device is a coin flip, and the
 	// wrong side of it is silent corruption, so the stale instance has to go.
 	DefectAmbiguousHead DefectKind = "ambiguous-head"
 
 	// DefectStaleEndpoint is an attached controller whose endpoint the control
-	// plane no longer publishes — typically the old primary after a migration.
+	// plane no longer publishes, typically the old primary after a migration.
 	// It is reported, never repaired automatically: an endpoint absent from the
 	// current answer is not necessarily gone for good (a node in restart is the
 	// obvious case), and dropping a live data path is the caller's decision.
@@ -84,7 +84,7 @@ const (
 	// ScopeNone marks a defect with no local remedy: nothing that can be torn
 	// down and reconnected changes it.
 	ScopeNone Scope = iota
-	// ScopeController repairs by tearing down one controller — one path of a
+	// ScopeController repairs by tearing down one controller, one path of a
 	// multipath subsystem. The remaining paths, and every namespace they serve,
 	// keep working.
 	ScopeController
@@ -111,7 +111,7 @@ type Defect struct {
 	Kind DefectKind
 	// NQN is the subsystem the defect concerns.
 	NQN string
-	// Scope is how much has to be torn down to repair it; ScopeNone means
+	// Scope is how much has to be torn down to repair it. ScopeNone means
 	// nothing local repairs it.
 	Scope Scope
 
@@ -128,8 +128,8 @@ type Defect struct {
 	//
 	// This is the field that decides whether a repair is allowed to happen
 	// unattended. Repairing a volume by ripping the block device out from under
-	// an unrelated volume that is serving I/O — the pods on it see ext4 remount
-	// read-only — is never an improvement.
+	// an unrelated volume that is serving I/O, whose pods see ext4 remount
+	// read-only, is never an improvement.
 	CoTenants []nvme.Namespace
 
 	// Subsystem is the kernel subsystem instance the defect is about. It
@@ -148,7 +148,7 @@ func (d Defect) Disruptive() bool {
 }
 
 // Repairable reports whether a local teardown-and-reconnect can fix this defect
-// at all. It says nothing about whether doing so is a good idea — that is what
+// at all. It says nothing about whether doing so is a good idea, which is what
 // Disruptive and the Repairer's policy are for.
 func (d Defect) Repairable() bool {
 	return d.Scope != ScopeNone && len(d.Controllers) > 0
@@ -170,13 +170,13 @@ func (d Defect) String() string {
 // reconnected or otherwise changed, and no NVMe command is issued.
 //
 // sel must set the NQN, and should set NSID or UUID on a multi-namespace
-// subsystem — that is what makes "the namespace I asked for has no path" a
-// decidable question rather than a guess about which namespace was meant.
+// subsystem, because that is what makes "the namespace I asked for has no path"
+// a decidable question rather than a guess about which namespace was meant.
 //
 // targets is the control plane's current answer, used to tell an endpoint that
 // is merely absent from it (DefectStaleEndpoint) from one that is wanted. Pass
-// nil to skip that comparison; the namespace- and controller-level checks do not
-// need it.
+// nil to skip that comparison. The namespace- and controller-level checks do
+// not need it.
 //
 // A subsystem that is not attached at all yields no defects: there is nothing
 // inconsistent about it, and an ordinary connect is what it needs. The same goes
@@ -240,13 +240,13 @@ func inspectSubsystem(s nvme.Subsystem, sel nvme.DeviceSelector, targets []Targe
 				Controllers: order,
 				Subsystem:   s.ID,
 				// No namespaces means no co-tenant block device exists to lose,
-				// so CoTenants is empty by construction — which is exactly why
+				// so CoTenants is empty by construction, which is exactly why
 				// this defect is safe to repair unattended.
 				Detail: fmt.Sprintf("%d live controller(s), no namespace exported", len(live)),
 			})
 		}
 	case len(matched) == 0:
-		// Namespaces, but not this one. The connection works; the target is not
+		// Namespaces, but not this one. The connection works, and the target is not
 		// publishing what was asked for. Every namespace present belongs to
 		// something else, so a teardown here is pure collateral damage.
 		defects = append(defects, Defect{
@@ -276,8 +276,8 @@ func inspectSubsystem(s nvme.Subsystem, sel nvme.DeviceSelector, targets []Targe
 //
 // This is the state a connect cannot see. The controller exists and is live, so
 // nothing at the controller level is missing and a connect declines to act,
-// while the namespace's own path list — the view that decides whether I/O can
-// use this path — does not mention it. The two never reconcile on their own.
+// while the namespace's own path list, the view that decides whether I/O can
+// use this path, does not mention it. The two never reconcile on their own.
 //
 // A namespace with no path list at all is skipped rather than reported: under
 // nvme_core.multipath=0 the kernel publishes no per-controller ANA view, and
@@ -299,7 +299,7 @@ func notContributing(s nvme.Subsystem, ns nvme.Namespace, live []nvme.Controller
 			continue
 		}
 		// A controller the control plane no longer publishes is stale, not
-		// broken; that is a different defect with a different verdict, and
+		// broken. That is a different defect with a different verdict, and
 		// reporting both for one controller would invite two repairs of it.
 		if len(targets) > 0 && !matchesAny(ctrl, targets) {
 			continue
@@ -351,7 +351,7 @@ func staleEndpoints(s nvme.Subsystem, targets []Target) []Defect {
 // connect. It is dangerous rather than merely untidy: a By* lookup returns
 // whichever came first, and handing back the stale namespace means writing to
 // the wrong block device. The repairable case is the one where reachability
-// separates them — a head whose paths have all gone inaccessible is the stale
+// separates them: a head whose paths have all gone inaccessible is the stale
 // one. When every instance still looks usable the defect is reported at
 // ScopeNone: reachability says which devices are serviceable, not which one this
 // connect created, and tearing down a guess is how a healthy volume loses its
@@ -455,8 +455,9 @@ func otherNamespaces(s nvme.Subsystem, exclude *nvme.NamespaceID) []nvme.Namespa
 }
 
 // losingLastPath returns the namespaces other than own that would be left with
-// no usable path if every controller in victims were torn down — the blast
-// radius of a repair, in the only terms that matter to another volume's pods:
+// no usable path if every controller in victims were torn down. That is the
+// blast radius of a repair, in the only terms that matter to another volume's
+// pods:
 // whether its block device stops serving I/O.
 //
 // A namespace that still has an accessible path through a surviving controller

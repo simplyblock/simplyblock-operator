@@ -81,8 +81,8 @@ func TestOf_HTTPStatuses(t *testing.T) {
 	}
 }
 
-// A wrapped status error must classify like a bare one — errors in atlas are
-// wrapped with context on the way up.
+// A wrapped status error must classify like a bare one, because errors in atlas
+// are wrapped with context on the way up.
 func TestOf_ClassifiesThroughWrapping(t *testing.T) {
 	err := fmt.Errorf("create volume %q: %w", "vol-a",
 		fmt.Errorf("request failed: %w", &httpErr{code: 503, msg: "upstream down"}))

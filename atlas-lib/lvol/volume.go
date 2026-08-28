@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// VolumeHandle is the stable, cluster-wide identifier of a logical volume —
+// VolumeHandle is the stable, cluster-wide identifier of a logical volume,
 // the value used as the CSI volume_id. It encodes the three simplyblock UUIDs
 // a volume is addressed by, colon-separated:
 //

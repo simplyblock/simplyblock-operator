@@ -41,12 +41,12 @@ findings is a run that gets skimmed.
 
 This is the trap the checker exists for, and it is easy to get backward.
 
-| Spelling                                                         | Reaches the schema                                                               | Use for                                                    |
-|------------------------------------------------------------------|----------------------------------------------------------------------------------|------------------------------------------------------------|
-| `// +k8s:immutable`                                              | **yes** — controller-gen emits `x-kubernetes-validations: rule: self == oldSelf` | always immutable, from creation                            |
-| `// +kubebuilder:validation:XValidation:rule="self == oldSelf"`  | yes, field level                                                                 | the same thing, written out, when the message matters      |
-| type-level `XValidation` naming the field with `!has(oldSelf.x)` | yes                                                                              | immutable **once set**, so it can be filled in later       |
-| `// Immutable.` in a doc comment                                 | **no**                                                                           | nothing. It documents an intention and enforces none of it |
+| Spelling                                                         | Reaches the schema                                                              | Use for                                                    |
+|------------------------------------------------------------------|---------------------------------------------------------------------------------|------------------------------------------------------------|
+| `// +k8s:immutable`                                              | **yes:** controller-gen emits `x-kubernetes-validations: rule: self == oldSelf` | always immutable, from creation                            |
+| `// +kubebuilder:validation:XValidation:rule="self == oldSelf"`  | yes, field level                                                                | the same thing, written out, when the message matters      |
+| type-level `XValidation` naming the field with `!has(oldSelf.x)` | yes                                                                             | immutable **once set**, so it can be filled in later       |
+| `// Immutable.` in a doc comment                                 | **no**                                                                          | nothing. It documents an intention and enforces none of it |
 
 29 fields use `+k8s:immutable` and the generated CRDs carry 30 `self == oldSelf`
 rules, so the marker is live and is the shortest correct spelling. Reach for the
@@ -62,7 +62,7 @@ type-level CEL form only when an empty value is a legitimate starting state.
 | `unspecified-spec-field`      | 13    | Mostly `StorageClusterSpec`, where `operator-sdk:csv` markers stand in for `+optional`                     |
 | `untyped-phase`               | 7     | Only `StorageClusterOps`, `StorageNodeOps`, and `VolumeMigration` type their phase                         |
 | `no-shortname`                | 7     | `BackupPolicy`, `ControlPlane`, `StorageBackup`, `StorageCluster`, `StorageNodeSet`, `StoragePool`, `Task` |
-| `unenforced-immutability`     | 6     | `ReplicationOps` (3) and `ReplicationSlot` (3) — prose only, no marker                                     |
+| `unenforced-immutability`     | 6     | `ReplicationOps` (3) and `ReplicationSlot` (3), prose only, no marker                                      |
 | `enumless-closed-set`         | 5     | Including `ReplicationOpsPhase`, which has four constants and no `Enum`                                    |
 | `no-phase-no-conditions`      | 4     |                                                                                                            |
 | `conditions-without-listtype` | 3     | All three condition-using types: `ReplicationPair`, `ReplicationPolicy`, `ReplicationSlot`                 |

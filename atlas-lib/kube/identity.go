@@ -16,7 +16,7 @@ func IsManaged(pv *corev1.PersistentVolume) bool {
 }
 
 // PinnedNode returns the storage node a volume is pinned to, or "" if it is not
-// pinned. The canonical AnnoSelectedStorageNode wins; for backward compatibility
+// pinned. The canonical AnnoSelectedStorageNode wins. For backward compatibility
 // with PVCs created before it existed, the legacy AnnoHostID / DeprecatedAnnoHostID
 // (whose original meaning was a hard placement) are honored as fallbacks. The
 // one-shot AnnoPlacementHint is deliberately NOT a pin: hinted volumes stay
@@ -32,7 +32,7 @@ func PinnedNode(annotations map[string]string) string {
 }
 
 // IsPinnedVolume reports whether the given (PVC) annotations pin a volume to a
-// specific storage node — i.e., it must not be moved by auto-rebalancing and
+// specific storage node, i.e., it must not be moved by auto-rebalancing and
 // blocks a node drain. See PinnedNode for which annotations count.
 func IsPinnedVolume(annotations map[string]string) bool {
 	return PinnedNode(annotations) != ""

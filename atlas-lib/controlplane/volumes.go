@@ -40,8 +40,8 @@ func (c *Client) Volume(ctx context.Context, h lvol.VolumeHandle) (lvol.Volume, 
 //
 // Pass lvol.ForHost to resolve the connection for a specific initiator NQN.
 // The control plane needs it for an access-controlled volume: it authorizes the
-// named host against the subsystem's allowed-hosts list — answering 404 with
-// "Host NQN ... not found in allowed hosts" for one that is not on it — and
+// named host against the subsystem's allowed-hosts list (answering 404 with
+// "Host NQN ... not found in allowed hosts" for one that is not on it) and
 // resolves that host's DHCHAP secret. Without it, such a volume either is
 // refused or comes back with no key material, and the connect then fails
 // authentication at the target.
@@ -61,7 +61,7 @@ func (c *Client) Connection(ctx context.Context, h lvol.VolumeHandle, opts ...lv
 		return lvol.Connection{}, fmt.Errorf("connect %s: %w", h, err)
 	}
 	// The /connect body is untyped in the spec (FastAPI declares no response
-	// model), but its shape is the spec's NvmeConnectEntry — the same model a
+	// model), but its shape is the spec's NvmeConnectEntry, the same model a
 	// migration's connect_strings carry. Decode it as this endpoint's flavor
 	// of that model (see internal/cpapi/validation.yaml), which additionally
 	// holds the control plane to the namespace id only /connect promises.
@@ -86,14 +86,14 @@ func (c *Client) Connection(ctx context.Context, h lvol.VolumeHandle, opts ...lv
 			ReconnectDelaySec: e.ReconnectDelay,
 			KeepAliveTMOSec:   e.KeepAliveTmo,
 			// The spec makes both timeouts required, so whatever arrives is
-			// the control plane's answer — including 0 ("fail I/O
+			// the control plane's answer, including 0 ("fail I/O
 			// immediately"), which must not degrade into "unspecified."
 			CtrlLossTMOSec:   ptr.To(e.CtrlLossTmo),
 			FastIOFailTMOSec: ptr.To(e.FastIoFailTmo),
 			HostIface:        ptr.From(e.HostIface, ""),
 			TLS:              ptr.BoolFromOrFalse(e.Tls),
-			// The secrets have no fields of their own in the response; the
-			// prebuilt command line is where the control plane puts them.
+			// The secrets have no fields of their own in the response, and
+			// the prebuilt command line is where the control plane puts them.
 			DHCHAPSecret:     connectFlag(e.Connect, "--dhchap-secret"),
 			DHCHAPCtrlSecret: connectFlag(e.Connect, "--dhchap-ctrl-secret"),
 		})
@@ -109,10 +109,10 @@ func (c *Client) Connection(ctx context.Context, h lvol.VolumeHandle, opts ...lv
 // parsing its own rendering back out is the only channel there is.
 //
 // Only the "--flag=value" spelling is recognized, which is the one that line
-// uses; a bare "--flag value" is not, since it cannot be told apart from a flag
+// uses. A bare "--flag value" is not, since it cannot be told apart from a flag
 // followed by an unrelated positional without knowing every flag's arity.
-// Missing means empty — an ungated volume's line simply carries no such flag,
-// which is not an error.
+// Missing means empty, because an ungated volume's line simply carries no such
+// flag, which is not an error.
 func connectFlag(connectCmd, flag string) string {
 	prefix := flag + "="
 	for _, field := range strings.Fields(connectCmd) {
@@ -191,7 +191,7 @@ func (c *Client) DeleteVolume(ctx context.Context, h lvol.VolumeHandle) error {
 }
 
 // CreateVolumeParams are the inputs for creating a volume. Only Name and
-// SizeBytes are required; zero-valued optional fields are omitted so the
+// SizeBytes are required, and zero-valued optional fields are omitted so the
 // control plane applies its defaults.
 type CreateVolumeParams struct {
 	Name      string
@@ -208,7 +208,7 @@ type CreateVolumeParams struct {
 	HostID                string
 	PVCName               string
 
-	// QoS limits; 0 means unset.
+	// QoS limits, where 0 means unset.
 	MaxRWIOPS   int
 	MaxRWMbytes int
 	MaxRMbytes  int

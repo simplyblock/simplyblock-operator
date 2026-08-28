@@ -1,10 +1,10 @@
 # Openings, per language
 
 The mechanics of the opening comment in each language, with examples that exist
-in the repository. Every example starts at line 1 of its file — there is nothing
+in the repository. Every example starts at line 1 of its file, and there is nothing
 above it.
 
-## Go — a file in an existing package
+## Go: a file in an existing package
 
 A `//` comment directly above the `package` clause, describing this file's
 subject. No blank line between the comment and the clause.
@@ -23,10 +23,10 @@ package util
 
 Go attaches a comment above `package` to the *package*, so in a multi-file
 package only one file should read as the package overview. The others describe
-themselves — start with the subject (`Whitebox tests for…`, `Release of the NVMe
+themselves. Start with the subject (`Whitebox tests for…`, `Release of the NVMe
 target paths…`) rather than with `Package util…`.
 
-## Go — the package overview
+## Go: the package overview
 
 A `doc.go`, or the package's main file, carries the overview as a proper package
 comment. It states what the package is for, and it is the right place for the
@@ -59,7 +59,7 @@ A package that fans out into sub-packages lists them, indented by a tab so
 
 (`atlas-lib/doc.go`.)
 
-## Go — a command
+## Go: a command
 
 `// Command <name> …`, the convention for a `main` package:
 
@@ -133,10 +133,10 @@ APPLY_FIXES: all
 (`.mega-linter.yml`.)
 
 For a manifest or a test fixture, say what it deploys or reproduces and what it
-is for — a bare `apiVersion:` at line 1 leaves the next reader guessing whether
+is for. A bare `apiVersion:` at line 1 leaves the next reader guessing whether
 the file is a template, an example, or something that is actually applied.
 
-A Helm template's header is a `#` comment as well; keep it above the first
+A Helm template's header is a `#` comment as well. Keep it above the first
 `{{-` block. Never hand-write a file into `crds/` or `templates/roles/`, which
 `make helm-sync` overwrites.
 
@@ -162,7 +162,7 @@ no license header.
 ## Go markers are not the opening
 
 `+kubebuilder:` markers, `//go:generate`, and `//nolint` directives sit where
-they apply — above the type, the field, or the statement — not at the top of the
+they apply, above the type, the field, or the statement, and not at the top of the
 file as a header. A file whose first line is a marker has no opening comment.
 
 The one exception is a package-level marker such as `+kubebuilder:object:generate`

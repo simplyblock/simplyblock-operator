@@ -18,14 +18,14 @@ smell names from Fowler's refactoring catalog. See `references/source-notes.md`.
 
 ## Scope
 
-| In scope                                                             | Not this skill                                                                             |
-|----------------------------------------------------------------------|--------------------------------------------------------------------------------------------|
-| Simplification, deduplication, extraction of functions and constants | A behavior change, however trivially small — a design doc or an issue first                |
-| Unifying patterns and concepts across siblings                       | A bug fix — `regression-test`, which requires the failing test before the change           |
-| Modernizing onto `atlas-lib` primitives                              | Moving a shared primitive *into* `atlas-lib` — `extract-to-atlas-lib`, invoked from pass 3 |
-| Complexity, nesting, function and file sizing                        | Renaming or retyping a field under `operator/api/**` — that is an API break; `api-design`  |
-| Splitting files, regrouping packages, moving code between them       | A new feature, a new CRD, a new controller                                                 |
-| Rewriting comments to be explicit and on point; deleting dead code   | Performance work that changes an algorithm's observable output or ordering                 |
+| In scope                                                               | Not this skill                                                                               |
+|------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
+| Simplification, deduplication, extraction of functions and constants   | A behavior change, however trivially small. A design doc or an issue first                   |
+| Unifying patterns and concepts across siblings                         | A bug fix. See `regression-test`, which requires the failing test first                      |
+| Modernizing onto `atlas-lib` primitives                                | Moving a shared primitive *into* `atlas-lib`. See `extract-to-atlas-lib`, from pass 3        |
+| Complexity, nesting, function and file sizing                          | Renaming or retyping a field under `operator/api/**`. That is an API break. See `api-design` |
+| Splitting files, regrouping packages, moving code between them         | A new feature, a new CRD, a new controller                                                   |
+| Rewriting comments to be explicit and on point, and deleting dead code | Performance work that changes an algorithm's observable output or ordering                   |
 
 ## Never touch
 
@@ -34,11 +34,11 @@ strips someone else's copyright.
 
 | Path                                                                              | Why                                                                                     |
 |-----------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------|
-| `*.gen.go`, `atlas-lib/internal/cpapi/cpapi.gen.go` (19,268 lines)                | oapi-codegen output; change the spec or the generator config                            |
-| `**/zz_generated.deepcopy.go`, `operator/config/**`, `operator/dist/install.yaml` | controller-gen and installer output; see `build-system`                                 |
+| `*.gen.go`, `atlas-lib/internal/cpapi/cpapi.gen.go` (19,268 lines)                | oapi-codegen output. Change the spec or the generator config                            |
+| `**/zz_generated.deepcopy.go`, `operator/config/**`, `operator/dist/install.yaml` | controller-gen and installer output. See `build-system`                                 |
 | `helm-charts/charts/**`, `csi-driver/charts/**`                                   | synced from the operator manifests by `make helm-sync`                                  |
-| `csi-driver/pkg/**` and `csi-driver/e2e/**` files carrying an Apache header (23)  | inherited upstream SPDK-CSI code; reshaping it discards the provenance the header names |
-| Field names, types, and marker semantics under `operator/api/**`                  | a shipped field is a contract; renaming it is a breaking change, not a rename           |
+| `csi-driver/pkg/**` and `csi-driver/e2e/**` files carrying an Apache header (23)  | inherited upstream SPDK-CSI code. Reshaping it discards the provenance the header names |
+| Field names, types, and marker semantics under `operator/api/**`                  | a shipped field is a contract, so renaming it is a breaking change, not a rename        |
 
 `operator/internal/webapi` is a special case: it is being retired in favor of
 `atlas-lib/controlplane`, so it takes no investment. Do not tidy it, do not
@@ -110,14 +110,14 @@ equivalence is not.
 Work the rungs in order, top down. Each one makes the rungs below it smaller,
 and skipping ahead produces work that has to be undone.
 
-| Rung               | The question                                                              | Why it comes first                                                       |
-|--------------------|---------------------------------------------------------------------------|--------------------------------------------------------------------------|
-| 1. **Delete**      | Can this go entirely — is anything still reached, still called, still on? | The cheapest mechanism to review is the mechanism that is gone           |
-| 2. **Reuse**       | Does `atlas-lib`, the standard library, or a sibling already do this?     | Extracting a helper that already exists elsewhere creates the third copy |
-| 3. **Unify**       | Do these siblings do one thing several ways?                              | Unify before extracting, or the extraction has to be redone per variant  |
-| 4. **Extract**     | What does this block do, and can it be named?                             | Only now, because rungs 1–3 changed what is left to name                 |
-| 5. **Restructure** | Does the seam between files and packages match the concerns?              | Moving code is cheap once it is the right code                           |
-| 6. **Flatten**     | Can the nesting invert into guard clauses and early returns?              | Last, because the earlier rungs delete most of the nesting for free      |
+| Rung               | The question                                                             | Why it comes first                                                       |
+|--------------------|--------------------------------------------------------------------------|--------------------------------------------------------------------------|
+| 1. **Delete**      | Can this go entirely: is anything still reached, still called, still on? | The cheapest mechanism to review is the mechanism that is gone           |
+| 2. **Reuse**       | Does `atlas-lib`, the standard library, or a sibling already do this?    | Extracting a helper that already exists elsewhere creates the third copy |
+| 3. **Unify**       | Do these siblings do one thing several ways?                             | Unify before extracting, or the extraction has to be redone per variant  |
+| 4. **Extract**     | What does this block do, and can it be named?                            | Only now, because rungs 1–3 changed what is left to name                 |
+| 5. **Restructure** | Does the seam between files and packages match the concerns?             | Moving code is cheap once it is the right code                           |
+| 6. **Flatten**     | Can the nesting invert into guard clauses and early returns?             | Last, because the earlier rungs delete most of the nesting for free      |
 
 The rung most often skipped is 2. Read `references/passes.md` pass 3 before
 extracting anything.
@@ -134,17 +134,17 @@ smell**, which is the other half and the one reading code produces:
 the refactoring techniques that resolve each one, filtered to the subset that
 applies to Go.
 
-| # | Pass                     | Removes                                                             | Delegates to           |
-|---|--------------------------|---------------------------------------------------------------------|------------------------|
-| 1 | Dead code                | unreachable branches, unused helpers, orphaned constants, leftovers | —                      |
-| 2 | Comments                 | restatement, stale prose, commented-out code, vague `TODO`s         | `house-style`          |
-| 3 | Modernize onto atlas-lib | hand-rolled NQNs, handle parsing, error classification, sysfs reads | `extract-to-atlas-lib` |
-| 4 | Deduplication            | copies inside a module; copies across two of them                   | `extract-to-atlas-lib` |
-| 5 | Complexity and nesting   | nested blocks, compound conditions, flag arguments                  | `reconciler-patterns`  |
-| 6 | Function sizing          | functions doing several things under one name                       | `reconciler-patterns`  |
-| 7 | Restructure              | files and packages whose subject is no longer one subject           | `new-files`            |
-| 8 | Pattern unification      | siblings that solve one problem several ways                        | `reconciler-patterns`  |
-| 9 | Constants                | magic numbers and repeated string literals                          | —                      |
+| #   | Pass                     | Removes                                                             | Delegates to           |
+|-----|--------------------------|---------------------------------------------------------------------|------------------------|
+| 1   | Dead code                | unreachable branches, unused helpers, orphaned constants, leftovers | —                      |
+| 2   | Comments                 | restatement, stale prose, commented-out code, vague `TODO`s         | `house-style`          |
+| 3   | Modernize onto atlas-lib | hand-rolled NQNs, handle parsing, error classification, sysfs reads | `extract-to-atlas-lib` |
+| 4   | Deduplication            | copies inside a module, and copies across two of them               | `extract-to-atlas-lib` |
+| 5   | Complexity and nesting   | nested blocks, compound conditions, flag arguments                  | `reconciler-patterns`  |
+| 6   | Function sizing          | functions doing several things under one name                       | `reconciler-patterns`  |
+| 7   | Restructure              | files and packages whose subject is no longer one subject           | `new-files`            |
+| 8   | Pattern unification      | siblings that solve one problem several ways                        | `reconciler-patterns`  |
+| 9   | Constants                | magic numbers and repeated string literals                          | —                      |
 
 ### 5. The gates
 

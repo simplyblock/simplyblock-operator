@@ -148,7 +148,7 @@ func TestConnect_IdempotentWhenPathAlreadyLive(t *testing.T) {
 	}
 }
 
-// A live controller at another address is a different path, not this one — a
+// A live controller at another address is a different path, not this one. A
 // storage node whose IP changed must still be connected at its new address.
 func TestConnect_ConnectsWhenOnlyAnotherPathIsLive(t *testing.T) {
 	connected := false

@@ -15,10 +15,10 @@ const DefaultPrefix = "nqn.2023-02.io.simplyblock"
 // id in a logical-volume subsystem NQN.
 const lvolMarker = "lvol"
 
-// HostPrefix is the naming-authority prefix of a simplyblock *host* NQN — the
+// HostPrefix is the naming-authority prefix of a simplyblock *host* NQN: the
 // initiator identity, not a subsystem. It differs from DefaultPrefix in its
 // date segment because the two were coined at different times and both are
-// on-wire values now; neither can be derived from the other.
+// on-wire values now, and neither can be derived from the other.
 const HostPrefix = "nqn.2014-08.io.simplyblock"
 
 // uuidMarker is the literal segment introducing the UUID of a UUID-based host
@@ -34,7 +34,7 @@ const uuidMarker = "uuid"
 // registers exactly this string in the pool's allowed_hosts for every allowed
 // node, and the CSI driver on that node must present exactly this string on
 // connect and when asking the control plane to resolve a connection
-// (lvol.ForHost) — so the two derive it here rather than each spelling out the
+// (lvol.ForHost), so the two derive it here rather than each spelling out the
 // format, which is what makes them agree.
 //
 // The node's UID is the right seed and the node name is not: a node rebuilt
@@ -51,7 +51,7 @@ func Host(nodeUID string) string {
 // It is prefix-agnostic on purpose: what a caller needs from a host NQN is the
 // UUID identifying the host, and an NQN in either form identifies it the same
 // way. The UUID is returned exactly as spelled, since it must match what the
-// NQN says character for character — the kernel pairs hostid with hostnqn by
+// NQN says character for character. The kernel pairs hostid with hostnqn by
 // comparison, not by parsing.
 func HostUUID(hostNQN string) (string, bool) {
 	_, id, found := cutLast(hostNQN, ":"+uuidMarker+":")
@@ -105,7 +105,7 @@ func MakeWithPrefix(prefix, clusterID, logicalVolumeID string) string {
 }
 
 // Make composes the on-wire subsystem NQN string for a logical volume in a
-// cluster using the simplyblock DefaultPrefix — the one-shot string equivalent
+// cluster using the simplyblock DefaultPrefix, the one-shot string equivalent
 // of Build(...).String().
 func Make(clusterID, logicalVolumeID string) string {
 	return MakeWithPrefix(DefaultPrefix, clusterID, logicalVolumeID)

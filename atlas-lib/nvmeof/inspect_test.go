@@ -26,7 +26,7 @@ func liveCtrl(id, addr string) nvme.Controller {
 }
 
 // namespaceOn is a namespace served by the named controllers over optimized ANA
-// paths — a healthy multipath namespace.
+// paths, meaning a healthy multipath namespace.
 func namespaceOn(nsid nvme.NamespaceID, uuid string, ctrlIDs ...string) nvme.Namespace {
 	ns := nvme.Namespace{
 		ID:         nsid,
@@ -55,7 +55,7 @@ func subsystem(ctrls []nvme.Controller, nss ...nvme.Namespace) nvme.Subsystem {
 }
 
 // inspectSub runs Inspect over a single fixed subsystem, with no duplicate-head
-// check (that needs a device view; see the AmbiguousHead tests).
+// check, which needs a device view (see the AmbiguousHead tests).
 func inspectSub(t *testing.T, s nvme.Subsystem, sel nvme.DeviceSelector, tgts []Target) []Defect {
 	t.Helper()
 	subs := fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) { return s, nil }}
@@ -142,7 +142,7 @@ func TestInspect_NoNamespaceNeedsALiveController(t *testing.T) {
 
 // The f99b5b5 state: the controller is live and at a published endpoint, so a
 // connect declines to act, but the namespace's own path list does not mention
-// it — the volume runs a path short and the two views never reconcile.
+// it. The volume runs a path short and the two views never reconcile.
 func TestInspect_ControllerContributesNoPath(t *testing.T) {
 	s := subsystem(
 		[]nvme.Controller{liveCtrl("nvme0", "10.0.0.1"), liveCtrl("nvme1", "10.0.0.2"), liveCtrl("nvme2", "10.0.0.3")},
@@ -198,8 +198,8 @@ func TestInspect_StaleEndpointIsNotAlsoNotContributing(t *testing.T) {
 	}
 }
 
-// Namespaces, but not this one. The connection works — the target simply is not
-// publishing it — and every namespace that is there belongs to someone else.
+// Namespaces, but not this one. The connection works and the target simply is
+// not publishing it, so every namespace that is there belongs to someone else.
 func TestInspect_NamespaceMissing(t *testing.T) {
 	s := subsystem(
 		[]nvme.Controller{liveCtrl("nvme0", "10.0.0.1")},
@@ -321,7 +321,7 @@ func TestInspect_DuplicateNamespaceEntriesAreOneNamespace(t *testing.T) {
 }
 
 // A selector matching several namespaces of one subsystem is under-specified,
-// which no reconnect fixes; naming "the" namespace's controllers would be a
+// which no reconnect fixes. Naming "the" namespace's controllers would be a
 // guess about which one was meant.
 func TestInspect_UnderSpecifiedSelectorYieldsNoNamespaceVerdict(t *testing.T) {
 	s := subsystem(
