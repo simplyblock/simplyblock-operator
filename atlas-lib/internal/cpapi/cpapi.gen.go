@@ -643,7 +643,7 @@ type ClusterDTOStatus string
 
 // ClusterParams defines model for ClusterParams.
 type ClusterParams struct {
-	BackupConfig           *BackupConfigInput      `json:"backup_config,omitempty"`
+	BackupConfig           *UnresolvedBackupConfig `json:"backup_config,omitempty"`
 	BlkSize                *ClusterParamsBlkSize   `json:"blk_size,omitempty"`
 	CapCrit                *int                    `json:"cap_crit,omitempty"`
 	CapWarn                *int                    `json:"cap_warn,omitempty"`
@@ -1002,6 +1002,33 @@ type TaskDTOFunctionName string
 
 // TaskDTOStatus defines model for TaskDTO.Status.
 type TaskDTOStatus string
+
+// UnresolvedBackupConfig A backup configuration as a caller can state it, before a cluster resolves it.
+//
+// Identical to :class:`BackupConfig` except that “bucket_name“ may be absent,
+// because the default is derived from a cluster id that does not exist yet at
+// cluster-create time (“Cluster.default_backup_bucket_name“). Hand one to
+// “Cluster.set_backup_config“, which resolves it; nothing further down ever
+// sees a configuration without a bucket.
+//
+// Which is also why an instance must be turned back into a plain dict at the
+// boundary it arrived on rather than passed along as a “BackupConfig“: the
+// inherited :meth:`location` cannot produce a location for a bucket nobody has
+// named yet.
+type UnresolvedBackupConfig struct {
+	BucketName       *string        `json:"bucket_name,omitempty"`
+	Credentials      *S3Credentials `json:"credentials,omitempty"`
+	Endpoint         *string        `json:"endpoint,omitempty"`
+	Region           *string        `json:"region,omitempty"`
+	S3ThreadPoolSize *int           `json:"s3_thread_pool_size,omitempty"`
+
+	// SecondaryTarget The kind of secondary store, numbered as the data plane's RPC expects.
+	SecondaryTarget *SecondaryTarget `json:"secondary_target,omitempty"`
+	SnapshotBackups *bool            `json:"snapshot_backups,omitempty"`
+	UsePathStyle    *bool            `json:"use_path_style,omitempty"`
+	VerifyTls       *bool            `json:"verify_tls,omitempty"`
+	WithCompression *bool            `json:"with_compression,omitempty"`
+}
 
 // UpdatableClusterParameters defines model for UpdatableClusterParameters.
 type UpdatableClusterParameters struct {

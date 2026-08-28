@@ -6577,7 +6577,7 @@
           "backup_config": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/BackupConfig-Input"
+                "$ref": "#/components/schemas/UnresolvedBackupConfig"
               },
               {
                 "type": "null"
@@ -8040,6 +8040,98 @@
           "retry"
         ],
         "title": "TaskDTO"
+      },
+      "UnresolvedBackupConfig": {
+        "properties": {
+          "bucket_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bucket Name"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
+          },
+          "secondary_target": {
+            "$ref": "#/components/schemas/SecondaryTarget",
+            "default": 0
+          },
+          "with_compression": {
+            "type": "boolean",
+            "title": "With Compression",
+            "default": false
+          },
+          "snapshot_backups": {
+            "type": "boolean",
+            "title": "Snapshot Backups",
+            "default": true
+          },
+          "verify_tls": {
+            "type": "boolean",
+            "title": "Verify Tls",
+            "default": true
+          },
+          "use_path_style": {
+            "type": "boolean",
+            "title": "Use Path Style",
+            "default": false
+          },
+          "credentials": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/S3Credentials"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "s3_thread_pool_size": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "S3 Thread Pool Size"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UnresolvedBackupConfig",
+        "description": "A backup configuration as a caller can state it, before a cluster resolves it.\n\nIdentical to :class:`BackupConfig` except that ``bucket_name`` may be absent,\nbecause the default is derived from a cluster id that does not exist yet at\ncluster-create time (``Cluster.default_backup_bucket_name``). Hand one to\n``Cluster.set_backup_config``, which resolves it; nothing further down ever\nsees a configuration without a bucket.\n\nWhich is also why an instance must be turned back into a plain dict at the\nboundary it arrived on rather than passed along as a ``BackupConfig``: the\ninherited :meth:`location` cannot produce a location for a bucket nobody has\nnamed yet."
       },
       "UpdatableClusterParameters": {
         "properties": {
