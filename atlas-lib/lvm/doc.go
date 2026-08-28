@@ -55,4 +55,18 @@
 // in is that head, the same value it stages, never a per-controller leg. A
 // striped volume group passes one path per member, which is what
 // CreateVolumeGroup's variadic device-path list is for.
+//
+// # Identity is typed, not a bare string
+//
+// PhysicalVolume, VolumeGroup, and LogicalVolume each wrap the one string
+// that identifies them (a device path, a VG name, a VG name plus an LV name)
+// so that passing a device path where a VG name belongs is a compile error
+// instead of an LVM failure discovered at runtime. LogicalVolume carries its
+// VolumeGroup rather than a bare name for the same reason: a caller assembling
+// a wrong VG/LV pairing by hand is a mistake the type system catches instead
+// of one that surfaces as "volume group not found."
+//
+// None of the three carries a reference back to a Manager. They are values,
+// not handles: constructing one costs nothing, comparing two with == answers
+// "same identity," and the same value works with any Manager instance.
 package lvm

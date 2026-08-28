@@ -37,15 +37,15 @@ func warnf(format string, args ...any) {
 	l.Warn(fmt.Sprintf(format, args...))
 }
 
-// volumeGroupName returns the volume group name lvolID's VDO stack lives in.
-func volumeGroupName(lvolID string) string {
-	return volumeGroupPrefix + lvolID
+// volumeGroup returns the volume group lvolID's VDO stack lives in.
+func volumeGroup(lvolID string) lvm.VolumeGroup {
+	return lvm.VolumeGroup{Name: volumeGroupPrefix + lvolID}
 }
 
 // DevicePath returns the path to lvolID's VDO logical volume (the device to
 // format/mount, as opposed to the raw NVMe-oF device VDO sits on top of).
 func DevicePath(lvolID string) string {
-	return fmt.Sprintf("/dev/%s/%s", volumeGroupName(lvolID), lvolID)
+	return fmt.Sprintf("/dev/%s/%s", volumeGroup(lvolID).Name, lvolID)
 }
 
 // cmdCtx and growCtx bound one LVM/dm-vdo invocation. A field on lvm.Manager
@@ -71,19 +71,20 @@ func growCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 func CreateOrAttach(
 	ctx context.Context, manager *lvm.Manager, devicePath, lvolID string, compression, deduplication bool,
 ) (string, error) {
-	vg := volumeGroupName(lvolID)
+	vg := volumeGroup(lvolID)
+	pv := lvm.PhysicalVolume{DevicePath: devicePath}
 
 	// LVM discovers PVs by content-scanning visible devices, not by remembering a
 	// path. Refresh its view before checking, since devicePath may have just
 	// reappeared under a new device node (reconnect) or be genuinely new.
 	rescanCtx, cancel := cmdCtx(ctx)
-	if err := manager.Rescan(rescanCtx, devicePath); err != nil {
+	if err := manager.Rescan(rescanCtx, pv); err != nil {
 		warnf("vdo.CreateOrAttach: pvscan --cache %s: %v", devicePath, err)
 	}
 	cancel()
 
 	existsCtx, cancel := cmdCtx(ctx)
-	currentVG, err := manager.VolumeGroup(existsCtx, devicePath)
+	currentVG, err := manager.VolumeGroup(existsCtx, pv)
 	cancel()
 	if err != nil {
 		return "", fmt.Errorf("probe volume group identity of %s: %w", devicePath, err)
@@ -91,10 +92,10 @@ func CreateOrAttach(
 
 	if currentVG == vg {
 		hasLVCtx, cancel := cmdCtx(ctx)
-		hasLV, err := manager.HasLogicalVolume(hasLVCtx, vg, lvolID)
+		hasLV, err := manager.HasLogicalVolume(hasLVCtx, lvm.LogicalVolume{VolumeGroup: vg, Name: lvolID})
 		cancel()
 		if err != nil {
-			return "", fmt.Errorf("check %s for logical volume %s: %w", vg, lvolID, err)
+			return "", fmt.Errorf("check %s for logical volume %s: %w", vg.Name, lvolID, err)
 		}
 		if hasLV {
 			activateCtx, cancel := cmdCtx(ctx)
@@ -112,7 +113,7 @@ func CreateOrAttach(
 		// through to a fresh create.
 		warnf(
 			"vdo.CreateOrAttach: volume group %s exists but has no %s logical volume, removing orphaned volume group and recreating", //nolint:lll
-			vg, lvolID,
+			vg.Name, lvolID,
 		)
 		vgremoveCtx, cancel := cmdCtx(ctx)
 		err = manager.RemoveVolumeGroup(vgremoveCtx, vg)
@@ -123,20 +124,20 @@ func CreateOrAttach(
 	}
 
 	pvcreateCtx, cancel := cmdCtx(ctx)
-	err = manager.CreatePhysicalVolume(pvcreateCtx, devicePath)
+	_, err = manager.CreatePhysicalVolume(pvcreateCtx, pv)
 	cancel()
 	if err != nil {
 		return "", err
 	}
 	vgcreateCtx, cancel := cmdCtx(ctx)
-	err = manager.CreateVolumeGroup(vgcreateCtx, vg, devicePath)
+	_, err = manager.CreateVolumeGroup(vgcreateCtx, vg, pv)
 	cancel()
 	if err != nil {
 		return "", err
 	}
 	lvcreateCtx, cancel := cmdCtx(ctx)
 	def := lvm.LogicalVolumeDefinition{Compression: compression, Deduplication: deduplication}
-	err = manager.CreateLogicalVolume(lvcreateCtx, vg, poolName, lvolID, def)
+	_, err = manager.CreateLogicalVolume(lvcreateCtx, vg, poolName, lvolID, def)
 	cancel()
 	if err != nil {
 		return "", err
@@ -155,14 +156,16 @@ func CreateOrAttach(
 func ResolveClone(ctx context.Context, manager *lvm.Manager, devicePath, lvolID string) error {
 	resolveCtx, cancel := cmdCtx(ctx)
 	defer cancel()
-	foreignVG, err := manager.ResolveClonedVolumeGroup(resolveCtx, devicePath, volumeGroupName(lvolID), lvolID, poolName)
+	pv := lvm.PhysicalVolume{DevicePath: devicePath}
+	vg := volumeGroup(lvolID)
+	foreignVG, err := manager.ResolveClonedVolumeGroup(resolveCtx, pv, vg, lvolID, poolName)
 	if err != nil {
 		return err
 	}
-	if foreignVG != "" {
+	if foreignVG != (lvm.VolumeGroup{}) {
 		warnf(
 			"vdo.ResolveClone: device %s for volume %s carried a foreign volume group identity %q, regenerated PV/VG UUIDs and renamed to %s", //nolint:lll
-			devicePath, lvolID, foreignVG, volumeGroupName(lvolID),
+			devicePath, lvolID, foreignVG.Name, vg.Name,
 		)
 	}
 	return nil
@@ -178,7 +181,7 @@ func ResolveClone(ctx context.Context, manager *lvm.Manager, devicePath, lvolID 
 // reactivation path reaches this exact state later without recreating
 // anything.
 func Deactivate(ctx context.Context, manager *lvm.Manager, lvolID string) error {
-	vg := volumeGroupName(lvolID)
+	vg := volumeGroup(lvolID)
 	deactivateCtx, cancel := cmdCtx(ctx)
 	err := manager.DeactivateVolumeGroup(deactivateCtx, vg)
 	cancel()
@@ -198,7 +201,7 @@ func Deactivate(ctx context.Context, manager *lvm.Manager, lvolID string) error 
 	// fails indefinitely and the orphaned dm-vdo stack is never cleaned up.
 	warnf(
 		"vdo.Deactivate: deactivate %s failed (backing device unreachable), falling back to direct dmsetup removal of any live dm nodes", //nolint:lll
-		vg,
+		vg.Name,
 	)
 	removeCtx, cancel := cmdCtx(ctx)
 	defer cancel()
@@ -214,7 +217,7 @@ func Deactivate(ctx context.Context, manager *lvm.Manager, lvolID string) error 
 // read/write metadata that lives on the now-gone device, so this falls back
 // to direct dmsetup removal of any live dm nodes in that case.
 func Remove(ctx context.Context, manager *lvm.Manager, lvolID string) error {
-	vg := volumeGroupName(lvolID)
+	vg := volumeGroup(lvolID)
 	deactivateCtx, cancel := cmdCtx(ctx)
 	_ = manager.DeactivateVolumeGroup(deactivateCtx, vg)
 	cancel()
@@ -228,7 +231,7 @@ func Remove(ctx context.Context, manager *lvm.Manager, lvolID string) error {
 
 	warnf(
 		"vdo.Remove: remove %s failed (backing device likely unreachable), falling back to direct dmsetup removal of any live dm nodes", //nolint:lll
-		vg,
+		vg.Name,
 	)
 	dmCtx, cancel := cmdCtx(ctx)
 	defer cancel()
@@ -240,10 +243,12 @@ func Remove(ctx context.Context, manager *lvm.Manager, lvolID string) error {
 // creation time), then grows the VDO logical volume's own size to match, and
 // returns its device path.
 func Grow(ctx context.Context, manager *lvm.Manager, devicePath, lvolID string) (string, error) {
-	vg := volumeGroupName(lvolID)
+	vg := volumeGroup(lvolID)
+	pool := lvm.LogicalVolume{VolumeGroup: vg, Name: poolName}
+	volume := lvm.LogicalVolume{VolumeGroup: vg, Name: lvolID}
 
 	pvresizeCtx, cancel := cmdCtx(ctx)
-	err := manager.ExpandPhysicalVolume(pvresizeCtx, devicePath)
+	err := manager.ExpandPhysicalVolume(pvresizeCtx, lvm.PhysicalVolume{DevicePath: devicePath})
 	cancel()
 	if err != nil {
 		return "", err
@@ -254,7 +259,7 @@ func Grow(ctx context.Context, manager *lvm.Manager, devicePath, lvolID string) 
 	// "+" prefix makes it additive (current size + free space), which is what "grow
 	// to consume all newly available space" means.
 	lvextendPoolCtx, cancel := growCtx(ctx)
-	err = manager.ExpandLogicalVolume(lvextendPoolCtx, vg, poolName)
+	err = manager.ExpandLogicalVolume(lvextendPoolCtx, pool)
 	cancel()
 	if err != nil {
 		return "", err
@@ -266,13 +271,13 @@ func Grow(ctx context.Context, manager *lvm.Manager, devicePath, lvolID string) 
 	// "largest safe size" default). Read the pool's new size back and extend the
 	// logical volume to match it.
 	sizeCtx, cancel := cmdCtx(ctx)
-	poolSize, err := manager.LogicalVolumeSize(sizeCtx, vg, poolName)
+	poolSize, err := manager.LogicalVolumeSize(sizeCtx, pool)
 	cancel()
 	if err != nil {
-		return "", fmt.Errorf("read grown pool size for %s/%s: %w", vg, poolName, err)
+		return "", fmt.Errorf("read grown pool size for %s/%s: %w", vg.Name, poolName, err)
 	}
 	lvextendLVCtx, cancel := growCtx(ctx)
-	err = manager.ExtendLogicalVolumeToSize(lvextendLVCtx, vg, lvolID, poolSize)
+	err = manager.ExtendLogicalVolumeToSize(lvextendLVCtx, volume, poolSize)
 	cancel()
 	if err != nil {
 		return "", err
@@ -287,6 +292,6 @@ func Grow(ctx context.Context, manager *lvm.Manager, devicePath, lvolID string) 
 func SetFeatures(ctx context.Context, manager *lvm.Manager, lvolID string, compression, deduplication bool) error {
 	timeoutCtx, cancel := cmdCtx(ctx)
 	defer cancel()
-	volume := NewVolume(volumeGroupName(lvolID), poolName, lvolID)
+	volume := NewVolume(volumeGroup(lvolID).Name, poolName, lvolID)
 	return UpdateVolume(timeoutCtx, manager, volume, compression, deduplication)
 }

@@ -1,9 +1,9 @@
 # Atlas
 
 Shared Go library for the simplyblock **Kubernetes operator** and **CSI
-driver**. It holds the node-level storage primitives both consumers need —
-NVMe discovery, NVMe-oF fabric management, NQN handling, and the
-logical-volume ↔ NVMe-device mapping — so neither re-implements them.
+driver**. It holds the node-level storage primitives both consumers need
+(NVMe discovery, NVMe-oF fabric management, NQN handling, and the
+logical-volume ↔ NVMe-device mapping) so neither re-implements them.
 
 ![](../assets/simplyblock-logo.svg)
 
@@ -11,7 +11,7 @@ logical-volume ↔ NVMe-device mapping — so neither re-implements them.
 > and contribution guidelines, see the [root README](../README.md).
 
 The library lives in this monorepo and is consumed by the operator and CSI driver via a Go
-`replace` directive (module path `github.com/simplyblock/atlas` → `../atlas-lib`); it is not
+`replace` directive (module path `github.com/simplyblock/atlas` → `../atlas-lib`). It is not
 published or installed independently.
 
 ## Layout
@@ -37,9 +37,17 @@ atlas/
 │   ├── multipath.go        ConnectPaths (ordered per-path connect) + PathResult
 │   └── wait.go             ConnectDevice / WaitForDevice: attach -> nvme.Device
 ├── nqn/                    Build & parse simplyblock lvol NQNs
-├── lvm/                    Device-scoped Linux LVM commands + content-based identity
-│   ├── doc.go              Why every command here is scoped by device, not by name
-│   └── lvm.go              Inspector (VolumeGroup/HasLogicalVolume/Rescan/Run) + dm cleanup
+├── lvm/                    Linux LVM commands + content-based identity
+│   ├── doc.go              Why identity is read from content, and how scoping is decided
+│   ├── lvm.go              Manager, Run (the escape hatch)
+│   ├── identity.go         VolumeGroup, HasLogicalVolume, ListLogicalVolumes, Rescan
+│   ├── volume.go           Create/Activate/Deactivate/Remove a PV, VG, or LV
+│   ├── clone.go            ResolveClonedVolumeGroup (rescan + import + rename)
+│   ├── grow.go             Expand a PV, VG, or LV, read an LV's current size
+│   ├── dm.go               RemoveOrphanedDMNodes
+│   └── vdo/                VDO provisioning handler + the whole per-volume stack lifecycle
+│       ├── volume.go       Registers itself with lvm, UpdateVolume
+│       └── stack.go        CreateOrAttach, ResolveClone, Deactivate, Remove, Grow, SetFeatures
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)
@@ -77,7 +85,7 @@ atlas/
 ## Use cases
 
 The flows below are the ones the operator and CSI driver actually perform. Each
-shows the atlas-idiomatic implementation; a _Today_ note points at the live call
+shows the atlas-idiomatic implementation, and a _Today_ note points at the live call
 site where one exists, so it is visible which patterns are already wired and
 which are available but not yet adopted.
 
@@ -126,8 +134,8 @@ handle, err := client.CreateVolume(ctx, clusterID, pool.ID, controlplane.CreateV
 ```
 
 `ResizeVolume`, `DeleteVolume`, `CloneVolume` and `ListVolumes` complete the
-lifecycle. `DeleteVolume` is idempotent — an already-absent volume is not an
-error — so a retried `DeleteVolume` RPC needs no pre-check.
+lifecycle. `DeleteVolume` is idempotent, since an already-absent volume is not
+an error, so a retried `DeleteVolume` RPC needs no pre-check.
 
 _Today:_ `csi-driver/pkg/spdk/controllerserver.go` uses the `kube` param helpers
 but still calls the control plane through its own `pkg/util/nvmf.go` client.
@@ -135,7 +143,7 @@ but still calls the control plane through its own `pkg/util/nvmf.go` client.
 #### Migrate a volume to another storage node
 
 The operator's `VolumeMigration` reconciler. A migration is created, observed by
-phase, then either continued past its pre-created checkpoint or cancelled.
+phase, then either continued past its pre-created checkpoint or canceled.
 
 ```go
 migration, err := client.CreateVolumeMigration(ctx, handle, targetNodeID)
@@ -173,7 +181,7 @@ exactly this sequence against the operator's own `internal/webapi` client.
 
 #### Choose or validate a placement target
 
-The volume-placement webhook picks the least-loaded node at creation time; the
+The volume-placement webhook picks the least-loaded node at creation time. The
 PVC pin controller only needs to confirm that a user-supplied node exists.
 
 ```go
@@ -201,7 +209,7 @@ nics, err := client.ListStorageNodeNICs(ctx, clusterID, best.ID)
 #### Wire the resolver once per consumer
 
 `kube.Resolver` is the single seam for every PV/PVC/VolumeAttachment/StorageClass
-lookup; pick the implementation that matches the consumer's caching, and keep the
+lookup. Pick the implementation that matches the consumer's caching, and keep the
 rest of the code on the interface.
 
 ```go
@@ -263,7 +271,7 @@ clusterID, poolID, volumeID, err := handle.Split()
 ```
 
 _Today:_ several operator call sites still do `strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)`
-(`logical_volume_selector.go`, `persistentvolumeclaim_controller.go`);
+(`logical_volume_selector.go`, `persistentvolumeclaim_controller.go`).
 `VolumeHandle.Split` is the typed replacement and rejects malformed handles.
 
 #### Read how a volume was provisioned
@@ -294,7 +302,7 @@ if props.IsMultiNamespace() { // max_namespace_per_subsys > 1
 ```
 
 An unresolvable StorageClass is treated as single-namespace and logged in both
-consumers — one unreadable class must not stall a migration.
+consumers, because one unreadable class must not stall a migration.
 
 _Today:_ `volumemigration_controller.go:isMultiNamespaceMigration` and the
 rebalancer's namespaced-set collection in `logical_volume_selector.go`.
@@ -343,7 +351,7 @@ establishing *all* of them, in that order: a single-path attach leaves the
 volume one node failure away from losing I/O, and connecting out of order hands
 I/O to the wrong node until the kernel has the full ANA picture. So the flow is
 always "ask the control plane where the volume lives → build a target per path →
-connect them in order → wait for the block device".
+connect them in order → wait for the block device."
 
 ```go
 // The wait for a path to go live is bounded per path (10s by default), not per
@@ -398,8 +406,9 @@ if err != nil {
 stage(dev.Namespace.DevicePath) // /dev/nvme0n1 — the multipath head, not a leg
 ```
 
-Connecting is idempotent per path — a controller already fronting an endpoint is
-left alone rather than duplicated — so a retried NodeStage re-establishes only
+Connecting is idempotent per path, since a controller already fronting an
+endpoint is left alone rather than duplicated, so a retried NodeStage
+re-establishes only
 what is missing. `Connector.Connect` is the single-path form (`ConnectPaths` with
 one target), and `nvmeof.ConnectDevice` pairs it with the device wait for the
 cases that genuinely have one path.
@@ -414,7 +423,7 @@ matched, err := devices.ListWithSelector(ctx, sel)
 ```
 
 _Today:_ the CSI node service still connects, repairs, and ANA-reconciles paths
-with nvme-cli in `csi-driver/pkg/util/initiator.go`; `FabricsConnector` is the
+with nvme-cli in `csi-driver/pkg/util/initiator.go`. `FabricsConnector` is the
 kernel-direct replacement (it needs no nvme-cli binary in the node image).
 
 #### Detach without collateral damage
@@ -434,8 +443,8 @@ if out.SharedSubsystem {
 }
 ```
 
-The gate is `nvme.Device.IsMultiNamespace` — *can* this subsystem hold other
-volumes — not whether it currently does. Enumerating the neighbours describes
+The gate is `nvme.Device.IsMultiNamespace`, meaning *can* this subsystem hold
+other volumes, not whether it currently does. Enumerating the neighbors describes
 only the moment it was looked at: a namespace can join a shared subsystem
 between the check and the disconnect, and then a correct "none right now" answer
 is still destructive. So a subsystem provisioned to be shared is never
@@ -444,15 +453,15 @@ disconnected on one volume's behalf, even while it happens to hold only that one
 That answer sometimes needs an Identify Controller command, which wants a live
 controller and Linux. `DetachDevice` returns the error rather than assuming, so
 reaping a subsystem whose controllers are all dead is an explicit
-`connector.Disconnect` — never a default.
+`connector.Disconnect`, never a default.
 
 `Disconnect` takes down every path of the subsystem, releasing them in ANA order
-— unusable and non-optimized legs first, the optimized one last — so I/O still in
+(unusable and non-optimized legs first, the optimized one last) so I/O still in
 flight keeps the best path it has until the end.
 
 Every one of these questions also has a pure form taking a snapshot the caller
-owns, which is the cheap way to sweep many devices — one `List` answers all four
-for all of them:
+owns, which is the cheap way to sweep many devices, since one `List` answers all
+four for all of them:
 
 ```go
 all, err := devices.List(ctx)
@@ -516,12 +525,15 @@ if live < len(conn.Endpoints) {
 
 `connector.IsConnected(ctx, nqn)` is the cheap coarse check ("any live
 controller at all") for callers that only need to know whether the subsystem is
-attached, e.g. before deciding to clean up.
+attached, e.g., before deciding to clean up.
 
 #### Find the other devices of one volume
 
-When native NVMe multipath is off, a volume can surface as several block devices
-sharing its namespace UUID, and a teardown has to release every one of them:
+A volume can surface as several block devices sharing its namespace UUID when a
+stale controller has not been reaped yet, and a teardown has to release every
+one of them. This is a state to detect and clear, not one to run in: a live
+simplyblock volume is one namespace head, with its paths selected inside it by
+ANA state.
 
 ```go
 siblings, err := dev.Siblings(ctx) // re-scans; nvme.Siblings(dev, all) is pure
@@ -540,7 +552,7 @@ go, co-tenants are *other* volumes that must be left alone. `nvme.IsSibling` and
 
 #### Detect a namespaced volume host-side
 
-Where no StorageClass is in reach. Conclusive sysfs cases cost nothing; only a
+Where no StorageClass is in reach. Conclusive sysfs cases cost nothing, and only a
 lone namespace at NSID 1 needs an Identify Controller command (Linux only, live
 controller required):
 
@@ -566,55 +578,156 @@ if s, ok := nqn.Parse(dev.Subsystem.NQN); ok {
 
 #### Assemble an LVM stack on a device
 
-A simplyblock HA volume presents more than one local device node with
-byte-identical content, which breaks LVM's default behavior in two ways: a
-system-wide `pvscan` can resolve a PV against whichever duplicate its cache
-happens to pick, and a name-based `vgs <name>` existence check can report a
-VG as present when it was never created on the device being asked about. Every
-call scopes to an explicit device list instead, and answers identity questions
-from a device's own on-disk content rather than a name lookup.
+LVM answers "which device does this volume group live on" by scanning devices
+and matching the UUIDs and names it finds written in their content. That is
+unambiguous while no two visible devices carry the same content, which is the
+normal case here: every volume group is named after its own lvol and every
+`pvcreate` mints a fresh PV UUID, so a node's other tenants cannot answer a
+lookup meant for this volume however many are attached.
+
+Cloning breaks that on purpose. A byte-level clone or snapshot restore copies
+its source's PV and VG UUIDs *and its VG name* verbatim, so from the moment a
+clone is attached beside its source until `ImportClonedVolumeGroup` has
+re-stamped it, the two are the same volume group as far as a name lookup is
+concerned. Two consequences, both confirmed live:
+
+- **A scan reports a duplicate PV** and can resolve later commands against
+  whichever of the two its cache happened to pick.
+- **A name-based existence check isn't tied to a device.** `vgs <name>` answers
+  "does a volume group called X exist anywhere LVM is allowed to look?" rather
+  than "does it exist *on this device*." That reported a volume group as
+  already present when it had never been created on the device being asked
+  about, leaving no logical volume behind it and failing `mkfs`.
+
+This package answers identity questions from a device's own content rather than
+a name lookup, and scopes the commands that need it (`--devices`) so a scan
+cannot reach the other copy. **Which commands need it is the package's decision,
+not its caller's**, and no method takes a device list. A command that names a
+device scopes itself to it. A command that addresses a volume group or logical
+volume by name runs unscoped, because by then the name is unique.
+
+Identity is typed, not a bare string: `PhysicalVolume`, `VolumeGroup`, and
+`LogicalVolume` each wrap the one string that identifies them, so passing a
+device path where a VG name belongs is a compile error, not an LVM failure
+discovered at runtime. `LogicalVolume` carries its `VolumeGroup` rather than a
+bare name for the same reason: a caller pairing the wrong VG with an LV by
+hand is a mistake the type system catches instead of one that surfaces as
+"volume group not found." None of the three references a `Manager`: they are
+plain values, comparable with `==`, and the same value works with any
+`Manager` instance.
 
 ```go
-insp := lvm.NewInspector()
+mgr := lvm.NewManager()
+pv := lvm.PhysicalVolume{DevicePath: devicePath}
 
-// Content-based, not "vgs <name>": "" means genuinely blank, or unreadable —
-// both read the same way to a caller deciding whether to create fresh.
-vg, err := insp.VolumeGroup(ctx, devicePath)
+// Content-based, not "vgs <name>": the zero VolumeGroup means genuinely blank,
+// or unreadable — both read the same way to a caller deciding whether to
+// create fresh.
+volumeGroup, err := mgr.VolumeGroup(ctx, pv)
 if err != nil {
     handleError(err)
 }
 switch {
-case vg != expectedVG:
+case volumeGroup != expectedVolumeGroup:
     // Genuinely blank device (or a foreign identity to resolve first, e.g. a
     // byte-level clone) — create fresh.
 default:
-    hasLV, err := insp.HasLogicalVolume(ctx, []string{devicePath}, vg, lvName)
+    logicalVolume := lvm.LogicalVolume{VolumeGroup: volumeGroup, Name: logicalVolumeName}
+    hasLV, err := mgr.HasLogicalVolume(ctx, logicalVolume)
     if err != nil {
         handleError(err)
     } else if hasLV {
-        // Reactivate, never recreate.
+        err = mgr.ActivateVolumeGroup(ctx, volumeGroup) // reactivate, never recreate
     } else {
         // Orphaned: pvcreate/vgcreate completed, the final lvcreate did not.
-        // Remove and fall through to a fresh create.
+        err = mgr.RemoveVolumeGroup(ctx, volumeGroup) // fall through to a fresh create
     }
 }
 
-// devices scopes every command to exactly the members involved — a single
-// device for VDO, several for a striped volume group.
-if _, err := insp.Run(ctx, devices, "pvcreate", devicePath); err != nil {
+if _, err := mgr.CreatePhysicalVolume(ctx, pv); err != nil {
+    handleError(err)
+}
+// Variadic: one device for VDO, several for a striped volume group.
+if _, err := mgr.CreateVolumeGroup(ctx, expectedVolumeGroup, pv); err != nil {
+    handleError(err)
+}
+if _, err := mgr.CreateLogicalVolume(ctx, expectedVolumeGroup, poolName, logicalVolumeName, def); err != nil {
     handleError(err)
 }
 ```
 
-`RemoveOrphanedDMNodes` is the fallback when the backing device is already
-gone and a normal `vgremove`/`vgchange -an` can no longer read the metadata it
-needs: it clears the live dm nodes directly, retrying across a few passes so
+Every named method has this shape: build the right LVM/dm-vdo command, scope it
+if its operands call for that, and wrap the error with the operation it was
+attempting. `Run` stays available as an escape hatch for a command that doesn't
+have a named method yet, and is always unscoped: a command that has to be scoped
+belongs in the package as a named method, since the scope follows from the
+operands. Reaching for `Run` first is exactly the duplication this package
+exists to prevent.
+
+A freshly attached device may turn out to be a byte-level clone or snapshot
+restore of another volume, and resolving that is one call, safe and cheap to
+make on any device before staging it:
+
+```go
+// Refresh, probe the device's own identity, and if it is somebody else's
+// volume group, re-stamp it and rename the logical volume inside. Returns the
+// foreign VolumeGroup it found, or the zero value when there was nothing to
+// resolve.
+previous, err := mgr.ResolveClonedVolumeGroup(ctx, pv, volumeGroup, logicalVolumeName, poolName)
+if err != nil {
+    handleError(err)
+}
+if previous != (lvm.VolumeGroup{}) {
+    log.Warnf("device %s carried a foreign VG identity %q, re-stamped as %s",
+        devicePath, previous.Name, volumeGroup.Name)
+}
+```
+
+The order is not the caller's to get right, which is why the sequence lives in
+the package: the refresh has to precede the probe or the probe reads a stale
+cache, the probe has to be content-based or it cannot see a foreign identity at
+all (the volume group on disk is still named after the source), and the rename
+has to follow the import because `vgimportclone` renames the volume group but
+leaves the logical volume inside named after the source. The trailing arguments
+name logical volumes to preserve, for the structural ones a stack names
+identically in every volume, such as VDO's pool. `ImportClonedVolumeGroup` and
+`RenameLogicalVolume` remain available for a recovery path that needs one step
+alone.
+
+VDO lives in the `lvm/vdo` subpackage rather than in `lvm` itself. It registers
+a provisioning handler at init, and `CreateLogicalVolume` consults the registry
+for the extra `lvcreate` flags a `LogicalVolumeDefinition` implies, so a caller
+asks for compression or deduplication instead of knowing how dm-vdo spells it.
+Importing the subpackage is what makes those flags reachable, and
+`vdo.UpdateVolume` toggles them on a pool that already exists.
+
+`RemoveOrphanedDMNodes` is the fallback when the backing device is already gone
+and `RemoveVolumeGroup`/`DeactivateVolumeGroup` can no longer read the metadata
+they need: it clears the live dm nodes directly, retrying across a few passes so
 removing a dependent unblocks what it was blocking.
 
-_Today:_ `csi-driver/pkg/util/vdo.go` is the only consumer, wrapping VDO's
-`lvcreate --type vdo` on top of this package's device scoping and identity
-checks. A striped LVM volume group across several members would use the same
-primitives with more than one device in the list.
+`lvm/vdo` also holds the whole per-volume stack lifecycle a caller actually
+drives, not only the provisioning handler: `CreateOrAttach` (idempotent
+create-or-reactivate), `ResolveClone` (a thin wrapper over
+`ResolveClonedVolumeGroup`, naming VDO's own volume group/pool convention),
+`Deactivate`/`Remove` (each with its own rule for when an unreachable backing
+device falls back to `RemoveOrphanedDMNodes`: `Deactivate` only on that specific
+failure, `Remove` unconditionally, since one is trying to preserve the volume
+and the other is already destroying it), `Grow`, and `SetFeatures` (a
+lvolID-keyed wrapper over `UpdateVolume`). Every one of them is keyed by
+lvolID alone. The volume group/pool naming convention stays internal to this
+package rather than leaking to a caller. None of it references a Kubernetes
+type: it is node-level orchestration that happens to live in a CSI driver
+today, not CSI-shaped logic, and `Logger` (a package-level `*slog.Logger`,
+nil-safe) is how a caller gets its own log format without this package taking
+on a Kubernetes-specific logging dependency.
+
+_Today:_ `lvm/vdo` is the only in-tree consumer. The CSI driver's client-side
+VDO support (`csi-driver/pkg/util/vdo.go`) is the code this package was
+extracted from, and now just wires `vdo.CreateOrAttach`/`ResolveClone`/
+`Deactivate`/`Remove`/`Grow` into `NodeStageVolume`/`NodeUnstageVolume`/
+`NodeExpandVolume`. A striped LVM volume group across several members would use
+`CreateVolumeGroup`'s variadic device-path list the same way.
 
 ### Cross-cutting
 
@@ -640,7 +753,7 @@ func status(err error) error {
 
 #### Handle optional fields
 
-Generated request bodies and Kubernetes types are full of them; read them without
+Generated request bodies and Kubernetes types are full of them. Read them without
 one-off nil checks:
 
 ```go
@@ -661,7 +774,8 @@ defer deferrers.Run(cancelWatch)
 
 #### Validate user-supplied outbound URLs
 
-Before the operator forwards one (e.g. a Prometheus endpoint from a CR):
+Before the operator sends a request to one (e.g., a Prometheus endpoint from a
+CR):
 
 ```go
 if err := net.ValidateExternalURL(spec.PrometheusURL); err != nil {
@@ -697,20 +811,20 @@ resolver := kube.NewLiveResolver(kfake.NewSimpleClientset(pv, pvc, sc))
   `lvol.Mapper`) so the operator and CSI driver can unit-test against
   fakes without a kernel, `/sys`, or `nvme-cli` present.
 - **The Linux grunt work hides in `internal/`** (sysfs parsing, command
-  execution). It can change freely; consumers depend on behavior, not
+  execution). It can change freely, and consumers depend on behavior, not
   mechanism.
-- **Dependency direction flows one way**: `kube`/`controlplane`/`nvmeof` →
+- **Dependency direction flows one way:** `kube`/`controlplane`/`nvmeof` →
   `lvol` → `nvme`, with `errs`/`nqn`/`ptr`/`net` as leaf utilities. No import
   cycles. `nvmeof` depends on `lvol` only to turn a control-plane `Connection`
-  into fabric targets; the fabric mechanics know nothing about volumes.
+  into fabric targets, and the fabric mechanics know nothing about volumes.
 - **Kubernetes deps are confined to `kube`.** Only that package imports
-  `k8s.io/api` and `k8s.io/client-go`; importing `nvme`/`nvmeof`/etc.
+  `k8s.io/api` and `k8s.io/client-go`, and importing `nvme`/`nvmeof`/etc.
   pulls no Kubernetes deps. (client-go is already in both the operator and
   CSI driver, so this adds nothing to either consumer's graph.)
 - **One shared resolution implementation.** `kube.NewResolver(ResolverConfig)`
-  returns an `InformerResolver` that works off any `cache.SharedIndexInformer`
-  — a standalone client-go `SharedInformerFactory` (CSI driver) or a
-  controller-runtime manager cache (operator) — so PV/PVC/VolumeAttachment
+  returns an `InformerResolver` that works off any `cache.SharedIndexInformer`,
+  whether a standalone client-go `SharedInformerFactory` (CSI driver) or a
+  controller-runtime manager cache (operator), so PV/PVC/VolumeAttachment
   caching lives here once instead of being reimplemented per consumer. The
   pure index key funcs in `index.go` are reused by both the client-go
   indexer and a controller-runtime `FieldIndexer`.

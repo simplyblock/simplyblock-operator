@@ -110,7 +110,8 @@ func TestRegisteredHandlerReachesCreateLogicalVolume(t *testing.T) {
 	}
 	mgr, fake := newManager()
 	def := lvm.LogicalVolumeDefinition{Compression: true, Deduplication: false}
-	if err := mgr.CreateLogicalVolume(context.Background(), "vdo-abc123", "vdopool", "abc123", def); err != nil {
+	vg := lvm.VolumeGroup{Name: "vdo-abc123"}
+	if _, err := mgr.CreateLogicalVolume(context.Background(), vg, "vdopool", "abc123", def); err != nil {
 		t.Fatalf("CreateLogicalVolume: %v", err)
 	}
 	want := []string{

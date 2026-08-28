@@ -43,6 +43,39 @@ func runCommand(ctx context.Context, args ...string) (string, error) {
 	return string(output), nil
 }
 
+// PhysicalVolume identifies an LVM physical volume by the device path it was
+// created on. A plain value type, not a handle: it carries no reference back
+// to a Manager, so it stays valid to pass to any Manager instance.
+type PhysicalVolume struct {
+	DevicePath string
+}
+
+// VolumeGroup identifies an LVM volume group by name.
+type VolumeGroup struct {
+	Name string
+}
+
+// LogicalVolume identifies a logical volume within a VolumeGroup: the VDO
+// pool a create/grow targets, the VDO logical volume itself, or a plain LV.
+// Carrying its VolumeGroup rather than just a bare name is what makes a
+// caller's VG/LV pairing a type the compiler checks instead of two strings
+// that happen to travel together correctly today.
+type LogicalVolume struct {
+	VolumeGroup VolumeGroup
+	Name        string
+}
+
+// devicePaths extracts the device path each of pvs identifies, in order, for
+// the handful of calls that still need a []string to build an argument list
+// or scope a command with deviceScope.
+func devicePaths(pvs []PhysicalVolume) []string {
+	paths := make([]string, len(pvs))
+	for i, pv := range pvs {
+		paths[i] = pv.DevicePath
+	}
+	return paths
+}
+
 // deviceScope returns LVM's --devices argument pair, scoping a command to
 // exactly the given devices (comma-joined, LVM's own syntax for the flag) and
 // bypassing its default system-wide device scan entirely. See the package doc

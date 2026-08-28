@@ -10,7 +10,9 @@ import (
 func TestManager_ImportClonedVolumeGroup(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	if err := mgr.ImportClonedVolumeGroup(context.Background(), "vdo-clone1", "/dev/nvme1n1"); err != nil {
+	vg := VolumeGroup{Name: "vdo-clone1"}
+	pv := PhysicalVolume{DevicePath: "/dev/nvme1n1"}
+	if err := mgr.ImportClonedVolumeGroup(context.Background(), vg, pv); err != nil {
 		t.Fatalf("ImportClonedVolumeGroup: %v", err)
 	}
 	want := []string{"vgimportclone", "--devices", "/dev/nvme1n1", "--basevgname", "vdo-clone1", "/dev/nvme1n1"}
@@ -24,7 +26,9 @@ func TestManager_ImportClonedVolumeGroup_WrapsRunnerError(t *testing.T) {
 	key := joinKey([]string{"vgimportclone", "--devices", "/dev/nvme1n1", "--basevgname", "vdo-clone1", "/dev/nvme1n1"})
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: wantErr}}
 	mgr := NewManagerWithRunner(fake.run)
-	err := mgr.ImportClonedVolumeGroup(context.Background(), "vdo-clone1", "/dev/nvme1n1")
+	vg := VolumeGroup{Name: "vdo-clone1"}
+	pv := PhysicalVolume{DevicePath: "/dev/nvme1n1"}
+	err := mgr.ImportClonedVolumeGroup(context.Background(), vg, pv)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("ImportClonedVolumeGroup() error = %v, want wrapping %v", err, wantErr)
 	}
@@ -33,7 +37,8 @@ func TestManager_ImportClonedVolumeGroup_WrapsRunnerError(t *testing.T) {
 func TestManager_RenameLogicalVolume(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	err := mgr.RenameLogicalVolume(context.Background(), "vdo-clone1", "source-lv", "clone1")
+	vg := VolumeGroup{Name: "vdo-clone1"}
+	err := mgr.RenameLogicalVolume(context.Background(), vg, "source-lv", "clone1")
 	if err != nil {
 		t.Fatalf("RenameLogicalVolume: %v", err)
 	}
@@ -56,14 +61,14 @@ func TestManager_ResolveClonedVolumeGroup_ResolvesAForeignIdentity(t *testing.T)
 	}
 	mgr := NewManagerWithRunner(fake.run)
 
-	previous, err := mgr.ResolveClonedVolumeGroup(
-		context.Background(), "/dev/nvme1n1", "vdo-clone1", "clone1", "vdopool",
-	)
+	pv := PhysicalVolume{DevicePath: "/dev/nvme1n1"}
+	vg := VolumeGroup{Name: "vdo-clone1"}
+	previous, err := mgr.ResolveClonedVolumeGroup(context.Background(), pv, vg, "clone1", "vdopool")
 	if err != nil {
 		t.Fatalf("ResolveClonedVolumeGroup: %v", err)
 	}
-	if previous != "vdo-source" {
-		t.Errorf("previous VG = %q, want \"vdo-source\"", previous)
+	if want := (VolumeGroup{Name: "vdo-source"}); previous != want {
+		t.Errorf("previous VG = %v, want %v", previous, want)
 	}
 	want := [][]string{
 		{"pvscan", "--devices", "/dev/nvme1n1", "--cache"},
@@ -94,14 +99,14 @@ func TestManager_ResolveClonedVolumeGroup_NoOps(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fake := &fakeRunner{out: map[string]string{pvs: tt.out}, err: map[string]error{}}
 			mgr := NewManagerWithRunner(fake.run)
-			previous, err := mgr.ResolveClonedVolumeGroup(
-				context.Background(), "/dev/nvme1n1", "vdo-clone1", "clone1", "vdopool",
-			)
+			pv := PhysicalVolume{DevicePath: "/dev/nvme1n1"}
+			vg := VolumeGroup{Name: "vdo-clone1"}
+			previous, err := mgr.ResolveClonedVolumeGroup(context.Background(), pv, vg, "clone1", "vdopool")
 			if err != nil {
 				t.Fatalf("ResolveClonedVolumeGroup: %v", err)
 			}
-			if previous != "" {
-				t.Errorf("previous VG = %q, want \"\" (nothing resolved)", previous)
+			if previous != (VolumeGroup{}) {
+				t.Errorf("previous VG = %v, want the zero value (nothing resolved)", previous)
 			}
 			for _, call := range fake.calls {
 				if call[0] == "vgimportclone" || call[0] == "lvrename" {
@@ -125,9 +130,9 @@ func TestManager_ResolveClonedVolumeGroup_PreservesStructuralLVs(t *testing.T) {
 	}
 	mgr := NewManagerWithRunner(fake.run)
 
-	if _, err := mgr.ResolveClonedVolumeGroup(
-		context.Background(), "/dev/nvme1n1", "vdo-clone1", "clone1", "vdopool",
-	); err != nil {
+	pv := PhysicalVolume{DevicePath: "/dev/nvme1n1"}
+	vg := VolumeGroup{Name: "vdo-clone1"}
+	if _, err := mgr.ResolveClonedVolumeGroup(context.Background(), pv, vg, "clone1", "vdopool"); err != nil {
 		t.Fatalf("ResolveClonedVolumeGroup: %v", err)
 	}
 	for _, call := range fake.calls {
@@ -150,9 +155,9 @@ func TestManager_ResolveClonedVolumeGroup_SurvivesAFailedRescan(t *testing.T) {
 		},
 	}
 	mgr := NewManagerWithRunner(fake.run)
-	if _, err := mgr.ResolveClonedVolumeGroup(
-		context.Background(), "/dev/nvme1n1", "vdo-clone1", "clone1",
-	); err != nil {
+	pv := PhysicalVolume{DevicePath: "/dev/nvme1n1"}
+	vg := VolumeGroup{Name: "vdo-clone1"}
+	if _, err := mgr.ResolveClonedVolumeGroup(context.Background(), pv, vg, "clone1"); err != nil {
 		t.Errorf("ResolveClonedVolumeGroup: %v, want the failed pvscan to be non-fatal", err)
 	}
 }
@@ -164,9 +169,9 @@ func TestManager_ResolveClonedVolumeGroup_WrapsAProbeFailure(t *testing.T) {
 	})
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{pvs: wantErr}}
 	mgr := NewManagerWithRunner(fake.run)
-	_, err := mgr.ResolveClonedVolumeGroup(
-		context.Background(), "/dev/nvme1n1", "vdo-clone1", "clone1",
-	)
+	pv := PhysicalVolume{DevicePath: "/dev/nvme1n1"}
+	vg := VolumeGroup{Name: "vdo-clone1"}
+	_, err := mgr.ResolveClonedVolumeGroup(context.Background(), pv, vg, "clone1")
 	if !errors.Is(err, wantErr) {
 		t.Errorf("ResolveClonedVolumeGroup() error = %v, want wrapping %v", err, wantErr)
 	}

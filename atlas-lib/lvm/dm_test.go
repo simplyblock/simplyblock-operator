@@ -26,7 +26,7 @@ func TestManager_RemoveOrphanedDMNodes(t *testing.T) {
 			err: map[string]error{},
 		}
 		mgr := NewManagerWithRunner(fake.run)
-		if err := mgr.RemoveOrphanedDMNodes(context.Background(), "vdo-abc123"); err != nil {
+		if err := mgr.RemoveOrphanedDMNodes(context.Background(), VolumeGroup{Name: "vdo-abc123"}); err != nil {
 			t.Fatalf("RemoveOrphanedDMNodes: %v", err)
 		}
 	})
@@ -40,7 +40,7 @@ func TestManager_RemoveOrphanedDMNodes(t *testing.T) {
 			err: map[string]error{},
 		}
 		mgr := NewManagerWithRunner(fake.run)
-		if err := mgr.RemoveOrphanedDMNodes(context.Background(), "vdo-abc123"); err != nil {
+		if err := mgr.RemoveOrphanedDMNodes(context.Background(), VolumeGroup{Name: "vdo-abc123"}); err != nil {
 			t.Fatalf("RemoveOrphanedDMNodes: %v", err)
 		}
 
@@ -78,7 +78,7 @@ func TestManager_RemoveOrphanedDMNodes(t *testing.T) {
 			}
 		}
 		mgr := NewManagerWithRunner(run)
-		if err := mgr.RemoveOrphanedDMNodes(context.Background(), "vdo-abc123"); err != nil {
+		if err := mgr.RemoveOrphanedDMNodes(context.Background(), VolumeGroup{Name: "vdo-abc123"}); err != nil {
 			t.Fatalf("RemoveOrphanedDMNodes: %v", err)
 		}
 		if poolAttempts < 2 {
@@ -93,7 +93,7 @@ func TestManager_RemoveOrphanedDMNodes(t *testing.T) {
 			err: map[string]error{joinKey([]string{"dmsetup", "ls"}): wantErr},
 		}
 		mgr := NewManagerWithRunner(fake.run)
-		if err := mgr.RemoveOrphanedDMNodes(context.Background(), "vdo-abc123"); !errors.Is(err, wantErr) {
+		if err := mgr.RemoveOrphanedDMNodes(context.Background(), VolumeGroup{Name: "vdo-abc123"}); !errors.Is(err, wantErr) {
 			t.Errorf("RemoveOrphanedDMNodes() error = %v, want wrapping %v", err, wantErr)
 		}
 	})
