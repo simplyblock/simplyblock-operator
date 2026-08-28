@@ -290,6 +290,11 @@ func (r *ReplicationSlotReconciler) reconcileReplicating(
 			// ANA flip has already moved IO back here; don't revert the slot.
 			log.Info("Source cluster reports stale failed_over; slot already replicating/source — ignoring",
 				"slot", slot.Name)
+			// The cutover_done window on the source cluster is short (~10 s, before the
+			// replication monitor creates a new replicating record). Requeue quickly so
+			// the next poll catches cutover_done and fires the late preconnect job before
+			// that window closes.
+			return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
 		} else {
 			slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateFailedOver)
 			slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionTarget)
@@ -551,8 +556,15 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		// created (safety timer fired, or we missed the window entirely). Attempt a
 		// late preconnect so the CSI node gets target NVMe paths even after the ANA
 		// flip — this limits IO downtime to ctrl_loss_tmo instead of indefinite.
-		if status != nil && status.State == backendStateCutoverDone {
-			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, volumeID, proceedClusterID, proceedPoolID, proceedVolumeID)
+		//
+		// For failback the target-cluster API always reports failed_over (the old
+		// failover record), never cutover_done — that state lives on the source
+		// cluster (clusterID) after _finalize runs the UUID swap. So both states
+		// signal "ANA flip done" and we pre-connect source-cluster paths in both
+		// cases. For non-failback proceedClusterID == clusterID, so the distinction
+		// is irrelevant.
+		if status != nil && (status.State == backendStateCutoverDone || status.State == backendStateFailedOver) {
+			r.reconcilePreconnect(ctx, slot, apiClient, clusterID, volumeID, clusterID, poolID, volumeID)
 		}
 		return r.applyAdvancedBackendStateForFailback(ctx, slot, status, proceedClusterID != clusterID)
 	}
@@ -876,17 +888,23 @@ func (r *ReplicationSlotReconciler) applyAdvancedBackendStateForFailback(
 	switch status.State {
 	case backendStateCutoverDone, backendStateFailedOver:
 		// Failback ANA flip complete — IO is back on the original source cluster.
-		patch := client.MergeFrom(slot.DeepCopy())
+		// Clear the failback annotations first (metadata patch), then update status.
+		// Doing them in one r.Status().Patch() would silently discard the annotation
+		// changes because the status subresource ignores metadata writes.
+		annotPatch := client.MergeFrom(slot.DeepCopy())
+		delete(slot.Annotations, annotFailbackTarget)
+		delete(slot.Annotations, annotCutoverProceedSignaled)
+		if err := r.Patch(ctx, slot, annotPatch); err != nil {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		statusPatch := client.MergeFrom(slot.DeepCopy())
 		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateReplicating)
 		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionSource)
 		slot.Status.Message = replMsgSlotReplicating
-		// Clear the failback annotation; it is no longer needed.
-		delete(slot.Annotations, annotFailbackTarget)
-		delete(slot.Annotations, annotCutoverProceedSignaled)
 		log.Info("Failback cutover complete; slot returning to replicating/source", "slot", slot.Name)
 		r.Recorder.Eventf(slot, nil, corev1.EventTypeNormal, "FailbackComplete", "FailbackComplete",
 			"Failback cutover done; volume is live on source cluster again")
-		if err := r.Status().Patch(ctx, slot, patch); err != nil {
+		if err := r.Status().Patch(ctx, slot, statusPatch); err != nil {
 			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{RequeueAfter: replSlotRequeueReplicating}, nil
