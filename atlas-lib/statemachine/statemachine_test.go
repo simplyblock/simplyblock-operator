@@ -77,7 +77,7 @@ func mustTransition(t *testing.T, sm *Machine[st], to st) {
 	}
 }
 
-// arm puts the machine in `on` with a one minute deadline and returns it.
+// `armed` puts the machine in `on` with a one-minute deadline and returns it.
 func armed(t *testing.T) *Machine[st] {
 	t.Helper()
 	sm := newTest(t, (&hook{timeout: time.Minute}).fn)
@@ -205,7 +205,7 @@ func TestConfigIsDeeplyCopied(t *testing.T) {
 
 	// Keep a reference to the exact To slice New will clone. It has to be taken
 	// before New, and before the map entry holding it is replaced below —
-	// reaching for cfg.States[off].To afterwards would find a different slice.
+	// reaching for cfg.States[off].To afterward would find a different slice.
 	offEdges := cfg.States[off].To
 	if len(offEdges) == 0 || offEdges[0] != off {
 		t.Fatalf("setup: off's edges are %v, expected them to start with %v", offEdges, off)
@@ -423,7 +423,7 @@ func TestHookErrorLeavesMachineUntouched(t *testing.T) {
 
 func TestHookErrorPreservesExistingDeadline(t *testing.T) {
 	// A failed transition must not disturb the deadline of the state the machine
-	// is stuck in: off -> on arms a minute, then on -> ready fails.
+	// is stuck in: off -> on sets a one-minute deadline, then on -> ready fails.
 	sm, err := New(context.Background(), Config[st]{
 		Initial: off,
 		States: map[st]StateDef[st]{
@@ -796,9 +796,9 @@ func mustTransition2(t *testing.T, sm *Machine[st], to st, ctx context.Context) 
 	}
 }
 
-func TestAlreadyCancelledCallerContextStillTransitions(t *testing.T) {
+func TestAlreadyCanceledCallerContextStillTransitions(t *testing.T) {
 	// The call context bounds the hook, and this hook does not consult it, so
-	// the transition succeeds. Documented behaviour, worth pinning down.
+	// the transition succeeds. Documented behavior, worth pinning down.
 	sm := newTest(t, (&hook{}).fn)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -1071,7 +1071,7 @@ func TestRestoreRejectsUnknownState(t *testing.T) {
 }
 
 func TestRestoreRejectsZeroStateWhenUndeclared(t *testing.T) {
-	// The controller idiom: an empty subPhase is not a state, it means "fresh".
+	// The controller idiom: an empty subPhase is not a state, it means "fresh."
 	sm := newTest(t, nil)
 	if err := sm.Restore(Snapshot[st]{}); !errors.Is(err, ErrUnknownState) {
 		t.Fatalf("err = %v, want ErrUnknownState for an empty state", err)

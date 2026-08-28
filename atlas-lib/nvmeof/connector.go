@@ -45,7 +45,7 @@ type Target struct {
 	// TLS requests an encrypted connection. The kernel needs a pre-shared
 	// key for the host/subsystem NQN pair in its keyring; the connect fails
 	// if none is installed.
-	TLS bool // tls
+	TLS bool // `tls`
 
 	// DHCHAPSecret and DHCHAPCtrlSecret authenticate the connect: the first
 	// proves the host to the target, the second the target back to the host
@@ -193,7 +193,7 @@ type Connector interface {
 	// idempotent and must attach the paths it can even when a
 	// higher-priority one is unavailable.
 	ConnectPaths(ctx context.Context, targets []Target) ([]PathResult, error)
-	// Disconnect detaches the subsystem identified by nqn, releasing paths
+	// Disconnect detaches the subsystem identified by `nqn`, releasing paths
 	// that cannot serve I/O before the optimized one. It must be
 	// idempotent (no error if already disconnected).
 	Disconnect(ctx context.Context, nqn string) error
@@ -207,7 +207,7 @@ type Connector interface {
 	// error, which matters because ctrl is a snapshot and the kernel may
 	// have reaped it in the meantime.
 	DisconnectController(ctx context.Context, ctrl nvme.Controller) error
-	// IsConnected reports whether a live controller exists for nqn.
+	// IsConnected reports whether a live controller exists for `nqn`.
 	IsConnected(ctx context.Context, nqn string) (bool, error)
 }
 
@@ -289,7 +289,7 @@ func (c *connector) Connect(ctx context.Context, t Target) error {
 	return results[0].Err
 }
 
-// Disconnect removes every controller fronting nqn by writing its
+// Disconnect removes every controller fronting `nqn` by writing its
 // delete_controller attribute. It is idempotent: a subsystem that is already
 // absent is not an error. For a multi-namespace subsystem this detaches the
 // paths shared by every namespace on it.
@@ -329,7 +329,7 @@ func (c *connector) Disconnect(ctx context.Context, nqn string) error {
 // It is the narrow counterpart to Disconnect, and the difference is not
 // cosmetic: on a subsystem shared by several volumes, Disconnect takes every
 // co-tenant's block device with it, so repairing one broken path has to be able
-// to say "this controller, and nothing else".
+// to say "this controller, and nothing else."
 //
 // A controller the kernel has already reaped is not an error: ctrl is a snapshot
 // and the race is expected, so a vanished sysfs path counts as done.
@@ -352,7 +352,7 @@ func (c *connector) deleteController(ctrl nvme.Controller) error {
 	return c.deleteCtrl(ctrl)
 }
 
-// IsConnected reports whether a live controller exists for nqn.
+// IsConnected reports whether a live controller exists for `nqn`.
 func (c *connector) IsConnected(ctx context.Context, nqn string) (bool, error) {
 	s, err := c.subs.ByNQN(ctx, nqn)
 	if errors.Is(err, errs.ErrNotFound) {
@@ -404,7 +404,7 @@ func endpoint(t Target) string {
 
 // hostIdentity resolves the (hostnqn, hostid) a connect presents, from the
 // target's identity and the node's file-seeded default. Either may come back
-// empty, which means "send neither, and let the mechanism take the node's".
+// empty, which means "send neither, and let the mechanism take the node's."
 //
 // The two are resolved together rather than field by field, and that is the
 // whole point of this function. The kernel enforces a strict 1:1 between them:
@@ -447,7 +447,7 @@ func hostIdentity(t Target, fileNQN, fileID string) (hostNQN, hostID string, err
 	return t.HostNQN, id, nil
 }
 
-// readTrim reads a one-line file, e.g. /etc/nvme/hostnqn, and returns "" when
+// readTrim reads a one-line file, e.g., /etc/nvme/hostnqn, and returns "" when
 // it is absent — an unset host identity is a fallback, not a failure.
 func readTrim(path string) string {
 	b, err := os.ReadFile(path)

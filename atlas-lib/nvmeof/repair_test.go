@@ -28,7 +28,7 @@ type kernel struct {
 	// serves narrows which namespaces a given address serves; nil means all.
 	serves   func(addr string, nsid nvme.NamespaceID) bool
 	pathless bool
-	// sticky keeps a teardown from clearing the fault, modelling a repair that
+	// sticky keeps a teardown from clearing the fault, modeling a repair that
 	// does not stick.
 	sticky bool
 	// connectErr fails the connect for these addresses.

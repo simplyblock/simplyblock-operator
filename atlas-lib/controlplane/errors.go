@@ -23,7 +23,7 @@ import (
 //	404 -> errs.ErrNotFound
 //	409 -> errs.ErrAlreadyExists
 type StatusError struct {
-	// Op names the resource or operation that failed, e.g. `storage node "abc"`.
+	// Op names the resource or operation that failed, e.g., `storage node "abc"`.
 	Op string
 	// StatusCode is the HTTP status the control plane returned.
 	StatusCode int
@@ -59,7 +59,7 @@ func (e *StatusError) Unwrap() error {
 }
 
 // respError turns a non-success control-plane response into a *StatusError. what
-// names the resource or operation, e.g. `storage node "abc"`.
+// names the resource or operation, e.g., `storage node "abc"`.
 func respError(what string, code int, body []byte) error {
 	return &StatusError{
 		Op:         what,

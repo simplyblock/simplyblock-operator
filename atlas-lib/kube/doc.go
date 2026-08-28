@@ -15,7 +15,7 @@
 // k8s.io/api directly; the live lookups are expressed as the Resolver interface.
 // The package ships two implementations:
 // LiveResolver (direct, uncached reads via a client-go clientset) and
-// InformerResolver (cached reads via client-go shared informers, e.g. a
+// InformerResolver (cached reads via client-go shared informers, e.g., a
 // controller-runtime manager cache). A consumer may also implement the
-// interfaces with its own client — e.g. a controller-runtime client.Client.
+// interfaces with its own client — e.g., a controller-runtime client.Client.
 package kube

@@ -24,7 +24,7 @@
 #     support. Enum membership is deliberately absent: a newer control plane is
 #     allowed to invent statuses.
 
-# A volume's identity, size and subsystem: what CSI publishes, resizes and
+# A volume's identity, size, and subsystem: what CSI publishes, resizes, and
 # attaches (controlplane/volumes.go).
 VolumeDTO:
   id: required
@@ -32,8 +32,8 @@ VolumeDTO:
   pool_name: required
   # The create path rejects anything under 100MiB, so a volume never has size 0.
   size: gt=0
-  # Every subsystem NQN is built as "<cluster nqn>:lvol:<uuid>", and the cluster
-  # NQN is "nqn.2023-02.io.simplyblock:<uuid>".
+  # Every subsystem NQN is built as `<cluster nqn>:lvol:<uuid>`, and the cluster
+  # NQN is `nqn.2023-02.io.simplyblock:<uuid>`.
   nqn: required,startswith=nqn.
   # Not gt=0: ns_id is 0 while a volume is in creation, until the primary's
   # namespace add assigns the real one (sbcli lvol_controller.add_lvol).

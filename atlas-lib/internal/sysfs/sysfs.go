@@ -1,9 +1,8 @@
 // Package sysfs provides low-level access to the Linux NVMe sysfs
 // hierarchy: path-layout constants and (raw and typed) attribute-reading
-// helpers. It is
-// internal so these details stay out of the public nvme API and can change
-// freely. Package nvme builds the public Subsystem/Controller/Namespace
-// model on top of it.
+// helpers. It is internal so these details stay out of the public `nvme` API
+// and can change freely. Package nvme builds the public
+// Subsystem/Controller/Namespace model on top of it.
 //
 // Observed layout (NVMe-oF/TCP, multipath, kernel 5.14 / Rocky 9):
 //
@@ -23,7 +22,7 @@
 //	  ro, hidden, dev, queue/logical_block_size, ...
 //
 // Per-controller namespace legs appear as nvmeXcYnZ under the controller
-// (e.g. nvme0c0n1); the host I/O device is the subsystem-level nvmeXnY.
+// (e.g., nvme0c0n1); the host I/O device is the subsystem-level nvmeXnY.
 package sysfs
 
 import (
@@ -89,7 +88,7 @@ func String(elem ...string) string {
 }
 
 // Int reads a sysfs attribute as a base-10 integer, returning def if the
-// attribute is missing or unparsable (e.g. numa_node's "-1" sentinel).
+// attribute is missing or unparsable (e.g., numa_node's "-1" sentinel).
 func Int(def int, elem ...string) int {
 	s := String(elem...)
 	if s == "" {

@@ -9,7 +9,7 @@ import (
 // optional and all set fields are ANDed, so the zero selector matches
 // everything; each one on its own is a lookup key the resolvers already expose
 // (ByUUID, ByNamespace, ByDevicePath), and combined they express the cases a
-// single key cannot — notably "namespace N of subsystem NQN", which is how
+// single key cannot — notably "namespace N of subsystem NQN," which is how
 // simplyblock's namespaced lvols share one subsystem.
 //
 // UUID comparison is case-insensitive: sysfs reports namespace UUIDs in lower
@@ -18,7 +18,7 @@ type DeviceSelector struct {
 	NQN        string      // subsystem NQN
 	NSID       NamespaceID // namespace id; 0: any
 	UUID       string      // namespace UUID (simplyblock: the lvol UUID)
-	DevicePath string      // block device node, e.g. "/dev/nvme0n1"
+	DevicePath string      // block device node, e.g., "/dev/nvme0n1"
 }
 
 // Matches reports whether d satisfies every field the selector sets.
@@ -51,14 +51,14 @@ func (s DeviceSelector) Filter(devs []Device) []Device {
 	return out
 }
 
-// IsZero reports whether the selector constrains nothing, i.e. matches every
+// IsZero reports whether the selector constrains nothing, i.e., matches every
 // device.
 func (s DeviceSelector) IsZero() bool {
 	return s == DeviceSelector{}
 }
 
-// String renders the set fields as a compact "k=v,..." list, for error
-// messages and logs. The zero selector renders as "any".
+// String renders the set fields as a compact `k=v,...` list, for error
+// messages and logs. The zero selector renders as `any`.
 func (s DeviceSelector) String() string {
 	var parts []string
 	if s.NQN != "" {

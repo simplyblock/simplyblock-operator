@@ -77,7 +77,7 @@ func (c *connector) ConnectPaths(ctx context.Context, targets []Target) ([]PathR
 		if r.Live {
 			live++
 		}
-		// A cancelled or expired caller context stops the walk: the paths
+		// A canceled or expired caller context stops the walk: the paths
 		// behind this one are left unattempted rather than run against a
 		// context that can only fail.
 		if ctx.Err() != nil {

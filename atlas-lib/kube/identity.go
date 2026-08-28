@@ -32,7 +32,7 @@ func PinnedNode(annotations map[string]string) string {
 }
 
 // IsPinnedVolume reports whether the given (PVC) annotations pin a volume to a
-// specific storage node — i.e. it must not be moved by auto-rebalancing and
+// specific storage node — i.e., it must not be moved by auto-rebalancing and
 // blocks a node drain. See PinnedNode for which annotations count.
 func IsPinnedVolume(annotations map[string]string) bool {
 	return PinnedNode(annotations) != ""
@@ -65,7 +65,7 @@ func PendingPin(annotations map[string]string) (string, bool) {
 }
 
 // PinRejected reports whether target is the pin value a controller has already
-// rejected as an unknown storage node, i.e. whether warning about it again would
+// rejected as an unknown storage node, i.e., whether warning about it again would
 // be a duplicate.
 func PinRejected(annotations map[string]string, target string) bool {
 	return target != "" && annotations[AnnoSelectedStorageNodeRejected] == target

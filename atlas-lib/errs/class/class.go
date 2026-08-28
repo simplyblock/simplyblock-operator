@@ -58,12 +58,12 @@ type Class struct {
 	RPCSpecific bool
 
 	// Success means the error is a no-op for this operation, which should report
-	// success — e.g. a 404 on a delete: the object is already gone. Only a
+	// success — e.g., a 404 on a delete: the object is already gone. Only a
 	// per-operation layer sets it; Of never does.
 	Success bool
 
 	// Idempotent means the operation must resolve a conflict by looking up the
-	// existing object before deciding — e.g. a 409 on a create: same source and
+	// existing object before deciding — e.g., a 409 on a create: same source and
 	// parameters means return the existing object, otherwise AlreadyExists.
 	// Classification cannot decide that; only a per-operation layer sets it.
 	Idempotent bool

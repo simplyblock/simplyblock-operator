@@ -29,7 +29,7 @@ import (
 // attach, per-path timeouts, waiting for a controller to reach live, skipping a
 // path that already exists, ANA teardown order on release — comes from the
 // shared connector, the same machinery FabricsConnector runs on. Those are the
-// parts with the subtle behaviour, and a second copy of them would be the
+// parts with the subtle behavior, and a second copy of them would be the
 // duplication this type exists to avoid.
 //
 // It is Linux-only in practice and needs nvme-cli on PATH and the privileges to
@@ -92,7 +92,7 @@ func NewCLIConnectorWithRunner(
 }
 
 // SudoRunner runs nvme-cli through sudo, for an image whose process is not root
-// and reaches the fabric through a sudoers rule for the nvme binary.
+// and reaches the fabric through a sudoers rule for the `nvme` binary.
 //
 // The privilege is needed even in a privileged container: the capabilities a
 // privileged container grants are dropped when the entrypoint runs as an
@@ -224,7 +224,7 @@ func (c *CLIConnector) disconnectController(ctrl nvme.Controller) error {
 }
 
 // controllerName is the kernel name nvme-cli addresses a controller by,
-// e.g. "nvme3", taken from the id or from the sysfs path it was found at.
+// e.g., `nvme3`, taken from the id or from the sysfs path it was found at.
 func controllerName(ctrl nvme.Controller) string {
 	if ctrl.ID != "" {
 		return string(ctrl.ID)

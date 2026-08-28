@@ -8,7 +8,7 @@ generate:
   models: true
   client: true
 output-options:
-  # Patches spec bugs (e.g. the migrations-list op's missing path params)
+  # Patches spec bugs (e.g., the migrations-list op's missing path params)
   # without editing the vendored openapi.json, so re-exports stay clean.
   overlay:
     path: overlay.yaml

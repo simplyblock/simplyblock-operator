@@ -183,13 +183,13 @@ func typeName(expr ast.Expr) string {
 
 // rule is one type's compiled rules: validator tags by Go field name, and the
 // JSON keys that must be present in the body. For an endpoint-scoped variant,
-// base is the schema it is a flavour of and endpoint is where it comes from;
+// base is the schema it is a flavor of and endpoint is where it comes from;
 // both are empty for a schema's own rules.
 type rule struct {
 	typ      string
 	tags     map[string]string
 	keys     []string
-	order    []string          // field names, in the order their keys appear in the yaml
+	order    []string          // field names, in the order their keys appear in the YAML
 	wire     map[string]string // Go field to the wire key it came from, for messages
 	base     string
 	endpoint string
@@ -296,7 +296,7 @@ func compile(rulesYAML []byte, structs map[string]*ast.StructType, doc spec, spe
 }
 
 // parseBlocks reads the rules file into blocks, keeping the file's order, which
-// keeps the generated output stable and reviewable against the yaml.
+// keeps the generated output stable and reviewable against the YAML.
 func parseBlocks(rulesYAML []byte) ([]block, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(rulesYAML, &doc); err != nil {
@@ -459,7 +459,7 @@ func fieldForKey(st *ast.StructType, key string) (field string, ok bool) {
 	return "", false
 }
 
-// jsonName is the key a struct tag's json entry decodes from.
+// jsonName is the key a struct tag's `json` entry decodes from.
 func jsonName(tag string) string {
 	_, value, ok := strings.Cut(tag, `json:"`)
 	if !ok {

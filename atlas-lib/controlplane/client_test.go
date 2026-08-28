@@ -92,7 +92,7 @@ func TestClientConnection(t *testing.T) {
 }
 
 // The /connect entries carry the connect parameters the control plane picked
-// for each path (hyphenated keys, matching the nvme connect options); all of
+// for each path (hyphenated keys, matching the `nvme connect` options); all of
 // them have to survive decoding.
 func TestClientConnectionCarriesConnectParameters(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -117,7 +117,7 @@ func TestClientConnectionCarriesConnectParameters(t *testing.T) {
 	if e.CtrlLossTMOSec == nil || *e.CtrlLossTMOSec != 60 {
 		t.Errorf("ctrl-loss-tmo = %v, want 60", e.CtrlLossTMOSec)
 	}
-	// 0 means "fail I/O immediately", which must not be lost as "unset".
+	// 0 means "fail I/O immediately," which must not be lost as "unset."
 	if e.FastIOFailTMOSec == nil || *e.FastIOFailTMOSec != 0 {
 		t.Errorf("fast-io-fail-tmo = %v, want 0", e.FastIOFailTMOSec)
 	}

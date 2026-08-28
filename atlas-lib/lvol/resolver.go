@@ -12,13 +12,13 @@ import "context"
 // initiator's business — with one exception: the DHCHAP secrets below, which
 // the control plane publishes nowhere else (see controlplane.Client.Connection).
 type Endpoint struct {
-	Transport string // e.g. "tcp"
+	Transport string // e.g., `tcp`
 	Address   string // storage-node host or IP
 	Port      int    // service port, typically 4420
 
 	// Per-path connect tunables as the control plane chose them. The
 	// timeouts are pointers because 0 is a meaningful value (fail I/O
-	// immediately) distinct from "not specified".
+	// immediately) distinct from "not specified."
 	NrIOQueues        int  // number of I/O queue pairs
 	ReconnectDelaySec int  // delay between reconnect attempts
 	KeepAliveTMOSec   int  // keep-alive timeout
@@ -103,7 +103,7 @@ func ConnectionOptions(opts ...ConnectionOption) ConnectionParams {
 
 // Resolver looks up logical volumes and their fabric connection details,
 // typically from the simplyblock control plane. It is an interface so
-// callers (e.g. the CSI node service) depend on the behavior, not on the
+// callers (e.g., the CSI node service) depend on the behavior, not on the
 // controlplane client; controlplane.Client implements it.
 //
 // It is the control-plane counterpart to Mapper: Resolver answers "where

@@ -58,9 +58,9 @@ func (s Subsystem) IsMultiNamespace() (bool, error) {
 	return nn > 1, nil
 }
 
-// IsLive reports whether the controller is in the kernel "live" state — able
-// to serve admin and I/O commands (as opposed to "connecting", "resetting",
-// "deleting", etc.).
+// IsLive reports whether the controller is in the kernel `live` state — able
+// to serve admin and I/O commands (as opposed to `connecting`, `resetting`,
+// `deleting`, and the rest).
 func (c Controller) IsLive() bool {
 	return c.State == controllerStateLive
 }

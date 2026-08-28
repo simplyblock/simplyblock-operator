@@ -21,7 +21,7 @@ var errAmbiguousSelector = errors.New("selector matches several namespaces of th
 // that came up for it, which is what a CSI NodeStage actually needs: Connect
 // alone only guarantees a live controller, not that the block device is already
 // visible. nsid picks the namespace on a multi-namespace subsystem; 0 means
-// "the subsystem's only namespace".
+// "the subsystem's only namespace."
 //
 // It is idempotent to the same degree Connect is: an already-attached target
 // short-circuits to the device lookup.
@@ -52,7 +52,7 @@ func ConnectDevice(
 // paths came up but no block device followed.
 //
 // nsid picks the namespace on a multi-namespace subsystem — pass
-// lvol.Connection.NSID; 0 means "the subsystem's only namespace".
+// lvol.Connection.NSID; 0 means "the subsystem's only namespace."
 func ConnectMultipathDevice(
 	ctx context.Context,
 	c Connector,

@@ -34,13 +34,13 @@ type DetachOutcome struct {
 // fails. So the question is asked here, once, rather than left to each caller.
 //
 // The question asked is nvme.Device.IsMultiNamespace — *can* this subsystem hold
-// other volumes — and not whether it currently does. Enumerating the neighbours
+// other volumes — and not whether it currently does. Enumerating the neighbors
 // only describes the moment it was looked at: a namespace can join a shared
 // subsystem at any time, including between the check and the disconnect, and
 // then a "no co-tenants right now" answer would have been correct and still
 // destructive. A subsystem provisioned to be shared is therefore never
 // disconnected on one volume's behalf, even while it happens to hold only this
-// one. Callers that want to name the current neighbours for an event can ask
+// one. Callers that want to name the current neighbors for an event can ask
 // nvme.Device.CoTenants, whose answer is inherently a snapshot.
 //
 // A question that cannot be answered is never assumed away: the Identify

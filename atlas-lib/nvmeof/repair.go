@@ -121,7 +121,7 @@ func (r AttachResult) live() int {
 // cannot, applying a policy Inspect deliberately does not have.
 //
 // It sits above Connector rather than inside it: the connector stays mechanical,
-// and the decisions that need judgement — how narrow a repair to prefer, whether
+// and the decisions that need judgment — how narrow a repair to prefer, whether
 // a repair may disturb another volume, how often the same repair may be
 // retried — live here, on a value, together with the state they need. That state
 // is why this is a type and not a function: cooldowns have to outlive a single
@@ -149,7 +149,7 @@ type Repairer struct {
 }
 
 // repairKey identifies a repair for cooldown purposes: the same defect on the
-// same target, recognised again on a later attempt.
+// same target, recognized again on a later attempt.
 //
 // What may go in subject is constrained from both sides. It has to be narrow
 // enough that two repairs outstanding at once do not collide — or applying one
@@ -266,7 +266,7 @@ func NewRepairer(
 // not the volume with no device — that one at least fails visibly. It is the
 // volume that has a device and silently runs a path short: a live controller
 // contributing nothing, redundancy quietly below what the control plane
-// published, and every connect answering "already connected". Nothing about the
+// published, and every connect answering "already connected." Nothing about the
 // device's presence says the fabric is right, so Attach is safe and useful to
 // call on every tick of a monitor loop, not just at NodeStage.
 //
@@ -278,7 +278,7 @@ func NewRepairer(
 // volume deliberately left degraded is something the caller needs to be told.
 //
 // nsid picks the namespace on a multi-namespace subsystem — pass
-// lvol.Connection.NSID; 0 means "the subsystem's only namespace", which is
+// lvol.Connection.NSID; 0 means "the subsystem's only namespace," which is
 // enough for a plain lvol but ambiguous for a shared subsystem.
 //
 // The returned error is non-nil only when no device came up. AttachResult is
@@ -523,7 +523,7 @@ func keyOf(d Defect) repairKey {
 // of its three paths is degraded, not failed, and failing it would take away the
 // two paths it has.
 //
-// Otherwise it builds the error, naming what was diagnosed and what was or was
+// Otherwise, it builds the error, naming what was diagnosed and what was or was
 // not done about it. The wait error alone — "no device turned up" — is what made
 // the original incidents so hard to read; the diagnosis is the part that says
 // whether anyone can do anything about it.
@@ -594,7 +594,7 @@ func repairWith(ctx context.Context, c ControllerDetacher, d Defect) error {
 	return firstErr
 }
 
-// describeNamespaces names namespaces the way an operator would recognise them:
+// describeNamespaces names namespaces the way an operator would recognize them:
 // by the volume UUID where there is one, since that is the lvol id, and by
 // device path otherwise.
 func describeNamespaces(nss []nvme.Namespace) string {

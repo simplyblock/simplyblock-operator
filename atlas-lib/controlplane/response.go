@@ -15,7 +15,7 @@ import (
 // payload returns the success body of a typed (spec-modelled) response. A nil
 // body means the control plane answered with something other than the success
 // it declares — respError maps that, including 404 to errs.ErrNotFound. what
-// names the request, e.g. `volume <handle>`.
+// names the request, e.g., `volume <handle>`.
 func payload[T any](what string, body *T, code int, raw []byte) (*T, error) {
 	if body == nil {
 		return nil, respError(what, code, raw)

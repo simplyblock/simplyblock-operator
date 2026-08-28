@@ -30,7 +30,7 @@ import (
 // The snapshots are sanitized (capture-sysfs.sh sanitize): UUIDs and addresses
 // are stand-ins, substituted consistently so the relationships that matter
 // survive — the model still equals the master lvol UUID, which still appears in
-// the NQN and in namespace 1's uuid.
+// the NQN and in namespace 1's `uuid`.
 //
 // They also pin the identity the fabric actually presents:
 //

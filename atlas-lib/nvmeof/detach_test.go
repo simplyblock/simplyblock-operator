@@ -116,7 +116,7 @@ func TestDetachDevice_KeepsSubsystemForANamespaceAboveOne(t *testing.T) {
 }
 
 // The race the capability question closes: a subsystem provisioned to be shared
-// currently holds only this volume. Enumerating neighbours would answer "none"
+// currently holds only this volume. Enumerating neighbors would answer "none"
 // and allow a disconnect that a namespace joining a moment later — or during the
 // teardown — turns destructive.
 func TestDetachDevice_KeepsAShareableSubsystemWithNoCurrentCoTenants(t *testing.T) {

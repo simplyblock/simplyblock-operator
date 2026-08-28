@@ -34,7 +34,7 @@
 // fabrics device directly, CLIConnector shells out to nvme-cli. Only those two
 // operations differ — establishing a path, and tearing a controller down — and
 // everything above them, the path order above included, is shared. A caller that
-// has to speak nvme-cli today therefore gets the same behaviour as one that does
+// has to speak nvme-cli today therefore gets the same behavior as one that does
 // not, and can change mechanism later without changing what it asks for.
 //
 // hack/nvmet holds the tooling for exercising either against a real fabric. The
@@ -73,10 +73,10 @@
 // and the retry spins. A subsystem whose controllers are live but which exports
 // no namespace; a live controller at a published endpoint that serves no path to
 // the namespace, so the volume runs below its published redundancy while every
-// connect answers "already connected". Neither is visible to Connect,
+// connect answers "already connected." Neither is visible to Connect,
 // IsConnected or a wait for a device.
 //
-// Three pieces address that, layered so the judgement is separable from the
+// Three pieces address that, layered so the judgment is separable from the
 // mechanism:
 //
 //   - Inspect (inspect.go) diagnoses. It reads only, names each defect

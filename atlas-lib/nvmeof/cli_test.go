@@ -139,7 +139,7 @@ func TestCLIConnectArgs_CarriesDHCHAPAuth(t *testing.T) {
 }
 
 // An unauthenticated subsystem gets no DHCHAP flags: nvme-cli rejects an empty
-// secret rather than treating it as "none".
+// secret rather than treating it as "none."
 func TestCLIConnectArgs_OmitsDHCHAPWhenUnset(t *testing.T) {
 	c := cliConnector(t, &cliRun{}, fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) {
 		return notFound()
@@ -150,8 +150,8 @@ func TestCLIConnectArgs_OmitsDHCHAPWhenUnset(t *testing.T) {
 	}
 }
 
-// A zero value means "leave the kernel default", exactly as the fabrics-device
-// line omits it — not "send zero".
+// A zero value means "leave the kernel default," exactly as the fabrics-device
+// line omits it — not "send zero."
 func TestCLIConnectArgs_OmitsUnsetTunables(t *testing.T) {
 	c := cliConnector(t, &cliRun{}, fakeSubs{byNQN: func(context.Context, string) (nvme.Subsystem, error) {
 		return notFound()

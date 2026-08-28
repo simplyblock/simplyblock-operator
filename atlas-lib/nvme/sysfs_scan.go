@@ -8,23 +8,23 @@ import (
 	"github.com/simplyblock/atlas/internal/sysfs"
 )
 
-// nsNameRE matches a block-namespace directory such as "nvme0n1". It
-// deliberately excludes per-controller legs ("nvme0c0n1") and the generic
-// char namespace ("ng0n1"); the host I/O device is the subsystem-level one.
+// nsNameRE matches a block-namespace directory such as `nvme0n1`. It
+// deliberately excludes per-controller legs (`nvme0c0n1`) and the generic
+// char namespace (`ng0n1`); the host I/O device is the subsystem-level one.
 var nsNameRE = regexp.MustCompile(`^nvme\d+n\d+$`)
 
 // legNameRE matches a per-controller namespace leg such as "nvme0c1n1" —
 // the ANA-bearing path under a controller directory.
 var legNameRE = regexp.MustCompile(`^nvme\d+c\d+n\d+$`)
 
-// ctrlNameRE matches a controller entry such as "nvme0". The kernel links
+// ctrlNameRE matches a controller entry such as `nvme0`. The kernel links
 // every controller into its subsystem's directory, which is how a controller
 // is tied to the subsystem it fronts.
 var ctrlNameRE = regexp.MustCompile(`^nvme\d+$`)
 
 // legHeadRE splits a leg name into the head it serves and the controller it
-// runs over: "nvme0c1n1" -> head "nvme0" + "n1", i.e. head device "nvme0n1"
-// reached via controller "nvme1".
+// runs over: `nvme0c1n1` -> head `nvme0` + `n1`, i.e., head device `nvme0n1`
+// reached via controller `nvme1`.
 var legHeadRE = regexp.MustCompile(`^(nvme\d+)c\d+(n\d+)$`)
 
 // legHead returns the name of the namespace head a leg serves, or "" if leg is
@@ -274,8 +274,8 @@ func scanNamespace(base, devRoot, name string) Namespace {
 	}
 }
 
-// parseAddress parses an NVMe-oF "address" attribute such as
-// "traddr=192.168.10.69,trsvcid=4426,src_addr=192.168.10.67".
+// parseAddress parses an NVMe-oF `address` attribute such as
+// `traddr=192.168.10.69,trsvcid=4426,src_addr=192.168.10.67`.
 func parseAddress(s string) Address {
 	var a Address
 	for kv := range strings.SplitSeq(s, ",") {

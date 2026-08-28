@@ -47,7 +47,7 @@ type responseRule struct {
 //
 // It is exported for the hand-written response types in the controlplane
 // package, whose constraints live in `validate` struct tags; the generated
-// UnmarshalJSON methods call it for everything modelled in the spec.
+// UnmarshalJSON methods call it for everything modeled in the spec.
 func Validate(data []byte, v any) error {
 	t := reflect.TypeOf(v)
 	for t != nil && t.Kind() == reflect.Pointer {
@@ -106,7 +106,7 @@ func keysByType() map[reflect.Type][]string {
 }
 
 // validate is the shared validator. It is configured once here and only read
-// afterwards, which is what makes concurrent use safe — registering rules on a
+// afterward, which is what makes concurrent use safe — registering rules on a
 // validator already in use is not.
 var validate = newValidator()
 

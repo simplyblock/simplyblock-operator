@@ -44,7 +44,7 @@ type nvmePassthruCmd struct {
 }
 
 // identifyControllerMNAN issues an NVMe Identify Controller admin command on
-// the controller character device (e.g. "/dev/nvme0") and returns its MNAN
+// the controller character device (e.g., "/dev/nvme0") and returns its MNAN
 // field (Maximum Number of Allowed Namespaces) — the most namespaces the
 // controller's subsystem may hold.
 func identifyControllerMNAN(devicePath string) (uint32, error) {

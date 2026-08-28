@@ -208,9 +208,9 @@ func TestConnectPaths_WaitsForConnectingPathWithoutReconnecting(t *testing.T) {
 	}
 }
 
-// A cancelled context stops the walk instead of running the remaining paths
+// A canceled context stops the walk instead of running the remaining paths
 // against a context that can only fail.
-func TestConnectPaths_StopsOnCancelledContext(t *testing.T) {
+func TestConnectPaths_StopsOnCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &fabric{fail: map[string]error{"10.0.0.1": errors.New("refused")}}
 	c := f.connector()

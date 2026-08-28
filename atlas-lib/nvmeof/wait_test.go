@@ -14,7 +14,7 @@ import (
 )
 
 // fakeDevs is a nvme.DeviceResolver whose List returns one scripted snapshot
-// per call, repeating the last one once the script runs out — modelling a
+// per call, repeating the last one once the script runs out — modeling a
 // kernel state that changes between polls.
 type fakeDevs struct {
 	snapshots [][]nvme.Device
@@ -153,7 +153,7 @@ func TestWaitForDevice_SkipsUnreachableRival(t *testing.T) {
 	}
 }
 
-// Reachability decides between candidates; it does not pick a favourite among
+// Reachability decides between candidates; it does not pick a favorite among
 // equals. Two live-looking rivals — a stale head that has not lost its paths
 // yet — must still be waited out rather than guessed at.
 func TestWaitForDevice_WaitsWhenRivalsBothReachable(t *testing.T) {

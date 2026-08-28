@@ -45,7 +45,7 @@ func Close(c io.Closer) {
 
 // Run invokes fn and logs any error, annotated with the caller that scheduled
 // the deferred call. A nil fn is a no-op. Use it for teardown / cancel style
-// callbacks that return an error, e.g. `defer deferrers.Run(tx.Rollback)`.
+// callbacks that return an error, e.g., `defer deferrers.Run(tx.Rollback)`.
 func Run(fn func() error) {
 	if fn == nil {
 		return

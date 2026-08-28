@@ -99,7 +99,7 @@ func (c *Client) CancelVolumeMigration(ctx context.Context, h lvol.VolumeHandle,
 	return migrationActionResult("cancel migration "+migrationID, resp.StatusCode(), resp.Body)
 }
 
-// ContinueVolumeMigration resumes a paused (e.g. pre-created) migration of the
+// ContinueVolumeMigration resumes a paused (e.g., pre-created) migration of the
 // volume identified by h.
 func (c *Client) ContinueVolumeMigration(ctx context.Context, h lvol.VolumeHandle, migrationID string) error {
 	cluster, pool, volume, err := h.Split()

@@ -23,7 +23,7 @@ import (
 // d — those sharing d's namespace UUID — excluding d itself.
 //
 // Simplyblock identifies a volume by its namespace UUID (the lvol UUID). When
-// a volume is reachable as more than one block device — e.g. native NVMe
+// a volume is reachable as more than one block device — e.g., native NVMe
 // multipath is disabled and each path exposes its own /dev/nvmeXnY — those
 // block devices all carry that UUID and are siblings. With native multipath a
 // volume has a single multipath head, so Siblings returns nothing.
@@ -64,7 +64,7 @@ func HasSiblings(d Device, all []Device) bool {
 //
 // Unlike Siblings (the same volume via different paths, keyed by UUID),
 // CoTenants are *different* volumes that merely coexist on one subsystem. They
-// share its controllers, so disconnecting the subsystem — e.g. writing any
+// share its controllers, so disconnecting the subsystem — e.g., writing any
 // controller's delete_controller — tears every co-tenant down together; check
 // for them before doing so.
 //
@@ -205,7 +205,7 @@ func (d Device) sameSubsystem(ctx context.Context) ([]Device, error) {
 // rescan re-resolves through the resolver d came from. An identity-less device
 // never gets here: its callers above return no devices rather than an error,
 // since nothing can be said about it and every one of them reads that as
-// "nothing alongside".
+// "nothing alongside."
 func (d Device) rescan(ctx context.Context, sel DeviceSelector) ([]Device, error) {
 	if d.resolver == nil {
 		return nil, fmt.Errorf("device %s: not bound to a resolver: %w",

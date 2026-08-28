@@ -14,7 +14,7 @@ const dupUUID = "792e184c-43d5-40ba-b497-3b645347cf1d"
 // staleFixture is the node-migration shape: the volume has been reconnected to
 // a new storage node, giving a second subsystem for the same NQN, while the old
 // subsystem lingers with a connecting controller and an inaccessible path. The
-// stale one is nvme-subsys0, so scan order favours exactly the wrong device.
+// stale one is nvme-subsys0, so scan order favors exactly the wrong device.
 func staleFixture(t *testing.T) string {
 	t.Helper()
 	stale, fresh := "class/nvme-subsystem/nvme-subsys0", "class/nvme-subsystem/nvme-subsys1"

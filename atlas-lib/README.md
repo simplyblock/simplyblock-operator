@@ -132,7 +132,7 @@ but still calls the control plane through its own `pkg/util/nvmf.go` client.
 #### Migrate a volume to another storage node
 
 The operator's `VolumeMigration` reconciler. A migration is created, observed by
-phase, then either continued past its pre-created checkpoint or cancelled.
+phase, then either continued past its pre-created checkpoint or canceled.
 
 ```go
 migration, err := client.CreateVolumeMigration(ctx, handle, targetNodeID)
@@ -340,7 +340,7 @@ establishing *all* of them, in that order: a single-path attach leaves the
 volume one node failure away from losing I/O, and connecting out of order hands
 I/O to the wrong node until the kernel has the full ANA picture. So the flow is
 always "ask the control plane where the volume lives → build a target per path →
-connect them in order → wait for the block device".
+connect them in order → wait for the block device."
 
 ```go
 // The wait for a path to go live is bounded per path (10s by default), not per
@@ -432,7 +432,7 @@ if out.SharedSubsystem {
 ```
 
 The gate is `nvme.Device.IsMultiNamespace` — *can* this subsystem hold other
-volumes — not whether it currently does. Enumerating the neighbours describes
+volumes — not whether it currently does. Enumerating the neighbors describes
 only the moment it was looked at: a namespace can join a shared subsystem
 between the check and the disconnect, and then a correct "none right now" answer
 is still destructive. So a subsystem provisioned to be shared is never
@@ -513,7 +513,7 @@ if live < len(conn.Endpoints) {
 
 `connector.IsConnected(ctx, nqn)` is the cheap coarse check ("any live
 controller at all") for callers that only need to know whether the subsystem is
-attached, e.g. before deciding to clean up.
+attached, e.g., before deciding to clean up.
 
 #### Find the other devices of one volume
 
@@ -606,7 +606,8 @@ defer deferrers.Run(cancelWatch)
 
 #### Validate user-supplied outbound URLs
 
-Before the operator forwards one (e.g. a Prometheus endpoint from a CR):
+Before the operator sends a request to one (e.g., a Prometheus endpoint from a
+CR):
 
 ```go
 if err := net.ValidateExternalURL(spec.PrometheusURL); err != nil {
@@ -644,7 +645,7 @@ resolver := kube.NewLiveResolver(kfake.NewSimpleClientset(pv, pvc, sc))
 - **The Linux grunt work hides in `internal/`** (sysfs parsing, command
   execution). It can change freely; consumers depend on behavior, not
   mechanism.
-- **Dependency direction flows one way**: `kube`/`controlplane`/`nvmeof` →
+- **Dependency direction flows one way:** `kube`/`controlplane`/`nvmeof` →
   `lvol` → `nvme`, with `errs`/`nqn`/`ptr`/`net` as leaf utilities. No import
   cycles. `nvmeof` depends on `lvol` only to turn a control-plane `Connection`
   into fabric targets; the fabric mechanics know nothing about volumes.

@@ -289,7 +289,7 @@ var ErrUnknownState = errors.New("statemachine: unknown state")
 var ErrClosed = errors.New("statemachine: closed")
 
 // ErrReentrantTransition reports a [Machine.TransitionTo] call made from inside a
-// [TransitionFunc], which is rejected because it cannot be honoured: the outer
+// [TransitionFunc], which is rejected because it cannot be honored: the outer
 // call has yet to apply its own result and would overwrite the inner one,
 // leaving the machine in a state whose entry hook never ran.
 //
@@ -371,7 +371,7 @@ type StateDef[S comparable] struct {
 }
 
 // Config declares a state machine. It is copied by [New], so the caller may
-// reuse or mutate it afterwards.
+// reuse or mutate it afterward.
 type Config[S comparable] struct {
 	// Initial is the state the machine starts in, and the state [Machine.Reset]
 	// returns to. It must be a key of States. Its OnEnter hook does not run at
@@ -430,7 +430,7 @@ type Machine[S comparable] struct {
 // New validates cfg and returns a machine sitting in its initial state with no
 // deadline. The machine must be closed to release its contexts.
 //
-// ctx bounds the machine: cancelling it cancels the current state's context and
+// ctx bounds the machine: canceling it cancels the current state's context and
 // makes [Machine.TransitionTo] fail with [ErrClosed]. Pass a context tied to the
 // lifetime of whatever the machine models, never one scoped to a single request.
 //
@@ -518,8 +518,8 @@ func NewFromSnapshot[S comparable](
 	return sm, nil
 }
 
-// arm replaces the current state's context with one expiring after timeout,
-// cancelling the previous one. A timeout of zero or less produces a context with
+// `arm` replaces the current state's context with one expiring after timeout,
+// canceling the previous one. A timeout of zero or less produces a context with
 // no deadline, so stateCtx is never nil and [Machine.Deadline] reports the
 // absence of a deadline for free.
 //
@@ -537,8 +537,8 @@ func (sm *Machine[S]) arm(timeout time.Duration) {
 	}
 }
 
-// armAt is arm for an absolute deadline, as read back from persisted state. A
-// zero deadline means none. A deadline already in the past yields an
+// `armAt` is `arm` for an absolute deadline, as read back from persisted state.
+// A zero deadline means none. A deadline already in the past yields an
 // already-expired context, which is the point: an operator that was down while a
 // state timed out must see that timeout on its next pass.
 func (sm *Machine[S]) armAt(deadline time.Time) {

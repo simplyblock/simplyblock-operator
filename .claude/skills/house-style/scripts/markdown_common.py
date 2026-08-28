@@ -609,8 +609,12 @@ BLOCK_COMMENT_MARGIN_PATTERN = re.compile(r"^(\s*)\*(\s|$)")
 # not a sentence: godoc renders a tab-indented line as preformatted (the package
 # index in atlas-lib/doc.go is one), and a shell or YAML header indents its usage
 # lines the same way. Package names, commands, and aligned columns are not prose,
-# so the line is skipped rather than reported for spelling and spacing.
-VERBATIM_COMMENT_PATTERN = re.compile(r"^(?:\t| {3,})\S")
+# so the line is skipped rather than reported for spelling and spacing. The
+# indentation is only the entry into the block: a nested statement of a code
+# sample carries several tabs, and a right-aligned table column pads its cell
+# with spaces behind the tab, so everything up to the first visible character is
+# part of the marker.
+VERBATIM_COMMENT_PATTERN = re.compile(r"^(?:\t|[ ]{3,})[ \t]*\S")
 YAML_DOCUMENT_MARKER_PATTERN = re.compile(r"^\s*(?:---|\.\.\.)\s*$")
 
 # A commented-out line of configuration is code, not prose. In a values file or

@@ -66,7 +66,7 @@ func HostUUID(hostNQN string) (string, bool) {
 //
 //	<Prefix>:<ClusterID>:lvol:<LvolID>
 //
-// e.g. nqn.2023-02.io.simplyblock:c30a691a-...:lvol:792e184c-...
+// e.g., nqn.2023-02.io.simplyblock:c30a691a-...:lvol:792e184c-...
 type Subsystem struct {
 	Prefix    string
 	ClusterID string
@@ -112,7 +112,7 @@ func Make(clusterID, logicalVolumeID string) string {
 }
 
 // Parse parses a logical-volume subsystem NQN of the form
-// "<prefix>:<clusterID>:lvol:<logicalVolumeID>". ok is false if it does not match.
+// `<prefix>:<clusterID>:lvol:<logicalVolumeID>`. ok is false if it does not match.
 func Parse(nqn string) (s Subsystem, ok bool) {
 	rest, logicalVolumeID, found := strings.Cut(nqn, ":"+lvolMarker+":")
 	if !found {

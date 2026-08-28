@@ -16,7 +16,7 @@ import (
 const (
 	// fabricsDevice is the kernel NVMe-oF connect interface: writing a
 	// comma-separated options line to it creates a controller and reading
-	// back yields "instance=N,cntlid=M".
+	// back yields `instance=N,cntlid=M`.
 	fabricsDevice = "/dev/nvme-fabrics"
 	// deleteControllerAttr, under a controller's sysfs dir, tears the
 	// controller down when "1" is written to it.
@@ -99,7 +99,7 @@ func fabricsOptions(t Target, cHostNQN, cHostID string) (string, error) {
 	if t.FastIOFailTMOSec != nil {
 		fmt.Fprintf(&b, ",fast_io_fail_tmo=%d", *t.FastIOFailTMOSec)
 	}
-	// tls is a bare boolean token, like nvme-cli's --tls.
+	// `tls` is a bare boolean token, like nvme-cli's `--tls`.
 	if t.TLS {
 		b.WriteString(",tls")
 	}

@@ -26,18 +26,18 @@ type QoSLimits struct {
 // Properties are the provisioning parameters parsed from a StorageClass — the
 // full set the CSI controller reads at CreateVolume, in typed form. It is the
 // control-plane-side view of how a volume was provisioned, available to any
-// component with StorageClass access (e.g. the operator's rebalancer), as
-// opposed to the host sysfs view exposed by the nvme package.
+// component with StorageClass access (e.g., the operator's rebalancer), as
+// opposed to the host sysfs view exposed by the `nvme` package.
 type Properties struct {
 	// Pool is the storage pool the volume is created in (pool_name).
 	Pool string
-	// Fabric is the transport fabric (fabric), e.g. "tcp".
+	// Fabric is the transport fabric (`fabric`), e.g., `tcp`.
 	Fabric string
 	// ClusterID pins provisioning to a specific storage cluster (cluster_id);
 	// empty when the class does not target one explicitly.
 	ClusterID string
 	// MaxSize caps volume growth (max_size); empty when unset. Kept as the raw
-	// string because the control plane accepts size suffixes (e.g. "10G").
+	// string because the control plane accepts size suffixes (e.g., "10G").
 	MaxSize string
 	// LvolPriorityClass is the logical-volume priority class (lvol_priority_class).
 	LvolPriorityClass int

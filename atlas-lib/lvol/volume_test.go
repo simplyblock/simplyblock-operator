@@ -19,7 +19,7 @@ func TestVolumeHandleSplit(t *testing.T) {
 	bad := []VolumeHandle{
 		"",                          // empty
 		"only-one",                  // no separators
-		VolumeHandle(cs),            // one uuid
+		VolumeHandle(cs),            // one UUID
 		VolumeHandle(cs + ":" + ps), // two parts
 		VolumeHandle(cs + ":" + ps + ":" + vs + ":extra"), // four parts
 		"x:y:z",                      // three parts, not UUIDs

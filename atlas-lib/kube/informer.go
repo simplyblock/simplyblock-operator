@@ -25,7 +25,7 @@ type ResolverConfig struct {
 	PersistentVolumeClaims cache.SharedIndexInformer
 	// VolumeAttachments is the shared informer for VolumeAttachments.
 	// Optional: leave nil if the consumer does not need attachment
-	// queries (e.g. the CSI node driver, which resolves devices locally
+	// queries (e.g., the CSI node driver, which resolves devices locally
 	// rather than via VolumeAttachment). When nil, AttachmentsForPV
 	// returns errs.ErrUnsupported and ResolveBinding omits Node/Attached.
 	VolumeAttachments cache.SharedIndexInformer
@@ -84,7 +84,7 @@ func NewResolver(cfg ResolverConfig) (*InformerResolver, error) {
 }
 
 // NewResolverFromFactory is a convenience constructor for the common case
-// of a standalone client-go SharedInformerFactory (e.g. the CSI driver).
+// of a standalone client-go SharedInformerFactory (e.g., the CSI driver).
 func NewResolverFromFactory(f informers.SharedInformerFactory) (*InformerResolver, error) {
 	return NewResolver(ResolverConfig{
 		PersistentVolumes:      f.Core().V1().PersistentVolumes().Informer(),

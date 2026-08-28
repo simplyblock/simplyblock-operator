@@ -5,7 +5,7 @@ import "encoding/binary"
 // NVMe Identify Controller data structure (CNS 01h): a fixed 4096-byte blob
 // from the Identify admin command. atlas decodes only MNAN; the notable
 // fields and their little-endian byte offsets are tabulated for reference.
-// See the NVMe Base Specification, "Identify Controller data structure".
+// See the NVMe Base Specification, "Identify Controller data structure."
 //
 //	offset  size  field    meaning
 //	------  ----  -------  ------------------------------------------------

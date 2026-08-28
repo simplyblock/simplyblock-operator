@@ -28,7 +28,7 @@ import (
 // Inspect names these positively, from state the kernel already publishes,
 // rather than inferring them from a wait that ran out or from the text of an
 // nvme-cli error. That distinction matters: a timeout cannot tell "slow" from
-// "broken", so a diagnosis built on one is either too eager or too patient,
+// "broken," so a diagnosis built on one is either too eager or too patient,
 // whereas "live controller, zero namespaces" is decidable on the first look.
 //
 // Diagnosis is separate from repair on purpose. A migration controller wants to
@@ -56,7 +56,7 @@ const (
 	DefectNamespaceMissing DefectKind = "namespace-missing"
 
 	// DefectControllerNotContributing is a live controller that provides no
-	// path to the selected namespace, so it counts towards neither redundancy
+	// path to the selected namespace, so it counts toward neither redundancy
 	// nor I/O while looking connected from every angle a connect checks. A
 	// fresh controller re-runs the namespace scan, which is what recovers it.
 	DefectControllerNotContributing DefectKind = "controller-not-contributing"

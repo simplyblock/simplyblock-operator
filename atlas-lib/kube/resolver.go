@@ -18,7 +18,7 @@ import (
 // the pure extraction/aggregation logic on top and ships two implementations
 // (LiveResolver, InformerResolver).
 //
-// A consumer that needs only a subset (e.g. only StorageClassByName) should
+// A consumer that needs only a subset (e.g., only StorageClassByName) should
 // declare its own narrow interface at the point of use rather than expect this
 // package to pre-split — both shipped implementations provide every method.
 type Resolver interface {

@@ -62,7 +62,7 @@ func (c *Client) Connection(ctx context.Context, h lvol.VolumeHandle, opts ...lv
 	}
 	// The /connect body is untyped in the spec (FastAPI declares no response
 	// model), but its shape is the spec's NvmeConnectEntry — the same model a
-	// migration's connect_strings carry. Decode it as this endpoint's flavour
+	// migration's connect_strings carry. Decode it as this endpoint's flavor
 	// of that model (see internal/cpapi/validation.yaml), which additionally
 	// holds the control plane to the namespace id only /connect promises.
 	entries, err := decodeBody[[]cpapi.LvolConnectEntry]("connect volume "+string(h), resp.StatusCode(), resp.Body)
@@ -87,7 +87,7 @@ func (c *Client) Connection(ctx context.Context, h lvol.VolumeHandle, opts ...lv
 			KeepAliveTMOSec:   e.KeepAliveTmo,
 			// The spec makes both timeouts required, so whatever arrives is
 			// the control plane's answer — including 0 ("fail I/O
-			// immediately"), which must not degrade into "unspecified".
+			// immediately"), which must not degrade into "unspecified."
 			CtrlLossTMOSec:   ptr.To(e.CtrlLossTmo),
 			FastIOFailTMOSec: ptr.To(e.FastIoFailTmo),
 			HostIface:        ptr.From(e.HostIface, ""),
@@ -101,7 +101,7 @@ func (c *Client) Connection(ctx context.Context, h lvol.VolumeHandle, opts ...lv
 	return conn, nil
 }
 
-// connectFlag pulls one --flag's value out of the prebuilt "nvme connect ..."
+// connectFlag pulls one `--flag`'s value out of the prebuilt `nvme connect ...`
 // command line the control plane returns alongside each path, and is how the
 // DHCHAP secrets are read: the control plane resolves them per (host,
 // subsystem) while building that line and exposes them through no other field
@@ -197,7 +197,7 @@ type CreateVolumeParams struct {
 	Name      string
 	SizeBytes uint64
 
-	HAType                string // ha_type, e.g. "ha" or "single"
+	HAType                string // ha_type, e.g., "ha" or "single"
 	Encrypt               bool
 	Namespaced            bool
 	MaxNamespacePerSubsys int
@@ -346,7 +346,7 @@ func (c *Client) CloneVolume(ctx context.Context, clusterID, poolID string, para
 }
 
 // createdID extracts the new resource's id from a creation's Location header
-// (e.g. ".../volumes/<id>/"). It errors on a non-2xx response.
+// (e.g., `.../volumes/<id>/`). It errors on a non-2xx response.
 func createdID(what string, resp *http.Response, body []byte) (string, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", respError(what, resp.StatusCode, body)
@@ -362,7 +362,7 @@ func createdID(what string, resp *http.Response, body []byte) (string, error) {
 }
 
 // sizeToInt converts a byte size to the int the API expects, rejecting values
-// that would overflow int (i.e. on 32-bit builds, or absurd sizes).
+// that would overflow int (i.e., on 32-bit builds, or absurd sizes).
 func sizeToInt(bytes uint64) (int, error) {
 	if bytes > math.MaxInt {
 		return 0, fmt.Errorf("size %d bytes exceeds the maximum supported (%d)", bytes, uint64(math.MaxInt))
