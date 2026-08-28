@@ -451,7 +451,6 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 		return ctrl.Result{}, err
 	}
 
-	results := make([]simplyblockv1alpha1.ReplicationOpsResult, 0, len(slots))
 	anyFailed := false
 
 	// replicationRelationship holds the fields we need from
@@ -466,10 +465,7 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 		slot := &slots[i]
 		clusterID, _, volumeID, ok := splitVolumeHandle(slot.Spec.VolumeID)
 		if !ok {
-			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
-				Detail: "invalid VolumeID",
-			})
+			log.Error(nil, "invalid VolumeID on slot; skipping", "slot", slot.Name)
 			anyFailed = true
 			continue
 		}
@@ -484,31 +480,18 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 				relErr = fmt.Errorf("status %d: %s", relStatus, string(relBody))
 			}
 			log.Error(relErr, "fetch replication relationship failed", "slot", slot.Name)
-			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
-				Detail: relErr.Error(),
-			})
 			anyFailed = true
 			continue
 		}
 		var rel replicationRelationship
 		if err := json.Unmarshal(relBody, &rel); err != nil {
 			log.Error(err, "parse replication relationship failed", "slot", slot.Name)
-			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
-				Detail: fmt.Sprintf("parse relationship: %v", err),
-			})
 			anyFailed = true
 			continue
 		}
 		if rel.TargetLvolID == "" || rel.TargetClusterID == "" || rel.TargetPoolID == "" {
-			detail := fmt.Sprintf("incomplete relationship: target_lvol=%q target_cluster=%q target_pool=%q",
-				rel.TargetLvolID, rel.TargetClusterID, rel.TargetPoolID)
-			log.Error(nil, detail, "slot", slot.Name)
-			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
-				Detail: detail,
-			})
+			log.Error(nil, fmt.Sprintf("incomplete relationship: target_lvol=%q target_cluster=%q target_pool=%q",
+				rel.TargetLvolID, rel.TargetClusterID, rel.TargetPoolID), "slot", slot.Name)
 			anyFailed = true
 			continue
 		}
@@ -528,10 +511,6 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 				fbErr = fmt.Errorf("status %d: %s", status, string(body))
 			}
 			log.Error(fbErr, "replication/failback failed", "slot", slot.Name)
-			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
-				Detail: fbErr.Error(),
-			})
 			anyFailed = true
 			continue
 		}
@@ -553,10 +532,6 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 				commitErr = fmt.Errorf("status %d", status)
 			}
 			log.Error(commitErr, "replication/commit (failback) failed", "slot", slot.Name)
-			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
-				Detail: commitErr.Error(),
-			})
 			anyFailed = true
 			continue
 		}
@@ -581,10 +556,6 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 		if err := r.Status().Patch(ctx, slot, slotPatch); err != nil {
 			log.Error(err, "failed to update slot status to cutover_pending", "slot", slot.Name)
 		}
-
-		results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-			SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultSucceeded),
-		})
 	}
 
 	if anyFailed {
