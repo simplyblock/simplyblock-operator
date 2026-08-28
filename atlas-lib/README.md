@@ -45,8 +45,9 @@ atlas/
 │   ├── clone.go            ResolveClonedVolumeGroup (rescan + import + rename)
 │   ├── grow.go             Expand a PV, VG, or LV, read an LV's current size
 │   ├── dm.go               RemoveOrphanedDMNodes
-│   └── vdo/                VDO provisioning handler (compression, deduplication)
-│       └── volume.go       Registers itself with lvm, UpdateVolume
+│   └── vdo/                VDO provisioning handler + the whole per-volume stack lifecycle
+│       ├── volume.go       Registers itself with lvm, UpdateVolume
+│       └── stack.go        CreateOrAttach, ResolveClone, Deactivate, Remove, Grow, SetFeatures
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)
@@ -691,9 +692,27 @@ and `RemoveVolumeGroup`/`DeactivateVolumeGroup` can no longer read the metadata
 they need: it clears the live dm nodes directly, retrying across a few passes so
 removing a dependent unblocks what it was blocking.
 
+`lvm/vdo` also holds the whole per-volume stack lifecycle a caller actually
+drives, not only the provisioning handler: `CreateOrAttach` (idempotent
+create-or-reactivate), `ResolveClone` (a thin wrapper over
+`ResolveClonedVolumeGroup`, naming VDO's own volume group/pool convention),
+`Deactivate`/`Remove` (each with its own rule for when an unreachable backing
+device falls back to `RemoveOrphanedDMNodes`: `Deactivate` only on that specific
+failure, `Remove` unconditionally, since one is trying to preserve the volume
+and the other is already destroying it), `Grow`, and `SetFeatures` (a
+lvolID-keyed wrapper over `UpdateVolume`). Every one of them is keyed by
+lvolID alone. The volume group/pool naming convention stays internal to this
+package rather than leaking to a caller. None of it references a Kubernetes
+type: it is node-level orchestration that happens to live in a CSI driver
+today, not CSI-shaped logic, and `Logger` (a package-level `*slog.Logger`,
+nil-safe) is how a caller gets its own log format without this package taking
+on a Kubernetes-specific logging dependency.
+
 _Today:_ `lvm/vdo` is the only in-tree consumer. The CSI driver's client-side
-VDO support is the code this package was extracted from and its intended first
-caller. A striped LVM volume group across several members would use
+VDO support (`csi-driver/pkg/util/vdo.go`) is the code this package was
+extracted from, and now just wires `vdo.CreateOrAttach`/`ResolveClone`/
+`Deactivate`/`Remove`/`Grow` into `NodeStageVolume`/`NodeUnstageVolume`/
+`NodeExpandVolume`. A striped LVM volume group across several members would use
 `CreateVolumeGroup`'s variadic device-path list the same way.
 
 ### Cross-cutting
