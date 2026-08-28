@@ -10,7 +10,7 @@ import (
 func TestManager_ExpandPhysicalVolume(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	if err := mgr.ExpandPhysicalVolume(context.Background(), "/dev/nvme0n1"); err != nil {
+	if err := mgr.ExpandPhysicalVolume(context.Background(), PhysicalVolume{DevicePath: "/dev/nvme0n1"}); err != nil {
 		t.Fatalf("ExpandPhysicalVolume: %v", err)
 	}
 	want := []string{"pvresize", "/dev/nvme0n1"}
@@ -22,7 +22,8 @@ func TestManager_ExpandPhysicalVolume(t *testing.T) {
 func TestManager_ExtendVolumeGroup(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	if err := mgr.ExtendVolumeGroup(context.Background(), "striped-vg", "/dev/nvme1n1"); err != nil {
+	vg := VolumeGroup{Name: "striped-vg"}
+	if err := mgr.ExtendVolumeGroup(context.Background(), vg, PhysicalVolume{DevicePath: "/dev/nvme1n1"}); err != nil {
 		t.Fatalf("ExtendVolumeGroup: %v", err)
 	}
 	want := []string{"vgextend", "striped-vg", "/dev/nvme1n1"}
@@ -36,7 +37,8 @@ func TestManager_ExtendVolumeGroup_WrapsRunnerError(t *testing.T) {
 	key := joinKey([]string{"vgextend", "striped-vg", "/dev/nvme1n1"})
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: wantErr}}
 	mgr := NewManagerWithRunner(fake.run)
-	err := mgr.ExtendVolumeGroup(context.Background(), "striped-vg", "/dev/nvme1n1")
+	vg := VolumeGroup{Name: "striped-vg"}
+	err := mgr.ExtendVolumeGroup(context.Background(), vg, PhysicalVolume{DevicePath: "/dev/nvme1n1"})
 	if !errors.Is(err, wantErr) {
 		t.Errorf("ExtendVolumeGroup() error = %v, want wrapping %v", err, wantErr)
 	}
@@ -45,7 +47,8 @@ func TestManager_ExtendVolumeGroup_WrapsRunnerError(t *testing.T) {
 func TestManager_ExpandLogicalVolume(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	err := mgr.ExpandLogicalVolume(context.Background(), "vdo-abc123", "vdopool")
+	lv := LogicalVolume{VolumeGroup: VolumeGroup{Name: "vdo-abc123"}, Name: "vdopool"}
+	err := mgr.ExpandLogicalVolume(context.Background(), lv)
 	if err != nil {
 		t.Fatalf("ExpandLogicalVolume: %v", err)
 	}
@@ -65,7 +68,8 @@ func TestManager_LogicalVolumeSize(t *testing.T) {
 	})
 	fake := &fakeRunner{out: map[string]string{key: "  8589934592\n"}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	got, err := mgr.LogicalVolumeSize(context.Background(), "vdo-abc123", "vdopool")
+	lv := LogicalVolume{VolumeGroup: VolumeGroup{Name: "vdo-abc123"}, Name: "vdopool"}
+	got, err := mgr.LogicalVolumeSize(context.Background(), lv)
 	if err != nil {
 		t.Fatalf("LogicalVolumeSize: %v", err)
 	}
@@ -81,7 +85,8 @@ func TestManager_LogicalVolumeSize_UnparsableOutput(t *testing.T) {
 	})
 	fake := &fakeRunner{out: map[string]string{key: "not a number"}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	if _, err := mgr.LogicalVolumeSize(context.Background(), "vdo-abc123", "vdopool"); err == nil {
+	lv := LogicalVolume{VolumeGroup: VolumeGroup{Name: "vdo-abc123"}, Name: "vdopool"}
+	if _, err := mgr.LogicalVolumeSize(context.Background(), lv); err == nil {
 		t.Error("expected an error for unparsable lvs output")
 	}
 }
@@ -89,7 +94,8 @@ func TestManager_LogicalVolumeSize_UnparsableOutput(t *testing.T) {
 func TestManager_ExtendLogicalVolumeToSize(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	err := mgr.ExtendLogicalVolumeToSize(context.Background(), "vdo-abc123", "abc123", 8589934592)
+	lv := LogicalVolume{VolumeGroup: VolumeGroup{Name: "vdo-abc123"}, Name: "abc123"}
+	err := mgr.ExtendLogicalVolumeToSize(context.Background(), lv, 8589934592)
 	if err != nil {
 		t.Fatalf("ExtendLogicalVolumeToSize: %v", err)
 	}
@@ -104,7 +110,8 @@ func TestManager_ExtendLogicalVolumeToSize_WrapsRunnerError(t *testing.T) {
 	key := joinKey([]string{"lvextend", "-L100B", "vdo-abc123/abc123"})
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: wantErr}}
 	mgr := NewManagerWithRunner(fake.run)
-	err := mgr.ExtendLogicalVolumeToSize(context.Background(), "vdo-abc123", "abc123", 100)
+	lv := LogicalVolume{VolumeGroup: VolumeGroup{Name: "vdo-abc123"}, Name: "abc123"}
+	err := mgr.ExtendLogicalVolumeToSize(context.Background(), lv, 100)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("ExtendLogicalVolumeToSize() error = %v, want wrapping %v", err, wantErr)
 	}

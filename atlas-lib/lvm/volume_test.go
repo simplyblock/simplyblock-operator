@@ -11,8 +11,12 @@ func TestManager_CreatePhysicalVolume(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
 
-	if err := mgr.CreatePhysicalVolume(context.Background(), "/dev/nvme0n1"); err != nil {
+	pv, err := mgr.CreatePhysicalVolume(context.Background(), PhysicalVolume{DevicePath: "/dev/nvme0n1"})
+	if err != nil {
 		t.Fatalf("CreatePhysicalVolume: %v", err)
+	}
+	if pv.DevicePath != "/dev/nvme0n1" {
+		t.Errorf("CreatePhysicalVolume() = %v, want DevicePath /dev/nvme0n1", pv)
 	}
 	want := []string{"pvcreate", "--devices", "/dev/nvme0n1", "/dev/nvme0n1"}
 	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
@@ -27,7 +31,7 @@ func TestManager_CreatePhysicalVolume_WrapsRunnerError(t *testing.T) {
 		err: map[string]error{joinKey([]string{"pvcreate", "--devices", "/dev/nvme0n1", "/dev/nvme0n1"}): wantErr},
 	}
 	mgr := NewManagerWithRunner(fake.run)
-	if err := mgr.CreatePhysicalVolume(context.Background(), "/dev/nvme0n1"); !errors.Is(err, wantErr) {
+	if _, err := mgr.CreatePhysicalVolume(context.Background(), PhysicalVolume{DevicePath: "/dev/nvme0n1"}); !errors.Is(err, wantErr) {
 		t.Errorf("CreatePhysicalVolume() error = %v, want wrapping %v", err, wantErr)
 	}
 }
@@ -36,8 +40,12 @@ func TestManager_CreateVolumeGroup(t *testing.T) {
 	t.Run("single device", func(t *testing.T) {
 		fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 		mgr := NewManagerWithRunner(fake.run)
-		if err := mgr.CreateVolumeGroup(context.Background(), "vg1", "/dev/nvme0n1"); err != nil {
+		vg, err := mgr.CreateVolumeGroup(context.Background(), VolumeGroup{Name: "vg1"}, PhysicalVolume{DevicePath: "/dev/nvme0n1"})
+		if err != nil {
 			t.Fatalf("CreateVolumeGroup: %v", err)
+		}
+		if vg.Name != "vg1" {
+			t.Errorf("CreateVolumeGroup() = %v, want Name vg1", vg)
 		}
 		want := []string{"vgcreate", "--devices", "/dev/nvme0n1", "vg1", "/dev/nvme0n1"}
 		if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
@@ -48,8 +56,8 @@ func TestManager_CreateVolumeGroup(t *testing.T) {
 	t.Run("multiple devices, for a striped VG", func(t *testing.T) {
 		fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 		mgr := NewManagerWithRunner(fake.run)
-		devices := []string{"/dev/nvme0n1", "/dev/nvme1n1"}
-		if err := mgr.CreateVolumeGroup(context.Background(), "vg1", devices...); err != nil {
+		pvs := []PhysicalVolume{{DevicePath: "/dev/nvme0n1"}, {DevicePath: "/dev/nvme1n1"}}
+		if _, err := mgr.CreateVolumeGroup(context.Background(), VolumeGroup{Name: "vg1"}, pvs...); err != nil {
 			t.Fatalf("CreateVolumeGroup: %v", err)
 		}
 		want := []string{
@@ -62,35 +70,21 @@ func TestManager_CreateVolumeGroup(t *testing.T) {
 }
 
 func TestManager_ActivateVolumeGroup(t *testing.T) {
-	t.Run("scoped", func(t *testing.T) {
-		fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
-		mgr := NewManagerWithRunner(fake.run)
-		if err := mgr.ActivateVolumeGroup(context.Background(), "vg1"); err != nil {
-			t.Fatalf("ActivateVolumeGroup: %v", err)
-		}
-		want := []string{"vgchange", "-ay", "vg1"}
-		if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
-			t.Errorf("recorded call = %v, want %v", fake.calls, want)
-		}
-	})
-
-	t.Run("unscoped, by name alone", func(t *testing.T) {
-		fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
-		mgr := NewManagerWithRunner(fake.run)
-		if err := mgr.ActivateVolumeGroup(context.Background(), "vg1"); err != nil {
-			t.Fatalf("ActivateVolumeGroup: %v", err)
-		}
-		want := []string{"vgchange", "-ay", "vg1"}
-		if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
-			t.Errorf("recorded call = %v, want %v", fake.calls, want)
-		}
-	})
+	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
+	mgr := NewManagerWithRunner(fake.run)
+	if err := mgr.ActivateVolumeGroup(context.Background(), VolumeGroup{Name: "vg1"}); err != nil {
+		t.Fatalf("ActivateVolumeGroup: %v", err)
+	}
+	want := []string{"vgchange", "-ay", "vg1"}
+	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+		t.Errorf("recorded call = %v, want %v", fake.calls, want)
+	}
 }
 
 func TestManager_DeactivateVolumeGroup(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	if err := mgr.DeactivateVolumeGroup(context.Background(), "vg1"); err != nil {
+	if err := mgr.DeactivateVolumeGroup(context.Background(), VolumeGroup{Name: "vg1"}); err != nil {
 		t.Fatalf("DeactivateVolumeGroup: %v", err)
 	}
 	want := []string{"vgchange", "-an", "vg1"}
@@ -106,7 +100,7 @@ func TestManager_DeactivateVolumeGroup_WrapsRunnerError(t *testing.T) {
 		err: map[string]error{joinKey([]string{"vgchange", "-an", "vg1"}): wantErr},
 	}
 	mgr := NewManagerWithRunner(fake.run)
-	if err := mgr.DeactivateVolumeGroup(context.Background(), "vg1"); !errors.Is(err, wantErr) {
+	if err := mgr.DeactivateVolumeGroup(context.Background(), VolumeGroup{Name: "vg1"}); !errors.Is(err, wantErr) {
 		t.Errorf("DeactivateVolumeGroup() error = %v, want wrapping %v", err, wantErr)
 	}
 }
@@ -114,7 +108,7 @@ func TestManager_DeactivateVolumeGroup_WrapsRunnerError(t *testing.T) {
 func TestManager_RemoveVolumeGroup(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	if err := mgr.RemoveVolumeGroup(context.Background(), "vg1"); err != nil {
+	if err := mgr.RemoveVolumeGroup(context.Background(), VolumeGroup{Name: "vg1"}); err != nil {
 		t.Fatalf("RemoveVolumeGroup: %v", err)
 	}
 	want := []string{"vgremove", "-f", "vg1"}
@@ -130,7 +124,7 @@ func TestManager_RemoveVolumeGroup_WrapsRunnerError(t *testing.T) {
 		err: map[string]error{joinKey([]string{"vgremove", "-f", "vg1"}): wantErr},
 	}
 	mgr := NewManagerWithRunner(fake.run)
-	if err := mgr.RemoveVolumeGroup(context.Background(), "vg1"); !errors.Is(err, wantErr) {
+	if err := mgr.RemoveVolumeGroup(context.Background(), VolumeGroup{Name: "vg1"}); !errors.Is(err, wantErr) {
 		t.Errorf("RemoveVolumeGroup() error = %v, want wrapping %v", err, wantErr)
 	}
 }
@@ -161,8 +155,13 @@ func TestManager_CreateLogicalVolume_DispatchesByHandles(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
 	def := LogicalVolumeDefinition{Compression: true}
-	if err := mgr.CreateLogicalVolume(context.Background(), "vg1", "pv1", "lv1", def); err != nil {
+	vg := VolumeGroup{Name: "vg1"}
+	lv, err := mgr.CreateLogicalVolume(context.Background(), vg, "pv1", "lv1", def)
+	if err != nil {
 		t.Fatalf("CreateLogicalVolume: %v", err)
+	}
+	if want := (LogicalVolume{VolumeGroup: vg, Name: "lv1"}); lv != want {
+		t.Errorf("CreateLogicalVolume() = %v, want %v", lv, want)
 	}
 	want := []string{"lvcreate", "-n", "lv1", "-l", "100%FREE", "vg1/pv1", "--yes", "--fake-flag"}
 	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
@@ -179,7 +178,8 @@ func TestManager_CreateLogicalVolume_NoHandlerMatchesContributesNothing(t *testi
 
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
-	if err := mgr.CreateLogicalVolume(context.Background(), "vg1", "pv1", "lv1", LogicalVolumeDefinition{}); err != nil {
+	vg := VolumeGroup{Name: "vg1"}
+	if _, err := mgr.CreateLogicalVolume(context.Background(), vg, "pv1", "lv1", LogicalVolumeDefinition{}); err != nil {
 		t.Fatalf("CreateLogicalVolume: %v", err)
 	}
 	want := []string{"lvcreate", "-n", "lv1", "-l", "100%FREE", "vg1/pv1", "--yes"}

@@ -19,18 +19,18 @@ func escapeDMName(name string) string {
 }
 
 // RemoveOrphanedDMNodes clears any live device-mapper nodes whose name starts
-// with namePrefix (escaped internally), for when the backing device is gone
-// and the higher-level removal (RemoveVolumeGroup, etc.) can no longer read
-// the metadata it needs to deactivate cleanly. Retries across a few passes so
-// removing a dependent node unblocks what it was blocking, rather than
-// hardcoding the dependency chain.
-func (m *Manager) RemoveOrphanedDMNodes(ctx context.Context, namePrefix string) error {
+// with volumeGroup's (escaped internally), for when the backing device is
+// gone and the higher-level removal (RemoveVolumeGroup, etc.) can no longer
+// read the metadata it needs to deactivate cleanly. Retries across a few
+// passes so removing a dependent node unblocks what it was blocking, rather
+// than hardcoding the dependency chain.
+func (m *Manager) RemoveOrphanedDMNodes(ctx context.Context, volumeGroup VolumeGroup) error {
 	out, err := m.exec(ctx, nil, "dmsetup", "ls")
 	if err != nil {
 		return fmt.Errorf("dmsetup ls: %w", err)
 	}
 
-	escaped := escapeDMName(namePrefix)
+	escaped := escapeDMName(volumeGroup.Name)
 
 	var names []string
 	for line := range strings.SplitSeq(out, "\n") {

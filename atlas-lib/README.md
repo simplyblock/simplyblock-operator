@@ -606,12 +606,24 @@ not its caller's**, and no method takes a device list. A command that names a
 device scopes itself to it. A command that addresses a volume group or logical
 volume by name runs unscoped, because by then the name is unique.
 
+Identity is typed, not a bare string: `PhysicalVolume`, `VolumeGroup`, and
+`LogicalVolume` each wrap the one string that identifies them, so passing a
+device path where a VG name belongs is a compile error, not an LVM failure
+discovered at runtime. `LogicalVolume` carries its `VolumeGroup` rather than a
+bare name for the same reason: a caller pairing the wrong VG with an LV by
+hand is a mistake the type system catches instead of one that surfaces as
+"volume group not found." None of the three references a `Manager`: they are
+plain values, comparable with `==`, and the same value works with any
+`Manager` instance.
+
 ```go
 mgr := lvm.NewManager()
+pv := lvm.PhysicalVolume{DevicePath: devicePath}
 
-// Content-based, not "vgs <name>": "" means genuinely blank, or unreadable —
-// both read the same way to a caller deciding whether to create fresh.
-volumeGroup, err := mgr.VolumeGroup(ctx, devicePath)
+// Content-based, not "vgs <name>": the zero VolumeGroup means genuinely blank,
+// or unreadable — both read the same way to a caller deciding whether to
+// create fresh.
+volumeGroup, err := mgr.VolumeGroup(ctx, pv)
 if err != nil {
     handleError(err)
 }
@@ -620,7 +632,8 @@ case volumeGroup != expectedVolumeGroup:
     // Genuinely blank device (or a foreign identity to resolve first, e.g. a
     // byte-level clone) — create fresh.
 default:
-    hasLV, err := mgr.HasLogicalVolume(ctx, volumeGroup, logicalVolumeName)
+    logicalVolume := lvm.LogicalVolume{VolumeGroup: volumeGroup, Name: logicalVolumeName}
+    hasLV, err := mgr.HasLogicalVolume(ctx, logicalVolume)
     if err != nil {
         handleError(err)
     } else if hasLV {
@@ -631,14 +644,14 @@ default:
     }
 }
 
-if err := mgr.CreatePhysicalVolume(ctx, devicePath); err != nil {
+if _, err := mgr.CreatePhysicalVolume(ctx, pv); err != nil {
     handleError(err)
 }
 // Variadic: one device for VDO, several for a striped volume group.
-if err := mgr.CreateVolumeGroup(ctx, expectedVolumeGroup, devicePath); err != nil {
+if _, err := mgr.CreateVolumeGroup(ctx, expectedVolumeGroup, pv); err != nil {
     handleError(err)
 }
-if err := mgr.CreateLogicalVolume(ctx, expectedVolumeGroup, poolName, logicalVolumeName, def); err != nil {
+if _, err := mgr.CreateLogicalVolume(ctx, expectedVolumeGroup, poolName, logicalVolumeName, def); err != nil {
     handleError(err)
 }
 ```
@@ -658,14 +671,15 @@ make on any device before staging it:
 ```go
 // Refresh, probe the device's own identity, and if it is somebody else's
 // volume group, re-stamp it and rename the logical volume inside. Returns the
-// foreign volume group name it found, or "" when there was nothing to resolve.
-previous, err := mgr.ResolveClonedVolumeGroup(ctx, devicePath, volumeGroup, logicalVolume, poolName)
+// foreign VolumeGroup it found, or the zero value when there was nothing to
+// resolve.
+previous, err := mgr.ResolveClonedVolumeGroup(ctx, pv, volumeGroup, logicalVolumeName, poolName)
 if err != nil {
     handleError(err)
 }
-if previous != "" {
+if previous != (lvm.VolumeGroup{}) {
     log.Warnf("device %s carried a foreign VG identity %q, re-stamped as %s",
-        devicePath, previous, volumeGroup)
+        devicePath, previous.Name, volumeGroup.Name)
 }
 ```
 
