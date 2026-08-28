@@ -65,10 +65,10 @@ func deviceScope(devices ...string) []string {
 // Device scoping is this type's business, not its caller's. A method that
 // names a device scopes itself to that device, while a method that addresses a
 // volume group or logical volume by name runs unscoped, which is unambiguous
-// for the reasons the package doc comment gives. No method asks a caller which devices
-// LVM may look at, because no caller is in a position to answer.
+// for the reasons the package doc comment gives. No method asks a caller
+// which devices LVM may look at, because no caller is in a position to answer.
 //
-// `Run` remains available as an escape hatch for a command this type doesn't
+// `Run` remains available as an escape hatch for a command this type does not
 // wrap yet, but the named methods across this package's files are what a caller
 // should reach for first: assembling a stack by hand-building `Run` argument
 // lists is exactly the duplication this package exists to prevent.
@@ -93,7 +93,7 @@ func NewManagerWithRunner(run runner) *Manager {
 }
 
 // Run executes an LVM/dm-vdo command unscoped, the escape hatch for a command
-// this package doesn't wrap yet. Prefer a named method when one exists.
+// this package does not wrap yet. Prefer a named method when one exists.
 //
 // A command that has to be scoped to a device belongs in this package as a
 // named method rather than here, because the scope follows from which device

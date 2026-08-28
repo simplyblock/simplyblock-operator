@@ -49,8 +49,9 @@ func TestManager_ExpandLogicalVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandLogicalVolume: %v", err)
 	}
-	// The "+" prefix is what makes this additive rather than an absolute target. See the
-	// method's doc comment for why an unprefixed 100%FREE would be a real bug here.
+	// The "+" prefix is what makes this additive rather than an absolute
+	// target. See the method's doc comment for why an unprefixed 100%FREE
+	// would be a real bug here.
 	want := []string{"lvextend", "-l+100%FREE", "vdo-abc123/vdopool"}
 	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
