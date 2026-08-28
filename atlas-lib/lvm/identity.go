@@ -18,7 +18,7 @@ import (
 // for a VG name that was never actually created on that device, on a host
 // whose LVM devices file restricts default visibility to unrelated devices.
 func (m *Manager) VolumeGroup(ctx context.Context, devicePath string) (string, error) {
-	out, err := m.Run(ctx, []string{devicePath}, "pvs", "--noheadings", "-o", "vg_name", devicePath)
+	out, err := m.exec(ctx, []string{devicePath}, "pvs", "--noheadings", "-o", "vg_name", devicePath)
 	if err != nil {
 		if isNoPVSignature(err) {
 			return "", nil
@@ -38,10 +38,10 @@ func isNoPVSignature(err error) bool {
 	return strings.Contains(msg, "failed to find") || strings.Contains(msg, "not found")
 }
 
-// ListLogicalVolumes returns the names of every logical volume vg, scoped to
-// devices, currently contains.
-func (m *Manager) ListLogicalVolumes(ctx context.Context, devices []string, vg string) ([]string, error) {
-	out, err := m.Run(ctx, devices, "lvs", "--noheadings", "-o", "lv_name", vg)
+// ListLogicalVolumes returns the names of every logical volume volumeGroup
+// currently contains.
+func (m *Manager) ListLogicalVolumes(ctx context.Context, volumeGroup string) ([]string, error) {
+	out, err := m.exec(ctx, nil, "lvs", "--noheadings", "-o", "lv_name", volumeGroup)
 	if err != nil {
 		return nil, err
 	}
@@ -52,9 +52,9 @@ func (m *Manager) ListLogicalVolumes(ctx context.Context, devices []string, vg s
 	return names, nil
 }
 
-// HasLogicalVolume reports whether vg, scoped to devices, already contains a
-// logical volume named lvName. Distinguishes a fully assembled stack from one
-// left orphaned by an interrupted create (pvcreate/vgcreate completed, the
+// HasLogicalVolume reports whether volumeGroup already contains a logical
+// volume named logicalVolume. Distinguishes a fully assembled stack from
+// one left orphaned by an interrupted create (pvcreate/vgcreate completed, the
 // final lvcreate did not): such a VG reports zero LVs, and `vgchange -ay`
 // against it "succeeds" while producing no mountable device at all.
 //
@@ -63,18 +63,22 @@ func (m *Manager) ListLogicalVolumes(ctx context.Context, devices []string, vg s
 // on this device, so an lvs failure at this point is a genuine problem, not a
 // signal that the volume is merely orphaned (misreading it as orphaned risks
 // a caller destroying a real, valid VG over a transient probe failure).
-func (m *Manager) HasLogicalVolume(ctx context.Context, devices []string, vg, lvName string) (bool, error) {
-	names, err := m.ListLogicalVolumes(ctx, devices, vg)
+func (m *Manager) HasLogicalVolume(
+	ctx context.Context, volumeGroup, logicalVolume string,
+) (bool, error) {
+	names, err := m.ListLogicalVolumes(ctx, volumeGroup)
 	if err != nil {
 		return false, err
 	}
-	return slices.Contains(names, lvName), nil
+	return slices.Contains(names, logicalVolume), nil
 }
 
-// Rescan refreshes LVM's cached view of devices (pvscan --cache), scoped to
-// exactly these devices so a volume's other redundant local device nodes are
-// never registered into LVM's cache alongside the ones being inspected.
-func (m *Manager) Rescan(ctx context.Context, devices []string) error {
-	_, err := m.Run(ctx, devices, "pvscan", "--cache")
+// Rescan refreshes LVM's cached view of devicePaths (pvscan --cache), scoped
+// to exactly those devices so that nothing else visible on the node is
+// registered into LVM's cache as a side effect of inspecting them. That
+// matters most for a freshly attached clone, whose PV UUID is still its
+// source's until ImportClonedVolumeGroup has run.
+func (m *Manager) Rescan(ctx context.Context, devicePaths ...string) error {
+	_, err := m.exec(ctx, devicePaths, "pvscan", "--cache")
 	return err
 }

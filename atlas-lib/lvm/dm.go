@@ -25,7 +25,7 @@ func escapeDMName(name string) string {
 // removing a dependent node unblocks what it was blocking, rather than
 // hardcoding the dependency chain.
 func (m *Manager) RemoveOrphanedDMNodes(ctx context.Context, namePrefix string) error {
-	out, err := m.run(ctx, "dmsetup", "ls")
+	out, err := m.exec(ctx, nil, "dmsetup", "ls")
 	if err != nil {
 		return fmt.Errorf("dmsetup ls: %w", err)
 	}
@@ -51,7 +51,7 @@ func (m *Manager) RemoveOrphanedDMNodes(ctx context.Context, namePrefix string) 
 	for pass := 0; pass < 3 && len(names) > 0; pass++ {
 		var remaining []string
 		for _, name := range names {
-			if _, err := m.run(ctx, "dmsetup", "remove", name); err != nil {
+			if _, err := m.exec(ctx, nil, "dmsetup", "remove", name); err != nil {
 				remaining = append(remaining, name)
 				lastErr = err
 			}

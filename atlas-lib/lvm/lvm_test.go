@@ -52,13 +52,13 @@ func TestDeviceScope(t *testing.T) {
 	}
 }
 
-func TestManager_Run_InsertsDeviceScopeAfterBinary(t *testing.T) {
+func TestManager_exec_InsertsDeviceScopeAfterBinary(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
 
-	_, err := mgr.Run(context.Background(), []string{"/dev/nvme0n1"}, "pvcreate", "/dev/nvme0n1")
+	_, err := mgr.exec(context.Background(), []string{"/dev/nvme0n1"}, "pvcreate", "/dev/nvme0n1")
 	if err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf("exec: %v", err)
 	}
 	want := []string{"pvcreate", "--devices", "/dev/nvme0n1", "/dev/nvme0n1"}
 	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
@@ -66,13 +66,13 @@ func TestManager_Run_InsertsDeviceScopeAfterBinary(t *testing.T) {
 	}
 }
 
-func TestManager_Run_NoDevicesRunsUnscoped(t *testing.T) {
+func TestManager_exec_NoDevicesRunsUnscoped(t *testing.T) {
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	mgr := NewManagerWithRunner(fake.run)
 
-	_, err := mgr.Run(context.Background(), nil, "vgchange", "-an", "vdo-abc123")
+	_, err := mgr.exec(context.Background(), nil, "vgchange", "-an", "vdo-abc123")
 	if err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf("exec: %v", err)
 	}
 	want := []string{"vgchange", "-an", "vdo-abc123"}
 	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
@@ -80,9 +80,24 @@ func TestManager_Run_NoDevicesRunsUnscoped(t *testing.T) {
 	}
 }
 
+// Run is the escape hatch and takes no device list at all: a command that has
+// to be scoped gets a named method instead.
+func TestManager_Run_IsUnscoped(t *testing.T) {
+	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
+	mgr := NewManagerWithRunner(fake.run)
+
+	if _, err := mgr.Run(context.Background(), "lvchange", "--compression", "y", "vdo-abc123/vdopool"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := []string{"lvchange", "--compression", "y", "vdo-abc123/vdopool"}
+	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+		t.Errorf("recorded call = %v, want %v", fake.calls, want)
+	}
+}
+
 func TestManager_Run_RequiresACommandName(t *testing.T) {
 	mgr := NewManagerWithRunner(nil)
-	if _, err := mgr.Run(context.Background(), []string{"/dev/nvme0n1"}); err == nil {
+	if _, err := mgr.Run(context.Background()); err == nil {
 		t.Error("expected an error for a call with no command name")
 	}
 }
