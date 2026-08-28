@@ -15,6 +15,7 @@ go doc github.com/simplyblock/atlas/<package>
 | `nvme`           | Read-only NVMe lookups: subsystems, controllers, namespaces, devices, ANA state, reachability, multi-namespace                                             | reading what the kernel knows about an NVMe device                      |
 | `nvmeof`         | Fabric connect and disconnect over TCP, ordered multipath connects, wait-for-device                                                                        | attaching or detaching a target, or inspecting a connection attempt     |
 | `nqn`            | Building and parsing NVMe Qualified Names, subsystem and host                                                                                              | any string both components must produce identically                     |
+| `lvm`            | Linux LVM commands (deciding their own device scoping), content-based PV/VG/LV identity checks, and (in `lvm/vdo`) VDO's provisioning and lifecycle        | assembling or inspecting an LVM stack on top of a simplyblock device    |
 | `lvol`           | Logical-volume identity: `VolumeHandle`, `Volume`, control-plane resolution, device mapping                                                                | naming, addressing, or locating a logical volume                        |
 | `kube`           | lvol-to-PV, PVC, and VolumeAttachment correlation, the driver, parameter, label, annotation, and finalizer keys, StorageClass properties, and DNS-safe ids | correlating a volume with a Kubernetes object, or a key both sides read |
 | `controlplane`   | The client for the control-plane v2 API, and its request and response types                                                                                | a new endpoint, or a typed body for one                                 |
@@ -45,21 +46,22 @@ package is unwanted, since the library is deliberately ahead of its consumers.
 It does mean that an extraction near that package should first check whether the
 thing being extracted is already sitting there unused.
 
-| Package          | operator | csi-driver | Note                                                                        |
-|------------------|----------|------------|-----------------------------------------------------------------------------|
-| `ptr`            | 24       | 1          |                                                                             |
-| `kube`           | 16       | 2          |                                                                             |
-| `nvme`           | 4        | 4          |                                                                             |
-| `nvmeof`         | 4        | 2          | two connect implementations still exist, and the CSI driver uses `nvme-cli` |
-| `errs`           | 1        | 3          |                                                                             |
-| `errs/deferrers` | 0        | 3          |                                                                             |
-| `net`            | 1        | 0          |                                                                             |
-| `locks`          | 0        | 1          |                                                                             |
-| `nqn`            | 0        | 0          | both consumers spell the NQN out as a format string instead                 |
-| `lvol`           | 0        | 0          | both split the volume handle with `strings.Split(handle, ":")`              |
-| `errs/class`     | 0        | 0          | the operator has its own `internal/webapi/errorclass.go`                    |
-| `statemachine`   | 0        | 0          | 12 hand-rolled phase switches across 7 controller files                     |
-| `controlplane`   | 0        | 0          | see below                                                                   |
+| Package          | operator | csi-driver | Note                                                                         |
+|------------------|----------|------------|------------------------------------------------------------------------------|
+| `ptr`            | 24       | 1          |                                                                              |
+| `kube`           | 16       | 2          |                                                                              |
+| `nvme`           | 4        | 4          |                                                                              |
+| `nvmeof`         | 4        | 2          | two connect implementations still exist, and the CSI driver uses `nvme-cli`  |
+| `lvm`            | 0        | 0          | adopted by `csi-driver/pkg/util/vdo.go` on PR #402, not yet merged to `main` |
+| `errs`           | 1        | 3          |                                                                              |
+| `errs/deferrers` | 0        | 3          |                                                                              |
+| `net`            | 1        | 0          |                                                                              |
+| `locks`          | 0        | 1          |                                                                              |
+| `nqn`            | 0        | 0          | both consumers spell the NQN out as a format string instead                  |
+| `lvol`           | 0        | 0          | both split the volume handle with `strings.Split(handle, ":")`               |
+| `errs/class`     | 0        | 0          | the operator has its own `internal/webapi/errorclass.go`                     |
+| `statemachine`   | 0        | 0          | 12 hand-rolled phase switches across 7 controller files                      |
+| `controlplane`   | 0        | 0          | see below                                                                    |
 
 ## The two legacy control-plane clients
 

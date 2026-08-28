@@ -37,6 +37,17 @@ atlas/
 │   ├── multipath.go        ConnectPaths (ordered per-path connect) + PathResult
 │   └── wait.go             ConnectDevice / WaitForDevice: attach -> nvme.Device
 ├── nqn/                    Build & parse simplyblock lvol NQNs
+├── lvm/                    Linux LVM commands + content-based identity
+│   ├── doc.go              Why identity is read from content, and how scoping is decided
+│   ├── lvm.go              Manager, Run (the escape hatch)
+│   ├── identity.go         VolumeGroup, HasLogicalVolume, ListLogicalVolumes, Rescan
+│   ├── volume.go           Create/Activate/Deactivate/Remove a PV, VG, or LV
+│   ├── clone.go            ResolveClonedVolumeGroup (rescan + import + rename)
+│   ├── grow.go             Expand a PV, VG, or LV, read an LV's current size
+│   ├── dm.go               RemoveOrphanedDMNodes
+│   └── vdo/                VDO provisioning handler + the whole per-volume stack lifecycle
+│       ├── volume.go       Registers itself with lvm, UpdateVolume
+│       └── stack.go        CreateOrAttach, ResolveClone, Deactivate, Remove, Grow, SetFeatures
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)
@@ -518,8 +529,11 @@ attached, e.g., before deciding to clean up.
 
 #### Find the other devices of one volume
 
-When native NVMe multipath is off, a volume can surface as several block devices
-sharing its namespace UUID, and a teardown has to release every one of them:
+A volume can surface as several block devices sharing its namespace UUID when a
+stale controller has not been reaped yet, and a teardown has to release every
+one of them. This is a state to detect and clear, not one to run in: a live
+simplyblock volume is one namespace head, with its paths selected inside it by
+ANA state.
 
 ```go
 siblings, err := dev.Siblings(ctx) // re-scans; nvme.Siblings(dev, all) is pure
@@ -561,6 +575,159 @@ if s, ok := nqn.Parse(dev.Subsystem.NQN); ok {
     _, _ = s.ClusterID, s.LvolID
 }
 ```
+
+#### Assemble an LVM stack on a device
+
+LVM answers "which device does this volume group live on" by scanning devices
+and matching the UUIDs and names it finds written in their content. That is
+unambiguous while no two visible devices carry the same content, which is the
+normal case here: every volume group is named after its own lvol and every
+`pvcreate` mints a fresh PV UUID, so a node's other tenants cannot answer a
+lookup meant for this volume however many are attached.
+
+Cloning breaks that on purpose. A byte-level clone or snapshot restore copies
+its source's PV and VG UUIDs *and its VG name* verbatim, so from the moment a
+clone is attached beside its source until `ImportClonedVolumeGroup` has
+re-stamped it, the two are the same volume group as far as a name lookup is
+concerned. Two consequences, both confirmed live:
+
+- **A scan reports a duplicate PV** and can resolve later commands against
+  whichever of the two its cache happened to pick.
+- **A name-based existence check isn't tied to a device.** `vgs <name>` answers
+  "does a volume group called X exist anywhere LVM is allowed to look?" rather
+  than "does it exist *on this device*." That reported a volume group as
+  already present when it had never been created on the device being asked
+  about, leaving no logical volume behind it and failing `mkfs`.
+
+This package answers identity questions from a device's own content rather than
+a name lookup, and scopes the commands that need it (`--devices`) so a scan
+cannot reach the other copy. **Which commands need it is the package's decision,
+not its caller's**, and no method takes a device list. A command that names a
+device scopes itself to it. A command that addresses a volume group or logical
+volume by name runs unscoped, because by then the name is unique.
+
+Identity is typed, not a bare string: `PhysicalVolume`, `VolumeGroup`, and
+`LogicalVolume` each wrap the one string that identifies them, so passing a
+device path where a VG name belongs is a compile error, not an LVM failure
+discovered at runtime. `LogicalVolume` carries its `VolumeGroup` rather than a
+bare name for the same reason: a caller pairing the wrong VG with an LV by
+hand is a mistake the type system catches instead of one that surfaces as
+"volume group not found." None of the three references a `Manager`: they are
+plain values, comparable with `==`, and the same value works with any
+`Manager` instance.
+
+```go
+mgr := lvm.NewManager()
+pv := lvm.PhysicalVolume{DevicePath: devicePath}
+
+// Content-based, not "vgs <name>": the zero VolumeGroup means genuinely blank,
+// or unreadable — both read the same way to a caller deciding whether to
+// create fresh.
+volumeGroup, err := mgr.VolumeGroup(ctx, pv)
+if err != nil {
+    handleError(err)
+}
+switch {
+case volumeGroup != expectedVolumeGroup:
+    // Genuinely blank device (or a foreign identity to resolve first, e.g. a
+    // byte-level clone) — create fresh.
+default:
+    logicalVolume := lvm.LogicalVolume{VolumeGroup: volumeGroup, Name: logicalVolumeName}
+    hasLV, err := mgr.HasLogicalVolume(ctx, logicalVolume)
+    if err != nil {
+        handleError(err)
+    } else if hasLV {
+        err = mgr.ActivateVolumeGroup(ctx, volumeGroup) // reactivate, never recreate
+    } else {
+        // Orphaned: pvcreate/vgcreate completed, the final lvcreate did not.
+        err = mgr.RemoveVolumeGroup(ctx, volumeGroup) // fall through to a fresh create
+    }
+}
+
+if _, err := mgr.CreatePhysicalVolume(ctx, pv); err != nil {
+    handleError(err)
+}
+// Variadic: one device for VDO, several for a striped volume group.
+if _, err := mgr.CreateVolumeGroup(ctx, expectedVolumeGroup, pv); err != nil {
+    handleError(err)
+}
+if _, err := mgr.CreateLogicalVolume(ctx, expectedVolumeGroup, poolName, logicalVolumeName, def); err != nil {
+    handleError(err)
+}
+```
+
+Every named method has this shape: build the right LVM/dm-vdo command, scope it
+if its operands call for that, and wrap the error with the operation it was
+attempting. `Run` stays available as an escape hatch for a command that doesn't
+have a named method yet, and is always unscoped: a command that has to be scoped
+belongs in the package as a named method, since the scope follows from the
+operands. Reaching for `Run` first is exactly the duplication this package
+exists to prevent.
+
+A freshly attached device may turn out to be a byte-level clone or snapshot
+restore of another volume, and resolving that is one call, safe and cheap to
+make on any device before staging it:
+
+```go
+// Refresh, probe the device's own identity, and if it is somebody else's
+// volume group, re-stamp it and rename the logical volume inside. Returns the
+// foreign VolumeGroup it found, or the zero value when there was nothing to
+// resolve.
+previous, err := mgr.ResolveClonedVolumeGroup(ctx, pv, volumeGroup, logicalVolumeName, poolName)
+if err != nil {
+    handleError(err)
+}
+if previous != (lvm.VolumeGroup{}) {
+    log.Warnf("device %s carried a foreign VG identity %q, re-stamped as %s",
+        devicePath, previous.Name, volumeGroup.Name)
+}
+```
+
+The order is not the caller's to get right, which is why the sequence lives in
+the package: the refresh has to precede the probe or the probe reads a stale
+cache, the probe has to be content-based or it cannot see a foreign identity at
+all (the volume group on disk is still named after the source), and the rename
+has to follow the import because `vgimportclone` renames the volume group but
+leaves the logical volume inside named after the source. The trailing arguments
+name logical volumes to preserve, for the structural ones a stack names
+identically in every volume, such as VDO's pool. `ImportClonedVolumeGroup` and
+`RenameLogicalVolume` remain available for a recovery path that needs one step
+alone.
+
+VDO lives in the `lvm/vdo` subpackage rather than in `lvm` itself. It registers
+a provisioning handler at init, and `CreateLogicalVolume` consults the registry
+for the extra `lvcreate` flags a `LogicalVolumeDefinition` implies, so a caller
+asks for compression or deduplication instead of knowing how dm-vdo spells it.
+Importing the subpackage is what makes those flags reachable, and
+`vdo.UpdateVolume` toggles them on a pool that already exists.
+
+`RemoveOrphanedDMNodes` is the fallback when the backing device is already gone
+and `RemoveVolumeGroup`/`DeactivateVolumeGroup` can no longer read the metadata
+they need: it clears the live dm nodes directly, retrying across a few passes so
+removing a dependent unblocks what it was blocking.
+
+`lvm/vdo` also holds the whole per-volume stack lifecycle a caller actually
+drives, not only the provisioning handler: `CreateOrAttach` (idempotent
+create-or-reactivate), `ResolveClone` (a thin wrapper over
+`ResolveClonedVolumeGroup`, naming VDO's own volume group/pool convention),
+`Deactivate`/`Remove` (each with its own rule for when an unreachable backing
+device falls back to `RemoveOrphanedDMNodes`: `Deactivate` only on that specific
+failure, `Remove` unconditionally, since one is trying to preserve the volume
+and the other is already destroying it), `Grow`, and `SetFeatures` (a
+lvolID-keyed wrapper over `UpdateVolume`). Every one of them is keyed by
+lvolID alone. The volume group/pool naming convention stays internal to this
+package rather than leaking to a caller. None of it references a Kubernetes
+type: it is node-level orchestration that happens to live in a CSI driver
+today, not CSI-shaped logic, and `Logger` (a package-level `*slog.Logger`,
+nil-safe) is how a caller gets its own log format without this package taking
+on a Kubernetes-specific logging dependency.
+
+_Today:_ `lvm/vdo` is the only in-tree consumer. The CSI driver's client-side
+VDO support (`csi-driver/pkg/util/vdo.go`) is the code this package was
+extracted from, and now just wires `vdo.CreateOrAttach`/`ResolveClone`/
+`Deactivate`/`Remove`/`Grow` into `NodeStageVolume`/`NodeUnstageVolume`/
+`NodeExpandVolume`. A striped LVM volume group across several members would use
+`CreateVolumeGroup`'s variadic device-path list the same way.
 
 ### Cross-cutting
 
