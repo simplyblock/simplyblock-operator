@@ -86,6 +86,13 @@ An illegal transition should be an error, not a silent status write. That is wha
 a declared graph buys: `Pending → Completed` fails at `TransitionTo` instead of
 skipping the work in between.
 
+**An Ops controller declares one graph per action**, with
+`statemachine.MultiConfig[subPhase]` keyed by `statemachine.Action`. An Ops kind
+has one `subPhase` field whose enum is the union of every action's steps, so a
+single graph cannot express that `Promoting` belongs to `migrate` and never to
+`remove` — a per-action graph can, and makes the wrong one an
+`IllegalTransitionError`. See `references/state-machines.md`.
+
 ### 4. Write ahead of the side effect
 
 Before a call that changes something outside the cluster, persist the intent —

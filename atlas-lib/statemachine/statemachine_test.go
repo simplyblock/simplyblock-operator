@@ -1231,3 +1231,85 @@ func TestStatesIteratesWholeGraph(t *testing.T) {
 		break
 	}
 }
+
+// --- NewFromSnapshot -----------------------------------------------------------
+
+func TestNewFromSnapshotRestoresStateAndDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		deadline := time.Now().Add(time.Hour)
+		sm, err := NewFromSnapshot(context.Background(), graph(nil),
+			Snapshot[st]{State: on, Deadline: deadline})
+		if err != nil {
+			t.Fatalf("NewFromSnapshot: %v", err)
+		}
+		defer sm.Close()
+
+		if got := sm.CurrentState(); got != on {
+			t.Errorf("CurrentState() = %v, want %v", got, on)
+		}
+		got, ok := sm.Deadline()
+		if !ok {
+			t.Fatal("NewFromSnapshot dropped the deadline")
+		}
+		if !got.Equal(deadline) {
+			t.Errorf("Deadline() = %v, want %v", got, deadline)
+		}
+		if !sm.CanTransitionTo(rdy) {
+			t.Error("restored machine lost its outgoing edges")
+		}
+	})
+}
+
+func TestNewFromSnapshotZeroStateStartsAtInitial(t *testing.T) {
+	sm, err := NewFromSnapshot(context.Background(), graph(nil), Snapshot[st]{})
+	if err != nil {
+		t.Fatalf("NewFromSnapshot: %v", err)
+	}
+	defer sm.Close()
+
+	if got := sm.CurrentState(); got != off {
+		t.Errorf("CurrentState() = %v, want the initial state %v", got, off)
+	}
+	if _, ok := sm.Deadline(); ok {
+		t.Error("a fresh machine came back with a deadline")
+	}
+}
+
+func TestNewFromSnapshotRejectsUnknownState(t *testing.T) {
+	sm, err := NewFromSnapshot(context.Background(), graph(nil), Snapshot[st]{State: undeclared})
+	if !errors.Is(err, ErrUnknownState) {
+		t.Fatalf("err = %v, want ErrUnknownState", err)
+	}
+	if sm != nil {
+		t.Error("a rejected NewFromSnapshot returned a machine")
+	}
+}
+
+func TestNewFromSnapshotRejectsBadConfig(t *testing.T) {
+	sm, err := NewFromSnapshot(context.Background(), Config[st]{
+		Initial: off,
+		States:  map[st]StateDef[st]{off: {To: []st{undeclared}}},
+	}, Snapshot[st]{State: off})
+	if !errors.Is(err, ErrUnknownState) {
+		t.Fatalf("err = %v, want ErrUnknownState", err)
+	}
+	if sm != nil {
+		t.Error("a rejected NewFromSnapshot returned a machine")
+	}
+}
+
+func TestNewFromSnapshotRunsNoHook(t *testing.T) {
+	h := &hook{timeout: time.Minute}
+	sm, err := NewFromSnapshot(context.Background(), graph(h.fn), Snapshot[st]{State: on})
+	if err != nil {
+		t.Fatalf("NewFromSnapshot: %v", err)
+	}
+	defer sm.Close()
+
+	if h.calls != 0 {
+		t.Errorf("NewFromSnapshot ran the entry hook %d times", h.calls)
+	}
+	if _, ok := sm.Deadline(); ok {
+		t.Error("NewFromSnapshot armed the hook's deadline instead of the snapshot's")
+	}
+}

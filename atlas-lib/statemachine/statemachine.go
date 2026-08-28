@@ -55,13 +55,12 @@
 //		aborted    = v1alpha1.VolumeMigrationPhaseAborted
 //	)
 //
-//	// machineFor builds the graph for one migration. The hooks close over vm, so
-//	// the machine is built per reconcile rather than shared on the reconciler.
-//	func (r *VolumeMigrationReconciler) machineFor(
-//		ctx context.Context,
+//	// configFor builds the graph for one migration. The hooks close over vm, so
+//	// the graph is built per reconcile rather than shared on the reconciler.
+//	func (r *VolumeMigrationReconciler) configFor(
 //		vm *v1alpha1.VolumeMigration,
-//	) *statemachine.Machine[phase] {
-//		return statemachine.Must(ctx, statemachine.Config[phase]{
+//	) statemachine.Config[phase] {
+//		return statemachine.Config[phase]{
 //			Initial: pending,
 //			States: map[phase]statemachine.StateDef[phase]{
 //				// Nothing has been submitted yet, so there is nothing to abort.
@@ -75,7 +74,7 @@
 //				failed:    {OnEnter: r.onFinished(vm)},
 //				aborted:   {OnEnter: r.onFinished(vm)},
 //			},
-//		})
+//		}
 //	}
 //
 // A hook performs the side effects of entering its phase and says how long that
@@ -123,7 +122,7 @@
 // A controller's machine does not live between reconciles: the process holds no
 // memory of the last pass, and may not even be the same process. The phase is
 // therefore kept in the resource and restored on each pass with
-// [Machine.Snapshot] and [Machine.Restore], which carry both the state and its
+// [Machine.Snapshot] and [NewFromSnapshot], which carry both the state and its
 // deadline. Restoring runs no entry hooks, on the grounds that the transition
 // into that phase already happened and CreateMigration should not be called
 // twice.
@@ -137,20 +136,18 @@
 //			return ctrl.Result{}, client.IgnoreNotFound(err)
 //		}
 //
-//		sm := r.machineFor(ctx, &vm)
-//		defer sm.Close()
-//
-//		// An empty phase is a migration nobody has reconciled yet, which is
-//		// already what Config.Initial means.
-//		if vm.Status.Phase != "" {
-//			snap := statemachine.Snapshot[phase]{State: vm.Status.Phase}
-//			if vm.Status.PhaseDeadline != nil {
-//				snap.Deadline = vm.Status.PhaseDeadline.Time
-//			}
-//			if err := sm.Restore(snap); err != nil {
-//				return ctrl.Result{}, fmt.Errorf("restoring phase %q: %w", vm.Status.Phase, err)
-//			}
+//		// An empty phase is a migration nobody has reconciled yet, and
+//		// NewFromSnapshot reads it as Config.Initial without being asked.
+//		snap := statemachine.Snapshot[phase]{State: vm.Status.Phase}
+//		if vm.Status.PhaseDeadline != nil {
+//			snap.Deadline = vm.Status.PhaseDeadline.Time
 //		}
+//		sm, err := statemachine.NewFromSnapshot(ctx, r.configFor(&vm), snap)
+//		if err != nil {
+//			// An unrecognised phase: a downgrade, or a hand-edited resource.
+//			return ctrl.Result{}, fmt.Errorf("restoring phase %q: %w", vm.Status.Phase, err)
+//		}
+//		defer sm.Close()
 //
 //		// Completed, Failed and Aborted have no outgoing edges.
 //		if sm.IsTerminal() {
@@ -241,6 +238,30 @@
 // clock and is exposed to skew in a way an in-process deadline is not. And
 // persisting the phase without the deadline yields one that can never time out,
 // which is why [Machine.Snapshot] returns both together.
+//
+// # One graph per action
+//
+// A VolumeMigration does one thing, so one graph describes it. An Ops resource
+// does whichever thing its spec.action asked for, and the steps of one action are
+// not the steps of another. [MultiConfig] declares them together, keyed by
+// [Action], and hands back an ordinary machine for the one that was asked for.
+//
+// A StorageNodeOps is the case that motivates it. Six actions share one kind, one
+// status.subPhase field, and one enum whose values are the union of two disjoint
+// workflows:
+//
+//	remove:  Validating ── Suspending ── Migrating ── Verifying ── Removing
+//	migrate: Preparing  ── Restarting ── Promoting
+//	shutdown, restart, suspend, resume: no sub-phases at all
+//
+// Written as one graph, that union is unenforceable — nothing stops a remove op
+// from reporting Promoting. Written as a MultiConfig, the graph for the action in
+// hand is the only one in play, and Promoting during a remove is an
+// [IllegalTransitionError] rather than an accepted status write.
+//
+// The outer phase — Pending, Running, Succeeded, Failed — is identical for all
+// six, so it stays a plain [Config]. Such a controller runs two machines: one for
+// the phase, and one for the sub-phase of the action it is executing.
 package statemachine
 
 import (
@@ -362,6 +383,23 @@ type Config[S comparable] struct {
 	States map[S]StateDef[S]
 }
 
+// validate reports whether the graph is closed: the initial state is declared,
+// and no edge points at a state that is not. It is separate from [New] because
+// [MultiConfig] validates graphs it is not about to build a machine from.
+func (config Config[S]) validate() error {
+	if _, ok := config.States[config.Initial]; !ok {
+		return fmt.Errorf("%w: initial state %v", ErrUnknownState, config.Initial)
+	}
+	for state, def := range config.States {
+		for _, to := range def.To {
+			if _, ok := config.States[to]; !ok {
+				return fmt.Errorf("%w: %v -> %v", ErrUnknownState, state, to)
+			}
+		}
+	}
+	return nil
+}
+
 // Machine is a deterministic finite state machine over the state type S, which
 // is typically a named string or integer type so that each machine gets its own
 // compile-checked set of states. A resource's existing phase type serves
@@ -399,15 +437,8 @@ type Machine[S comparable] struct {
 // New reports [ErrUnknownState] if [Config.Initial] is absent from
 // [Config.States], or if any state declares an edge to a state that is not declared.
 func New[S comparable](ctx context.Context, config Config[S]) (*Machine[S], error) {
-	if _, ok := config.States[config.Initial]; !ok {
-		return nil, fmt.Errorf("%w: initial state %v", ErrUnknownState, config.Initial)
-	}
-	for state, def := range config.States {
-		for _, to := range def.To {
-			if _, ok := config.States[to]; !ok {
-				return nil, fmt.Errorf("%w: %v -> %v", ErrUnknownState, state, to)
-			}
-		}
+	if err := config.validate(); err != nil {
+		return nil, err
 	}
 
 	states := maps.Clone(config.States)
@@ -439,6 +470,52 @@ func Must[S comparable](ctx context.Context, cfg Config[S]) *Machine[S] {
 		panic(err)
 	}
 	return sm
+}
+
+// NewFromSnapshot is [New] followed by [Machine.Restore]: it returns a machine
+// already at a persisted position, for the common case of a controller rebuilding
+// one from a resource's status. Restoring runs no entry hook, on the grounds that
+// the transition into that state already happened in an earlier process.
+//
+// An empty snapshot yields a machine in [Config.Initial] rather than an error,
+// which is the point of this constructor. Persisted phases start out unset —
+// status.phase is empty until the first pass writes one — so every caller of
+// [Machine.Restore] otherwise has to guard it:
+//
+//	// What this replaces.
+//	sm := statemachine.Must(ctx, config)
+//	if vm.Status.Phase != "" {
+//		if err := sm.Restore(snap); err != nil {
+//			return ctrl.Result{}, err
+//		}
+//	}
+//
+// Precisely: a [Snapshot.State] that is both the zero value of S and not a
+// declared state means "fresh," and the snapshot's deadline is dropped with it,
+// because a deadline without a state is incoherent and the state is what decides.
+// A zero state that *is* declared — as the first constant of an int-backed phase
+// type usually is — restores as written, deadline included. A non-zero undeclared
+// state stays an error, since that is a downgrade or a hand-edited resource and
+// silently starting the workflow over would be the wrong answer.
+//
+// The returned error is [ErrUnknownState], either for a graph that is not closed
+// or for a state the graph does not declare. No machine is returned on either.
+func NewFromSnapshot[S comparable](
+	ctx context.Context,
+	config Config[S],
+	snap Snapshot[S],
+) (*Machine[S], error) {
+	sm, err := New(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	if err := sm.restoreOrStart(snap); err != nil {
+		// Close what New just built: an abandoned machine's context would stay
+		// attached to ctx until ctx itself is canceled.
+		sm.Close()
+		return nil, err
+	}
+	return sm, nil
 }
 
 // arm replaces the current state's context with one expiring after timeout,
@@ -660,8 +737,10 @@ func (sm *Machine[S]) Snapshot() Snapshot[S] {
 // process, and its side effects are not to be repeated.
 //
 // A zero [Snapshot.State] restores nothing and reports [ErrUnknownState] unless
-// the zero value is itself a declared state, which is what lets a controller
-// treat a never-reconciled resource as "start from the beginning":
+// the zero value is itself a declared state. A controller restoring a resource
+// that may never have been reconciled therefore has to guard the call, which is
+// what [NewFromSnapshot] exists to absorb — prefer it when the machine is being
+// built in the same breath:
 //
 //	if vm.Status.Phase != "" {
 //		if err := sm.Restore(snap); err != nil {
@@ -689,6 +768,17 @@ func (sm *Machine[S]) Restore(snap Snapshot[S]) error {
 	sm.current = snap.State
 	sm.armAt(snap.Deadline)
 	return nil
+}
+
+// restoreOrStart is [Machine.Restore], except that the snapshot of a resource
+// nothing has reconciled yet leaves the machine where it already is. It backs
+// [NewFromSnapshot], which is where the rule and its reasoning are written down.
+func (sm *Machine[S]) restoreOrStart(snap Snapshot[S]) error {
+	var zero S
+	if _, declared := sm.states[snap.State]; !declared && snap.State == zero {
+		return nil
+	}
+	return sm.Restore(snap)
 }
 
 // RequeueAfter reports how long remains before the current state expires, and

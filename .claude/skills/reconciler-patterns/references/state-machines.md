@@ -43,17 +43,17 @@ go doc github.com/simplyblock/atlas/statemachine   # the complete worked example
 
 What it gives a reconciler, and why each part matters:
 
-| Call                                 | Use                                                                                                                                                                                                 |
-|--------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `Config{Initial, States}`            | The graph, declared once. `To: []phase{…}` per state; a terminal state declares no exits                                                                                                            |
-| `StateDef.OnEnter`                   | The side effects of entering the phase, returning how long the phase may last                                                                                                                       |
-| `Restore(Snapshot{State, Deadline})` | Rebuild the machine from `status.phase` and `status.phaseDeadline` at the top of the reconcile. **Runs no entry hooks** — the transition already happened, and the backend call must not fire twice |
-| `IsTerminal()`                       | The terminal no-op, without a `switch` listing the terminal phases                                                                                                                                  |
-| `TimeoutReached()`                   | The phase ran out of time, possibly while the operator was down, because the deadline came back from the resource and not from a live timer                                                         |
-| `TransitionTo(ctx, to)`              | The transition, validated against the graph                                                                                                                                                         |
-| `Snapshot()`                         | What to write back into status: the state and its deadline                                                                                                                                          |
-| `RequeueAfter()`                     | The requeue value, bounded by the phase deadline. `false` when there is no deadline **or it already passed** — an expired phase needs handling now, not another requeue                             |
-| `Close()`                            | Deferred; the machine owns contexts                                                                                                                                                                 |
+| Call                              | Use                                                                                                                                                                                               |
+|-----------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `Config{Initial, States}`         | The graph, declared once. `To: []phase{…}` per state; a terminal state declares no exits                                                                                                          |
+| `StateDef.OnEnter`                | The side effects of entering the phase, returning how long the phase may last                                                                                                                     |
+| `NewFromSnapshot(ctx, cfg, snap)` | Build the machine from `status.phase` and `status.phaseDeadline` at the top of the reconcile. **Runs no entry hooks** — the transition already happened, and the backend call must not fire twice |
+| `IsTerminal()`                    | The terminal no-op, without a `switch` listing the terminal phases                                                                                                                                |
+| `TimeoutReached()`                | The phase ran out of time, possibly while the operator was down, because the deadline came back from the resource and not from a live timer                                                       |
+| `TransitionTo(ctx, to)`           | The transition, validated against the graph                                                                                                                                                       |
+| `Snapshot()`                      | What to write back into status: the state and its deadline                                                                                                                                        |
+| `RequeueAfter()`                  | The requeue value, bounded by the phase deadline. `false` when there is no deadline **or it already passed** — an expired phase needs handling now, not another requeue                           |
+| `Close()`                         | Deferred; the machine owns contexts                                                                                                                                                               |
 
 Two CRD fields carry it: the existing `status.phase`, plus a
 `status.phaseDeadline *metav1.Time`. No CRD has the second one yet — it is what
@@ -64,6 +64,64 @@ instead of per action.
 The machine is built **per reconcile**, not stored on the reconciler: its hooks
 close over the object being reconciled, and a `Machine` is not safe for
 concurrent use.
+
+`NewFromSnapshot` reads an empty `status.phase` as "nobody has reconciled this
+yet" and starts at `Config.Initial`, so the reconcile does not open with an
+`if ops.Status.Phase != ""` guard. That rule is about the *empty* value only: an
+unrecognized non-empty phase is a downgrade or a hand-edited resource and stays an
+error.
+
+## One graph per action
+
+An Ops kind is one CRD serving several operations, and the steps of one are not
+the steps of another. `StorageNodeOps` is the case: six actions, one
+`status.subPhase` field, and an enum whose values are the union of two disjoint
+workflows.
+
+```
+remove:  Validating ── Suspending ── Migrating ── Verifying ── Removing
+migrate: Preparing  ── Restarting ── Promoting
+shutdown, restart, suspend, resume: no sub-phases at all
+```
+
+Written as one graph that union is unenforceable — nothing stops a `remove` op
+from reporting `Promoting`. `statemachine.MultiConfig[subPhase]` declares them
+together, keyed by `statemachine.Action`, and hands back an ordinary `Machine` for
+the action in hand:
+
+```go
+sm, err := r.subPhasesFor(ops).FromSnapshot(ctx, statemachine.Action(ops.Spec.Action), snap)
+```
+
+Four things this settles, each of which a `switch` gets wrong:
+
+- **The action is not machine state.** `spec.action` is immutable, so it is
+  re-read from the resource every pass. Nothing about it goes in `status`, and the
+  snapshot stays one state and one deadline.
+- **Every graph is validated, not just the selected one.** A `switch` only
+  validates the branch it takes, so a bad edge in the `migrate` graph waits for
+  someone to migrate. Here, constructing a machine for *any* action proves all of
+  them closed.
+- **An unknown action is an error, not a missing `default`.** `ErrUnknownAction`,
+  because `spec.action` survives a downgrade — where a `switch` with no `default`
+  silently stalls the operation.
+- **An action with no steps declares no graph.** `MultiConfig` is a map, so ask it
+  rather than reading the error:
+
+  ```go
+  if _, ok := subPhases[action]; !ok {
+      return ctrl.Result{}, nil // shutdown and resume run in a single step
+  }
+  ```
+
+The **outer `phase` stays a plain `Config`** — `Pending → Running →
+Succeeded/Failed` is identical for all six actions. Folding it into each action's
+map would copy that spine six times and a fix would land in one of them. Such a
+controller runs two machines: one for the phase, one for the sub-phase.
+
+There is no `Must` on `MultiConfig`, deliberately: a malformed graph is a program
+bug worth panicking on, but an unrecognized `spec.action` is user input, and
+panicking a controller on it is not.
 
 ## Converting a hand-rolled switch
 
@@ -83,15 +141,18 @@ path cannot tell entering a step from still being in it. Convert in this order:
 
 1. **Write the graph** from the existing cases, with the edges the code actually
    takes. Any edge that surprises you is either a bug or an undocumented
-   behavior — resolve it before continuing.
+   behavior — resolve it before continuing. Where the switch also branches on
+   `spec.action`, that is one graph per action: a `MultiConfig`, not one graph
+   with every action's steps in it.
 2. **Move each `case` body into an `OnEnter` hook**, returning the step's bound.
    Keep the polling that does not transition *outside* the hook: most passes of a
    `Migrating` step only read the backend and update counters, and re-entering
    the state would repeat its side effect.
 3. **Add `status.phaseDeadline`**, regenerate the CRD (`make -C operator manifests`,
    then `make helm-sync`).
-4. **Restore, check terminal, check timeout, advance, snapshot, write, requeue** —
-   in that order, which is the shape in the package documentation.
+4. **Build from the snapshot, check terminal, check timeout, advance, snapshot,
+   write, requeue** — in that order, which is the shape in the package
+   documentation.
 5. **A test per transition**, plus one per interrupted step: restore from that
    phase and assert the hook did not run again. See `test-scenarios`.
 
