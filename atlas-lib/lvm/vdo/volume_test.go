@@ -74,8 +74,11 @@ func TestVolumeHandler_CreateVolumeArgs(t *testing.T) {
 	}
 }
 
-// Handles requires both features, where CreateVolumeArgs contributes its flags
-// for either one.
+// Handles agrees with CreateVolumeArgs on which definitions this handler
+// contributes flags for: either feature, not both. A mismatch between the two
+// would mean CreateLogicalVolume's dispatch (by Handles) and its actual
+// argument contribution (by CreateVolumeArgs) disagree about what counts as a
+// VDO volume.
 func TestVolumeHandler_Handles(t *testing.T) {
 	tests := []struct {
 		name                       string
@@ -83,8 +86,8 @@ func TestVolumeHandler_Handles(t *testing.T) {
 		want                       bool
 	}{
 		{"both on", true, true, true},
-		{"compression only", true, false, false},
-		{"deduplication only", false, true, false},
+		{"compression only", true, false, true},
+		{"deduplication only", false, true, true},
 		{"both off", false, false, false},
 	}
 	for _, tt := range tests {
@@ -122,10 +125,12 @@ func TestRegisteredHandlerReachesCreateLogicalVolume(t *testing.T) {
 
 // UpdateVolume addresses the VDO pool the volume was created on, which is where
 // lvm2 keeps the compression and deduplication attributes, and runs unscoped
-// like every other volume-group-by-name operation.
+// like every other volume-group-by-name operation. Exercised through
+// NewVolume rather than a struct literal, the same way an external caller
+// (csi-driver, every field being unexported) has to build one.
 func TestUpdateVolume(t *testing.T) {
 	mgr, fake := newManager()
-	volume := &Volume{volumeGroupName: "vdo-abc123", poolName: "vdopool", logicalVolumeName: "abc123"}
+	volume := NewVolume("vdo-abc123", "vdopool", "abc123")
 	if err := UpdateVolume(context.Background(), mgr, volume, true, false); err != nil {
 		t.Fatalf("UpdateVolume: %v", err)
 	}
@@ -139,7 +144,7 @@ func TestUpdateVolume_WrapsRunnerError(t *testing.T) {
 	wantErr := errors.New("VDO pool is not active")
 	key := joinKey([]string{"lvchange", "--compression", "n", "--deduplication", "n", "vdo-abc123/vdopool"})
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: wantErr}}
-	volume := &Volume{volumeGroupName: "vdo-abc123", poolName: "vdopool", logicalVolumeName: "abc123"}
+	volume := NewVolume("vdo-abc123", "vdopool", "abc123")
 	err := UpdateVolume(context.Background(), lvm.NewManagerWithRunner(fake.run), volume, false, false)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("UpdateVolume() error = %v, want wrapping %v", err, wantErr)

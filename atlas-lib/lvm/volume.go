@@ -14,6 +14,7 @@ type LogicalVolumeDefinition struct {
 
 type VolumeProvisioning interface {
 	Name() string
+	Handles(def LogicalVolumeDefinition) bool
 	CreateVolumeArgs(def LogicalVolumeDefinition) []string
 }
 
@@ -74,27 +75,37 @@ func (m *Manager) RemoveVolumeGroup(ctx context.Context, volumeGroup string) err
 	return nil
 }
 
-// CreateLogicalVolume creates the logical volume logicalVolume on
-// volumeGroup's physicalVolume (lvcreate), sized to consume the volume group's
-// full free space.
+// CreateLogicalVolume creates the logical volume logicalVolume in
+// volumeGroup, sized to consume the volume group's full free space, targeting
+// volumeGroup/poolName (lvcreate).
+//
+// poolName is not a physical volume, despite an earlier version of this
+// function naming the parameter that way. lvcreate's <vg>/<pool> form names
+// the pool a new logical volume is created inside, which only a pool-based
+// VolumeProvisioning handler needs: VDO's handler creates both the pool and
+// the logical volume in this one lvcreate call, via poolName.
 //
 // Internally, depending on the LogicalVolumeDefinition, the function may
 // delegate parts of the creation process to a VolumeProvisioning handler.
 func (m *Manager) CreateLogicalVolume(
-	ctx context.Context, volumeGroup, physicalVolume, logicalVolume string, def LogicalVolumeDefinition,
+	ctx context.Context, volumeGroup, poolName, logicalVolume string, def LogicalVolumeDefinition,
 ) error {
 	args := []string{
 		"lvcreate",
 		"-n", logicalVolume,
 		"-l", "100%FREE",
-		volumeGroup + "/" + physicalVolume,
+		volumeGroup + "/" + poolName,
 		"--yes",
 	}
 
-	if handler, ok := volumeProvisioning["vdo"]; ok {
+	for _, handler := range volumeProvisioning {
+		if !handler.Handles(def) {
+			continue
+		}
 		if additionalArgs := handler.CreateVolumeArgs(def); len(additionalArgs) > 0 {
 			args = append(args, additionalArgs...)
 		}
+		break
 	}
 	if _, err := m.exec(ctx, nil, args...); err != nil {
 		return fmt.Errorf("lvcreate %s/%s: %w", volumeGroup, logicalVolume, err)

@@ -13,6 +13,18 @@ type Volume struct {
 	logicalVolumeName string
 }
 
+// NewVolume identifies an existing VDO volume by the volume group, pool, and
+// logical volume names CreateLogicalVolume gave it, so a caller outside this
+// package can construct one to pass to UpdateVolume. Fields stay unexported:
+// nothing outside this package reads them back out.
+func NewVolume(volumeGroupName, poolName, logicalVolumeName string) *Volume {
+	return &Volume{
+		volumeGroupName:   volumeGroupName,
+		poolName:          poolName,
+		logicalVolumeName: logicalVolumeName,
+	}
+}
+
 type volumeHandler struct {
 }
 
@@ -21,7 +33,7 @@ func (v *volumeHandler) Name() string {
 }
 
 func (v *volumeHandler) Handles(def lvm.LogicalVolumeDefinition) bool {
-	return def.Compression && def.Deduplication
+	return def.Compression || def.Deduplication
 }
 
 func (v *volumeHandler) CreateVolumeArgs(
