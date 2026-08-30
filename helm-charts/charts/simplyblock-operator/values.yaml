@@ -260,6 +260,38 @@ controlplane:
       repository: quay.io/simplyblock-io/grafana
       tag: 10.0.12
       pullPolicy: IfNotPresent
+      # Alert rules derived from the control plane's cluster event log rather
+      # than from Thanos. The event log carries what the metrics cannot: the
+      # transition a node, device, or cluster made, and therefore whether an
+      # operator asked for it. Reading it needs a REST data source, which is
+      # what the Infinity plugin below provides.
+      eventAlerts:
+        enabled: false
+        # Every rule reads the newest `logLimit` records of the event log and
+        # folds them into the current state of each node, device, and cluster.
+        # A limit too low silently heals an alert whose opening transition has
+        # scrolled out of the window, so raise it on a cluster that produces
+        # events quickly; every rule evaluation pays for it in one request.
+        logLimit: 1000
+        # How often the rules run, and how long a condition must hold before it
+        # notifies. Both are Grafana durations.
+        interval: 1m
+        for: 1m
+        plugin:
+          # The Grafana image this chart deploys is a plain upstream mirror with
+          # no plugins in it, and /var/lib/grafana is an emptyDir, so the plugin
+          # is fetched on every pod start. Grafana's entrypoint reads
+          # GF_INSTALL_PLUGINS as a URL, a semicolon, and an install folder.
+          #
+          # 2.12.2 is the last Infinity release whose grafanaDependency
+          # (>=9.5.15) admits the Grafana 10.0.12 pinned above; every release
+          # still in the plugin catalog requires >=10.4.8. Moving Grafana
+          # forward is what unpins this.
+          url: "https://grafana.com/api/plugins/yesoreyeram-infinity-datasource/versions/2.12.2/download"
+          # Set to true once the plugin is baked into the Grafana image, which
+          # is what an air-gapped or restart-sensitive install wants: the
+          # download is ~74 MB and repeats on every pod start.
+          preinstalled: false
       endpoint: ""
       # Receivers Grafana provisions into the "grafana-alerts" contact point.
       # Every enabled channel is notified for every simplyblock alert. With none

@@ -19,6 +19,38 @@ http://simplyblock-webappapi.{{ .Release.Namespace }}.svc.cluster.local:5000
 {{- end -}}
 
 {{/*
+The clusters whose event log the Grafana event-driven alert rules read, as a
+JSON array of {"id","secret"} objects for `fromJsonArray`. Both the Infinity
+data sources and the rules that query them iterate this, so the two can never
+disagree about which clusters exist.
+
+A cluster with no id or no secret is skipped rather than rendered half-configured.
+The two are used for different halves of the same request: the secret is the
+whole credential, sent as the bearer token that /api/v2 matches against every
+cluster's secret, while the id addresses the cluster in the request path. The
+API then checks that the two agree, so a half-configured or mismatched entry
+fails every evaluation with a 401 that reads like an outage rather than like a
+missing value. The list is empty until `cluster create` has run and its UUID and
+secret have been fed back into the values, which is the normal state right after
+install.
+*/}}
+{{- define "simplyblock.eventAlertClusters" -}}
+{{- $out := list -}}
+{{- if .Values.storagenode.multiCluster.enable -}}
+{{- range default (list) .Values.storagenode.multiCluster.clusters -}}
+{{- if and .cluster_id .secret -}}
+{{- $out = append $out (dict "id" .cluster_id "secret" .secret) -}}
+{{- end -}}
+{{- end -}}
+{{- else -}}
+{{- if and .Values.csiConfig.simplybk.uuid .Values.csiSecret.simplybk.secret -}}
+{{- $out = append $out (dict "id" .Values.csiConfig.simplybk.uuid "secret" .Values.csiSecret.simplybk.secret) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $out -}}
+{{- end -}}
+
+{{/*
 Volume named "tls" holding the serving cert bundle for pods that terminate TLS.
 Args: dict "ctx" $root "secret" <serving-cert-secret-name>
 - openshift: project the serving Secret with the cabundle ConfigMap (renaming

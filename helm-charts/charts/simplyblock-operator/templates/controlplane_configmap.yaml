@@ -204,6 +204,33 @@ data:
       access: proxy
       uid: PBFA97CFB590B2093
       editable: true
+{{- $eventAlerts := .Values.controlplane.observability.grafana.eventAlerts | default dict }}
+{{- $eventClusters := include "simplyblock.eventAlertClusters" . | fromJsonArray }}
+{{- if and $eventAlerts.enabled $eventClusters }}
+{{- $cpAddr := include "simplyblock.controlPlaneAddr" . }}
+    # One Infinity data source per cluster. The v2 API authenticates with the
+    # cluster secret as a bearer token, and Grafana binds credentials to a data
+    # source rather than to a query, so a cluster needs its own. The secret goes
+    # through secureJsonData, which Grafana stores encrypted and never returns
+    # to the browser; Infinity reads the pair as a custom request header.
+{{- range $eventClusters }}
+    - name: Simplyblock Events {{ .id }}
+      type: yesoreyeram-infinity-datasource
+      uid: {{ printf "sbev-%s" (sha256sum .id | trunc 12) }}
+      url: {{ $cpAddr }}
+      access: proxy
+      editable: false
+      jsonData:
+        httpHeaderName1: Authorization
+        # Without this the health check probes the bare base URL, which the
+        # control plane answers with a string Infinity cannot read as a table.
+        customHealthCheckEnabled: false
+        tlsSkipVerify: true
+        timeoutInSeconds: 30
+      secureJsonData:
+        httpHeaderValue1: {{ printf "Bearer %s" .secret | quote }}
+{{- end }}
+{{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -881,6 +908,860 @@ data:
               labels:
                 app: simplyblock
               isPaused: false
+{{- if and $eventAlerts.enabled $eventClusters }}
+{{- $logLimit := $eventAlerts.logLimit | default 1000 }}
+{{- $for := $eventAlerts.for | default "1m" }}
+
+        # Rules derived from the control plane's cluster event log rather than
+        # from Thanos. Each query folds the newest log records into the current
+        # state of every node, device, and cluster and returns one row per entity
+        # that is currently wrong. Healing is therefore structural: the reverting
+        # event -- a node back online, a device back online, a cluster back to
+        # active -- removes the row, the row's absence removes the alert
+        # instance, and noDataState: OK turns an entirely empty result into the
+        # resolved state.
+        #
+        # The fold has to read the transitions because the cause is not in the
+        # payload. cluster_ops.get_logs drops caused_by, and set_node_status
+        # writes every transition under the same default caused_by regardless.
+        # What separates a shutdown an operator asked for from a fault is the
+        # state it passes through -- only shutdown_storage_node reaches
+        # in_shutdown -- and that is what the two suppression rules key on.
+        - orgId: 1
+          name: simplyblock_events
+          folder: grafana_folder
+          interval: {{ $eventAlerts.interval | default "1m" }}
+          rules:
+{{- range $eventClusters }}
+{{- $cid := .id }}
+{{- $dsUid := printf "sbev-%s" (sha256sum .id | trunc 12) }}
+            - uid: {{ printf "sbev-%s-%s" (sha256sum $cid | trunc 8) "node-left-online" }}
+              title: StorageNode_left_online_{{ $cid }}
+              condition: B
+              data:
+                - refId: A
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: {{ $dsUid }}
+                  model:
+                    refId: A
+                    type: json
+                    source: url
+                    format: table
+                    # Only the backend parser runs server-side, which is what
+                    # an alert rule needs. root_selector is tried as a gjson
+                    # path first and falls back to JSONata; opening with a
+                    # bracket guarantees the fallback. The v2 endpoint returns
+                    # the records unwrapped, so $ is the record array itself.
+                    parser: backend
+                    url: /api/v2/clusters/{{ $cid }}/logs
+                    url_options:
+                      method: GET
+                      params:
+                        - key: limit
+                          value: {{ $logLimit | quote }}
+                    root_selector: |-
+                      (
+                        $planned := ['in_shutdown', 'in_removal', 'pending_removal', 'removed'];
+                        $healthy := ['online', 'in_creation'];
+                        $ev := [$[Event = 'STATUS_CHANGE' and $contains(Message, 'Storage node status changed from: ')]];
+                        $fold := function($evs) {
+                          $reduce($evs, function($a, $e) {
+                            (
+                              $to := $substringAfter($e.Message, ' to: ');
+                              {
+                                'state': $to,
+                                'since': $e.Date,
+                                'planned': $to in $planned or ($a.planned and $to = 'offline')
+                              }
+                            )
+                          }, { 'state': 'online', 'since': '', 'planned': false })
+                        };
+                        $nodes := $count($ev) = 0 ? [] : [$each($ev{ NodeId: [$] }, function($evs, $id) {
+                          $merge([{ 'node': $id }, $fold($evs)])
+                        })];
+                        [$nodes[$not(state in $healthy) and $not(planned)].{
+                          'node': node,
+                          'state': state,
+                          'since': since,
+                          'value': 1
+                        }]
+                      )
+                    # Exactly one numeric field and the rest strings is what
+                    # makes Grafana read the frame as a numeric table, turning
+                    # every string field into a label of its own alert instance.
+                    columns:
+                      - selector: node
+                        text: node
+                        type: string
+                      - selector: state
+                        text: state
+                        type: string
+                      - selector: since
+                        text: since
+                        type: string
+                      - selector: value
+                        text: value
+                        type: number
+                - refId: B
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: __expr__
+                  model:
+                    refId: B
+                    type: threshold
+                    datasource:
+                      type: __expr__
+                      uid: __expr__
+                    expression: A
+                    conditions:
+                      - evaluator:
+                          params:
+                            - 0
+                          type: gt
+                        operator:
+                          type: and
+                        query:
+                          params: []
+                        reducer:
+                          params: []
+                          type: last
+                        type: query
+              # A row exists only for something currently wrong, so an empty
+              # result is the healthy state and has to resolve the alert. A
+              # failing query is not: that is the alert source being broken.
+              noDataState: OK
+              execErrState: Error
+              for: {{ $for }}
+              annotations:
+                summary: 'Storage node {{ "{{" }} $labels.node {{ "}}" }} left the online state and is now {{ "{{" }} $labels.state {{ "}}" }}.'
+                description: 'The rule folds the cluster event log into the current state of every storage node and fires while a node sits in anything other than online or in_creation. A shutdown or removal an operator asked for is exempt: those reach in_shutdown, pending_removal, in_removal, or removed, which no fault path does. The alert clears when the node returns to online.'
+              labels:
+                app: simplyblock
+                cluster: {{ $cid }}
+                severity: critical
+              isPaused: false
+            - uid: {{ printf "sbev-%s-%s" (sha256sum $cid | trunc 8) "device-unavailable" }}
+              title: Device_became_unavailable_{{ $cid }}
+              condition: B
+              data:
+                - refId: A
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: {{ $dsUid }}
+                  model:
+                    refId: A
+                    type: json
+                    source: url
+                    format: table
+                    # Only the backend parser runs server-side, which is what
+                    # an alert rule needs. root_selector is tried as a gjson
+                    # path first and falls back to JSONata; opening with a
+                    # bracket guarantees the fallback. The v2 endpoint returns
+                    # the records unwrapped, so $ is the record array itself.
+                    parser: backend
+                    url: /api/v2/clusters/{{ $cid }}/logs
+                    url_options:
+                      method: GET
+                      params:
+                        - key: limit
+                          value: {{ $logLimit | quote }}
+                    root_selector: |-
+                      (
+                        $window := 120000;
+                        $ms := function($d) { $toMillis($substring($d & '.000', 0, 23), '[Y0001]-[M01]-[D01] [H01]:[m01]:[s01].[f001]') };
+                        $healthy := ['online', 'in_creation'];
+                        $nodeEv := [$[Event = 'STATUS_CHANGE' and $contains(Message, 'Storage node status changed from: ')]];
+                        $cascades := [$map($nodeEv[$not($substringAfter(Message, ' to: ') in $healthy)], function($e) { $ms($e.Date) })];
+                        $devEv := [$[Event = 'STATUS_CHANGE' and $contains(Message, 'Device status changed from: ')]];
+                        $fold := function($evs) {
+                          $reduce($evs, function($a, $e) {
+                            {
+                              'state': $substringAfter($e.Message, ' to: '),
+                              'since': $e.Date,
+                              'at': $ms($e.Date),
+                              'order': $e.Storage_ID
+                            }
+                          }, { 'state': 'online', 'since': '', 'at': 0, 'order': '' })
+                        };
+                        $devs := $count($devEv) = 0 ? [] : [$each($devEv{ NodeId: [$] }, function($evs, $id) {
+                          (
+                            $f := $fold($evs);
+                            $merge([
+                              { 'device': $id, 'cascade': $count($cascades[$ <= $f.at and $f.at - $ <= $window]) > 0 },
+                              $f
+                            ])
+                          )
+                        })];
+                        [$devs[state = 'unavailable' and $not(cascade)].{
+                          'device': device,
+                          'order': order,
+                          'since': since,
+                          'value': 1
+                        }]
+                      )
+                    # Exactly one numeric field and the rest strings is what
+                    # makes Grafana read the frame as a numeric table, turning
+                    # every string field into a label of its own alert instance.
+                    columns:
+                      - selector: device
+                        text: device
+                        type: string
+                      - selector: order
+                        text: order
+                        type: string
+                      - selector: since
+                        text: since
+                        type: string
+                      - selector: value
+                        text: value
+                        type: number
+                - refId: B
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: __expr__
+                  model:
+                    refId: B
+                    type: threshold
+                    datasource:
+                      type: __expr__
+                      uid: __expr__
+                    expression: A
+                    conditions:
+                      - evaluator:
+                          params:
+                            - 0
+                          type: gt
+                        operator:
+                          type: and
+                        query:
+                          params: []
+                        reducer:
+                          params: []
+                          type: last
+                        type: query
+              # A row exists only for something currently wrong, so an empty
+              # result is the healthy state and has to resolve the alert. A
+              # failing query is not: that is the alert source being broken.
+              noDataState: OK
+              execErrState: Error
+              for: {{ $for }}
+              annotations:
+                summary: 'Device {{ "{{" }} $labels.device {{ "}}" }} (cluster device order {{ "{{" }} $labels.order {{ "}}" }}) is unavailable.'
+                description: 'The rule fires for a device that is currently unavailable and did not become so as part of a whole node going down. A node leaving online cascades every one of its devices to unavailable within seconds, and that is reported once as the storage node alert rather than once per device. The alert clears when the device returns to online.'
+              labels:
+                app: simplyblock
+                cluster: {{ $cid }}
+                severity: warning
+              isPaused: false
+            - uid: {{ printf "sbev-%s-%s" (sha256sum $cid | trunc 8) "device-removed" }}
+              title: Device_removed_{{ $cid }}
+              condition: B
+              data:
+                - refId: A
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: {{ $dsUid }}
+                  model:
+                    refId: A
+                    type: json
+                    source: url
+                    format: table
+                    # Only the backend parser runs server-side, which is what
+                    # an alert rule needs. root_selector is tried as a gjson
+                    # path first and falls back to JSONata; opening with a
+                    # bracket guarantees the fallback. The v2 endpoint returns
+                    # the records unwrapped, so $ is the record array itself.
+                    parser: backend
+                    url: /api/v2/clusters/{{ $cid }}/logs
+                    url_options:
+                      method: GET
+                      params:
+                        - key: limit
+                          value: {{ $logLimit | quote }}
+                    root_selector: |-
+                      (
+                        $recent := 86400000;
+                        $ms := function($d) { $toMillis($substring($d & '.000', 0, 23), '[Y0001]-[M01]-[D01] [H01]:[m01]:[s01].[f001]') };
+                        $now := $millis();
+                        $devEv := [$[Event = 'STATUS_CHANGE' and $contains(Message, 'Device status changed from: ')]];
+                        $fold := function($evs) {
+                          $reduce($evs, function($a, $e) {
+                            {
+                              'state': $substringAfter($e.Message, ' to: '),
+                              'since': $e.Date,
+                              'at': $ms($e.Date),
+                              'order': $e.Storage_ID
+                            }
+                          }, { 'state': 'online', 'since': '', 'at': 0, 'order': '' })
+                        };
+                        $devs := $count($devEv) = 0 ? [] : [$each($devEv{ NodeId: [$] }, function($evs, $id) {
+                          $merge([{ 'device': $id }, $fold($evs)])
+                        })];
+                        [$devs[state = 'removed' and $now - at <= $recent].{
+                          'device': device,
+                          'order': order,
+                          'since': since,
+                          'value': 1
+                        }]
+                      )
+                    # Exactly one numeric field and the rest strings is what
+                    # makes Grafana read the frame as a numeric table, turning
+                    # every string field into a label of its own alert instance.
+                    columns:
+                      - selector: device
+                        text: device
+                        type: string
+                      - selector: order
+                        text: order
+                        type: string
+                      - selector: since
+                        text: since
+                        type: string
+                      - selector: value
+                        text: value
+                        type: number
+                - refId: B
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: __expr__
+                  model:
+                    refId: B
+                    type: threshold
+                    datasource:
+                      type: __expr__
+                      uid: __expr__
+                    expression: A
+                    conditions:
+                      - evaluator:
+                          params:
+                            - 0
+                          type: gt
+                        operator:
+                          type: and
+                        query:
+                          params: []
+                        reducer:
+                          params: []
+                          type: last
+                        type: query
+              # A row exists only for something currently wrong, so an empty
+              # result is the healthy state and has to resolve the alert. A
+              # failing query is not: that is the alert source being broken.
+              noDataState: OK
+              execErrState: Error
+              for: {{ $for }}
+              annotations:
+                summary: 'Device {{ "{{" }} $labels.device {{ "}}" }} (cluster device order {{ "{{" }} $labels.order {{ "}}" }}) was removed.'
+                description: 'The rule fires for every device whose latest state is removed, whatever the cause. It clears when the device is brought back online, and otherwise ages out a day after the removal, since a device that is genuinely gone has no reversion to wait for.'
+              labels:
+                app: simplyblock
+                cluster: {{ $cid }}
+                severity: critical
+              isPaused: false
+            - uid: {{ printf "sbev-%s-%s" (sha256sum $cid | trunc 8) "cluster-degraded" }}
+              title: Cluster_became_degraded_{{ $cid }}
+              condition: B
+              data:
+                - refId: A
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: {{ $dsUid }}
+                  model:
+                    refId: A
+                    type: json
+                    source: url
+                    format: table
+                    # Only the backend parser runs server-side, which is what
+                    # an alert rule needs. root_selector is tried as a gjson
+                    # path first and falls back to JSONata; opening with a
+                    # bracket guarantees the fallback. The v2 endpoint returns
+                    # the records unwrapped, so $ is the record array itself.
+                    parser: backend
+                    url: /api/v2/clusters/{{ $cid }}/logs
+                    url_options:
+                      method: GET
+                      params:
+                        - key: limit
+                          value: {{ $logLimit | quote }}
+                    root_selector: |-
+                      (
+                        $planned := ['in_shutdown', 'in_removal', 'pending_removal', 'removed'];
+                        $healthy := ['online', 'in_creation'];
+                        $nodeEv := [$[Event = 'STATUS_CHANGE' and $contains(Message, 'Storage node status changed from: ')]];
+                        $fold := function($evs) {
+                          $reduce($evs, function($a, $e) {
+                            (
+                              $to := $substringAfter($e.Message, ' to: ');
+                              {
+                                'state': $to,
+                                'planned': $to in $planned or ($a.planned and $to = 'offline')
+                              }
+                            )
+                          }, { 'state': 'online', 'planned': false })
+                        };
+                        $nodes := $count($nodeEv) = 0 ? [] : [$each($nodeEv{ NodeId: [$] }, function($evs, $id) { $fold($evs) })];
+                        $operatorDown := $count($nodes[$not(state in $healthy) and planned]) > 0;
+                        $cluEv := [$[Event = 'STATUS_CHANGE' and $contains(Message, 'Cluster status changed from ')]];
+                        $last := $cluEv[-1];
+                        $state := $exists($last) ? $substringAfter($last.Message, ' to ') : 'active';
+                        [$state = 'degraded' and $not($operatorDown) ? {
+                          'state': $state,
+                          'since': $last.Date,
+                          'value': 1
+                        }]
+                      )
+                    # Exactly one numeric field and the rest strings is what
+                    # makes Grafana read the frame as a numeric table, turning
+                    # every string field into a label of its own alert instance.
+                    columns:
+                      - selector: state
+                        text: state
+                        type: string
+                      - selector: since
+                        text: since
+                        type: string
+                      - selector: value
+                        text: value
+                        type: number
+                - refId: B
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: __expr__
+                  model:
+                    refId: B
+                    type: threshold
+                    datasource:
+                      type: __expr__
+                      uid: __expr__
+                    expression: A
+                    conditions:
+                      - evaluator:
+                          params:
+                            - 0
+                          type: gt
+                        operator:
+                          type: and
+                        query:
+                          params: []
+                        reducer:
+                          params: []
+                          type: last
+                        type: query
+              # A row exists only for something currently wrong, so an empty
+              # result is the healthy state and has to resolve the alert. A
+              # failing query is not: that is the alert source being broken.
+              noDataState: OK
+              execErrState: Error
+              for: {{ $for }}
+              annotations:
+                summary: 'The cluster is degraded.'
+                description: 'The rule fires while the cluster''s latest status is degraded. A degradation an operator caused by shutting a node down is exempt, decided by whether any node currently out of service got there through in_shutdown or a removal state. The alert clears when the cluster returns to active.'
+              labels:
+                app: simplyblock
+                cluster: {{ $cid }}
+                severity: warning
+              isPaused: false
+            - uid: {{ printf "sbev-%s-%s" (sha256sum $cid | trunc 8) "cluster-suspended" }}
+              title: Cluster_became_suspended_{{ $cid }}
+              condition: B
+              data:
+                - refId: A
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: {{ $dsUid }}
+                  model:
+                    refId: A
+                    type: json
+                    source: url
+                    format: table
+                    # Only the backend parser runs server-side, which is what
+                    # an alert rule needs. root_selector is tried as a gjson
+                    # path first and falls back to JSONata; opening with a
+                    # bracket guarantees the fallback. The v2 endpoint returns
+                    # the records unwrapped, so $ is the record array itself.
+                    parser: backend
+                    url: /api/v2/clusters/{{ $cid }}/logs
+                    url_options:
+                      method: GET
+                      params:
+                        - key: limit
+                          value: {{ $logLimit | quote }}
+                    root_selector: |-
+                      (
+                        $cluEv := [$[Event = 'STATUS_CHANGE' and $contains(Message, 'Cluster status changed from ')]];
+                        $last := $cluEv[-1];
+                        $state := $exists($last) ? $substringAfter($last.Message, ' to ') : 'active';
+                        [$state = 'suspended' ? {
+                          'state': $state,
+                          'since': $last.Date,
+                          'value': 1
+                        }]
+                      )
+                    # Exactly one numeric field and the rest strings is what
+                    # makes Grafana read the frame as a numeric table, turning
+                    # every string field into a label of its own alert instance.
+                    columns:
+                      - selector: state
+                        text: state
+                        type: string
+                      - selector: since
+                        text: since
+                        type: string
+                      - selector: value
+                        text: value
+                        type: number
+                - refId: B
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: __expr__
+                  model:
+                    refId: B
+                    type: threshold
+                    datasource:
+                      type: __expr__
+                      uid: __expr__
+                    expression: A
+                    conditions:
+                      - evaluator:
+                          params:
+                            - 0
+                          type: gt
+                        operator:
+                          type: and
+                        query:
+                          params: []
+                        reducer:
+                          params: []
+                          type: last
+                        type: query
+              # A row exists only for something currently wrong, so an empty
+              # result is the healthy state and has to resolve the alert. A
+              # failing query is not: that is the alert source being broken.
+              noDataState: OK
+              execErrState: Error
+              for: {{ $for }}
+              annotations:
+                summary: 'The cluster is suspended.'
+                description: 'The rule fires while the cluster''s latest status is suspended, whatever the cause, including a suspension that followed an operator''s node shutdown. The alert clears when the cluster leaves suspended.'
+              labels:
+                app: simplyblock
+                cluster: {{ $cid }}
+                severity: critical
+              isPaused: false
+            - uid: {{ printf "sbev-%s-%s" (sha256sum $cid | trunc 8) "cluster-capacity" }}
+              title: Cluster_capacity_reached_{{ $cid }}
+              condition: B
+              data:
+                - refId: A
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: {{ $dsUid }}
+                  model:
+                    refId: A
+                    type: json
+                    source: url
+                    format: table
+                    # Only the backend parser runs server-side, which is what
+                    # an alert rule needs. root_selector is tried as a gjson
+                    # path first and falls back to JSONata; opening with a
+                    # bracket guarantees the fallback. The v2 endpoint returns
+                    # the records unwrapped, so $ is the record array itself.
+                    parser: backend
+                    url: /api/v2/clusters/{{ $cid }}/logs
+                    url_options:
+                      method: GET
+                      params:
+                        - key: limit
+                          value: {{ $logLimit | quote }}
+                    root_selector: |-
+                      (
+                        $ms := function($d) { $toMillis($substring($d & '.000', 0, 23), '[Y0001]-[M01]-[D01] [H01]:[m01]:[s01].[f001]') };
+                        $now := $millis();
+                        $ev := [$[Event = 'CAPACITY']];
+                        $latest := $count($ev) = 0 ? [] : [$each(
+                          $ev{ ($contains(Message, 'provisioned capacity') ? 'provisioned' : 'absolute'): [$] },
+                          function($evs, $kind) {
+                            (
+                              $e := $evs[-1];
+                              $window := ($kind = 'absolute' and $e.Level = 'Critical') ? 1200000 : 180000;
+                              {
+                                'kind': $kind,
+                                'severity': $e.Level,
+                                'value': $substringBefore($substringAfter($e.Message, 'reached: '), '%'),
+                                'fresh': $now - $ms($e.Date) <= $window
+                              }
+                            )
+                          })];
+                        [$latest[fresh and (severity = 'Warning' or severity = 'Critical')].{
+                          'kind': kind,
+                          'severity': severity,
+                          'value': value
+                        }]
+                      )
+                    # Exactly one numeric field and the rest strings is what
+                    # makes Grafana read the frame as a numeric table, turning
+                    # every string field into a label of its own alert instance.
+                    columns:
+                      - selector: kind
+                        text: kind
+                        type: string
+                      - selector: severity
+                        text: severity
+                        type: string
+                      - selector: value
+                        text: value
+                        type: number
+                - refId: B
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: __expr__
+                  model:
+                    refId: B
+                    type: threshold
+                    datasource:
+                      type: __expr__
+                      uid: __expr__
+                    expression: A
+                    conditions:
+                      - evaluator:
+                          params:
+                            - 0
+                          type: gt
+                        operator:
+                          type: and
+                        query:
+                          params: []
+                        reducer:
+                          params: []
+                          type: last
+                        type: query
+              # A row exists only for something currently wrong, so an empty
+              # result is the healthy state and has to resolve the alert. A
+              # failing query is not: that is the alert source being broken.
+              noDataState: OK
+              execErrState: Error
+              for: {{ $for }}
+              annotations:
+                summary: '{{ "{{" }} $labels.kind {{ "}}" }} cluster capacity is at {{ "{{" }} $value {{ "}}" }}% ({{ "{{" }} $labels.severity {{ "}}" }}).'
+                description: 'The rule reports the newest capacity event per kind, absolute and provisioned, and carries the utilization as its value. The control plane emits no back-to-normal event, so the alert clears by the event ceasing: the capacity monitor re-emits every 30 seconds while over a threshold, except an absolute critical which it throttles to once every 15 minutes, and the rule allows for both.'
+              labels:
+                app: simplyblock
+                cluster: {{ $cid }}
+                severity: warning
+              isPaused: false
+            - uid: {{ printf "sbev-%s-%s" (sha256sum $cid | trunc 8) "jm-records-threshold" }}
+              title: JM_records_threshold_exceeded_{{ $cid }}
+              condition: B
+              data:
+                - refId: A
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: {{ $dsUid }}
+                  model:
+                    refId: A
+                    type: json
+                    source: url
+                    format: table
+                    # Only the backend parser runs server-side, which is what
+                    # an alert rule needs. root_selector is tried as a gjson
+                    # path first and falls back to JSONata; opening with a
+                    # bracket guarantees the fallback. The v2 endpoint returns
+                    # the records unwrapped, so $ is the record array itself.
+                    parser: backend
+                    url: /api/v2/clusters/{{ $cid }}/logs
+                    url_options:
+                      method: GET
+                      params:
+                        - key: limit
+                          value: {{ $logLimit | quote }}
+                    root_selector: |-
+                      (
+                        $recent := 3600000;
+                        $ms := function($d) { $toMillis($substring($d & '.000', 0, 23), '[Y0001]-[M01]-[D01] [H01]:[m01]:[s01].[f001]') };
+                        $now := $millis();
+                        $ev := [$[Event = 'JM_COMPRESSION_BACKLOG']];
+                        $latest := $count($ev) = 0 ? [] : [$each($ev{ NodeId: [$] }, function($evs, $id) {
+                          (
+                            $e := $evs[-1];
+                            { 'node': $id, 'since': $e.Date, 'at': $ms($e.Date) }
+                          )
+                        })];
+                        [$latest[$now - at <= $recent].{
+                          'node': node,
+                          'since': since,
+                          'value': 1
+                        }]
+                      )
+                    # Exactly one numeric field and the rest strings is what
+                    # makes Grafana read the frame as a numeric table, turning
+                    # every string field into a label of its own alert instance.
+                    columns:
+                      - selector: node
+                        text: node
+                        type: string
+                      - selector: since
+                        text: since
+                        type: string
+                      - selector: value
+                        text: value
+                        type: number
+                - refId: B
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: __expr__
+                  model:
+                    refId: B
+                    type: threshold
+                    datasource:
+                      type: __expr__
+                      uid: __expr__
+                    expression: A
+                    conditions:
+                      - evaluator:
+                          params:
+                            - 0
+                          type: gt
+                        operator:
+                          type: and
+                        query:
+                          params: []
+                        reducer:
+                          params: []
+                          type: last
+                        type: query
+              # A row exists only for something currently wrong, so an empty
+              # result is the healthy state and has to resolve the alert. A
+              # failing query is not: that is the alert source being broken.
+              noDataState: OK
+              execErrState: Error
+              for: {{ $for }}
+              annotations:
+                summary: 'The journal on storage node {{ "{{" }} $labels.node {{ "}}" }} holds more records awaiting compression than the configured threshold.'
+                description: 'Compression is not keeping up with the journal, and journal replay on the next restart or failover grows with every record. The control plane latches this alert on the upward crossing and re-arms silently, emitting nothing when the backlog drains, so the alert clears an hour after the last crossing rather than on a recovery event.'
+              labels:
+                app: simplyblock
+                cluster: {{ $cid }}
+                severity: critical
+              isPaused: false
+            - uid: {{ printf "sbev-%s-%s" (sha256sum $cid | trunc 8) "jm-compression-error" }}
+              title: JM_compression_error_{{ $cid }}
+              condition: B
+              data:
+                - refId: A
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: {{ $dsUid }}
+                  model:
+                    refId: A
+                    type: json
+                    source: url
+                    format: table
+                    # Only the backend parser runs server-side, which is what
+                    # an alert rule needs. root_selector is tried as a gjson
+                    # path first and falls back to JSONata; opening with a
+                    # bracket guarantees the fallback. The v2 endpoint returns
+                    # the records unwrapped, so $ is the record array itself.
+                    parser: backend
+                    url: /api/v2/clusters/{{ $cid }}/logs
+                    url_options:
+                      method: GET
+                      params:
+                        - key: limit
+                          value: {{ $logLimit | quote }}
+                    root_selector: |-
+                      (
+                        $ev := [$[Event = 'jm_compression']];
+                        $latest := $count($ev) = 0 ? [] : [$each($ev{ (NodeId & '/' & VUID): [$] }, function($evs, $key) {
+                          (
+                            $e := $evs[-1];
+                            {
+                              'node': $substringBefore($key, '/'),
+                              'jm_vuid': $substringAfter($key, '/'),
+                              'level': $e.Level,
+                              'detail': $e.Message
+                            }
+                          )
+                        })];
+                        [$latest[level = 'Error'].{
+                          'node': node,
+                          'jm_vuid': jm_vuid,
+                          'detail': detail,
+                          'value': 1
+                        }]
+                      )
+                    # Exactly one numeric field and the rest strings is what
+                    # makes Grafana read the frame as a numeric table, turning
+                    # every string field into a label of its own alert instance.
+                    columns:
+                      - selector: node
+                        text: node
+                        type: string
+                      - selector: jm_vuid
+                        text: jm_vuid
+                        type: string
+                      - selector: detail
+                        text: detail
+                        type: string
+                      - selector: value
+                        text: value
+                        type: number
+                - refId: B
+                  relativeTimeRange:
+                    from: 600
+                    to: 0
+                  datasourceUid: __expr__
+                  model:
+                    refId: B
+                    type: threshold
+                    datasource:
+                      type: __expr__
+                      uid: __expr__
+                    expression: A
+                    conditions:
+                      - evaluator:
+                          params:
+                            - 0
+                          type: gt
+                        operator:
+                          type: and
+                        query:
+                          params: []
+                        reducer:
+                          params: []
+                          type: last
+                        type: query
+              # A row exists only for something currently wrong, so an empty
+              # result is the healthy state and has to resolve the alert. A
+              # failing query is not: that is the alert source being broken.
+              noDataState: OK
+              execErrState: Error
+              for: {{ $for }}
+              annotations:
+                summary: 'Journal compression failed on storage node {{ "{{" }} $labels.node {{ "}}" }} for jm_vuid {{ "{{" }} $labels.jm_vuid {{ "}}" }}: {{ "{{" }} $labels.detail {{ "}}" }}.'
+                description: 'The rule tracks the newest compression event per node and journal and fires while that event is an error, which is either a compression_failed status or a non-zero error code. The alert clears when the same journal reports a clean compression run.'
+              labels:
+                app: simplyblock
+                cluster: {{ $cid }}
+                severity: critical
+              isPaused: false
+{{- end }}
+{{- end }}
 
 {{- $grafana := .Values.controlplane.observability.grafana }}
 {{- $notifications := $grafana.notifications | default dict }}
