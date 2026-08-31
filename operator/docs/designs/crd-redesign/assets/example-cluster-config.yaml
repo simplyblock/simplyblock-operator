@@ -1,0 +1,91 @@
+# An example ClusterDeploymentConfig, referenced from design-clusterdeploymentconfig.md
+# §3. It lives beside the design rather than in a chart or a test fixture because it is
+# what a discovery run writes and an administrator then reviews, which is a document
+# somebody reads before anything is applied rather than a manifest the product ships.
+#
+# The fields are Appendix A's, which is the type this expands from. Two things a reader
+# copying from here should know: spec.approved is false in everything discovery writes
+# (§5), and the device lists are explicit rather than a rule, because the deviceFilter
+# that produced them is an input to the run and is not carried into the document (§8.1).
+
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ClusterDeploymentConfig
+metadata:
+  name: production
+  namespace: simplyblock
+
+spec:
+  # Set by a reviewer, never by discovery. The webhook of §5.1 rejects an edit that
+  # changes anything else in the same request.
+  approved: false
+
+  # Detected from the markers a distribution leaves, not asked for (§8.1). One of
+  # Vanilla, OpenShift, Rancher, K3s, or Talos.
+  environment: OpenShift
+  edgeCluster: false
+
+  # Absent spec.clusterRef, so this document creates its cluster. A growth document
+  # names an existing cluster in spec.clusterRef and carries no spec.cluster (§6).
+  cluster:
+    name: production
+    stripe:
+      dataChunks: 4
+      parityChunks: 2
+    enableFailureDomains: true
+
+  # One entry per group of workers that share a sizing. Sizing is stamped onto every
+  # StorageNode the set expands into (design-storagenode.md §3.1).
+  nodeSets:
+    - name: rack-a
+      sizing:
+        maxSubsystemCount: 100
+        vcpuCount: 15
+        minHugePagesSize: 16G
+      groups:
+        # NVMe devices are named by PCI address, which is the class simplyblock has
+        # always accepted.
+        - name: saturn
+          workers:
+            - worker3
+            - worker4
+          mgmtInterface: eth1
+          dataInterfaces:
+            - eth2
+          devices:
+            nvme:
+              - "0000:5e:00.0"
+              - "0000:5f:00.0"
+
+        # Logical block devices are named by path, and are the class 26.4 adds. A
+        # group carries one class or the other, whichever discovery was asked to
+        # report (§8.1).
+        - name: mars
+          workers:
+            - worker5
+          mgmtInterface: eth1
+          dataInterfaces:
+            - eth2
+          devices:
+            block:
+              - /dev/sdb
+              - /dev/sdc
+
+    - name: rack-b
+      sizing:
+        maxSubsystemCount: 100
+        vcpuCount: 15
+        minHugePagesSize: 16G
+      groups:
+        - name: elon
+          workers:
+            - worker1
+            - worker2
+          mgmtInterface: eth1
+          dataInterfaces:
+            - eth2
+          # Failure domains are declared per group, which the cluster's
+          # enableFailureDomains above makes mandatory rather than optional.
+          failureDomain: 1
+          devices:
+            nvme:
+              - "0000:5e:00.0"

@@ -1,0 +1,89 @@
+# Example OperatorOps objects for the Discover action, referenced from
+# design-clusterdeploymentconfig.md §7. It lives beside the design rather than in a
+# chart or a test fixture because nothing here is applied by the product: these are
+# what an administrator writes by hand to ask the operator what hardware it can see,
+# and what the object looks like once it has answered.
+#
+# Three documents: the smallest run that does anything, a run narrowed to the workers
+# and the devices somebody intends to use, and the same object after it succeeded.
+
+# The smallest useful discovery run. Every schedulable worker is inspected, every
+# device each one advertises is reported, and the config is named after the run's
+# timestamp so that it cannot overwrite a draft somebody has already corrected.
+#
+# There is no target reference, and its absence is the point: every other Ops kind in
+# the group names the entity it acts on, and this one acts on the operator process.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: OperatorOps
+metadata:
+  name: discover-initial
+  namespace: simplyblock
+spec:
+  action: Discover
+
+---
+# A narrowed run, which is what a second discovery usually is. The node selector keeps
+# the inspection to the workers meant to carry storage, and the device filter keeps the
+# boot device and the small system disks out of the draft rather than relying on the
+# approval gate to catch them.
+#
+# The filter is an input to discovery and does not survive into the document discovery
+# writes: a ClusterDeploymentConfig carries the explicit device list the filter
+# produced, never the rule that produced it.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: OperatorOps
+metadata:
+  name: discover-storage-workers
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    # Named explicitly, so the draft is predictable to review and to re-apply against.
+    configName: production-draft
+    # Labels on the Kubernetes Node objects, which are the administrator's own and
+    # not keys this API group defines.
+    nodeSelector:
+      node-role.kubernetes.io/simplyblock-storage: ""
+    deviceFilter:
+      # The slot every worker in this fleet boots from.
+      pcieDenyList:
+        - "0000:00:1f.2"
+      # Anything smaller than this is a system disk on these machines.
+      driveSizeRange: 1T-16T
+      # Report spinning disks alongside NVMe drives, which the backend accepts from
+      # 26.4 onward. Unset reports NVMe only.
+      enableLogicalBlockDevices: true
+
+---
+# The same object once the run finished, showing what a reader looks at afterward.
+# status.configRef is the whole output: the draft is where the findings are, and this
+# object is the record that a run produced it, with which filter, and when.
+#
+# The draft it wrote carries spec.approved: false, which discovery sets and never
+# changes. Nothing is deployed until somebody reviews the device lists and approves it.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: OperatorOps
+metadata:
+  name: discover-storage-workers
+  namespace: simplyblock
+  generation: 1
+spec:
+  action: Discover
+  discover:
+    configName: production-draft
+    nodeSelector:
+      node-role.kubernetes.io/simplyblock-storage: ""
+    deviceFilter:
+      pcieDenyList:
+        - "0000:00:1f.2"
+      driveSizeRange: 1T-16T
+      enableLogicalBlockDevices: true
+status:
+  phase: Succeeded
+  step:
+    state: Writing
+  configRef: production-draft
+  message: Wrote production-draft from 6 workers and 34 candidate devices.
+  observedGeneration: 1
+  startedAt: "2026-08-31T09:14:02Z"
+  completedAt: "2026-08-31T09:14:51Z"
