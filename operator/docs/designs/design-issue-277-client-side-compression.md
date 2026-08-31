@@ -2,23 +2,9 @@
 
 **Status:** Partially Implemented  
 **Author:** Manohar Reddy  
-**Date:** 2026-08-06 (last updated 2026-08-25)  
+**Date:** 2026-08-06 (last updated 2026-08-31)  
 **Issue:** https://github.com/simplyblock/simplyblock-operator/issues/277
 **Test Plan:** [`tests/test-plan-issue-277-client-side-compression.md`](../tests/test-plan-issue-277-client-side-compression.md)
-
----
-
-**Reader expectations**: this document is weighted toward hands-on validation
-over top-down design. It grew out of testing whether specific mechanisms work
-(VDO creation and reattach, clone/snapshot handling, migration, kernel/OS
-support, compression vs. deduplication cost) and threading design decisions
-through as they emerged from that testing — not from writing an architecture
-first and citing evidence afterward. Design decisions and their rationale are
-present throughout, but they sit alongside a lot of verification detail
-rather than being the primary structure with evidence cited in support.
-Readers expecting a conventional design doc (problem statement, chosen
-approach, alternatives considered, interface surface, rollout plan, each
-backed by evidence) should calibrate for that difference going in.
 
 ---
 
@@ -47,9 +33,6 @@ backed by evidence) should calibrate for that difference going in.
   - [11. Testing Strategy](#11-testing-strategy)
   - [12. Compatibility with Existing CSI Driver / Operator Features](#12-compatibility-with-existing-csi-driver--operator-features)
     - [Confirmed compatible, no changes needed](#confirmed-compatible-no-changes-needed)
-    - [Real gaps found — need design/code changes](#real-gaps-found--need-designcode-changes)
-    - [Needs a one-line confirmation, not a design change](#needs-a-one-line-confirmation-not-a-design-change)
-  - [13. Open Questions and Discussion](#13-open-questions-and-discussion)
 
 ---
 
@@ -59,8 +42,9 @@ backed by evidence) should calibrate for that difference going in.
 for a client-side compression/dedup layer: when requested via a StorageClass, a
 compression block device is auto-created between the CSI mount and the NVMe-oF
 multipath device used for the volume, and this device must be re-included every
-time the node-side CSI driver re-provisions the volume. To achieve this we use 
-VDO (Virtual Data Optimizer, the `dm-vdo` device-mapper target) as the intended mechanism.
+time the node-side CSI driver re-provisions the volume. VDO (Virtual Data
+Optimizer, the `dm-vdo` device-mapper target) is the mechanism used to
+achieve this.
 
 ### VDO availability
 
@@ -104,6 +88,9 @@ VDO availability cannot be assumed present on any node.
   as a known prerequisite gap (see [Section 4](#4-node-capability-auto-install-and-advertisement)).
 - Guaranteeing standalone `vdo` CLI longevity — Red Hat has been nudging toward
   LVM-integrated VDO; noted as a re-evaluate-later risk, not solved here.
+- Supporting non-RHEL-family node OSes. `kmod-kvdo`/`vdo` packages are a
+  RHEL-family concept; a distro like Ubuntu has no equivalent path evaluated
+  or supported by this design.
 
 ---
 
@@ -191,6 +178,16 @@ image; the capability-detection step below still works correctly in that case
 itself) — it just means the earlier install step is a no-op/failure that's
 already handled by the `rpm -q` check, or informational failure if truly absent.
 
+**In-tree `dm-vdo` on kernel 6.9+.** Per the `dm-vdo/kvdo` project's own
+README, the out-of-tree `kvdo` module is no longer updated for newer
+kernels: its functionality merged into the mainline kernel as the `dm-vdo`
+module starting at 6.9. On a node already running a kernel at or above that
+line, none of the `dnf install`/`modprobe kvdo` machinery above is needed.
+The capability check tries `modprobe dm-vdo` first, and only falls through
+to the `kmod-kvdo`/`vdo` install path above when that fails, so a node on a
+current-enough kernel gets VDO capability with no install step, and no
+`dnf`/BaseOS dependency, at all.
+
 ### Advertise via node label
 
 Record success/failure of `modprobe kvdo` and add it to the node label
@@ -200,8 +197,8 @@ Record success/failure of `modprobe kvdo` and add it to the node label
 
 **Operator override, implemented and live-verified.** The auto-detect probe above
 runs on every `csi-node` pod restart, which would otherwise clobber a label an
-operator set by hand (the escape hatch airgapped clusters and non-RHEL golden
-images need, see [§13](#13-open-questions-and-discussion)). `advertiseVDOCapability`
+operator set by hand (the escape hatch an airgapped cluster or a golden-image
+node needs). `advertiseVDOCapability`
 stamps a second annotation, `simplyblock.io/vdo-capable-managed-by:
 auto-detect`, alongside every label value it writes itself. On startup it first
 checks whether `simplyblock.io/vdo-capable` is already present without that
@@ -270,6 +267,9 @@ much cheaper benefit.
   `client_compression == "true" || client_deduplication == "true"`, not on
   `client_compression` alone (a dedup-only volume still needs a working `kvdo`
   module just as much as a compression-only one).
+- **A PVC requesting `clientCompression` or `clientDeduplication` must be at
+  least 5GiB.** VDO enforces its own hard minimum around 4.72GiB; a smaller
+  device cannot hold a VDO container at all.
 
 ---
 
@@ -304,8 +304,8 @@ device-resolution logic is required. The resulting dm device is named
 actual available capacity rather than a hardcoded value; omitting `-V` sizes
 the logical volume to the largest size that remains safe within the pool even
 under zero dedup/compression savings (per `man lvmvdo`). Every LVM command is
-scoped to `$DEV` via `--devices` — see "HA-duplicate-PV fix" below for why
-this is required, not just tidy.
+scoped to `$DEV` via `--devices` — see "HA-mode device identity" below for
+why this is required, not just tidy.
 
 *This sequence, run against an NVMe-oF-connected simplyblock lvol, produces a
 mountable filesystem; a file written after mount and read back matched its
@@ -375,9 +375,8 @@ func DeactivateVDO(ctx context.Context, lvolID string) error
 // (the vgimportclone equivalent), before any activation is attempted. Must
 // run BEFORE CreateOrAttachVDO's own vgs/lvs check, since a byte-identical
 // clone will otherwise look like "this volume's VG already exists" under the
-// wrong name/UUID. See Section 12. Unlike XFS's `nouuid` mount flag for FS
-// UUID collisions, there is no equivalent filesystem-level workaround for the
-// LVM/VDO layer.
+// wrong name/UUID. Unlike XFS's `nouuid` mount flag for FS UUID collisions,
+// there is no equivalent filesystem-level workaround for the LVM/VDO layer.
 func ResolveClonedVDO(ctx context.Context, devicePath, lvolID string) error
 
 // GrowVDO extends the VG's pool LV to consume all newly available physical space on
@@ -387,43 +386,38 @@ func ResolveClonedVDO(ctx context.Context, devicePath, lvolID string) error
 func GrowVDO(ctx context.Context, devicePath, lvolID string) (string, error)
 ```
 
-**HA-duplicate-PV fix (a real bug found and fixed live, not anticipated by
-this design's original sequence above).** A volume's two redundant NVMe-oF HA
-paths each surface as their own local `/dev/nvmeXnY` device node while
-presenting byte-identical backend content. LVM's default, system-wide device
-scan cannot tell these apart: `pvscan --cache <path>` hit a genuine "duplicate
-PV" ambiguity between a volume's two HA device nodes, and even once commands
-were pointed at one specific path, a name-based `vgs <name>` existence check
-still reported a VG as present when it had never actually been created on
-that device (this host restricts default LVM visibility via an
-`/etc/lvm/devices/system.devices` devices file, so a name-only lookup does not
-reliably tie its answer back to the intended device). Fixed in three parts,
-found and verified across three rounds of live debugging:
+**HA-mode device identity.** A volume's two redundant NVMe-oF HA paths each
+surface as their own local `/dev/nvmeXnY` device node while presenting
+byte-identical backend content. LVM's default, system-wide device scan
+cannot tell these apart: `pvscan --cache <path>` hits a "duplicate PV"
+ambiguity between a volume's two HA device nodes, and even once commands are
+pointed at one specific path, a name-based `vgs <name>` existence check still
+reports a VG as present when it was never actually created on that device
+(this host restricts default LVM visibility via an
+`/etc/lvm/devices/system.devices` devices file, so a name-only lookup does
+not reliably tie its answer back to the intended device). Handled in three
+parts:
 
 1. Every LVM command in `CreateOrAttachVDO`/`ResolveClonedVDO`/`GrowVDO` is
    scoped to exactly one device via LVM's `--devices` flag, bypassing the
    system-wide scan entirely.
-2. `vgExists` is content-based (`pvVGName(devicePath) == vg`), not the
-   original name-based `vgs --devices <path> <name>` lookup, using the same
-   content-scanning identity check `ResolveClonedVDO` already used for clone
+2. `vgExists` is content-based (`pvVGName(devicePath) == vg`), not a
+   name-based `vgs --devices <path> <name>` lookup, using the same
+   content-scanning identity check `ResolveClonedVDO` uses for clone
    detection.
-3. A new `vgHasLV` check distinguishes a fully created VDO stack from an
+3. A `vgHasLV` check distinguishes a fully created VDO stack from an
    **orphaned VG** left behind by an interrupted create (`pvcreate`/
    `vgcreate` completed, `lvcreate` did not): such a VG reports zero LVs, and
    `vgchange -ay` against it "succeeds" while producing no mountable device
-   at all. `CreateOrAttachVDO` now removes an orphaned VG and falls through to
-   a fresh create rather than reactivating it forever.
+   at all. `CreateOrAttachVDO` removes an orphaned VG and falls through to a
+   fresh create rather than reactivating it forever.
 
-With all three in place, two independently toggled VDO pools (compression-only,
-dedup-only) mounted successfully end-to-end on the same cluster where this was
-first found, confirming the fix chain works together. See the test plan's
-Error-case coverage for the live evidence.
+See the test plan's Error-case coverage for verification.
 
 Compression and deduplication have different cost profiles: deduplication
 carries a measurably larger, fixed per-volume memory cost than compression
-does, independent of whichever combination of the two is enabled. See
-[§13](#13-open-questions-and-discussion) for a real-hardware measurement of
-that cost.
+does, independent of whichever combination of the two is enabled — an
+accepted cost of client-side deduplication, not a design constraint.
 
 ### Clone and snapshot restore handling
 
@@ -492,7 +486,7 @@ deliberate configuration.
   `client_deduplication`) — VDO virtualizes and relocates blocks, so the
   filesystem is no longer directly on the erasure-coded device; applying
   stripe alignment hints computed for the raw device to a VDO virtual device
-  is not just useless, it's actively misleading. See Section 12.
+  is not just useless, it's actively misleading.
 
 ---
 
@@ -531,10 +525,29 @@ device disappears without a clean disconnect, `DeactivateVDO`'s `vgchange
 -an` fails ("Volume group ... not found") because there is no device left to
 read the VG's metadata from, and the fallback is a direct `dmsetup remove` of
 the live dm nodes (see `RemoveOrphanedDMNodes` in Section 7) rather than the
-normal LVM teardown path. Separately, VDO fences itself into read-only mode
-on the underlying I/O failure rather than corrupting anything, and ext4
-independently aborts its own journal for the same reason, neither needing
-wiring from this design.
+normal LVM teardown path: it matches every dm node whose name starts with
+the volume group's dash-escaped name and removes each with a plain `dmsetup
+remove`, retrying up to three passes so a node still blocked by another
+live dependency clears once that dependency is gone. The removal mechanism
+itself is proven correct; what's unverified is whether it always runs at
+all, since it only fires when `NodeUnstageVolume` is actually invoked on the
+affected node, and whether kubelet's volume reconciler reliably re-invokes
+`NodeUnstageVolume` on the *original* node after a NotReady/rejoin cycle,
+once the pod has already been rescheduled elsewhere, is a different,
+unverified code path (see the test plan). Separately, VDO fences itself into
+read-only mode on the underlying I/O failure rather than corrupting
+anything, and ext4 independently aborts its own journal for the same
+reason, neither needing wiring from this design.
+
+The node's `/etc/lvm/devices/system.devices` file, which restricts LVM's
+default visibility to specific devices, is a separate concern this design
+does not address at all: no code path prunes a stale entry after its
+device disappears, unlike the dm-node cleanup above, which exists and only
+needs reliably triggering. It doesn't affect correctness, since the file
+only gates which devices LVM considers rather than causing failures on its
+own, so this is a hygiene concern rather than a safety one, but it is
+unbounded: a node that accumulates enough failure cycles over its lifetime
+grows a stale entry per cycle with no automatic pruning anywhere.
 
 **Crash-consistency under `async`** (the default write policy, see Section
 7): an `fsync()`'d write survives a genuine, unclean node crash with an exact
@@ -596,8 +609,7 @@ a genuine cross-node reschedule, and `VolumeMigration` compatibility all have
 real evidence, not just unit coverage. What remains open is concentrated in a
 few specific gaps rather than spread across the whole feature: interrupt
 recovery mid-`lvcreate`, a live `kvdo`-unloadable regression, and load/scale
-behavior at realistic fleet density. See [§13](#13-open-questions-and-discussion)
-for the design-level open questions this doesn't resolve.
+behavior at realistic fleet density.
 
 Full scenario matrix, coverage status, and hand-off test concepts:
 [`tests/test-plan-issue-277-client-side-compression.md`](../tests/test-plan-issue-277-client-side-compression.md).
@@ -701,214 +713,3 @@ landing at **~1:1, effectively zero savings** (137,186 new data blocks for
 137,173 new logical blocks written) — ciphertext genuinely doesn't compress
 or dedup. But since the architecture never exposes ciphertext to the client,
 this failure mode does not occur here. **No design change needed.**
-
-### Real gaps found — need design/code changes
-
-- **🔴 Clone/snapshot-restore volumes will carry byte-duplicate LVM/VDO
-  metadata — confirmed, not speculative.** `CreateSnapshot`/clone provisioning
-  in this driver is a true block-level CoW clone (SPDK-backed), not a
-  copy-and-reformat. `stageVolume`'s `FormatAndMountSensitiveWithFormatOptions`
-  already `blkid`-probes and skips `mkfs` if a filesystem is detected — proven
-  by an **existing workaround already in the codebase**:
-  `stagingMountFlags` adds `nouuid` for XFS specifically because "XFS refuses
-  to mount two filesystems with the same UUID" on a volume and its
-  clone/restored snapshot. A VDO/LVM stack has **no equivalent per-mount
-  escape hatch** — `pvscan`/`vgscan`/udev auto-activation operate on the
-  whole node's device namespace, not per-mount, so a byte-duplicate PV/VG
-  UUID could cause `vgchange`/`lvm2-activation` failures or silent
-  misdetection node-wide, merely from both devices being *visible* to the
-  same node — not even requiring both to be mounted simultaneously (common in
-  Kubernetes: clones are frequently scheduled onto the same node as their
-  source). **Fix (implemented and live-verified):** a `vgimportclone`-equivalent
-  UUID-regeneration step (`ResolveClonedVDO`, added to Section 7) runs before
-  any LVM activation whenever `VolumeContentSource` is set. This was the
-  single most important finding from this review — it's a correctness gap,
-  not a tuning question.
-- **🟡 Existing XFS stripe-alignment tuning (`xfs_su`/`xfs_sw`,
-  `xfsStripeOptions`) becomes meaningless — and actively misleading — under
-  VDO.** VDO virtualizes and relocates blocks for deduplication, so a
-  filesystem on a VDO device is no longer directly on the erasure-coded
-  backend device the stripe hints were computed for. **Fix (implemented and
-  live-verified):** `stageVolume` skips `xfsStripeOptions` entirely whenever
-  either client-side VDO flag is set.
-- ~~Server-side `encryption=true` + `client_compression=true` likely defeats
-  compression~~ **Retracted — spiked and confirmed wrong; moved to "Confirmed
-  compatible" above.** The client always receives plaintext for an encrypted
-  volume (crypto bdev sits below the NVMf attach point, server-side-only key),
-  so this combination is fine. See the detailed writeup above.
-- **🟡 Server-side `compression=true` + `client_compression=true` is
-  redundant, not harmful.** Compressing already-compressed data wastes CPU on
-  both ends for negligible additional savings — a much milder version of the
-  encryption issue. **Fix: not yet implemented.** No warning exists anywhere
-  in the codebase today for this combination; it silently runs both layers.
-  Still lower priority than the encryption case, since it wastes CPU rather
-  than breaking anything. `client_deduplication` has no server-side
-  counterpart to worry about here — the existing server-side feature is
-  compression-only.
-
-### Needs a one-line confirmation, not a design change
-- ~~Placement webhook / volume placement injector~~ **Resolved (read the
-  code): no conflict exists.** `SimplyblockVolumePlacementInjector` only picks
-  which storage backend node hosts the lvol (a `host_id` hint annotation
-  `CreateVolume` consumes); it never touches pod scheduling or injects pod
-  affinity. It cannot conflict with Section 5's `vdo-capable` topology gate
-  because the two apply to different things entirely: this webhook selects a
-  storage node, the topology gate constrains the consuming pod's node. Also
-  confirms client-side VDO's backend-node-agnosticism directly: `VolumeMigration`
-  moving a VDO-backed volume's storage node has no `vdo-capable` check at all
-  (verified live and in code, this session), correct since `dm-vdo` runs on
-  the consumer node on top of the NVMe-oF client connection, never on the
-  backend.
-- ~~`AllowedTopologies` composition with DHCHAP's existing `allowedNodes`
-  gate~~ **Resolved (read the code):** `createStorageClassIfNotExists`
-  (`simplyblockstoragepool_controller.go`) builds one `TopologySelectorTerm`
-  and appends both the DHCHAP and the `vdo-capable` expressions into its
-  single `MatchLabelExpressions` list when both apply to the same pool. Its
-  own doc comment states the reason explicitly: a list within one term
-  is ANDed by Kubernetes, whereas separate terms would be ORed and
-  incorrectly let a volume needing both land on a node satisfying only one.
-  Implemented correctly from the start, not something this review needed to
-  fix.
-
----
-
-## 13. Open Questions and Discussion
-
-- **Unresolved policy question: what exactly qualifies a volume for
-  deduplication?** Per team discussion, deduplication is meant to be
-  restricted to "specific volumes" rather than freely available anywhere
-  compression is — a deliberate choice given the measured, fixed ~390MB/volume
-  RAM cost (below) that compression alone doesn't carry. But the concrete
-  rule hasn't been decided. Candidates, each implying different plumbing:
-  - **Pool/StorageClass-level allowlist:** an admin explicitly enables
-    `clientDeduplication` on specific pools (mirrors the existing
-    `DHCHAP`/`AllowedNodes` pattern already on `Pool`).
-  - **Workload-type label/annotation:** e.g., only PVCs labeled as VM-image or
-    backup-target storage get dedup, auto-applied rather than admin-toggled
-    per pool.
-  - **Size threshold:** dedup only below/above some volume size, since the
-    fixed per-instance index cost matters proportionally more for small
-    volumes.
-  This needs to be settled with the team before `ClientDeduplication`'s exact
-  validation/gating behavior (Section 6) can be finalized — right now the
-  field is a plain independent boolean with no restriction beyond the
-  topology capability gate, which may not be what's wanted.
-- ~~🔴 `upsertStorageClass` is create-only, not create-or-update — enabling
-  compression/dedup on an existing Pool silently does nothing~~ **Resolved,
-  by a stronger guarantee than either option this originally proposed.**
-  `createStorageClassIfNotExists`
-  (`operator/internal/controller/simplyblockstoragepool_controller.go`, its
-  current name; this section originally cited it as `upsertStorageClass`)
-  is still intentionally create-only, and a `Create` against an
-  already-existing name still hits `AlreadyExists` and no-ops. But
-  `StoragePoolSpec.StorageClassParameters` now carries `+k8s:immutable`,
-  which `controller-gen` turns into an `x-kubernetes-validations: self ==
-  oldSelf` rule the API server itself enforces. An attempt to edit
-  `storageClassParameters` on an already-created Pool is **rejected outright
-  by Kubernetes**, with an explicit validation error at the moment of the
-  edit, not silently swallowed later inside the reconciler. This is neither
-  of the two fixes originally proposed (a status condition, or documenting
-  the limitation): it prevents the invalid edit from ever being persisted at
-  all, so there is no silent-no-op window to detect or document. One loose
-  end: the `ClientCompression`/`ClientDeduplication` field-level doc comments
-  in `storagepool_types.go` still describe the old "changing this has no
-  effect" behavior and cite issue #401 — worth updating to describe the
-  actual, stronger guarantee (an explicit rejection, not a silent no-op) now
-  that the type-level comment on `StorageClassParameters` already does.
-- ~~Standalone `vdo` CLI longevity~~ **Resolved (verified hands-on)**: it's
-  already gone, not just uncertain — the installed `vdo` 8.2.2.2 package on
-  this cluster ships no `vdo` binary at all, only `vdoformat`/`vdostats`/etc.
-  LVM-integrated VDO (`lvcreate --type vdo`) is the only management path that
-  exists; Section 7 is now written against that reality.
-- ~~Airgapped install~~ **Partially resolved**: `advertiseVDOCapability` now
-  leaves an operator-set `simplyblock.io/vdo-capable` label alone rather than
-  overwriting it with its own probe result, keyed off a
-  `simplyblock.io/vdo-capable-managed-by` annotation the auto-detect path
-  stamps on every label it writes itself (absent, or any other value, means a
-  human set it). A cluster admin can label an airgapped or golden-image node
-  by hand and it sticks. What's still open: no *tooling* to help an admin
-  decide which nodes qualify (e.g., a kernel-version/package-availability
-  check they could run before labeling) — this only solves "can override,"
-  not "how do I know what to set it to."
-- **Kernel/distro coverage beyond RHEL-family:** this design assumes a
-  RHEL-compatible distro with `kmod-kvdo`/`vdo` packages available. Non-RHEL
-  K8s node OSes (e.g., Ubuntu-based managed node images) were not evaluated and
-  may not have an equivalent path at all — worth scoping which distros this
-  feature needs to support before wide rollout.
-- **Memory/CPU cost per VDO instance — now measured, not estimated, and worse
-  than the earlier documentation-sourced guess**: a real VDO-backed LV at the
-  minimum viable size (5.5GiB physical pool, `vm04`) reported, via
-  `vdostats --verbose`, **`KVDO module bytes used: 408960848`** (~390MB of
-  kernel RAM) for that single instance, and **918272 overhead blocks
-  (~3.5GiB, 64% of the pool) consumed by VDO's own bookkeeping before a single
-  byte of user data was written** — only 642 data blocks (~2.6MB) held actual
-  post-dedup/compression data from 600MB of highly duplicate/compressible test
-  input. With many small-to-medium PVCs per node, this is a real, significant
-  per-node RAM and usable-capacity tax (~390MB RAM and ~3.5GiB of "wasted"
-  physical space *per volume*, at minimum size) — not a rough theoretical
-  concern. Whether the overhead ratio improves meaningfully for larger pools
-  (bigger slab configuration) is unverified and should be tested before
-  committing to "one VDO instance per PVC" for the platform's typical PVC size
-  range.
-
-  This ~390MB figure is a module-wide total, not per-instance, confirmed by
-  running two simultaneous deduplication-enabled volumes: combined memory was
-  within 0.0003% of exactly double the single-instance figure, so there's no
-  shared-memory benefit across instances, and each additional
-  deduplication-enabled volume adds the full ~390MB. Compression-only volumes
-  don't carry this cost: deduplication is what drives it, via a fixed 256MB
-  UDS index (`lvm dumpconfig --type default
-  allocation/vdo_index_memory_size_mb` → `256`, a compiled-in `lvm2` default,
-  not something `lvcreate` derives from pool or device size) plus roughly
-  130-140MB of other fixed `kvdo` module structures. Because that index size
-  is fixed rather than size-derived, the cost should hold at any volume size,
-  not just the narrow range (5.1-9.2GiB) actually measured. A dense
-  256MB index only covers roughly a 1TiB deduplication window, though, so a much
-  larger volume would keep costing the same ~390MB while seeing
-  deduplication *effectiveness* degrade beyond that window: a capacity
-  ceiling on the benefit, not the cost.
-- **DKMS/source-build does not escape the kernel-currency requirement**
-  (checked and ruled out on `vm02` — a **prerequisite check only**: no source
-  was cloned, no build was attempted, no module was loaded; this was closed
-  off before reaching an actual build step). The hope was that building `kvdo`
-  from
-  upstream source ([github.com/dm-vdo/kvdo](https://github.com/dm-vdo/kvdo) —
-  confirmed to be exactly the source Red Hat builds `kmod-kvdo` from) against
-  the exact running kernel's headers might avoid the prebuilt-`kmod-kvdo`
-  NVR-pinning fragility entirely. Note the source itself is *not* pinned to
-  exact kernel NVRs the way the prebuilt RPM is — its `8.2.x.x` branch targets
-  the whole `5.14.0-*.el9` family generically via
-  `make -C /usr/src/kernels/$(uname -r) M=$(pwd)`. The blocker in practice was
-  narrower: the repo providing `kernel-devel` only retains headers for the
-  same small set of "current" kernel builds that `kmod-kvdo` itself targets —
-  the running kernel's own `kernel-devel` package (`503.14.1.el9_5`) was **not
-  available** (general internet/GitHub reachability was confirmed fine; the
-  missing piece is vendor-side header retention, not network access, build
-  tooling, or source versioning). Net effect is the same either way: the only
-  real fix is running a kernel build the vendor is still actively shipping
-  matching artifacts for — **node kernel currency is the actual prerequisite**,
-  not a packaging inconvenience to engineer around.
-- **VDO is now upstream/in-tree as of kernel 6.9:** per the `dm-vdo/kvdo`
-  README, *"This repository is no longer being updated for newer kernels...
-  The latest version of this project is available in the Linux kernel as the
-  dm-vdo module starting in version 6.9."* On any node running a kernel ≥6.9,
-  none of Section 4's install/modprobe/grub-pinning machinery is needed at
-  all — `dm-vdo` is already part of the kernel, so node-capability detection
-  degrades to a plain `modprobe dm-vdo` (or config) check with no package
-  install and no boot-default side effect. Worth checking whether any of
-  simplyblock's target node OSes (newer Ubuntu, a future RHEL/Rocky rebase)
-  already clear that bar — Section 4 should detect and prefer the in-tree
-  `dm-vdo` path over the legacy `kvdo`/`kmod-kvdo` install path when present,
-  rather than assuming the RHEL9-era out-of-tree path forever.
-- **Crash/interrupt recovery during `lvcreate --type vdo` — inconclusive, still
-  open**: three separate attempts to interrupt `lvcreate --type vdo` mid-
-  transaction (fixed-delay kill, immediate-detection kill, `SIGSTOP`) all
-  failed to catch a genuinely partial state — the operation completes in
-  well under a second even at 8-9GB. This bounds the practical risk (a
-  `NodeStageVolume` interrupted by, say, a killed CSI pod has a narrow window
-  to land mid-`lvcreate`) but doesn't rule it out — real production volumes,
-  slower network-attached NVMe-oF storage, or a loaded node could widen the
-  window. `CreateOrAttachVDO`'s check-then-act idempotency (Section 7) should
-  still handle a genuinely half-created VG defensively (detect and clean up
-  rather than error unrecoverably), even though this session couldn't
-  reproduce that state to verify it end-to-end.
