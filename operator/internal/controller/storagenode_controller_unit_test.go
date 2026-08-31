@@ -8,6 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -307,6 +308,39 @@ func TestHandleDeletion_RemovesFinalizerWhenNeverProvisioned(t *testing.T) {
 	for _, f := range updated.Finalizers {
 		if f == storageNodeFinalizer {
 			t.Error("finalizer should have been removed for unprovisioned node")
+		}
+	}
+}
+
+// TestReconcile_FinalizesWhenParentStorageNodeSetGone verifies that a StorageNode
+// being deleted can still clear its finalizer when the owning StorageNodeSet has
+// already been removed (e.g. cascading delete racing ahead of its children).
+// Reconcile must check DeletionTimestamp before looking up the parent, since
+// handleDeletion doesn't need it — otherwise this loops forever on
+// "parent StorageNodeSet not found, requeuing" and the StorageNode is stuck.
+func TestReconcile_FinalizesWhenParentStorageNodeSetGone(t *testing.T) {
+	sn := newStorageNode("sn-1", snTestNS, "sns-already-deleted", snTestWorker)
+	sn.Finalizers = []string{storageNodeFinalizer}
+	now := metav1.Now()
+	sn.DeletionTimestamp = &now
+	// status.UUID is empty — node was never provisioned, so handleDeletion should
+	// remove the finalizer immediately without needing backend cleanup.
+	r := newSNReconciler(t, sn)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "sn-1", Namespace: snTestNS},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	var updated simplyblockv1alpha1.StorageNode
+	getErr := r.Get(context.Background(), types.NamespacedName{Name: "sn-1", Namespace: snTestNS}, &updated)
+	if getErr == nil {
+		for _, f := range updated.Finalizers {
+			if f == storageNodeFinalizer {
+				t.Error("finalizer should have been removed even though parent StorageNodeSet is gone")
+			}
 		}
 	}
 }
