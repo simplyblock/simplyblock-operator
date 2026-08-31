@@ -25,6 +25,12 @@ References:
   .claude/skills/api-design/scripts/check-crds.py --changed
   ```
 
+  `--design <doc.md>` runs the same audit over the Go in a design document's
+  appendices, which is where a per-kind design states the type it specifies. A
+  convention broken in a document becomes a convention broken in the API a release
+  later, so the cheapest place to catch it is before anything is implemented. The
+  `design-doc` skill's step 3a owns what that appendix has to contain.
+
   **Do not read adoption numbers out of this skill's prose.** They went stale
   within weeks the last time they were written by hand: short names were
   documented as absent while ten types carried one. `--adoption` reads them from
@@ -63,6 +69,11 @@ its `Ops` kind accepts.
   `status.boundNodeUUID`.
 - **Progress counters belong in status** (`volumesMigrated`, `volumesPending`) and
   are what a `printcolumn` shows.
+- **A boolean toggle is `enableXyz` or `disableXyz`**, chosen by the default so
+  that the zero value is the default: `enableXyz` when the thing is off, and
+  `disableXyz` when it is on. `skipXyz`, `withXyz`, `xyzEnabled`, and a bare
+  `enabled` are rejected, and the checker reports them as
+  `toggle-not-enable-disable`. See `references/consistency.md`.
 
 ## What every new type carries
 
@@ -93,8 +104,30 @@ The full table with adoption numbers is in `references/markers.md`. The minimum:
   `enumless-closed-set` for a named type whose constants the API server does not
   constrain, `untyped-phase` for a `Phase string` that should be a
   `<Kind>Phase`. Seven phases are still plain strings.
-- **`observedGeneration` in status.** No type has it, in any of the seventeen.
-  New ones carry it. See `reconciler-patterns` for what breaks without it.
+- **An enum value this group defines is PascalCase.** `Activate`, `RollingRestart`,
+  `HostMaintenance`. Not `activate`, not `rolling-restart`, not `shutdown_called`.
+  This is the spelling core Kubernetes uses for every enum it owns (`Pending`,
+  `IfNotPresent`, `ClusterIP`, `Retain`), and it is already the spelling of every
+  phase in this group, so a lowercase action verb beside a `Pending` phase is
+  inconsistent within a single object. It is also what makes the Go constant and
+  the wire value the same word, which is what lets `StorageNodeOpsActionMigrate`
+  be read off `action: Migrate` without a lookup table.
+
+  **The exception is a value that names something outside this group**, where that
+  thing's own spelling wins: `ext4` and `xfs` are the kernel's names for
+  filesystems, and a value mirrored from the control plane's vocabulary keeps the
+  control plane's casing. The test is whether this group invented the word. The
+  checker reports the rest as `enum-value-not-pascal-case`, and carries the
+  foreign-value list.
+- **`observedGeneration` in status, on every kind, written on every status
+  update.** Both halves are the rule: a declared field nothing writes reports a
+  definite-looking zero rather than nothing. Without it a stale status and a
+  disagreeing one are the same observation, so a spec edit cannot be waited on and
+  a test has to sleep instead. Status is written with an optimistic-lock patch,
+  which is what stops a status computed from generation N landing over one
+  computed from N+1. No type has it, in any of the seventeen, which is the group's
+  largest single gap. `design-crd-model.md` §7.9 is the rule and
+  `reconciler-patterns` is the mechanics.
 - **A phase, and conditions when something waits.** Ten kinds report progress
   through `status.phase` and a message, three through `status.conditions`, and
   none through both. For a new type: a typed phase always, because that is what
@@ -111,26 +144,83 @@ action or target on a running operation is the "spec changed mid-flight" failure
 the reconciler then has to detect and fail on, when admission could have refused
 the edit. `check-crds.py` reports each as `unenforced-immutability`.
 
-**The shortest correct spelling is `// +k8s:immutable`.** controller-gen emits
-`x-kubernetes-validations: rule: self == oldSelf` from it. 29 fields use it and
-the generated CRDs carry 30 such rules. It is easy to assume otherwise, because
-it does not look like a `+kubebuilder:` marker. `references/consistency.md`
-tabulates which spellings reach the schema.
+**The correct spelling is `// +k8s:immutable`, for both meanings.** It does not
+look like a `+kubebuilder:` marker, which is why it is taken for inert
+documentation. It emits two rules, and which of them apply depends on whether the
+field is required:
 
-Reach for CEL when `self == oldSelf` is not what is meant. Two shapes, and the
-difference matters:
+- **On an optional field:** immutable **once set**. A field-level
+  `self == oldSelf` rejects a change, and a parent-level
+  `!has(oldSelf.X) || has(self.X)` rejects removal. Neither blocks a first
+  assignment.
+- **On a `Required` field:** immutable from creation, because the field can never
+  be absent for the field-level rule to skip.
 
-```go
-// Always immutable, from creation:
-// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="targetCluster is immutable"
-
-// Immutable once set, so it can be filled in later but never changed:
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType",message="fabricType is immutable once set"
-```
+The hand-written `!has(oldSelf.x) || self.x == oldSelf.x` is the longer spelling of
+the once-set case and guards only the value. `references/consistency.md` has the
+generator source lines. Write CEL when the rejection message has to say something
+the generated one cannot.
 
 An `Ops` spec is immutable in its entirety: target, action, and parameters. The
 object is a request, and a request that can be rewritten while it runs is a
 different request.
+
+## A reference to another kind is resolved at admission
+
+**Every field naming another object in this API group is checked by a validating
+webhook on create, which rejects a reference that does not resolve.** `clusterRef`,
+`nodeRef`, `poolRef`, `backupRef`, `creatorRef`, and the per-action target of every
+`Ops` kind are all this. The webhook does one thing: it gets the named object, and
+refuses the create when there is nothing there.
+
+**The reason is the section above.** These references are immutable, almost without
+exception, so a reference that is wrong at creation is wrong for the object's whole
+life: the field cannot be edited, and the only remedy is to delete the object and write
+it again. That is precisely what a rejected create asks for, except that the rejection
+says so at once and at no cost, while admitting it produces an object parked in
+`Pending` with a message whose only action is the deletion the rejection would have
+required. A mutable reference is a weaker case for the same check, and still worth it.
+
+**Existence is admission's, readiness is the controller's.** The two are different
+questions and putting either in the other's place is wrong. Whether the named object
+exists is fixed for an immutable field, so it is decided once, at create. Whether it is
+*ready* — a cluster with no `status.uuid` yet, a pool still being created, a node that
+is offline — is true at one moment and false at the next, and an admission decision is
+never revisited, so deciding it there would decide it wrongly for most of the object's
+life. A reference that resolves to an object that is not ready is therefore admitted,
+and the controller holds in `Pending` with an event saying what it is waiting for.
+
+**Do not do it when it is not possible.**
+
+- The field does not name a Kubernetes object. A backend identifier is not a
+  reference however much its name looks like one, and it takes a format rule on the
+  type instead: `sourceClusterID` carries a control-plane UUID and is validated by
+  `+kubebuilder:validation:Pattern`, not by a lookup. A `*Ref` suffix on such a field
+  is the naming defect that hides this, so fix the name first.
+- The object is core Kubernetes and legitimately arrives later. A claim a restore
+  creates, or a `PersistentVolume` that provisioning has not produced yet, cannot be
+  required to exist at admission.
+
+**Do not do it when it is not necessary.**
+
+- The operator writes the reference itself. An object the operator creates from a
+  template names the parent that created it and always resolves, so the check buys
+  nothing on that path — but write it anyway when a user *can* author the kind by
+  hand, because that is the path it exists for.
+- The field is in `status`. Status is the operator's, and a reference it wrote that
+  does not resolve is a bug to fix rather than input to reject.
+
+**What it costs, so nobody is surprised by it.** A reference checked at create imposes
+an ordering on a single apply: a pool whose cluster is in the same directory is rejected
+if it reaches the API server first. That is recoverable — `kubectl apply` is re-run, and
+a chart or a `ClusterDeploymentConfig` orders the objects — and it is the price of
+catching the misspelling that would otherwise be permanent. Say it in the design rather
+than letting somebody discover it.
+
+**Two mechanical notes.** The webhook needs `get` on every kind it resolves, which is
+usually already in the manager's role. And a bare name means the same namespace, so a
+reference from a cluster-scoped kind carries a namespace and a name: a label value
+admits no `/`, and a cluster-scoped list makes a bare name ambiguous.
 
 ## Once it has shipped
 
@@ -154,6 +244,8 @@ the least forgiving place to get it wrong.
 ## Before handing an API change back
 
 1. The change is a field, an action, or a kind, and the reason is stated.
+1a. Every reference to another kind in this group is resolved by a webhook on
+    create, or the design says which of the two exemptions applies.
 2. Closed sets are typed enums, and immutable fields carry a CEL rule, not a
    comment.
 3. Status carries `observedGeneration`, the phase, and whatever a restart needs.

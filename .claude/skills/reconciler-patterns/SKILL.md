@@ -1,6 +1,6 @@
 ---
 name: reconciler-patterns
-description: How a controller in this repository is written: never blocking in Reconcile, multi-step operations as a persisted phase and subPhase driven by atlas-lib/statemachine, write-ahead before a side effect, generation and resourceVersion discipline, mutual exclusion through a lock field, requeue against error, terminal no-op, finalizers, and the events a blocked decision owes. Use when writing or reviewing a reconciler, adding a phase to one, or debugging one that stalls, loops, or repeats a side effect.
+description: How a controller in this repository is written: never blocking in Reconcile, multi-step operations as a persisted phase and step driven by atlas-lib/statemachine, write-ahead before a side effect, generation and resourceVersion discipline, mutual exclusion through a lock field, requeue against error, terminal no-op, finalizers, and the events a blocked decision owes. Use when writing or reviewing a reconciler, adding a phase to one, or debugging one that stalls, loops, or repeats a side effect.
 ---
 
 # Reconciler patterns
@@ -11,7 +11,7 @@ and where the canonical implementation of each already exists.
 
 References:
 
-- `references/state-machines.md`: `phase` and `subPhase`, `atlas-lib/statemachine`,
+- `references/state-machines.md`: `phase` and `step`, `atlas-lib/statemachine`,
   deadlines, converting a hand-rolled switch.
 - `references/concurrency.md`: generation, resourceVersion, conflicts, locks,
   cache staleness, per-cluster state.
@@ -56,11 +56,14 @@ poll.
 
 ### 2. A multi-step operation lives in the resource, not in memory
 
-`status.phase` for the operation, `status.subPhase` for the steps inside a phase.
+`status.phase` for the operation, `status.step` for the steps inside a phase.
 11 CRDs already carry a `phase`, `StorageNodeOps` carries a typed `subPhase`, and
 `StorageNode.status.actionStatus.subPhase` carries an untyped one. **New fields
 are typed** (`type FooPhase string` with the constants next to it), because an
-untyped phase makes an impossible value a compile-time non-event.
+untyped phase makes an impossible value a compile-time non-event. On an Ops kind
+the second level is `status.step` and holds a serialized machine snapshot rather
+than a bare name. `subPhase` is its pre-rename spelling. `design-crd-model.md`
+§3.1 is the shape and `references/state-machines.md` is the mechanism.
 
 The process holds no memory between passes and may not be the same process. Every
 decision a later pass needs has to be readable from the resource: which step is
@@ -69,26 +72,29 @@ active, what was already triggered, when the step must be given up on.
 ### 3. Declare the state graph, and do not switch on strings
 
 `atlas-lib/statemachine` exists for this and has no adoption yet. It takes the
-CRD's own phase type as its state type, validates every transition against a
+CRD's own state type as its state type, validates every transition against a
 declared graph, carries a per-state deadline, and round-trips through
-`Snapshot`/`Restore` so the phase survives a restart. Its package documentation
-carries a complete worked reconciler. Read it before writing a new machine:
+`Snapshot`/`Restore` so the position survives a restart. Its package
+documentation carries a complete worked reconciler. Read it before writing a new
+machine:
 
 ```bash
 go doc github.com/simplyblock/atlas/statemachine
 ```
 
-New multi-step controllers use it. `storagenodeops_controller.go:292` is the
-hand-rolled `switch ops.Status.SubPhase` to convert first, and
-`references/state-machines.md` says how.
+**Every action of an Ops kind is backed by a declared graph**, which is a rule
+rather than a preference (`design-crd-model.md` §3.1). Other multi-step
+controllers use it too. `storagenodeops_controller.go:292` is the hand-rolled
+`switch ops.Status.SubPhase` to convert first, and `references/state-machines.md`
+says how.
 
 An illegal transition should be an error, not a silent status write. That is what
 a declared graph buys: `Pending → Completed` fails at `TransitionTo` instead of
 skipping the work in between.
 
 **An Ops controller declares one graph per action**, with
-`statemachine.MultiConfig[subPhase]` keyed by `statemachine.Action`. An Ops kind
-has one `subPhase` field whose enum is the union of every action's steps, so a
+`statemachine.MultiConfig[Step]` keyed by `statemachine.Action`. An Ops kind has
+one `status.step` field whose enum is the union of every action's steps, so a
 single graph cannot express that `Promoting` belongs to `migrate` and never to
 `remove`. A per-action graph can, and makes the wrong one an
 `IllegalTransitionError`. See `references/state-machines.md`.
@@ -96,9 +102,9 @@ single graph cannot express that `Promoting` belongs to `migrate` and never to
 ### 4. Write ahead of the side effect
 
 Before a call that changes something outside the cluster, persist the intent
-(`status.triggered = true`, the sub-phase, and the ID being acted on) and then
-make the call. A reconcile that dies between the two must find, on the next pass, that the
-call may already have happened.
+(`status.triggered = true`, the step, and the ID being acted on) and then make
+the call. A reconcile that dies between the two must find, on the next pass,
+that the call may already have happened.
 
 Every retried mutating call has to be idempotent, or guarded by a read that tells
 whether it landed. `drainSuspend` reads the node's backend status before POSTing
@@ -121,7 +127,7 @@ Canonical: `storagenodeops_controller.go:204`,
   means someone else wrote the object, so the local copy is stale: re-read,
   recompute, and write again with `retry.RetryOnConflict`. There are 122 status writes
   and 4 files that do this. Never re-`Get` and blindly overwrite: that is how a
-  concurrently written sub-phase gets reverted.
+  concurrently written step gets reverted.
 - **Never write spec from a controller** that also owns status. Spec is the
   user's, and status is the controller's.
 

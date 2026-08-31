@@ -8,8 +8,8 @@ document you are editing.
 
 | Kind                          | Pattern                       | Examples                                               |
 |-------------------------------|-------------------------------|--------------------------------------------------------|
-| Design doc                    | `design-<slug>.md`            | `design-node-removal-draining.md`, `design-dhchap.md`  |
-| Test plan                     | `test-plan-<slug>.md`         | `test-plan-drain-remove.md`                            |
+| Design doc                    | `design-<slug>.md`            | `design-storagenode.md`, `design-dhchap.md`            |
+| Test plan                     | `test-plan-<slug>.md`         | `test-plan-storagenode.md`                             |
 | Work plan                     | `work-plan-<slug>.md`         | `work-plan-drain-remove.md`, in `operator/docs/tasks/` |
 | Scenario catalog (not a plan) | `<area>-scenario-catalog.md`  | `csi-e2e-scenario-catalog.md`                          |
 | Diagrams / images             | `designs/assets/<name>.<ext>` | `assets/crd-overview.jpg`                              |
@@ -36,7 +36,7 @@ Immediately under the H1, one blank line, then two-space line breaks:
 **Author:** Christoph Engelbert (noctarius)  
 **Date:** 2026-06-02 (last updated 2026-06-17)  
 **Issue(s):** https://github.com/simplyblock/simplyblock-operator/issues/131
-**Test Plan:** [`tests/test-plan-drain-remove.md`](../tests/test-plan-drain-remove.md)
+**Test Plan:** [`tests/test-plan-storagenode.md`](../tests/test-plan-storagenode.md)
 
 ---
 ```
@@ -76,6 +76,12 @@ Immediately under the H1, one blank line, then two-space line breaks:
   to the other in an existing doc.
 - Section numbers are an API. Once published, do not renumber to insert a
   section. Append, or use a decimal sub-section.
+- **Appendices follow the numbered sections**, headed
+  `## Appendix A: \`<file>.go\`` with a colon rather than a dash, one per
+  generated file. A design specifying a CRD ends with the whole type there, and
+  the numbered sections quote from it rather than repeating it. The TOC lists them
+  under an `Appendices:` bullet list after the numbered entries, because they are
+  not numbered sections and numbering them would make the next one renumber.
 - Cross-reference sections in prose as `§5.2`, `(§9)`, `see §4`.
 
 ## External prerequisites
@@ -152,19 +158,74 @@ design:**` or similar, is the right place for what the picture cannot show.
 
 ## Recurring tables
 
-| Section                     | Columns                                        |
-|-----------------------------|------------------------------------------------|
-| Backend API Requirements    | `Method \| Endpoint \| Notes`                  |
-| Kubernetes Events           | `Event \| Type \| Reason`                      |
-| Prometheus Metrics          | `Metric \| Labels \| Description`              |
-| Failure/cancellation matrix | `Condition \| Sub-phase (or Phase) \| Result`  |
-| Configuration               | `Field \| Type \| Default \| Description`      |
-| Annotation overrides        | `Annotation \| Values \| Effect`               |
-| Open Questions (table form) | `# \| Question \| Owner`                       |
-| Test plan, scenario matrix  | `# \| Scenario \| Type \| Test` (see below)    |
-| Test plan, planned matrix   | `# \| Scenario`                                |
-| Test plan, coverage summary | `Class \| Scenarios \| Covered \| Not covered` |
-| Test plan, gaps             | `# \| Gap \| Reason`                           |
+| Section                     | Columns                                                                |
+|-----------------------------|------------------------------------------------------------------------|
+| Backend API Requirements    | `Method \| Endpoint \| Notes`                                          |
+| Kubernetes Events           | `Event \| Type \| Reason`, plus `On` when several kinds receive events |
+| Prometheus Metrics          | `Metric \| Labels \| Description`                                      |
+| Failure/cancellation matrix | `Condition \| Sub-phase (or Phase) \| Result`                          |
+| Configuration               | `Field \| Type \| Default \| Description`                              |
+| Annotation overrides        | `Annotation \| Values \| Effect`                                       |
+| Open Questions (table form) | `# \| Question \| Owner`                                               |
+| Test plan, scenario matrix  | `# \| Scenario \| Type \| Test` (see below)                            |
+| Test plan, planned matrix   | `# \| Scenario`                                                        |
+| Test plan, coverage summary | `Class \| Scenarios \| Covered \| Not covered`                         |
+| Test plan, gaps             | `# \| Gap \| Reason`                                                   |
+
+## Observability sections
+
+Two tables, and neither is boilerplate. `design-storagecluster.md` §10 and
+`design-node-volume-stack.md` §14, the latter on the `design/volume-stack` branch,
+are the reference implementations.
+
+**Open with the baseline.** State whether each table is an addition to a surface
+that exists or new infrastructure, because a reviewer does something different with
+each. "The CSI node plugin emits no Kubernetes events and exposes no Prometheus
+metrics. Its entire observability surface is `klog`" says the whole section is new
+work. A design adding three reasons to a controller that already emits twelve says
+the opposite.
+
+### Kubernetes events
+
+**Name the target object and say why it is that one.** An event needs a target, and
+the choice is a design decision rather than a detail: it wants an object a user owns
+and looks at, and one that outlives whatever is being reported. A pod is usually
+wrong because it is gone before anyone looks. A PVC, or the CR itself when the CR is
+the audit record, is usually right.
+
+- **The `Event` column is the condition, not a label.** `The walk is holding
+  because a peer node is not online` rather than `Peer hold`. A reader scanning the
+  column should be able to tell what happened without opening the code.
+- **`Reason` is CamelCase, one per condition and not one per variant.** When the
+  discriminator is already a field and a print column, repeating it in the reason
+  tells a reader nothing and gives anyone alerting on the condition five reasons to
+  match instead of one: `OperationSucceeded`, not `Activated`, `Expanded`,
+  `Shutdown`, `Started`, and `Restarted`.
+- **Every blocked, held, or skipped decision owes an event.** Correct behavior that
+  looks like a hang is the case that matters most, because a walk holding for a
+  degraded cluster and a controller that has stalled are indistinguishable without
+  one.
+
+### Prometheus metrics
+
+**Design the metrics rather than reporting their absence.** A section reading "no
+metrics exist for either kind" is not an observability section. A design that
+specifies behavior specifies how that behavior is observed, and a table of metrics
+nothing exports yet is a specification like any other.
+
+Names are `simplyblock_<subsystem>_<thing>[_total|_seconds]`, matching the registry
+that exists (`simplyblock_rebalancer_migrations_total`). Carry the scope label the
+neighboring metrics carry, usually `cluster`, so one dashboard covers a
+multi-cluster deployment. Shapes follow the question: a counter for outcomes by
+result, a histogram for anything whose distribution matters more than its mean, and
+a gauge for a state that is either held or not.
+
+**Close by naming the two or three metrics that are load-bearing**, and say what
+each is the alert for. A gauge that reads one while a lock is held is how a leaked
+lock gets noticed instead of reported. A histogram of time spent holding for a peer
+is what eventually decides whether the hold needs a timeout. A metric that only
+restates what a phase already says earns no such paragraph, and probably should not
+exist.
 
 ## Test scenario matrices
 
@@ -266,8 +327,20 @@ usefully, a leading comment in the Go test itself (`// U-27: …`).
 
 - **Go** for CRD spec/status additions: real struct, real field tags, the
   kubebuilder markers (`+optional`, `+kubebuilder:validation:…`,
-  `+kubebuilder:default=…`) and the doc comments the code will carry.
-- **YAML** for CR examples, StorageClass examples, and status snapshots.
+  `+kubebuilder:default=…`) and the doc comments the code will carry. The
+  `api-design` skill owns what those markers have to say. Two of its rules reach
+  every design document: **enum values are PascalCase** for anything this API
+  group defines (`Enum=Activate;Expand;RollingRestart`), except a value naming
+  something outside it (`Enum=ext4;xfs`), and **a boolean toggle is `enableXyz` or
+  `disableXyz`**, chosen so the zero value is the default.
+- **YAML** for CR examples, StorageClass examples, and status snapshots. An
+  example is what a reader copies, so a wrong enum value in one propagates further
+  than the same value in a Go block.
+- **A Go block in a numbered section is an excerpt, and looks like one.** Bare
+  fields with their markers, never a `type X struct {` that a reader would take
+  for the whole type. The whole type is the appendix, and it is the only copy.
+  This is also what keeps `check-crds.py --design` honest, since it reads the
+  appendices alone and a truncated type in the body would parse as a real one.
 - **Pseudocode** in a fenced block for algorithms, after the prose step list.
   Steps are written as `### Step 1 — Abort conditions`, then an
   `### Algorithm Summary` block.

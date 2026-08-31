@@ -271,6 +271,7 @@ import (
 	"iter"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -763,11 +764,29 @@ func (sm *Machine[S]) Restore(snap Snapshot[S]) error {
 		return fmt.Errorf("%w: entering %v, refused restore of %v", ErrReentrantTransition, *sm.entering, snap.State)
 	}
 	if _, ok := sm.states[snap.State]; !ok {
-		return fmt.Errorf("%w: %v", ErrUnknownState, snap.State)
+		// Name what the graph does declare. A restored state comes from a
+		// resource rather than from code, so the value is as likely to belong to
+		// a different action, or to a version that has moved on, as to be a
+		// typo, and those read very differently once the alternatives are in the
+		// message.
+		return fmt.Errorf("%w: %v (declared: %s)",
+			ErrUnknownState, snap.State, strings.Join(stateNames(sm.states), ", "))
 	}
 	sm.current = snap.State
 	sm.armAt(snap.Deadline)
 	return nil
+}
+
+// stateNames renders a state set as sorted strings. The state type is only
+// [comparable], so it cannot be sorted directly, and its rendering is what a
+// message wants anyway.
+func stateNames[S comparable](states map[S]StateDef[S]) []string {
+	names := make([]string, 0, len(states))
+	for state := range states {
+		names = append(names, fmt.Sprint(state))
+	}
+	slices.Sort(names)
+	return names
 }
 
 // restoreOrStart is [Machine.Restore], except that the snapshot of a resource

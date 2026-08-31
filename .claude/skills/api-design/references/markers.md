@@ -21,15 +21,15 @@ below that looks like a count is a rule of thumb, and the script is the fact.
 
 ## Field level
 
-| Marker                                        | Use                                                                                                    |
-|-----------------------------------------------|--------------------------------------------------------------------------------------------------------|
-| `+optional`                                   | Every field that is not required. A pointer plus `omitempty` when "unset" differs from "zero"          |
-| `+kubebuilder:validation:Required`            | The fields without which the object is meaningless                                                     |
-| `+kubebuilder:validation:Enum=a;b;c`          | Every closed set, and every action verb                                                                |
-| `+kubebuilder:default=…`                      | A default the API server applies. It is part of the API: tightening one later is a breaking change     |
-| `+kubebuilder:validation:Minimum` / `Maximum` | Numeric bounds. A vCPU or size floor belongs here, not in a reconciler's error path                    |
-| `+k8s:immutable`                              | Always-immutable fields. controller-gen turns it into `self == oldSelf`, as below                      |
-| `+listType=map` with `+listMapKey=type`       | On a `[]metav1.Condition`, so server-side apply merges by condition type instead of replacing the list |
+| Marker                                        | Use                                                                                                                          |
+|-----------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|
+| `+optional`                                   | Every field that is not required. A pointer plus `omitempty` when "unset" differs from "zero"                                |
+| `+kubebuilder:validation:Required`            | The fields without which the object is meaningless                                                                           |
+| `+kubebuilder:validation:Enum=A;B;C`          | Every closed set, and every action verb. Values are PascalCase unless they name something outside this group (`ext4`, `xfs`) |
+| `+kubebuilder:default=…`                      | A default the API server applies. It is part of the API: tightening one later is a breaking change                           |
+| `+kubebuilder:validation:Minimum` / `Maximum` | Numeric bounds. A vCPU or size floor belongs here, not in a reconciler's error path                                          |
+| `+k8s:immutable`                              | Always-immutable fields. controller-gen turns it into `self == oldSelf`, as below                                            |
+| `+listType=map` with `+listMapKey=type`       | On a `[]metav1.Condition`, so server-side apply merges by condition type instead of replacing the list                       |
 
 `omitempty` in the JSON tag already makes controller-gen treat a field as
 optional, so `+optional` is for saying so out loud. A field with neither, and no
@@ -38,32 +38,38 @@ reports that as `unspecified-spec-field`.
 
 ## Immutability
 
-**Start with the marker.** `// +k8s:immutable` on the field is the whole job for
-anything that is immutable from creation: controller-gen emits
-`x-kubernetes-validations: rule: self == oldSelf` into the schema. It is not
+**Use the marker, and let the field's optionality pick the meaning.**
+`// +k8s:immutable` on the field is the whole job for both meanings. It is not
 spelled `+kubebuilder:`, which is why it is repeatedly assumed to be inert
 documentation. It is not.
 
-Reach for CEL when `self == oldSelf` is not what is meant. Two shapes, both CEL,
-one on the field and one on the type:
+It emits two rules, and which of them apply depends on `required`:
 
 ```go
-// Field: immutable from creation.
-// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="targetCluster is immutable"
+// Immutable from creation, because a required field can never be absent.
+// +k8s:immutable
+// +kubebuilder:validation:Required
+ClusterRef string `json:"clusterRef"`
 
-// Type: immutable once set, so it may be filled in later but never changed.
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.fabricType) || self.fabricType == oldSelf.fabricType",message="fabricType is immutable once set"
+// Immutable once set: fillable later, then neither changeable nor removable.
+// +k8s:immutable
+// +optional
+FabricType string `json:"fabricType,omitempty"`
 ```
 
-Use the first for anything that identifies what the object is about: a target
-reference, an action verb, or a pool or cluster binding. Use the second for
-configuration that a controller or a user fills in once, where an empty value is
-a legitimate starting state (`fabricType`, `stripe`, a KMS binding).
+The field-level `self == oldSelf` rejects a change of value. The parent-level
+`!has(oldSelf.X) || has(self.X)`, added only for a field outside `required`,
+rejects removal, and exists because the field rule cannot fire when the field is
+gone. Neither blocks a first assignment, which is what once-set means.
 
-A doc comment reading `// Immutable.` is the fourth spelling and the only one
-that enforces nothing. `references/consistency.md` tabulates all four, and
-`check-crds.py` reports every field that claims immutability in prose without
-backing it with one of the first three.
+So do **not** hand-write `!has(oldSelf.x) || self.x == oldSelf.x` for the once-set
+case: it is longer, and it guards the value without guarding removal. Write CEL
+only when the rejection message has to say something the generated one cannot.
+
+A doc comment reading `// Immutable.` is the spelling that enforces nothing.
+`references/consistency.md` tabulates them all with the generator source lines,
+and `check-crds.py` reports every field that claims immutability in prose without
+backing it.
 
 ## Cross-field rules worth writing
 

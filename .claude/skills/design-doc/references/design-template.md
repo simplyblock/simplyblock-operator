@@ -200,19 +200,39 @@ with two spaces.
 
 ## 11. Observability
 
+<!-- Open with the baseline: is each table below an addition to a surface that
+     exists, or new infrastructure? A reviewer does something different with each.
+     See `conventions.md` § "Observability sections" for the full rules. -->
+
 ### Kubernetes Events
+
+<!-- One paragraph first: which object receives these events, and why that one.
+     It wants an object a user owns and that outlives what is being reported. -->
 
 | Event | Type | Reason |
 |---|---|---|
+
+<!-- The Event column is the condition, not a label: `The walk is holding because
+     a peer node is not online`, not `Peer hold`. Reason is CamelCase, one per
+     condition and not one per variant of it. Every blocked, held, or skipped
+     decision owes a row, because correct behavior that looks like a hang is the
+     case that matters most. Add an `On` column when several kinds receive
+     events. -->
 
 ### Prometheus Metrics
 
 | Metric | Labels | Description |
 |---|---|---|
 
-<!-- Metric names are `simplyblock_<subsystem>_<thing>[_total|_seconds]`.
-     Every blocked, failed, or skipped decision the operator makes needs either
-     an event or a metric — otherwise it is undebuggable in the field. -->
+<!-- Design the metrics; do not report that none exist. Names are
+     `simplyblock_<subsystem>_<thing>[_total|_seconds]`, carrying the scope label
+     the neighboring metrics carry. Counter for outcomes, histogram where the
+     distribution matters more than the mean, gauge for a state that is held or
+     not. -->
+
+<!-- Close with a paragraph naming the two or three load-bearing metrics and what
+     each is the alert for. A metric that only restates what a phase already says
+     earns no mention, and probably should not exist. -->
 
 ---
 

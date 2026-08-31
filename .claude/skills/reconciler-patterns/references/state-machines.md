@@ -2,24 +2,28 @@
 
 ## The two levels
 
-| Field             | Holds                        | Example                                                          |
-|-------------------|------------------------------|------------------------------------------------------------------|
-| `status.phase`    | The operation's own progress | `Pending`, `Running`, `Succeeded`, `Failed`                      |
-| `status.subPhase` | The steps inside a phase     | `Validating`, `Suspending`, `Migrating`, `Verifying`, `Removing` |
+| Field          | Holds                                            | Example                                                          |
+|----------------|--------------------------------------------------|------------------------------------------------------------------|
+| `status.phase` | The operation's own progress                     | `Pending`, `Running`, `Succeeded`, `Failed`                      |
+| `status.step`  | The machine's serialized position inside a phase | `Validating`, `Suspending`, `Migrating`, `Verifying`, `Removing` |
 
-A phase is what a user asks about, and a sub-phase is how the controller gets there.
-Drain-remove is the shape: one `Running` phase, five sub-phases, each a single
+A phase is what a user asks about, and a step is how the controller gets there.
+Drain-remove is the shape: one `Running` phase, five steps, each a single
 reconcile pass that returns.
+
+`status.step` was called `subPhase` before `design-crd-model.md` §3.1, which also
+made it an object rather than a bare name (see "The step field is a snapshot"
+below). The mechanism is unchanged.
 
 Both are **typed**, with their constants next to the type:
 
 ```go
-// StorageNodeOpsSubPhase is the step a running node operation is on.
-type StorageNodeOpsSubPhase string
+// StorageNodeOpsStep is the step a running node operation is on.
+type StorageNodeOpsStep string
 
 const (
-    StorageNodeOpsSubPhasePreparing  StorageNodeOpsSubPhase = "Preparing"
-    StorageNodeOpsSubPhaseMigrating  StorageNodeOpsSubPhase = "Migrating"
+    StorageNodeOpsStepPreparing  StorageNodeOpsStep = "Preparing"
+    StorageNodeOpsStepMigrating  StorageNodeOpsStep = "Migrating"
     // …
 )
 ```
@@ -28,8 +32,37 @@ const (
 rule. Do not copy it: an untyped phase turns an impossible value into a runtime
 surprise, and a typed one makes the state graph below expressible.
 
-Add `+kubebuilder:printcolumn` for both, so `kubectl get` shows where an
-operation is without a `describe`.
+Add `+kubebuilder:printcolumn` for `status.phase` and `status.step.state`, so
+`kubectl get` shows where an operation is without a `describe`.
+
+## The step field is a snapshot
+
+`status.step` holds the serialized `statemachine.Snapshot`, which is a state and
+the deadline that state expires at. Persisting only the state loses the deadline,
+and a restored machine that never times out is a stalled operation nothing
+detects. So the field is an object:
+
+```go
+// StorageNodeOpsStepSnapshot is the durable position of the action's state
+// machine, the CRD form of statemachine.Snapshot.
+type StorageNodeOpsStepSnapshot struct {
+    // +optional
+    State StorageNodeOpsStep `json:"state,omitempty"`
+    // +optional
+    Deadline *metav1.Time `json:"deadline,omitempty"`
+}
+```
+
+The deadline is a `*metav1.Time` rather than the library's `time.Time`, which is
+why each kind declares its own struct instead of embedding `statemachine.Snapshot`
+directly. Generic types are not usable here either, since the CRD generators do
+not handle them. **The package documentation of `Snapshot` still recommends two
+flat fields** (`Phase` plus `PhaseDeadline`) and predates this rule. The nested
+object is what `design-crd-model.md` §3.1 requires.
+
+`status.phase` carries no deadline of its own. A time limit belongs to a step,
+which is one bounded piece of work, whereas `Running` lasts as long as the action
+does.
 
 ## The state machine
 
@@ -55,19 +88,18 @@ What it gives a reconciler, and why each part matters:
 | `RequeueAfter()`                  | The requeue value, bounded by the phase deadline. `false` when there is no deadline **or it already passed.** An expired phase needs handling now, not another requeue                                  |
 | `Close()`                         | Deferred, because the machine owns contexts                                                                                                                                                             |
 
-Two CRD fields carry it: the existing `status.phase`, plus a
-`status.phaseDeadline *metav1.Time`. No CRD has the second one yet, and it is what
-makes a per-phase timeout survive a restart, and it answers the drain design's
-open question about the right action timeout by making the bound per phase
-instead of per action.
+One CRD field carries it: `status.step`, the snapshot above. No CRD has it yet.
+The deadline inside it is what makes a per-step timeout survive a restart, and it
+answers the drain design's open question about the right action timeout by making
+the bound per step instead of per action.
 
 The machine is built **per reconcile**, not stored on the reconciler: its hooks
 close over the object being reconciled, and a `Machine` is not safe for
 concurrent use.
 
-`NewFromSnapshot` reads an empty `status.phase` as "nobody has reconciled this
-yet" and starts at `Config.Initial`, so the reconcile does not open with an
-`if ops.Status.Phase != ""` guard. That rule is about the *empty* value only: an
+`NewFromSnapshot` reads an empty `status.step.state` as "nobody has reconciled
+this yet" and starts at `Config.Initial`, so the reconcile does not open with an
+`if ops.Status.Step.State != ""` guard. That rule is about the *empty* value only: an
 unrecognized non-empty phase is a downgrade or a hand-edited resource and stays an
 error.
 
@@ -75,22 +107,22 @@ error.
 
 An Ops kind is one CRD serving several operations, and the steps of one are not
 the steps of another. `StorageNodeOps` is the case: six actions, one
-`status.subPhase` field, and an enum whose values are the union of two disjoint
+`status.step` field, and an enum whose values are the union of two disjoint
 workflows.
 
 ```
 remove:  Validating ── Suspending ── Migrating ── Verifying ── Removing
 migrate: Preparing  ── Restarting ── Promoting
-shutdown, restart, suspend, resume: no sub-phases at all
+shutdown, restart, suspend, resume: no steps at all
 ```
 
-Written as one graph that union is unenforceable, since nothing stops a `remove` op
-from reporting `Promoting`. `statemachine.MultiConfig[subPhase]` declares them
+Written as one graph that union is unenforceable, since nothing stops a `remove`
+op from reporting `Promoting`. `statemachine.MultiConfig[Step]` declares them
 together, keyed by `statemachine.Action`, and hands back an ordinary `Machine` for
 the action in hand:
 
 ```go
-sm, err := r.subPhasesFor(ops).FromSnapshot(ctx, statemachine.Action(ops.Spec.Action), snap)
+sm, err := r.stepsFor(ops).FromSnapshot(ctx, statemachine.Action(ops.Spec.Action), snap)
 ```
 
 Four things this settles, each of which a `switch` gets wrong:
@@ -109,7 +141,7 @@ Four things this settles, each of which a `switch` gets wrong:
   rather than reading the error:
 
   ```go
-  if _, ok := subPhases[action]; !ok {
+  if _, ok := steps[action]; !ok {
       return ctrl.Result{}, nil // shutdown and resume run in a single step
   }
   ```
@@ -117,7 +149,7 @@ Four things this settles, each of which a `switch` gets wrong:
 The **outer `phase` stays a plain `Config`:** `Pending → Running →
 Succeeded/Failed` is identical for all six actions. Folding it into each action's
 map would copy that spine six times and a fix would land in one of them. Such a
-controller runs two machines: one for the phase, one for the sub-phase.
+controller runs two machines: one for the phase, one for the step.
 
 There is no `Must` on `MultiConfig`, deliberately: a malformed graph is a program
 bug worth panicking on, but an unrecognized `spec.action` is user input, and
@@ -148,13 +180,17 @@ path cannot tell entering a step from still being in it. Convert in this order:
    Keep the polling that does not transition *outside* the hook: most passes of a
    `Migrating` step only read the backend and update counters, and re-entering
    the state would repeat its side effect.
-3. **Add `status.phaseDeadline`**, regenerate the CRD (`make -C operator manifests`,
-   then `make helm-sync`).
+3. **Rename `status.subPhase` to `status.step` and make it the snapshot object**,
+   then regenerate the CRD (`make -C operator manifests`, then `make helm-sync`).
+   A converting reconcile reads the old string into `step.state` and leaves
+   `step.deadline` absent, which restores as a step with no deadline. That is the
+   pre-rename behavior, so an operation in flight across the upgrade keeps running
+   rather than expiring at once.
 4. **Build from the snapshot, check terminal, check timeout, advance, snapshot,
    write, requeue**, in that order, which is the shape in the package
    documentation.
 5. **A test per transition**, plus one per interrupted step: restore from that
-   phase and assert the hook did not run again. See `test-scenarios`.
+   step and assert the hook did not run again. See `test-scenarios`.
 
 ## Not every reconcile is a transition
 

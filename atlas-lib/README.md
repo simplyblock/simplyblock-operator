@@ -69,6 +69,10 @@ atlas/
 │   ├── pools.go            storage pools (incl. by-name lookup)
 │   ├── storagenodes.go     storage nodes + their data NICs
 │   └── migrations.go       volume migrations: create / get / continue / cancel
+├── statemachine/           Deterministic state machine declared as data
+│   ├── statemachine.go     Config, StateDef, Machine, Snapshot, deadlines
+│   ├── multiconfig.go      MultiConfig: one graph per action over one state type
+│   └── kubernetes.go       KubeSnapshot + ToKube/FromKube: the CRD form of a Snapshot
 ├── net/                    Outbound URL validation (SSRF guard)
 ├── ptr/                    Pointer/optional-field helpers for generated + K8s types
 ├── errs/                   Sentinel errors (errors.Is across packages)

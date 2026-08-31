@@ -54,7 +54,7 @@ RESULT_AND_ERROR_RE = re.compile(
 
 FATAL_RE = re.compile(r"\b(os\.Exit|log\.Fatal\w*|klog\.Fatal\w*)\s*\(")
 PANIC_RE = re.compile(r"^\s*panic\s*\(")
-PHASE_SWITCH_RE = re.compile(r"\bswitch\s+[^{]*\b(Phase|SubPhase)\b")
+PHASE_SWITCH_RE = re.compile(r"\bswitch\s+[^{]*\b(Phase|SubPhase|Step)\b")
 STATUS_ASSIGN_RE = re.compile(r"\b(\w+)\.Status\.\w+\s*=(?!=)")
 PLAIN_UPDATE_RE = re.compile(r"\.(?:Client\.)?Update\s*\(\s*ctx\s*,\s*&?(\w+)")
 STATUS_UPDATE_RE = re.compile(r"\.Status\(\)\.(Update|Patch)\s*\(")

@@ -74,9 +74,38 @@ $S/quality-gate.sh american punctuation --changed
 $S/quality-gate.sh identifiers            # names across the source trees
 ```
 
-A gate fails on errors and never on warnings. Five checks rewrite their own
-findings, and the diff is worth reading afterward, because none of them can tell
-a product name from an identifier written without backticks:
+**A gate fails on errors and never on warnings, which is why the summary line is
+not the result.** A run with twelve warnings and no errors prints
+`All 9 quality gate(s) passed`, and a run judged by its last line is a run whose
+warnings were thrown away. The `counterfactual` and `voice` gates are the ones this
+costs most, because they are warning-only by construction: their findings have a real
+exception, so each one is a sentence to justify or rewrite rather than a rule that was
+broken.
+
+**So capture the output and read it whole.** Never pipe a gate run through `tail`,
+`head`, or a `grep` that keeps only the summary. Write the run to a scratch file
+outside the repository and work through it from there:
+
+```bash
+$S/quality-gate.sh --changed 2>&1 | tee /tmp/gate.txt   # or the agent scratchpad
+grep -c WARN /tmp/gate.txt                              # how many decisions are owed
+grep -n 'WARN\|ERROR' /tmp/gate.txt                     # the queue itself
+```
+
+A file rather than scrollback for two reasons. A long run reports more findings than
+fit in one screen, and re-running the gate after each fix to see the next one is slow
+enough that the tail of the list quietly stops being read. And a file can be worked
+bit by bit: fix a finding, strike it off, and the record of what was already judged
+survives the next run's noise.
+
+**Every warning gets a verdict, and the verdict is recorded.** Rewritten, or kept with
+the reason it is one of the exception cases. A warning nobody decided about is
+indistinguishable from a warning nobody saw, and the handback should say which
+findings were rewritten and which were justified.
+
+Five checks rewrite their own findings, and the diff is worth reading afterward,
+because none of them can tell a product name from an identifier written without
+backticks:
 
 ```bash
 python3 $S/check-simplyblock-spelling.py --fix <paths>
@@ -316,6 +345,17 @@ reference:
 
 - **The identifier gate is new here.** The documentation repository has no code
   to name, so `check-identifiers.py` has no upstream counterpart.
+
+- **The counterfactual gate is new here, and it is a warning.** A design document
+  is read by somebody who never saw the alternatives that were weighed, so prose
+  arguing against one of them ("the refusal is admission, not a step", "folding it
+  into the same phase would report an outage") makes the reader reconstruct a
+  missing half. `check-counterfactual.py` reports three shapes: counterfactuals
+  describing a system that was not built, rebuttals leading with what the design
+  is not, and notes describing the document's own history. It never fails the
+  gate, because a rejected alternative a reader would otherwise propose again does
+  earn a place, written as a decision with its reason. Every finding is a sentence
+  to rewrite or to justify in the reply.
 
 Document structure (section numbering, the metadata block, tables, and diagrams)
 is not here. It lives in the `design-doc` skill, which owns those documents.

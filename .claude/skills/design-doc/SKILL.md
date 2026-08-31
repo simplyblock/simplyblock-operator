@@ -41,16 +41,36 @@ comma, the lowercase `simplyblock` brand, product-name spelling, punctuation, an
 the impersonal third-person voice. Follow it while writing, and run its gate over
 what the change touched before handing the work back.
 
+**A design that shows a CRD is bound by the `api-design` skill, so read it before
+writing the Go.** The structs in a design document are not illustrations: they are
+what gets implemented, so a convention broken in the document is a convention
+broken in the API a release later. That skill owns the marker set, the naming of a
+boolean toggle, the PascalCase enum values, the spellings of immutability, and the
+typed phase, and its `scripts/check-crds.py` audits the shipped types against all
+of them. The document's own conformance is checked by reading, since a Go block in
+Markdown is not a type the script can parse.
+
 The canonical examples in the repo, in rough order of usefulness:
 
 - `design-issue-130-auto-rebalancing.md`: the fullest example (phasing, algorithm,
   pseudocode, metrics provider interface, backend API protocol). Its
   issue-numbered filename is legacy. New docs are named `design-<slug>.md` and
   name their issues in the metadata block only.
-- `design-node-removal-draining.md`: clean state machine + sub-phase controller doc.
+- `design-storagenode.md`: an entity, its `Ops` companion, and the Kubernetes workload
+  it runs as, in one document. The reference for several state graphs over one `Ops`
+  kind, and for a document that absorbs the ones it supersedes.
 - `design-primary-node-placement.md`: layered-algorithm doc with a strong `## Overview`.
-- `design-storageclusterops.md`, `design-storagenodeset-storagenode.md`: CRD-introduction docs.
-- `test-plan-storagenode-ops.md`, `test-plan-storageclusterops.md`, `test-plan-drain-remove.md`.
+- `design-storagecluster.md`: an entity and its `Ops` companion in one document,
+  which is the shape `design-crd-model.md` §3.1 requires. Also the model for a
+  document that specifies a target and confines every delta against the registered
+  API to one migration section, rather than annotating each section with what ships.
+  §10 is the observability reference.
+- `design-node-volume-stack.md` §14, on the `design/volume-stack` branch: the other
+  observability reference, and the clearer of the two on opening with the baseline.
+- `test-plan-storagecluster.md`: the ID'd scenario matrix, including planned blocks
+  that are excluded from the coverage counts.
+- `test-plan-storagenode.md`: the largest matrix in the corpus, and the reference
+  for an axis coverage table whose blanks are argued rather than listed.
 
 ## Workflow
 
@@ -110,7 +130,14 @@ Follow `references/design-template.md`. Rules that matter more than the rest:
   `## Data Model Changes`.
 - **Show real Go and real YAML.** Spec additions appear as annotated Go structs
   with kubebuilder markers and the doc comments they will actually carry, and CR
-  examples appear as YAML.
+  examples appear as YAML. Both are bound by the `api-design` skill, and the two
+  that get broken most often in a document are the enum values, which are
+  PascalCase for anything this API group defines (`action: RollingRestart`, never
+  `rolling-restart`), and the boolean toggles, which are `enableXyz` or
+  `disableXyz` and nothing else. A YAML example is where a wrong enum value
+  propagates, because it is what a reader copies.
+- **A design that specifies a CRD ends with the whole type, in an appendix.** See
+  step 3a.
 - **The document describes the system, not the discussion that produced it.**
   The general rule is the `house-style` skill's: reference documentation, prose
   over lists, and the writer out of the page. Three corollaries are specific to a
@@ -122,6 +149,24 @@ Follow `references/design-template.md`. Rules that matter more than the rest:
     propose it again.** Then it is a decision with its reason ("per-member
     parity is not planned, because the resiliency story is per-member erasure
     coding") and never a story about how the decision was reached.
+  - **These are reference designs, so nothing in one argues for itself.** A
+    section states what the design is. It does not make a case for it against an
+    option nobody is holding. The reader is not a reviewer to be persuaded, and a
+    design that defends itself reads as a design that expects to lose. A section
+    titled `Why X and Not Y`, or whose body is a list of what Y cannot do, is this
+    mistake at section scale: `Why a Kind and Not a List` becomes
+    `One Object Per Device`, and the paragraphs arguing that a list cannot be
+    operated on become paragraphs saying that the object has an identity and a
+    lifecycle.
+  - **The exception is a design that is genuinely unintuitive, and the question it
+    answers is "why is it that way?"** Asking instead why not the obvious
+    alternative produces different prose from the same facts. The first framing
+    states the constraint that shapes the design and stops
+    ("`StorageClass.parameters` is immutable, so a class an older operator
+    generated can never be rewritten"). The second reaches for a comparison, drags
+    the alternative onto the page to knock it down, and leaves the reader holding
+    an option they never had. Reach for the exception when a competent reader would
+    stop and ask, not whenever a choice was made.
   - **Status sets the tense.** An `Implemented` document says what the code does.
     A `Draft` says what the design requires. Neither says what someone intends to
     do: an intention that is not yet true is an Open Question or a phase marked
@@ -134,13 +179,68 @@ Follow `references/design-template.md`. Rules that matter more than the rest:
 - **Backend API dependencies get their own table** (method, endpoint, notes),
   including idempotency requirements. Flag endpoints the control plane does not
   yet provide as such, since these are the design's external blockers.
-- **Observability is not optional.** Kubernetes events (event, type, reason) and
-  Prometheus metrics (metric, labels, description) as two tables.
+- **Observability is designed, not reported.** Two tables, Kubernetes events and
+  Prometheus metrics, and both specify what the design needs rather than what
+  happens to exist. A section reading "no metrics exist for either kind" is not an
+  observability section. The two failure modes are that one, and an `Event` column
+  of labels rather than conditions. `references/conventions.md` has the full rules,
+  including how the event's target object is chosen and why one reason per
+  condition beats one per variant.
 - The `## Testing Strategy` section is a **pointer, not a catalog:** a few
   lines on what each class of test must prove, the harness each needs, where the
   risk concentrates, and a link to the test plan. No scenario tables, no IDs:
   scenarios live in the test plan and only there, because a duplicated list is a
   list that goes stale on one side.
+
+### 3a. A CRD design ends with its type, whole, in an appendix
+
+A per-kind design document closes with **one appendix per generated file**, named
+for it: `## Appendix A: \`storagenode_types.go\``. The appendix holds the type as
+it is to be written, in file order, and it is complete: the enums with their Go
+constants, the nested structs, `Spec`, `Status`, the root type with every
+`+kubebuilder:` marker it carries, and the `List`.
+
+**Without it a design does not actually specify the type it is about.** Before this
+rule, `design-storagecluster.md` argued twenty spec fields across five paragraphs
+and showed three of them in Go, and both its status structs existed only as prose.
+Neither it nor `design-storagenode.md` stated a single `printcolumn`, `shortName`,
+or enum constant. A reader could not answer what type `status.resources.devices`
+is, and an implementer had to invent the answer.
+
+**The appendix is the only full copy, and the body quotes rather than repeats.**
+Two copies of a struct agree on the day they are written and disagree a revision
+later, and the body's is the copy that gets edited. So a section keeps the one or
+two fields its argument turns on, as bare fields rather than a `type X struct {`
+that would read as the whole thing, and says the type is in the appendix. That
+split also gives each half its right register: the appendix carries the doc comment
+the shipped file will carry, and the argument for it stays in the prose. A comment
+reading "it is not a set of overrides on anything: with StorageNodeSet retired,
+there is no fleet object left to override" is a design argument that has no business
+in a `_types.go` file.
+
+**A block belonging to another kind gets its own appendix**, headed with the file
+it lands in, so nobody reads it as part of the kind this document owns.
+`design-storagenode.md` Appendix C is that case: it specifies a group on
+`StorageCluster` that the `StorageNodeSet` retirement requires.
+
+**A type another design owns is referenced, not restated.** Say which design
+declares it and move on. `design-storagecluster.md`'s Appendix A does this for the
+rebalancing settings structs, which also keeps an unsettled naming decision out of
+a document that has not taken it.
+
+**Then run the gate over it:**
+
+```bash
+.claude/skills/api-design/scripts/check-crds.py --design operator/docs/designs/design-<slug>.md
+```
+
+It extracts the Go from the appendices and runs the same audit it runs against
+the shipped types, so a wrong enum casing, a `skipXyz` toggle, a missing
+`printcolumn`, or immutability claimed in prose is caught while the design is
+still a document. It fails if the appendix declares no root kind, which is the
+check that the appendix is a type rather than a sketch. Both existing designs
+returned real findings on their first run, one in the document and one in the
+checker.
 
 ### 4. Write the test plan
 
@@ -206,8 +306,16 @@ explicitly:
 ```bash
 .claude/skills/house-style/scripts/quality-gate.sh --paths \
   operator/docs/designs/design-<slug>.md \
-  operator/docs/tests/test-plan-<slug>.md
+  operator/docs/tests/test-plan-<slug>.md \
+  2>&1 | tee /tmp/gate-<slug>.txt
 ```
+
+**Capture the run and never truncate it.** A `| tail` or a `grep` that keeps the
+summary turns this step into a no-op, because the summary says `passed` while the
+warnings it hides are the ones this step exists to adjudicate. The file is what makes
+one-at-a-time possible: the queue survives while it is worked through, and the next
+run's output does not scroll the remainder away. `house-style/SKILL.md` has the
+mechanics.
 
 Name the paths rather than relying on `--changed`. The working tree usually
 carries unrelated dirty files, and a run that reports findings in documents this
@@ -216,7 +324,7 @@ call only when the change spans more files than are convenient to list.
 
 Then:
 
-- **Clear every error.** All eight gates pass, or the work is not done.
+- **Clear every error.** All nine gates pass, or the work is not done.
 - **Read the diff of every `--fix`.** The fixers cannot tell a product name from
   an identifier written without backticks, and the punctuation fixer will move a
   comma inside a phrase that was cited rather than quoted, turning `"e.g.,"` into
@@ -295,6 +403,18 @@ paragraph the iteration added and look for that second voice:
   design turns on.
 - **A rhetorical question.** The document answers questions. It does not ask them
   outside `## Open Questions`.
+- **A section that exists to win an argument.** Its title compares
+  (`Why X and Not Y`, `X, Not Y`) or its body is a list of what the alternative
+  cannot do. Retitle it for what the design *is* and keep only the paragraphs that
+  say something about the design. Those that only say something about the
+  alternative go. This is the one item on the list that survives a paragraph-level
+  read, because every paragraph in such a section is locally fine and the section
+  is the defect.
+- **A justification that outlived its question.** A section written to answer an
+  Open Question stays behind when the question is settled and deleted, and then
+  reads as a defense of something nobody disputes. Whenever an Open Question is
+  removed, grep the corpus for what cited it and check whether a section exists
+  only as its answer.
 
 **The fix is not to strip the rationale.** The corpus voice is "**X is Y because
 Z**" and that voice stays. What goes is the other half of an argument: state the
@@ -312,20 +432,26 @@ Report what the pass found: which paragraphs were rewritten, or that none were.
 
 ### Before handing the work back
 
-1. All seven house style gates pass on every file this change created or edited.
-2. Every punctuation warning outside a code block is either fixed or listed with
+1. All nine house style gates pass on every file this change created or edited.
+2. A design specifying a CRD ends with the whole type in an appendix (step 3a),
+   the body holds no second copy of any struct, and
+   `check-crds.py --design <doc>` reports no error.
+3. Every punctuation warning outside a code block is either fixed or listed with
    a reason that survives scrutiny.
-3. Every document this change owes exists, and each links to the others.
-4. Every TOC anchor and relative link resolves.
-5. Every `§` reference is unambiguous about which document it means.
-6. Every count in the text matches the file.
-7. Every test function named in the test plan's `Test` column exists (grepped,
+4. Every document this change owes exists, and each links to the others.
+5. Every TOC anchor and relative link resolves.
+6. Every `§` reference is unambiguous about which document it means.
+7. Every count in the text matches the file.
+8. The Observability section designs events and metrics rather than reporting that
+   none exist, its `Event` column holds conditions rather than labels, and it names
+   the object its events land on.
+9. Every test function named in the test plan's `Test` column exists (grepped,
    not recalled).
-8. Every paragraph this iteration added has been read for the second voice of
+10. Every paragraph this iteration added has been read for the second voice of
    step 8, and every unsettled proposal sits in an appendix rather than in the
    body.
-9. The reply says whether a work plan is the next step, and what still has to
-   settle before the design can be split.
+11. The reply says whether a work plan is the next step, and what still has to
+    settle before the design can be split.
 
 ## Updating an existing document
 
