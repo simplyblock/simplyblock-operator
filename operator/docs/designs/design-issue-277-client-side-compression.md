@@ -529,15 +529,29 @@ normal LVM teardown path: it matches every dm node whose name starts with
 the volume group's dash-escaped name and removes each with a plain `dmsetup
 remove`, retrying up to three passes so a node still blocked by another
 live dependency clears once that dependency is gone. The removal mechanism
-itself is proven correct; what's unverified is whether it always runs at
-all, since it only fires when `NodeUnstageVolume` is actually invoked on the
-affected node, and whether kubelet's volume reconciler reliably re-invokes
-`NodeUnstageVolume` on the *original* node after a NotReady/rejoin cycle,
-once the pod has already been rescheduled elsewhere, is a different,
-unverified code path (see the test plan). Separately, VDO fences itself into
-read-only mode on the underlying I/O failure rather than corrupting
-anything, and ext4 independently aborts its own journal for the same
-reason, neither needing wiring from this design.
+is proven correct, and so is its trigger: forcing a real node failure
+(stopping kubelet, letting the default 300s NoExecute toleration evict the
+pod, then restarting kubelet) confirmed that kubelet's volume reconciler
+does re-invoke `NodeUnstageVolume` on the original node once it rejoins,
+correctly clearing the stale VDO/LVM state, verified for three simultaneous
+VDO instances torn down together on the same rejoin, not just one.
+Separately, VDO fences itself into read-only mode on the underlying I/O
+failure rather than corrupting anything, and ext4 independently aborts its
+own journal for the same reason, neither needing wiring from this design.
+
+**A permanently failed node blocks the replacement pod indefinitely, not
+just delays it.** The same test surfaced a more consequential gap than the
+cleanup question above. Kubernetes' attachdetach-controller refuses to
+attach an RWO volume to a replacement pod on a different node while the
+original node's attachment can't be confirmed released
+(`FailedAttachVolume: Multi-Attach error`), and this design does nothing to
+shorten that wait. The block clears the moment the original node rejoins
+and releases its attachment, but if it never does, nothing here invokes
+Kubernetes' `node.kubernetes.io/out-of-service` taint mechanism (the
+standard answer since 1.24: an admin or automation marks a confirmed-dead
+node so the attachdetach-controller force-detaches without waiting for a
+graceful release) or any equivalent of it. A workload on a genuinely,
+permanently dead node stays stuck without manual intervention.
 
 The node's `/etc/lvm/devices/system.devices` file, which restricts LVM's
 default visibility to specific devices, is a separate concern this design
@@ -559,9 +573,8 @@ backend, so an acknowledged write is safe under `async`, not just under
 Coverage status and the remaining open questions for this section (a
 genuinely overlapping, not just closely timed, `vgchange`/`pvscan` race, a
 boot-time activation race across several VGs, the clean-reboot teardown
-variant, whether kubelet reliably re-invokes `NodeUnstageVolume` on the
-original node after a NotReady/rejoin cycle, and `system.devices` bookkeeping
-hygiene) are tracked in the test plan, not restated here.
+variant, the permanent-node-failure gap above, and `system.devices`
+bookkeeping hygiene) are tracked in the test plan, not restated here.
 
 ---
 
