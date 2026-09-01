@@ -1332,10 +1332,9 @@ type UnderscoreUpdateParams struct {
 
 // ClustersListApiV2ClustersGetParams defines parameters for ClustersListApiV2ClustersGet.
 type ClustersListApiV2ClustersGetParams struct {
-	ClusterId *openapi_types.UUID `form:"cluster_id,omitempty" json:"cluster_id,omitempty"`
-
 	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
-	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+	Watch     *bool               `form:"watch,omitempty" json:"watch,omitempty"`
+	ClusterId *openapi_types.UUID `form:"cluster_id,omitempty" json:"cluster_id,omitempty"`
 }
 
 // ClustersCreateApiV2ClustersPostParams defines parameters for ClustersCreateApiV2ClustersPost.
@@ -1400,6 +1399,7 @@ type ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPos
 
 // ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormat defines parameters for ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPost.
 type ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormat string
+
 // ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGetParams defines parameters for ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGet.
 type ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGetParams struct {
 	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
@@ -2015,6 +2015,13 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+
+	// MetricsMetaMetricsGet Metrics
+	//
+	// Endpoint that serves Prometheus metrics.
+	//
+	// Corresponds with GET /_meta/metrics (the `MetricsMetaMetricsGet` operationId).
+	MetricsMetaMetricsGet(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// HealthApiV2MetaHealthGet Health
 	//
@@ -2931,6 +2938,23 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /api/v2/management-nodes/{management_node_id}/ (the `ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGet` operationId).
 	ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGet(ctx context.Context, managementNodeId openapi_types.UUID, params *ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+// MetricsMetaMetricsGet Metrics
+//
+// Endpoint that serves Prometheus metrics.
+//
+// Corresponds with GET /_meta/metrics (the `MetricsMetaMetricsGet` operationId).
+func (c *Client) MetricsMetaMetricsGet(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewMetricsMetaMetricsGetRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 // HealthApiV2MetaHealthGet Health
@@ -5268,6 +5292,33 @@ func (c *Client) ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGet(ctx
 	return c.Client.Do(req)
 }
 
+// NewMetricsMetaMetricsGetRequest constructs an http.Request for the MetricsMetaMetricsGet method
+func NewMetricsMetaMetricsGetRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/_meta/metrics")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewHealthApiV2MetaHealthGetRequest constructs an http.Request for the HealthApiV2MetaHealthGet method
 func NewHealthApiV2MetaHealthGetRequest(server string) (*http.Request, error) {
 	var err error
@@ -5350,9 +5401,9 @@ func NewClustersListApiV2ClustersGetRequest(server string, params *ClustersListA
 		// per the OpenAPI spec (e.g. "color=blue,black,brown").
 		var rawQueryFragments []string
 
-		if params.ClusterId != nil {
+		if params.Watch != nil {
 
-			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cluster_id", *params.ClusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "", Format: ""}); err != nil {
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "watch", *params.Watch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {
@@ -5362,9 +5413,9 @@ func NewClustersListApiV2ClustersGetRequest(server string, params *ClustersListA
 
 		}
 
-		if params.Watch != nil {
+		if params.ClusterId != nil {
 
-			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "watch", *params.Watch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cluster_id", *params.ClusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {
@@ -11486,6 +11537,15 @@ func WithBaseURL(baseURL string) ClientOption {
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
 
+	// MetricsMetaMetricsGetWithResponse Metrics
+	//
+	// Endpoint that serves Prometheus metrics.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /_meta/metrics (the `MetricsMetaMetricsGet` operationId).
+	MetricsMetaMetricsGetWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*MetricsMetaMetricsGetResponse, error)
+
 	// HealthApiV2MetaHealthGetWithResponse Health
 	//
 	// Liveness probe: succeeds whenever the process can serve requests.
@@ -12565,6 +12625,47 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /api/v2/management-nodes/{management_node_id}/ (the `ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGet` operationId).
 	ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetWithResponse(ctx context.Context, managementNodeId openapi_types.UUID, params *ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetParams, reqEditors ...RequestEditorFn) (*ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetResponse, error)
+}
+
+type MetricsMetaMetricsGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *interface{}
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r MetricsMetaMetricsGetResponse) GetJSON200() *interface{} {
+	return r.JSON200
+}
+
+// GetBody returns the raw response body bytes
+func (r MetricsMetaMetricsGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r MetricsMetaMetricsGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r MetricsMetaMetricsGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r MetricsMetaMetricsGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 type HealthApiV2MetaHealthGetResponse struct {
@@ -14529,13 +14630,13 @@ type ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGe
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *interface{}
+	JSON200 *StorageNodeDTO
 	// JSON422 the response for an HTTP 422 `application/json` response
 	JSON422 *HTTPValidationError
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGetResponse) GetJSON200() *interface{} {
+func (r ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGetResponse) GetJSON200() *StorageNodeDTO {
 	return r.JSON200
 }
 
@@ -17558,6 +17659,21 @@ func (r ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetResponse) Con
 	return ""
 }
 
+// MetricsMetaMetricsGetWithResponse Metrics
+//
+// Endpoint that serves Prometheus metrics.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /_meta/metrics (the `MetricsMetaMetricsGet` operationId).
+func (c *ClientWithResponses) MetricsMetaMetricsGetWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*MetricsMetaMetricsGetResponse, error) {
+	rsp, err := c.MetricsMetaMetricsGet(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseMetricsMetaMetricsGetResponse(rsp)
+}
+
 // HealthApiV2MetaHealthGetWithResponse Health
 //
 // Liveness probe: succeeds whenever the process can serve requests.
@@ -19490,6 +19606,32 @@ func (c *ClientWithResponses) ManagementNodeDetailApiV2ManagementNodesManagement
 	return ParseManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetResponse(rsp)
 }
 
+// ParseMetricsMetaMetricsGetResponse parses an HTTP response from a MetricsMetaMetricsGetWithResponse call
+func ParseMetricsMetaMetricsGetResponse(rsp *http.Response) (*MetricsMetaMetricsGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &MetricsMetaMetricsGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest interface{}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseHealthApiV2MetaHealthGetResponse parses an HTTP response from a HealthApiV2MetaHealthGetWithResponse call
 func ParseHealthApiV2MetaHealthGetResponse(rsp *http.Response) (*HealthApiV2MetaHealthGetResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -20860,7 +21002,7 @@ func ParseClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNod
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest interface{}
+		var dest StorageNodeDTO
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
