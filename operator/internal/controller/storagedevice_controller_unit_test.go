@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	"github.com/simplyblock/atlas/ptr"
@@ -55,10 +56,18 @@ func sdNodeObject() *simplyblockv1alpha1.StorageNode {
 	}
 }
 
+// sdReconciler builds its client directly rather than through newTestClient,
+// because the mirror resolves a device's node through a field index and the
+// fake client only answers a MatchingFields query for an index it was given.
 func sdReconciler(t *testing.T, cache DeviceCache, objs ...client.Object) *StorageDeviceReconciler {
 	t.Helper()
 	scheme := newTestScheme(t, simplyblockv1alpha1.AddToScheme)
-	c := newTestClient(t, scheme, []client.Object{&simplyblockv1alpha1.StorageDevice{}}, objs...)
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&simplyblockv1alpha1.StorageDevice{}).
+		WithIndex(&simplyblockv1alpha1.StorageNode{}, StorageNodeUUIDIndex, IndexStorageNodeUUID).
+		WithObjects(objs...).
+		Build()
 	return &StorageDeviceReconciler{Client: c, Scheme: scheme, Devices: cache}
 }
 
