@@ -19,8 +19,10 @@ type Event struct {
 }
 
 // Subscription is one resource type plugged into a [SubscriptionManager]. It
-// declares where to stream (Path), which scopes to stream (Scopes), and how to
-// ingest each change (Ingest).
+// declares where to stream a scope from (Path) and how to ingest each change
+// (Ingest). Which scopes are streamed is not its to decide: the manager hands
+// back a [ScopeSet] at registration, and the reconcilers that know which
+// objects exist drive it.
 //
 // Ingest runs on the stream read goroutine, so it must be cheap and must not
 // block on external I/O (no API calls): it decodes the event into the
@@ -28,6 +30,13 @@ type Event struct {
 // Kubernetes writes happen off this path, in a reconciler the subscription
 // registers with the manager — so a slow or failing API server never stalls or
 // tears down the stream.
+//
+// The one thing it may wait on is room in its own trigger channel. That channel
+// is drained by controller-runtime's source.Channel into a workqueue, which is
+// unbounded and deduplicates by key, so the drain is an enqueue rather than a
+// reconcile and does not move at the speed of the API server. Waiting there is
+// deliberate: a dropped trigger is a mirror left stale until the next event or
+// reconnect, because nothing else observes a control-plane-only change.
 type Subscription interface {
 	// Name identifies the subscription in logs.
 	Name() string

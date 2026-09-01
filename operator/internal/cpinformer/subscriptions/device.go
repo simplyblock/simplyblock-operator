@@ -190,10 +190,13 @@ func (s *DeviceSubscription) objectName(scope cpinformer.Scope, deviceID string)
 }
 
 // enqueue pushes a reconcile trigger naming the device's StorageDevice object,
-// dropping it only on shutdown. A device whose node has no registered object
-// name yields no trigger: the object is named after that node, and there is
-// nothing to name it after yet. The node's registration is followed by the
-// stream's snapshot, which enqueues everything.
+// giving up only on shutdown rather than dropping it when the channel is full
+// (see [cpinformer.Subscription] on why waiting is the right side to err on).
+//
+// A device whose node has no registered object name yields no trigger: the
+// object is named after that node, and there is nothing to name it after yet.
+// The node's registration is followed by the stream's snapshot, which enqueues
+// everything.
 func (s *DeviceSubscription) enqueue(ctx context.Context, scope cpinformer.Scope, deviceID string) {
 	name, ok := s.objectName(scope, deviceID)
 	if !ok {

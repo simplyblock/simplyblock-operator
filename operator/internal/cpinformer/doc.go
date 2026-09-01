@@ -11,25 +11,35 @@
 // # Pieces
 //
 //   - [Store] / [Lister] — a thread-safe cache keyed by control-plane id,
-//     scoped by the watch's path parameters (e.g. cluster+pool for volumes).
-//   - [Informer] — ties an SSE stream to a Store: it applies snapshot/created/
-//     updated/deleted events and, for every applied change, pushes a
-//     controller-runtime event onto a channel via [Informer.Channel].
-//   - [SubscriptionManager] — a leader-election-gated manager.Runnable that
-//     opens and closes one stream per scope as the operator's own CRs come and
-//     go.
+//     scoped by the watch's path parameters (e.g., cluster and storage node for
+//     devices).
+//   - [Subscription] — one resource type: where to stream it from, and how to
+//     ingest each change into a cache and enqueue a reconcile trigger. Each
+//     implementation lives in the subscriptions subpackage.
+//   - [SubscriptionManager] — a manager.Runnable that opens and closes one
+//     stream per active scope as the operator's own objects come and go, and
+//     hands each decoded event to its subscription. [Election] decides whether
+//     it runs on the leader alone or on every replica.
+//   - [ScopeSet] — the live set of scopes a subscription streams. Reconcilers
+//     add and remove scopes; the manager opens and closes streams to match.
+//
+// # Division of labor
+//
+// A subscription owns retrieval, decoding, and caching. It never writes
+// Kubernetes objects: that is a reconciler's, reading the subscription's cache
+// and its trigger channel. The split is what keeps a slow or failing API server
+// from stalling or tearing down a stream.
 //
 // # Consistency rules (see the design doc §6)
 //
-//   - The Store is updated *before* the reconcile trigger is enqueued
+//   - The cache is updated *before* the reconcile trigger is enqueued
 //     (store-then-enqueue ordering).
-//   - Every SSE (re)connect begins with a full snapshot; the Informer diffs it
-//     against the Store and synthesizes deletions for entities that vanished
-//     during a disconnect (reconnect relist with delete-detection).
-//   - The Lister is not linearizable: a briefly-stale read causes at most one
+//   - Every SSE (re)connect begins with a full snapshot; a subscription diffs it
+//     against its cache and enqueues the entities that vanished during the
+//     disconnect (reconnect relist with delete-detection).
+//   - A scope is not authoritative until its first snapshot has been applied,
+//     so a reconciler must not delete an object merely because a cold cache
+//     does not have its entity.
+//   - The Lister is not linearizable: a briefly stale read causes at most one
 //     extra, idempotent reconcile, never incorrectness.
-//
-// This is an initial implementation of the reusable core plus a Volume pilot;
-// wiring into a specific reconciler is intentionally left to the caller (see
-// the example on [Informer.Source]).
 package cpinformer
