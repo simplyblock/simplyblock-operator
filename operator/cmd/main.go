@@ -26,6 +26,8 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
+	"github.com/simplyblock/simplyblock-operator/internal/metricsapi"
+
 	// Import all Kubernetes client auth plugins (e.g., Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -123,6 +125,13 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	var enableMetricsAPI bool
+	var metricsAPIPort int
+	flag.BoolVar(&enableMetricsAPI, "enable-metrics-api", true,
+		"Serve the aggregated metrics.simplyblock.io API (LogicalVolumeMetrics). "+
+			"Disable it on a cluster where the APIService is not installed.")
+	flag.IntVar(&metricsAPIPort, "metrics-api-bind-port", metricsapi.DefaultBindPort,
+		"The HTTPS port the aggregated metrics API listens on.")
 	var latencyPercentile string
 	flag.StringVar(&latencyPercentile, "latency-percentile", "p50",
 		"fio write-latency percentile driving the volume-rebalancing deviation signal: "+
@@ -266,7 +275,10 @@ func main() {
 		setupLog.Error(err, "unable to resolve control-plane stream config")
 		os.Exit(1)
 	}
-	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"))
+	// LeaderOnly: the device subscription feeds a reconciler that writes
+	// StorageDevice objects, and two replicas mirroring the same device would
+	// fight over them.
+	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"), cpinformer.LeaderOnly)
 	deviceSubscription := subscriptions.NewDeviceSubscription(operatorNamespace)
 	deviceScopes := cpSubscriptions.AddSubscription(deviceSubscription)
 	if err := (&controller.StorageDeviceReconciler{
@@ -280,6 +292,24 @@ func main() {
 	if err := mgr.Add(cpSubscriptions); err != nil {
 		setupLog.Error(err, "unable to add control-plane subscription manager")
 		os.Exit(1)
+	}
+
+	// The volume stream is a second manager rather than another subscription on
+	// the first, because it must run on every replica: it feeds no reconciler and
+	// writes nothing, and its cache answers aggregated-API reads that arrive at
+	// whichever replica the Service picked. Leader election is a property of a
+	// Runnable, so the two elections need two managers.
+	var volumeSubscription *subscriptions.VolumeSubscription
+	var volumeScopes *cpinformer.ScopeSet
+	if enableMetricsAPI {
+		replicaSubscriptions := cpinformer.NewSubscriptionManager(
+			streamCfg, ctrl.Log.WithName("cpinformer-replica"), cpinformer.EveryReplica)
+		volumeSubscription = subscriptions.NewVolumeSubscription()
+		volumeScopes = replicaSubscriptions.AddSubscription(volumeSubscription)
+		if err := mgr.Add(replicaSubscriptions); err != nil {
+			setupLog.Error(err, "unable to add the per-replica control-plane subscription manager")
+			os.Exit(1)
+		}
 	}
 
 	if err := (&controller.ControlPlaneReconciler{
@@ -312,9 +342,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StoragePoolReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("storagepool-controller"),
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Recorder:     mgr.GetEventRecorder("storagepool-controller"),
+		VolumeScopes: volumeScopes,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")
 		os.Exit(1)
@@ -526,6 +557,15 @@ func main() {
 			}})
 		setupLog.Info("registered simplyblock-volume-placement mutating webhook")
 	}()
+
+	// The aggregated metrics API: LogicalVolumeMetrics served from the volume
+	// cache above, joined to the claims that name them.
+	if enableMetricsAPI {
+		if err := metricsapi.Install(mgr, operatorNamespace, metricsAPIPort, volumeSubscription); err != nil {
+			setupLog.Error(err, "unable to install the aggregated metrics API")
+			os.Exit(1)
+		}
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

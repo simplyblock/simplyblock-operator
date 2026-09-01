@@ -51,6 +51,12 @@ spec:
           args:
             - --leader-elect
             - --health-probe-bind-address=:8081
+            {{- if .Values.metricsAPI.enabled }}
+            - --metrics-api-bind-port={{ .Values.metricsAPI.port }}
+            {{- else }}
+            # No APIService routes to it, so do not open the port at all.
+            - --enable-metrics-api=false
+            {{- end }}
           env:
             - name: WATCH_NAMESPACE
               valueFrom:
@@ -80,6 +86,13 @@ spec:
             # (including /tmp) is read-only, so this must be a writable volume.
             - mountPath: /tmp/k8s-webhook-server/serving-certs
               name: webhook-certs
+            {{- if .Values.metricsAPI.enabled }}
+            # Same arrangement as the webhook cert above, for the same reason:
+            # cert-controller writes the aggregated API's serving cert only into
+            # its Secret and then waits for it to appear here.
+            - mountPath: /tmp/k8s-metrics-apiserver/serving-certs
+              name: metrics-apiserver-certs
+            {{- end }}
             {{- if .Values.tls.enabled }}
             {{- include "simplyblock.tlsVolumeMount" . | nindent 12 }}
             {{- end }}
@@ -95,6 +108,12 @@ spec:
               port: 8081
             initialDelaySeconds: 5
             periodSeconds: 10
+          {{- if .Values.metricsAPI.enabled }}
+          ports:
+            - name: metrics-api
+              containerPort: {{ .Values.metricsAPI.port }}
+              protocol: TCP
+          {{- end }}
       volumes:
         # Self-signed mode (cert-controller) only writes the serving cert to the
         # webhook-server-cert Secret, so that Secret must be mounted here for the
@@ -111,6 +130,14 @@ spec:
             secretName: webhook-server-cert
             optional: true
           {{- end }}
+        {{- if .Values.metricsAPI.enabled }}
+        # optional:true lets the pod start before the operator has created and
+        # populated the Secret; kubelet syncs the files in once it exists.
+        - name: metrics-apiserver-certs
+          secret:
+            secretName: metrics-apiserver-cert
+            optional: true
+        {{- end }}
         {{- if .Values.tls.enabled }}
         {{- include "simplyblock.clientTlsVolume" (dict "ctx" . "clientSecret" "simplyblock-operator-client-tls") | nindent 8 }}
         {{- end }}

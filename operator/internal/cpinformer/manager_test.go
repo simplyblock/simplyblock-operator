@@ -64,7 +64,7 @@ func TestSubscriptionManagerStreamsAndDispatches(t *testing.T) {
 	defer srv.Close()
 
 	sub := &stubSub{path: "/vols"}
-	m := NewSubscriptionManager(StreamConfig{Endpoint: srv.URL, Liveness: 2 * time.Second}, logr.Discard())
+	m := NewSubscriptionManager(StreamConfig{Endpoint: srv.URL, Liveness: 2 * time.Second}, logr.Discard(), LeaderOnly)
 	scopes := m.AddSubscription(sub)
 	scopes.Add(Scope{"c", "p"})
 
@@ -95,7 +95,7 @@ func TestSubscriptionManagerAddScopeAfterStart(t *testing.T) {
 	defer srv.Close()
 
 	sub := &stubSub{path: "/vols"}
-	m := NewSubscriptionManager(StreamConfig{Endpoint: srv.URL}, logr.Discard())
+	m := NewSubscriptionManager(StreamConfig{Endpoint: srv.URL}, logr.Discard(), LeaderOnly)
 	scopes := m.AddSubscription(sub) // empty at start
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -111,7 +111,7 @@ func TestSubscriptionManagerAddScopeAfterStart(t *testing.T) {
 }
 
 func TestSubscriptionManagerNeedsLeaderElection(t *testing.T) {
-	m := NewSubscriptionManager(StreamConfig{}, logr.Discard())
+	m := NewSubscriptionManager(StreamConfig{}, logr.Discard(), LeaderOnly)
 	if !m.NeedLeaderElection() {
 		t.Error("NeedLeaderElection() = false, want true")
 	}

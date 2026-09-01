@@ -1,0 +1,28 @@
+# Aggregates read access to LogicalVolumeMetrics into the built-in Kubernetes
+# "view" ClusterRole, so that anyone already bound to "view" in a namespace can
+# see the capacity of the volumes behind their own claims and nothing else.
+#
+# This is the point of serving the readings as a namespaced API resource rather
+# than as metrics alone: the confinement is the cluster's own RBAC, enforced by
+# the kube-apiserver before the operator is reached, and it needs no per-tenant
+# dashboard or query rewriting to hold.
+#
+# There are no write verbs because there is nothing to write. The resource is
+# computed on demand and the aggregated API server registers no mutating verbs at
+# all, so a create or a delete is refused before RBAC is consulted.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: simplyblock-metrics-aggregate-to-view
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: Helm
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+- apiGroups:
+  - metrics.simplyblock.io
+  resources:
+  - logicalvolumemetrics
+  verbs:
+  - get
+  - list

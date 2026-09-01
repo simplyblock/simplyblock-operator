@@ -27,6 +27,7 @@ GOLANGCI_LINT  ?= $(BIN_DIR)/golangci-lint
 KUSTOMIZE      ?= $(BIN_DIR)/kustomize
 CONTROLLER_GEN ?= $(BIN_DIR)/controller-gen
 ENVTEST        ?= $(BIN_DIR)/setup-envtest
+OPENAPI_GEN    ?= $(BIN_DIR)/openapi-gen
 YQ             ?= $(BIN_DIR)/yq
 
 # ── Install targets ──────────────────────────────────────────────────────────
@@ -45,6 +46,10 @@ kustomize: ## Install kustomize (manifest-pinned) into .bin.
 .PHONY: controller-gen
 controller-gen: ## Install controller-gen (manifest-pinned) into .bin.
 	@"$(TOOLS_SH)" install controller-gen
+
+.PHONY: openapi-gen
+openapi-gen: ## Install openapi-gen (manifest-pinned) into .bin.
+	@"$(TOOLS_SH)" install openapi-gen
 
 .PHONY: yq
 yq: ## Install yq (manifest-pinned) into .bin.
