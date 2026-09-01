@@ -774,119 +774,6 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: logicalvolumes.storage.simplyblock.io
-spec:
-  group: storage.simplyblock.io
-  names:
-    kind: LogicalVolume
-    listKind: LogicalVolumeList
-    plural: logicalvolumes
-    singular: logicalvolume
-  scope: Namespaced
-  versions:
-  - additionalPrinterColumns:
-    - description: Backend volume name
-      jsonPath: .status.name
-      name: Name
-      type: string
-    - description: Backend lifecycle status
-      jsonPath: .status.state
-      name: State
-      type: string
-    - description: Provisioned size in bytes
-      jsonPath: .status.sizeBytes
-      name: Size
-      type: integer
-    - description: Backend pool name
-      jsonPath: .status.poolName
-      name: Pool
-      type: string
-    - jsonPath: .metadata.creationTimestamp
-      name: Age
-      type: date
-    name: v1alpha1
-    schema:
-      openAPIV3Schema:
-        description: |-
-          LogicalVolume is the Schema for the logicalvolumes API. It is a read model of a
-          control-plane volume, kept in sync by the SSE informer.
-        properties:
-          apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
-              Servers should convert recognized schemas to the latest internal value, and
-              may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-            type: string
-          kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
-              Servers may infer this from the endpoint the client submits requests to.
-              Cannot be updated.
-              In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-            type: string
-          metadata:
-            type: object
-          spec:
-            description: spec identifies the mirrored control-plane volume
-            properties:
-              clusterID:
-                description: ClusterID is the backend cluster UUID that owns the volume.
-                type: string
-              poolID:
-                description: PoolID is the backend storage-pool UUID that owns the
-                  volume.
-                type: string
-              volumeID:
-                description: VolumeID is the backend volume UUID.
-                type: string
-            required:
-            - clusterID
-            - poolID
-            - volumeID
-            type: object
-          status:
-            description: status defines the observed state of the volume
-            properties:
-              name:
-                description: Name is the backend volume name.
-                type: string
-              nqn:
-                description: NQN is the NVMe Qualified Name the volume is exported
-                  under.
-                type: string
-              observedGeneration:
-                description: ObservedGeneration is the generation last reconciled
-                  into this status.
-                format: int64
-                type: integer
-              poolName:
-                description: PoolName is the backend pool name the volume belongs
-                  to.
-                type: string
-              sizeBytes:
-                description: SizeBytes is the provisioned size in bytes.
-                format: int64
-                type: integer
-              state:
-                description: State is the backend lifecycle status (e.g. "online",
-                  "deleted").
-                type: string
-            type: object
-        required:
-        - spec
-        type: object
-    served: true
-    storage: true
-    subresources:
-      status: {}
----
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  annotations:
-    controller-gen.kubebuilder.io/version: v0.21.0
   name: replicationops.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -2474,6 +2361,194 @@ spec:
                   Completed increments it, and nothing else writes it, so it only ever grows.
                 format: int64
                 type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: storagedevices.storage.simplyblock.io
+spec:
+  group: storage.simplyblock.io
+  names:
+    kind: StorageDevice
+    listKind: StorageDeviceList
+    plural: storagedevices
+    shortNames:
+    - sd
+    singular: storagedevice
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.nodeRef
+      name: Node
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.role
+      name: Role
+      type: string
+    - jsonPath: .status.deviceStatus
+      name: Status
+      type: string
+    - jsonPath: .status.capacity.totalBytes
+      name: Total
+      type: integer
+    - jsonPath: .status.capacity.usedBytes
+      name: Used
+      type: integer
+    - jsonPath: .status.hardware.pciAddress
+      name: PCI
+      priority: 1
+      type: string
+    - jsonPath: .status.hardware.serialNumber
+      name: Serial
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StorageDevice is one storage backend device belonging to one storage node. It
+          is the bottom of the ownership spine and the narrowest thing an operation can
+          target.
+
+          Objects are created by the operator from what the control plane reports and
+          are never written by a user: the device's existence follows from the node
+          having it, and which devices a node uses is decided in the node's own spec.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec identifies the mirrored control-plane device
+            properties:
+              deviceID:
+                description: |-
+                  DeviceID is the control plane's identifier for the device. With NodeRef it
+                  is the whole of this object's identity.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+              nodeRef:
+                description: |-
+                  NodeRef names the StorageNode this device belongs to. The node owns this
+                  object by controller reference, so deleting the node deletes its devices.
+                type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
+            required:
+            - deviceID
+            - nodeRef
+            type: object
+          status:
+            description: status defines the observed state of the device
+            properties:
+              capacity:
+                description: Capacity is how big the device is and how much it holds.
+                properties:
+                  totalBytes:
+                    description: TotalBytes is the device's usable size.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  usedBytes:
+                    description: UsedBytes is what it currently holds.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
+              clusterID:
+                description: |-
+                  ClusterID and NodeID are the backend ids of the stream this device was
+                  last observed on. They are recorded because an object outliving its device
+                  has to say which scope's absence would be authoritative before the mirror
+                  may delete it; the object's own spec names Kubernetes objects rather than
+                  backend ones, so it cannot answer that on its own.
+                type: string
+              deviceStatus:
+                description: |-
+                  DeviceStatus is the control plane's own string, in the control plane's
+                  spelling, which is why it carries no Enum here.
+                type: string
+              hardware:
+                description: Hardware identifies the part.
+                properties:
+                  model:
+                    description: Model is the manufacturer's model string.
+                    type: string
+                  nvmeController:
+                    description: |-
+                      NVMeController is the controller the device is served through, in the
+                      control plane's spelling.
+                    type: string
+                  pciAddress:
+                    description: |-
+                      PCIAddress is the device's address on the host ("0000:5e:00.0"), where it
+                      has one. A logical block device may not: the address can belong to the
+                      controller it hangs off rather than to the device.
+                    type: string
+                  serialNumber:
+                    description: SerialNumber is what is printed on the drive.
+                    type: string
+                type: object
+              message:
+                description: |-
+                  Message is the reason the phase is what it is: one sentence, replaced as
+                  the device moves, and never a log.
+                type: string
+              nodeID:
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the rest of this status was computed
+                  from. On this kind it moves at most once, since every spec field is fixed
+                  when the object is created.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the operator's own view of the device.
+                enum:
+                - Online
+                - Degraded
+                - Unknown
+                - Removed
+                - Failed
+                type: string
+              role:
+                description: Role is what the device carries.
+                enum:
+                - Storage
+                - Journal
+                type: string
             type: object
         required:
         - spec
@@ -4582,7 +4657,6 @@ rules:
   - backuppolicies
   - backuprestores
   - controlplanes
-  - logicalvolumes
   - replicationops
   - replicationpairs
   - replicationpolicies
@@ -4590,6 +4664,7 @@ rules:
   - storagebackups
   - storageclusterops
   - storageclusters
+  - storagedevices
   - storagenodeops
   - storagenodes
   - storagenodesets
@@ -4632,7 +4707,6 @@ rules:
   - backuppolicies/status
   - backuprestores/status
   - controlplanes/status
-  - logicalvolumes/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status
@@ -4640,6 +4714,7 @@ rules:
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status
+  - storagedevices/status
   - storagenodeops/status
   - storagenodes/status
   - storagenodesets/status

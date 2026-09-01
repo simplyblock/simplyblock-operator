@@ -78,7 +78,7 @@ var responseRules = []responseRule{
 
 // LvolConnectEntry is a NvmeConnectEntry as answered by GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/connect, which promises more
 // than the shared model does. Same fields, own identity, so it can carry its
-// own rules; convert to NvmeConnectEntry where the difference does not matter.
+// own rules. Convert to NvmeConnectEntry where the difference does not matter.
 type LvolConnectEntry NvmeConnectEntry
 
 // UnmarshalJSON decodes and validates a BackupDTO.

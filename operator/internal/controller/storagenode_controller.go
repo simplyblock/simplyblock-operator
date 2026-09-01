@@ -40,6 +40,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -58,6 +59,24 @@ type StorageNodeReconciler struct {
 	Recorder         events.EventRecorder
 	TLSEnabled       bool
 	TLSMutualEnabled bool
+
+	// DeviceScopes, if set, receives this node's (cluster, node) scope so the
+	// control-plane SSE manager streams the node's devices. The control plane
+	// offers no cluster-wide device stream, so the node rather than the cluster
+	// is what drives a device subscription. Optional (nil in tests).
+	DeviceScopes *cpinformer.ScopeSet
+	// DeviceNodeNames, if set, learns which StorageNode object a backend node id
+	// belongs to. The device subscription needs it to name the objects it
+	// mirrors into, and this reconciler is where both ids are known at once.
+	DeviceNodeNames DeviceNodeRegistry
+}
+
+// DeviceNodeRegistry is how the StorageNode reconciler tells a device
+// subscription which object a backend node id names. It is an interface so the
+// node reconciler does not depend on the subscription's concrete type.
+type DeviceNodeRegistry interface {
+	RegisterNode(nodeID, objectName string)
+	UnregisterNode(nodeID string)
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
@@ -97,7 +116,7 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Handle deletion.
 	if !sn.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, &sn, &sns)
+		return r.handleDeletion(ctx, &sn, clusterUUID)
 	}
 
 	// Ensure finalizer.
@@ -145,8 +164,42 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
+	// Node provisioned → its devices can be streamed. The name is registered
+	// before the scope, so the subscription can name what the first snapshot
+	// delivers.
+	r.registerDeviceStream(clusterUUID, &sn)
+
 	// Node provisioned → sync status periodically.
 	return r.syncStatus(ctx, &sn, clusterUUID, apiClient)
+}
+
+// registerDeviceStream opens the node's device stream by registering its scope,
+// having first taught the subscription which object the backend node id names.
+func (r *StorageNodeReconciler) registerDeviceStream(clusterUUID string, sn *simplyblockv1alpha1.StorageNode) {
+	if sn.Status.UUID == "" {
+		return
+	}
+	if r.DeviceNodeNames != nil {
+		r.DeviceNodeNames.RegisterNode(sn.Status.UUID, sn.Name)
+	}
+	if r.DeviceScopes != nil {
+		r.DeviceScopes.Add(cpinformer.Scope{clusterUUID, sn.Status.UUID})
+	}
+}
+
+// unregisterDeviceStream closes the node's device stream. The scope goes first:
+// no further events can arrive once the stream is closed, so the name mapping is
+// dropped second and nothing is left naming objects after a node on its way out.
+func (r *StorageNodeReconciler) unregisterDeviceStream(clusterUUID string, sn *simplyblockv1alpha1.StorageNode) {
+	if sn.Status.UUID == "" {
+		return
+	}
+	if r.DeviceScopes != nil {
+		r.DeviceScopes.Remove(cpinformer.Scope{clusterUUID, sn.Status.UUID})
+	}
+	if r.DeviceNodeNames != nil {
+		r.DeviceNodeNames.UnregisterNode(sn.Status.UUID)
+	}
 }
 
 // pollUUIDFromBackend lists all backend nodes for the cluster, finds the ones
@@ -468,7 +521,7 @@ func (r *StorageNodeReconciler) isFDBWorkerBlocked(
 // countInFlightNodes returns how many distinct workers (physical hosts) in the
 // same StorageNodeSet are still being provisioned, excluding the calling node's
 // own worker. A worker is considered in-flight if any of its StorageNode CRs
-// has PostedAt set and either has no UUID yet or is still "in_creation".
+// has PostedAt set and either has no UUID yet or is still "in_creation."
 // Counting distinct workers (not individual CRs) ensures maxParallelNodeAdds
 // matches its documented meaning regardless of nodesPerSocket — without this,
 // each in-flight host would consume nodesPerSocket slots instead of one.
@@ -638,7 +691,7 @@ func (r *StorageNodeReconciler) checkFailureDomain(
 // partitionsPerDevice translates spec.enableJournalDevice into the backend's
 // partitions-per-device count: 0 dedicates a whole NVMe device to the journal
 // manager, 1 carves a journal partition out of each storage device. Unset
-// defaults to 1, preserving the behaviour of the spec.partitions field this
+// defaults to 1, preserving the behavior of the spec.partitions field this
 // replaced.
 func partitionsPerDevice(sns *simplyblockv1alpha1.StorageNodeSet) int {
 	if ptr.BoolFromOrFalse(sns.Spec.EnableJournalDevice) {
@@ -742,9 +795,14 @@ func effectiveFailureDomain(sn *simplyblockv1alpha1.StorageNode, sns *simplybloc
 func (r *StorageNodeReconciler) handleDeletion(
 	ctx context.Context,
 	sn *simplyblockv1alpha1.StorageNode,
-	_ *simplyblockv1alpha1.StorageNodeSet,
+	clusterUUID string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+
+	// The node is going away, so stop streaming its devices. Its StorageDevice
+	// objects are garbage-collected by the owner reference rather than deleted
+	// here.
+	r.unregisterDeviceStream(clusterUUID, sn)
 
 	// If the node was never provisioned, skip ops and remove finalizer immediately.
 	if sn.Status.UUID == "" {

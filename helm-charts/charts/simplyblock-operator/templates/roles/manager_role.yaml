@@ -191,7 +191,6 @@ rules:
   - backuppolicies
   - backuprestores
   - controlplanes
-  - logicalvolumes
   - replicationops
   - replicationpairs
   - replicationpolicies
@@ -199,6 +198,7 @@ rules:
   - storagebackups
   - storageclusterops
   - storageclusters
+  - storagedevices
   - storagenodeops
   - storagenodes
   - storagenodesets
@@ -241,7 +241,6 @@ rules:
   - backuppolicies/status
   - backuprestores/status
   - controlplanes/status
-  - logicalvolumes/status
   - replicationops/status
   - replicationpairs/status
   - replicationpolicies/status
@@ -249,6 +248,7 @@ rules:
   - storagebackups/status
   - storageclusterops/status
   - storageclusters/status
+  - storagedevices/status
   - storagenodeops/status
   - storagenodes/status
   - storagenodesets/status

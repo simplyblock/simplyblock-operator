@@ -26,7 +26,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
+	// Import all Kubernetes client auth plugins (e.g., Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
@@ -257,22 +257,24 @@ func main() {
 	}
 
 	// Control-plane SSE push subscriptions: one leader-only manager, streams
-	// driven by scopes that reconcilers register (e.g. the Pool controller adds a
-	// pool's scope once it is ready). Volumes are mirrored into LogicalVolume CRs
-	// via a subscription (ingest→cache) + a reconciler (cache→CR writes).
+	// driven by scopes that reconcilers register (the StorageNode controller adds
+	// a node's scope once the node is provisioned). Devices are mirrored into
+	// StorageDevice CRs via a subscription (ingest→cache) + a reconciler
+	// (cache→CR writes).
 	streamCfg, err := subscriptions.ResolveStreamConfig()
 	if err != nil {
 		setupLog.Error(err, "unable to resolve control-plane stream config")
 		os.Exit(1)
 	}
 	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"))
-	volumeSubscription := subscriptions.NewVolumeSubscription(operatorNamespace, nil)
-	volumeScopes := cpSubscriptions.AddSubscription(volumeSubscription)
-	if err := (&controller.LogicalVolumeReconciler{
+	deviceSubscription := subscriptions.NewDeviceSubscription(operatorNamespace)
+	deviceScopes := cpSubscriptions.AddSubscription(deviceSubscription)
+	if err := (&controller.StorageDeviceReconciler{
 		Client:  mgr.GetClient(),
-		Volumes: volumeSubscription,
+		Scheme:  mgr.GetScheme(),
+		Devices: deviceSubscription,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "LogicalVolume")
+		setupLog.Error(err, "unable to create controller", "controller", "StorageDevice")
 		os.Exit(1)
 	}
 	if err := mgr.Add(cpSubscriptions); err != nil {
@@ -310,10 +312,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StoragePoolReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		Recorder:     mgr.GetEventRecorder("storagepool-controller"),
-		VolumeScopes: volumeScopes,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("storagepool-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")
 		os.Exit(1)
@@ -397,6 +398,8 @@ func main() {
 		Recorder:         mgr.GetEventRecorder("storagenode-controller"),
 		TLSEnabled:       tlsEnabled,
 		TLSMutualEnabled: tlsMutualEnabled,
+		DeviceScopes:     deviceScopes,
+		DeviceNodeNames:  deviceSubscription,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
@@ -436,7 +439,7 @@ func main() {
 			APIClient: webapi.NewClient(),
 			K8sClient: mgr.GetClient(),
 		},
-		// Resolves each storage node's data-network IP (/nics) for the fio baseline;
+		// Resolves each storage node's data-network IP (the NICs endpoint) for the fio baseline;
 		// independent of the provisioner, so it is set for both prod and test paths.
 		APIClient: webapi.NewClient(),
 	}).SetupWithManager(mgr); err != nil {

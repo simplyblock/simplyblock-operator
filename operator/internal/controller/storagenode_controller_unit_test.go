@@ -297,7 +297,7 @@ func TestHandleDeletion_RemovesFinalizerWhenNeverProvisioned(t *testing.T) {
 	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, nil)
 	r := newSNReconciler(t, sn, sns)
 
-	_, err := r.handleDeletion(context.Background(), sn, sns)
+	_, err := r.handleDeletion(context.Background(), sn, snTestCluster)
 	if err != nil {
 		t.Fatalf("handleDeletion returned error: %v", err)
 	}
