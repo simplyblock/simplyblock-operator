@@ -1,22 +1,14 @@
-/*
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// The connection half of a subscription: where the control plane is and how to
+// authenticate against it. It is resource-agnostic and shared by every
+// subscription, which is why it lives beside them rather than in any one of
+// them — only the per-resource path differs, and each Subscription supplies its
+// own.
 
 package subscriptions
 
 import (
+	"fmt"
+
 	"github.com/simplyblock/atlas/kube"
 
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
@@ -25,14 +17,20 @@ import (
 
 // ResolveStreamConfig builds the shared control-plane stream config used by the
 // SubscriptionManager: endpoint and TLS client from webapi, bearer token from
-// the pod service account. It is resource-agnostic — only the per-resource path
-// (from each Subscription) differs.
+// the pod service account.
+//
+// A token that cannot be read is an error rather than an empty string. Starting
+// unauthenticated would push the failure to the first stream, where it arrives
+// as a 401 that reconnects forever and says nothing about the token.
 func ResolveStreamConfig() (cpinformer.StreamConfig, error) {
 	streamClient, err := webapi.NewStreamClient()
 	if err != nil {
 		return cpinformer.StreamConfig{}, err
 	}
-	token, _ := kube.ServiceAccountToken()
+	token, err := kube.ServiceAccountToken()
+	if err != nil {
+		return cpinformer.StreamConfig{}, fmt.Errorf("read the service-account token: %w", err)
+	}
 	return cpinformer.StreamConfig{
 		Endpoint: streamClient.BaseURL,
 		Token:    token,

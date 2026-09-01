@@ -27,6 +27,24 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 )
 
+// StorageNodeUUIDIndex indexes StorageNode objects by the backend node id in
+// their status. The mirror resolves a device's node by that id on every
+// reconcile, and there is one device object per physical drive, so a scan over
+// every node in the namespace is work proportional to nodes times devices.
+const StorageNodeUUIDIndex = "status.uuid"
+
+// IndexStorageNodeUUID is the index function for [StorageNodeUUIDIndex],
+// exported so that a test's client can register the same index the manager
+// does. A node with no id yet is not indexed: it has nothing a device could
+// match against.
+func IndexStorageNodeUUID(o client.Object) []string {
+	node, ok := o.(*simplyblockv1alpha1.StorageNode)
+	if !ok || node.Status.UUID == "" {
+		return nil
+	}
+	return []string{node.Status.UUID}
+}
+
 // deviceRetry is how long the mirror waits before looking again at something
 // that is not wrong, only not ready: a node object that has not appeared yet, or
 // a scope whose first snapshot is still in flight.
@@ -79,6 +97,11 @@ type StorageDeviceReconciler struct {
 // stale ones at startup) and the subscription's trigger stream (for
 // control-plane changes). Both enqueue a StorageDevice to reconcile.
 func (r *StorageDeviceReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(), &simplyblockv1alpha1.StorageNode{}, StorageNodeUUIDIndex, IndexStorageNodeUUID,
+	); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageDevice{}).
 		Named("storagedevice").
@@ -192,15 +215,16 @@ func (r *StorageDeviceReconciler) upsert(
 // been created yet, or may already be on its way out.
 func (r *StorageDeviceReconciler) nodeFor(ctx context.Context, namespace, nodeID string) (*simplyblockv1alpha1.StorageNode, error) {
 	var nodes simplyblockv1alpha1.StorageNodeList
-	if err := r.List(ctx, &nodes, client.InNamespace(namespace)); err != nil {
+	if err := r.List(ctx, &nodes,
+		client.InNamespace(namespace),
+		client.MatchingFields{StorageNodeUUIDIndex: nodeID},
+	); err != nil {
 		return nil, err
 	}
-	for i := range nodes.Items {
-		if nodes.Items[i].Status.UUID == nodeID {
-			return &nodes.Items[i], nil
-		}
+	if len(nodes.Items) == 0 {
+		return nil, nil
 	}
-	return nil, nil
+	return &nodes.Items[0], nil
 }
 
 // devicePhase groups the control plane's device vocabulary into the operator's
