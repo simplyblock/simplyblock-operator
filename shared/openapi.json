@@ -5,6 +5,23 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/_meta/metrics": {
+      "get": {
+        "summary": "Metrics",
+        "description": "Endpoint that serves Prometheus metrics.",
+        "operationId": "metrics__meta_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/": {
       "get": {
         "summary": "Clusters:List",
@@ -15,6 +32,18 @@
           }
         ],
         "parameters": [
+          {
+            "name": "watch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.",
+              "default": false,
+              "title": "Watch"
+            },
+            "description": "Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear."
+          },
           {
             "name": "cluster_id",
             "in": "query",
@@ -31,18 +60,6 @@
               ],
               "title": "Cluster Id"
             }
-          },
-          {
-            "name": "watch",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "description": "Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.",
-              "default": false,
-              "title": "Watch"
-            },
-            "description": "Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear."
           }
         ],
         "responses": {
@@ -927,7 +944,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/StorageNodeDTO"
+                }
               },
               "text/event-stream": {
                 "schema": {
@@ -1433,6 +1452,9 @@
         "responses": {
           "202": {
             "description": "Successful Response"
+          },
+          "409": {
+            "description": "Shutdown preconditions not met; retry later or use force"
           },
           "422": {
             "description": "Validation Error",
@@ -2951,7 +2973,11 @@
     },
     "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/replicate_lvol_on_source_cluster": {
       "post": {
+        "tags": [
+          "replication"
+        ],
         "summary": "Clusters:Storage-Pools:Replicate Lvol On Source Cluster",
+        "description": "Rebuild a volume on the source cluster.\n\nCollection-scoped rather than an operation on `/{volume_id}`: the volume is\ntypically gone from the source cluster by the time this is called, so the\ncontroller falls back to resolving the id through the replication records.",
         "operationId": "clusters_storage_pools_replicate_lvol_on_source_cluster_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes_replicate_lvol_on_source_cluster_post",
         "security": [
           {
@@ -2991,13 +3017,8 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -3486,180 +3507,6 @@
         }
       }
     },
-    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_trigger": {
-      "post": {
-        "summary": "Clusters:Storage-Pools:Volumes:Replication Start",
-        "operationId": "clusters_storage_pools_volumes_replication_start_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_trigger_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "pool_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Pool Id"
-            }
-          },
-          {
-            "name": "volume_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Volume Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_start": {
-      "post": {
-        "summary": "Clusters:Storage-Pools:Volumes:Replication Start",
-        "operationId": "clusters_storage_pools_volumes_replication_start_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_start_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "pool_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Pool Id"
-            }
-          },
-          {
-            "name": "volume_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Volume Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_stop": {
-      "post": {
-        "summary": "Clusters:Storage-Pools:Volumes:Replication Stop",
-        "operationId": "clusters_storage_pools_volumes_replication_stop_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_stop_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "pool_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Pool Id"
-            }
-          },
-          {
-            "name": "volume_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Volume Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/connect": {
       "get": {
         "summary": "Clusters:Storage-Pools:Volumes:Connect",
@@ -4032,274 +3879,6 @@
         }
       }
     },
-    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replicate_lvol": {
-      "post": {
-        "summary": "Clusters:Storage-Pools:Volumes:Replicate Lvol",
-        "operationId": "clusters_storage_pools_volumes_replicate_lvol_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replicate_lvol_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "pool_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Pool Id"
-            }
-          },
-          {
-            "name": "volume_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Volume Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_commit": {
-      "post": {
-        "summary": "Clusters:Storage-Pools:Volumes:Replication Commit",
-        "operationId": "clusters_storage_pools_volumes_replication_commit_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_commit_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "pool_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Pool Id"
-            }
-          },
-          {
-            "name": "volume_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Volume Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_failback": {
-      "post": {
-        "summary": "Clusters:Storage-Pools:Volumes:Replication Failback",
-        "operationId": "clusters_storage_pools_volumes_replication_failback_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_failback_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "pool_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Pool Id"
-            }
-          },
-          {
-            "name": "volume_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Volume Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FailbackParams"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/list_replication_tasks": {
-      "get": {
-        "summary": "Clusters:Storage-Pools:Volumes:List Replication Tasks",
-        "operationId": "clusters_storage_pools_volumes_list_replication_tasks_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__list_replication_tasks_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "pool_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Pool Id"
-            }
-          },
-          {
-            "name": "volume_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Volume Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TaskDTO"
-                  },
-                  "title": "Response Clusters Storage Pools Volumes List Replication Tasks Api V2 Clusters  Cluster Id  Storage Pools  Pool Id  Volumes  Volume Id  List Replication Tasks Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/clone": {
       "post": {
         "summary": "Clusters:Storage-Pools:Volumes:Clone",
@@ -4524,10 +4103,14 @@
         }
       }
     },
-    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/": {
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/": {
       "get": {
-        "summary": "Clusters:Storage-Pools:Volumes:Migrations:List",
-        "operationId": "clusters_storage_pools_volumes_migrations_list_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__migrations__get",
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Storage-Pools:Volumes:Replication:Detail",
+        "description": "Resolve a volume to its counterpart on the other cluster.\n\nAnswers \"what is the TARGET volume uuid for this SOURCE volume uuid\" (and the\nreverse). Before this the ids were only returned by the fail-over or commit\ncall itself, so a caller that had not kept them could not find the target\nvolume through the API at all -- LVolReplication was exposed nowhere.",
+        "operationId": "clusters_storage_pools_volumes_replication_detail_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication__get",
         "security": [
           {
             "HTTPBearer": []
@@ -4543,6 +4126,26 @@
               "format": "uuid",
               "title": "Cluster Id"
             }
+          },
+          {
+            "name": "pool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pool Id"
+            }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
           }
         ],
         "responses": {
@@ -4551,11 +4154,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/MigrationDTO"
-                  },
-                  "title": "Response Clusters Storage Pools Volumes Migrations List Api V2 Clusters  Cluster Id  Storage Pools  Pool Id  Volumes  Volume Id  Migrations  Get"
+                  "$ref": "#/components/schemas/ReplicationRelationshipDTO"
                 }
               }
             }
@@ -4571,10 +4170,16 @@
             }
           }
         }
-      },
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start": {
       "post": {
-        "summary": "Cluster:Storage-Pools:Volumes:Migrations:Create",
-        "operationId": "cluster_storage_pools_volumes_migrations_create_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__migrations__post",
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Storage-Pools:Volumes:Replication:Start",
+        "description": "Start replicating a volume.\n\nThe destination is the request's replication_cluster_id, else the cluster's\nconfigured target. It used to pass the PATH cluster \u2014 the volume's OWN\ncluster \u2014 as the destination, which self-targets and never falls back to the\nconfigured target, so replication could not be started correctly over REST\nat all. mode/interval_min were likewise unreachable.",
+        "operationId": "clusters_storage_pools_volumes_replication_start_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_start_post",
         "security": [
           {
             "HTTPBearer": []
@@ -4592,16 +4197,6 @@
             }
           },
           {
-            "name": "volume_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Volume Id"
-            }
-          },
-          {
             "name": "pool_id",
             "in": "path",
             "required": true,
@@ -4612,33 +4207,35 @@
             }
           },
           {
-            "name": "response-format",
-            "in": "query",
-            "required": false,
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
             "schema": {
-              "enum": [
-                "empty",
-                "full",
-                "identifier"
-              ],
               "type": "string",
-              "default": "full",
-              "title": "Response-Format"
+              "format": "uuid",
+              "title": "Volume Id"
             }
           }
         ],
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_MigrationParams"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ReplicationStartParams"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
               }
             }
           }
         },
         "responses": {
-          "201": {
+          "204": {
             "description": "Successful Response"
           },
           "422": {
@@ -4654,10 +4251,13 @@
         }
       }
     },
-    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/{migration_id}/": {
-      "get": {
-        "summary": "Cluster:Storage-Pools:Volumes:Migrations:Detail",
-        "operationId": "cluster_storage_pools_volumes_migrations_detail_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__migrations__migration_id___get",
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/stop": {
+      "post": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Storage-Pools:Volumes:Replication:Stop",
+        "operationId": "clusters_storage_pools_volumes_replication_stop_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_stop_post",
         "security": [
           {
             "HTTPBearer": []
@@ -4675,13 +4275,13 @@
             }
           },
           {
-            "name": "migration_id",
+            "name": "pool_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
               "format": "uuid",
-              "title": "Migration Id"
+              "title": "Pool Id"
             }
           },
           {
@@ -4693,99 +4293,11 @@
               "format": "uuid",
               "title": "Volume Id"
             }
-          },
-          {
-            "name": "pool_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Pool Id"
-            }
           }
         ],
         "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MigrationDTO"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "summary": "Cluster:Storage-Pools:Volumes:Migrations:Cancel",
-        "operationId": "cluster_storage_pools_volumes_migrations_cancel_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__migrations__migration_id___delete",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "cluster_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Cluster Id"
-            }
-          },
-          {
-            "name": "migration_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Migration Id"
-            }
-          },
-          {
-            "name": "volume_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Volume Id"
-            }
-          },
-          {
-            "name": "pool_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Pool Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -4800,10 +4312,13 @@
         }
       }
     },
-    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/{migration_id}/continue": {
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/trigger": {
       "post": {
-        "summary": "Cluster:Storage-Pools:Volumes:Migrations:Continue",
-        "operationId": "cluster_storage_pools_volumes_migrations_continue_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__migrations__migration_id__continue_post",
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Storage-Pools:Volumes:Replication:Trigger",
+        "operationId": "clusters_storage_pools_volumes_replication_trigger_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_trigger_post",
         "security": [
           {
             "HTTPBearer": []
@@ -4821,13 +4336,75 @@
             }
           },
           {
-            "name": "migration_id",
+            "name": "pool_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
               "format": "uuid",
-              "title": "Migration Id"
+              "title": "Pool Id"
+            }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failover": {
+      "post": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Storage-Pools:Volumes:Replication:Failover",
+        "description": "Bring the volume up on the target cluster.\n\nThe counterpart's id is read back from this volume's replication\nrelationship, its connection paths from the target volume's `connect`.\n\n``generation`` selects WHICH retained point-in-time to come up on: 0 (the\ndefault) is the newest, 1 the one before it, and so on through the\nhistory a retention schedule keeps. Failing over to an older generation\nis the recovery path for a logical corruption, which the newest copy has\nfaithfully replicated.",
+        "operationId": "clusters_storage_pools_volumes_replication_failover_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_failover_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pool Id"
             }
           },
           {
@@ -4841,6 +4418,58 @@
             }
           },
           {
+            "name": "generation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Generation"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/commit": {
+      "post": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Storage-Pools:Volumes:Replication:Commit",
+        "description": "Queue the planned cutover. Progress is the returned task.",
+        "operationId": "clusters_storage_pools_volumes_replication_commit_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_commit_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
             "name": "pool_id",
             "in": "path",
             "required": true,
@@ -4849,6 +4478,78 @@
               "format": "uuid",
               "title": "Pool Id"
             }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failback": {
+      "post": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Storage-Pools:Volumes:Replication:Failback",
+        "description": "Point replication back at a source cluster. The cutover itself is\n`commit`.",
+        "operationId": "clusters_storage_pools_volumes_replication_failback_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_failback_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pool Id"
+            }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
           }
         ],
         "requestBody": {
@@ -4856,17 +4557,84 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_ContinueParams"
+                "$ref": "#/components/schemas/FailbackParams"
               }
             }
           }
         },
         "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/tasks": {
+      "get": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Storage-Pools:Volumes:Replication:Tasks",
+        "operationId": "clusters_storage_pools_volumes_replication_tasks_api_v2_clusters__cluster_id__storage_pools__pool_id__volumes__volume_id__replication_tasks_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pool Id"
+            }
+          },
+          {
+            "name": "volume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Volume Id"
+            }
+          }
+        ],
+        "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TaskDTO"
+                  },
+                  "title": "Response Clusters Storage Pools Volumes Replication Tasks Api V2 Clusters  Cluster Id  Storage Pools  Pool Id  Volumes  Volume Id  Replication Tasks Get"
+                }
               }
             }
           },
@@ -5857,6 +5625,979 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/": {
+      "get": {
+        "summary": "Clusters:Subsystems:Migrations:List",
+        "operationId": "clusters_subsystems_migrations_list_api_v2_clusters__cluster_id__subsystems__nqn__migrations__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "nqn",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Nqn"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/MigrationDTO"
+                      },
+                      {
+                        "$ref": "#/components/schemas/BatchMigrationDTO"
+                      }
+                    ]
+                  },
+                  "title": "Response Clusters Subsystems Migrations List Api V2 Clusters  Cluster Id  Subsystems  Nqn  Migrations  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Clusters:Subsystems:Migrations:Create",
+        "operationId": "clusters_subsystems_migrations_create_api_v2_clusters__cluster_id__subsystems__nqn__migrations__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "nqn",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Nqn"
+            }
+          },
+          {
+            "name": "response-format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "empty",
+                "full",
+                "identifier"
+              ],
+              "type": "string",
+              "default": "full",
+              "title": "Response-Format"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_MigrationParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/": {
+      "get": {
+        "summary": "Clusters:Subsystems:Migrations:Detail",
+        "operationId": "clusters_subsystems_migrations_detail_api_v2_clusters__cluster_id__subsystems__nqn__migrations__migration_id___get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "migration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Migration Id"
+            }
+          },
+          {
+            "name": "nqn",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Nqn"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MigrationDTO"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BatchMigrationDTO"
+                    }
+                  ],
+                  "title": "Response Clusters Subsystems Migrations Detail Api V2 Clusters  Cluster Id  Subsystems  Nqn  Migrations  Migration Id   Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Clusters:Subsystems:Migrations:Cancel",
+        "operationId": "clusters_subsystems_migrations_cancel_api_v2_clusters__cluster_id__subsystems__nqn__migrations__migration_id___delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "migration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Migration Id"
+            }
+          },
+          {
+            "name": "nqn",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Nqn"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/continue": {
+      "post": {
+        "summary": "Clusters:Subsystems:Migrations:Continue",
+        "operationId": "clusters_subsystems_migrations_continue_api_v2_clusters__cluster_id__subsystems__nqn__migrations__migration_id__continue_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "migration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Migration Id"
+            }
+          },
+          {
+            "name": "nqn",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Nqn"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_ContinueParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/cleanup-target": {
+      "post": {
+        "summary": "Clusters:Subsystems:Migrations:Cleanup-Target",
+        "description": "Idempotently remove every object this migration created on the target\nnode(s). Only defined for a single-lvol migration; batch migration groups\nhave no cleanup-target equivalent at the group level.\n\nSafe to call at any migration state \u2014 objects not found are reported as\nalready cleaned up rather than as errors.",
+        "operationId": "clusters_subsystems_migrations_cleanup_target_api_v2_clusters__cluster_id__subsystems__nqn__migrations__migration_id__cleanup_target_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "migration_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Migration Id"
+            }
+          },
+          {
+            "name": "nqn",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Nqn"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/replication/targets/": {
+      "get": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Targets:List",
+        "operationId": "clusters_replication_targets_list_api_v2_clusters__cluster_id__replication_targets__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReplicationTargetDTO"
+                  },
+                  "title": "Response Clusters Replication Targets List Api V2 Clusters  Cluster Id  Replication Targets  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Targets:Create",
+        "operationId": "clusters_replication_targets_create_api_v2_clusters__cluster_id__replication_targets__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "response-format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "empty",
+                "full",
+                "identifier"
+              ],
+              "type": "string",
+              "default": "full",
+              "title": "Response-Format"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TargetParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/replication/targets/{target_id}/": {
+      "get": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Targets:Detail",
+        "operationId": "clusters_replication_targets_detail_api_v2_clusters__cluster_id__replication_targets__target_id___get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "target_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Target Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplicationTargetDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Targets:Delete",
+        "operationId": "clusters_replication_targets_delete_api_v2_clusters__cluster_id__replication_targets__target_id___delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "target_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Target Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/replication/targets/{target_id}/failover": {
+      "post": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Targets:Failover",
+        "description": "Fail over EVERY volume replicating to this target.\n\nA site loss has to move all volumes at once; doing it volume by volume was\nthe only option before. Idempotent per volume and reports one result per\nvolume, so a partial failure is visible instead of silent.",
+        "operationId": "clusters_replication_targets_failover_api_v2_clusters__cluster_id__replication_targets__target_id__failover_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "target_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Target Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FailoverResultDTO"
+                  },
+                  "title": "Response Clusters Replication Targets Failover Api V2 Clusters  Cluster Id  Replication Targets  Target Id  Failover Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/replication/policies/": {
+      "get": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Policies:List",
+        "operationId": "clusters_replication_policies_list_api_v2_clusters__cluster_id__replication_policies__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReplicationPolicyDTO"
+                  },
+                  "title": "Response Clusters Replication Policies List Api V2 Clusters  Cluster Id  Replication Policies  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Policies:Create",
+        "operationId": "clusters_replication_policies_create_api_v2_clusters__cluster_id__replication_policies__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "response-format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "empty",
+                "full",
+                "identifier"
+              ],
+              "type": "string",
+              "default": "full",
+              "title": "Response-Format"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/": {
+      "get": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Policies:Detail",
+        "operationId": "clusters_replication_policies_detail_api_v2_clusters__cluster_id__replication_policies__policy_id___get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "policy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Policy Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplicationPolicyDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Policies:Delete",
+        "operationId": "clusters_replication_policies_delete_api_v2_clusters__cluster_id__replication_policies__policy_id___delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "policy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Policy Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/failover": {
+      "post": {
+        "tags": [
+          "replication"
+        ],
+        "summary": "Clusters:Replication:Policies:Failover",
+        "operationId": "clusters_replication_policies_failover_api_v2_clusters__cluster_id__replication_policies__policy_id__failover_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          },
+          {
+            "name": "policy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Policy Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FailoverResultDTO"
+                  },
+                  "title": "Response Clusters Replication Policies Failover Api V2 Clusters  Cluster Id  Replication Policies  Policy Id  Failover Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/management-nodes/": {
       "get": {
         "summary": "Management Nodes:List",
@@ -6221,6 +6962,68 @@
         ],
         "title": "BackupPolicyDTO"
       },
+      "BatchMigrationDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cluster_id": {
+            "type": "string",
+            "title": "Cluster Id"
+          },
+          "source_node_id": {
+            "type": "string",
+            "title": "Source Node Id"
+          },
+          "target_node_id": {
+            "type": "string",
+            "title": "Target Node Id"
+          },
+          "target_nqn": {
+            "type": "string",
+            "title": "Target Nqn"
+          },
+          "phase": {
+            "type": "string",
+            "title": "Phase"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "member_count": {
+            "type": "integer",
+            "title": "Member Count"
+          },
+          "error_message": {
+            "type": "string",
+            "title": "Error Message"
+          },
+          "connect_strings": {
+            "items": {
+              "$ref": "#/components/schemas/NvmeConnectEntry"
+            },
+            "type": "array",
+            "title": "Connect Strings",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "cluster_id",
+          "source_node_id",
+          "target_node_id",
+          "target_nqn",
+          "phase",
+          "status",
+          "member_count",
+          "error_message"
+        ],
+        "title": "BatchMigrationDTO"
+      },
       "CapacityStatDTO": {
         "properties": {
           "date": {
@@ -6525,27 +7328,10 @@
             "title": "Cr Plural",
             "default": ""
           },
-          "cluster_ip": {
-            "type": "string",
-            "title": "Cluster Ip",
-            "default": ""
-          },
-          "grafana_secret": {
-            "type": "string",
-            "format": "password",
-            "title": "Grafana Secret",
-            "default": "",
-            "writeOnly": true
-          },
           "client_data_nic": {
             "type": "string",
             "title": "Client Data Nic",
             "default": ""
-          },
-          "max_fault_tolerance": {
-            "type": "integer",
-            "title": "Max Fault Tolerance",
-            "default": 1
           },
           "nvmf_base_port": {
             "type": "integer",
@@ -6586,9 +7372,29 @@
             "type": "boolean",
             "title": "Enable Failure Domain",
             "default": false
+          },
+          "max_subsys": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Max Subsys"
+          },
+          "hugepages_mem": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Hugepages Mem",
+            "default": 0
+          },
+          "spdk_vcpu_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Spdk Vcpu Count"
           }
         },
         "type": "object",
+        "required": [
+          "max_subsys",
+          "spdk_vcpu_count"
+        ],
         "title": "ClusterParams"
       },
       "DeviceDTO": {
@@ -6827,7 +7633,8 @@
           "source_cluster_id": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "format": "uuid"
               },
               {
                 "type": "null"
@@ -6838,6 +7645,61 @@
         },
         "type": "object",
         "title": "FailbackParams"
+      },
+      "FailoverResultDTO": {
+        "properties": {
+          "lvol_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Lvol Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "failed_over",
+              "skipped",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "target_lvol_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Lvol Id"
+          },
+          "connection_strings": {
+            "items": {
+              "$ref": "#/components/schemas/NvmeConnectEntry"
+            },
+            "type": "array",
+            "title": "Connection Strings",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "lvol_id",
+          "status"
+        ],
+        "title": "FailoverResultDTO"
       },
       "HTTPValidationError": {
         "properties": {
@@ -7078,6 +7940,17 @@
             "type": "array",
             "title": "Allowed-Hosts",
             "default": []
+          },
+          "target-lvol-id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target-Lvol-Id"
           }
         },
         "type": "object",
@@ -7093,8 +7966,59 @@
           "keep-alive-tmo",
           "connect"
         ],
-        "title": "NvmeConnectEntry",
-        "description": "Typed representation of a single NVMe-oF connect target.\n\nReturned by connect_lvol and create_migration.  Replaces the ad-hoc dicts\nthat were built in both places with hyphenated keys.\n\nPython attributes and constructor keywords use snake_case\n(``nr_io_queues``); the JSON representation uses hyphenated keys\n(``nr-io-queues``) to match the ``nvme connect`` option names.  Serialize\nwith ``by_alias=True`` (FastAPI response models do this by default) to emit\nthe hyphenated keys."
+        "title": "NvmeConnectEntry"
+      },
+      "PolicyParams": {
+        "properties": {
+          "policy_name": {
+            "type": "string",
+            "title": "Policy Name"
+          },
+          "target_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Target Id"
+          },
+          "interval_min": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Interval Min",
+            "default": 1
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "failover",
+                  "migration"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "keep_replicated": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 2.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keep Replicated"
+          }
+        },
+        "type": "object",
+        "required": [
+          "policy_name",
+          "target_id"
+        ],
+        "title": "PolicyParams"
       },
       "PoolHostParams": {
         "properties": {
@@ -7113,19 +8037,290 @@
       "ReplicateLVolParams": {
         "properties": {
           "lvol_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Lvol Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lvol_id"
+        ],
+        "title": "ReplicateLVolParams"
+      },
+      "ReplicationPolicyDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cluster Id"
+          },
+          "policy_name": {
+            "type": "string",
+            "title": "Policy Name"
+          },
+          "target_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Target Id"
+          },
+          "interval_min": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Interval Min"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "failover",
+              "migration"
+            ],
+            "title": "Mode"
+          },
+          "keep_replicated": {
+            "type": "integer",
+            "title": "Keep Replicated"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "cluster_id",
+          "policy_name",
+          "target_id",
+          "interval_min",
+          "mode",
+          "keep_replicated",
+          "status"
+        ],
+        "title": "ReplicationPolicyDTO"
+      },
+      "ReplicationRelationshipDTO": {
+        "properties": {
+          "replication_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Replication Id"
+          },
+          "source_lvol_id": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "format": "uuid"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Lvol Id"
+            "title": "Source Lvol Id"
+          },
+          "target_lvol_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Lvol Id"
+          },
+          "source_cluster_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Cluster Id"
+          },
+          "target_cluster_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Cluster Id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "failover",
+              "migration"
+            ],
+            "title": "Mode"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "replicating",
+              "cutover_pending",
+              "cutover_done",
+              "failed_over"
+            ],
+            "title": "State"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "to_target",
+              "to_source"
+            ],
+            "title": "Direction"
+          },
+          "target_nqn": {
+            "type": "string",
+            "title": "Target Nqn"
+          },
+          "target_ns_id": {
+            "type": "integer",
+            "title": "Target Ns Id"
+          },
+          "is_source": {
+            "type": "boolean",
+            "title": "Is Source"
           }
         },
         "type": "object",
-        "title": "ReplicateLVolParams"
+        "required": [
+          "replication_id",
+          "source_lvol_id",
+          "target_lvol_id",
+          "source_cluster_id",
+          "target_cluster_id",
+          "mode",
+          "state",
+          "direction",
+          "target_nqn",
+          "target_ns_id",
+          "is_source"
+        ],
+        "title": "ReplicationRelationshipDTO"
+      },
+      "ReplicationStartParams": {
+        "properties": {
+          "replication_cluster_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replication Cluster Id"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "failover",
+                  "migration"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "interval_min": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Min"
+          }
+        },
+        "type": "object",
+        "title": "ReplicationStartParams"
+      },
+      "ReplicationTargetDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Cluster Id"
+          },
+          "target_name": {
+            "type": "string",
+            "title": "Target Name"
+          },
+          "target_cluster_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Target Cluster Id"
+          },
+          "target_pool_uuid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Pool Uuid"
+          },
+          "timeout_sec": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Timeout Sec"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "cluster_id",
+          "target_name",
+          "target_cluster_id",
+          "target_pool_uuid",
+          "timeout_sec",
+          "status"
+        ],
+        "title": "ReplicationTargetDTO"
       },
       "RootModel_Union__CreateParams___CloneParams__": {
         "anyOf": [
@@ -7238,7 +8433,9 @@
               "in_creation",
               "unreachable",
               "schedulable",
-              "down"
+              "down",
+              "in_removal",
+              "pending_removal"
             ],
             "title": "Status"
           },
@@ -7634,7 +8831,14 @@
             "title": "Max W Mbytes"
           },
           "capacity": {
-            "$ref": "#/components/schemas/CapacityStatDTO"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CapacityStatDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "dhchap": {
             "type": "boolean",
@@ -7734,6 +8938,49 @@
           "name"
         ],
         "title": "StoragePoolParams"
+      },
+      "TargetParams": {
+        "properties": {
+          "target_name": {
+            "type": "string",
+            "title": "Target Name"
+          },
+          "target_cluster_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Target Cluster Id"
+          },
+          "target_pool_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Pool Id"
+          },
+          "timeout_sec": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout Sec"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_name",
+          "target_cluster_id"
+        ],
+        "title": "TargetParams"
       },
       "TaskDTO": {
         "properties": {
@@ -7916,6 +9163,18 @@
               }
             ],
             "title": "Size"
+          },
+          "replication_policy_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replication Policy Id"
           }
         },
         "type": "object",
@@ -8588,6 +9847,17 @@
               }
             ],
             "title": "Replication Cluster Id"
+          },
+          "replication_policy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replication Policy"
           },
           "encrypt": {
             "type": "boolean",

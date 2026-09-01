@@ -103,6 +103,17 @@ func (d *BackupPolicyDTO) UnmarshalJSON(data []byte) error {
 	return Validate(data, d)
 }
 
+// UnmarshalJSON decodes and validates a BatchMigrationDTO.
+func (d *BatchMigrationDTO) UnmarshalJSON(data []byte) error {
+	type plain BatchMigrationDTO // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = BatchMigrationDTO(v)
+	return Validate(data, d)
+}
+
 // UnmarshalJSON decodes and validates a CapacityStatDTO.
 func (d *CapacityStatDTO) UnmarshalJSON(data []byte) error {
 	type plain CapacityStatDTO // shed this method, so the decode below does not recurse
@@ -147,6 +158,17 @@ func (d *DeviceHealthInfoDTO) UnmarshalJSON(data []byte) error {
 	return Validate(data, d)
 }
 
+// UnmarshalJSON decodes and validates a FailoverResultDTO.
+func (d *FailoverResultDTO) UnmarshalJSON(data []byte) error {
+	type plain FailoverResultDTO // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = FailoverResultDTO(v)
+	return Validate(data, d)
+}
+
 // UnmarshalJSON decodes and validates a ManagementNodeDTO.
 func (d *ManagementNodeDTO) UnmarshalJSON(data []byte) error {
 	type plain ManagementNodeDTO // shed this method, so the decode below does not recurse
@@ -177,6 +199,39 @@ func (d *NvmeConnectEntry) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*d = NvmeConnectEntry(v)
+	return Validate(data, d)
+}
+
+// UnmarshalJSON decodes and validates a ReplicationPolicyDTO.
+func (d *ReplicationPolicyDTO) UnmarshalJSON(data []byte) error {
+	type plain ReplicationPolicyDTO // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = ReplicationPolicyDTO(v)
+	return Validate(data, d)
+}
+
+// UnmarshalJSON decodes and validates a ReplicationRelationshipDTO.
+func (d *ReplicationRelationshipDTO) UnmarshalJSON(data []byte) error {
+	type plain ReplicationRelationshipDTO // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = ReplicationRelationshipDTO(v)
+	return Validate(data, d)
+}
+
+// UnmarshalJSON decodes and validates a ReplicationTargetDTO.
+func (d *ReplicationTargetDTO) UnmarshalJSON(data []byte) error {
+	type plain ReplicationTargetDTO // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = ReplicationTargetDTO(v)
 	return Validate(data, d)
 }
 

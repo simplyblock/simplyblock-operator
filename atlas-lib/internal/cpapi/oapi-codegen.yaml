@@ -8,10 +8,6 @@ generate:
   models: true
   client: true
 output-options:
-  # Patches spec bugs (e.g., the migrations-list op's missing path params)
-  # without editing the vendored openapi.json, so re-exports stay clean.
-  overlay:
-    path: overlay.yaml
   exclude-operation-ids:
     - redirect_legacy__get
     - redirect_legacy_cluster__full_path__get

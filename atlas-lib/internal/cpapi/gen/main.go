@@ -65,8 +65,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("parse %s: %v", *in, err)
 	}
-	structs, unmarshalers := index(file)
-	types := responseTypes(structs, unmarshalers)
+	structs, unmarshalers, unionMembers := index(file)
+	types := responseTypes(structs, unmarshalers, unionMembers)
 	if len(types) == 0 {
 		log.Fatalf("%s: found no response types — has the generated client changed shape?", *in)
 	}
@@ -101,10 +101,16 @@ func main() {
 		*out, len(types)+variants, len(compiled), variants)
 }
 
-// index returns the file's struct types by name, and the names of the types
-// that already declare an UnmarshalJSON method.
-func index(file *ast.File) (structs map[string]*ast.StructType, unmarshalers map[string]bool) {
+// index returns the file's struct types by name, the names of the types that
+// already declare an UnmarshalJSON method, and the member types of each union.
+//
+// A union is generated for an `anyOf` response as a struct holding raw JSON,
+// with one As<Member> accessor per alternative. Its members are reachable only
+// through those accessors: the struct's own field is a json.RawMessage, which
+// the walk in responseTypes cannot see through.
+func index(file *ast.File) (structs map[string]*ast.StructType, unmarshalers map[string]bool, unionMembers map[string][]string) {
 	structs, unmarshalers = map[string]*ast.StructType{}, map[string]bool{}
+	unionMembers = map[string][]string{}
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.GenDecl:
@@ -118,17 +124,28 @@ func index(file *ast.File) (structs map[string]*ast.StructType, unmarshalers map
 				}
 			}
 		case *ast.FuncDecl:
-			if d.Name.Name == "UnmarshalJSON" && d.Recv != nil && len(d.Recv.List) == 1 {
-				unmarshalers[typeName(d.Recv.List[0].Type)] = true
+			if d.Recv == nil || len(d.Recv.List) != 1 {
+				continue
+			}
+			recv := typeName(d.Recv.List[0].Type)
+			if d.Name.Name == "UnmarshalJSON" {
+				unmarshalers[recv] = true
+			}
+			// As<Member>() (<Member>, error) is the union accessor's shape.
+			if member, ok := strings.CutPrefix(d.Name.Name, "As"); ok && member != "" &&
+				d.Type.Results != nil && len(d.Type.Results.List) == 2 {
+				if got := typeName(d.Type.Results.List[0].Type); got == member {
+					unionMembers[recv] = append(unionMembers[recv], member)
+				}
 			}
 		}
 	}
-	return structs, unmarshalers
+	return structs, unmarshalers, unionMembers
 }
 
 // responseTypes is the sorted set of model types to generate for: the success
 // payloads of every response struct, plus every model type reachable from one.
-func responseTypes(structs map[string]*ast.StructType, unmarshalers map[string]bool) []string {
+func responseTypes(structs map[string]*ast.StructType, unmarshalers map[string]bool, unionMembers map[string][]string) []string {
 	found := map[string]bool{}
 	var reach func(name string)
 	reach = func(name string) {
@@ -139,6 +156,10 @@ func responseTypes(structs map[string]*ast.StructType, unmarshalers map[string]b
 		found[name] = true
 		for _, f := range st.Fields.List {
 			reach(typeName(f.Type))
+		}
+		// A union's alternatives hang off its accessors rather than its fields.
+		for _, member := range unionMembers[name] {
+			reach(member)
 		}
 	}
 	for _, st := range structs {
