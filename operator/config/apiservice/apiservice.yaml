@@ -1,0 +1,27 @@
+# The APIService that makes the kube-apiserver proxy metrics.simplyblock.io to the
+# operator. Without this object the group does not exist: the operator's listener
+# is running, and nothing routes to it.
+#
+# The name is fixed by Kubernetes as <version>.<group> and takes no Kustomize
+# namePrefix, which is why it is spelled out rather than templated.
+#
+# caBundle is deliberately absent. The operator writes it at runtime through
+# cert-controller, alongside the serving certificate it belongs to (see
+# internal/metricsapi/cert.go); a value committed here would be replaced within
+# seconds and would be wrong in the meantime.
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.metrics.simplyblock.io
+spec:
+  group: metrics.simplyblock.io
+  version: v1alpha1
+  service:
+    name: metrics-apiserver
+    namespace: system
+    port: 443
+  # groupPriorityMinimum is low because nothing else claims this group and the
+  # value only orders groups against each other in discovery. versionPriority
+  # orders versions within the group, and there is one.
+  groupPriorityMinimum: 100
+  versionPriority: 100

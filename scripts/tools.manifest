@@ -42,6 +42,15 @@ controller-gen.backend = go
 controller-gen.version = v0.21.0
 controller-gen.package = sigs.k8s.io/controller-tools/cmd/controller-gen
 
+# openapi-gen generates the OpenAPI v3 definitions the aggregated metrics API
+# server requires: since server-side apply went GA, InstallAPIGroup refuses to
+# register a group without them. The version tracks the k8s.io/kube-openapi
+# pseudo-version in operator/go.mod, because the generated code and the library
+# that consumes it share a contract.
+openapi-gen.backend = go
+openapi-gen.version = v0.0.0-20260317180543-43fb72c5454a
+openapi-gen.package = k8s.io/kube-openapi/cmd/openapi-gen
+
 # setup-envtest.version is intentionally omitted: the operator derives it from
 # its go.mod (controller-runtime release branch) and passes it explicitly.
 setup-envtest.backend = go

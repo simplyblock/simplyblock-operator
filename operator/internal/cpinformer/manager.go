@@ -18,7 +18,7 @@ import (
 // locates and authenticates against the control plane but is resource-agnostic
 // (the path comes from each [Subscription]).
 type StreamConfig struct {
-	// Endpoint is the control-plane base URL, e.g. http://simplyblock-webappapi:5000.
+	// Endpoint is the control-plane base URL, e.g., http://simplyblock-webappapi:5000.
 	Endpoint string
 	// Token is the bearer token (cluster secret or service-account JWT).
 	Token string
@@ -49,7 +49,7 @@ func (c *StreamConfig) withDefaults() {
 var errLiveness = errors.New("cpinformer: liveness deadline exceeded")
 
 // ScopeSet is a subscription's live set of scopes to stream. Callers add and
-// remove scopes as their source CRs come and go (e.g. a Pool controller adding a
+// remove scopes as their source CRs come and go (e.g., a Pool controller adding a
 // pool's scope when it becomes ready); the manager opens/closes streams to match.
 type ScopeSet struct {
 	mu     sync.Mutex
@@ -98,18 +98,41 @@ func (s *ScopeSet) list() []Scope {
 	return out
 }
 
-// SubscriptionManager is the single, global owner of the operator's
-// control-plane streams. Each resource type is added as a [Subscription] with
-// its own [ScopeSet]; the manager keeps one stream per scope and dispatches every
-// decoded event to the subscription's Ingest.
+// Election says which replicas a manager's streams run on. It is a named type
+// rather than a bare bool so the choice is legible at the call site, because it
+// is not a tuning knob: picking the wrong one is a correctness bug in one
+// direction and a serving bug in the other.
+type Election bool
+
+const (
+	// LeaderOnly restricts the streams to the elected leader. Every subscription
+	// that feeds a reconciler wants this: two replicas mirroring the same
+	// control-plane object into the same Kubernetes object would fight.
+	LeaderOnly Election = true
+	// EveryReplica runs the streams on every replica. A subscription whose cache
+	// is read by something that serves traffic wants this, because the request
+	// arrives at whichever replica the Service picked and a follower with an
+	// empty cache would answer it wrongly. Nothing is written, so there is
+	// nothing for the replicas to race over, and the cost is one stream per
+	// replica per scope.
+	EveryReplica Election = false
+)
+
+// SubscriptionManager owns a set of the operator's control-plane streams. Each
+// resource type is added as a [Subscription] with its own [ScopeSet]; the manager
+// keeps one stream per scope and dispatches every decoded event to the
+// subscription's Ingest.
 //
 // It is one manager.Runnable and manager.LeaderElectionRunnable shared across
-// all resource types, and runs on the leader only (design doc §8).
+// the resource types added to it (design doc §8). Because leader election is a
+// property of a Runnable rather than of a subscription, subscriptions that
+// disagree about [Election] go in separate managers.
 type SubscriptionManager struct {
-	cfg  StreamConfig
-	log  logr.Logger
-	subs []registration
-	wg   sync.WaitGroup
+	cfg      StreamConfig
+	log      logr.Logger
+	election Election
+	subs     []registration
+	wg       sync.WaitGroup
 }
 
 type registration struct {
@@ -117,13 +140,14 @@ type registration struct {
 	scopes *ScopeSet
 }
 
-// NewSubscriptionManager returns a manager with the shared stream config.
-func NewSubscriptionManager(cfg StreamConfig, log logr.Logger) *SubscriptionManager {
+// NewSubscriptionManager returns a manager with the shared stream config,
+// running its streams on the replicas that election names.
+func NewSubscriptionManager(cfg StreamConfig, log logr.Logger, election Election) *SubscriptionManager {
 	cfg.withDefaults()
 	if log.GetSink() == nil {
 		log = logr.Discard()
 	}
-	return &SubscriptionManager{cfg: cfg, log: log.WithName("cpinformer")}
+	return &SubscriptionManager{cfg: cfg, log: log.WithName("cpinformer"), election: election}
 }
 
 // AddSubscription registers a resource type and returns the [ScopeSet] the caller
@@ -134,8 +158,8 @@ func (m *SubscriptionManager) AddSubscription(sub Subscription) *ScopeSet {
 	return ss
 }
 
-// NeedLeaderElection reports that this runnable runs on the leader only.
-func (m *SubscriptionManager) NeedLeaderElection() bool { return true }
+// NeedLeaderElection implements manager.LeaderElectionRunnable.
+func (m *SubscriptionManager) NeedLeaderElection() bool { return bool(m.election) }
 
 // Start runs every subscription until ctx is canceled, then tears the streams
 // down. It implements manager.Runnable.
@@ -175,7 +199,7 @@ func (m *SubscriptionManager) runSubscription(ctx context.Context, reg registrat
 	}
 }
 
-// reconcileStreams opens streams for newly-desired scopes and cancels those no
+// reconcileStreams opens streams for newly desired scopes and cancels those no
 // longer desired.
 func (m *SubscriptionManager) reconcileStreams(ctx context.Context, sub Subscription, streams map[string]context.CancelFunc, scopes []Scope, log logr.Logger) {
 	want := make(map[string]Scope, len(scopes))
