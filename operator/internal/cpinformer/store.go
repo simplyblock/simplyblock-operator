@@ -15,8 +15,13 @@ type Lister[T any] interface {
 	List(scope Scope) []T
 	// Find searches every scope for the object with the given id, returning the
 	// scope it was found in. It suits reconcilers that receive an id (a globally
-	// unique control-plane uuid) without its scope.
+	// unique control-plane UUID) without its scope.
 	Find(id string) (Scope, T, bool)
+	// All returns every cached object across every scope. It suits a reader that
+	// has no scope to ask for, such as the aggregated metrics API, which serves
+	// one namespace's volumes without knowing which pool each was provisioned
+	// from.
+	All() []T
 }
 
 // Store is a thread-safe cache of control-plane objects, partitioned by [Scope]
@@ -70,6 +75,20 @@ func (s *Store[T]) Find(id string) (Scope, T, bool) {
 	}
 	var zero T
 	return nil, zero, false
+}
+
+// All implements [Lister]. The returned slice is a fresh copy; callers may
+// retain it.
+func (s *Store[T]) All() []T {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]T, 0, len(s.items))
+	for _, m := range s.items {
+		for _, v := range m {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // Upsert inserts or replaces one object in a scope.

@@ -1,0 +1,95 @@
+{{- if and .Values.operator.enabled .Values.metricsAPI.enabled }}
+# The cluster-facing half of the aggregated metrics API: the Service the
+# kube-apiserver proxies to, the APIService that registers
+# metrics.simplyblock.io, and the two bindings that let the operator delegate
+# authentication and authorization back to the kube-apiserver.
+#
+# These are hand-written rather than synced from operator/config/rbac because
+# both bindings name a ServiceAccount in the release namespace, and the sync
+# copies files verbatim with no namespace substitution. The ClusterRole they
+# complement (simplyblock-metrics-aggregate-to-view) has no subjects, so that one
+# is synced into templates/roles like every other role.
+#
+# The whole group is optional. Setting metricsAPI.enabled to false removes these
+# objects, and the operator is started with --enable-metrics-api=false so it does
+# not listen on a port nothing routes to.
+apiVersion: v1
+kind: Service
+metadata:
+  name: simplyblock-operator-metrics-apiserver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: Helm
+spec:
+  ports:
+    - port: 443
+      protocol: TCP
+      targetPort: {{ .Values.metricsAPI.port }}
+  selector:
+    app: simplyblock-operator
+---
+# The name is fixed by Kubernetes as <version>.<group>; it is not configurable.
+#
+# caBundle is absent on purpose. The operator injects it at runtime through
+# cert-controller, together with the serving certificate it belongs to, so a
+# value here would be overwritten within seconds and wrong until then. Until the
+# injection lands the APIService reports Available=False, which is the expected
+# state for the first few seconds after an install.
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.metrics.simplyblock.io
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: Helm
+spec:
+  group: metrics.simplyblock.io
+  version: v1alpha1
+  service:
+    name: simplyblock-operator-metrics-apiserver
+    namespace: {{ .Release.Namespace }}
+    port: 443
+  groupPriorityMinimum: 100
+  versionPriority: 100
+---
+# system:auth-delegator is the built-in ClusterRole holding exactly TokenReview
+# and SubjectAccessReview. Without it every request to the group fails closed
+# with a 401 whose message points at certificates rather than at RBAC.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simplyblock-operator-metrics-apiserver-auth-delegator
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: Helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: simplyblock-operator
+    namespace: {{ .Release.Namespace }}
+---
+# The request-header configuration the kube-apiserver proxies with lives in the
+# extension-apiserver-authentication ConfigMap in kube-system. The Role that
+# reads it is created by the kube-apiserver itself, so only the binding is
+# declared.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: simplyblock-operator-metrics-apiserver-extension-reader
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: Helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: simplyblock-operator
+    namespace: {{ .Release.Namespace }}
+{{- end }}

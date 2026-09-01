@@ -29,6 +29,7 @@ kustomize v5.7.1 linux amd64 sha256:ea375e7372f9aa029129d4b2d16c66b7750b7f1213c4
 kustomize v5.7.1 linux arm64 sha256:4261a040217df3bd6896597c3986d1465925726e4f22a945304b5233a4dcdbda
 protoc-gen-go v1.36.11 module all h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBNVE=
 protoc-gen-go-grpc v1.6.2 module all h1:rgSNvqscFZ1JgV/4wH5GOsZFSFkR2Eua9As3KIr2LlM=
+openapi-gen v0.0.0-20260317180543-43fb72c5454a module all h1:xCeOEAOoGYl2jnJoHkC3hkbPJgdATINPMAxaynU2Ovg=
 setup-envtest release-0.24 module all h1:a0H3X9ZYS3umFkQSHcRg/7KUqZF4BTrG2jV731XQwx4=
 yq v4.44.3 darwin amd64 sha256:216ddfa03e7ba0e5aba00b236ec78324b5bfc49b610db254fe92310878baea20
 yq v4.44.3 darwin arm64 sha256:559a594ef7a6ebc5b81a67b7717fb3accedd266d8fa7d8352da7fec9e463f48b
