@@ -38,9 +38,9 @@ poll-sourced at the root.
 
 This model has two costs:
 
-| Cost | Cause |
-|---|---|
-| **Latency** | A change in the control plane is invisible until the next requeue tick — worst case ~2 minutes. |
+| Cost         | Cause                                                                                                                   |
+|--------------|-------------------------------------------------------------------------------------------------------------------------|
+| **Latency**  | A change in the control plane is invisible until the next requeue tick — worst case ~2 minutes.                         |
 | **API load** | Every controller re-reads the control plane every few seconds regardless of whether anything changed, on every replica. |
 
 The control-plane v2 API provides **Server-Sent-Events push notifications**: any
@@ -108,13 +108,13 @@ branch. `watch` is a FastAPI query param (`WatchParam`).
 
 ### 3.3 Event types and payloads
 
-| `event:` | Meaning | `data:` |
-|---|---|---|
+| `event:`   | Meaning                                | `data:`                                                                       |
+|------------|----------------------------------------|-------------------------------------------------------------------------------|
 | `snapshot` | Sent once, first, on every (re)connect | Full current state — a JSON **array** of DTOs (list) or a single DTO (detail) |
-| `created` | Entity entered the filtered set | Full DTO |
-| `updated` | Entity changed | Full DTO (detail streams always use `updated`, never `created`) |
-| `deleted` | Entity left the filtered set | Final DTO with `status: "deleted"` (soft-delete) or `{}` (physical removal) |
-| `error` | Backend failure | `{"detail": "backend unavailable"}`, then the stream closes |
+| `created`  | Entity entered the filtered set        | Full DTO                                                                      |
+| `updated`  | Entity changed                         | Full DTO (detail streams always use `updated`, never `created`)               |
+| `deleted`  | Entity left the filtered set           | Final DTO with `status: "deleted"` (soft-delete) or `{}` (physical removal)   |
+| `error`    | Backend failure                        | `{"detail": "backend unavailable"}`, then the stream closes                   |
 
 The DTO is produced by the same `from_model` builder as the REST route; a streamed
 object is byte-identical to what a REST `GET` returns. Operation is carried by the
@@ -136,31 +136,31 @@ written by components that do not maintain the index.
 
 Watches are scoped to path params via each model's `watch_scope()`:
 
-| Resource | Scope | Streams required by the operator |
-|---|---|---|
-| Volume (`LVol`) | `(pool_uuid,)` | One per pool |
-| Snapshot | `(pool_uuid,)` | One per pool |
-| Pool | `(cluster_id,)` | One per cluster |
-| Storage node | `(cluster_id,)` | One per cluster |
-| Task (`JobSchedule`) | `(cluster_id,)` | One per cluster |
-| Cluster | `()` (root) | One total |
-| Device | — (watches parent `StorageNode`) | Exploded from the node stream |
+| Resource             | Scope                           | Streams required by the operator                                                                                                                                 |
+|----------------------|---------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Volume (`LVol`)      | `(pool_uuid,)`                  | One per pool                                                                                                                                                     |
+| Snapshot             | `(pool_uuid,)`                  | One per pool                                                                                                                                                     |
+| Pool                 | `(cluster_id,)`                 | One per cluster                                                                                                                                                  |
+| Storage node         | `(cluster_id,)`                 | One per cluster                                                                                                                                                  |
+| Task (`JobSchedule`) | `(cluster_id,)`                 | One per cluster                                                                                                                                                  |
+| Cluster              | `()` (root)                     | One total                                                                                                                                                        |
+| Device               | `(cluster_id, storage_node_id)` | One per storage node. Exploded from the node stream server-side, but addressed under the node, so there is no cluster-wide device stream to subscribe to instead |
 
 Membership matches the REST list endpoint exactly (the watch reuses the same
-`select` getter as the filter). Deleting a parent (e.g. a pool) closes its child
+`select` getter as the filter). Deleting a parent (e.g., a pool) closes its child
 streams server-side; a reconnect then returns 404.
 
 ### 3.6 Reliability properties
 
-| Property | Value |
-|---|---|
-| Resume / replay | None. No `id:`, `Last-Event-ID` ignored, no buffer. Reconnect delivers a fresh snapshot. |
-| Heartbeat | `: ping <ts>` comment every 15s (`PING_SEC`). |
-| Forced close | Hard 1-hour stream lifetime cap (`WATCH_MAX_LIFETIME_SEC`) — clean close, reconnect expected. |
-| Delivery | Coalescing — a slow subscriber receives latest state, not a backlog; intermediate transitions may be skipped. |
-| Backpressure / errors | FDB errors retry `(1,2,4)s`, then `event: error` + close. DB down at connect returns 503. |
-| Concurrency cost | One shared FDB watch + thread per scope, reused across all subscribers of that scope. |
-| Auth | Same v2 bearer (admin SA JWT or cluster secret), validated only at connect; the 1h cap bounds a revoked token. |
+| Property              | Value                                                                                                          |
+|-----------------------|----------------------------------------------------------------------------------------------------------------|
+| Resume / replay       | None. No `id:`, `Last-Event-ID` ignored, no buffer. Reconnect delivers a fresh snapshot.                       |
+| Heartbeat             | `: ping <ts>` comment every 15s (`PING_SEC`).                                                                  |
+| Forced close          | Hard 1-hour stream lifetime cap (`WATCH_MAX_LIFETIME_SEC`) — clean close, reconnect expected.                  |
+| Delivery              | Coalescing — a slow subscriber receives latest state, not a backlog; intermediate transitions may be skipped.  |
+| Backpressure / errors | FDB errors retry `(1,2,4)s`, then `event: error` + close. DB down at connect returns 503.                      |
+| Concurrency cost      | One shared FDB watch + thread per scope, reused across all subscribers of that scope.                          |
+| Auth                  | Same v2 bearer (admin SA JWT or cluster secret), validated only at connect; the 1h cap bounds a revoked token. |
 
 Two properties shape the operator design: snapshot-on-connect (the reconnect
 resync is provided by the server) and coalescing delivery (the stream delivers
@@ -173,8 +173,8 @@ current truth, not an ordered edit log — inherently level-triggered).
 ```
                      simplyblock control plane (v2 API)
                                    │
-         GET /clusters/{c}/storage-pools/{p}/volumes/?watch=true
-         GET /clusters/{c}/storage-nodes/?watch=true   ... (per scope)
+         GET /clusters/{c}/storage-nodes/{n}/devices/?watch=true
+         GET /clusters/{c}/storage-pools/{p}/volumes/?watch=true  ... (per scope)
                                    │  text/event-stream
                                    ▼
 ┌───────────────────────────────────────────────────────────────────────────┐
@@ -182,7 +182,7 @@ current truth, not an ordered edit log — inherently level-triggered).
 │                                                                           │
 │  ┌───────────────────────────┐     opens/closes streams per scope         │
 │  │ Subscription Manager      │◄──── driven by operator's own CR watches   │
-│  │ (manager.Runnable,        │       (Pool CRs → which pools to watch …)  │
+│  │ (manager.Runnable,        │       (StorageNode CRs → which nodes …)    │
 │  │  NeedLeaderElection=true) │                                            │
 │  └───────────┬───────────────┘                                            │
 │              │ one goroutine per active stream                            │
@@ -209,14 +209,14 @@ The design is a re-implementation of client-go's `SharedIndexInformer` +
 `Lister` pattern, sourced from SSE instead of the Kubernetes API server. Three
 cooperating pieces:
 
-1. **Subscription Manager** — a leader-only `manager.Runnable` that determines
+1. **Subscription Manager:** a leader-only `manager.Runnable` that determines
    which scopes to stream and opens/closes stream goroutines as the operator's own
    CRs come and go.
-2. **Control-Plane Informer** — per resource, a thread-safe store keyed by
+2. **Control-Plane Informer:** per resource, a thread-safe store keyed by
    control-plane id, seeded by the `snapshot` frame and mutated by
    `created`/`updated`/`deleted`. It exposes a `Lister` for reconcilers and, for
    every applied event, pushes a `GenericEvent` onto a channel.
-3. **`source.Channel` wiring** — each participating controller attaches the
+3. **`source.Channel` wiring:** each participating controller attaches the
    informer's channel via `WatchesRawSource`, mapping each event to the
    `reconcile.Request`(s) for the affected CR(s). Reconcilers read the `Lister`
    instead of calling the control-plane API.
@@ -238,7 +238,7 @@ dynamic, driven by the operator's own CRs:
 
 - On start (as leader), it enumerates the scopes to watch from existing CRs
   (`StorageCluster`, `Pool`, …) and opens a stream goroutine for each.
-- It watches those CRs; a new scope (e.g. a new `Pool`) opens a stream, and a
+- It watches those CRs; a new scope (e.g., a new `Pool`) opens a stream, and a
   removed scope cancels the stream's context. The server also closes child streams
   when a parent is deleted; the manager tolerates both orders.
 - It registers via `mgr.Add(...)` as a `manager.Runnable` and
@@ -257,7 +257,7 @@ func (m *SubscriptionManager) NeedLeaderElection() bool { return true }
 
 func (m *SubscriptionManager) Start(ctx context.Context) error {
     // reconcile desired scope set from CRs; open/close stream goroutines;
-    // block until ctx is cancelled (manager shutdown / lost leadership).
+    // block until ctx is canceled (manager shutdown / lost leadership).
 }
 ```
 
@@ -351,8 +351,8 @@ bounded, not synchronous). Two mechanisms cover this:
 
 - The store is seeded from the mutation response. The v2 write endpoints return the
   new object; it is applied to the store immediately, as controllers use the
-  returned object after a k8s `Update`.
-- The `Lister` is not a linearizable read. A briefly-stale read causes at most one
+  returned object after a K8s `Update`.
+- The `Lister` is not a linearizable read. A briefly stale read causes at most one
   extra idempotent reconcile when the real event lands, not incorrectness, because
   reconcile is level-triggered.
 
@@ -391,7 +391,7 @@ recovers cleanly.
   `event: error`, a connect-time 503, or a liveness-deadline miss. The server's
   `retry: 3000` hint is the base; jittered exponential backoff caps it.
 - **Liveness via ping.** A `: ping` comment arrives every ~15s. A read deadline
-  above that interval (e.g. 45s) is maintained; a miss indicates a half-open
+  above that interval (e.g., 45s) is maintained; a miss indicates a half-open
   socket and triggers reconnect. TCP alone is not relied upon — proxies and load
   balancers half-open silently.
 - **The 1-hour forced close is routine**, handled as an ordinary reconnect. Each

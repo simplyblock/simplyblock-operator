@@ -53,7 +53,7 @@ func (c *Client) ListStorageNodes(ctx context.Context, clusterID string) ([]Stor
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.api.ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGetWithResponse(ctx, cluster)
+	resp, err := c.api.ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGetWithResponse(ctx, cluster, nil)
 	if err != nil {
 		return nil, fmt.Errorf("list storage nodes in %s: %w", clusterID, err)
 	}
@@ -79,7 +79,7 @@ func (c *Client) GetStorageNode(ctx context.Context, clusterID, nodeID string) (
 	if err != nil {
 		return StorageNode{}, err
 	}
-	resp, err := c.api.ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGetWithResponse(ctx, cluster, node)
+	resp, err := c.api.ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGetWithResponse(ctx, cluster, node, nil)
 	if err != nil {
 		return StorageNode{}, fmt.Errorf("get storage node %s: %w", nodeID, err)
 	}

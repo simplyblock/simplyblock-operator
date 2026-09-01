@@ -32,7 +32,7 @@ func (c *Client) ListStoragePools(ctx context.Context, clusterID string) ([]Stor
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.api.ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGetWithResponse(ctx, cluster)
+	resp, err := c.api.ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGetWithResponse(ctx, cluster, nil)
 	if err != nil {
 		return nil, fmt.Errorf("list storage pools in %s: %w", clusterID, err)
 	}
@@ -54,7 +54,7 @@ func (c *Client) GetStoragePool(ctx context.Context, clusterID, poolID string) (
 	if err != nil {
 		return StoragePool{}, err
 	}
-	resp, err := c.api.ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGetWithResponse(ctx, cluster, pool)
+	resp, err := c.api.ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGetWithResponse(ctx, cluster, pool, nil)
 	if err != nil {
 		return StoragePool{}, fmt.Errorf("get storage pool %s: %w", poolID, err)
 	}
