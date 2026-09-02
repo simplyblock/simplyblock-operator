@@ -1,0 +1,101 @@
+# The releases of each simplyblock component and what each client release works
+# against. Served from https://install.simplyblock.io/releases.yaml and read by
+# the operator, which is design-simplyblockdriver.md §5.1.
+#
+# Releases are listed newest first, and that order is authoritative: it is what
+# decides whether a control plane is older or newer than what a driver declares.
+# The `released` date is informational.
+#
+# `compatible` is keyed by the component it names, so a release that has to agree
+# with more than one of them says so. A release without it predates the promise
+# and is compared against nothing.
+schema: 1
+
+components:
+  - name: controlplane
+    releases:
+      - version: "26.2.1"
+        released: "2026-09-01"
+      - version: "26.2"
+        released: "2026-08-08"
+      - version: "26.1"
+      - version: "0.2.0"
+      - version: "0.1.0"
+
+  - name: csi-driver
+    releases:
+      - version: "26.2.1"
+        released: "2026-07-02"
+        compatible:
+          controlplane:
+            - "26.2.x"
+            - "26.1.x"
+      - version: "26.2.0"
+        released: "2026-06-01"
+        compatible:
+          controlplane:
+            - "26.2.x"
+            - "26.1.x"
+      - version: "26.1.2"
+        released: "2026-06-01"
+        compatible:
+          controlplane:
+            - "26.1.x"
+            - "0.2.0"
+      - version: "26.1.1"
+        released: "2026-03-01"
+        compatible:
+          controlplane:
+            - "26.1.x"
+            - "0.2.0"
+      - version: "26.1.0"
+        released: "2026-01-01"
+        compatible:
+          controlplane:
+            - "26.1.x"
+            - "0.2.0"
+      - version: "0.3.0"
+        released: "2023-06-01"
+      - version: "0.2.0"
+        released: "2023-05-01"
+      - version: "0.1.0"
+        released: "2023-01-01"
+
+  - name: operator
+    releases:
+      - version: "26.2.1"
+        released: "2026-07-02"
+        compatible:
+          controlplane:
+            - "26.2.x"
+            - "26.1.x"
+      - version: "26.2.0"
+        released: "2026-06-01"
+        compatible:
+          controlplane:
+            - "26.2.x"
+            - "26.1.x"
+      - version: "26.1.2"
+        released: "2026-06-01"
+        compatible:
+          controlplane:
+            - "26.1.x"
+            - "0.2.0"
+      - version: "26.1.1"
+        released: "2026-03-01"
+        compatible:
+          controlplane:
+            - "26.1.x"
+            - "0.2.0"
+      - version: "26.1.0"
+        released: "2026-01-01"
+        compatible:
+          controlplane:
+            - "26.1.x"
+            - "0.2.0"
+      - version: "0.3.0"
+        released: "2023-06-01"
+      - version: "0.2.0"
+        released: "2023-05-01"
+      - version: "0.1.0"
+        released: "2023-01-01"
