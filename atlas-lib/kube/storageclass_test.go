@@ -27,11 +27,8 @@ func TestPropertiesFromStorageClass(t *testing.T) {
 		ParamFabric:                "tcp",
 		ParamClusterID:             "cluster-1",
 		ParamMaxSize:               "10G",
-		ParamLvolPriorityClass:     "3",
 		ParamMaxNamespacePerSubsys: "32",
-		ParamCompression:           "true",
 		ParamEncryption:            "true",
-		ParamReplicate:             "false",
 		ParamQoSRWIOPS:             "1000",
 		ParamQoSWMBytes:            "50",
 	}))
@@ -41,10 +38,10 @@ func TestPropertiesFromStorageClass(t *testing.T) {
 	if props.Pool != "pool-a" || props.Fabric != "tcp" || props.ClusterID != "cluster-1" || props.MaxSize != "10G" {
 		t.Errorf("string fields wrong: %+v", props)
 	}
-	if props.LvolPriorityClass != 3 || props.MaxNamespacePerSubsys != 32 {
+	if props.MaxNamespacePerSubsys != 32 {
 		t.Errorf("int fields wrong: %+v", props)
 	}
-	if !props.Compression || !props.Encryption || props.Replicate {
+	if !props.Encryption {
 		t.Errorf("bool fields wrong: %+v", props)
 	}
 	if props.QoS.RWIOPS != 1000 || props.QoS.WMBytes != 50 || props.QoS.RWMBytes != 0 {

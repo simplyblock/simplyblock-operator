@@ -68,11 +68,8 @@ const (
 	ParamFabric                = "fabric"
 	ParamClusterID             = "cluster_id"
 	ParamMaxSize               = "max_size"
-	ParamLvolPriorityClass     = "lvol_priority_class"
 	ParamMaxNamespacePerSubsys = "max_namespace_per_subsys"
-	ParamCompression           = "compression"
 	ParamEncryption            = "encryption"
-	ParamReplicate             = "replicate"
 
 	// QoS limits. Empty/absent means unset (0).
 	ParamQoSRWIOPS   = "qos_rw_iops"

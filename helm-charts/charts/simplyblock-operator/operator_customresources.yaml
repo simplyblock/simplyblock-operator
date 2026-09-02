@@ -50,17 +50,14 @@ spec:
   #     write: 250
   #     readWrite: 750
   # storageClassParameters:
-  #   compression: "False"
   #   encryption: false
   #   fabric: tcp
   #   filesystem: ext4
-  #   lvolPriorityClass: "0"
   #   maxNamespacePerSubsys: "1"
   #   qosRMbytes: "0"
   #   qosWMbytes: "0"
   #   qosRwMbytes: "0"
   #   qosRwIops: "0"
-  #   replicate: false
   #   tune2fsReservedBlocks: "0"
 
 ---

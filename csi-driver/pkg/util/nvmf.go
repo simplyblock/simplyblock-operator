@@ -206,16 +206,13 @@ type CreateLVolData struct {
 	Size         string `json:"size"`
 	LvsName      string `json:"pool"`
 	Fabric       string `json:"fabric"`
-	Compression  bool   `json:"comp"`
 	Encryption   bool   `json:"encrypt"`
-	Replicate    bool   `json:"do_replicate"`
 	MaxRWIOPS    string `json:"max_rw_iops"`
 	MaxRWmBytes  string `json:"max_rw_mbytes"`
 	MaxRmBytes   string `json:"max_r_mbytes"`
 	MaxWmBytes   string `json:"max_w_mbytes"`
 	MaxSize      string `json:"max_size"`
 	MaxNamespace int    `json:"max_namespace_per_subsys"`
-	PriorClass   int    `json:"priority_class"`
 	HostID       string `json:"host_id"`
 	LvolID       string `json:"uid"`
 	Namespaced   bool   `json:"namespaced"`
