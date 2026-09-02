@@ -277,6 +277,7 @@ func TestResolveCrossClusterCredentialsResolvesSourceClusterSecret(t *testing.T)
 	}
 	if creds == nil {
 		t.Fatal("creds = nil, want resolved credentials")
+		return
 	}
 	if creds.AccessKeyID != "AKIDEXAMPLE" || creds.SecretAccessKey != "supersecret" {
 		t.Fatalf("creds = %+v, want AKIDEXAMPLE/supersecret", creds)

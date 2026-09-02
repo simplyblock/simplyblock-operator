@@ -978,6 +978,7 @@ func TestNodeDrainStatusPatch409RetryPreservesDrainState(t *testing.T) {
 	state := getDrainState(&updated, workerName)
 	if state == nil {
 		t.Fatal("drain state was lost after 409 — RetryOnConflict did not preserve the phase")
+		return
 	}
 	if state.Phase != simplyblockv1alpha1.DrainPhaseComplete {
 		t.Fatalf("expected DrainPhaseComplete after retry, got %q", state.Phase)
