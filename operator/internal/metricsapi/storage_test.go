@@ -117,7 +117,7 @@ func newStorage(t *testing.T, vols []subscriptions.VolumeDTO, objs ...client.Obj
 	return NewStorage(fakeVolumes{items: vols}, c)
 }
 
-func listIn(t *testing.T, s *Storage, namespace string, opts *metainternalversion.ListOptions) *metricsv1alpha1.LogicalVolumeMetricsList {
+func listFrom(t *testing.T, s *Storage, namespace string, opts *metainternalversion.ListOptions) *metricsv1alpha1.LogicalVolumeMetricsList {
 	t.Helper()
 	ctx := request.WithNamespace(context.Background(), namespace)
 	if opts == nil {
@@ -143,7 +143,7 @@ func TestListNamesObjectsAfterTheClaimAndScopesToItsNamespace(t *testing.T) {
 		pvc("team-b", "redis-data", "pv-b", nil),
 	)
 
-	list := listIn(t, s, testNamespace, nil)
+	list := listFrom(t, s, testNamespace, nil)
 	if len(list.Items) != 1 {
 		t.Fatalf("List(team-a) returned %d items, want 1", len(list.Items))
 	}
@@ -180,7 +180,7 @@ func TestListAcrossAllNamespaces(t *testing.T) {
 		pvc("team-b", "redis-data", "pv-b", nil),
 	)
 
-	if n := len(listIn(t, s, "", nil).Items); n != 2 {
+	if n := len(listFrom(t, s, "", nil).Items); n != 2 {
 		t.Errorf("cluster-wide List returned %d items, want 2", n)
 	}
 }
@@ -198,7 +198,7 @@ func TestListSkipsVolumesWithNoBoundClaim(t *testing.T) {
 		pv("pv-unbound", "55555555-5555-5555-5555-555555555555", "", ""),
 	)
 
-	list := listIn(t, s, "", nil)
+	list := listFrom(t, s, "", nil)
 	if len(list.Items) != 1 {
 		t.Fatalf("List returned %d items, want only the claim-backed one", len(list.Items))
 	}
@@ -222,7 +222,7 @@ func TestListHonorsALabelSelectorOverTheClaimsLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse selector: %v", err)
 	}
-	list := listIn(t, s, testNamespace, &metainternalversion.ListOptions{LabelSelector: sel})
+	list := listFrom(t, s, testNamespace, &metainternalversion.ListOptions{LabelSelector: sel})
 	if len(list.Items) != 1 {
 		t.Fatalf("selector matched %d items, want 1", len(list.Items))
 	}
@@ -330,7 +330,7 @@ func TestConvertToTableRendersTheCapacityColumns(t *testing.T) {
 		pv("pv-a", testVolume, testNamespace, testClaim),
 		pvc(testNamespace, testClaim, "pv-a", nil),
 	)
-	list := listIn(t, s, testNamespace, nil)
+	list := listFrom(t, s, testNamespace, nil)
 
 	table, err := s.ConvertToTable(context.Background(), list, nil)
 	if err != nil {
