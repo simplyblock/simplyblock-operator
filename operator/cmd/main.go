@@ -279,7 +279,7 @@ func main() {
 	// StorageDevice objects, and two replicas mirroring the same device would
 	// fight over them.
 	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"), cpinformer.LeaderOnly)
-	deviceSubscription := subscriptions.NewDeviceSubscription(operatorNamespace)
+	deviceSubscription := subscriptions.NewDeviceSubscription()
 	deviceScopes := cpSubscriptions.AddSubscription(deviceSubscription)
 	if err := (&controller.StorageDeviceReconciler{
 		Client:  mgr.GetClient(),
