@@ -339,3 +339,64 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
+
+// Regression: 2026-09-02-backuprestore-never-terminates. Every reason a restore could
+// stall before the control plane accepted it requeued at 10s forever, so the
+// BackupRestore never left Pending and callers waiting on a terminal phase hung. One
+// full cluster held 124 of them, costing 2,301 retries in 29 minutes. This drives the
+// missing-StorageBackup path, which accounted for 15 of those.
+func TestBackupRestoreGivesUpAfterRepeatedAttempts(t *testing.T) {
+	scheme := newTestScheme(t, corev1.AddToScheme, simplyblockv1alpha1.AddToScheme)
+
+	cluster := testCluster("default", "mycluster", "cluster-uuid")
+	restore := &simplyblockv1alpha1.BackupRestore{
+		ObjectMeta: metav1.ObjectMeta{Name: "restore-sample", Namespace: "default"},
+		Spec: simplyblockv1alpha1.BackupRestoreSpec{
+			ClusterName: "mycluster",
+			// No StorageBackup of this name exists.
+			BackupRef: simplyblockv1alpha1.BackupRef{Name: "backup-that-never-existed"},
+		},
+	}
+
+	k8sClient := newTestClient(t, scheme,
+		[]client.Object{&simplyblockv1alpha1.BackupRestore{}}, cluster, restore)
+	r := &BackupRestoreReconciler{Client: k8sClient, Scheme: scheme, Recorder: events.NewFakeRecorder(64)}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "restore-sample", Namespace: "default"}}
+	key := client.ObjectKey{Name: "restore-sample", Namespace: "default"}
+
+	for i := 1; i <= maxRestoreAttempts; i++ {
+		res, err := r.Reconcile(context.Background(), req)
+		if err != nil {
+			t.Fatalf("attempt %d returned error: %v", i, err)
+		}
+		if res.RequeueAfter == 0 {
+			t.Fatalf("attempt %d gave up early, want a requeue while attempts remain", i)
+		}
+	}
+
+	res, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("RequeueAfter = %v after giving up, want 0", res.RequeueAfter)
+	}
+
+	got := &simplyblockv1alpha1.BackupRestore{}
+	if err := k8sClient.Get(context.Background(), key, got); err != nil {
+		t.Fatalf("failed to get restore: %v", err)
+	}
+	if got.Status.Phase != simplyblockv1alpha1.RestorePhaseFailed {
+		t.Fatalf("Phase = %q after %d attempts, want %q",
+			got.Status.Phase, maxRestoreAttempts, simplyblockv1alpha1.RestorePhaseFailed)
+	}
+	if !strings.Contains(got.Status.Message, "backup-that-never-existed") {
+		t.Fatalf("Message = %q, want it to keep the reason the restore stalled", got.Status.Message)
+	}
+
+	// A terminal restore re-reconciles to nothing.
+	if res, err = r.Reconcile(context.Background(), req); err != nil || res.RequeueAfter != 0 {
+		t.Fatalf("Reconcile of a Failed restore = (%v, %v), want no-op", res, err)
+	}
+}
