@@ -83,19 +83,9 @@ type StorageClassParameters struct {
 	// QosWMbytes sets the write throughput limit in MB/s (0 = unlimited).
 	// +kubebuilder:default="0"
 	QosWMbytes string `json:"qosWMbytes,omitempty"`
-	// Compression enables compression for logical volumes.
-	// +kubebuilder:default="False"
-	Compression string `json:"compression,omitempty"`
 	// Encryption enables encryption for logical volumes.
 	// +kubebuilder:default=false
 	Encryption *bool `json:"encryption,omitempty"`
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Replicate By Default"
-	// Replicate enables replication for logical volumes.
-	// +kubebuilder:default=false
-	Replicate *bool `json:"replicate,omitempty"`
-	// LvolPriorityClass sets the logical volume priority class.
-	// +kubebuilder:default="0"
-	LvolPriorityClass string `json:"lvolPriorityClass,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Fabric"
 	// Fabric is the transport fabric (e.g. tcp).
 	// +kubebuilder:default=tcp

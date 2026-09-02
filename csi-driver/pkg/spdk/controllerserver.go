@@ -795,25 +795,12 @@ func (cs *controllerServer) prepareCreateVolumeReq(
 ) (*util.CreateLVolData, bool, error) {
 	params := req.GetParameters()
 
-	priorClass, err := kube.IntParam(params, "lvol_priority_class", 0)
-	if err != nil {
-		return nil, false, err
-	}
-
 	maxNamespace, err := kube.IntParam(params, "max_namespace_per_subsys", 1)
 	if err != nil {
 		return nil, false, err
 	}
 
-	compression, err := kube.BoolParam(params, "compression", false)
-	if err != nil {
-		return nil, false, err
-	}
 	encryption, err := kube.BoolParam(params, "encryption", false)
-	if err != nil {
-		return nil, false, err
-	}
-	replicate, err := kube.BoolParam(params, "replicate", false)
 	if err != nil {
 		return nil, false, err
 	}
@@ -873,10 +860,7 @@ func (cs *controllerServer) prepareCreateVolumeReq(
 		MaxWmBytes:   maxWmBytes,
 		MaxSize:      params["max_size"],
 		MaxNamespace: maxNamespace,
-		PriorClass:   priorClass,
-		Compression:  compression,
 		Encryption:   encryption,
-		Replicate:    replicate,
 		HostID:       hostID,
 		LvolID:       lvolID,
 		Namespaced:   maxNamespace > 1,
