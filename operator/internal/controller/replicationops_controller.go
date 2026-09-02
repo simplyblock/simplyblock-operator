@@ -43,6 +43,12 @@ import (
 
 const (
 	finalizerReplicationOps = "storage.simplyblock.io/replicationops-finalizer"
+
+	// replicationFailoverFailed is the per-volume status a failover response
+	// carries for a volume that did not fail over. The endpoint answers 200
+	// whatever happens and reports each volume's outcome in its own status, so
+	// this string, not the HTTP code, is what says a volume was left behind.
+	replicationFailoverFailed = "failed"
 )
 
 // ReplicationOpsReconciler reconciles ReplicationOps resources.
@@ -254,7 +260,7 @@ func (r *ReplicationOpsReconciler) reconcileTargetFailover(
 
 	var failures []string
 	for _, br := range backendResults {
-		if br.Status == "failed" {
+		if br.Status == replicationFailoverFailed {
 			failures = append(failures, fmt.Sprintf("%s: %s", br.LvolID, br.Detail))
 		}
 	}
@@ -349,7 +355,7 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 		// Backend always returns 200; check per-volume status for failures.
 		var failures []string
 		for _, r := range backendResults {
-			if r.Status == "failed" {
+			if r.Status == replicationFailoverFailed {
 				failures = append(failures, fmt.Sprintf("%s: %s", r.LvolID, r.Detail))
 			}
 		}
