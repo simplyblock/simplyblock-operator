@@ -75,7 +75,7 @@ type StorageNodeReconciler struct {
 // subscription which object a backend node id names. It is an interface so the
 // node reconciler does not depend on the subscription's concrete type.
 type DeviceNodeRegistry interface {
-	RegisterNode(nodeID, objectName string)
+	RegisterNode(nodeID string, node types.NamespacedName)
 	UnregisterNode(nodeID string)
 }
 
@@ -180,7 +180,7 @@ func (r *StorageNodeReconciler) registerDeviceStream(clusterUUID string, sn *sim
 		return
 	}
 	if r.DeviceNodeNames != nil {
-		r.DeviceNodeNames.RegisterNode(sn.Status.UUID, sn.Name)
+		r.DeviceNodeNames.RegisterNode(sn.Status.UUID, client.ObjectKeyFromObject(sn))
 	}
 	if r.DeviceScopes != nil {
 		r.DeviceScopes.Add(cpinformer.Scope{clusterUUID, sn.Status.UUID})

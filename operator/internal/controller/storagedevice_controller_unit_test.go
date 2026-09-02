@@ -41,8 +41,8 @@ type fakeDeviceCache struct {
 
 func (f *fakeDeviceCache) Triggers() <-chan event.GenericEvent { return nil }
 func (f *fakeDeviceCache) Synced(cpinformer.Scope) bool        { return f.synced }
-func (f *fakeDeviceCache) Lookup(objectName string) (cpinformer.Scope, subscriptions.DeviceDTO, bool) {
-	dto, ok := f.devices[objectName]
+func (f *fakeDeviceCache) Lookup(key types.NamespacedName) (cpinformer.Scope, subscriptions.DeviceDTO, bool) {
+	dto, ok := f.devices[key.Name]
 	if !ok {
 		return nil, subscriptions.DeviceDTO{}, false
 	}
@@ -238,5 +238,69 @@ func TestStorageDeviceReconcileWaitsForSyncBeforeDeleting(t *testing.T) {
 	}
 	if _, err := getSD(t, r.Client); err != nil {
 		t.Errorf("object must not be deleted before sync: %v", err)
+	}
+}
+
+// Regression: 2026-09-02-storagedevice-owner-namespace — the mirror named its
+// objects in the operator's own namespace, while the StorageNode that owns them
+// lives wherever the storage cluster's CRs do. nodeFor then searched the
+// operator's namespace for the owning node, found none, and requeued on a timer
+// forever, so no StorageDevice was ever created anywhere: a three-node cluster
+// whose control plane reported four devices per node mirrored none of the twelve.
+//
+// Creating them in the operator's namespace would not have worked either. The
+// object carries a controller reference to its StorageNode, and a namespaced
+// owner in a different namespace is one the garbage collector reads as absent,
+// so it would have deleted every object as fast as the mirror made it.
+//
+// Every other case in this file puts the node and the mirror in one namespace,
+// which is why none of them can fail for this.
+func TestTheMirrorCreatesTheDeviceInTheOwningNodesNamespace(t *testing.T) {
+	// The StorageNode belongs to the storage cluster's namespace, which is not
+	// the one the operator runs in. The subscription is told no namespace at
+	// all: it learns the node's, which is the whole of the fix.
+	const nodeNamespace = "default"
+
+	node := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Namespace: nodeNamespace, Name: sdNodeCR},
+		Status:     simplyblockv1alpha1.StorageNodeStatus{UUID: sdNodeID},
+	}
+
+	// The real subscription, wired the way cmd/main.go wires it, so the object
+	// the reconciler is asked about is the one the stream would really name.
+	sub := subscriptions.NewDeviceSubscription()
+	sub.RegisterNode(sdNodeID, client.ObjectKeyFromObject(node))
+	snapshot := `[{"id":"` + sdDevice + `","status":"online","size":100}]`
+	if err := sub.Ingest(context.Background(), cpinformer.Event{
+		Kind: cpinformer.EventSnapshot, Scope: sdScope(), Data: []byte(snapshot),
+	}); err != nil {
+		t.Fatalf("ingest snapshot: %v", err)
+	}
+
+	var triggered event.GenericEvent
+	select {
+	case triggered = <-sub.Triggers():
+	default:
+		t.Fatal("the snapshot enqueued no reconcile trigger")
+	}
+
+	r := sdReconciler(t, sub, node)
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(triggered.Object),
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// Wherever the mirror chose to put it, it has to be the owner's namespace:
+	// that is the only namespace in which the controller reference resolves.
+	var devices simplyblockv1alpha1.StorageDeviceList
+	if err := r.List(context.Background(), &devices); err != nil {
+		t.Fatalf("list devices: %v", err)
+	}
+	if len(devices.Items) != 1 {
+		t.Fatalf("the mirror created %d StorageDevice objects, want 1", len(devices.Items))
+	}
+	if got := devices.Items[0].Namespace; got != nodeNamespace {
+		t.Errorf("device created in namespace %q, want the owning node's %q", got, nodeNamespace)
 	}
 }

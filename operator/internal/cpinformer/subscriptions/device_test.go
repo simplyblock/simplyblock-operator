@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 )
@@ -23,13 +25,26 @@ const (
 
 func deviceScope() cpinformer.Scope { return cpinformer.Scope{sdCluster, sdNode} }
 
+// sdNodeObject is the StorageNode the devices belong to. Its namespace is not
+// the operator's on purpose: a device object is created beside its node, so a
+// case that used one namespace for both could not catch them being confused.
+var sdNodeObject = types.NamespacedName{Namespace: "default", Name: sdNodeCR}
+
+// deviceObjectKey is the key the subscription names for the device on that node.
+func deviceObjectKey() types.NamespacedName {
+	return types.NamespacedName{
+		Namespace: sdNodeObject.Namespace,
+		Name:      simplyblockv1alpha1.StorageDeviceName(sdNodeObject.Name, sdDevice),
+	}
+}
+
 // registered returns a subscription that already knows the node's object name,
 // which is the normal state: the StorageNode controller registers the name
 // before it adds the scope that opens the stream.
 func registered(t *testing.T) *DeviceSubscription {
 	t.Helper()
-	sub := NewDeviceSubscription("sb")
-	sub.RegisterNode(sdNode, sdNodeCR)
+	sub := NewDeviceSubscription()
+	sub.RegisterNode(sdNode, sdNodeObject)
 	return sub
 }
 
@@ -45,8 +60,10 @@ func drainDeviceTrigger(t *testing.T, sub *DeviceSubscription) string {
 	t.Helper()
 	select {
 	case ev := <-sub.Triggers():
-		if ev.Object.GetNamespace() != "sb" {
-			t.Errorf("trigger namespace = %q, want sb", ev.Object.GetNamespace())
+		// The object belongs beside its StorageNode, not beside the operator.
+		if ev.Object.GetNamespace() != sdNodeObject.Namespace {
+			t.Errorf("trigger namespace = %q, want the owning node's %q",
+				ev.Object.GetNamespace(), sdNodeObject.Namespace)
 		}
 		return ev.Object.GetName()
 	case <-time.After(time.Second):
@@ -65,7 +82,7 @@ func expectNoDeviceTrigger(t *testing.T, sub *DeviceSubscription) {
 }
 
 func TestDeviceSubscriptionPathIsNodeScoped(t *testing.T) {
-	sub := NewDeviceSubscription("sb")
+	sub := NewDeviceSubscription()
 	want := "/api/v2/clusters/" + sdCluster + "/storage-nodes/" + sdNode + "/devices/"
 	if got := sub.Path(deviceScope()); got != want {
 		t.Errorf("Path() = %q, want %q", got, want)
@@ -81,14 +98,14 @@ func TestDeviceSubscriptionSnapshotCachesSyncsAndTriggers(t *testing.T) {
 	ingestDevice(t, sub, cpinformer.EventSnapshot,
 		`[{"id":"`+sdDevice+`","cluster_id":"`+sdCluster+`","storage_node_id":"`+sdNode+`","status":"online","size":4096}]`)
 
-	want := simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice)
+	want := simplyblockv1alpha1.StorageDeviceName(sdNodeObject.Name, sdDevice)
 	if got := drainDeviceTrigger(t, sub); got != want {
 		t.Errorf("trigger = %q, want %q", got, want)
 	}
 	if !sub.Synced(deviceScope()) {
 		t.Error("scope should be synced after a snapshot")
 	}
-	scope, dto, ok := sub.Lookup(want)
+	scope, dto, ok := sub.Lookup(deviceObjectKey())
 	if !ok || dto.Size != 4096 || scope.Key() != deviceScope().Key() {
 		t.Errorf("lookup = %v, %+v, %v", scope, dto, ok)
 	}
@@ -105,7 +122,7 @@ func TestDeviceSubscriptionSnapshotRemovalTriggersVanishedDevice(t *testing.T) {
 	if got := drainDeviceTrigger(t, sub); got != simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice) {
 		t.Errorf("relist trigger = %q", got)
 	}
-	if _, _, ok := sub.Lookup(simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice)); ok {
+	if _, _, ok := sub.Lookup(deviceObjectKey()); ok {
 		t.Error("device absent from the snapshot should be gone from the cache")
 	}
 }
@@ -119,7 +136,7 @@ func TestDeviceSubscriptionDeleteDropsFromCacheAndTriggers(t *testing.T) {
 	if got := drainDeviceTrigger(t, sub); got != simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice) {
 		t.Errorf("delete trigger = %q", got)
 	}
-	if _, _, ok := sub.Lookup(simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice)); ok {
+	if _, _, ok := sub.Lookup(deviceObjectKey()); ok {
 		t.Error("device should be gone from the cache after delete")
 	}
 }
@@ -132,7 +149,7 @@ func TestDeviceSubscriptionEmptyDeleteIsIgnored(t *testing.T) {
 	// A physical removal carries {}; the snapshot relist covers it.
 	ingestDevice(t, sub, cpinformer.EventDeleted, `{}`)
 	expectNoDeviceTrigger(t, sub)
-	if _, _, ok := sub.Lookup(simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice)); !ok {
+	if _, _, ok := sub.Lookup(deviceObjectKey()); !ok {
 		t.Error("an empty delete must not drop the cached device")
 	}
 }
@@ -142,17 +159,17 @@ func TestDeviceSubscriptionEmptyDeleteIsIgnored(t *testing.T) {
 // registered it yet. Caching it is right; naming an object after a node that is
 // not there is not, so no trigger is emitted.
 func TestDeviceSubscriptionCachesButDoesNotTriggerForUnknownNode(t *testing.T) {
-	sub := NewDeviceSubscription("sb")
+	sub := NewDeviceSubscription()
 
 	ingestDevice(t, sub, cpinformer.EventSnapshot, `[{"id":"`+sdDevice+`","status":"online"}]`)
 
 	expectNoDeviceTrigger(t, sub)
-	if _, _, ok := sub.Lookup(simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice)); ok {
+	if _, _, ok := sub.Lookup(deviceObjectKey()); ok {
 		t.Error("a device with no node name cannot be indexed under an object name")
 	}
 
 	// Once the node registers, the next event reaches the reconciler.
-	sub.RegisterNode(sdNode, sdNodeCR)
+	sub.RegisterNode(sdNode, sdNodeObject)
 	ingestDevice(t, sub, cpinformer.EventUpdated, `{"id":"`+sdDevice+`","status":"online"}`)
 	if got := drainDeviceTrigger(t, sub); got != simplyblockv1alpha1.StorageDeviceName(sdNodeCR, sdDevice) {
 		t.Errorf("trigger after registration = %q", got)
