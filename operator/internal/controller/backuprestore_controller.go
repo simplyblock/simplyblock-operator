@@ -170,19 +170,27 @@ func (r *BackupRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
-	// Everything before the control plane accepts the restore requeues on failure: the
-	// cluster lookup, a backup that is not there or not ready, the pool lookup, and the
-	// restore call itself. None of them gave up, so a restore that could never be placed
-	// stayed in Pending forever and every caller waiting on a terminal phase hung with
-	// it. Counting the passes bounds all of them at once, whatever the reason was, and
-	// status.message still says which.
-	//
-	// Only until acceptance. Filling the volume from S3 afterwards is a backend task
-	// that runs for hours and reports its own failure.
-	if restoreCR.Status.RestoredLvolID == "" && r.attempts.record(req.NamespacedName) > maxRestoreAttempts {
+	res, err := r.reconcileRestore(ctx, restoreCR)
+
+	// A restore that could never be placed requeued at 10s forever, so it sat in Pending
+	// and callers waiting on a terminal phase hung. Counted on the way out and only for a
+	// stall: a pass that made progress must not spend the budget, since the backup may
+	// only have become ready on the last attempt. Errors are the workqueue's to retry.
+	// The bound holds until acceptance only; the S3 transfer reports its own failure.
+	if err == nil && res.RequeueAfter > 0 && restoreCR.Status.RestoredLvolID == "" &&
+		r.attempts.record(req.NamespacedName) > maxRestoreAttempts {
 		return r.failExhaustedRestore(ctx, restoreCR)
 	}
 
+	return res, err
+}
+
+// reconcileRestore drives one pass over a non-terminal restore. Split out so the
+// attempt budget in Reconcile can see whether the pass stalled.
+func (r *BackupRestoreReconciler) reconcileRestore(
+	ctx context.Context,
+	restoreCR *simplyblockv1alpha1.BackupRestore,
+) (ctrl.Result, error) {
 	clusterUUID, res, done, err := r.resolveClusterUUID(ctx, restoreCR)
 	if done {
 		return res, err
@@ -550,7 +558,7 @@ func isCrossCluster(restoreCR *simplyblockv1alpha1.BackupRestore) bool {
 // not be this cluster's own bucket for a backup imported from another cluster.
 // The source cluster's StorageCluster CR (if still present in this namespace)
 // already has that bucket's credentials via its own backup.credentialsSecretRef,
-// so this resolves and forwards them rather than requiring the caller to supply
+// so this resolves and passes them on rather than requiring the caller to supply
 // them separately.
 //
 // Returns a nil credentials with a non-nil error when they cannot be resolved
@@ -795,7 +803,7 @@ func (r *BackupRestoreReconciler) ensurePV(
 					VolumeHandle:     volumeHandle,
 					VolumeAttributes: volumeAttributes,
 					// FSType preserves the original source volume's filesystem
-					// (e.g. xfs) so the restored volume mounts the same way it
+					// (e.g., XFS) so the restored volume mounts the same way it
 					// was backed up, instead of the CSI driver's ext4 default.
 					// Empty for backups taken before this field existed, or for
 					// imported backups with no live source PV — the CSI driver
