@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"sync"
 
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
@@ -52,36 +53,41 @@ type DeviceDTO struct {
 //
 // A device object is named after the StorageNode object that owns it, and the
 // control plane knows nothing of Kubernetes object names. So the subscription
-// keeps the backend-node-id-to-object-name mapping that the StorageNode
-// controller registers alongside the scope it streams, which is what lets Ingest
-// name an object without reading the API — it runs on the stream goroutine and
-// must never block on I/O.
+// keeps the backend-node-id-to-object mapping that the StorageNode controller
+// registers alongside the scope it streams, which is what lets Ingest name an
+// object without reading the API — it runs on the stream goroutine and must
+// never block on I/O.
+//
+// The mapping carries the node's namespace and not only its name, because the
+// device object has to be created beside its node rather than beside the
+// operator: it holds a controller reference to the node, and a namespaced owner
+// in another namespace is one the garbage collector reads as absent.
 type DeviceSubscription struct {
-	namespace string
-	store     *cpinformer.Store[DeviceDTO]
-	ch        chan event.GenericEvent
+	store *cpinformer.Store[DeviceDTO]
+	ch    chan event.GenericEvent
 
 	mu    sync.Mutex
-	nodes map[string]string // backend node id -> StorageNode object name
+	nodes map[string]types.NamespacedName // backend node id -> StorageNode object
 	// byObject indexes the cache the way the reconciler reads it: a reconcile
-	// request carries an object name, and only the subscription can turn one
-	// back into a device id, because only it knows the naming rule and the node
-	// names it depends on. It holds an entry for every cached device and nothing
-	// else, so a miss means the control plane no longer reports the device.
-	byObject map[string]string // object name -> backend device id
+	// request carries an object key, and only the subscription can turn one back
+	// into a device id, because only it knows the naming rule and the node
+	// objects it depends on. It holds an entry for every cached device and
+	// nothing else, so a miss means the control plane no longer reports the
+	// device.
+	byObject map[string]string // "namespace/name" -> backend device id
 	synced   map[string]bool   // scopeKey -> first snapshot applied
 }
 
-// NewDeviceSubscription returns a device subscription that mirrors into
-// StorageDevice objects in namespace.
-func NewDeviceSubscription(namespace string) *DeviceSubscription {
+// NewDeviceSubscription returns a device subscription. It is not told a
+// namespace: each device object belongs in the namespace of the StorageNode that
+// owns it, which RegisterNode supplies.
+func NewDeviceSubscription() *DeviceSubscription {
 	return &DeviceSubscription{
-		namespace: namespace,
-		store:     cpinformer.NewStore(func(d DeviceDTO) string { return d.ID }),
-		ch:        make(chan event.GenericEvent, 1024),
-		nodes:     map[string]string{},
-		byObject:  map[string]string{},
-		synced:    map[string]bool{},
+		store:    cpinformer.NewStore(func(d DeviceDTO) string { return d.ID }),
+		ch:       make(chan event.GenericEvent, 1024),
+		nodes:    map[string]types.NamespacedName{},
+		byObject: map[string]string{},
+		synced:   map[string]bool{},
 	}
 }
 
@@ -95,12 +101,12 @@ func (s *DeviceSubscription) Path(scope cpinformer.Scope) string {
 	return fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/devices/", scope[0], scope[1])
 }
 
-// RegisterNode records the StorageNode object name that devices on the given
-// backend node belong to. The StorageNode controller calls it before adding the
-// node's scope, so a name is known by the time the stream delivers anything.
-func (s *DeviceSubscription) RegisterNode(nodeID, objectName string) {
+// RegisterNode records the StorageNode object that devices on the given backend
+// node belong to. The StorageNode controller calls it before adding the node's
+// scope, so the object is known by the time the stream delivers anything.
+func (s *DeviceSubscription) RegisterNode(nodeID string, node types.NamespacedName) {
 	s.mu.Lock()
-	s.nodes[nodeID] = objectName
+	s.nodes[nodeID] = node
 	s.mu.Unlock()
 }
 
@@ -166,27 +172,30 @@ func (s *DeviceSubscription) Ingest(ctx context.Context, ev cpinformer.Event) er
 // which no trigger is emitted: without a node name there is no object name, so
 // there is nothing to index and nothing to reconcile.
 func (s *DeviceSubscription) index(scope cpinformer.Scope, deviceID string) {
-	if name, ok := s.objectName(scope, deviceID); ok {
+	if key, ok := s.objectKey(scope, deviceID); ok {
 		s.mu.Lock()
-		s.byObject[name] = deviceID
+		s.byObject[key.String()] = deviceID
 		s.mu.Unlock()
 	}
 }
 
 func (s *DeviceSubscription) unindex(scope cpinformer.Scope, deviceID string) {
-	if name, ok := s.objectName(scope, deviceID); ok {
+	if key, ok := s.objectKey(scope, deviceID); ok {
 		s.mu.Lock()
-		delete(s.byObject, name)
+		delete(s.byObject, key.String())
 		s.mu.Unlock()
 	}
 }
 
-func (s *DeviceSubscription) objectName(scope cpinformer.Scope, deviceID string) (string, bool) {
-	nodeName, ok := s.nodeName(scope[1])
+func (s *DeviceSubscription) objectKey(scope cpinformer.Scope, deviceID string) (types.NamespacedName, bool) {
+	node, ok := s.node(scope[1])
 	if !ok {
-		return "", false
+		return types.NamespacedName{}, false
 	}
-	return simplyblockv1alpha1.StorageDeviceName(nodeName, deviceID), true
+	return types.NamespacedName{
+		Namespace: node.Namespace,
+		Name:      simplyblockv1alpha1.StorageDeviceName(node.Name, deviceID),
+	}, true
 }
 
 // enqueue pushes a reconcile trigger naming the device's StorageDevice object,
@@ -198,24 +207,24 @@ func (s *DeviceSubscription) objectName(scope cpinformer.Scope, deviceID string)
 // The node's registration is followed by the stream's snapshot, which enqueues
 // everything.
 func (s *DeviceSubscription) enqueue(ctx context.Context, scope cpinformer.Scope, deviceID string) {
-	name, ok := s.objectName(scope, deviceID)
+	key, ok := s.objectKey(scope, deviceID)
 	if !ok {
 		return
 	}
 	sd := &simplyblockv1alpha1.StorageDevice{}
-	sd.SetNamespace(s.namespace)
-	sd.SetName(name)
+	sd.SetNamespace(key.Namespace)
+	sd.SetName(key.Name)
 	select {
 	case s.ch <- event.GenericEvent{Object: sd}:
 	case <-ctx.Done():
 	}
 }
 
-func (s *DeviceSubscription) nodeName(nodeID string) (string, bool) {
+func (s *DeviceSubscription) node(nodeID string) (types.NamespacedName, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	name, ok := s.nodes[nodeID]
-	return name, ok
+	node, ok := s.nodes[nodeID]
+	return node, ok
 }
 
 // Triggers is the reconcile-trigger channel; the reconciler attaches it via
@@ -224,11 +233,12 @@ func (s *DeviceSubscription) Triggers() <-chan event.GenericEvent { return s.ch 
 
 // Lookup returns the cached device that the named StorageDevice object mirrors,
 // with the scope it belongs to, or ok=false if the control plane no longer
-// reports it. It takes an object name rather than a device id because that is
-// what a reconcile request carries.
-func (s *DeviceSubscription) Lookup(objectName string) (cpinformer.Scope, DeviceDTO, bool) {
+// reports it. It takes an object key rather than a device id because that is
+// what a reconcile request carries, and the namespace is part of the identity:
+// two namespaces may each hold a StorageNode of the same name.
+func (s *DeviceSubscription) Lookup(key types.NamespacedName) (cpinformer.Scope, DeviceDTO, bool) {
 	s.mu.Lock()
-	deviceID, ok := s.byObject[objectName]
+	deviceID, ok := s.byObject[key.String()]
 	s.mu.Unlock()
 	if !ok {
 		return nil, DeviceDTO{}, false

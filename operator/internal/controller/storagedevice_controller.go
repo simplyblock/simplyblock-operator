@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -74,7 +75,7 @@ type DeviceCache interface {
 	Triggers() <-chan event.GenericEvent
 	// Lookup returns the device the named object mirrors and its scope, or
 	// ok=false if the control plane no longer reports it.
-	Lookup(objectName string) (cpinformer.Scope, subscriptions.DeviceDTO, bool)
+	Lookup(key types.NamespacedName) (cpinformer.Scope, subscriptions.DeviceDTO, bool)
 	// Synced reports whether a scope's initial snapshot has been applied.
 	Synced(scope cpinformer.Scope) bool
 }
@@ -115,7 +116,7 @@ func (r *StorageDeviceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // is left alone, because a cold cache is an absence of information rather than
 // information.
 func (r *StorageDeviceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	scope, dto, inCache := r.Devices.Lookup(req.Name)
+	scope, dto, inCache := r.Devices.Lookup(req.NamespacedName)
 
 	var sd simplyblockv1alpha1.StorageDevice
 	err := r.Get(ctx, req.NamespacedName, &sd)
