@@ -37,6 +37,11 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
+// metricsCertRotatorController is the controller name this rotator registers
+// under. It is not the default because the webhook's rotator holds that one, and
+// two controllers may not share a name: they would report the same metrics.
+const metricsCertRotatorController = "metrics-apiserver-cert-rotator"
+
 // RBAC needed to provision the aggregated API server's serving certificate and
 // to publish its CA bundle.
 //
@@ -73,6 +78,12 @@ func SetupCertificate(mgr ctrl.Manager, namespace, certDir string) (chan struct{
 	dnsName := fmt.Sprintf("%s.%s.svc", utils.MetricsAPIServiceName, namespace)
 
 	if err := rotator.AddRotator(mgr, &rotator.CertRotator{
+		// cert-controller names the controller it registers "cert-rotator"
+		// unless told otherwise, and the webhook's rotator already runs under
+		// that name. controller-runtime rejects a second controller with a name
+		// it has seen, so leaving this empty does not produce a shared rotator:
+		// it fails the manager at startup and takes every reconciler with it.
+		ControllerName: metricsCertRotatorController,
 		SecretKey:      types.NamespacedName{Namespace: namespace, Name: utils.MetricsAPIServerCertName},
 		CertDir:        certDir,
 		CAName:         "simplyblock-operator-metrics-apiserver-ca",
