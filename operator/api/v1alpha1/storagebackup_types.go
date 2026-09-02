@@ -26,7 +26,11 @@ const (
 	BackupPhaseDone       = "Done"
 	BackupPhaseFailed     = "Failed"
 	BackupPhaseMerging    = "Merging"
-	BackupPhaseDeleting   = "Deleting"
+	// BackupPhaseMerged is terminal: retention folded this backup's delta into its
+	// successor, so the backup no longer exists independently and cannot be restored
+	// on its own. The successor carries the data.
+	BackupPhaseMerged   = "Merged"
+	BackupPhaseDeleting = "Deleting"
 )
 
 type PersistentVolumeClaimRef struct {
@@ -45,12 +49,12 @@ type StorageBackupSpec struct {
 	// +k8s:immutable
 	ClusterName string `json:"clusterName"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="PVC Ref"
-	// PVCRef identifies the PVC whose backing Simplyblock volume should be snapshotted and backed up.
+	// PVCRef identifies the PVC whose backing simplyblock volume should be snapshotted and backed up.
 	// Not required when SourceClusterUUID is set (imported backup).
 	// +optional
 	PVCRef *PersistentVolumeClaimRef `json:"pvcRef,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Snapshot Name"
-	// SnapshotName optionally overrides the internally-created snapshot name.
+	// SnapshotName optionally overrides the internally created snapshot name.
 	// +optional
 	SnapshotName string `json:"snapshotName,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Source Cluster UUID"
@@ -78,20 +82,20 @@ type StorageBackupStatus struct {
 	PVCNamespace string `json:"pvcNamespace,omitempty"`
 	// PVName is the bound PV name.
 	PVName string `json:"pvName,omitempty"`
-	// PoolName is the Simplyblock pool name derived from the CSI volume handle.
+	// PoolName is the simplyblock pool name derived from the CSI volume handle.
 	PoolName string `json:"poolName,omitempty"`
 	// PoolUUID is the backend pool UUID.
 	PoolUUID string `json:"poolUUID,omitempty"`
-	// LvolID is the Simplyblock volume UUID.
+	// LvolID is the simplyblock volume UUID.
 	LvolID string `json:"lvolID,omitempty"`
 	// LvolName is the backend logical volume name.
 	LvolName string `json:"lvolName,omitempty"`
-	// FSType is the filesystem type of the source PersistentVolume (e.g. "ext4",
-	// "xfs"), captured at backup time so a restore can preserve it regardless of
+	// FSType is the filesystem type of the source PersistentVolume, ext4 or XFS for
+	// example, captured at backup time so a restore can preserve it regardless of
 	// which StorageClass the restored PVC ends up using.
 	FSType string `json:"fsType,omitempty"`
 
-	// SnapshotID is the internally-created snapshot UUID used for the backup request.
+	// SnapshotID is the internally created snapshot UUID used for the backup request.
 	SnapshotID string `json:"snapshotID,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Snapshot Name"
 	// SnapshotName is the snapshot name used for the backup request.
