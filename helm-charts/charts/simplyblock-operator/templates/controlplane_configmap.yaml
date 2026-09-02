@@ -222,6 +222,15 @@ data:
       editable: false
       jsonData:
         httpHeaderName1: Authorization
+        # Infinity refuses every URL query until the host is allowlisted. The
+        # refusal reaches an operator as a per-rule evaluation error reading
+        # "datasource is missing allowed hosts/URLs" rather than as a
+        # configuration warning, so every rule below fails in a way that looks
+        # like an outage instead of like a missing setting. The backend reads
+        # the list as jsonData.allowedHosts and matches a URL by prefix, so the
+        # control-plane base address covers every /api/v2 path they query.
+        allowedHosts:
+          - {{ $cpAddr }}
         # Without this the health check probes the bare base URL, which the
         # control plane answers with a string Infinity cannot read as a table.
         customHealthCheckEnabled: false
