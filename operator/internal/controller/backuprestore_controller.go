@@ -51,6 +51,7 @@ const (
 	eventReasonRestoreBackupNotFound     = "RestoreBackupNotFound"
 	eventReasonRestoreBackupNotReady     = "RestoreBackupNotReady"
 	eventReasonRestoreBackupFailed       = "RestoreBackupFailed"
+	eventReasonRestoreBackupMerged       = "RestoreBackupMerged"
 	eventReasonRestoreClusterLookupError = "RestoreClusterLookupError"
 	eventReasonRestorePoolLookupError    = "RestorePoolLookupError"
 	eventReasonRestoreAPIFailed          = "RestoreAPIFailed"
@@ -209,6 +210,24 @@ func (r *BackupRestoreReconciler) reconcileBackupAndPool(
 			return ctrl.Result{}, true, patchErr
 		}
 		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreBackupFailed, eventReasonRestoreBackupFailed, "%s", msg)
+		return ctrl.Result{}, true, nil
+	}
+
+	// A merged backup is equally terminal, for a different reason: retention
+	// folded its delta into the successor, so it no longer exists on its own and
+	// the control plane refuses a chain that contains anything but completed
+	// backups. Waiting for it to reach Done would never end.
+	if backup.Status.Phase == simplyblockv1alpha1.BackupPhaseMerged {
+		msg := fmt.Sprintf(
+			"StorageBackup %q was merged into its successor by retention and cannot be restored on its own",
+			backup.Name)
+		if patchErr := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
+			s.Phase = simplyblockv1alpha1.RestorePhaseFailed
+			s.Message = msg
+		}); patchErr != nil {
+			return ctrl.Result{}, true, patchErr
+		}
+		r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning, eventReasonRestoreBackupMerged, eventReasonRestoreBackupMerged, "%s", msg)
 		return ctrl.Result{}, true, nil
 	}
 
@@ -473,7 +492,7 @@ func isCrossCluster(restoreCR *simplyblockv1alpha1.BackupRestore) bool {
 // not be this cluster's own bucket for a backup imported from another cluster.
 // The source cluster's StorageCluster CR (if still present in this namespace)
 // already has that bucket's credentials via its own backup.credentialsSecretRef,
-// so this resolves and forwards them rather than requiring the caller to supply
+// so this resolves and relays them rather than requiring the caller to supply
 // them separately.
 //
 // Returns a nil credentials with a non-nil error when they cannot be resolved
@@ -718,7 +737,7 @@ func (r *BackupRestoreReconciler) ensurePV(
 					VolumeHandle:     volumeHandle,
 					VolumeAttributes: volumeAttributes,
 					// FSType preserves the original source volume's filesystem
-					// (e.g. xfs) so the restored volume mounts the same way it
+					// (XFS, for example) so the restored volume mounts the same way it
 					// was backed up, instead of the CSI driver's ext4 default.
 					// Empty for backups taken before this field existed, or for
 					// imported backups with no live source PV — the CSI driver

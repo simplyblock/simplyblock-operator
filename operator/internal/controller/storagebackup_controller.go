@@ -48,6 +48,7 @@ const (
 	backupAPIStatusCompleted  = "completed"
 	backupAPIStatusFailed     = "failed"
 	backupAPIStatusMerging    = "merging"
+	backupAPIStatusMerged     = "merged"
 	backupAPIStatusDeleting   = "deleting"
 )
 
@@ -57,6 +58,14 @@ const (
 	backupDeletionRequeue  = 10 * time.Second
 	backupProgressRequeue  = 10 * time.Second
 	backupReconcileRequeue = 10 * time.Second
+
+	// backupMergeWatchRequeue is how often a completed backup is re-polled to
+	// see whether retention has merged it. It is deliberately far slower than
+	// backupProgressRequeue: a merge happens at an arbitrary later point rather
+	// than within seconds of the backup finishing, nothing waits on the
+	// transition the way a caller waits for the backup itself, and every poll
+	// costs one cluster-wide backup list.
+	backupMergeWatchRequeue = 5 * time.Minute
 
 	pvcLvolIDAnnotation = "simplybk/lvol-id"
 )
@@ -70,7 +79,7 @@ const (
 	eventReasonBackupClusterLookupError = "BackupClusterLookupError"
 
 	// eventReasonBackupSourceResolutionError is emitted when the PVC/PV source
-	// cannot be resolved (e.g. PVC not found, not bound, or missing lvol metadata).
+	// cannot be resolved (e.g., PVC not found, not bound, or missing lvol metadata).
 	eventReasonBackupSourceResolutionError = "BackupSourceResolutionError"
 
 	// eventReasonBackupPoolLookupError is emitted when the storage pool UUID
@@ -205,7 +214,7 @@ func (r *StorageBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		// Imported backups are managed externally: poll status directly by
 		// BackupID/ClusterUUID instead of resolving a PVC-based source, since the
-		// originating PVC/lvol may no longer exist (e.g. after the source pool was
+		// originating PVC/lvol may no longer exist (e.g., after the source pool was
 		// deleted and recreated) even though the backend backup and its data
 		// remain valid and restorable. Calling resolveBackupSource here would
 		// hard-fail on the missing PVC and overwrite the imported status back to
@@ -438,6 +447,12 @@ func (r *StorageBackupReconciler) syncBackupProgress(
 
 	if backupTerminal(backup.Status) {
 		return ctrl.Result{}, nil
+	}
+
+	// A completed backup is still waiting on a possible merge, which is not
+	// worth a ten-second poll.
+	if backup.Status == backupAPIStatusCompleted {
+		return ctrl.Result{RequeueAfter: backupMergeWatchRequeue}, nil
 	}
 
 	return ctrl.Result{RequeueAfter: backupProgressRequeue}, nil
@@ -903,6 +918,8 @@ func backupPhaseFromAPIStatus(status string) string {
 		return simplyblockv1alpha1.BackupPhaseFailed
 	case backupAPIStatusMerging:
 		return simplyblockv1alpha1.BackupPhaseMerging
+	case backupAPIStatusMerged:
+		return simplyblockv1alpha1.BackupPhaseMerged
 	case backupAPIStatusDeleting:
 		return simplyblockv1alpha1.BackupPhaseDeleting
 	default:
@@ -910,8 +927,15 @@ func backupPhaseFromAPIStatus(status string) string {
 	}
 }
 
+// backupTerminal reports whether a backend status can no longer change.
+//
+// "completed" is deliberately not terminal. Retention merges a completed backup
+// into its successor at an arbitrary later point, moving it through merging to
+// merged, and the control plane pushes nothing: the operator learns of it only
+// by asking again. Treating completion as the end of the lifecycle is what kept
+// those transitions out of StorageBackup.status entirely.
 func backupTerminal(status string) bool {
-	return status == backupAPIStatusCompleted || status == backupAPIStatusFailed
+	return status == backupAPIStatusMerged || status == backupAPIStatusFailed
 }
 
 func unixToTimePtr(ts int64) *metav1.Time {
