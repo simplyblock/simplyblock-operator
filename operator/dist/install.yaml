@@ -3751,10 +3751,6 @@ spec:
                   the Kubernetes API once created, so there is no supported way to change these after the
                   fact. Create a new StoragePool to provision volumes with different settings.
                 properties:
-                  compression:
-                    default: "False"
-                    description: Compression enables compression for logical volumes.
-                    type: string
                   encryption:
                     default: false
                     description: Encryption enables encryption for logical volumes.
@@ -3770,11 +3766,6 @@ spec:
                     enum:
                     - ext4
                     - xfs
-                    type: string
-                  lvolPriorityClass:
-                    default: "0"
-                    description: LvolPriorityClass sets the logical volume priority
-                      class.
                     type: string
                   maxNamespacePerSubsys:
                     default: "1"
@@ -3800,10 +3791,6 @@ spec:
                     description: QosWMbytes sets the write throughput limit in MB/s
                       (0 = unlimited).
                     type: string
-                  replicate:
-                    default: false
-                    description: Replicate enables replication for logical volumes.
-                    type: boolean
                   tune2fsReservedBlocks:
                     description: |-
                       Tune2fsReservedBlocks sets the ext4 reserved-blocks percentage. Left unset, the node

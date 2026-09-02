@@ -421,10 +421,7 @@ func mergeStorageClassParameters(dst map[string]string, p *simplyblockv1alpha1.S
 	dst["qos_rw_mbytes"] = p.QosRwMbytes
 	dst["qos_r_mbytes"] = p.QosRMbytes
 	dst["qos_w_mbytes"] = p.QosWMbytes
-	dst["compression"] = p.Compression
 	dst["encryption"] = boolStr(p.Encryption)
-	dst["replicate"] = boolStr(p.Replicate)
-	dst["lvol_priority_class"] = p.LvolPriorityClass
 	dst["fabric"] = p.Fabric
 	dst["max_namespace_per_subsys"] = p.MaxNamespacePerSubsys
 	dst["tune2fs_reserved_blocks"] = p.Tune2fsReservedBlocks

@@ -39,18 +39,12 @@ type Properties struct {
 	// MaxSize caps volume growth (`max_size`), and is empty when unset. Kept as the raw
 	// string because the control plane accepts size suffixes (e.g., "10G").
 	MaxSize string
-	// LvolPriorityClass is the logical-volume priority class (lvol_priority_class).
-	LvolPriorityClass int
 	// MaxNamespacePerSubsys is how many NVMe namespaces may share one subsystem
 	// (max_namespace_per_subsys). A value > 1 makes volumes of this class
 	// "namespaced": they share a subsystem with siblings. See IsMultiNamespace.
 	MaxNamespacePerSubsys int
-	// Compression enables volume compression (compression).
-	Compression bool
 	// Encryption enables volume encryption (encryption).
 	Encryption bool
-	// Replicate enables cross-cluster replication (replicate).
-	Replicate bool
 	// QoS holds the quality-of-service caps.
 	QoS QoSLimits
 }
@@ -77,23 +71,11 @@ func PropertiesFromStorageClass(sc *storagev1.StorageClass) (Properties, error) 
 	}
 	p := sc.Parameters
 
-	priorClass, err := IntParam(p, ParamLvolPriorityClass, 0)
-	if err != nil {
-		return Properties{}, err
-	}
 	maxNS, err := IntParam(p, ParamMaxNamespacePerSubsys, 1)
 	if err != nil {
 		return Properties{}, err
 	}
-	compression, err := BoolParam(p, ParamCompression, false)
-	if err != nil {
-		return Properties{}, err
-	}
 	encryption, err := BoolParam(p, ParamEncryption, false)
-	if err != nil {
-		return Properties{}, err
-	}
-	replicate, err := BoolParam(p, ParamReplicate, false)
 	if err != nil {
 		return Properties{}, err
 	}
@@ -107,11 +89,8 @@ func PropertiesFromStorageClass(sc *storagev1.StorageClass) (Properties, error) 
 		Fabric:                StringParam(p, ParamFabric, ""),
 		ClusterID:             StringParam(p, ParamClusterID, ""),
 		MaxSize:               StringParam(p, ParamMaxSize, ""),
-		LvolPriorityClass:     priorClass,
 		MaxNamespacePerSubsys: maxNS,
-		Compression:           compression,
 		Encryption:            encryption,
-		Replicate:             replicate,
 		QoS:                   qos,
 	}, nil
 }
