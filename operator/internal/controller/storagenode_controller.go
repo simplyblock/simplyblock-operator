@@ -119,6 +119,9 @@ type NodeCache interface {
 	// Lookup returns the cached node with the given backend id, or ok=false
 	// when the control plane no longer reports it.
 	Lookup(nodeID string) (cpinformer.Scope, subscriptions.NodeDTO, bool)
+	// List returns every node of a cluster, which is what a StorageNode with
+	// no backend id yet has to search to find its own.
+	List(scope cpinformer.Scope) []subscriptions.NodeDTO
 	// Synced reports whether the cluster's initial snapshot has been applied.
 	Synced(scope cpinformer.Scope) bool
 	// Triggers is the reconcile-trigger stream; each event names a StorageNode.
@@ -276,15 +279,9 @@ func (r *StorageNodeReconciler) pollUUIDFromBackend(
 		return nil
 	}
 
-	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
-	body, httpStatus, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
-	if err != nil || httpStatus >= 300 {
+	allNodes, ok := r.clusterNodes(ctx, clusterUUID, apiClient)
+	if !ok {
 		return nil // transient — requeue silently
-	}
-
-	var allNodes []SNODEAPIResponse
-	if err := json.Unmarshal(body, &allNodes); err != nil {
-		return nil
 	}
 
 	// Collect all backend nodes for this worker's IP.
@@ -762,6 +759,41 @@ func (r *StorageNodeReconciler) nodeCapacity(
 	}
 	sample, ok := samples[nodeUUID]
 	return sample, ok
+}
+
+// clusterNodes returns every backend node of the cluster, from the stream's
+// cache once it has delivered the cluster's snapshot and from the control plane
+// until then.
+//
+// The cache is preferred because the stream has already delivered exactly this
+// list, so requesting it again asks for what is in memory. It is only trusted
+// once the scope is synced: an empty unsynced cache and a cluster with no nodes
+// look identical, and adoption would read the first as the second and keep
+// waiting for a node that is already there.
+func (r *StorageNodeReconciler) clusterNodes(
+	ctx context.Context,
+	clusterUUID string,
+	apiClient *webapi.Client,
+) ([]SNODEAPIResponse, bool) {
+	if r.Nodes != nil && r.Nodes.Synced(cpinformer.Scope{clusterUUID}) {
+		cached := r.Nodes.List(cpinformer.Scope{clusterUUID})
+		out := make([]SNODEAPIResponse, 0, len(cached))
+		for _, dto := range cached {
+			out = append(out, nodeResponseFrom(dto))
+		}
+		return out, true
+	}
+
+	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/", clusterUUID)
+	body, httpStatus, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
+	if err != nil || httpStatus >= 300 {
+		return nil, false
+	}
+	var allNodes []SNODEAPIResponse
+	if err := json.Unmarshal(body, &allNodes); err != nil {
+		return nil, false
+	}
+	return allNodes, true
 }
 
 // cachedNode returns the node the storage-node stream last reported, when there
