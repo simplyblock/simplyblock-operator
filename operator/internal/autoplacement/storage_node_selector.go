@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	atlasprom "github.com/simplyblock/atlas/prometheus"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
-	promlatency "github.com/simplyblock/simplyblock-operator/internal/metrics/prometheus"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -298,13 +298,13 @@ func (sns *StorageNodeSelector) collectCurrentLatency(
 	percentile string,
 	inputs ...StorageNodeSelectorInput,
 ) (map[string]map[string]int64, error) {
-	provider, err := promlatency.New(prometheusURL)
+	provider, err := atlasprom.New(prometheusURL)
 	if err != nil {
 		return nil, fmt.Errorf("create prometheus latency provider: %w", err)
 	}
 
 	clusterIds := distinctClusterUUIDs(inputs)
-	return provider.GetClustersCurrentLatency(ctx, clusterIds, percentile)
+	return provider.ClusterLatencies(ctx, clusterIds, percentile)
 }
 
 // readBaselineFromCRs returns a nodeUUID → baseline-latency map (at the configured
@@ -323,7 +323,7 @@ func (sns *StorageNodeSelector) readBaselineFromCRs(
 	for _, snode := range snodeList.Items {
 		for _, lm := range snode.Status.LatencyMetrics {
 			baseline := lm.BaselineP50NS
-			if percentile == promlatency.PercentileP99 {
+			if percentile == atlasprom.PercentileP99 {
 				baseline = lm.BaselineP99NS
 			}
 			if baseline > 0 {

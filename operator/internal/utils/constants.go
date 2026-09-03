@@ -103,6 +103,12 @@ const (
 	MetricsAPIServiceObject  = "v1alpha1.metrics.simplyblock.io"
 	MetricsAPIServerCertName = "metrics-apiserver-cert"
 
+	// DefaultPrometheusURL is where the chart deploys Prometheus. Two things
+	// read simplyblock's exported metrics through it: the rebalancer's placement
+	// signals, and the aggregated metrics API's capacity samples. The address is
+	// named once here rather than spelled out at each of them.
+	DefaultPrometheusURL = "http://simplyblock-prometheus:9090"
+
 	AnnotationTLSSecretRevision = "storage.simplyblock.io/tls-secret-revision"
 
 	LabelFDBClusterName = "foundationdb.org/fdb-cluster-name"

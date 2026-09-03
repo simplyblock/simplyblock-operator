@@ -9,7 +9,6 @@ require (
 	github.com/onsi/gomega v1.39.0
 	github.com/open-policy-agent/cert-controller v0.15.0
 	github.com/prometheus/client_golang v1.23.2
-	github.com/prometheus/common v0.67.5
 	github.com/simplyblock/atlas v0.0.0-00010101000000-000000000000
 	gomodules.xyz/jsonpatch/v2 v2.4.0
 	k8s.io/api v0.36.2
@@ -65,6 +64,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
+	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
