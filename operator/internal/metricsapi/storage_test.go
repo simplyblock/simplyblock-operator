@@ -11,7 +11,9 @@ package metricsapi
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -24,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/prometheus"
 
 	metricsv1alpha1 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
@@ -53,6 +56,51 @@ func (f fakeVolumes) Get(id string) (subscriptions.VolumeDTO, bool) {
 		}
 	}
 	return subscriptions.VolumeDTO{}, false
+}
+
+// fakeCapacity stands in for the metrics endpoint. It counts its calls, because
+// one list must query a cluster once rather than once per volume.
+type fakeCapacity struct {
+	byCluster map[string]map[string]prometheus.Capacity
+	err       error
+	calls     int
+}
+
+func (f *fakeCapacity) VolumeCapacity(
+	_ context.Context, clusterUUID string,
+) (map[string]prometheus.Capacity, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.byCluster[clusterUUID], nil
+}
+
+// capacityFrom turns the fixtures' own capacity blocks into samples, so that a
+// case about listing, scoping, or table rendering says what a volume occupies
+// without also restating which endpoint the number is read from. A case about
+// that reads its own source in.
+func capacityFrom(vols []subscriptions.VolumeDTO) *fakeCapacity {
+	f := &fakeCapacity{byCluster: map[string]map[string]prometheus.Capacity{}}
+	for _, v := range vols {
+		if f.byCluster[v.ClusterID] == nil {
+			f.byCluster[v.ClusterID] = map[string]prometheus.Capacity{}
+		}
+		c := prometheus.Capacity{
+			Total:              v.Capacity.SizeTotal,
+			Used:               v.Capacity.SizeUsed,
+			Free:               v.Capacity.SizeFree,
+			Provisioned:        v.Capacity.SizeProv,
+			UtilizationPercent: v.Capacity.SizeUtil,
+		}
+		// The same rule the real source follows: a date of zero is no reading,
+		// not a reading taken at the epoch.
+		if v.Capacity.Date > 0 {
+			c.SampledAt = time.Unix(v.Capacity.Date, 0).UTC()
+		}
+		f.byCluster[v.ClusterID][v.ID] = c
+	}
+	return f
 }
 
 func volume(id string, used, prov int64) subscriptions.VolumeDTO {
@@ -114,7 +162,7 @@ func newStorage(t *testing.T, vols []subscriptions.VolumeDTO, objs ...client.Obj
 			return kube.VolumeHandleKeys(o.(*corev1.PersistentVolume))
 		}).
 		Build()
-	return NewStorage(fakeVolumes{items: vols}, c)
+	return NewStorage(fakeVolumes{items: vols}, c, capacityFrom(vols))
 }
 
 func listFrom(t *testing.T, s *Storage, namespace string, opts *metainternalversion.ListOptions) *metricsv1alpha1.LogicalVolumeMetricsList {
@@ -357,5 +405,199 @@ func TestConvertToTableRendersTheCapacityColumns(t *testing.T) {
 	}
 	if cells[3] != "36%" {
 		t.Errorf("utilization cell = %v, want 36%%", cells[3])
+	}
+}
+
+// testVolumeSize is the nominal size every fixture volume is created with: the
+// 10 GiB a claim asked for, which is what provisioned has to report.
+const testVolumeSize = 10737418240
+
+// asTheControlPlaneReportsIt builds the DTO shape a real control plane sends for
+// a logical volume: a nominal size, and a capacity block of all zeros.
+//
+// The volume fixture above fills in both, which is more than the control plane
+// does and is why no case in this file could fail for a field read from the
+// wrong one of the two.
+func asTheControlPlaneReportsIt(id string) subscriptions.VolumeDTO {
+	return subscriptions.VolumeDTO{
+		ID:        id,
+		ClusterID: testCluster,
+		PoolID:    testPool,
+		PoolName:  "pool-a",
+		Name:      "lvol-" + id[:8],
+		Status:    "online",
+		Size:      testVolumeSize,
+		// Verified against the live API: every field of this block is zero for a
+		// logical volume, including the sample date.
+		Capacity: subscriptions.VolumeCapacityDTO{},
+	}
+}
+
+// Regression: 2026-09-03-provisioned-reads-the-capacity-stat — provisioned was
+// projected from the DTO's capacity.size_prov, which the control plane reports
+// as zero for every logical volume, so a 10 GiB claim served a provisioned
+// size of zero.
+// The nominal size is carried in the DTO's own size field, which is required by
+// the schema and correct on the wire.
+func TestProvisionedIsTheVolumesNominalSizeNotACapacityStat(t *testing.T) {
+	s := newStorage(t,
+		[]subscriptions.VolumeDTO{asTheControlPlaneReportsIt(testVolume)},
+		pv("pv-a", testVolume, testNamespace, testClaim),
+		pvc(testNamespace, testClaim, "pv-a", nil),
+	)
+
+	list := listFrom(t, s, testNamespace, nil)
+	if len(list.Items) != 1 {
+		t.Fatalf("List returned %d items, want 1", len(list.Items))
+	}
+	if got := list.Items[0].Capacity.Provisioned.Value(); got != testVolumeSize {
+		t.Errorf("provisioned = %d, want the volume's nominal size %d", got, testVolumeSize)
+	}
+}
+
+// newStorageWith builds the storage over an explicit capacity source, for the
+// cases that are about the source itself rather than about what it reports.
+func newStorageWith(
+	t *testing.T,
+	capacity CapacitySource,
+	vols []subscriptions.VolumeDTO,
+	objs ...client.Object,
+) *Storage {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("build scheme: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objs...).
+		WithIndex(&corev1.PersistentVolume{}, kube.IndexPVByVolumeHandle, func(o client.Object) []string {
+			return kube.VolumeHandleKeys(o.(*corev1.PersistentVolume))
+		}).
+		Build()
+	return NewStorage(fakeVolumes{items: vols}, c, capacity)
+}
+
+// The measured fields come from the sample and not from the volume, which is
+// the whole reason the source exists: the control plane's own capacity block
+// reads zero for every logical volume.
+func TestTheMeasuredFieldsComeFromTheCapacitySource(t *testing.T) {
+	sampledAt := time.Unix(1788384958, 0).UTC()
+	capacity := &fakeCapacity{byCluster: map[string]map[string]prometheus.Capacity{
+		testCluster: {testVolume: {
+			Total:              testVolumeSize,
+			Used:               1080033280,
+			Free:               9657384960,
+			UtilizationPercent: 10,
+			SampledAt:          sampledAt,
+		}},
+	}}
+
+	s := newStorageWith(t, capacity,
+		[]subscriptions.VolumeDTO{asTheControlPlaneReportsIt(testVolume)},
+		pv("pv-a", testVolume, testNamespace, testClaim),
+		pvc(testNamespace, testClaim, "pv-a", nil),
+	)
+
+	got := listFrom(t, s, testNamespace, nil).Items[0]
+	if got.Capacity.Used.Value() != 1080033280 || got.Capacity.Free.Value() != 9657384960 {
+		t.Errorf("used = %d, free = %d", got.Capacity.Used.Value(), got.Capacity.Free.Value())
+	}
+	if got.Capacity.Total.Value() != testVolumeSize || got.Capacity.UtilizationPercent != 10 {
+		t.Errorf("total = %d, util = %d", got.Capacity.Total.Value(), got.Capacity.UtilizationPercent)
+	}
+	// The reading is as of when the control plane measured it, not when it was
+	// served and not the epoch.
+	if !got.Timestamp.Time.Equal(sampledAt) {
+		t.Errorf("timestamp = %s, want the sample's %s", got.Timestamp, sampledAt)
+	}
+}
+
+// A volume nobody has measured still has a size, and reporting it is more
+// useful than omitting the volume. The measured fields stay zero and the
+// timestamp stays unset, so a client can tell a fresh volume from a full one.
+func TestAVolumeWithNoSampleStillReportsItsProvisionedSize(t *testing.T) {
+	capacity := &fakeCapacity{byCluster: map[string]map[string]prometheus.Capacity{}}
+
+	s := newStorageWith(t, capacity,
+		[]subscriptions.VolumeDTO{asTheControlPlaneReportsIt(testVolume)},
+		pv("pv-a", testVolume, testNamespace, testClaim),
+		pvc(testNamespace, testClaim, "pv-a", nil),
+	)
+
+	got := listFrom(t, s, testNamespace, nil).Items[0]
+	if got.Capacity.Provisioned.Value() != testVolumeSize {
+		t.Errorf("provisioned = %d, want %d", got.Capacity.Provisioned.Value(), testVolumeSize)
+	}
+	if got.Capacity.Used.Value() != 0 {
+		t.Errorf("used = %d, want 0 for a volume with no sample", got.Capacity.Used.Value())
+	}
+	if !got.Timestamp.IsZero() {
+		t.Errorf("timestamp = %s, want unset rather than the epoch", got.Timestamp)
+	}
+}
+
+// Prometheus is a dependency this API can answer partially without. A list that
+// failed outright would tell a client nothing about which volumes it has, when
+// the identities and the sizes are both still correct.
+func TestAFailingCapacitySourceStillServesTheList(t *testing.T) {
+	capacity := &fakeCapacity{err: errors.New("connection refused")}
+
+	s := newStorageWith(t, capacity,
+		[]subscriptions.VolumeDTO{asTheControlPlaneReportsIt(testVolume)},
+		pv("pv-a", testVolume, testNamespace, testClaim),
+		pvc(testNamespace, testClaim, "pv-a", nil),
+	)
+
+	list := listFrom(t, s, testNamespace, nil)
+	if len(list.Items) != 1 {
+		t.Fatalf("List returned %d items, want the volume anyway", len(list.Items))
+	}
+	if got := list.Items[0].Capacity.Provisioned.Value(); got != testVolumeSize {
+		t.Errorf("provisioned = %d, want %d", got, testVolumeSize)
+	}
+	if got := list.Items[0].Capacity.Used.Value(); got != 0 {
+		t.Errorf("used = %d, want 0 when no sample could be read", got)
+	}
+}
+
+// A deployment with no Prometheus passes no source at all, which must not be a
+// nil dereference on the read path.
+func TestNoCapacitySourceServesProvisionedOnly(t *testing.T) {
+	s := newStorageWith(t, nil,
+		[]subscriptions.VolumeDTO{asTheControlPlaneReportsIt(testVolume)},
+		pv("pv-a", testVolume, testNamespace, testClaim),
+		pvc(testNamespace, testClaim, "pv-a", nil),
+	)
+
+	got := listFrom(t, s, testNamespace, nil).Items[0]
+	if got.Capacity.Provisioned.Value() != testVolumeSize {
+		t.Errorf("provisioned = %d, want %d", got.Capacity.Provisioned.Value(), testVolumeSize)
+	}
+}
+
+// One list is one query per cluster, not one per volume. Each query is an HTTP
+// round trip on a request path, and every volume of a cluster is answered by
+// the same one.
+func TestAListQueriesEachClusterOnce(t *testing.T) {
+	capacity := &fakeCapacity{byCluster: map[string]map[string]prometheus.Capacity{}}
+
+	s := newStorageWith(t, capacity,
+		[]subscriptions.VolumeDTO{
+			asTheControlPlaneReportsIt(testVolume),
+			asTheControlPlaneReportsIt(testVolumeB),
+		},
+		pv("pv-a", testVolume, testNamespace, testClaim),
+		pvc(testNamespace, testClaim, "pv-a", nil),
+		pv("pv-b", testVolumeB, testNamespace, "second-claim"),
+		pvc(testNamespace, "second-claim", "pv-b", nil),
+	)
+
+	if n := len(listFrom(t, s, testNamespace, nil).Items); n != 2 {
+		t.Fatalf("List returned %d items, want 2", n)
+	}
+	if capacity.calls != 1 {
+		t.Errorf("queried the capacity source %d times for two volumes of one cluster, want 1",
+			capacity.calls)
 	}
 }

@@ -250,11 +250,12 @@ Prometheus offers no push or watch for samples, so a caller reads at the moment
 it needs a number. A cache adds staleness on top of the scrape interval and has
 no event to invalidate it. `DeviceCapacity` is the same call keyed by device UUID.
 
-_Today:_ nothing reads capacity through this yet. `operator/internal/metricsapi`
-still projects `dto.Capacity` from the control-plane DTO, which is why
-`LogicalVolumeMetrics` reports zeros, and
-`operator/internal/controller/storagedevice_controller.go` publishes the device
-capacity its subscription cached.
+_Today:_ `operator/internal/metricsapi/storage.go` reads `VolumeCapacity` once
+per cluster per request to serve the measured half of a `LogicalVolumeMetrics`
+reading, and takes the provisioned size from the volume itself.
+`DeviceCapacity` has no caller:
+`operator/internal/controller/storagedevice_controller.go` still publishes the
+device capacity its subscription cached, which the device stream never updates.
 
 #### Rank nodes by write latency
 

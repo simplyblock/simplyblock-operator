@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/prometheus"
 )
 
 // Install registers everything the aggregated metrics API needs on mgr. It
@@ -31,7 +32,13 @@ import (
 // caller has gone. It is logged and the API stays absent, which degrades the
 // operator to what it did before this existed rather than taking it down: no
 // reconciler depends on this server.
-func Install(mgr ctrl.Manager, namespace string, port int, volumes VolumeSource) error {
+func Install(
+	mgr ctrl.Manager,
+	namespace string,
+	port int,
+	volumes VolumeSource,
+	prometheusURL string,
+) error {
 	// The join reads PersistentVolumes by CSI volume handle. The key function is
 	// atlas-lib's, shared with the CSI driver's client-go indexer, so both
 	// resolve a handle the same way and only simplyblock-provisioned volumes are
@@ -54,9 +61,28 @@ func Install(mgr ctrl.Manager, namespace string, port int, volumes VolumeSource)
 	}
 
 	log := mgr.GetLogger().WithName("metricsapi")
+
+	// The sampled half of a reading. A logical volume's capacity block is all
+	// zeros in the control plane's own DTO, so these numbers exist only in the
+	// metrics the same service exports.
+	//
+	// An unconfigured or unbuildable endpoint is not fatal: the readings then
+	// carry each volume's provisioned size and nothing measured. Serving the
+	// identities and sizes beats serving nothing over a dependency this API can
+	// answer partially without.
+	var capacity CapacitySource
+	if prometheusURL == "" {
+		log.Info("no Prometheus endpoint configured; capacity samples will be absent")
+	} else if provider, err := prometheus.New(prometheusURL); err != nil {
+		log.Error(err, "capacity samples will be absent", "prometheusURL", prometheusURL)
+	} else {
+		capacity = provider
+	}
 	go func() {
 		<-ready
-		server, err := NewServer(Options{BindPort: port, CertDir: CertDir}, volumes, mgr.GetCache(), log)
+		server, err := NewServer(
+			Options{BindPort: port, CertDir: CertDir}, volumes, mgr.GetCache(), capacity, log,
+		)
 		if err != nil {
 			log.Error(err, "the aggregated metrics API will not be served")
 			return

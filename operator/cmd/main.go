@@ -132,6 +132,10 @@ func main() {
 			"Disable it on a cluster where the APIService is not installed.")
 	flag.IntVar(&metricsAPIPort, "metrics-api-bind-port", metricsapi.DefaultBindPort,
 		"The HTTPS port the aggregated metrics API listens on.")
+	var prometheusURL string
+	flag.StringVar(&prometheusURL, "prometheus-url", utils.DefaultPrometheusURL,
+		"Prometheus endpoint the aggregated metrics API reads capacity samples from. "+
+			"Empty serves each volume's provisioned size with no measured values.")
 	var latencyPercentile string
 	flag.StringVar(&latencyPercentile, "latency-percentile", "p50",
 		"fio write-latency percentile driving the volume-rebalancing deviation signal: "+
@@ -561,7 +565,10 @@ func main() {
 	// The aggregated metrics API: LogicalVolumeMetrics served from the volume
 	// cache above, joined to the claims that name them.
 	if enableMetricsAPI {
-		if err := metricsapi.Install(mgr, operatorNamespace, metricsAPIPort, volumeSubscription); err != nil {
+		err := metricsapi.Install(
+			mgr, operatorNamespace, metricsAPIPort, volumeSubscription, prometheusURL,
+		)
+		if err != nil {
 			setupLog.Error(err, "unable to install the aggregated metrics API")
 			os.Exit(1)
 		}

@@ -436,6 +436,10 @@ metricsAPI:
   # The container port the kube-apiserver is proxied to. Change it only on a
   # conflict; the Service and the APIService follow this value.
   port: 6443
+  # Where the capacity samples are read from. A logical volume's used size is
+  # not in the control plane's own API, only in the metrics it exports, so an
+  # empty value serves each volume's provisioned size and nothing measured.
+  prometheusURL: http://simplyblock-prometheus:9090
 
 mongodb-kubernetes:
   name: "simplyblock-mongodb"
