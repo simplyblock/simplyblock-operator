@@ -33,6 +33,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/simplyblock/atlas/blockfs"
 	"github.com/simplyblock/atlas/errs/deferrers"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -54,6 +55,26 @@ type nodeServer struct {
 	volumeLocks *util.VolumeLocks
 	kubeClient  kubernetes.Interface
 	guardian    *util.Guardian
+	// exec runs the node's filesystem tools (blkid, mkfs). It is a field rather
+	// than exec.New() at the call site so a test can drive the format decision
+	// without a kernel, a blkid, or an mkfs on the host.
+	exec exec.Interface
+	// fsProber decides whether a device already holds data. Left nil outside
+	// tests: deviceProber falls back to a real probe, so a node server built
+	// without one still refuses to guess rather than silently formatting.
+	fsProber blockfs.Prober
+}
+
+// defaultDeviceProber reads real block devices. One instance serves every
+// stage: it holds no per-device state.
+var defaultDeviceProber = blockfs.NewDeviceProber()
+
+// deviceProber returns the probe behind the format decision.
+func (ns *nodeServer) deviceProber() blockfs.Prober {
+	if ns.fsProber != nil {
+		return ns.fsProber
+	}
+	return defaultDeviceProber
 }
 
 //nolint:unparam // error return kept for constructor symmetry / future use
@@ -63,6 +84,7 @@ func newNodeServer(d *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*no
 		mounter:           mount.New(""),
 		volumeLocks:       util.NewVolumeLocks(),
 		kubeClient:        kubeClient,
+		exec:              exec.New(),
 	}
 
 	// Build one Kubernetes cache manager and share it across the node plugin:
@@ -380,7 +402,7 @@ func (ns *nodeServer) NodeStageVolume(
 			initiator.Disconnect(ctx) //nolint:errcheck // ignore error
 		}
 	}()
-	if err = ns.stageVolume(devicePath, stagingTargetPath, req, vc); err != nil { // idempotent
+	if err = ns.stageVolume(ctx, devicePath, stagingTargetPath, req, vc); err != nil { // idempotent
 		klog.Errorf("failed to stage volume, volumeID: %s devicePath:%s err: %v", volumeID, devicePath, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -394,6 +416,114 @@ func (ns *nodeServer) NodeStageVolume(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &csi.NodeStageVolumeResponse{}, nil
+}
+
+// formatAndMount mounts devicePath at stagingPath, formatting it first only
+// when the device is provably empty.
+//
+// The decision is made here rather than left to mount-utils, whose
+// SafeFormatAndMount probes with blkid and cannot tell a device that carries no
+// filesystem from one whose reads failed: blkid exits 2 for both, mount-utils
+// resolves that to "unformatted," and mkfs runs. A volume behind a degraded
+// NVMe-oF path — reads timing out under nvme_core.io_timeout, or a controller
+// past its ctrl_loss_tmo — is therefore reformatted rather than staged, which
+// is how a production cluster lost a volume's data. Upstream tracks the same
+// defect as kubernetes/kubernetes#140376.
+//
+// So only a device that answered a read and proved to be all zeros may be
+// formatted. Every other state is either somebody's data or an unanswered
+// question, and staging fails rather than guessing: an outage is recoverable
+// and a wiped volume is not. The repair paths never reach here at all, because
+// they mount a device they know is formatted.
+func (ns *nodeServer) formatAndMount(
+	ctx context.Context,
+	devicePath, stagingPath, fsType string,
+	mntFlags, formatOptions []string,
+) error {
+	probe := ns.deviceProber().Probe(ctx, devicePath)
+
+	switch probe.State {
+	case blockfs.StateFormatted:
+		if family := fsFamily(fsType); family != "" && family != probe.Signature {
+			klog.Warningf(
+				"formatAndMount: %s holds a %s filesystem but the volume asks for %s; mounting as %s rather than reformatting",
+				devicePath, probe.Signature, fsType, fsType,
+			)
+		} else {
+			klog.Infof("formatAndMount: %s already holds a %s filesystem; mounting it unchanged", devicePath, probe.Signature)
+		}
+		// Plain Mount, never FormatAndMount: the device already carries a
+		// filesystem, and ext4 and XFS each replay their own journal as they
+		// mount. This is what the restage path does with a device it did not
+		// create, and a cold stage owes the volume the same treatment.
+		if err := ns.mounter.Mount(devicePath, stagingPath, fsType, mntFlags); err != nil {
+			return fmt.Errorf("mount %s at %s: %w", devicePath, stagingPath, err)
+		}
+		return nil
+
+	case blockfs.StateForeign:
+		return fmt.Errorf(
+			"refusing to stage %s: it carries a %s signature, and formatting it would destroy data"+
+				" this volume did not put there",
+			devicePath, probe.Signature,
+		)
+
+	case blockfs.StateUnreadable:
+		return fmt.Errorf(
+			"refusing to stage %s: it could not be read (%w), and a device that will not answer"+
+				" a read must not be assumed empty",
+			devicePath, probe.Err,
+		)
+
+	case blockfs.StateUnknown:
+		// Formatting here keeps a volume whose first blocks hold unrecognizable
+		// bytes stageable, which is what the driver did before it probed at all.
+		// The warning is what makes the case visible if it ever turns out to be
+		// a signature worth recognizing.
+		klog.Warningf(
+			"formatAndMount: %s carries no filesystem signature but is not blank either; formatting it as %s",
+			devicePath, fsType,
+		)
+
+	case blockfs.StateBlank:
+
+	default:
+		return fmt.Errorf("refusing to stage %s: unrecognized probe state %q", devicePath, probe.State)
+	}
+
+	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: ns.exec}
+	return mounter.FormatAndMountSensitiveWithFormatOptions(
+		devicePath,
+		stagingPath,
+		fsType,
+		mntFlags,
+		nil,
+		formatOptions,
+	)
+}
+
+// The filesystem types this driver knows by name. The ext family shares one
+// on-disk signature, so a probe reports the family rather than the revision.
+const (
+	fsTypeExt4    = "ext4"
+	fsTypeXFS     = "xfs"
+	fsFamilyExt   = "ext"
+	fsFamilyBtrfs = "btrfs"
+)
+
+// fsFamily maps a requested filesystem type onto the family a probe reports, so
+// that a volume asking for ext4 is not warned about the "ext" a probe names. It
+// returns "" for a type no probe can recognize, which suppresses the comparison
+// rather than warning about every such volume.
+func fsFamily(fsType string) string {
+	switch fsType {
+	case "ext2", "ext3", fsTypeExt4:
+		return fsFamilyExt
+	case fsTypeXFS, fsFamilyBtrfs:
+		return fsType
+	default:
+		return ""
+	}
 }
 
 func (ns *nodeServer) NodeUnstageVolume(
@@ -448,7 +578,7 @@ func (ns *nodeServer) NodePublishVolume(
 	// If the backing NVMe-oF device was lost (total path loss), repair it before
 	// bind-mounting into the pod — otherwise the pod inherits the dead mount/
 	// missing device. kubelet skips NodeStage when the volume is still referenced
-	// on this node (e.g. a same-node pod replacement), so NodePublish is the
+	// on this node (e.g., a same-node pod replacement), so NodePublish is the
 	// reliable place to heal.
 	if err := ns.healVolumeBeforePublish(ctx, req); err != nil {
 		klog.Errorf("failed to heal volume %s before publish: %v", volumeID, err)
@@ -627,7 +757,7 @@ func xfsStripeOptions(volumeContext map[string]string) []string {
 }
 
 // xfsFormatConfigPath is the mkfs.xfs config file that pins which on-disk features
-// new xfs volumes are created with. xfsprogs ships it; the container image only has
+// new XFS volumes are created with. xfsprogs ships it; the container image only has
 // to contain a matching xfsprogs. Kept in sync with the assertion in
 // deploy/image/Dockerfile_base.
 const xfsFormatConfigPath = "/usr/share/xfsprogs/mkfs/lts_5.15.conf"
@@ -645,7 +775,7 @@ const xfsFormatConfigPath = "/usr/share/xfsprogs/mkfs/lts_5.15.conf"
 //	XFS (nvme0n1): Filesystem cannot be safely mounted by this kernel.
 //	XFS (nvme0n1): SB validate failed with error -22.
 //
-// Unlike the ext4 equivalent there is no repair path: xfs features can only be added,
+// Unlike the ext4 equivalent there is no repair path: XFS features can only be added,
 // never removed, and such a filesystem cannot be mounted even read-only. Prevention
 // is the only option.
 //
@@ -694,6 +824,7 @@ func checkXFSFormatConfig() error {
 //
 //nolint:cyclop // many cases in switch increases complexity
 func (ns *nodeServer) stageVolume(
+	ctx context.Context,
 	devicePath, stagingPath string,
 	req *csi.NodeStageVolumeRequest,
 	volumeContext map[string]string,
@@ -717,27 +848,18 @@ func (ns *nodeServer) stageVolume(
 	mntFlags := stagingMountFlags(req.GetVolumeCapability())
 	formatOptions := []string{}
 
-	if fsType == "xfs" {
+	if fsType == fsTypeXFS {
 		formatOptions = append(formatOptions, xfsFeatureOptions()...)
 		formatOptions = append(formatOptions, xfsStripeOptions(volumeContext)...)
 	}
 
 	klog.Infof("mount %s to %s, fstype: %s, flags: %v", devicePath, stagingPath, fsType, mntFlags)
 	klog.Infof("formatOptions %v", formatOptions)
-	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
-	err = mounter.FormatAndMountSensitiveWithFormatOptions(
-		devicePath,
-		stagingPath,
-		fsType,
-		mntFlags,
-		nil,
-		formatOptions,
-	)
-	if err != nil {
+	if err = ns.formatAndMount(ctx, devicePath, stagingPath, fsType, mntFlags, formatOptions); err != nil {
 		return err
 	}
 
-	if fsType == "ext4" {
+	if fsType == fsTypeExt4 {
 		reserved := volumeContext["tune2fs_reserved_blocks"]
 		if reserved != "" {
 			cmd := osexec.Command("tune2fs", "-m", reserved, devicePath)
@@ -766,7 +888,7 @@ func fsTypeOrDefault(volCap *csi.VolumeCapability) string {
 	if fsType := volCap.GetMount().GetFsType(); fsType != "" {
 		return fsType
 	}
-	return "ext4"
+	return fsTypeExt4
 }
 
 // stagingMountFlags builds the mount flags used when mounting a volume at its
@@ -774,8 +896,8 @@ func fsTypeOrDefault(volCap *csi.VolumeCapability) string {
 func stagingMountFlags(volCap *csi.VolumeCapability) []string {
 	flags := append([]string{}, volCap.GetMount().GetMountFlags()...)
 
-	if volCap.GetMount().GetFsType() == "xfs" {
-		// xfs refuses to mount two filesystems with the same uuid; nouuid lets a
+	if volCap.GetMount().GetFsType() == fsTypeXFS {
+		// XFS refuses to mount two filesystems with the same UUID; nouuid lets a
 		// volume and its clone/restored snapshot mount on the same node.
 		flags = append(flags, "nouuid")
 	}
@@ -809,7 +931,7 @@ func (ns *nodeServer) stagingMountDead(stagingPath string) bool {
 		return mount.IsCorruptedMnt(err)
 	}
 	// Some filesystems (notably ext4) do NOT shut down when their backing block
-	// device is removed on total NVMe-oF path loss — unlike xfs, which goes EIO
+	// device is removed on total NVMe-oF path loss — unlike XFS, which goes EIO
 	// and is caught above. IsMountPoint and stat then both succeed from cache, so
 	// the dead mount looks healthy and never gets restaged. Detect it by checking
 	// that the block device backing the mount still exists: the mountpoint's

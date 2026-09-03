@@ -37,6 +37,10 @@ atlas/
 │   ├── multipath.go        ConnectPaths (ordered per-path connect) + PathResult
 │   └── wait.go             ConnectDevice / WaitForDevice: attach -> nvme.Device
 ├── nqn/                    Build & parse simplyblock lvol NQNs
+├── blockfs/                Does a block device already hold data, and can that be answered
+│   ├── doc.go              Why blkid's answer is unsafe, and how a stalled device is read
+│   ├── probe.go            State, Result, Prober iface; NewDeviceProber (local impl)
+│   └── signature.go        The on-disk signature table + match
 ├── lvm/                    Linux LVM commands + content-based identity
 │   ├── doc.go              Why identity is read from content, and how scoping is decided
 │   ├── lvm.go              Manager, Run (the escape hatch)
@@ -429,6 +433,43 @@ matched, err := devices.ListWithSelector(ctx, sel)
 _Today:_ the CSI node service still connects, repairs, and ANA-reconciles paths
 with nvme-cli in `csi-driver/pkg/util/initiator.go`. `FabricsConnector` is the
 kernel-direct replacement (it needs no nvme-cli binary in the node image).
+
+#### Decide whether a device may be formatted
+
+Staging a filesystem volume ends in a question with one catastrophic wrong
+answer: does this device already hold data? The conventional way of asking is
+unsafe. `blkid` exits 2 both for a device carrying no signature and for one it
+could not read, and `k8s.io/mount-utils` maps that single exit code to
+"unformatted" and runs `mkfs`, so a volume behind a degraded path is wiped
+rather than staged. `blockfs` reads the device and keeps the two apart:
+
+```go
+switch probe := blockfs.NewDeviceProber().Probe(ctx, devicePath); probe.State {
+case blockfs.StateFormatted:
+    // Mount it as it is. ext4 and xfs each replay their own journal.
+    mount(devicePath, probe.Signature)
+case blockfs.StateBlank:
+    // All zeros, read successfully: the only state that permits a format.
+    formatAndMount(devicePath)
+case blockfs.StateForeign:
+    // LVM2, LUKS, swap, or a partition table: not mountable, still data.
+    handleError(fmt.Errorf("%s holds a %s signature", devicePath, probe.Signature))
+case blockfs.StateUnreadable:
+    // Nothing can be concluded, so nothing may be assumed. Fail the stage and
+    // let the caller retry: an outage is recoverable and a wiped volume is not.
+    handleError(probe.Err)
+}
+```
+
+The probe is bounded (20s by default, under `nvme_core.io_timeout`) so a stalled
+path resolves as unreadable instead of holding a NodeStage open, and a signature
+found in a partially read device still counts as formatted — the data is there
+whatever became of the rest.
+
+_Today:_ `csi-driver/pkg/spdk/nodeserver.go`'s `formatAndMount` is the live call
+site, and the reason it no longer delegates the decision to
+`SafeFormatAndMount`. See `operator/docs/tests/test-plan-node-stage-format.md`
+for the reproduction.
 
 #### Detach without collateral damage
 
