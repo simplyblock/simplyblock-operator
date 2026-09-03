@@ -105,17 +105,34 @@ same device. LV-03 reported `Blank`.
 
 ## 4. Failure injection, run by hand
 
-Not automated: no Go test can make a real NVMe namespace fail reads, and the
-kernels this product runs on are built without `CONFIG_FAULT_INJECTION`. The
-reproduction below stands in for it, and is what established that `blkid`'s exit
-status 2 really is returned for a device that holds a filesystem it cannot read.
+Not automated: no Go test can make a device fail reads on demand. Two recipes
+follow. The loop device is the quicker one and needs no cluster; the NVMe-oF one
+runs the whole failure against a real simplyblock volume and is what establishes
+that this is reachable in production rather than only in a model.
 
-| ID    | Scenario                                                                                | Type       | Test |
-|-------|-----------------------------------------------------------------------------------------|------------|------|
-| FI-01 | `blkid` exits 2 with empty output on an ext4 device whose reads fail                    | Regression | —    |
-| FI-02 | `mkfs` on such a device discards its blocks, then fails, leaving no valid filesystem    | Regression | —    |
-| FI-03 | With reads recovered between probe and `mkfs`, the volume is silently reformatted empty | Regression | —    |
-| FI-04 | A volume whose reads fail during a cold stage is refused rather than formatted          | Regression | —    |
+A degraded NVMe-oF path presents in three different ways, and only one of them
+destroys anything, so a reproduction has to say which it is reaching:
+
+| The paths are                         | The device node | I/O       | `blkid` | Consequence                                       |
+|---------------------------------------|-----------------|-----------|---------|---------------------------------------------------|
+| down, within `ctrl_loss_tmo`          | present         | queues    | blocks  | staging hangs, kubelet retries; nothing formatted |
+| down, past `ctrl_loss_tmo`            | **gone**        | n/a       | exit 2  | mkfs hits a missing path and fails                |
+| down, with `fast_io_fail_tmo` reached | **present**     | **fails** | exit 2  | **mkfs runs against the volume**                  |
+
+The third is the production case. Reaching it needs `fast_io_fail_tmo`, which
+tells the driver to fail I/O quickly while the controller keeps reconnecting, so
+the namespace stays present and unreadable rather than queueing or vanishing.
+`CONFIG_FAULT_INJECTION` is not required and is absent from the kernels this
+product runs on.
+
+| ID    | Scenario                                                                                 | Type       | Test |
+|-------|------------------------------------------------------------------------------------------|------------|------|
+| FI-01 | `blkid` exits 2 with empty output on an ext4 device whose reads fail                     | Regression | —    |
+| FI-02 | `mkfs` on such a device discards its blocks, then fails, leaving no valid filesystem     | Regression | —    |
+| FI-03 | With reads recovered between probe and `mkfs`, the volume is silently reformatted empty  | Regression | —    |
+| FI-04 | A volume whose reads fail during a cold stage is refused rather than formatted           | Regression | —    |
+| FI-05 | On a real NVMe-oF volume, `fast_io_fail_tmo` yields exit 2 with the device still present | Regression | —    |
+| FI-06 | That volume is then reformatted once the path recovers, and its data is gone             | Regression | —    |
 
 Reproduction for FI-01 through FI-03, on any host with `dm-flakey`. It runs
 against a loop device, never a real volume:
@@ -136,6 +153,51 @@ dmsetup load sbrepro --table "0 $(blockdev --getsz "$LOOP") flakey $LOOP 0 0 60 
 dmsetup resume sbrepro
 blkid -p -s TYPE -s PTTYPE -o export /dev/mapper/sbrepro    # empty, exit 2
 ```
+
+### FI-05 and FI-06, on a real simplyblock volume
+
+Needs a node with a simplyblock volume attached, and destroys that volume's
+data, so run it against one provisioned for the purpose. `<A>` and `<B>` are the
+storage nodes the volume's paths point at, from
+`cat /sys/class/nvme/nvme*/address`.
+
+```bash
+DEV=/dev/nvme0n1
+mkfs.ext4 -q -F $DEV                       # give the volume a filesystem
+mount $DEV /mnt && echo data > /mnt/precious.txt && sync && umount /mnt
+blkid -p -s UUID -o value $DEV             # note the UUID
+
+# Fail I/O quickly while the controller keeps reconnecting, so the namespace
+# stays present rather than queueing I/O or being torn down.
+for c in /sys/class/nvme/nvme0 /sys/class/nvme/nvme1; do
+    echo 3600 > $c/ctrl_loss_tmo
+    echo 5    > $c/fast_io_fail_tmo
+done
+
+# Sever every path.
+iptables -I OUTPUT -d <A> -p tcp --dport 4428 -j DROP
+iptables -I OUTPUT -d <B> -p tcp --dport 4428 -j DROP
+sleep 25
+echo 3 > /proc/sys/vm/drop_caches          # or the probe is answered from cache
+
+blkid -p -s TYPE -s PTTYPE -o export $DEV  # FI-05: exit 2, no output, device present
+```
+
+Then let the paths recover and run what the driver would run next:
+
+```bash
+iptables -D OUTPUT -d <A> -p tcp --dport 4428 -j DROP
+iptables -D OUTPUT -d <B> -p tcp --dport 4428 -j DROP
+mkfs.ext4 -F -m0 $DEV                      # FI-06: exits 0
+blkid -p -s UUID -o value $DEV             # a different UUID: the volume is gone
+```
+
+Verified on 2026-09-03 against a four-node cluster, kernel 5.14, on a 2 GiB
+volume with two live HA paths. The probe returned exit 2 with empty output while
+`/dev/nvme0n1` was present and its ext4 intact, `mkfs` then exited 0, and the
+volume came back with a new UUID holding nothing but `lost+found`. Dropping the
+page cache matters: without it the probe is answered from cache and returns exit
+0 even with every path severed.
 
 Verified on 2026-09-03 with util-linux 2.40.2 and dm-flakey v1.5.0. The probe
 returned exit 2 with empty output, and `mkfs.ext4 -F -m0` then destroyed the
