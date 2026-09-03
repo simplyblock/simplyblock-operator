@@ -441,7 +441,7 @@ func TestSyncStatusReadsThePushedNodeInsteadOfAskingForIt(t *testing.T) {
 	if got.Status.Status != "online" || !got.Status.Health {
 		t.Errorf("status/health = %q/%v, want online/true", got.Status.Status, got.Status.Health)
 	}
-	if got.Status.Hostname != "vm02_4420" {
+	if got.Status.Hostname != snBackendHostname {
 		t.Errorf("hostname = %q", got.Status.Hostname)
 	}
 	if got.Status.Ports == nil || got.Status.Ports.Management != "192.168.10.112" {
@@ -511,9 +511,12 @@ func (f *fakeNodeCapacity) NodeCapacity(
 }
 
 const (
-	snCapNode  = "fd687dfd-9b5d-4eca-8cb1-23bcf550ad21"
-	snCapTotal = int64(112303538176)
-	snCapUsed  = int64(422576128)
+	// snBackendHostname is how the control plane names a node, which is not the
+	// worker's Kubernetes name: the two are separate fields for that reason.
+	snBackendHostname = "vm02_4420"
+	snCapNode         = "fd687dfd-9b5d-4eca-8cb1-23bcf550ad21"
+	snCapTotal        = int64(112303538176)
+	snCapUsed         = int64(422576128)
 )
 
 func nodeWithUUID() *simplyblockv1alpha1.StorageNode {
@@ -541,7 +544,7 @@ func applyWithCapacity(
 	r := newSNReconciler(t, sn)
 	r.Capacity = src
 	if _, err := r.applyNodeStatus(context.Background(), sn, "cluster-1",
-		SNODEAPIResponse{Status: nodeStatusOnline, Hostname: "vm02_4420"}); err != nil {
+		SNODEAPIResponse{Status: nodeStatusOnline, Hostname: snBackendHostname}); err != nil {
 		t.Fatalf("applyNodeStatus: %v", err)
 	}
 	var got simplyblockv1alpha1.StorageNode
@@ -630,7 +633,7 @@ func TestAFailingNodeCapacitySourceStillPublishesTheNode(t *testing.T) {
 	got := applyWithCapacity(t, nodeWithUUID(),
 		&fakeNodeCapacity{err: errors.New("connection refused")})
 
-	if got.Status.Status != nodeStatusOnline || got.Status.Hostname != "vm02_4420" {
+	if got.Status.Status != nodeStatusOnline || got.Status.Hostname != snBackendHostname {
 		t.Errorf("status/hostname = %q/%q", got.Status.Status, got.Status.Hostname)
 	}
 	if got.Status.Resources.Capacity != nil {
@@ -649,5 +652,119 @@ func TestAnUnsampledNodePublishesNoCapacity(t *testing.T) {
 
 	if got.Status.Resources.Capacity != nil {
 		t.Errorf("capacity = %+v, want absent", got.Status.Resources.Capacity)
+	}
+}
+
+// Adoption matches a StorageNode to its backend node by the worker's address,
+// and the node stream already holds every node of the cluster. Reading the list
+// over HTTP would ask the control plane for what is in memory, so the server
+// here fails every request and counts them.
+func TestAdoptionMatchesTheBackendNodeFromTheStreamCache(t *testing.T) {
+	const (
+		cluster  = "22222222-2222-2222-2222-222222222222"
+		nodeUUID = "fd687dfd-9b5d-4eca-8cb1-23bcf550ad21"
+		workerIP = "192.168.10.112"
+	)
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	worker := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm02.example.com"},
+		Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+			{Type: corev1.NodeInternalIP, Address: workerIP},
+		}},
+	}
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "simplyblock-node-adopt"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{WorkerNode: worker.Name},
+	}
+
+	// The stream has delivered the cluster's nodes, which is what makes the
+	// scope authoritative enough to match against.
+	sub := subscriptions.NewNodeSubscription()
+	err := sub.Ingest(context.Background(), cpinformer.Event{
+		Kind:  cpinformer.EventSnapshot,
+		Scope: cpinformer.Scope{cluster},
+		Data: []byte(`[{"id":"` + nodeUUID + `","status":"online","mgmt_ip":"` + workerIP + `",
+			"health_check":true,"hostname":"vm02_4420","cpu_spdk_count":6,"lvols":0,
+			"rpc_port":4420,"lvol_subsys_port":4426,"nvmf_port":4421,"failure_domain":-1}]`),
+	})
+	if err != nil {
+		t.Fatalf("ingest snapshot: %v", err)
+	}
+
+	r := newSNReconciler(t, sn, worker)
+	r.Nodes = sub
+
+	if err := r.pollUUIDFromBackend(context.Background(), sn, cluster,
+		webapi.NewClient(srv.URL)); err != nil {
+		t.Fatalf("pollUUIDFromBackend: %v", err)
+	}
+
+	if n := atomic.LoadInt32(&calls); n != 0 {
+		t.Errorf("listed the cluster's nodes over HTTP %d time(s), want none", n)
+	}
+
+	var got simplyblockv1alpha1.StorageNode
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), &got); err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	if got.Status.UUID != nodeUUID {
+		t.Errorf("adopted UUID = %q, want %q", got.Status.UUID, nodeUUID)
+	}
+	if got.Status.Status != nodeStatusOnline || got.Status.Hostname != snBackendHostname {
+		t.Errorf("status/hostname = %q/%q", got.Status.Status, got.Status.Hostname)
+	}
+}
+
+// An unsynced cache is not evidence that the cluster has no nodes, so adoption
+// asks the control plane rather than concluding there is nothing to adopt.
+func TestAdoptionFallsBackToTheControlPlaneBeforeTheSnapshotArrives(t *testing.T) {
+	const (
+		cluster  = "22222222-2222-2222-2222-222222222222"
+		nodeUUID = "fd687dfd-9b5d-4eca-8cb1-23bcf550ad21"
+		workerIP = "192.168.10.112"
+	)
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"` + nodeUUID + `","status":"online","mgmt_ip":"` + workerIP + `",
+			"health_check":true,"hostname":"vm02_4420","rpc_port":4420,"failure_domain":-1}]`))
+	}))
+	defer srv.Close()
+
+	worker := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm02.example.com"},
+		Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+			{Type: corev1.NodeInternalIP, Address: workerIP},
+		}},
+	}
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "simplyblock-node-adopt"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{WorkerNode: worker.Name},
+	}
+
+	r := newSNReconciler(t, sn, worker)
+	r.Nodes = subscriptions.NewNodeSubscription() // connected, no snapshot yet
+
+	if err := r.pollUUIDFromBackend(context.Background(), sn, cluster,
+		webapi.NewClient(srv.URL)); err != nil {
+		t.Fatalf("pollUUIDFromBackend: %v", err)
+	}
+
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Errorf("made %d request(s), want exactly 1 while the cache is cold", n)
+	}
+	var got simplyblockv1alpha1.StorageNode
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), &got); err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	if got.Status.UUID != nodeUUID {
+		t.Errorf("adopted UUID = %q, want %q", got.Status.UUID, nodeUUID)
 	}
 }
