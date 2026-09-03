@@ -2,7 +2,11 @@ package controller
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -12,7 +16,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -375,4 +382,111 @@ func TestCountInFlightNodes_DeduplicatesByWorker(t *testing.T) {
 			t.Fatalf("expected 2 distinct in-flight workers (a, c), got %d", count)
 		}
 	})
+}
+
+// The reconciler serves a node's status from the stream's cache, so a change
+// the control plane pushed costs no request to read back. The server here
+// fails every request and counts them: a reconciler that polled would both
+// call it and fail to write a status.
+func TestSyncStatusReadsThePushedNodeInsteadOfAskingForIt(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	const nodeUUID = "fd687dfd-9b5d-4eca-8cb1-23bcf550ad21"
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "simplyblock-node-asxeub"},
+		Status:     simplyblockv1alpha1.StorageNodeStatus{UUID: nodeUUID},
+	}
+
+	// The stream reported the node online, as its snapshot would.
+	sub := subscriptions.NewNodeSubscription()
+	sub.RegisterNode(nodeUUID, client.ObjectKeyFromObject(sn))
+	err := sub.Ingest(context.Background(), cpinformer.Event{
+		Kind:  cpinformer.EventSnapshot,
+		Scope: cpinformer.Scope{"22222222-2222-2222-2222-222222222222"},
+		Data: []byte(`[{"id":"` + nodeUUID + `","status":"online","mgmt_ip":"192.168.10.112",
+			"health_check":true,"hostname":"vm02_4420","cpu_spdk_count":6,"lvols":3,
+			"rpc_port":4420,"lvol_subsys_port":4426,"nvmf_port":4421,"failure_domain":-1}]`),
+	})
+	if err != nil {
+		t.Fatalf("ingest snapshot: %v", err)
+	}
+
+	r := newSNReconciler(t, sn)
+	r.Nodes = sub
+
+	res, err := r.syncStatus(context.Background(), sn, "22222222-2222-2222-2222-222222222222",
+		webapi.NewClient(srv.URL))
+	if err != nil {
+		t.Fatalf("syncStatus: %v", err)
+	}
+
+	if n := atomic.LoadInt32(&calls); n != 0 {
+		t.Errorf("made %d control-plane request(s), want none for a node the stream already delivered", n)
+	}
+
+	var got simplyblockv1alpha1.StorageNode
+	key := client.ObjectKeyFromObject(sn)
+	if err := r.Get(context.Background(), key, &got); err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	if got.Status.Status != "online" || !got.Status.Health {
+		t.Errorf("status/health = %q/%v, want online/true", got.Status.Status, got.Status.Health)
+	}
+	if got.Status.Hostname != "vm02_4420" {
+		t.Errorf("hostname = %q", got.Status.Hostname)
+	}
+	if got.Status.Ports == nil || got.Status.Ports.Management != "192.168.10.112" {
+		t.Errorf("ports = %+v", got.Status.Ports)
+	}
+	if got.Status.Resources == nil || *got.Status.Resources.Volumes != 3 {
+		t.Errorf("resources = %+v", got.Status.Resources)
+	}
+
+	// The poll survives as the correctness floor, relaxed because it is no
+	// longer how a change is noticed.
+	if res.RequeueAfter < time.Minute {
+		t.Errorf("RequeueAfter = %s, want the relaxed backstop rather than a poll", res.RequeueAfter)
+	}
+}
+
+// A node the stream has not delivered still has to be readable, or a cold cache
+// would leave the CR's status frozen until the first snapshot lands.
+func TestSyncStatusFallsBackToTheControlPlaneForAnUncachedNode(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"aaaa","status":"in_creation","health_check":false,
+			"hostname":"vm09_4420","cpu_spdk_count":4,"lvols":0,"mgmt_ip":"10.0.0.9",
+			"rpc_port":4420,"lvol_subsys_port":4426,"nvmf_port":4421,"failure_domain":-1}`))
+	}))
+	defer srv.Close()
+
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "simplyblock-node-new"},
+		Status:     simplyblockv1alpha1.StorageNodeStatus{UUID: "aaaa"},
+	}
+
+	r := newSNReconciler(t, sn)
+	r.Nodes = subscriptions.NewNodeSubscription() // connected, nothing delivered yet
+
+	if _, err := r.syncStatus(context.Background(), sn, "cluster-1", webapi.NewClient(srv.URL)); err != nil {
+		t.Fatalf("syncStatus: %v", err)
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Errorf("made %d request(s), want exactly 1 for a node the stream has not delivered", n)
+	}
+
+	var got simplyblockv1alpha1.StorageNode
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), &got); err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	if got.Status.Status != nodeStatusInCreation || got.Status.Hostname != "vm09_4420" {
+		t.Errorf("status/hostname = %q/%q", got.Status.Status, got.Status.Hostname)
+	}
 }

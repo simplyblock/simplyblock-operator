@@ -33,21 +33,33 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 const (
-	storageNodeFinalizer    = "storage.simplyblock.io/storagenode-finalizer"
+	storageNodeFinalizer = "storage.simplyblock.io/storagenode-finalizer"
+	// storageNodeSyncInterval is how soon a node is looked at again after a
+	// failed read. It stays short because it is a retry rather than a poll.
 	storageNodeSyncInterval = 30 * time.Second
+	// storageNodeBackstopInterval is how soon a healthy node is re-read from the
+	// control plane when nothing has pushed. The stream carries a status change
+	// within a second, so this is the correctness floor rather than the
+	// mechanism: it covers the operator's own stream goroutine wedging, and the
+	// control plane's own note that a change written by a pre-upgrade component
+	// can take 30 seconds to reach a stream at all.
+	storageNodeBackstopInterval = 3 * time.Minute
 )
 
 // StorageNodeReconciler reconciles StorageNode objects.
@@ -65,18 +77,37 @@ type StorageNodeReconciler struct {
 	// offers no cluster-wide device stream, so the node rather than the cluster
 	// is what drives a device subscription. Optional (nil in tests).
 	DeviceScopes *cpinformer.ScopeSet
-	// DeviceNodeNames, if set, learns which StorageNode object a backend node id
-	// belongs to. The device subscription needs it to name the objects it
-	// mirrors into, and this reconciler is where both ids are known at once.
-	DeviceNodeNames DeviceNodeRegistry
+	// NodeRegistries learn which StorageNode object a backend node id belongs
+	// to. Both the device and the storage-node subscriptions need that mapping
+	// to name what they stream, and this reconciler is where the backend id and
+	// the object are known at once. Optional (empty in tests).
+	NodeRegistries []NodeObjectRegistry
+	// Nodes, if set, is the storage-node subscription's cache. Status is read
+	// from it in preference to the control-plane API: the stream has already
+	// delivered the same DTO, so a request would ask for what is in memory.
+	// Optional (nil in tests, and nil leaves the reconciler polling).
+	Nodes NodeCache
 }
 
-// DeviceNodeRegistry is how the StorageNode reconciler tells a device
-// subscription which object a backend node id names. It is an interface so the
-// node reconciler does not depend on the subscription's concrete type.
-type DeviceNodeRegistry interface {
+// NodeObjectRegistry is how the StorageNode reconciler tells a subscription
+// which object a backend node id names. It is an interface so the reconciler
+// does not depend on any subscription's concrete type.
+type NodeObjectRegistry interface {
 	RegisterNode(nodeID string, node types.NamespacedName)
 	UnregisterNode(nodeID string)
+}
+
+// NodeCache is the read surface the reconciler needs from the storage-node
+// subscription: the node the control plane last reported, and whether the
+// cluster's snapshot has arrived at all.
+type NodeCache interface {
+	// Lookup returns the cached node with the given backend id, or ok=false
+	// when the control plane no longer reports it.
+	Lookup(nodeID string) (cpinformer.Scope, subscriptions.NodeDTO, bool)
+	// Synced reports whether the cluster's initial snapshot has been applied.
+	Synced(scope cpinformer.Scope) bool
+	// Triggers is the reconcile-trigger stream; each event names a StorageNode.
+	Triggers() <-chan event.GenericEvent
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storagenodes,verbs=get;list;watch;create;update;patch;delete
@@ -167,38 +198,44 @@ func (r *StorageNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Node provisioned → its devices can be streamed. The name is registered
 	// before the scope, so the subscription can name what the first snapshot
 	// delivers.
-	r.registerDeviceStream(clusterUUID, &sn)
+	r.registerStreams(clusterUUID, &sn)
 
 	// Node provisioned → sync status periodically.
 	return r.syncStatus(ctx, &sn, clusterUUID, apiClient)
 }
 
-// registerDeviceStream opens the node's device stream by registering its scope,
-// having first taught the subscription which object the backend node id names.
-func (r *StorageNodeReconciler) registerDeviceStream(clusterUUID string, sn *simplyblockv1alpha1.StorageNode) {
+// registerStreams makes the node's control-plane events nameable and opens its
+// device stream. The name is registered before the scope, so a subscription can
+// name whatever its first snapshot delivers.
+//
+// The storage-node stream needs no scope registered here: it is per cluster, so
+// the cluster's own controller opens it, and this node's events arrive on it
+// whether or not this reconciler has run.
+func (r *StorageNodeReconciler) registerStreams(clusterUUID string, sn *simplyblockv1alpha1.StorageNode) {
 	if sn.Status.UUID == "" {
 		return
 	}
-	if r.DeviceNodeNames != nil {
-		r.DeviceNodeNames.RegisterNode(sn.Status.UUID, client.ObjectKeyFromObject(sn))
+	for _, registry := range r.NodeRegistries {
+		registry.RegisterNode(sn.Status.UUID, client.ObjectKeyFromObject(sn))
 	}
 	if r.DeviceScopes != nil {
 		r.DeviceScopes.Add(cpinformer.Scope{clusterUUID, sn.Status.UUID})
 	}
 }
 
-// unregisterDeviceStream closes the node's device stream. The scope goes first:
-// no further events can arrive once the stream is closed, so the name mapping is
-// dropped second and nothing is left naming objects after a node on its way out.
-func (r *StorageNodeReconciler) unregisterDeviceStream(clusterUUID string, sn *simplyblockv1alpha1.StorageNode) {
+// unregisterStreams closes the node's device stream and stops naming events
+// after it. The scope goes first: no further device events can arrive once the
+// stream is closed, so the name mappings are dropped second and nothing is left
+// naming objects after a node on its way out.
+func (r *StorageNodeReconciler) unregisterStreams(clusterUUID string, sn *simplyblockv1alpha1.StorageNode) {
 	if sn.Status.UUID == "" {
 		return
 	}
 	if r.DeviceScopes != nil {
 		r.DeviceScopes.Remove(cpinformer.Scope{clusterUUID, sn.Status.UUID})
 	}
-	if r.DeviceNodeNames != nil {
-		r.DeviceNodeNames.UnregisterNode(sn.Status.UUID)
+	for _, registry := range r.NodeRegistries {
+		registry.UnregisterNode(sn.Status.UUID)
 	}
 }
 
@@ -600,6 +637,15 @@ func (r *StorageNodeReconciler) syncStatus(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
+	// The stream has already delivered this node's DTO, so asking the control
+	// plane for it would fetch what is in memory. The cache is only trusted for
+	// a node it actually holds: an absent one may be gone, or may be a scope
+	// whose snapshot has not arrived, and the request below tells those apart
+	// by returning either the node or a 404.
+	if dto, ok := r.cachedNode(sn.Status.UUID); ok {
+		return r.applyNodeStatus(ctx, sn, nodeResponseFrom(dto))
+	}
+
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, sn.Status.UUID)
 	body, status, err := apiClient.Do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil || status >= 300 {
@@ -634,6 +680,52 @@ func (r *StorageNodeReconciler) syncStatus(
 		return ctrl.Result{RequeueAfter: storageNodeSyncInterval}, nil
 	}
 
+	return r.applyNodeStatus(ctx, sn, resp)
+}
+
+// cachedNode returns the node the storage-node stream last reported, when there
+// is a subscription and it holds one.
+func (r *StorageNodeReconciler) cachedNode(nodeID string) (subscriptions.NodeDTO, bool) {
+	if r.Nodes == nil || nodeID == "" {
+		return subscriptions.NodeDTO{}, false
+	}
+	_, dto, ok := r.Nodes.Lookup(nodeID)
+	return dto, ok
+}
+
+// nodeResponseFrom converts a streamed node into the shape the status
+// projection takes. The two are the same wire schema read through different
+// transports, so converting is what keeps one projection serving both and makes
+// a pushed status and a polled one indistinguishable in the object.
+func nodeResponseFrom(dto subscriptions.NodeDTO) SNODEAPIResponse {
+	return SNODEAPIResponse{
+		UUID:          dto.ID,
+		Status:        dto.Status,
+		IP:            dto.ManagementIP,
+		Health:        dto.HealthCheck,
+		Hostname:      dto.Hostname,
+		CPU:           int(dto.CPUCount),
+		Volumes:       int(dto.Volumes),
+		RPC_PORT:      int(dto.RPCPort),
+		LVOL_PORT:     int(dto.LvolPort),
+		NVMF_PORT:     int(dto.NVMeOFPort),
+		FailureDomain: dto.FailureDomain,
+	}
+}
+
+// applyNodeStatus writes what the control plane reports into the CR's status,
+// whichever transport it arrived by.
+//
+// The requeue is the backstop rather than the mechanism: a status change reaches
+// the stream in about a second, and this interval only bounds how long a wedged
+// stream can go unnoticed.
+func (r *StorageNodeReconciler) applyNodeStatus(
+	ctx context.Context,
+	sn *simplyblockv1alpha1.StorageNode,
+	resp SNODEAPIResponse,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
 	cpu := int32(resp.CPU)
 	volumes := int32(resp.Volumes)
 	rpcPort := int32(resp.RPC_PORT)
@@ -659,7 +751,7 @@ func (r *StorageNodeReconciler) syncStatus(
 	if err := r.Status().Patch(ctx, sn, patch); err != nil {
 		log.Error(err, "failed to patch StorageNode status")
 	}
-	return ctrl.Result{RequeueAfter: storageNodeSyncInterval}, nil
+	return ctrl.Result{RequeueAfter: storageNodeBackstopInterval}, nil
 }
 
 // checkFailureDomain returns an error if the parent cluster has
@@ -802,7 +894,7 @@ func (r *StorageNodeReconciler) handleDeletion(
 	// The node is going away, so stop streaming its devices. Its StorageDevice
 	// objects are garbage-collected by the owner reference rather than deleted
 	// here.
-	r.unregisterDeviceStream(clusterUUID, sn)
+	r.unregisterStreams(clusterUUID, sn)
 
 	// If the node was never provisioned, skip ops and remove finalizer immediately.
 	if sn.Status.UUID == "" {
@@ -921,13 +1013,22 @@ func (r *StorageNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha1.StorageNode{}).
 		Named("storagenode").
 		Watches(
 			&simplyblockv1alpha1.StorageNodeSet{},
 			handler.EnqueueRequestsFromMapFunc(r.storageNodeSetToStorageNodeRequests),
 		).
-		Owns(&simplyblockv1alpha1.StorageNodeOps{}).
-		Complete(r)
+		Owns(&simplyblockv1alpha1.StorageNodeOps{})
+
+	// A pushed control-plane change reconciles the node it named. The events
+	// already carry the object's own name, so they need no map function.
+	if r.Nodes != nil {
+		builder = builder.WatchesRawSource(
+			source.Channel(r.Nodes.Triggers(), &handler.EnqueueRequestForObject{}),
+		)
+	}
+
+	return builder.Complete(r)
 }

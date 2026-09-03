@@ -279,12 +279,17 @@ func main() {
 		setupLog.Error(err, "unable to resolve control-plane stream config")
 		os.Exit(1)
 	}
-	// LeaderOnly: the device subscription feeds a reconciler that writes
-	// StorageDevice objects, and two replicas mirroring the same device would
-	// fight over them.
+	// LeaderOnly: these subscriptions feed reconcilers that write StorageDevice
+	// and StorageNode objects, and two replicas writing the same object would
+	// fight over it.
 	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"), cpinformer.LeaderOnly)
 	deviceSubscription := subscriptions.NewDeviceSubscription()
 	deviceScopes := cpSubscriptions.AddSubscription(deviceSubscription)
+	// One stream per cluster carries every node of it, so the cluster's own
+	// controller opens the scope while the node's controller supplies the
+	// backend-id-to-object mapping the events are named by.
+	nodeSubscription := subscriptions.NewNodeSubscription()
+	nodeScopes := cpSubscriptions.AddSubscription(nodeSubscription)
 	if err := (&controller.StorageDeviceReconciler{
 		Client:  mgr.GetClient(),
 		Scheme:  mgr.GetScheme(),
@@ -325,10 +330,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageClusterReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorder("storagecluster-controller"),
-		Namespace: operatorNamespace,
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		Recorder:   mgr.GetEventRecorder("storagecluster-controller"),
+		Namespace:  operatorNamespace,
+		NodeScopes: nodeScopes,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
 		os.Exit(1)
@@ -434,7 +440,10 @@ func main() {
 		TLSEnabled:       tlsEnabled,
 		TLSMutualEnabled: tlsMutualEnabled,
 		DeviceScopes:     deviceScopes,
-		DeviceNodeNames:  deviceSubscription,
+		NodeRegistries: []controller.NodeObjectRegistry{
+			deviceSubscription, nodeSubscription,
+		},
+		Nodes: nodeSubscription,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)

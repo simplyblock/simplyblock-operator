@@ -350,7 +350,7 @@ func (r *StorageNodeSetReconciler) aggregateStorageNodeStatus(
 			offline++
 		case "suspended":
 			suspended++
-		case "in_creation":
+		case nodeStatusInCreation:
 			creating++
 		case "removed":
 			removed++
