@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	promlatency "github.com/simplyblock/simplyblock-operator/internal/metrics/prometheus"
+	atlasprom "github.com/simplyblock/atlas/prometheus"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -298,13 +298,13 @@ func (sns *StorageNodeSelector) collectCurrentLatency(
 	percentile string,
 	inputs ...StorageNodeSelectorInput,
 ) (map[string]map[string]int64, error) {
-	provider, err := promlatency.New(prometheusURL)
+	provider, err := atlasprom.New(prometheusURL)
 	if err != nil {
 		return nil, fmt.Errorf("create prometheus latency provider: %w", err)
 	}
 
 	clusterIds := distinctClusterUUIDs(inputs)
-	return provider.GetClustersCurrentLatency(ctx, clusterIds, percentile)
+	return provider.ClusterLatencies(ctx, clusterIds, percentile)
 }
 
 // distinctClusterUUIDs returns the set of unique ClusterUUIDs present across
