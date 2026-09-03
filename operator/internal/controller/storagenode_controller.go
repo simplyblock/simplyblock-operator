@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	"github.com/simplyblock/atlas/prometheus"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
@@ -82,6 +83,11 @@ type StorageNodeReconciler struct {
 	// to name what they stream, and this reconciler is where the backend id and
 	// the object are known at once. Optional (empty in tests).
 	NodeRegistries []NodeObjectRegistry
+	// Capacity, if set, supplies the node's storage occupancy. It is separate
+	// from the control-plane API and from the stream because neither carries
+	// the number: a node's capacity exists only in the metrics the control
+	// plane exports. Optional (nil leaves status.resources.capacity absent).
+	Capacity NodeCapacitySource
 	// Nodes, if set, is the storage-node subscription's cache. Status is read
 	// from it in preference to the control-plane API: the stream has already
 	// delivered the same DTO, so a request would ask for what is in memory.
@@ -95,6 +101,15 @@ type StorageNodeReconciler struct {
 type NodeObjectRegistry interface {
 	RegisterNode(nodeID string, node types.NamespacedName)
 	UnregisterNode(nodeID string)
+}
+
+// NodeCapacitySource supplies how full a node's storage is. It is satisfied by
+// atlas-lib's prometheus.Provider, and it is an interface here so that a test
+// needs no Prometheus.
+type NodeCapacitySource interface {
+	// NodeCapacity returns the sample for every node of a cluster, keyed by
+	// backend node UUID. A node with no sample is absent.
+	NodeCapacity(ctx context.Context, clusterUUID string) (map[string]prometheus.Capacity, error)
 }
 
 // NodeCache is the read surface the reconciler needs from the storage-node
@@ -643,7 +658,7 @@ func (r *StorageNodeReconciler) syncStatus(
 	// whose snapshot has not arrived, and the request below tells those apart
 	// by returning either the node or a 404.
 	if dto, ok := r.cachedNode(sn.Status.UUID); ok {
-		return r.applyNodeStatus(ctx, sn, nodeResponseFrom(dto))
+		return r.applyNodeStatus(ctx, sn, clusterUUID, nodeResponseFrom(dto))
 	}
 
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s", clusterUUID, sn.Status.UUID)
@@ -680,7 +695,73 @@ func (r *StorageNodeReconciler) syncStatus(
 		return ctrl.Result{RequeueAfter: storageNodeSyncInterval}, nil
 	}
 
-	return r.applyNodeStatus(ctx, sn, resp)
+	return r.applyNodeStatus(ctx, sn, clusterUUID, resp)
+}
+
+// capacityWriteThreshold is how much a node's used size has to move before the
+// new reading is worth recording: one percent of the node's own total, so a
+// larger node tolerates a larger absolute drift.
+//
+// Some threshold is required rather than merely economical. The reconciler
+// watches its own objects, so every status write schedules another reconcile;
+// writing a freshly sampled number every time would make the node reconcile
+// itself in a loop for as long as any I/O was happening, bounded only by the
+// workqueue's rate limiter.
+const capacityWriteThresholdPercent = 1
+
+// existingCapacity returns what the object already records, so an unchanged
+// reading can be carried forward rather than rewritten.
+func existingCapacity(sn *simplyblockv1alpha1.StorageNode) *simplyblockv1alpha1.StorageNodeCapacity {
+	if sn.Status.Resources == nil {
+		return nil
+	}
+	return sn.Status.Resources.Capacity
+}
+
+// worthWriting reports whether a sample says something the object does not
+// already say. A first reading always does; after that the used size has to
+// have moved by at least capacityWriteThresholdPercent of the total, or the
+// total itself has to have changed, which happens when a device joins or
+// leaves the node.
+func worthWriting(
+	current *simplyblockv1alpha1.StorageNodeCapacity,
+	sample prometheus.Capacity,
+) bool {
+	if !sample.Sampled() {
+		return false // nothing has measured this node; say nothing about it
+	}
+	if current == nil || current.UsedBytes == nil || current.TotalBytes == nil {
+		return true
+	}
+	if *current.TotalBytes != sample.Total {
+		return true
+	}
+	drift := *current.UsedBytes - sample.Used
+	if drift < 0 {
+		drift = -drift
+	}
+	return drift*100 >= sample.Total*capacityWriteThresholdPercent
+}
+
+// nodeCapacity reads one node's occupancy, or reports that there is none to
+// read. A failure is not an error the caller has to handle: the rest of the
+// status is correct without it, and a node whose capacity is momentarily
+// unknown is better published than not published at all.
+func (r *StorageNodeReconciler) nodeCapacity(
+	ctx context.Context,
+	clusterUUID, nodeUUID string,
+) (prometheus.Capacity, bool) {
+	if r.Capacity == nil || clusterUUID == "" || nodeUUID == "" {
+		return prometheus.Capacity{}, false
+	}
+	samples, err := r.Capacity.NodeCapacity(ctx, clusterUUID)
+	if err != nil {
+		logf.FromContext(ctx).V(1).Info("no capacity sample for this node",
+			"cluster", clusterUUID, "node", nodeUUID, "err", err.Error())
+		return prometheus.Capacity{}, false
+	}
+	sample, ok := samples[nodeUUID]
+	return sample, ok
 }
 
 // cachedNode returns the node the storage-node stream last reported, when there
@@ -722,6 +803,7 @@ func nodeResponseFrom(dto subscriptions.NodeDTO) SNODEAPIResponse {
 func (r *StorageNodeReconciler) applyNodeStatus(
 	ctx context.Context,
 	sn *simplyblockv1alpha1.StorageNode,
+	clusterUUID string,
 	resp SNODEAPIResponse,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -733,13 +815,28 @@ func (r *StorageNodeReconciler) applyNodeStatus(
 	nvmfPort := int32(resp.NVMF_PORT)
 
 	patch := client.MergeFrom(sn.DeepCopy())
+	// Carry the previous capacity forward by default. It is replaced below only
+	// when the reading has moved materially, so an unchanged one produces an
+	// empty patch and therefore no write and no retrigger.
+	capacity := existingCapacity(sn)
+	if sample, ok := r.nodeCapacity(ctx, clusterUUID, sn.Status.UUID); ok {
+		if worthWriting(capacity, sample) {
+			capacity = &simplyblockv1alpha1.StorageNodeCapacity{
+				TotalBytes: ptr.To(sample.Total),
+				UsedBytes:  ptr.To(sample.Used),
+				SampledAt:  ptr.To(metav1.NewTime(sample.SampledAt)),
+			}
+		}
+	}
+
 	sn.Status.Status = resp.Status
 	sn.Status.Health = resp.Health
 	sn.Status.Hostname = resp.Hostname
 	sn.Status.FailureDomain = fdPtr(resp.FailureDomain)
 	sn.Status.Resources = &simplyblockv1alpha1.StorageNodeResources{
-		CPU:     &cpu,
-		Volumes: &volumes,
+		CPU:      &cpu,
+		Volumes:  &volumes,
+		Capacity: capacity,
 	}
 	sn.Status.Ports = &simplyblockv1alpha1.StorageNodePorts{
 		Management: resp.IP,
