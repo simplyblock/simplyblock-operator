@@ -8,8 +8,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	atlasprom "github.com/simplyblock/atlas/prometheus"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
-	promlatency "github.com/simplyblock/simplyblock-operator/internal/metrics/prometheus"
 )
 
 func baselineTestScheme(t *testing.T) *runtime.Scheme {
@@ -70,7 +70,7 @@ func TestBenchmarkBaselineProvider_ReadsCRs(t *testing.T) {
 		Build()
 
 	t.Run("p50", func(t *testing.T) {
-		p := &benchmarkBaselineProvider{client: cl, percentile: promlatency.PercentileP50}
+		p := &benchmarkBaselineProvider{client: cl, percentile: atlasprom.PercentileP50}
 		got, err := p.BaselineNS(context.Background(), makeInput("ns1"))
 		if err != nil {
 			t.Fatalf("BaselineNS: %v", err)
@@ -87,7 +87,7 @@ func TestBenchmarkBaselineProvider_ReadsCRs(t *testing.T) {
 	})
 
 	t.Run("p99", func(t *testing.T) {
-		p := &benchmarkBaselineProvider{client: cl, percentile: promlatency.PercentileP99}
+		p := &benchmarkBaselineProvider{client: cl, percentile: atlasprom.PercentileP99}
 		got, err := p.BaselineNS(context.Background(), makeInput("ns1"))
 		if err != nil {
 			t.Fatalf("BaselineNS: %v", err)

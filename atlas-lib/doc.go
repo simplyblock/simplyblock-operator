@@ -33,6 +33,8 @@
 //	storage         One node's storage as one value (Accessor);
 //	                storage/storagerpc serves it over a link and reaches
 //	                another node's.
+//	prometheus      Read the telemetry simplyblock exports about itself:
+//	                capacity, per-volume load, and node write latency.
 //	errs            Sentinel errors shared across atlas, matched with errors.Is.
 //	errs/class      Classify a failure: the gRPC status to answer with, and
 //	                whether retrying can help.

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	atlasprom "github.com/simplyblock/atlas/prometheus"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
-	promlatency "github.com/simplyblock/simplyblock-operator/internal/metrics/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -25,7 +25,7 @@ func newBaselineProvider(k8sClient client.Client, cfg RebalancingConfig) (Baseli
 	if cfg.BaselineStrategy == string(simplyblockv1alpha1.BaselineStrategyBenchmark) {
 		return &benchmarkBaselineProvider{client: k8sClient, percentile: cfg.LatencyPercentile}, nil
 	}
-	provider, err := promlatency.New(cfg.PrometheusURL)
+	provider, err := atlasprom.New(cfg.PrometheusURL)
 	if err != nil {
 		return nil, fmt.Errorf("create prometheus baseline provider: %w", err)
 	}
@@ -54,7 +54,7 @@ func (b *benchmarkBaselineProvider) BaselineNS(
 		for _, snode := range snodeList.Items {
 			for _, lm := range snode.Status.LatencyMetrics {
 				baseline := lm.BaselineP50NS
-				if b.percentile == promlatency.PercentileP99 {
+				if b.percentile == atlasprom.PercentileP99 {
 					baseline = lm.BaselineP99NS
 				}
 				if baseline > 0 {
@@ -71,7 +71,7 @@ func (b *benchmarkBaselineProvider) BaselineNS(
 // (Hampel outlier rejection + median of survivors). It emits the per-node baseline and
 // sample-count gauges as a side effect.
 type rollingWindowBaselineProvider struct {
-	prom *promlatency.Provider
+	prom *atlasprom.Provider
 	cfg  RebalancingConfig
 }
 
@@ -80,7 +80,7 @@ func (r *rollingWindowBaselineProvider) BaselineNS(
 	inputs ...StorageNodeSelectorInput,
 ) (map[string]int64, error) {
 	clusterIDs := distinctClusterUUIDs(inputs)
-	windowed, err := r.prom.GetClustersWindowedLatency(
+	windowed, err := r.prom.ClusterLatencySamples(
 		ctx, clusterIDs, r.cfg.LatencyPercentile, r.cfg.BaselineWindow, r.cfg.BaselineStep,
 	)
 	if err != nil {
