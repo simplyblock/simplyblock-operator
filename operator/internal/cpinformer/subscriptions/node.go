@@ -189,6 +189,13 @@ func (s *NodeSubscription) Lookup(nodeID string) (cpinformer.Scope, NodeDTO, boo
 	return s.store.Find(nodeID)
 }
 
+// List returns every node the control plane reports for a cluster. It is what
+// adoption reads: a StorageNode with no backend id yet has nothing to look up
+// by, and has to find itself among the cluster's nodes by its worker's address.
+func (s *NodeSubscription) List(scope cpinformer.Scope) []NodeDTO {
+	return s.store.List(scope)
+}
+
 // Synced reports whether a scope has received its initial snapshot. Until it
 // has, an absent node is an absence of information rather than evidence that
 // the control plane has forgotten it.
