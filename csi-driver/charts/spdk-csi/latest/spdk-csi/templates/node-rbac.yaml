@@ -24,9 +24,16 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get","list","watch","delete"]
+# rbac-justified: the node plugin reads a claim's on-disk-filesystem annotation
+# before deciding whether a volume may be formatted, and records the filesystem
+# there after staging one, so a later stage knows what the volume holds without
+# reading the device. patch rather than update: the write is a merge patch of
+# that one key, so a concurrent writer of any other annotation is left alone.
+# Cluster-wide because claims live in whichever namespace a workload chose, and
+# unnamed because their names are not known ahead of time.
 - apiGroups: [""]
   resources: ["persistentvolumeclaims"]
-  verbs: ["get", "list", "watch"]
+  verbs: ["get", "list", "watch", "patch"]
 - apiGroups: [""]
   resources: ["persistentvolumes"]
   verbs: ["get", "list", "watch"]
