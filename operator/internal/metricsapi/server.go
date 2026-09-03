@@ -88,7 +88,13 @@ type Server struct {
 // The serving certificate must already exist in opts.CertDir: the listener reads
 // it at construction, so callers wait on the rotator's ready channel first (see
 // SetupCertificate).
-func NewServer(opts Options, volumes VolumeSource, reader client.Reader, log logr.Logger) (*Server, error) {
+func NewServer(
+	opts Options,
+	volumes VolumeSource,
+	reader client.Reader,
+	capacity CapacitySource,
+	log logr.Logger,
+) (*Server, error) {
 	opts.withDefaults()
 
 	config := genericapiserver.NewRecommendedConfig(Codecs)
@@ -144,7 +150,7 @@ func NewServer(opts Options, volumes VolumeSource, reader client.Reader, log log
 
 	group := genericapiserver.NewDefaultAPIGroupInfo(metricsv1alpha1.GroupName, Scheme, ParameterCodec, Codecs)
 	group.VersionedResourcesStorageMap[metricsv1alpha1.GroupVersion.Version] = map[string]rest.Storage{
-		ResourceName: NewStorage(volumes, reader),
+		ResourceName: NewStorage(volumes, reader, capacity),
 	}
 	if err := server.InstallAPIGroup(&group); err != nil {
 		return nil, fmt.Errorf("metricsapi: install api group: %w", err)

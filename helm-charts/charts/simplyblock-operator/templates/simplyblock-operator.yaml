@@ -59,6 +59,7 @@ spec:
             {{- end }}
             {{- if .Values.metricsAPI.enabled }}
             - --metrics-api-bind-port={{ .Values.metricsAPI.port }}
+            - --prometheus-url={{ .Values.metricsAPI.prometheusURL }}
             {{- else }}
             # No APIService routes to it, so do not open the port at all.
             - --enable-metrics-api=false

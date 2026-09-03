@@ -112,7 +112,7 @@ func TestAPIGroupInstalls(t *testing.T) {
 
 	group := genericapiserver.NewDefaultAPIGroupInfo(metricsv1alpha1.GroupName, Scheme, ParameterCodec, Codecs)
 	group.VersionedResourcesStorageMap[metricsv1alpha1.GroupVersion.Version] = map[string]rest.Storage{
-		ResourceName: NewStorage(fakeVolumes{}, nil),
+		ResourceName: NewStorage(fakeVolumes{}, nil, nil),
 	}
 	if err := server.InstallAPIGroup(&group); err != nil {
 		t.Fatalf("InstallAPIGroup: %v", err)
