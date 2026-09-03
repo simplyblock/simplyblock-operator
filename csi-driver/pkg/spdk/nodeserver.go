@@ -731,23 +731,38 @@ func (ns *nodeServer) stageVolume(
 		return err
 	}
 
-	// A blank device is the only one whose filesystem is still this driver's to
-	// choose. Once it carries one, mkfs never runs again, and honoring the
-	// claim's annotation at that point would mean destroying the data already
-	// on it, so the annotation is read here and nowhere else.
+	// blkid reporting nothing means either that the device carries no filesystem
+	// or that it could not be read, and the two are indistinguishable from its
+	// exit code alone. A claim that records a filesystem settles it: the volume
+	// was formatted once, so this reading is a failed probe rather than a blank
+	// device, and it is mounted as what the claim says is down there.
+	//
+	// It is mounted as the recorded filesystem, not the requested one, because
+	// those disagree exactly when it matters — a volume formatted before its
+	// StorageClass changed — and mounting ext4 as xfs fails. The mount flags
+	// follow the same filesystem for the same reason: xfs needs nouuid, and
+	// deriving the flags from the request would drop it.
+	//
+	// A mount that fails here is the correct outcome and must stay one. It means
+	// the claim's record disagrees with the device, or the device is genuinely
+	// dead, and neither is a reason to format: falling back to mkfs would
+	// reinstate the data loss this branch exists to prevent.
 	mntFlags := stagingMountFlags(fsType, req.GetVolumeCapability())
 	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
 	if fs == "" {
 		if annotated := ns.annotatedFilesystem(ctx, req.GetVolumeId(), volumeContext); annotated != "" {
 			if annotated != fsType {
-				klog.Warningf("wrong filesystem: mount %s to %s, requested fstype %s but formatted with %s", devicePath, stagingPath, fsType, annotated)
+				klog.Warningf(
+					"volume %s: claim records a %s filesystem but the volume asks for %s; mounting %s at %s as %s without reformatting", //nolint:lll // unwrappable string/log/signature
+					req.GetVolumeId(), annotated, fsType, devicePath, stagingPath, annotated,
+				)
 			}
 			volumeContext[stagedFsTypeKey] = annotated
 			return mounter.Mount(
 				devicePath,
 				stagingPath,
-				fsType,
-				mntFlags,
+				annotated,
+				stagingMountFlags(annotated, req.GetVolumeCapability()),
 			)
 		}
 	}
@@ -873,9 +888,10 @@ func getDiskFormat(disk string) (string, error) {
 		}
 		// TYPE is filesystem type, and PTTYPE is partition table type, according
 		// to https://www.kernel.org/pub/linux/utils/util-linux/v2.21/libblkid-docs/.
-		if cs[0] == "TYPE" {
+		switch cs[0] {
+		case "TYPE":
 			fstype = cs[1]
-		} else if cs[0] == "PTTYPE" {
+		case "PTTYPE":
 			pttype = cs[1]
 		}
 	}
