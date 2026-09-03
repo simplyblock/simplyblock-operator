@@ -151,6 +151,40 @@ type StorageNodeResources struct {
 	// Devices is the device summary (online/total) reported by the backend.
 	// +optional
 	Devices string `json:"devices,omitempty"`
+
+	// Capacity is how much of the node's storage is in use, summed over its
+	// devices. It is a measurement rather than a declaration, so it is absent
+	// until something has measured it, and it lags reality by the interval at
+	// which the control plane's metrics are scraped.
+	// +optional
+	Capacity *StorageNodeCapacity `json:"capacity,omitempty"`
+}
+
+// StorageNodeCapacity is a node's storage occupancy, as the control plane last
+// measured it.
+//
+// It carries the same two numbers as a device's capacity, because a node's is
+// the sum of its devices' and a reader comparing the two should not have to
+// reconcile different shapes. It is written only when the reading has moved
+// materially: a sample that changed by a few blocks is not worth an etcd write,
+// and writing every sample would make the reconciler retrigger itself on its
+// own status update.
+type StorageNodeCapacity struct {
+	// TotalBytes is the storage the node's devices provide.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	TotalBytes *int64 `json:"totalBytes,omitempty"`
+
+	// UsedBytes is what they currently hold.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	UsedBytes *int64 `json:"usedBytes,omitempty"`
+
+	// SampledAt is when the control plane took the reading. It is not when the
+	// object was written, and it may be considerably older if metrics
+	// collection has stopped.
+	// +optional
+	SampledAt *metav1.Time `json:"sampledAt,omitempty"`
 }
 
 // StorageNodePorts groups the network port and address fields reported by the backend.

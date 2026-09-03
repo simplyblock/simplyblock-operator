@@ -23,6 +23,8 @@ import (
 	"os"
 	"strings"
 
+	atlasprom "github.com/simplyblock/atlas/prometheus"
+
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
@@ -290,6 +292,16 @@ func main() {
 	// backend-id-to-object mapping the events are named by.
 	nodeSubscription := subscriptions.NewNodeSubscription()
 	nodeScopes := cpSubscriptions.AddSubscription(nodeSubscription)
+	// How full a node is exists only in the metrics the control plane exports,
+	// so it comes from Prometheus rather than from the API or the stream. An
+	// endpoint that cannot be reached leaves the capacity absent from the
+	// status and everything else in it correct.
+	var nodeCapacity controller.NodeCapacitySource
+	if provider, err := atlasprom.New(prometheusURL); err != nil {
+		setupLog.Error(err, "storage-node capacity will be absent", "prometheusURL", prometheusURL)
+	} else {
+		nodeCapacity = provider
+	}
 	if err := (&controller.StorageDeviceReconciler{
 		Client:  mgr.GetClient(),
 		Scheme:  mgr.GetScheme(),
@@ -443,7 +455,8 @@ func main() {
 		NodeRegistries: []controller.NodeObjectRegistry{
 			deviceSubscription, nodeSubscription,
 		},
-		Nodes: nodeSubscription,
+		Nodes:    nodeSubscription,
+		Capacity: nodeCapacity,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)

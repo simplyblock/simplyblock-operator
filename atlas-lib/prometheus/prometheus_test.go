@@ -312,3 +312,45 @@ func (nonVectorAPI) Query(
 ) (model.Value, promv1.Warnings, error) {
 	return &model.Scalar{Value: 1}, nil, nil
 }
+
+// A node's capacity is keyed by its own label, and the prefix differs from both
+// other kinds: getting either wrong would return an empty map against a cluster
+// that has the data.
+func TestNodeCapacityIsKeyedByTheSnodeLabel(t *testing.T) {
+	const testNode = "fd687dfd-9b5d-4eca-8cb1-23bcf550ad21"
+	labels := map[string]string{
+		"cluster":  testCluster,
+		"snode":    testNode,
+		"hostname": "vm02_4420",
+	}
+	api := &stubAPI{vector: model.Vector{
+		sample("snode_size_total", labels, 112303538176),
+		sample("snode_size_used", labels, 422576128),
+		sample("snode_size_free", labels, 111880962048),
+		sample("snode_date", labels, 1788423117),
+	}}
+
+	got, err := NewWithAPI(api).NodeCapacity(context.Background(), testCluster)
+	if err != nil {
+		t.Fatalf("NodeCapacity: %v", err)
+	}
+	c, ok := got[testNode]
+	if !ok {
+		t.Fatalf("no sample for the node, got keys %v", got)
+	}
+	if c.Total != 112303538176 || c.Used != 422576128 || c.Free != 111880962048 {
+		t.Errorf("total/used/free = %d/%d/%d", c.Total, c.Used, c.Free)
+	}
+	if !c.Sampled() {
+		t.Error("a node carrying a date should report Sampled")
+	}
+	if !strings.Contains(api.queries[0], "snode_size_used") {
+		t.Errorf("query %q does not ask for the node metrics", api.queries[0])
+	}
+	// The device and volume prefixes must not leak into a node query, or it
+	// would match nothing.
+	if strings.Contains(api.queries[0], "device_size_used") ||
+		strings.Contains(api.queries[0], "lvol_size_used") {
+		t.Errorf("query %q mixes entity kinds", api.queries[0])
+	}
+}

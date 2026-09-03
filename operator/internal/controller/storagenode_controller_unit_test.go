@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -14,6 +15,9 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/simplyblock/atlas/prometheus"
+	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
@@ -488,5 +492,162 @@ func TestSyncStatusFallsBackToTheControlPlaneForAnUncachedNode(t *testing.T) {
 	}
 	if got.Status.Status != nodeStatusInCreation || got.Status.Hostname != "vm09_4420" {
 		t.Errorf("status/hostname = %q/%q", got.Status.Status, got.Status.Hostname)
+	}
+}
+
+// fakeNodeCapacity stands in for the metrics endpoint.
+type fakeNodeCapacity struct {
+	samples map[string]prometheus.Capacity
+	err     error
+}
+
+func (f *fakeNodeCapacity) NodeCapacity(
+	_ context.Context, _ string,
+) (map[string]prometheus.Capacity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.samples, nil
+}
+
+const (
+	snCapNode  = "fd687dfd-9b5d-4eca-8cb1-23bcf550ad21"
+	snCapTotal = int64(112303538176)
+	snCapUsed  = int64(422576128)
+)
+
+func nodeWithUUID() *simplyblockv1alpha1.StorageNode {
+	return &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "simplyblock-node-cap"},
+		Status:     simplyblockv1alpha1.StorageNodeStatus{UUID: snCapNode},
+	}
+}
+
+func nodeRecording(used, total int64) *simplyblockv1alpha1.StorageNode {
+	sn := nodeWithUUID()
+	sn.Status.Resources = &simplyblockv1alpha1.StorageNodeResources{
+		Capacity: &simplyblockv1alpha1.StorageNodeCapacity{
+			TotalBytes: ptr.To(total),
+			UsedBytes:  ptr.To(used),
+		},
+	}
+	return sn
+}
+
+func applyWithCapacity(
+	t *testing.T, sn *simplyblockv1alpha1.StorageNode, src NodeCapacitySource,
+) simplyblockv1alpha1.StorageNode {
+	t.Helper()
+	r := newSNReconciler(t, sn)
+	r.Capacity = src
+	if _, err := r.applyNodeStatus(context.Background(), sn, "cluster-1",
+		SNODEAPIResponse{Status: nodeStatusOnline, Hostname: "vm02_4420"}); err != nil {
+		t.Fatalf("applyNodeStatus: %v", err)
+	}
+	var got simplyblockv1alpha1.StorageNode
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), &got); err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	return got
+}
+
+// A node's occupancy is in neither the control plane's API nor its stream, only
+// in the metrics it exports, so a first reading is published from there.
+func TestNodeStatusPublishesTheCapacitySample(t *testing.T) {
+	sampledAt := time.Unix(1788423117, 0).UTC()
+	got := applyWithCapacity(t, nodeWithUUID(), &fakeNodeCapacity{
+		samples: map[string]prometheus.Capacity{
+			snCapNode: {Total: snCapTotal, Used: snCapUsed, SampledAt: sampledAt},
+		},
+	})
+
+	c := got.Status.Resources.Capacity
+	if c == nil {
+		t.Fatal("capacity was not published")
+	}
+	if *c.TotalBytes != snCapTotal || *c.UsedBytes != snCapUsed {
+		t.Errorf("total/used = %d/%d", *c.TotalBytes, *c.UsedBytes)
+	}
+	if c.SampledAt == nil || !c.SampledAt.Time.Equal(sampledAt) {
+		t.Errorf("sampledAt = %v, want %s", c.SampledAt, sampledAt)
+	}
+}
+
+// The reconciler watches its own objects, so a status write schedules another
+// reconcile. Recording every sample would make a node reconcile itself for as
+// long as any I/O was happening, so a reading that has barely moved is left
+// alone and the patch stays empty.
+func TestASampleThatBarelyMovedIsNotWritten(t *testing.T) {
+	// One mebibyte more on a 104 GiB node: far under one percent.
+	got := applyWithCapacity(t, nodeRecording(snCapUsed, snCapTotal), &fakeNodeCapacity{
+		samples: map[string]prometheus.Capacity{
+			snCapNode: {
+				Total: snCapTotal, Used: snCapUsed + 1048576,
+				SampledAt: time.Unix(1788423200, 0).UTC(),
+			},
+		},
+	})
+
+	if *got.Status.Resources.Capacity.UsedBytes != snCapUsed {
+		t.Errorf("used was rewritten to %d for a sub-threshold move",
+			*got.Status.Resources.Capacity.UsedBytes)
+	}
+}
+
+// A move worth knowing about is recorded. Without this the suppression above
+// would be indistinguishable from never updating at all.
+func TestASampleThatMovedMateriallyIsWritten(t *testing.T) {
+	want := snCapUsed + 10*1024*1024*1024 // ten gibibytes: over one percent
+	got := applyWithCapacity(t, nodeRecording(snCapUsed, snCapTotal), &fakeNodeCapacity{
+		samples: map[string]prometheus.Capacity{
+			snCapNode: {Total: snCapTotal, Used: want, SampledAt: time.Unix(1788423200, 0).UTC()},
+		},
+	})
+
+	if *got.Status.Resources.Capacity.UsedBytes != want {
+		t.Errorf("used = %d, want %d", *got.Status.Resources.Capacity.UsedBytes, want)
+	}
+}
+
+// A device joining or leaving changes the total, which is worth recording
+// however little the used size moved.
+func TestAChangedTotalIsAlwaysWritten(t *testing.T) {
+	const grown = int64(168455307264)
+	got := applyWithCapacity(t, nodeRecording(snCapUsed, snCapTotal), &fakeNodeCapacity{
+		samples: map[string]prometheus.Capacity{
+			snCapNode: {Total: grown, Used: snCapUsed, SampledAt: time.Unix(1788423200, 0).UTC()},
+		},
+	})
+
+	if *got.Status.Resources.Capacity.TotalBytes != grown {
+		t.Errorf("total = %d, want the new one", *got.Status.Resources.Capacity.TotalBytes)
+	}
+}
+
+// Prometheus being unreachable leaves the rest of the status correct. A node
+// whose occupancy is momentarily unknown is better published than not.
+func TestAFailingNodeCapacitySourceStillPublishesTheNode(t *testing.T) {
+	got := applyWithCapacity(t, nodeWithUUID(),
+		&fakeNodeCapacity{err: errors.New("connection refused")})
+
+	if got.Status.Status != nodeStatusOnline || got.Status.Hostname != "vm02_4420" {
+		t.Errorf("status/hostname = %q/%q", got.Status.Status, got.Status.Hostname)
+	}
+	if got.Status.Resources.Capacity != nil {
+		t.Errorf("capacity = %+v, want absent rather than zero", got.Status.Resources.Capacity)
+	}
+}
+
+// A node the exporter has never measured has no capacity to publish, and zeros
+// would read as an empty node rather than an unmeasured one.
+func TestAnUnsampledNodePublishesNoCapacity(t *testing.T) {
+	got := applyWithCapacity(t, nodeWithUUID(), &fakeNodeCapacity{
+		samples: map[string]prometheus.Capacity{
+			snCapNode: {Total: 0, Used: 0}, // no SampledAt: never measured
+		},
+	})
+
+	if got.Status.Resources.Capacity != nil {
+		t.Errorf("capacity = %+v, want absent", got.Status.Resources.Capacity)
 	}
 }
