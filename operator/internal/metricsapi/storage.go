@@ -24,10 +24,14 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
+	"github.com/go-logr/logr"
+
 	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/atlas/prometheus"
 
 	metricsv1alpha1 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
@@ -51,19 +55,37 @@ type VolumeSource interface {
 	Get(volumeID string) (subscriptions.VolumeDTO, bool)
 }
 
+// CapacitySource supplies the sampled half of a reading. It is satisfied by
+// atlas-lib's prometheus.Provider, and it is an interface here so that a test
+// needs no Prometheus and so that a deployment without one can pass nil.
+//
+// The control plane is not the source. Its VolumeDTO carries a capacity block
+// and reports zeros in every field of it, while the metrics the same service
+// exports carry the real numbers.
+type CapacitySource interface {
+	// VolumeCapacity returns the sample for every volume of a cluster, keyed by
+	// control-plane volume id. A volume with no sample is absent.
+	VolumeCapacity(ctx context.Context, clusterUUID string) (map[string]prometheus.Capacity, error)
+}
+
 // Storage serves logicalvolumemetrics. It holds no state of its own: the
 // readings come from the volume cache and the identities from the manager's
 // Kubernetes cache, and it is the join of the two.
 type Storage struct {
-	volumes VolumeSource
-	reader  client.Reader
+	volumes  VolumeSource
+	reader   client.Reader
+	capacity CapacitySource
 }
 
 // NewStorage returns the REST storage. reader must be a cache with
 // kube.IndexPVByVolumeHandle registered on PersistentVolumes; without it every
 // list is an error rather than a slow answer, which is the failure worth having.
-func NewStorage(volumes VolumeSource, reader client.Reader) *Storage {
-	return &Storage{volumes: volumes, reader: reader}
+//
+// capacity may be nil, and a deployment with no Prometheus is why. A reading
+// then carries the volume's provisioned size and nothing sampled, which is less
+// than the whole answer and more than refusing to answer at all.
+func NewStorage(volumes VolumeSource, reader client.Reader, capacity CapacitySource) *Storage {
+	return &Storage{volumes: volumes, reader: reader, capacity: capacity}
 }
 
 // New implements rest.Storage.
@@ -111,7 +133,9 @@ func (s *Storage) Get(ctx context.Context, name string, _ *metav1.GetOptions) (r
 		// zeros would be indistinguishable from an empty volume.
 		return nil, apierrors.NewNotFound(metricsv1alpha1.Resource(ResourceName), name)
 	}
-	return newReading(bound, dto), nil
+	lookup := newCapacityLookup(s.capacity, logf.FromContext(ctx))
+	sample := lookup.forVolume(ctx, dto.ClusterID, dto.ID)
+	return newReading(bound, dto, sample), nil
 }
 
 // List implements rest.Lister. It walks the volume cache rather than the claims,
@@ -123,6 +147,8 @@ func (s *Storage) List(ctx context.Context, options *metainternalversion.ListOpt
 	if options != nil && options.LabelSelector != nil {
 		selector = options.LabelSelector
 	}
+
+	lookup := newCapacityLookup(s.capacity, logf.FromContext(ctx))
 
 	out := &metricsv1alpha1.LogicalVolumeMetricsList{}
 	for _, dto := range s.volumes.All() {
@@ -137,7 +163,8 @@ func (s *Storage) List(ctx context.Context, options *metainternalversion.ListOpt
 		if namespace != "" && bound.claim.Namespace != namespace {
 			continue
 		}
-		reading := newReading(bound, dto)
+		sample := lookup.forVolume(ctx, dto.ClusterID, dto.ID)
+		reading := newReading(bound, dto, sample)
 		if !selector.Matches(labels.Set(reading.Labels)) {
 			continue
 		}
@@ -177,9 +204,68 @@ func matchesFieldSelector(options *metainternalversion.ListOptions, reading *met
 	return true
 }
 
-// newReading assembles the served object from the claim that names it and the
-// control plane's last sample of the volume behind it.
-func newReading(bound binding, dto subscriptions.VolumeDTO) *metricsv1alpha1.LogicalVolumeMetrics {
+// capacityLookup fetches capacity samples once per cluster for the duration of
+// one request, because a list walks many volumes of the same few clusters and
+// each query is an HTTP round trip.
+//
+// A cluster whose query fails is recorded as having no samples and is not
+// retried within the request. Prometheus being down degrades a reading to its
+// provisioned size rather than failing the request: the identities and the
+// nominal sizes are still correct, and a client asking which volumes it has
+// should not be told nothing.
+type capacityLookup struct {
+	source    CapacitySource
+	log       logr.Logger
+	byCluster map[string]map[string]prometheus.Capacity
+}
+
+func newCapacityLookup(source CapacitySource, log logr.Logger) *capacityLookup {
+	return &capacityLookup{
+		source:    source,
+		log:       log,
+		byCluster: map[string]map[string]prometheus.Capacity{},
+	}
+}
+
+// forVolume returns the sample for one volume, or the zero Capacity when there
+// is none. The caller does not need the two cases distinguished: an absent
+// sample and an all-zero one are projected identically, and Capacity.Sampled
+// reports the difference for anything that does care.
+func (l *capacityLookup) forVolume(
+	ctx context.Context, clusterUUID, volumeID string,
+) prometheus.Capacity {
+	if l == nil || l.source == nil {
+		return prometheus.Capacity{}
+	}
+	samples, ok := l.byCluster[clusterUUID]
+	if !ok {
+		var err error
+		samples, err = l.source.VolumeCapacity(ctx, clusterUUID)
+		if err != nil {
+			l.log.V(1).Info("no capacity samples for this request",
+				"cluster", clusterUUID, "err", err.Error())
+			samples = nil
+		}
+		l.byCluster[clusterUUID] = samples
+	}
+	return samples[volumeID]
+}
+
+// newReading assembles the served object from three things: the claim that
+// names it, the control plane's view of the volume behind it, and the last
+// capacity sample taken of it.
+//
+// Provisioned comes from the volume itself and the rest from the sample. The
+// volume's nominal size is a property of the volume, known as soon as it exists
+// and never sampled, while what it occupies is only ever a measurement. An
+// unsampled volume therefore reports its provisioned size with the measured
+// fields left at zero, and Timestamp left at the zero time rather than at the
+// epoch, so that "never measured" does not read as "measured in 1970."
+func newReading(
+	bound binding,
+	dto subscriptions.VolumeDTO,
+	sample prometheus.Capacity,
+) *metricsv1alpha1.LogicalVolumeMetrics {
 	return &metricsv1alpha1.LogicalVolumeMetrics{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: metricsv1alpha1.GroupVersion.String(),
@@ -191,16 +277,16 @@ func newReading(bound binding, dto subscriptions.VolumeDTO) *metricsv1alpha1.Log
 			Labels:            bound.labels,
 			CreationTimestamp: bound.created,
 		},
-		Timestamp:        metav1.Unix(dto.Capacity.Date, 0),
+		Timestamp:        metav1.NewTime(sample.SampledAt),
 		VolumeHandle:     string(bound.handle),
 		PersistentVolume: bound.persistentVolume,
 		PoolName:         dto.PoolName,
 		Capacity: metricsv1alpha1.LogicalVolumeCapacity{
-			Provisioned:        *resource.NewQuantity(dto.Capacity.SizeProv, resource.BinarySI),
-			Used:               *resource.NewQuantity(dto.Capacity.SizeUsed, resource.BinarySI),
-			Free:               *resource.NewQuantity(dto.Capacity.SizeFree, resource.BinarySI),
-			Total:              *resource.NewQuantity(dto.Capacity.SizeTotal, resource.BinarySI),
-			UtilizationPercent: dto.Capacity.SizeUtil,
+			Provisioned:        *resource.NewQuantity(dto.Size, resource.BinarySI),
+			Used:               *resource.NewQuantity(sample.Used, resource.BinarySI),
+			Free:               *resource.NewQuantity(sample.Free, resource.BinarySI),
+			Total:              *resource.NewQuantity(sample.Total, resource.BinarySI),
+			UtilizationPercent: sample.UtilizationPercent,
 		},
 	}
 }
