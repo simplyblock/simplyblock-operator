@@ -24,12 +24,14 @@ import (
 	"net/http"
 	"reflect"
 	"strconv"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,6 +47,9 @@ const (
 	restoreReconcileRequeue = 10 * time.Second
 	// lvolStatusRestoreFailed is set by the tasks-runner after exhausting all S3 transfer retry attempts.
 	lvolStatusRestoreFailed = "restore_failed"
+	// maxRestoreAttempts caps how many times a restore may be reconciled without the
+	// control plane accepting it.
+	maxRestoreAttempts = 5
 )
 
 const (
@@ -58,14 +63,47 @@ const (
 	eventReasonRestorePVCreateFailed     = "RestorePVCreateFailed"
 	eventReasonRestorePVCCreateFailed    = "RestorePVCCreateFailed"
 	eventReasonRestoreInvalidSpec        = "RestoreInvalidSpec"
+	eventReasonRestoreAttemptsExhausted  = "RestoreAttemptsExhausted"
 )
 
 // BackupRestoreReconciler reconciles a BackupRestore object.
+// attemptCounter tallies reconciles per object. Its zero value is ready to use, and it
+// is safe for the concurrent reconciles a controller with MaxConcurrentReconciles above
+// one performs.
+type attemptCounter struct {
+	mu     sync.Mutex
+	counts map[types.NamespacedName]int
+}
+
+// record counts one attempt and returns the running total for key.
+func (c *attemptCounter) record(key types.NamespacedName) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.counts == nil {
+		c.counts = make(map[types.NamespacedName]int)
+	}
+	c.counts[key]++
+	return c.counts[key]
+}
+
+// forget drops key's tally, so the map does not outlive the objects it counts.
+func (c *attemptCounter) forget(key types.NamespacedName) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	delete(c.counts, key)
+}
+
 type BackupRestoreReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
 	Recorder  events.EventRecorder
 	APIClient *webapi.Client
+
+	// attempts counts reconciles each restore has spent unaccepted. In memory on
+	// purpose: an operator restart resetting a count is not worth a field in the API.
+	attempts attemptCounter
 }
 
 type restoreAPIRequest struct {
@@ -120,14 +158,39 @@ type restoreCSIConnection struct {
 func (r *BackupRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	restoreCR := &simplyblockv1alpha1.BackupRestore{}
 	if err := r.Get(ctx, req.NamespacedName, restoreCR); err != nil {
+		if kerrors.IsNotFound(err) {
+			r.attempts.forget(req.NamespacedName)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	if restoreCR.Status.Phase == simplyblockv1alpha1.RestorePhaseDone ||
 		restoreCR.Status.Phase == simplyblockv1alpha1.RestorePhaseFailed {
+		r.attempts.forget(req.NamespacedName)
 		return ctrl.Result{}, nil
 	}
 
+	res, err := r.reconcileRestore(ctx, restoreCR)
+
+	// A restore that could never be placed requeued at 10s forever, so it sat in Pending
+	// and callers waiting on a terminal phase hung. Counted on the way out and only for a
+	// stall: a pass that made progress must not spend the budget, since the backup may
+	// only have become ready on the last attempt. Errors are the workqueue's to retry.
+	// The bound holds until acceptance only; the S3 transfer reports its own failure.
+	if err == nil && res.RequeueAfter > 0 && restoreCR.Status.RestoredLvolID == "" &&
+		r.attempts.record(req.NamespacedName) > maxRestoreAttempts {
+		return r.failExhaustedRestore(ctx, restoreCR)
+	}
+
+	return res, err
+}
+
+// reconcileRestore drives one pass over a non-terminal restore. Split out so the
+// attempt budget in Reconcile can see whether the pass stalled.
+func (r *BackupRestoreReconciler) reconcileRestore(
+	ctx context.Context,
+	restoreCR *simplyblockv1alpha1.BackupRestore,
+) (ctrl.Result, error) {
 	clusterUUID, res, done, err := r.resolveClusterUUID(ctx, restoreCR)
 	if done {
 		return res, err
@@ -153,6 +216,28 @@ func (r *BackupRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.reconcilePVCBinding(ctx, restoreCR, clusterUUID)
 	}
 
+	return ctrl.Result{}, nil
+}
+
+// failExhaustedRestore marks a restore that was never accepted as Failed, keeping
+// status.Message, which holds the reason it never got there.
+func (r *BackupRestoreReconciler) failExhaustedRestore(
+	ctx context.Context,
+	restoreCR *simplyblockv1alpha1.BackupRestore,
+) (ctrl.Result, error) {
+	msg := fmt.Sprintf("restore was not accepted in %d attempts, giving up: %s",
+		maxRestoreAttempts, restoreCR.Status.Message)
+
+	if err := r.patchStatus(ctx, restoreCR, func(s *simplyblockv1alpha1.BackupRestoreStatus) {
+		s.Phase = simplyblockv1alpha1.RestorePhaseFailed
+		s.Message = msg
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	r.Recorder.Eventf(restoreCR, nil, corev1.EventTypeWarning,
+		eventReasonRestoreAttemptsExhausted, eventReasonRestoreAttemptsExhausted, "%s", msg)
+	r.attempts.forget(client.ObjectKeyFromObject(restoreCR))
 	return ctrl.Result{}, nil
 }
 
@@ -473,7 +558,7 @@ func isCrossCluster(restoreCR *simplyblockv1alpha1.BackupRestore) bool {
 // not be this cluster's own bucket for a backup imported from another cluster.
 // The source cluster's StorageCluster CR (if still present in this namespace)
 // already has that bucket's credentials via its own backup.credentialsSecretRef,
-// so this resolves and forwards them rather than requiring the caller to supply
+// so this resolves and passes them on rather than requiring the caller to supply
 // them separately.
 //
 // Returns a nil credentials with a non-nil error when they cannot be resolved
@@ -718,7 +803,7 @@ func (r *BackupRestoreReconciler) ensurePV(
 					VolumeHandle:     volumeHandle,
 					VolumeAttributes: volumeAttributes,
 					// FSType preserves the original source volume's filesystem
-					// (e.g. xfs) so the restored volume mounts the same way it
+					// (e.g., XFS) so the restored volume mounts the same way it
 					// was backed up, instead of the CSI driver's ext4 default.
 					// Empty for backups taken before this field existed, or for
 					// imported backups with no live source PV — the CSI driver
