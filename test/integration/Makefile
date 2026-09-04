@@ -64,8 +64,10 @@ preflight: ## Check the tools and privileges a run needs.
 	esac; \
 	test $$fail -eq 0 || exit 1; \
 	echo "talosctl: $$(talosctl version --client --short 2>/dev/null || talosctl version --client 2>/dev/null | head -2 | tail -1)"; \
-	echo "refreshing sudo credentials (the provisioner needs root)"; \
-	sudo -v
+	if [ "$$(id -u)" -ne 0 ]; then \
+	  echo "refreshing sudo credentials (the provisioner needs root)"; \
+	  sudo -v; \
+	fi
 
 test: preflight ## Boot a cluster and run the suite.
 	SB_INTEGRATION=1 $(CLUSTER_ENV) \
