@@ -643,3 +643,75 @@ func TestPoolReconcileDoesNotEmitEventWhenClusterUUIDNotReady(t *testing.T) {
 		t.Fatalf("expected no webapi calls while UUID pending, got %d: %+v", len(reqs), reqs)
 	}
 }
+
+const (
+	dhchapTestNamespace   = "simplyblock"
+	dhchapTestClusterName = "simplyblock-cluster"
+	dhchapTestClusterUUID = "cluster-uuid-dhchap"
+)
+
+// dhchapTestPool is DHCHAP-gated when allowedNodes is non-empty, which is what makes
+// createStorageClassIfNotExists set dhchap_node_label on the class.
+func dhchapTestPool(name string, allowedNodes ...string) *simplyblockv1alpha1.StoragePool {
+	return &simplyblockv1alpha1.StoragePool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       name,
+			Namespace:  dhchapTestNamespace,
+			Finalizers: []string{utils.FinalizerStoragePool},
+		},
+		Spec: simplyblockv1alpha1.StoragePoolSpec{
+			ClusterName:  dhchapTestClusterName,
+			DHCHAP:       true,
+			AllowedNodes: allowedNodes,
+		},
+		Status: simplyblockv1alpha1.StoragePoolStatus{UUID: "pool-uuid-dhchap"},
+	}
+}
+
+func plainTestPool(name string) *simplyblockv1alpha1.StoragePool {
+	pool := dhchapTestPool(name)
+	pool.Spec.DHCHAP = false
+	return pool
+}
+
+// A generated class never carries AllowedTopologies: the term is unsatisfiable until the CSI
+// node plugin re-registers, and the allowed-node restriction rides on dhchap_node_label,
+// which is set only for a pool that is actually gating on nodes.
+func TestPoolStorageClassShape(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		pool      *simplyblockv1alpha1.StoragePool
+		wantGated bool
+	}{
+		{"dhchap with allowedNodes", dhchapTestPool("gated", "worker-1", "worker-2"), true},
+		{"dhchap without allowedNodes", dhchapTestPool("no-nodes"), false},
+		{"plain pool", plainTestPool("plain"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newPoolStateTestReconciler(t, tc.pool,
+				testCluster(dhchapTestNamespace, dhchapTestClusterName, dhchapTestClusterUUID))
+			if err := r.createStorageClassIfNotExists(context.Background(), tc.pool, dhchapTestClusterUUID); err != nil {
+				t.Fatalf("createStorageClassIfNotExists: %v", err)
+			}
+
+			name := simplyblockStorageClassName(dhchapTestNamespace, dhchapTestClusterName, tc.pool.Name)
+			sc := &storagev1.StorageClass{}
+			if err := r.Get(context.Background(), client.ObjectKey{Name: name}, sc); err != nil {
+				t.Fatalf("get StorageClass %q: %v", name, err)
+			}
+			if len(sc.AllowedTopologies) != 0 {
+				t.Errorf("AllowedTopologies = %v, want none", sc.AllowedTopologies)
+			}
+			if sc.VolumeBindingMode == nil || *sc.VolumeBindingMode != storagev1.VolumeBindingWaitForFirstConsumer {
+				t.Errorf("volumeBindingMode = %v, want WaitForFirstConsumer", sc.VolumeBindingMode)
+			}
+			wantLabel := ""
+			if tc.wantGated {
+				wantLabel = poolNodeLabelKey(dhchapTestNamespace, dhchapTestClusterName, tc.pool.Name)
+			}
+			if got := sc.Parameters[dhchapNodeLabelParam]; got != wantLabel {
+				t.Errorf("%s = %q, want %q", dhchapNodeLabelParam, got, wantLabel)
+			}
+		})
+	}
+}

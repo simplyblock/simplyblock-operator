@@ -349,12 +349,13 @@ func (r *StoragePoolReconciler) deleteStorageClass(ctx context.Context, storageP
 }
 
 // createStorageClassIfNotExists creates the StorageClass for the pool the first time it's
-// needed. It is intentionally create-only, not create-or-update: StorageClass Parameters and
-// AllowedTopologies are immutable in the Kubernetes API itself, so there is no "update" to
-// perform here. StoragePool.Spec.StorageClassParameters (and DHCHAP, which controls
-// AllowedTopologies) are marked +k8s:immutable for the same reason — the API server rejects
-// edits to them once set, so this function never needs to reconcile drift.
+// needed. It is intentionally create-only, not create-or-update: a StorageClass's Parameters
+// are immutable in the Kubernetes API itself, so there is no "update" to perform here.
+// StoragePool.Spec.StorageClassParameters and DHCHAP are marked +k8s:immutable for the same
+// reason, so this function never needs to reconcile drift.
 func (r *StoragePoolReconciler) createStorageClassIfNotExists(ctx context.Context, storagePoolCR *simplyblockv1alpha1.StoragePool, clusterUUID string) error {
+	dhchapGated := storagePoolCR.Spec.DHCHAP && len(storagePoolCR.Spec.AllowedNodes) > 0
+
 	bindingMode := storagev1.VolumeBindingWaitForFirstConsumer
 	reclaimPolicy := corev1.PersistentVolumeReclaimDelete
 	allowExpansion := true
@@ -381,19 +382,11 @@ func (r *StoragePoolReconciler) createStorageClassIfNotExists(ctx context.Contex
 		AllowVolumeExpansion: &allowExpansion,
 	}
 
-	if storagePoolCR.Spec.DHCHAP && len(storagePoolCR.Spec.AllowedNodes) > 0 {
-		nodeLabelKey := poolNodeLabelKey(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name)
-		sc.AllowedTopologies = []corev1.TopologySelectorTerm{
-			{
-				MatchLabelExpressions: []corev1.TopologySelectorLabelRequirement{
-					{
-						Key:    nodeLabelKey,
-						Values: []string{"allowed"},
-					},
-				},
-			},
-		}
-		params[dhchapNodeLabelParam] = nodeLabelKey // CreateVolume can't derive this key on its own (#403)
+	if dhchapGated {
+		// CreateVolume turns this into the PV's nodeAffinity (dhchapAllowedNodeSegment, #403).
+		// Deliberately no matching AllowedTopologies term: CSINode topology keys are frozen at
+		// csi-node registration, so a pool label written later fails every PVC (#484).
+		params[dhchapNodeLabelParam] = poolNodeLabelKey(storagePoolCR.Namespace, storagePoolCR.Spec.ClusterName, storagePoolCR.Name)
 	}
 
 	if err := r.Create(ctx, sc); err != nil && !apierrors.IsAlreadyExists(err) {
