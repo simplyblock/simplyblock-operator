@@ -45,12 +45,6 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      # The operator and rebalancer images are built and pushed to Quay by
-      # operator_build.yaml, which already builds the same two images multi-arch
-      # for DockerHub and ECR. This job used to rebuild both of them here purely
-      # to reach a third registry, doubling the multi-arch build cost of every
-      # release. It now only generates the bundle, which reads the digests of
-      # those already-pushed images.
       - name: Install operator-sdk
         run: |
           OPERATOR_SDK_VERSION="v1.42.2"
