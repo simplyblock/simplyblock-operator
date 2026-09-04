@@ -122,8 +122,9 @@ var _ = ginkgo.Describe("SPDKCSI-DHCHAP", func() {
 
 			ginkgo.By("verify an unauthorized host is genuinely rejected by the backend authorization gate")
 			// The K8s scheduler would normally keep a pod off a node the pool
-			// doesn't allow (via the operator's AllowedTopologies), but that's a
-			// separate gate from the one this bug was about. Call /connect
+			// doesn't allow (via the provisioned PV's nodeAffinity, built from
+			// dhchap_node_label), but that's a separate gate from the one this
+			// bug was about. Call /connect
 			// directly with an unregistered host NQN — the same request path the
 			// CSI driver takes — to confirm the backend itself still refuses it
 			// independent of anything Kubernetes-side.
