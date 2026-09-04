@@ -239,9 +239,9 @@ verify-config-yaml: yq ## Check that every manifest under config/ parses as YAML
 	  fi; \
 	done; \
 	if [ "$$bad" != 0 ]; then \
-	  echo "operator-sdk reports an unparseable ClusterServiceVersion base as a"; \
-	  echo "missing manifest rather than a syntax error, so an invalid file here"; \
-	  echo "surfaces only when a release runs 'make bundle'."; \
+	  echo "operator-sdk reports a ClusterServiceVersion base it cannot parse as"; \
+	  echo "a missing manifest rather than a syntax error, so an invalid file"; \
+	  echo "here surfaces only when a release runs 'make bundle'."; \
 	  exit 1; \
 	fi; \
 	echo "config/: every manifest parses"
