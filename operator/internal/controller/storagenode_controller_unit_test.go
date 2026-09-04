@@ -2,7 +2,12 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -11,8 +16,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/simplyblock/atlas/prometheus"
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -351,7 +362,7 @@ func TestHandleDeletion_RemovesFinalizerWhenNeverProvisioned(t *testing.T) {
 	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, nil)
 	r := newSNReconciler(t, sn, sns)
 
-	_, err := r.handleDeletion(context.Background(), sn, sns)
+	_, err := r.handleDeletion(context.Background(), sn, snTestCluster)
 	if err != nil {
 		t.Fatalf("handleDeletion returned error: %v", err)
 	}
@@ -508,4 +519,385 @@ func TestCountInFlightNodes_DeduplicatesByWorker(t *testing.T) {
 			t.Fatalf("expected 2 distinct in-flight workers (a, c), got %d", count)
 		}
 	})
+}
+
+// The reconciler serves a node's status from the stream's cache, so a change
+// the control plane pushed costs no request to read back. The server here
+// fails every request and counts them: a reconciler that polled would both
+// call it and fail to write a status.
+func TestSyncStatusReadsThePushedNodeInsteadOfAskingForIt(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	const nodeUUID = "fd687dfd-9b5d-4eca-8cb1-23bcf550ad21"
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "simplyblock-node-asxeub"},
+		Status:     simplyblockv1alpha1.StorageNodeStatus{UUID: nodeUUID},
+	}
+
+	// The stream reported the node online, as its snapshot would.
+	sub := subscriptions.NewNodeSubscription()
+	sub.RegisterNode(nodeUUID, client.ObjectKeyFromObject(sn))
+	err := sub.Ingest(context.Background(), cpinformer.Event{
+		Kind:  cpinformer.EventSnapshot,
+		Scope: cpinformer.Scope{"22222222-2222-2222-2222-222222222222"},
+		Data: []byte(`[{"id":"` + nodeUUID + `","status":"online","mgmt_ip":"192.168.10.112",
+			"health_check":true,"hostname":"vm02_4420","cpu_spdk_count":6,"lvols":3,
+			"rpc_port":4420,"lvol_subsys_port":4426,"nvmf_port":4421,"failure_domain":-1}]`),
+	})
+	if err != nil {
+		t.Fatalf("ingest snapshot: %v", err)
+	}
+
+	r := newSNReconciler(t, sn)
+	r.Nodes = sub
+
+	res, err := r.syncStatus(context.Background(), sn, "22222222-2222-2222-2222-222222222222",
+		webapi.NewClient(srv.URL))
+	if err != nil {
+		t.Fatalf("syncStatus: %v", err)
+	}
+
+	if n := atomic.LoadInt32(&calls); n != 0 {
+		t.Errorf("made %d control-plane request(s), want none for a node the stream already delivered", n)
+	}
+
+	var got simplyblockv1alpha1.StorageNode
+	key := client.ObjectKeyFromObject(sn)
+	if err := r.Get(context.Background(), key, &got); err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	if got.Status.Status != "online" || !got.Status.Health {
+		t.Errorf("status/health = %q/%v, want online/true", got.Status.Status, got.Status.Health)
+	}
+	if got.Status.Hostname != snBackendHostname {
+		t.Errorf("hostname = %q", got.Status.Hostname)
+	}
+	if got.Status.Ports == nil || got.Status.Ports.Management != "192.168.10.112" {
+		t.Errorf("ports = %+v", got.Status.Ports)
+	}
+	if got.Status.Resources == nil || *got.Status.Resources.Volumes != 3 {
+		t.Errorf("resources = %+v", got.Status.Resources)
+	}
+
+	// The poll survives as the correctness floor, relaxed because it is no
+	// longer how a change is noticed.
+	if res.RequeueAfter < time.Minute {
+		t.Errorf("RequeueAfter = %s, want the relaxed backstop rather than a poll", res.RequeueAfter)
+	}
+}
+
+// A node the stream has not delivered still has to be readable, or a cold cache
+// would leave the CR's status frozen until the first snapshot lands.
+func TestSyncStatusFallsBackToTheControlPlaneForAnUncachedNode(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"aaaa","status":"in_creation","health_check":false,
+			"hostname":"vm09_4420","cpu_spdk_count":4,"lvols":0,"mgmt_ip":"10.0.0.9",
+			"rpc_port":4420,"lvol_subsys_port":4426,"nvmf_port":4421,"failure_domain":-1}`))
+	}))
+	defer srv.Close()
+
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "simplyblock-node-new"},
+		Status:     simplyblockv1alpha1.StorageNodeStatus{UUID: "aaaa"},
+	}
+
+	r := newSNReconciler(t, sn)
+	r.Nodes = subscriptions.NewNodeSubscription() // connected, nothing delivered yet
+
+	if _, err := r.syncStatus(context.Background(), sn, "cluster-1", webapi.NewClient(srv.URL)); err != nil {
+		t.Fatalf("syncStatus: %v", err)
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Errorf("made %d request(s), want exactly 1 for a node the stream has not delivered", n)
+	}
+
+	var got simplyblockv1alpha1.StorageNode
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), &got); err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	if got.Status.Status != nodeStatusInCreation || got.Status.Hostname != "vm09_4420" {
+		t.Errorf("status/hostname = %q/%q", got.Status.Status, got.Status.Hostname)
+	}
+}
+
+// fakeNodeCapacity stands in for the metrics endpoint.
+type fakeNodeCapacity struct {
+	samples map[string]prometheus.Capacity
+	err     error
+}
+
+func (f *fakeNodeCapacity) NodeCapacity(
+	_ context.Context, _ string,
+) (map[string]prometheus.Capacity, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.samples, nil
+}
+
+const (
+	// snBackendHostname is how the control plane names a node, which is not the
+	// worker's Kubernetes name: the two are separate fields for that reason.
+	snBackendHostname = "vm02_4420"
+	snCapNode         = "fd687dfd-9b5d-4eca-8cb1-23bcf550ad21"
+	snCapTotal        = int64(112303538176)
+	snCapUsed         = int64(422576128)
+)
+
+func nodeWithUUID() *simplyblockv1alpha1.StorageNode {
+	return &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "simplyblock-node-cap"},
+		Status:     simplyblockv1alpha1.StorageNodeStatus{UUID: snCapNode},
+	}
+}
+
+func nodeRecording(used, total int64) *simplyblockv1alpha1.StorageNode {
+	sn := nodeWithUUID()
+	sn.Status.Resources = &simplyblockv1alpha1.StorageNodeResources{
+		Capacity: &simplyblockv1alpha1.StorageNodeCapacity{
+			TotalBytes: ptr.To(total),
+			UsedBytes:  ptr.To(used),
+		},
+	}
+	return sn
+}
+
+func applyWithCapacity(
+	t *testing.T, sn *simplyblockv1alpha1.StorageNode, src NodeCapacitySource,
+) simplyblockv1alpha1.StorageNode {
+	t.Helper()
+	r := newSNReconciler(t, sn)
+	r.Capacity = src
+	if _, err := r.applyNodeStatus(context.Background(), sn, "cluster-1",
+		SNODEAPIResponse{Status: nodeStatusOnline, Hostname: snBackendHostname}); err != nil {
+		t.Fatalf("applyNodeStatus: %v", err)
+	}
+	var got simplyblockv1alpha1.StorageNode
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), &got); err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	return got
+}
+
+// A node's occupancy is in neither the control plane's API nor its stream, only
+// in the metrics it exports, so a first reading is published from there.
+func TestNodeStatusPublishesTheCapacitySample(t *testing.T) {
+	sampledAt := time.Unix(1788423117, 0).UTC()
+	got := applyWithCapacity(t, nodeWithUUID(), &fakeNodeCapacity{
+		samples: map[string]prometheus.Capacity{
+			snCapNode: {Total: snCapTotal, Used: snCapUsed, SampledAt: sampledAt},
+		},
+	})
+
+	c := got.Status.Resources.Capacity
+	if c == nil {
+		t.Fatal("capacity was not published")
+	}
+	if *c.TotalBytes != snCapTotal || *c.UsedBytes != snCapUsed {
+		t.Errorf("total/used = %d/%d", *c.TotalBytes, *c.UsedBytes)
+	}
+	if c.SampledAt == nil || !c.SampledAt.Time.Equal(sampledAt) {
+		t.Errorf("sampledAt = %v, want %s", c.SampledAt, sampledAt)
+	}
+}
+
+// The reconciler watches its own objects, so a status write schedules another
+// reconcile. Recording every sample would make a node reconcile itself for as
+// long as any I/O was happening, so a reading that has barely moved is left
+// alone and the patch stays empty.
+func TestASampleThatBarelyMovedIsNotWritten(t *testing.T) {
+	// One mebibyte more on a 104 GiB node: far under one percent.
+	got := applyWithCapacity(t, nodeRecording(snCapUsed, snCapTotal), &fakeNodeCapacity{
+		samples: map[string]prometheus.Capacity{
+			snCapNode: {
+				Total: snCapTotal, Used: snCapUsed + 1048576,
+				SampledAt: time.Unix(1788423200, 0).UTC(),
+			},
+		},
+	})
+
+	if *got.Status.Resources.Capacity.UsedBytes != snCapUsed {
+		t.Errorf("used was rewritten to %d for a sub-threshold move",
+			*got.Status.Resources.Capacity.UsedBytes)
+	}
+}
+
+// A move worth knowing about is recorded. Without this the suppression above
+// would be indistinguishable from never updating at all.
+func TestASampleThatMovedMateriallyIsWritten(t *testing.T) {
+	want := snCapUsed + 10*1024*1024*1024 // ten gibibytes: over one percent
+	got := applyWithCapacity(t, nodeRecording(snCapUsed, snCapTotal), &fakeNodeCapacity{
+		samples: map[string]prometheus.Capacity{
+			snCapNode: {Total: snCapTotal, Used: want, SampledAt: time.Unix(1788423200, 0).UTC()},
+		},
+	})
+
+	if *got.Status.Resources.Capacity.UsedBytes != want {
+		t.Errorf("used = %d, want %d", *got.Status.Resources.Capacity.UsedBytes, want)
+	}
+}
+
+// A device joining or leaving changes the total, which is worth recording
+// however little the used size moved.
+func TestAChangedTotalIsAlwaysWritten(t *testing.T) {
+	const grown = int64(168455307264)
+	got := applyWithCapacity(t, nodeRecording(snCapUsed, snCapTotal), &fakeNodeCapacity{
+		samples: map[string]prometheus.Capacity{
+			snCapNode: {Total: grown, Used: snCapUsed, SampledAt: time.Unix(1788423200, 0).UTC()},
+		},
+	})
+
+	if *got.Status.Resources.Capacity.TotalBytes != grown {
+		t.Errorf("total = %d, want the new one", *got.Status.Resources.Capacity.TotalBytes)
+	}
+}
+
+// Prometheus being unreachable leaves the rest of the status correct. A node
+// whose occupancy is momentarily unknown is better published than not.
+func TestAFailingNodeCapacitySourceStillPublishesTheNode(t *testing.T) {
+	got := applyWithCapacity(t, nodeWithUUID(),
+		&fakeNodeCapacity{err: errors.New("connection refused")})
+
+	if got.Status.Status != nodeStatusOnline || got.Status.Hostname != snBackendHostname {
+		t.Errorf("status/hostname = %q/%q", got.Status.Status, got.Status.Hostname)
+	}
+	if got.Status.Resources.Capacity != nil {
+		t.Errorf("capacity = %+v, want absent rather than zero", got.Status.Resources.Capacity)
+	}
+}
+
+// A node the exporter has never measured has no capacity to publish, and zeros
+// would read as an empty node rather than an unmeasured one.
+func TestAnUnsampledNodePublishesNoCapacity(t *testing.T) {
+	got := applyWithCapacity(t, nodeWithUUID(), &fakeNodeCapacity{
+		samples: map[string]prometheus.Capacity{
+			snCapNode: {Total: 0, Used: 0}, // no SampledAt: never measured
+		},
+	})
+
+	if got.Status.Resources.Capacity != nil {
+		t.Errorf("capacity = %+v, want absent", got.Status.Resources.Capacity)
+	}
+}
+
+// Adoption matches a StorageNode to its backend node by the worker's address,
+// and the node stream already holds every node of the cluster. Reading the list
+// over HTTP would ask the control plane for what is in memory, so the server
+// here fails every request and counts them.
+func TestAdoptionMatchesTheBackendNodeFromTheStreamCache(t *testing.T) {
+	const (
+		cluster  = "22222222-2222-2222-2222-222222222222"
+		nodeUUID = "fd687dfd-9b5d-4eca-8cb1-23bcf550ad21"
+		workerIP = "192.168.10.112"
+	)
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	worker := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm02.example.com"},
+		Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+			{Type: corev1.NodeInternalIP, Address: workerIP},
+		}},
+	}
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "simplyblock-node-adopt"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{WorkerNode: worker.Name},
+	}
+
+	// The stream has delivered the cluster's nodes, which is what makes the
+	// scope authoritative enough to match against.
+	sub := subscriptions.NewNodeSubscription()
+	err := sub.Ingest(context.Background(), cpinformer.Event{
+		Kind:  cpinformer.EventSnapshot,
+		Scope: cpinformer.Scope{cluster},
+		Data: []byte(`[{"id":"` + nodeUUID + `","status":"online","mgmt_ip":"` + workerIP + `",
+			"health_check":true,"hostname":"vm02_4420","cpu_spdk_count":6,"lvols":0,
+			"rpc_port":4420,"lvol_subsys_port":4426,"nvmf_port":4421,"failure_domain":-1}]`),
+	})
+	if err != nil {
+		t.Fatalf("ingest snapshot: %v", err)
+	}
+
+	r := newSNReconciler(t, sn, worker)
+	r.Nodes = sub
+
+	if err := r.pollUUIDFromBackend(context.Background(), sn, cluster,
+		webapi.NewClient(srv.URL)); err != nil {
+		t.Fatalf("pollUUIDFromBackend: %v", err)
+	}
+
+	if n := atomic.LoadInt32(&calls); n != 0 {
+		t.Errorf("listed the cluster's nodes over HTTP %d time(s), want none", n)
+	}
+
+	var got simplyblockv1alpha1.StorageNode
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), &got); err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	if got.Status.UUID != nodeUUID {
+		t.Errorf("adopted UUID = %q, want %q", got.Status.UUID, nodeUUID)
+	}
+	if got.Status.Status != nodeStatusOnline || got.Status.Hostname != snBackendHostname {
+		t.Errorf("status/hostname = %q/%q", got.Status.Status, got.Status.Hostname)
+	}
+}
+
+// An unsynced cache is not evidence that the cluster has no nodes, so adoption
+// asks the control plane rather than concluding there is nothing to adopt.
+func TestAdoptionFallsBackToTheControlPlaneBeforeTheSnapshotArrives(t *testing.T) {
+	const (
+		cluster  = "22222222-2222-2222-2222-222222222222"
+		nodeUUID = "fd687dfd-9b5d-4eca-8cb1-23bcf550ad21"
+		workerIP = "192.168.10.112"
+	)
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"` + nodeUUID + `","status":"online","mgmt_ip":"` + workerIP + `",
+			"health_check":true,"hostname":"vm02_4420","rpc_port":4420,"failure_domain":-1}]`))
+	}))
+	defer srv.Close()
+
+	worker := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm02.example.com"},
+		Status: corev1.NodeStatus{Addresses: []corev1.NodeAddress{
+			{Type: corev1.NodeInternalIP, Address: workerIP},
+		}},
+	}
+	sn := &simplyblockv1alpha1.StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "simplyblock-node-adopt"},
+		Spec:       simplyblockv1alpha1.StorageNodeSpec{WorkerNode: worker.Name},
+	}
+
+	r := newSNReconciler(t, sn, worker)
+	r.Nodes = subscriptions.NewNodeSubscription() // connected, no snapshot yet
+
+	if err := r.pollUUIDFromBackend(context.Background(), sn, cluster,
+		webapi.NewClient(srv.URL)); err != nil {
+		t.Fatalf("pollUUIDFromBackend: %v", err)
+	}
+
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Errorf("made %d request(s), want exactly 1 while the cache is cold", n)
+	}
+	var got simplyblockv1alpha1.StorageNode
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sn), &got); err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	if got.Status.UUID != nodeUUID {
+		t.Errorf("adopted UUID = %q, want %q", got.Status.UUID, nodeUUID)
+	}
 }

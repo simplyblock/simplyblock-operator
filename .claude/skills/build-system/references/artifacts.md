@@ -16,7 +16,7 @@ stale copy is a defect a reviewer can see.
 | `helm-charts/charts/simplyblock-operator/crds/*.yaml`                                 | `operator/config/crd/bases`                                  | `make helm-sync`                   | `Operator: Manifests` → `helm-sync` job                        |
 | `helm-charts/charts/simplyblock-operator/templates/roles/*.yaml`                      | `operator/config/rbac`                                       | `make helm-sync`                   | same                                                           |
 | `helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml` | `kustomize build operator/config/webhook`                    | `make helm-sync`                   | same                                                           |
-| `atlas-lib/internal/cpapi/cpapi.gen.go`                                               | `shared/openapi.json` + `oapi-codegen.yaml` + `overlay.yaml` | `make -C atlas-lib generate`       | compiles in `Atlas: Test`                                      |
+| `atlas-lib/internal/cpapi/cpapi.gen.go`                                               | `shared/openapi.json` + `oapi-codegen.yaml` | `make -C atlas-lib generate`       | compiles in `Atlas: Test`                                      |
 | `atlas-lib/internal/cpapi/validation.gen.go`                                          | `validation.yaml` + the generated client                     | `make -C atlas-lib generate`       | same                                                           |
 
 ---

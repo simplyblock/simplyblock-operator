@@ -19,6 +19,8 @@
 //	lvol            Logical-volume identity, and lvol -> NVMe device mapping.
 //	kube            Map a logical volume to the Kubernetes objects representing it.
 //	controlplane    Client for the simplyblock control-plane API.
+//	prometheus      Read the telemetry simplyblock exports about itself:
+//	                capacity, per-volume load, and node write latency.
 //	errs            Sentinel errors shared across atlas, matched with errors.Is.
 //	errs/class      Classify a failure: the gRPC status to answer with, and
 //	                whether retrying can help.

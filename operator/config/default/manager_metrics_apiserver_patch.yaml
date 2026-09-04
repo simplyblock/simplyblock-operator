@@ -1,0 +1,33 @@
+# Exposes the aggregated metrics API's port and mounts its serving certificate.
+#
+# The mount is the Secret rather than an emptyDir, and that is not a style
+# choice: cert-controller writes the certificate only into the Secret and then
+# waits for it to appear in CertDir. Nothing ever writes to that directory, so an
+# emptyDir stays empty, the rotator's ready channel never closes, and the API
+# server is never built. optional:true lets the pod start before the operator has
+# created and populated the Secret.
+#
+# The path matches metricsapi.CertDir, and the port matches the targetPort of the
+# Service in config/apiservice.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: system
+spec:
+  template:
+    spec:
+      containers:
+      - name: manager
+        ports:
+        - containerPort: 6443
+          name: metrics-api
+          protocol: TCP
+        volumeMounts:
+        - mountPath: /tmp/k8s-metrics-apiserver/serving-certs
+          name: metrics-apiserver-certs
+      volumes:
+      - name: metrics-apiserver-certs
+        secret:
+          secretName: metrics-apiserver-cert
+          optional: true

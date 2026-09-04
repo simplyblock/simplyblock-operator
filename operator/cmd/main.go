@@ -23,8 +23,14 @@ import (
 	"os"
 	"strings"
 
+	atlasprom "github.com/simplyblock/atlas/prometheus"
+
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
+	"github.com/simplyblock/simplyblock-operator/internal/metricsapi"
+
+	// Import all Kubernetes client auth plugins (e.g., Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
@@ -121,6 +127,17 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	var enableMetricsAPI bool
+	var metricsAPIPort int
+	flag.BoolVar(&enableMetricsAPI, "enable-metrics-api", true,
+		"Serve the aggregated metrics.simplyblock.io API (LogicalVolumeMetrics). "+
+			"Disable it on a cluster where the APIService is not installed.")
+	flag.IntVar(&metricsAPIPort, "metrics-api-bind-port", metricsapi.DefaultBindPort,
+		"The HTTPS port the aggregated metrics API listens on.")
+	var prometheusURL string
+	flag.StringVar(&prometheusURL, "prometheus-url", utils.DefaultPrometheusURL,
+		"Prometheus endpoint the aggregated metrics API reads capacity samples from. "+
+			"Empty serves each volume's provisioned size with no measured values.")
 	var latencyPercentile string
 	flag.StringVar(&latencyPercentile, "latency-percentile", "p50",
 		"fio write-latency percentile driving the volume-rebalancing deviation signal: "+
@@ -254,6 +271,68 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Control-plane SSE push subscriptions: one leader-only manager, streams
+	// driven by scopes that reconcilers register (the StorageNode controller adds
+	// a node's scope once the node is provisioned). Devices are mirrored into
+	// StorageDevice CRs via a subscription (ingest→cache) + a reconciler
+	// (cache→CR writes).
+	streamCfg, err := subscriptions.ResolveStreamConfig()
+	if err != nil {
+		setupLog.Error(err, "unable to resolve control-plane stream config")
+		os.Exit(1)
+	}
+	// LeaderOnly: these subscriptions feed reconcilers that write StorageDevice
+	// and StorageNode objects, and two replicas writing the same object would
+	// fight over it.
+	cpSubscriptions := cpinformer.NewSubscriptionManager(streamCfg, ctrl.Log.WithName("cpinformer"), cpinformer.LeaderOnly)
+	deviceSubscription := subscriptions.NewDeviceSubscription()
+	deviceScopes := cpSubscriptions.AddSubscription(deviceSubscription)
+	// One stream per cluster carries every node of it, so the cluster's own
+	// controller opens the scope while the node's controller supplies the
+	// backend-id-to-object mapping the events are named by.
+	nodeSubscription := subscriptions.NewNodeSubscription()
+	nodeScopes := cpSubscriptions.AddSubscription(nodeSubscription)
+	// How full a node is exists only in the metrics the control plane exports,
+	// so it comes from Prometheus rather than from the API or the stream. An
+	// endpoint that cannot be reached leaves the capacity absent from the
+	// status and everything else in it correct.
+	var nodeCapacity controller.NodeCapacitySource
+	if provider, err := atlasprom.New(prometheusURL); err != nil {
+		setupLog.Error(err, "storage-node capacity will be absent", "prometheusURL", prometheusURL)
+	} else {
+		nodeCapacity = provider
+	}
+	if err := (&controller.StorageDeviceReconciler{
+		Client:  mgr.GetClient(),
+		Scheme:  mgr.GetScheme(),
+		Devices: deviceSubscription,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StorageDevice")
+		os.Exit(1)
+	}
+	if err := mgr.Add(cpSubscriptions); err != nil {
+		setupLog.Error(err, "unable to add control-plane subscription manager")
+		os.Exit(1)
+	}
+
+	// The volume stream is a second manager rather than another subscription on
+	// the first, because it must run on every replica: it feeds no reconciler and
+	// writes nothing, and its cache answers aggregated-API reads that arrive at
+	// whichever replica the Service picked. Leader election is a property of a
+	// Runnable, so the two elections need two managers.
+	var volumeSubscription *subscriptions.VolumeSubscription
+	var volumeScopes *cpinformer.ScopeSet
+	if enableMetricsAPI {
+		replicaSubscriptions := cpinformer.NewSubscriptionManager(
+			streamCfg, ctrl.Log.WithName("cpinformer-replica"), cpinformer.EveryReplica)
+		volumeSubscription = subscriptions.NewVolumeSubscription()
+		volumeScopes = replicaSubscriptions.AddSubscription(volumeSubscription)
+		if err := mgr.Add(replicaSubscriptions); err != nil {
+			setupLog.Error(err, "unable to add the per-replica control-plane subscription manager")
+			os.Exit(1)
+		}
+	}
+
 	if err := (&controller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -263,10 +342,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StorageClusterReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorder("storagecluster-controller"),
-		Namespace: operatorNamespace,
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		Recorder:   mgr.GetEventRecorder("storagecluster-controller"),
+		Namespace:  operatorNamespace,
+		NodeScopes: nodeScopes,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")
 		os.Exit(1)
@@ -284,9 +364,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.StoragePoolReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("storagepool-controller"),
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Recorder:     mgr.GetEventRecorder("storagepool-controller"),
+		VolumeScopes: volumeScopes,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoragePool")
 		os.Exit(1)
@@ -370,6 +451,12 @@ func main() {
 		Recorder:         mgr.GetEventRecorder("storagenode-controller"),
 		TLSEnabled:       tlsEnabled,
 		TLSMutualEnabled: tlsMutualEnabled,
+		DeviceScopes:     deviceScopes,
+		NodeRegistries: []controller.NodeObjectRegistry{
+			deviceSubscription, nodeSubscription,
+		},
+		Nodes:    nodeSubscription,
+		Capacity: nodeCapacity,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageNode")
 		os.Exit(1)
@@ -409,7 +496,7 @@ func main() {
 			APIClient: webapi.NewClient(),
 			K8sClient: mgr.GetClient(),
 		},
-		// Resolves each storage node's data-network IP (/nics) for the fio baseline;
+		// Resolves each storage node's data-network IP (the NICs endpoint) for the fio baseline;
 		// independent of the provisioner, so it is set for both prod and test paths.
 		APIClient: webapi.NewClient(),
 	}).SetupWithManager(mgr); err != nil {
@@ -496,6 +583,18 @@ func main() {
 			}})
 		setupLog.Info("registered simplyblock-volume-placement mutating webhook")
 	}()
+
+	// The aggregated metrics API: LogicalVolumeMetrics served from the volume
+	// cache above, joined to the claims that name them.
+	if enableMetricsAPI {
+		err := metricsapi.Install(
+			mgr, operatorNamespace, metricsAPIPort, volumeSubscription, prometheusURL,
+		)
+		if err != nil {
+			setupLog.Error(err, "unable to install the aggregated metrics API")
+			os.Exit(1)
+		}
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

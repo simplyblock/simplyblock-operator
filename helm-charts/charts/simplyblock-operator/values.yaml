@@ -450,6 +450,26 @@ operator:
   enabled: true
   openShiftCluster: true
 
+# The aggregated metrics API, served by the operator at
+# metrics.simplyblock.io/v1alpha1. It publishes LogicalVolumeMetrics: the space
+# each logical volume actually occupies, read with
+# `kubectl get lvm -n <namespace>` and confined to a tenant's own claims by
+# ordinary namespaced RBAC.
+#
+# Disabling it removes the APIService, the Service, and the delegated-auth
+# bindings, and starts the operator with --enable-metrics-api=false. Nothing else
+# depends on it: no reconciler reads the readings, and no volume behaves
+# differently when it is off.
+metricsAPI:
+  enabled: true
+  # The container port the kube-apiserver is proxied to. Change it only on a
+  # conflict; the Service and the APIService follow this value.
+  port: 6443
+  # Where the capacity samples are read from. A logical volume's used size is
+  # not in the control plane's own API, only in the metrics it exports, so an
+  # empty value serves each volume's provisioned size and nothing measured.
+  prometheusURL: http://simplyblock-prometheus:9090
+
 mongodb-kubernetes:
   name: "simplyblock-mongodb"
   deployment_name: "simplyblock-mongodb"

@@ -37,6 +37,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -53,6 +54,10 @@ type StoragePoolReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
+	// VolumeScopes, if set, receives this pool's (cluster, pool) scope so the
+	// control-plane SSE manager streams its volumes into the cache the aggregated
+	// metrics API reads. Optional (nil in tests).
+	VolumeScopes *cpinformer.ScopeSet
 }
 
 // StoragePoolDTO mirrors the new API's storage pool response format.
@@ -84,7 +89,7 @@ type legacyPoolAPIResponse struct {
 }
 
 // toDTO converts the legacy response to the canonical StoragePoolDTO.
-// Fields absent from the DTO format (e.g. qos_host) are not carried over.
+// Fields absent from the DTO format (e.g., qos_host) are not carried over.
 func (r *legacyPoolAPIResponse) toDTO() StoragePoolDTO {
 	return StoragePoolDTO{
 		ID:           r.UUID,
@@ -99,8 +104,8 @@ func (r *legacyPoolAPIResponse) toDTO() StoragePoolDTO {
 }
 
 // parsePoolAPIResponse parses raw JSON into a StoragePoolDTO. It tries the DTO format first
-// (detected by the "id" field), then falls back to the legacy format (detected by the "uuid"
-// field). Returns an error if neither format is recognised.
+// (detected by the `id` field), then falls back to the legacy format (detected by the
+// `uuid` field). Returns an error if neither format is recognized.
 func parsePoolAPIResponse(data []byte) (StoragePoolDTO, error) {
 	var probe struct {
 		ID   string `json:"id"`
@@ -137,7 +142,7 @@ type poolHostParams struct {
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
+// Reconcile is part of the main Kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
 // the StoragePool object against the actual cluster state, and then
@@ -205,6 +210,11 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.handleStoragePoolCreation(ctx, storagePoolCR, apiClient, clusterUUID)
 	}
 
+	// Pool is ready: register its scope so the SSE manager streams its volumes.
+	if r.VolumeScopes != nil {
+		r.VolumeScopes.Add(cpinformer.Scope{clusterUUID, storagePoolCR.Status.UUID})
+	}
+
 	if err := r.createStorageClassIfNotExists(ctx, storagePoolCR, clusterUUID); err != nil {
 		log.Error(err, "Failed to create StorageClass for pool")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -249,6 +259,9 @@ func (r *StoragePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 func (r *StoragePoolReconciler) handleStoragePoolDeletion(ctx context.Context, storagePoolCR *simplyblockv1alpha1.StoragePool, apiClient *webapi.Client, clusterUUID string) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	if r.VolumeScopes != nil && storagePoolCR.Status.UUID != "" {
+		r.VolumeScopes.Remove(cpinformer.Scope{clusterUUID, storagePoolCR.Status.UUID})
+	}
 	if utils.ContainsString(storagePoolCR.Finalizers, utils.FinalizerStoragePool) {
 		if storagePoolCR.Status.UUID != "" {
 			// Backend pool exists — delete it first.

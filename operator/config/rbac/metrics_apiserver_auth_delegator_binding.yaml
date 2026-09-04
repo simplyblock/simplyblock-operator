@@ -1,0 +1,25 @@
+# Lets the aggregated metrics API server ask the kube-apiserver who a caller is
+# and what they may do.
+#
+# An extension API server does not do its own authentication or authorization. It
+# passes the caller's token to TokenReview and the resulting identity to
+# SubjectAccessReview, both on the kube-apiserver, so that a RoleBinding on
+# logicalvolumemetrics means what it would mean on any other resource. The
+# built-in system:auth-delegator ClusterRole is exactly those two verbs and
+# nothing else.
+#
+# Without this binding every request to the group fails closed with a 401 whose
+# message points at certificates rather than at RBAC, which is the most commonly
+# misdiagnosed way an aggregated API fails.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metrics-apiserver-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+- kind: ServiceAccount
+  name: controller-manager
+  namespace: system

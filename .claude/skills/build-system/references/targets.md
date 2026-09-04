@@ -113,7 +113,7 @@ component with **file targets**, so make's staleness rules apply.
 | Target                             | Runs                                                                                                                     |
 |------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
 | `generate`                         | the two generated files below, when out of date                                                                          |
-| `internal/cpapi/cpapi.gen.go`      | `go generate ./internal/cpapi/...`, depending on `../shared/openapi.json`, `oapi-codegen.yaml`, `overlay.yaml`, `gen.go` |
+| `internal/cpapi/cpapi.gen.go`      | `go generate ./internal/cpapi/...`, depending on `../shared/openapi.json`, `oapi-codegen.yaml`, `gen.go` |
 | `internal/cpapi/validation.gen.go` | `cd internal/cpapi && go run ./gen`, depending on the client, `validation.yaml`, `gen/main.go`                           |
 | `build`                            | the generated files, then `go build ./...`                                                                               |
 | `test`                             | `vet`, then `go test -race -coverprofile=coverage.out ./...`                                                             |

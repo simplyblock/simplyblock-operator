@@ -12,7 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	promlatency "github.com/simplyblock/simplyblock-operator/internal/metrics/prometheus"
+	atlasprom "github.com/simplyblock/atlas/prometheus"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -135,9 +135,9 @@ func (lvs *LogicalVolumeSelector) CollectVolumes(
 
 	volumesByNode = lvs.collectVolumesByNode(ctx, input.ClusterUUID, managed)
 
-	if ioProvider, pErr := promlatency.New(input.PrometheusURL); pErr != nil {
+	if ioProvider, pErr := atlasprom.New(input.PrometheusURL); pErr != nil {
 		log.Error(pErr, "Cannot create volume IO provider; scoring will use REST API values")
-	} else if prometheusIO, pErr := ioProvider.GetClusterVolumeIO(ctx, input.ClusterUUID); pErr != nil {
+	} else if prometheusIO, pErr := ioProvider.VolumeIO(ctx, input.ClusterUUID); pErr != nil {
 		log.Error(pErr, "Cannot query volume IO from Prometheus; scoring will use REST API values")
 	} else {
 		lvs.overrideVolumeIO(volumesByNode, prometheusIO)
@@ -375,7 +375,7 @@ func (lvs *LogicalVolumeSelector) BuildNamespacedSet(ctx context.Context, cluste
 // no I/O has been reported yet.
 func (lvs *LogicalVolumeSelector) overrideVolumeIO(
 	volumesByNode map[string][]VolumePlacement,
-	io map[string]promlatency.VolumeIOMetrics,
+	io map[string]atlasprom.VolumeIO,
 ) {
 	for nodeUUID, vols := range volumesByNode {
 		for i, vp := range vols {

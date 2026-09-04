@@ -75,7 +75,7 @@ const (
 	SecretNameSpdkProxyTLS         = "simplyblock-spdk-proxy-tls"
 
 	// Webhook serving-certificate wiring. WebhookServiceName and
-	// WebhookConfigurationName carry the kustomize namePrefix (simplyblock-operator-)
+	// WebhookConfigurationName carry the Kustomize namePrefix (simplyblock-operator-)
 	// applied in config/default. The serving certificate is provisioned into
 	// WebhookCertDir at runtime — self-signed via open-policy-agent/cert-controller,
 	// or from the cert-manager-issued Secret when SB_TLS_PROVIDER=cert-manager.
@@ -92,6 +92,23 @@ const (
 	// rotator and the webhook-server certwatcher agree without extra flags, and so
 	// the config/default/manager_webhook_patch.yaml emptyDir mount lines up.
 	WebhookCertDir = "/tmp/k8s-webhook-server/serving-certs"
+
+	// Aggregated metrics API wiring. MetricsAPIServiceName and
+	// MetricsAPIServiceObject carry the Kustomize namePrefix
+	// (simplyblock-operator-) applied in config/default, except that an APIService
+	// object's name is fixed by Kubernetes as <version>.<group> and takes no
+	// prefix. The serving certificate is provisioned into
+	// metricsapi.CertDir at runtime by the same cert-controller rotator the
+	// webhook uses, which also injects the CA bundle into the APIService.
+	MetricsAPIServiceName    = "simplyblock-operator-metrics-apiserver"
+	MetricsAPIServiceObject  = "v1alpha1.metrics.simplyblock.io"
+	MetricsAPIServerCertName = "metrics-apiserver-cert"
+
+	// DefaultPrometheusURL is where the chart deploys Prometheus. Two things
+	// read simplyblock's exported metrics through it: the rebalancer's placement
+	// signals, and the aggregated metrics API's capacity samples. The address is
+	// named once here rather than spelled out at each of them.
+	DefaultPrometheusURL = "http://simplyblock-prometheus:9090"
 
 	AnnotationTLSSecretRevision = "storage.simplyblock.io/tls-secret-revision"
 

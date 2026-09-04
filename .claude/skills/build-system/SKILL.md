@@ -142,7 +142,7 @@ locally, and that is intended.
 
 `atlas-lib` is the one component with real file targets rather than phony ones:
 `internal/cpapi/cpapi.gen.go` and `validation.gen.go` rebuild only when
-`../shared/openapi.json`, the codegen config, the overlay, or the generator
+`../shared/openapi.json`, the codegen config, or the generator
 source is newer. To force them:
 
 ```bash

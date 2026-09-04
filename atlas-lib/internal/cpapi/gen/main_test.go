@@ -25,6 +25,36 @@ type VolumeDTO struct {
 	Id   string @json:"id"@
 	NsId int    @json:"ns_id"@
 }
+
+type BatchDTO struct {
+	Id          string @json:"id"@
+	MemberCount int    @json:"member_count"@
+}
+
+type MigrationsGet200JSONResponseBody_Item struct {
+	union json.RawMessage
+}
+
+func (t MigrationsGet200JSONResponseBody_Item) AsVolumeDTO() (VolumeDTO, error) {
+	var body VolumeDTO
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+func (t MigrationsGet200JSONResponseBody_Item) AsBatchDTO() (BatchDTO, error) {
+	var body BatchDTO
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+func (t *MigrationsGet200JSONResponseBody_Item) UnmarshalJSON(b []byte) error {
+	t.union = b
+	return nil
+}
+
+type MigrationsListResponse struct {
+	JSON200 *[]MigrationsGet200JSONResponseBody_Item
+}
 `
 
 // testSpec stands in for shared/openapi.json.
@@ -53,7 +83,7 @@ func testStructs(t *testing.T) map[string]*ast.StructType {
 	if err != nil {
 		t.Fatal(err)
 	}
-	structs, _ := index(file)
+	structs, _, _ := index(file)
 	return structs
 }
 
@@ -162,5 +192,34 @@ NvmeConnectEntry@GET /api/v2/volumes/{volume_id}/connect:
 	}
 	if _, ruled := compiled[0].tags["NsId"]; ruled {
 		t.Error("the variant's rule leaked onto the base")
+	}
+}
+
+// A union response's alternatives are reachable only through its As<Member>
+// accessors: the struct's own field is a json.RawMessage. Missing them leaves
+// the member types without a validating decoder, so a body that violates the
+// rules decodes to plausible zero values instead of an error.
+func TestResponseTypesReachesUnionMembers(t *testing.T) {
+	src := strings.ReplaceAll(testClient, "@", "`")
+	file, err := parser.ParseFile(token.NewFileSet(), "cpapi.gen.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	structs, unmarshalers, unionMembers := index(file)
+	types := responseTypes(structs, unmarshalers, unionMembers)
+
+	got := map[string]bool{}
+	for _, name := range types {
+		got[name] = true
+	}
+	for _, want := range []string{"VolumeDTO", "BatchDTO"} {
+		if !got[want] {
+			t.Errorf("%s is a union member and was not reached; got %v", want, types)
+		}
+	}
+	// The union itself decodes to raw JSON and declares its own UnmarshalJSON,
+	// so generating a second one for it would not compile.
+	if got["MigrationsGet200JSONResponseBody_Item"] {
+		t.Error("the union type itself must not be generated for")
 	}
 }

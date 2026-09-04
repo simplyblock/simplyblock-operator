@@ -37,6 +37,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -83,6 +84,12 @@ type StorageClusterReconciler struct {
 	Scheme    *runtime.Scheme
 	Recorder  events.EventRecorder
 	Namespace string // operator namespace
+
+	// NodeScopes, if set, receives this cluster's scope so the control-plane
+	// SSE manager streams its storage nodes. The stream is per cluster and
+	// carries every node of it, so the cluster is what opens and closes it
+	// rather than any one node. Optional (nil in tests).
+	NodeScopes *cpinformer.ScopeSet
 }
 
 type CSICredentials struct {
@@ -132,6 +139,12 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	if clusterCR.Status.UUID != "" {
+		// The cluster exists on the backend, so its node stream can be opened.
+		// Adding a scope already present is a no-op, which is what makes this
+		// safe to do on every reconcile rather than only on the first.
+		if r.NodeScopes != nil {
+			r.NodeScopes.Add(cpinformer.Scope{clusterCR.Status.UUID})
+		}
 		return r.syncStatus(ctx, clusterCR)
 	}
 
@@ -463,6 +476,12 @@ func (r *StorageClusterReconciler) handleDeletion(
 	}
 
 	clusterUUID := clusterCR.Status.UUID
+
+	// Nothing more is worth streaming about a cluster being deleted, and a
+	// stream left open would reconnect against a cluster that is going away.
+	if r.NodeScopes != nil {
+		r.NodeScopes.Remove(cpinformer.Scope{clusterUUID})
+	}
 
 	apiClient := webapi.NewClient()
 	endpoint := fmt.Sprintf("/api/v2/clusters/%s", clusterUUID)

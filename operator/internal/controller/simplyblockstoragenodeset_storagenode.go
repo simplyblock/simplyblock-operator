@@ -293,37 +293,6 @@ func (r *StorageNodeSetReconciler) createStorageNodeCR(
 		return fmt.Errorf("creating StorageNode for worker %s after %d attempts: %w", worker, maxAttempts, createErr)
 	}
 
-	// Backward compatibility: pre-populate UUID and status from the legacy
-	// StorageNodeSet.status.nodes[] so nodes that were already provisioned
-	// before the three-tier model are adopted immediately (no re-POST).
-	for i := range sns.Status.Nodes {
-		ns := &sns.Status.Nodes[i]
-		if ns.Hostname != worker || ns.UUID == "" {
-			continue
-		}
-		patch := client.MergeFrom(sn.DeepCopy())
-		sn.Status.UUID = ns.UUID
-		sn.Status.Status = ns.Status
-		sn.Status.Health = ns.Health
-		sn.Status.Hostname = ns.Hostname
-		sn.Status.Resources = &simplyblockv1alpha1.StorageNodeResources{
-			CPU:     ns.CPU,
-			Volumes: ns.Volumes,
-		}
-		sn.Status.Ports = &simplyblockv1alpha1.StorageNodePorts{
-			Management: ns.MgmtIp,
-			Rpc:        ns.RpcPort,
-			Lvol:       ns.LvolPort,
-			NvmeOf:     ns.NvmfPort,
-		}
-		if patchErr := r.Status().Patch(ctx, sn, patch); patchErr != nil {
-			log.Error(patchErr, "failed to pre-populate StorageNode status", "name", sn.Name)
-		} else {
-			log.Info("pre-populated StorageNode status from legacy nodes[]",
-				"name", sn.Name, "uuid", ns.UUID, "status", ns.Status)
-		}
-		break
-	}
 	return nil
 }
 
@@ -350,7 +319,7 @@ func (r *StorageNodeSetReconciler) aggregateStorageNodeStatus(
 			offline++
 		case "suspended":
 			suspended++
-		case "in_creation":
+		case nodeStatusInCreation:
 			creating++
 		case "removed":
 			removed++

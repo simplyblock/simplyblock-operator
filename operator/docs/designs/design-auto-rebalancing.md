@@ -354,7 +354,7 @@ where `IOPS` and `ThroughputBytesPerSec` are queried from Prometheus using the m
 
 `IOPS = lvol_read_io_ps + lvol_write_io_ps`, `ThroughputBytesPerSec = lvol_read_bytes_ps + lvol_write_bytes_ps`.
 
-These metrics are exported by the control plane from its own Prometheus scrape of the SPDK statistics. The `VolumeIOProvider` (`internal/metrics/prometheus/volumes.go`) queries all four metrics in a single reconcile cycle and merges the results by volume UUID.
+These metrics are exported by the control plane from its own Prometheus scrape of the SPDK statistics. `atlas-lib`'s `prometheus.Provider.VolumeIO` (`atlas-lib/prometheus/volumeio.go`) queries all four metrics in a single query and merges the results by volume UUID.
 
 **Default weights:**
 
@@ -773,11 +773,11 @@ type NodeMetricsProvider interface {
 
 ### 9.3 Planned Implementations
 
-| Implementation              | Package                       | When to use                                                     |
-|-----------------------------|-------------------------------|-----------------------------------------------------------------|
-| `PrometheusMetricsProvider` | `internal/metrics/prometheus` | Phase 2 default. PromQL against SPDK-exported per-node metrics. |
-| `UniformMetricsProvider`    | `internal/metrics/uniform`    | Returns IOPS=1 everywhere. No-op for scoring; used in tests.    |
-| `StaticMetricsProvider`     | `internal/metrics/static`     | Unit/integration tests with fixture data.                       |
+| Implementation              | Package                    | When to use                                                     |
+|-----------------------------|----------------------------|-----------------------------------------------------------------|
+| `PrometheusMetricsProvider` | `atlas-lib/prometheus`     | Phase 2 default. PromQL against SPDK-exported per-node metrics. |
+| `UniformMetricsProvider`    | `internal/metrics/uniform` | Returns IOPS=1 everywhere. No-op for scoring; used in tests.    |
+| `StaticMetricsProvider`     | `internal/metrics/static`  | Unit/integration tests with fixture data.                       |
 
 ### 9.4 Prometheus Metric Schema (Phase 2)
 
