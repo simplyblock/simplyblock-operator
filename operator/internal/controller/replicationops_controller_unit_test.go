@@ -393,31 +393,57 @@ func TestOps_Failback_Success(t *testing.T) {
 	}
 	r, cl := newOpsReplReconciler(t, pol, slot, ops)
 
-	srv := newAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet {
+			// Relationship lookup: return target cluster/pool/volume IDs.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"target_lvol_id":"tgt-vol-u","target_cluster_id":"tgt-cluster-u","target_pool_id":"tgt-pool-u"}`))
+			return
+		}
+		// POST failback and POST commit: accept with 200.
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("{}"))
 	})
 	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
 
+	// Phase 1 — commit: ops posts failback+commit per slot, marks slots
+	// cutover_pending, advances subphase to WaitingForSlots.
 	_, err := r.Reconcile(context.Background(), opsRequest("ops1"))
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("commit phase: unexpected error: %v", err)
 	}
 	got := getOps(t, cl)
+	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseRunning) {
+		t.Errorf("after commit phase = %q, want Running", got.Status.Phase)
+	}
+	if got.Status.Subphase != "WaitingForSlots" {
+		t.Errorf("after commit subphase = %q, want WaitingForSlots", got.Status.Subphase)
+	}
+
+	// Simulate the slot controller completing failback: advance slot to replicating/source.
+	gotSlot := &simplyblockv1alpha1.ReplicationSlot{}
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: slot.Name, Namespace: slot.Namespace}, gotSlot); err != nil {
+		t.Fatalf("get slot: %v", err)
+	}
+	slotPatch := client.MergeFrom(gotSlot.DeepCopy())
+	gotSlot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateReplicating)
+	gotSlot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionSource)
+	if err := cl.Status().Patch(context.Background(), gotSlot, slotPatch); err != nil {
+		t.Fatalf("patch slot to replicating/source: %v", err)
+	}
+
+	// Phase 2 — wait: all slots are replicating/source → ops succeeds.
+	_, err = r.Reconcile(context.Background(), opsRequest("ops1"))
+	if err != nil {
+		t.Fatalf("wait phase: unexpected error: %v", err)
+	}
+	got = getOps(t, cl)
 	if got.Status.Phase != string(simplyblockv1alpha1.ReplicationOpsPhaseSucceeded) {
-		t.Errorf("phase = %q, want Succeeded", got.Status.Phase)
+		t.Errorf("after wait phase = %q, want Succeeded", got.Status.Phase)
 	}
 	if len(got.Status.Results) != 1 || got.Status.Results[0].Status != string(simplyblockv1alpha1.ReplicationOpsResultSucceeded) {
 		t.Errorf("unexpected results: %+v", got.Status.Results)
-	}
-
-	// Slot direction should be updated back to source.
-	gotSlot := &simplyblockv1alpha1.ReplicationSlot{}
-	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "pol-pvc1"}, gotSlot); err != nil {
-		t.Fatalf("get slot: %v", err)
-	}
-	if gotSlot.Status.Direction != string(simplyblockv1alpha1.ReplicationSlotDirectionSource) {
-		t.Errorf("slot direction = %q, want source after failback", gotSlot.Status.Direction)
 	}
 }
 

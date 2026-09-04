@@ -87,8 +87,9 @@ type ReplicationOpsSpec struct {
 	// +optional
 	SourceClusterID string `json:"sourceClusterID,omitempty"`
 
-	// DeleteSource instructs the backend to delete the source volume after a
-	// successful migration cutover. Only meaningful when action=migration.
+	// DeleteSource instructs the backend to delete the old volume after a
+	// successful cutover. For migration it deletes the original source volume;
+	// for failback it deletes the failed-over volume on the target cluster.
 	// +optional
 	DeleteSource bool `json:"deleteSource,omitempty"`
 }

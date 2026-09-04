@@ -416,12 +416,165 @@ func (r *ReplicationOpsReconciler) reconcileFailover(
 	return r.succeedOps(ctx, ops, "Failover completed successfully", results)
 }
 
-// reconcileFailback drives a failback to completion.
+// reconcileFailback drives a live failback to completion.
+//
+// After failover the active volume lives on the target cluster. The two-step
+// sequence mirrors how migration works:
+//  1. POST .../replication/failback — syncs the final snapshot from target back
+//     to the source volume.
+//  2. POST .../replication/commit — queues an async backend job that fetches
+//     the source connection string and switches ANA so the source becomes the
+//     active path again (202 Accepted; the job runs asynchronously).
+//
+// Phases:
+//   - CommitPhase (subphase != "WaitingForSlots"): POST failback + commit per
+//     slot, mark slots cutover_pending, advance subphase to WaitingForSlots.
+//   - WaitPhase (subphase == "WaitingForSlots"): poll slots until every slot
+//     is replicating/source, then succeed. This means Succeeded only appears
+//     once the ANA flip and UUID swap are complete end-to-end.
+//
+// No source cluster shutdown is required.
 func (r *ReplicationOpsReconciler) reconcileFailback(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.ReplicationOps,
 	policy *simplyblockv1alpha1.ReplicationPolicy,
 	apiClient *webapi.Client,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if ops.Status.Subphase == "WaitingForSlots" {
+		return r.reconcileFailbackWait(ctx, ops, policy)
+	}
+
+	slots, err := r.collectAffectedSlots(ctx, ops, policy)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	anyFailed := false
+
+	// replicationRelationship holds the fields we need from
+	// GET /api/v2/clusters/{c}/replication/relationships/{vol}
+	type replicationRelationship struct {
+		TargetLvolID    string `json:"target_lvol_id"`
+		TargetClusterID string `json:"target_cluster_id"`
+		TargetPoolID    string `json:"target_pool_id"`
+	}
+
+	for i := range slots {
+		slot := &slots[i]
+		clusterID, _, volumeID, ok := splitVolumeHandle(slot.Spec.VolumeID)
+		if !ok {
+			log.Error(nil, "invalid VolumeID on slot; skipping", "slot", slot.Name)
+			anyFailed = true
+			continue
+		}
+
+		// Resolve the target cluster, pool, and volume via the replication
+		// relationship. After failover the active volume is on the target cluster;
+		// the failback and commit endpoints must be called there, not on the source.
+		relEndpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/relationships/%s", clusterID, volumeID)
+		relBody, relStatus, relErr := apiClient.Do(ctx, http.MethodGet, relEndpoint, nil)
+		if relErr != nil || relStatus >= 300 {
+			if relErr == nil {
+				relErr = fmt.Errorf("status %d: %s", relStatus, string(relBody))
+			}
+			log.Error(relErr, "fetch replication relationship failed", "slot", slot.Name)
+			anyFailed = true
+			continue
+		}
+		var rel replicationRelationship
+		if err := json.Unmarshal(relBody, &rel); err != nil {
+			log.Error(err, "parse replication relationship failed", "slot", slot.Name)
+			anyFailed = true
+			continue
+		}
+		if rel.TargetLvolID == "" || rel.TargetClusterID == "" || rel.TargetPoolID == "" {
+			log.Error(nil, fmt.Sprintf("incomplete relationship: target_lvol=%q target_cluster=%q target_pool=%q",
+				rel.TargetLvolID, rel.TargetClusterID, rel.TargetPoolID), "slot", slot.Name)
+			anyFailed = true
+			continue
+		}
+
+		r.setSubphase(ctx, ops, "StartingFailback")
+
+		// Step 1: sync the final snapshot from the target back to the source volume.
+		fbBody := map[string]interface{}{}
+		if ops.Spec.SourceClusterID != "" {
+			fbBody["source_cluster_id"] = ops.Spec.SourceClusterID
+		}
+		fbEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/failback",
+			rel.TargetClusterID, rel.TargetPoolID, rel.TargetLvolID)
+		body, status, fbErr := apiClient.Do(ctx, http.MethodPost, fbEndpoint, fbBody)
+		if fbErr != nil || status >= 300 {
+			if fbErr == nil {
+				fbErr = fmt.Errorf("status %d: %s", status, string(body))
+			}
+			log.Error(fbErr, "replication/failback failed", "slot", slot.Name)
+			anyFailed = true
+			continue
+		}
+
+		r.setSubphase(ctx, ops, "CommittingFailback")
+
+		// Step 2: queue the async commit job that fetches the source connection
+		// string and switches ANA to make the source the active path again.
+		// Accepts 202 — the actual ANA switch happens asynchronously on the backend.
+		commitEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication/commit",
+			rel.TargetClusterID, rel.TargetPoolID, rel.TargetLvolID)
+		var commitBody map[string]interface{}
+		if ops.Spec.DeleteSource {
+			commitBody = map[string]interface{}{"delete_source": true}
+		}
+		_, status, commitErr := apiClient.Do(ctx, http.MethodPost, commitEndpoint, commitBody)
+		if commitErr != nil || (status != 202 && status >= 300) {
+			if commitErr == nil {
+				commitErr = fmt.Errorf("status %d", status)
+			}
+			log.Error(commitErr, "replication/commit (failback) failed", "slot", slot.Name)
+			anyFailed = true
+			continue
+		}
+
+		// Commit accepted — mark the slot cutover_pending so the slot controller
+		// begins polling. Store the target volume handle so reconcileCutoverPending
+		// polls the target cluster (where the task runs) rather than the source
+		// cluster (which only sees the old failed_over state).
+		metaPatch := client.MergeFrom(slot.DeepCopy())
+		if slot.Annotations == nil {
+			slot.Annotations = make(map[string]string)
+		}
+		slot.Annotations[annotFailbackTarget] = fmt.Sprintf("%s:%s:%s",
+			rel.TargetClusterID, rel.TargetPoolID, rel.TargetLvolID)
+		if err := r.Patch(ctx, slot, metaPatch); err != nil {
+			log.Error(err, "failed to set failback-target annotation", "slot", slot.Name)
+		}
+
+		slotPatch := client.MergeFrom(slot.DeepCopy())
+		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending)
+		slot.Status.Message = fmt.Sprintf("Failback commit queued via ReplicationOps %s", ops.Name)
+		if err := r.Status().Patch(ctx, slot, slotPatch); err != nil {
+			log.Error(err, "failed to update slot status to cutover_pending", "slot", slot.Name)
+		}
+	}
+
+	if anyFailed {
+		return r.failOps(ctx, ops, "Failback failed for one or more volumes; see results for details")
+	}
+	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "FailbackCommitQueued", "FailbackCommitQueued",
+		"Failback commit queued for policy %s (%d volumes); waiting for slots to reach replicating/source",
+		policy.Name, len(slots))
+	r.setSubphase(ctx, ops, "WaitingForSlots")
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+// reconcileFailbackWait polls slots until every one is replicating/source, then
+// marks the ReplicationOps Succeeded. It is entered on every reconcile when
+// subphase == "WaitingForSlots".
+func (r *ReplicationOpsReconciler) reconcileFailbackWait(
+	ctx context.Context,
+	ops *simplyblockv1alpha1.ReplicationOps,
+	policy *simplyblockv1alpha1.ReplicationPolicy,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -431,78 +584,30 @@ func (r *ReplicationOpsReconciler) reconcileFailback(
 	}
 
 	results := make([]simplyblockv1alpha1.ReplicationOpsResult, 0, len(slots))
-	anyFailed := false
-
+	allDone := true
 	for i := range slots {
 		slot := &slots[i]
-		clusterID, poolID, volumeID, ok := splitVolumeHandle(slot.Spec.VolumeID)
-		if !ok {
+		if slot.Status.State == string(simplyblockv1alpha1.ReplicationSlotStateReplicating) &&
+			slot.Status.Direction == string(simplyblockv1alpha1.ReplicationSlotDirectionSource) {
 			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
-				Detail: "invalid VolumeID",
+				SlotRef: slot.Name,
+				Status:  string(simplyblockv1alpha1.ReplicationOpsResultSucceeded),
 			})
-			anyFailed = true
-			continue
+		} else {
+			allDone = false
 		}
-
-		r.setSubphase(ctx, ops, "StartingFailback")
-
-		fbBody := map[string]interface{}{}
-		if ops.Spec.SourceClusterID != "" {
-			fbBody["source_cluster_id"] = ops.Spec.SourceClusterID
-		}
-		fbEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication_failback",
-			clusterID, poolID, volumeID)
-		body, status, fbErr := apiClient.Do(ctx, http.MethodPost, fbEndpoint, fbBody)
-		if fbErr != nil || status >= 300 {
-			if fbErr == nil {
-				fbErr = fmt.Errorf("status %d: %s", status, string(body))
-			}
-			log.Error(fbErr, "replication_failback failed", "slot", slot.Name)
-			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
-				Detail: fbErr.Error(),
-			})
-			anyFailed = true
-			continue
-		}
-
-		r.setSubphase(ctx, ops, "CommittingFailback")
-
-		commitEndpoint := fmt.Sprintf("/api/v2/clusters/%s/storage-pools/%s/volumes/%s/replication_commit",
-			clusterID, poolID, volumeID)
-		body, status, commitErr := apiClient.Do(ctx, http.MethodPost, commitEndpoint, nil)
-		if commitErr != nil || status >= 300 {
-			if commitErr == nil {
-				commitErr = fmt.Errorf("status %d: %s", status, string(body))
-			}
-			log.Error(commitErr, "replication_commit (failback step) failed", "slot", slot.Name)
-			results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-				SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultFailed),
-				Detail: commitErr.Error(),
-			})
-			anyFailed = true
-			continue
-		}
-
-		slotPatch := client.MergeFrom(slot.DeepCopy())
-		slot.Status.State = string(simplyblockv1alpha1.ReplicationSlotStateReplicating)
-		slot.Status.Direction = string(simplyblockv1alpha1.ReplicationSlotDirectionSource)
-		slot.Status.Message = fmt.Sprintf("Failed back via ReplicationOps %s", ops.Name)
-		if err := r.Status().Patch(ctx, slot, slotPatch); err != nil {
-			log.Error(err, "failed to update slot status after failback", "slot", slot.Name)
-		}
-		results = append(results, simplyblockv1alpha1.ReplicationOpsResult{
-			SlotRef: slot.Name, Status: string(simplyblockv1alpha1.ReplicationOpsResultSucceeded),
-		})
 	}
 
-	if anyFailed {
-		return r.failOps(ctx, ops, "Failback completed with errors; see results for details")
+	if !allDone {
+		log.Info("Failback: waiting for slots to reach replicating/source",
+			"ops", ops.Name, "total", len(slots), "done", len(results))
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
-	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "FailbackSucceeded", "FailbackSucceeded",
-		"Failback completed for policy %s (%d volumes)", policy.Name, len(slots))
-	return r.succeedOps(ctx, ops, "Failback completed successfully", results)
+
+	r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "FailbackComplete", "FailbackComplete",
+		"Failback complete for policy %s (%d volumes); all slots replicating/source",
+		policy.Name, len(slots))
+	return r.succeedOps(ctx, ops, "Failback complete; all volumes are replicating/source", results)
 }
 
 // reconcileMigration drives a planned online cutover (mode=migration).
