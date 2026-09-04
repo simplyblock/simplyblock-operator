@@ -47,7 +47,11 @@ const (
 // Monitor is a connection to one node's QEMU monitor.
 //
 // QEMU's socket chardev serves one client at a time, so hold it only as long as
-// needed and close it. The prepared faults on *Cluster do that themselves.
+// needed and close it. The prepared faults on *Cluster do that themselves, which
+// is also why a monitor must not be held across a call to one: the fault's own
+// connection would be accepted by the kernel and then never served, and it is the
+// deadline on the banner read that ends that wait rather than the caller's
+// context.
 type Monitor struct {
 	conn net.Conn
 	node string
@@ -84,11 +88,36 @@ func (c *Cluster) Monitor(ctx context.Context, node string) (*Monitor, error) {
 	m := &Monitor{conn: conn, node: node}
 	// The banner ends at the first prompt. Reading it now means a command's
 	// response is its own.
+	//
+	// Deadlined like every other read, and for a reason this one is the first to
+	// meet: a socket QEMU has bound but is not serving accepts the connection and
+	// then says nothing at all. Without the deadline the read blocks in the
+	// syscall, where the context cannot reach it, and the caller waits forever on
+	// a monitor that already has a client.
+	if err := m.setDeadline(ctx); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	if _, err := m.read(ctx); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("read monitor banner for %s: %w", node, err)
+		return nil, fmt.Errorf("read monitor banner for %s at %s: %w "+
+			"(QEMU serves one monitor client at a time; is another connection open?)",
+			node, path, err)
 	}
 	return m, nil
+}
+
+// setDeadline bounds the next exchange on the connection. monitorTimeout is the
+// cap and an earlier context deadline wins.
+//
+// A deadline rather than the context alone: a read that has already blocked does
+// not observe cancellation, since the context is only checked between reads.
+func (m *Monitor) setDeadline(ctx context.Context) error {
+	deadline := time.Now().Add(monitorTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	return m.conn.SetDeadline(deadline)
 }
 
 // dialMonitor connects, retrying while the socket exists but is not yet accepting.
@@ -129,11 +158,7 @@ func (m *Monitor) Close() error {
 // HMP reports a bad command by printing an error and prompting again, so an
 // unknown command is not a transport failure; the text is returned and checked.
 func (m *Monitor) Command(ctx context.Context, cmd string) (string, error) {
-	deadline := time.Now().Add(monitorTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	if err := m.conn.SetDeadline(deadline); err != nil {
+	if err := m.setDeadline(ctx); err != nil {
 		return "", err
 	}
 

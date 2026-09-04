@@ -104,20 +104,27 @@ func TestSmoke_NodeCanHostATarget(t *testing.T) {
 	// asks a real QEMU, and freezes the node it is running on to prove the fault
 	// takes effect rather than merely being accepted.
 	t.Run("the node's QEMU monitor answers and can freeze it", func(t *testing.T) {
-		m, err := c.Monitor(ctx, nodes[0])
+		// One connection at a time, and never one held across a fault. QEMU's
+		// socket chardev serves a single client, and Freeze and Thaw open their
+		// own monitor: a connection kept open here would leave theirs accepted by
+		// the kernel and never served, which is a wedge rather than an error.
+		status := func() (string, error) {
+			m, err := c.Monitor(ctx, nodes[0])
+			if err != nil {
+				return "", err
+			}
+			defer func() { _ = m.Close() }()
+			return m.Command(ctx, "info status")
+		}
+
+		running, err := status()
 		if err != nil {
 			t.Fatalf("monitor for %s: %v", nodes[0], err)
 		}
-		defer func() { _ = m.Close() }()
-
-		status, err := m.Command(ctx, "info status")
-		if err != nil {
-			t.Fatalf("info status: %v", err)
+		if !strings.Contains(running, "running") {
+			t.Fatalf("info status = %q, want a running virtual machine", running)
 		}
-		if !strings.Contains(status, "running") {
-			t.Fatalf("info status = %q, want a running virtual machine", status)
-		}
-		t.Logf("monitor: %s", status)
+		t.Logf("monitor: %s", running)
 
 		// Freeze and thaw, checking the state in between: a monitor that accepts
 		// `stop` without stopping anything would pass a test that only looked at
@@ -125,18 +132,20 @@ func TestSmoke_NodeCanHostATarget(t *testing.T) {
 		if err := c.Freeze(ctx, nodes[0]); err != nil {
 			t.Fatalf("freeze %s: %v", nodes[0], err)
 		}
-		frozen, err := m.Command(ctx, "info status")
-		if err != nil {
-			t.Errorf("info status while frozen: %v", err)
-		}
+		// Read before thawing and assert after it, so a node is never left frozen
+		// by a failed assertion.
+		frozen, frozenErr := status()
 		if err := c.Thaw(ctx, nodes[0]); err != nil {
 			t.Fatalf("thaw %s: %v — the node is left frozen", nodes[0], err)
+		}
+		if frozenErr != nil {
+			t.Errorf("info status while frozen: %v", frozenErr)
 		}
 		if !strings.Contains(frozen, "paused") {
 			t.Errorf("info status while frozen = %q, want paused", frozen)
 		}
 
-		resumed, err := m.Command(ctx, "info status")
+		resumed, err := status()
 		if err != nil {
 			t.Errorf("info status after thaw: %v", err)
 		}

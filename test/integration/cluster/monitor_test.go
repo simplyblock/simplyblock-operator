@@ -345,3 +345,84 @@ func TestMonitor_AbsentSocketSaysWhereItLooked(t *testing.T) {
 		t.Errorf("error does not name the path it looked for: %v", err)
 	}
 }
+
+// startUnattendedMonitor binds a socket that behaves the way QEMU's chardev does
+// once it already has a client: the kernel accepts a second connection into the
+// listen backlog and nothing ever reads from it or writes to it.
+//
+// Serving the connection is deliberately omitted rather than delayed. QEMU does
+// not queue a second client and get to it later; it never gets to it, so a
+// stand-in that eventually answers would test a monitor that does not exist.
+func startUnattendedMonitor(t *testing.T, path string) {
+	t.Helper()
+
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("listen on %s: %v", path, err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+}
+
+// tempHome points stateDir at a directory this test owns, so a monitor socket can
+// be put where Cluster.MonitorPath looks for one.
+//
+// Short names throughout: the socket path lives in sockaddr_un's 104 bytes, which
+// is what checkNameFits is about, and a temp directory is most of the budget.
+func tempHome(t *testing.T) {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("", "sbh")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("HOME", dir)
+}
+
+// A monitor that is bound but unattended must time out, not block.
+//
+// QEMU's socket chardev serves one client at a time. A second connection is
+// accepted by the kernel and then left alone: no banner, no prompt, no error to
+// read. Reading the banner without a deadline blocks in the read syscall, where
+// the context cannot reach it — cancellation is only observed between reads — so
+// the wait is unbounded and outlives whatever timeout the caller believed it had
+// set. On CI that is not a failing test but a job that runs to its own limit and
+// is killed with no output at all.
+func TestMonitor_UnattendedSocketTimesOutRatherThanBlocking(t *testing.T) {
+	tempHome(t)
+
+	c := &Cluster{cfg: Config{Name: "sbi"}}
+	path := c.MonitorPath("n1")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("state dir: %v", err)
+	}
+	startUnattendedMonitor(t, path)
+
+	// Well inside the ten-second cap on a monitor command, to pin that the
+	// caller's deadline is what bounds the banner read.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		m, err := c.Monitor(ctx, "n1")
+		if m != nil {
+			_ = m.Close()
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Monitor succeeded against a socket that never greeted it")
+		}
+		if !strings.Contains(err.Error(), "banner") {
+			t.Errorf("error does not say the banner never arrived: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		// Deliberately far beyond both the context and monitorTimeout: reaching
+		// here means the read is bounded by neither, which is the CI hang.
+		t.Fatal("Monitor blocked past its context reading the banner")
+	}
+}
