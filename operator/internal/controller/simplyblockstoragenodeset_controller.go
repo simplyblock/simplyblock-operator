@@ -858,15 +858,23 @@ func (r *StorageNodeSetReconciler) reconcileSpdkProxyEndpointSlices(
 		return fmt.Errorf("failed to list spdk-proxy pods: %w", err)
 	}
 
+	// portsWithAnyPod tracks every RPC port that has a matching pod object AT
+	// ALL, ready or not -- computed separately from byPort (ready pods only)
+	// so the delete pass below can tell "pod is genuinely gone" apart from
+	// "pod exists but isn't ready this instant". RPC_PORT is a static env var
+	// on the pod spec, readable the moment the pod is scheduled, well before
+	// it ever becomes ready, so this is safe to compute from the full list.
 	byPort := map[int32][]utils.SpdkProxyEndpoint{}
+	portsWithAnyPod := map[int32]bool{}
 	for i := range pods.Items {
 		pod := &pods.Items[i]
-		if !isSpdkProxyPodReady(pod) {
-			continue
-		}
 		rpcPort, ok := extractSpdkProxyRpcPort(pod)
 		if !ok {
 			log.Info("skipping spdk-proxy pod: unable to determine RPC_PORT", "pod", pod.Name)
+			continue
+		}
+		portsWithAnyPod[rpcPort] = true
+		if !isSpdkProxyPodReady(pod) {
 			continue
 		}
 		byPort[rpcPort] = append(byPort[rpcPort], utils.SpdkProxyEndpoint{
@@ -902,7 +910,18 @@ func (r *StorageNodeSetReconciler) reconcileSpdkProxyEndpointSlices(
 		}
 	}
 
-	// Delete orphaned slices whose RPC_PORT no longer has any ready pod.
+	// Delete orphaned slices whose RPC_PORT has no matching pod AT ALL.
+	//
+	// Deliberately checked against portsWithAnyPod, NOT byPort: a pod that's
+	// merely not-ready this instant (isSpdkProxyPodReady can flip false for
+	// a single missed probe tick on either container, well short of what
+	// would restart the container or emit an Unhealthy event) must not have
+	// its DNS entry deleted -- the previous incident's root cause. Only
+	// delete when the pod for that port is genuinely gone (scaled down,
+	// node removed, rescheduled to a different port); a transiently
+	// not-ready pod simply keeps its last-known-good EndpointSlice in place
+	// until the next reconcile finds it ready and refreshes it via the
+	// create/update pass above.
 	var existingSlices discoveryv1.EndpointSliceList
 	if err := r.List(ctx, &existingSlices,
 		client.InNamespace(snCR.Namespace),
@@ -917,11 +936,9 @@ func (r *StorageNodeSetReconciler) reconcileSpdkProxyEndpointSlices(
 		}
 		keep := false
 		for _, p := range slice.Ports {
-			if p.Port != nil {
-				if _, ok := byPort[*p.Port]; ok {
-					keep = true
-					break
-				}
+			if p.Port != nil && portsWithAnyPod[*p.Port] {
+				keep = true
+				break
 			}
 		}
 		if keep {
@@ -1642,6 +1659,33 @@ func maybeActivateCluster(
 	}
 
 	if utils.ShouldActivateCluster(requiredEc, onlineHealthy, snCR) {
+		// Failure-domain readiness gate: mirrors the one in
+		// StorageClusterReconciler.reconcileActivate
+		// (simplyblockstoragecluster_controller.go). ShouldActivateCluster only
+		// counts online-healthy nodes against the erasure-coding scheme -- it
+		// has no notion of failure domains, so without this check a cluster
+		// with enough nodes but too few/unbalanced FDs gets POSTed to
+		// /activate every time this reconciler runs, which the backend
+		// synchronously rejects and reverts (unready -> in_activation ->
+		// unready), producing a permanent activation-retry loop instead of
+		// quietly waiting. No-op for FD-disabled clusters.
+		if ptr.BoolFromOrFalse(clusterCR.Spec.EnableFailureDomains) {
+			hostDomains, err := clusterFailureDomainHosts(ctx, r.Client, clusterCR.Namespace, clusterCR.Name)
+			if err != nil {
+				log.Error(err, "Failed to list StorageNodeSets for failure-domain readiness check",
+					"cluster", clusterCR.Name)
+				return err
+			}
+			npcs := stripeParityChunks(clusterCR.Spec.StripeSpec)
+			if reason := fdActivationDomainCountViolation(npcs, hostDomains); reason != "" {
+				log.Info("Not activating yet, waiting on failure-domain readiness",
+					"cluster", clusterCR.Name, "reason", reason)
+				r.Recorder.Eventf(snCR, nil, corev1.EventTypeWarning, "FailureDomainNotReady", "FailureDomainNotReady",
+					"activation waiting on failure-domain readiness: %s", reason)
+				return nil
+			}
+		}
+
 		if err := waitForNodeOnlineSleepFn(ctx, waitForNodeOnlineActivationDelay); err != nil {
 			return err
 		}

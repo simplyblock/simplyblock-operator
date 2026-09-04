@@ -237,6 +237,172 @@ func TestCountActiveDrainsBackendTakesPrecedence(t *testing.T) {
 	}
 }
 
+func TestActiveDrainWorkersUnionsControllerAndBackend(t *testing.T) {
+	// Controller state flags node-a; backend independently flags node-b (e.g.
+	// a real failure with no coordinator-driven drain in progress). Both must
+	// appear in the set so the failure-domain gate sees each affected domain.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"in_shutdown","health_check":false}`))
+	}))
+	defer srv.Close()
+
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			DrainCoordination: []simplyblockv1alpha1.NodeDrainState{
+				{Hostname: "node-a", Phase: simplyblockv1alpha1.DrainPhaseShutdownCalled},
+			},
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "node-b", UUID: "uuid-b"},
+			},
+		},
+	}
+
+	got := activeDrainWorkers(context.Background(), snCR, webapi.NewClient(srv.URL), "cluster")
+	if !got["node-a"] || !got["node-b"] || len(got) != 2 {
+		t.Fatalf("expected {node-a, node-b}, got %v", got)
+	}
+}
+
+func TestActiveDrainWorkersConservativeOnBackendError(t *testing.T) {
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "node-a", UUID: "uuid-a"},
+			},
+		},
+	}
+
+	got := activeDrainWorkers(context.Background(), snCR, webapi.NewClient("http://127.0.0.1:1"), "cluster")
+	if !got["node-a"] {
+		t.Fatalf("expected node-a marked active conservatively on API error, got %v", got)
+	}
+}
+
+func TestDistinctDomainCount(t *testing.T) {
+	fd1, fd2, fd3 := int32(1), int32(2), int32(3)
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "a", FailureDomain: &fd1},
+				{Hostname: "b", FailureDomain: &fd1},
+				{Hostname: "c", FailureDomain: &fd2},
+				{Hostname: "d", FailureDomain: &fd3},
+				{Hostname: "e"}, // unassigned -> excluded
+			},
+		},
+	}
+
+	if got := distinctDomainCount(snCR); got != 3 {
+		t.Fatalf("expected 3 distinct domains, got %d", got)
+	}
+	if got := distinctDomainCount(&simplyblockv1alpha1.StorageNodeSet{}); got != 0 {
+		t.Fatalf("expected 0 for empty status, got %d", got)
+	}
+}
+
+func TestActiveDrainDomainCountsTallies(t *testing.T) {
+	fd1, fd2 := int32(1), int32(2)
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "node-a", FailureDomain: &fd1},
+				{Hostname: "node-b", FailureDomain: &fd1},
+				{Hostname: "node-c", FailureDomain: &fd2},
+				// node-d intentionally has no status entry -> excluded
+			},
+		},
+	}
+	activeWorkers := map[string]bool{"node-a": true, "node-b": true, "node-c": true, "node-d": true}
+	counts := activeDrainDomainCounts(snCR, activeWorkers)
+	if counts[1] != 2 || counts[2] != 1 || len(counts) != 2 {
+		t.Fatalf("expected {1:2, 2:1}, got %v", counts)
+	}
+}
+
+// fdDrainGate is confirmed against the backend team's stated requirements
+// (2026-08, Dmitrii Iakovlev) for a 2+2 layout:
+//   - 2 domains: "1 whole domain" or "1 node in each of the 2 domains" are
+//     the only safe combinations.
+//   - 3 domains: only 1 domain may be fully down, not 2.
+//   - 4 domains: 2 domains may be fully down (well-provisioned case).
+
+func TestFdDrainGate2DomainsOneWholeDomainSafe(t *testing.T) {
+	// chunksPerDomain = ceil(4/2) = 2. Domain 1 already has 3 nodes down
+	// (maxed at chunksPerDomain regardless of how many more) -- a 4th is free.
+	counts := map[int32]int{1: 3}
+	if blocked, _ := fdDrainGate(counts, 1, 2, 4, 2); blocked {
+		t.Fatalf("expected piling further within an already-maxed domain to proceed")
+	}
+}
+
+func TestFdDrainGate2DomainsOneNodePerDomainSafe(t *testing.T) {
+	counts := map[int32]int{1: 1}
+	if blocked, _ := fdDrainGate(counts, 2, 2, 4, 2); blocked {
+		t.Fatalf("expected 1 node in each of the 2 domains to proceed")
+	}
+}
+
+func TestFdDrainGate2DomainsWholeDomainPlusOtherIsUnsafe(t *testing.T) {
+	// Domain 1 fully down (4 nodes, maxed at chunksPerDomain=2) -- a node in
+	// domain 2 must now be blocked (not one of the two safe combinations).
+	counts := map[int32]int{1: 4}
+	blocked, reason := fdDrainGate(counts, 2, 2, 4, 2)
+	if !blocked || reason == "" {
+		t.Fatalf("expected domain 2 to be blocked once domain 1 is fully down, got blocked=%v reason=%q", blocked, reason)
+	}
+}
+
+func TestFdDrainGate2DomainsOnePerDomainPlusExtraInEitherIsUnsafe(t *testing.T) {
+	// 1 node down in each of domains 1 and 2 already (the safe combo) --
+	// piling a SECOND node onto EITHER domain must now be blocked, even
+	// though that domain is already "active". This is the exact gap the old
+	// unconditional-piling logic missed.
+	counts := map[int32]int{1: 1, 2: 1}
+	if blocked, _ := fdDrainGate(counts, 2, 2, 4, 2); !blocked {
+		t.Fatalf("expected a 2nd node in domain 2 to be blocked once 1+1 is already committed")
+	}
+	if blocked, _ := fdDrainGate(counts, 1, 2, 4, 2); !blocked {
+		t.Fatalf("expected a 2nd node in domain 1 to be blocked once 1+1 is already committed")
+	}
+}
+
+func TestFdDrainGate3DomainsOneWholeDomainSafeTwoUnsafe(t *testing.T) {
+	// chunksPerDomain = ceil(4/3) = 2, same per-domain cap as 2 domains, but
+	// spread across 3. 1 domain fully down is safe; opening a 2nd is not.
+	counts := map[int32]int{1: 2} // domain 1 already maxed
+	if blocked, _ := fdDrainGate(counts, 1, 3, 4, 2); blocked {
+		t.Fatalf("expected piling within the already-maxed domain 1 to proceed")
+	}
+	if blocked, _ := fdDrainGate(counts, 2, 3, 4, 2); !blocked {
+		t.Fatalf("expected opening domain 2 to be blocked once domain 1 has maxed the risk budget")
+	}
+}
+
+func TestFdDrainGate4DomainsTwoWholeDomainsSafeThreeUnsafe(t *testing.T) {
+	// chunksPerDomain = ceil(4/4) = 1 (well-provisioned): up to npcs=2 whole
+	// domains may be fully down.
+	counts := map[int32]int{1: 1} // domain 1 already maxed (chunksPerDomain=1)
+	if blocked, _ := fdDrainGate(counts, 2, 4, 4, 2); blocked {
+		t.Fatalf("expected opening a 2nd domain to proceed while under the npcs=2 domain budget")
+	}
+	countsTwoActive := map[int32]int{1: 1, 2: 1}
+	if blocked, _ := fdDrainGate(countsTwoActive, 3, 4, 4, 2); !blocked {
+		t.Fatalf("expected opening a 3rd domain to be blocked once 2 domains already max the npcs=2 budget")
+	}
+}
+
+func TestFdDrainGateUnknownSchemeTreatedAsSingleDomainChunk(t *testing.T) {
+	// domainsNeededForFullDisjoint=0 signals the scheme could not be parsed;
+	// chunksPerDomain must fall back to >= 1, not 0 (which would divide by
+	// zero / always-block via a degenerate cap).
+	counts := map[int32]int{1: 1}
+	blocked, _ := fdDrainGate(counts, 2, 5, 0, 2)
+	if blocked {
+		t.Fatalf("expected an unparsed scheme to still allow a 2nd domain within the npcs budget, got blocked")
+	}
+}
+
 // ---- reconciler tests ----
 
 func TestNodeDrainReconcileNotFound(t *testing.T) {
@@ -637,7 +803,7 @@ func TestProcessWorkerUncordonedNoState(t *testing.T) {
 
 	requeue, shouldBreak := r.processWorker(
 		context.Background(), snCR, "node-g",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false, 0, 0,
 	)
 	if requeue != 0 || shouldBreak {
 		t.Fatalf("expected (0, false) for uncordoned node with no state, got (%v, %v)", requeue, shouldBreak)
@@ -661,7 +827,7 @@ func TestProcessWorkerSkipsCordonedNotYetOnline(t *testing.T) {
 
 	requeue, shouldBreak := r.processWorker(
 		context.Background(), snCR, "node-h",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false, 0, 0,
 	)
 	if requeue != 0 || shouldBreak {
 		t.Fatalf("expected (0, false) for cordoned node not yet online, got (%v, %v)", requeue, shouldBreak)
@@ -690,7 +856,7 @@ func TestProcessWorkerCordonedOnlineInitializesState(t *testing.T) {
 
 	r.processWorker(
 		context.Background(), snCR, "node-i",
-		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster", 1, false, 0, 0,
 	)
 
 	// Drain state must have been initialized (phase may be detected or failed
@@ -982,6 +1148,147 @@ func TestNodeDrainStatusPatch409RetryPreservesDrainState(t *testing.T) {
 	}
 	if state.Phase != simplyblockv1alpha1.DrainPhaseComplete {
 		t.Fatalf("expected DrainPhaseComplete after retry, got %q", state.Phase)
+	}
+}
+
+// ---- failure-domain gate tests ----
+
+// snCRWithFD builds a minimal StorageNodeSet with two nodes whose failure domains
+// are set in status.nodes (populated from the backend API), and node-a already
+// in an active drain phase.
+func snCRWithFD(nodeADomain, nodeBDomain int32) *simplyblockv1alpha1.StorageNodeSet {
+	return &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-fd", Namespace: "default"},
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			WorkerNodes: []string{"node-a", "node-b"},
+		},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			// FailureDomain sourced from backend API response, stored in status.
+			// No UUIDs so activeDrainWorkers makes no backend API calls.
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "node-a", FailureDomain: &nodeADomain},
+				{Hostname: "node-b", FailureDomain: &nodeBDomain},
+			},
+			DrainCoordination: []simplyblockv1alpha1.NodeDrainState{
+				{Hostname: "node-a", Phase: simplyblockv1alpha1.DrainPhaseShutdownCalled},
+			},
+		},
+	}
+}
+
+// TestHandleDetectedFDDisabledUsesGlobalGate verifies that when fdEnabled=false
+// the existing node-count gate blocks a second drain when activeDrains >= maxFaultTolerance.
+func TestHandleDetectedFDDisabledUsesGlobalGate(t *testing.T) {
+	snCR := snCRWithFD(1, 2)
+	state := &simplyblockv1alpha1.NodeDrainState{Hostname: "node-b", Phase: simplyblockv1alpha1.DrainPhaseDetected}
+	r := newNodeDrainTestReconciler(t, snCR)
+
+	requeue, err := r.handleDetected(
+		context.Background(), snCR, state,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster",
+		1,     // maxFaultTolerance=1 → node-a already consumes the slot
+		false, // fdEnabled=false → global gate
+		0,     // domainsNeededForFullDisjoint unused when fdEnabled=false
+		0,     // npcs unused when fdEnabled=false
+	)
+
+	if err != nil {
+		t.Fatalf("expected nil error when blocked, got %v", err)
+	}
+	if requeue != 10*time.Second {
+		t.Fatalf("expected 10s requeue when blocked by global gate, got %v", requeue)
+	}
+	if state.Phase == simplyblockv1alpha1.DrainPhaseShutdownCalled {
+		t.Fatalf("phase must not advance while drain slot is unavailable")
+	}
+}
+
+// TestHandleDetectedSameDomainParallelAllowed verifies that when fdEnabled=true,
+// a worker in the same failure domain as an already-draining worker is allowed
+// past the gate without waiting.
+func TestHandleDetectedSameDomainParallelAllowed(t *testing.T) {
+	// Both node-a and node-b are in failure domain 1.
+	snCR := snCRWithFD(1, 1)
+	state := &simplyblockv1alpha1.NodeDrainState{Hostname: "node-b", Phase: simplyblockv1alpha1.DrainPhaseDetected}
+	r := newNodeDrainTestReconciler(t, snCR)
+
+	requeue, err := r.handleDetected(
+		context.Background(), snCR, state,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster",
+		1,    // maxFaultTolerance=1 — unused inside the fdEnabled branch
+		true, // fdEnabled=true
+		1,    // domainsNeededForFullDisjoint=1, domainsAvailable=1 -> chunksPerDomain=1,
+		// so node-a (already active in domain 1) has already maxed the domain's
+		// contribution -- node-b proceeds unconditionally regardless of npcs.
+		1, // npcs -- irrelevant here since the maxed-domain shortcut fires first
+	)
+
+	// The gate passes; the function proceeds until it finds no UUID for node-b
+	// and returns a 15s requeue with a non-nil error (UUID missing). That proves
+	// it was NOT held back at the drain-slot check.
+	blocked := err == nil && requeue == 10*time.Second
+	if blocked {
+		t.Fatalf("node in the same failure domain must not be blocked; state.Message=%q", state.Message)
+	}
+}
+
+// TestHandleDetectedCrossDomainGated verifies that when fdEnabled=true, a worker
+// in a different failure domain from the already-draining worker is blocked when
+// the active domain count meets maxFaultTolerance.
+func TestHandleDetectedCrossDomainGated(t *testing.T) {
+	// node-a is in domain 1 (already draining); node-b is in domain 2.
+	snCR := snCRWithFD(1, 2)
+	state := &simplyblockv1alpha1.NodeDrainState{Hostname: "node-b", Phase: simplyblockv1alpha1.DrainPhaseDetected}
+	r := newNodeDrainTestReconciler(t, snCR)
+
+	requeue, err := r.handleDetected(
+		context.Background(), snCR, state,
+		webapi.NewClient("http://127.0.0.1:1"), "cluster",
+		1,    // maxFaultTolerance=1 — unused inside the fdEnabled branch
+		true, // fdEnabled=true
+		2,    // domainsNeededForFullDisjoint=2, domainsAvailable=2 -> chunksPerDomain=1 (well-provisioned)
+		1,    // npcs=1: currentRisk(1)+1=2 > npcs(1) -> correctly blocked
+	)
+
+	if err != nil {
+		t.Fatalf("expected nil error when blocked by domain gate, got %v", err)
+	}
+	if requeue != 10*time.Second {
+		t.Fatalf("expected 10s requeue when cross-domain is gated, got %v", requeue)
+	}
+	if state.Phase == simplyblockv1alpha1.DrainPhaseShutdownCalled {
+		t.Fatalf("phase must not advance when cross-domain drain slot is unavailable")
+	}
+}
+
+// TestWorkerFailureDomainFromStatus verifies that the failure domain is read
+// from status.nodes[].failureDomain (populated from the backend API response).
+func TestWorkerFailureDomainFromStatus(t *testing.T) {
+	fd := int32(5)
+	snCR := &simplyblockv1alpha1.StorageNodeSet{
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "worker-a", FailureDomain: &fd},
+			},
+		},
+	}
+
+	got, ok := workerFailureDomain(snCR, "worker-a")
+	if !ok {
+		t.Fatal("expected domain to be found in status")
+	}
+	if got != 5 {
+		t.Fatalf("expected 5 from status.nodes, got %d", got)
+	}
+}
+
+// TestWorkerFailureDomainUnassigned verifies that a worker with no domain
+// assignment returns (0, false).
+func TestWorkerFailureDomainUnassigned(t *testing.T) {
+	snCR := &simplyblockv1alpha1.StorageNodeSet{}
+	_, ok := workerFailureDomain(snCR, "worker-missing")
+	if ok {
+		t.Fatal("expected (0, false) for unassigned worker")
 	}
 }
 
