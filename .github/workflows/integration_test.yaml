@@ -66,20 +66,40 @@ jobs:
         working-directory: test/integration
         run: go vet ./...
 
-      - name: Test
+      # Run separately from the suites, and first: these need no cluster, and a
+      # failure in them is a failure of the harness rather than of what it
+      # exercises.
+      - name: Unit tests
+        working-directory: test/integration
+        run: go test -v -count=1 -timeout 5m $(go list ./... | grep -v '/suites$')
+
+      - name: Integration suites
         working-directory: test/integration
         env:
           # Without this the suite skips itself and the job reports green having
           # booted nothing.
           SB_INTEGRATION: "1"
+        # One package on purpose. `go test` buffers a package's output while other
+        # packages are still running and prints it when the package finishes, so a
+        # suite that wedges produces nothing at all — which is how a boot failure
+        # and a deadlock came to look identical here.
+        #
+        # The timeout is under the job's own so that a wedge is a panic with every
+        # goroutine's stack rather than a cancellation with no output. It has to
+        # leave room for the diagnostic steps below, which do not run once the
+        # runner kills the job.
+        #
         # The test itself stays unprivileged; it elevates talosctl on its own, so
         # the Go build cache and artifacts are not left root-owned.
-        run: go test -v -count=1 -timeout 60m ./...
+        run: go test -v -count=1 -timeout 35m ./suites/
 
       # Cluster state and serial logs are the only way to read a boot failure
-      # after the fact, and a failed run is exactly when they are wanted.
+      # after the fact, and a run that went wrong is exactly when they are wanted.
+      # A canceled run counts as one: a job the runner kills for exceeding its own
+      # timeout is canceled rather than failed, and its cluster is the one whose
+      # state nobody has been able to read.
       - name: Collect cluster diagnostics
-        if: failure()
+        if: failure() || cancelled()
         run: |
           for d in "$HOME"/.talos/clusters/sbi-* "$HOME"/.talos/clusters/sb-integration*; do
             [ -d "$d" ] || continue
