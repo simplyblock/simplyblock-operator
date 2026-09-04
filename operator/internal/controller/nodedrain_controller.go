@@ -79,7 +79,11 @@ const (
 //
 // Concurrency is controlled by StorageCluster.spec.maxFaultTolerance: at most
 // that many nodes per StorageNodeSet CR may be in the active drain window
-// (phases shutdown_called, draining, restart_called) simultaneously.
+// (phases shutdown_called, draining, restart_called) simultaneously. When
+// failure domains are enabled (StorageCluster.spec.enableFailureDomains),
+// MaxFaultTolerance counts distinct active failure domains instead of raw
+// node count — see fdDrainGate for the full gating rule, including the
+// under-provisioned-domains fallback.
 //
 // OpenShift MachineConfigPool (MCP) pausing is not implemented here; instead,
 // set MachineConfigPool.spec.maxUnavailable to a high value and rely on the
@@ -148,6 +152,38 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 		maxFaultTolerance = int(*clusterCR.Status.MaxConcurrentWorkerRestarts)
 	}
 
+	// Failure-domain mode changes what MaxFaultTolerance counts against: with FD
+	// enabled, placement guarantees at most one erasure-coding chunk per domain,
+	// so the tolerable unit of loss is a whole domain, not an individual node
+	// (see handleDetected, which delegates the accounting to fdDrainGate).
+	fdEnabled := clusterCR.Spec.EnableFailureDomains != nil && *clusterCR.Spec.EnableFailureDomains
+
+	// domainsNeededForFullDisjoint (ndcs+npcs) is the number of distinct failure
+	// domains required to place every stripe's chunks one-per-domain. Below that,
+	// at least one domain necessarily carries more than one chunk, so losing
+	// more than one domain at once can no longer be assumed safe — see
+	// fdDrainGate's chunksPerDomain calculation. 0 means "unknown" (scheme not
+	// yet reported); fdDrainGate currently clamps that to chunksPerDomain=1 (the
+	// same as a fully-disjoint layout) rather than treating it conservatively.
+	domainsNeededForFullDisjoint := 0
+	// npcs is the failure-domain risk budget fdDrainGate spends against —
+	// see fdDrainGate for the full accounting rule.
+	npcs := 0
+	if fdEnabled {
+		if n, err := utils.RequiredNodesFromErasureCodingScheme(clusterCR.Status.ErasureCodingScheme); err == nil {
+			domainsNeededForFullDisjoint = n
+		} else {
+			log.Info("Could not parse erasure coding scheme for failure-domain gate; treating as under-provisioned",
+				"scheme", clusterCR.Status.ErasureCodingScheme, "err", err)
+		}
+		if n, err := utils.ParityChunksFromErasureCodingScheme(clusterCR.Status.ErasureCodingScheme); err == nil {
+			npcs = n
+		} else {
+			log.Info("Could not parse npcs from erasure coding scheme for failure-domain gate",
+				"scheme", clusterCR.Status.ErasureCodingScheme, "err", err)
+		}
+	}
+
 	apiClient := webapi.NewClient()
 	nextRequeue := time.Duration(0)
 
@@ -184,7 +220,7 @@ func (r *NodeDrainCoordinatorReconciler) Reconcile(ctx context.Context, req ctrl
 
 	for _, workerName := range snCR.Spec.WorkerNodes {
 		requeue, shouldBreak := r.processWorker(
-			ctx, snCR, workerName, apiClient, clusterUUID, maxFaultTolerance,
+			ctx, snCR, workerName, apiClient, clusterUUID, maxFaultTolerance, fdEnabled, domainsNeededForFullDisjoint, npcs,
 		)
 		if requeue > 0 && (nextRequeue == 0 || requeue < nextRequeue) {
 			nextRequeue = requeue
@@ -233,6 +269,9 @@ func (r *NodeDrainCoordinatorReconciler) processWorker(
 	apiClient *webapi.Client,
 	clusterUUID string,
 	maxFaultTolerance int,
+	fdEnabled bool,
+	domainsNeededForFullDisjoint int,
+	npcs int,
 ) (requeue time.Duration, shouldBreak bool) {
 	log := logf.FromContext(ctx)
 
@@ -279,7 +318,7 @@ func (r *NodeDrainCoordinatorReconciler) processWorker(
 
 	prevPhase := state.Phase
 	advRequeue, advErr := r.advanceStateMachine(
-		ctx, snCR, state, apiClient, clusterUUID, maxFaultTolerance,
+		ctx, snCR, state, apiClient, clusterUUID, maxFaultTolerance, fdEnabled, domainsNeededForFullDisjoint, npcs,
 	)
 	if advErr != nil {
 		log.Error(advErr, "Drain state machine error", "node", workerName, "phase", state.Phase)
@@ -385,10 +424,13 @@ func (r *NodeDrainCoordinatorReconciler) advanceStateMachine(
 	apiClient *webapi.Client,
 	clusterUUID string,
 	maxFaultTolerance int,
+	fdEnabled bool,
+	domainsNeededForFullDisjoint int,
+	npcs int,
 ) (time.Duration, error) {
 	switch state.Phase {
 	case simplyblockv1alpha1.DrainPhaseDetected:
-		return r.handleDetected(ctx, snCR, state, apiClient, clusterUUID, maxFaultTolerance)
+		return r.handleDetected(ctx, snCR, state, apiClient, clusterUUID, maxFaultTolerance, fdEnabled, domainsNeededForFullDisjoint, npcs)
 	case simplyblockv1alpha1.DrainPhaseShutdownCalled:
 		return r.handleShutdownCalled(ctx, snCR, state, apiClient, clusterUUID)
 	case simplyblockv1alpha1.DrainPhaseDraining:
@@ -405,8 +447,15 @@ func (r *NodeDrainCoordinatorReconciler) advanceStateMachine(
 }
 
 // handleDetected waits for a drain slot then initiates the simplyblock shutdown.
-// Gate: number of nodes currently in {shutdown_called, draining, restart_called}
-// must be less than MaxFaultTolerance.
+//
+// Gate without failure domains: number of nodes currently in
+// {shutdown_called, draining, restart_called} must be less than MaxFaultTolerance.
+//
+// Gate with failure domains enabled: see fdDrainGate for the full accounting
+// rule (a per-domain risk budget of npcs, confirmed against the backend
+// team's stated requirements for 2/3/4-domain 2+2 layouts).
+//
+// See activeDrainWorkers/activeDrainDomainCounts.
 //
 // Importantly, the storage pod is labelled and a blocking PDB (maxUnavailable=0)
 // is created BEFORE the slot check, so that MCP/kubectl-drain cannot evict the
@@ -418,6 +467,9 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 	apiClient *webapi.Client,
 	clusterUUID string,
 	maxFaultTolerance int,
+	fdEnabled bool,
+	domainsNeededForFullDisjoint int,
+	npcs int,
 ) (time.Duration, error) {
 	log := logf.FromContext(ctx)
 
@@ -452,11 +504,36 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 		log.Info("Storage PDB in place; released manager self-PDB — manager will migrate to another node", "node", state.Hostname)
 	}
 
-	activeDrains := countActiveDrains(ctx, snCR, apiClient, clusterUUID)
-	if activeDrains >= maxFaultTolerance {
-		state.Message = fmt.Sprintf("waiting for drain slot (%d/%d active)", activeDrains, maxFaultTolerance)
-		log.Info("No drain slot available, blocking PDB in place", "node", state.Hostname, "active", activeDrains, "max", maxFaultTolerance)
-		return 10 * time.Second, nil
+	if fdEnabled {
+		myDomain, hasDomain := workerFailureDomain(snCR, state.Hostname)
+		if !hasDomain {
+			// FD is enabled cluster-wide but this node has no domain assignment
+			// yet (should not normally happen — add_node enforces the pairing).
+			// Fall back to the plain node-count gate rather than let an
+			// unassigned node bypass the budget entirely.
+			activeDrains := countActiveDrains(ctx, snCR, apiClient, clusterUUID)
+			if activeDrains >= maxFaultTolerance {
+				state.Message = fmt.Sprintf("waiting for drain slot (%d/%d active, no failure-domain assignment)", activeDrains, maxFaultTolerance)
+				log.Info("No drain slot available (node has no FD assignment; using node count)", "node", state.Hostname, "active", activeDrains, "max", maxFaultTolerance)
+				return 10 * time.Second, nil
+			}
+		} else {
+			activeWorkers := activeDrainWorkers(ctx, snCR, apiClient, clusterUUID)
+			activeDomainCounts := activeDrainDomainCounts(snCR, activeWorkers)
+			domainsAvailable := distinctDomainCount(snCR)
+			if blocked, reason := fdDrainGate(activeDomainCounts, myDomain, domainsAvailable, domainsNeededForFullDisjoint, npcs); blocked {
+				state.Message = fmt.Sprintf("waiting for drain slot (%s)", reason)
+				log.Info("No drain slot available for failure domain", "node", state.Hostname, "domain", myDomain, "reason", reason)
+				return 10 * time.Second, nil
+			}
+		}
+	} else {
+		activeDrains := countActiveDrains(ctx, snCR, apiClient, clusterUUID)
+		if activeDrains >= maxFaultTolerance {
+			state.Message = fmt.Sprintf("waiting for drain slot (%d/%d active)", activeDrains, maxFaultTolerance)
+			log.Info("No drain slot available, blocking PDB in place", "node", state.Hostname, "active", activeDrains, "max", maxFaultTolerance)
+			return 10 * time.Second, nil
+		}
 	}
 
 	nodeUUIDs := findAllNodeUUIDs(snCR, state.Hostname)
@@ -506,7 +583,7 @@ func (r *NodeDrainCoordinatorReconciler) handleDetected(
 			continue
 		}
 		state.ActiveNodeUUID = s.uuid
-		if s.status == "in_shutdown" {
+		if s.status == nodeStatusInShutdown {
 			log.Info("First pending node already in_shutdown; advancing to shutdown_called", "node", state.Hostname, "nodeUUID", s.uuid)
 			state.Message = fmt.Sprintf("node %s already in_shutdown; waiting for offline", s.uuid)
 		} else {
@@ -1186,7 +1263,7 @@ func countActiveDrains(
 			continue
 		}
 		switch info.Status {
-		case "in_shutdown", "in_restart":
+		case nodeStatusInShutdown, nodeStatusInRestart:
 			activeWorkers[n.Hostname] = true
 		}
 	}
@@ -1196,6 +1273,147 @@ func countActiveDrains(
 		return backendCount
 	}
 	return controllerCount
+}
+
+// activeDrainWorkers returns the set of worker hostnames currently in the
+// active drain window, merging the same two sources as countActiveDrains
+// (controller-tracked phases and backend node status) into an actual set
+// rather than a count — needed so the failure-domain gate can test which
+// domains those workers belong to, not just how many there are.
+func activeDrainWorkers(
+	ctx context.Context,
+	snCR *simplyblockv1alpha1.StorageNodeSet,
+	apiClient *webapi.Client,
+	clusterUUID string,
+) map[string]bool {
+	active := map[string]bool{}
+	for _, s := range snCR.Status.DrainCoordination {
+		switch s.Phase {
+		case simplyblockv1alpha1.DrainPhaseShutdownCalled,
+			simplyblockv1alpha1.DrainPhaseDraining,
+			simplyblockv1alpha1.DrainPhaseRestartCalled:
+			active[s.Hostname] = true
+		}
+	}
+
+	seen := map[string]bool{}
+	for _, n := range snCR.Status.Nodes {
+		if n.UUID == "" || n.Hostname == "" || seen[n.Hostname] {
+			continue
+		}
+		seen[n.Hostname] = true
+		info, err := getBackendNodeInfo(ctx, apiClient, clusterUUID, n.UUID)
+		if err != nil {
+			// Conservatively mark active on a query error, same as countActiveDrains.
+			active[n.Hostname] = true
+			continue
+		}
+		switch info.Status {
+		case nodeStatusInShutdown, nodeStatusInRestart:
+			active[n.Hostname] = true
+		}
+	}
+	return active
+}
+
+// workerFailureDomain returns the effective failure-domain group for a worker
+// hostname from status.nodes[].failureDomain, which is populated by the backend
+// API response and is therefore authoritative even for nodes added outside the
+// operator. Returns (0, false) when the backend has not assigned a domain.
+func workerFailureDomain(snCR *simplyblockv1alpha1.StorageNodeSet, hostname string) (int32, bool) {
+	for _, ns := range snCR.Status.Nodes {
+		if ns.Hostname == hostname && ns.FailureDomain != nil {
+			return *ns.FailureDomain, true
+		}
+	}
+	return 0, false
+}
+
+// activeDrainDomainCounts maps a set of active worker hostnames to how many
+// of them fall in each failure domain — the per-domain node count fdDrainGate
+// needs to compute risk. Workers with no domain assignment are excluded — the
+// caller falls back to the plain node-count gate for those.
+func activeDrainDomainCounts(snCR *simplyblockv1alpha1.StorageNodeSet, activeWorkers map[string]bool) map[int32]int {
+	counts := map[int32]int{}
+	for w := range activeWorkers {
+		if d, ok := workerFailureDomain(snCR, w); ok {
+			counts[d]++
+		}
+	}
+	return counts
+}
+
+// distinctDomainCount returns the number of distinct effective failure-domain
+// groups currently assigned across a StorageNodeSet's workers, from
+// status.nodes[].failureDomain — the same authoritative source as
+// workerFailureDomain, not the deploy-time-requested spec.nodeFailureDomains.
+func distinctDomainCount(snCR *simplyblockv1alpha1.StorageNodeSet) int {
+	domains := map[int32]bool{}
+	for _, ns := range snCR.Status.Nodes {
+		if ns.FailureDomain != nil {
+			domains[*ns.FailureDomain] = true
+		}
+	}
+	return len(domains)
+}
+
+// fdDrainGate decides whether a candidate node in myDomain may proceed past
+// the Detected phase when failure domains are enabled. Kept as a pure
+// decision function (all inputs precomputed by the caller) so the policy is
+// directly unit-testable without the k8s/backend side effects in
+// handleDetected.
+//
+// The risk budget is npcs, spent per domain at a rate of
+// min(nodesDownInThatDomain, chunksPerDomain), where chunksPerDomain =
+// ceil(domainsNeededForFullDisjoint / domainsAvailable) — placement spreads a
+// stripe's domainsNeededForFullDisjoint (ndcs+npcs) chunks as evenly as
+// possible across the domains that actually exist, so with fewer domains
+// than chunks, at least one domain holds more than one chunk. A domain that
+// already has chunksPerDomain nodes down has maxed its contribution to the
+// budget — further nodes in THAT SAME domain are free — but a node in a
+// domain that hasn't maxed out yet is only safe if the combined risk across
+// every affected domain still leaves room. This reduces to the familiar "up
+// to npcs whole domains are free" rule once there are >= ndcs+npcs domains
+// (chunksPerDomain == 1).
+//
+// Confirmed against the backend team's stated requirements for a 2+2 layout:
+// 2 domains -> "1 whole domain" or "1 node in each of the 2 domains" are the
+// only safe combinations; 3 domains -> only 1 domain may be fully down, not
+// 2; 4 domains -> 2 domains may be fully down (the well-provisioned case).
+func fdDrainGate(
+	activeDomainCounts map[int32]int,
+	myDomain int32,
+	domainsAvailable int,
+	domainsNeededForFullDisjoint int,
+	npcs int,
+) (blocked bool, reason string) {
+	chunksPerDomain := domainsNeededForFullDisjoint
+	if domainsAvailable > 0 {
+		chunksPerDomain = (domainsNeededForFullDisjoint + domainsAvailable - 1) / domainsAvailable // ceil
+	}
+	if chunksPerDomain < 1 {
+		chunksPerDomain = 1
+	}
+
+	if activeDomainCounts[myDomain] >= chunksPerDomain {
+		return false, ""
+	}
+
+	currentRisk := 0
+	for _, count := range activeDomainCounts {
+		risk := count
+		if risk > chunksPerDomain {
+			risk = chunksPerDomain
+		}
+		currentRisk += risk
+	}
+	if currentRisk+1 > npcs {
+		return true, fmt.Sprintf(
+			"failure domain %d: %d/%d failure-domain risk budget already committed "+
+				"(%d domain(s) available, %d chunk(s)/domain worst case)",
+			myDomain, currentRisk, npcs, domainsAvailable, chunksPerDomain)
+	}
+	return false, ""
 }
 
 // findNodeUUID returns the backend UUID for the given hostname from StorageNodeSet status.

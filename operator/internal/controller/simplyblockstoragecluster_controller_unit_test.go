@@ -20,6 +20,144 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
+func TestFdActivationDomainCountViolation(t *testing.T) {
+	hosts := func(domainCounts ...int32) map[string]int32 {
+		m := map[string]int32{}
+		for i, fd := range domainCounts {
+			m[fmt.Sprintf("10.0.0.%d", i)] = fd
+		}
+		return m
+	}
+
+	cases := []struct {
+		name    string
+		npcs    int
+		hosts   map[string]int32
+		wantErr bool
+	}{
+		{"empty", 1, map[string]int32{}, true},
+		{"npcs1 two domains violates", 1, hosts(0, 0, 1, 1), true},
+		{"npcs1 three domains ok", 1, hosts(0, 1, 2), false},
+		{"npcs1 three domains unequal violates", 1, hosts(0, 1, 1, 2), true},
+		{"npcs2 two domains violates", 2, hosts(0, 0, 1, 1), true},
+		{"npcs2 three domains violates", 2, hosts(0, 1, 2), true},
+		{"npcs2 four domains ok", 2, hosts(0, 1, 2, 3), false},
+		{"npcs2 four domains unequal violates", 2, hosts(0, 0, 1, 2, 3), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reason := fdActivationDomainCountViolation(tc.npcs, tc.hosts)
+			if tc.wantErr && reason == "" {
+				t.Fatalf("expected a violation reason, got none")
+			}
+			if !tc.wantErr && reason != "" {
+				t.Fatalf("expected no violation, got: %s", reason)
+			}
+		})
+	}
+}
+
+func TestClusterFailureDomainHosts(t *testing.T) {
+	fd := func(v int32) *int32 { return &v }
+
+	nsA := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "set-a", Namespace: "default"},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-x"},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "w0", MgmtIp: "10.0.0.1", FailureDomain: fd(0)},
+				{Hostname: "w1", MgmtIp: "10.0.0.2", FailureDomain: fd(1)},
+				{Hostname: "w2", MgmtIp: "10.0.0.3"},                                                        // no domain yet, must be skipped
+				{Hostname: "w4", MgmtIp: "10.0.0.5", FailureDomain: fd(0), Status: utils.NodeStatusRemoved}, // removed, must be skipped
+			},
+		},
+	}
+	nsB := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "set-b", Namespace: "default"},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-x"},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "w3", MgmtIp: "10.0.0.4", FailureDomain: fd(2)},
+			},
+		},
+	}
+	nsOther := &simplyblockv1alpha1.StorageNodeSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "set-other", Namespace: "default"},
+		Spec:       simplyblockv1alpha1.StorageNodeSetSpec{ClusterName: "cluster-y"},
+		Status: simplyblockv1alpha1.StorageNodeSetStatus{
+			Nodes: []simplyblockv1alpha1.NodeStatus{
+				{Hostname: "y0", MgmtIp: "10.0.0.9", FailureDomain: fd(0)},
+			},
+		},
+	}
+
+	r := newClusterStateTestReconciler(t, nsA, nsB, nsOther)
+
+	got, err := clusterFailureDomainHosts(context.Background(), r.Client, "default", "cluster-x")
+	if err != nil {
+		t.Fatalf("clusterFailureDomainHosts returned error: %v", err)
+	}
+	want := map[string]int32{"10.0.0.1": 0, "10.0.0.2": 1, "10.0.0.4": 2}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+	for ip, fdVal := range want {
+		if got[ip] != fdVal {
+			t.Fatalf("expected %s -> domain %d, got %v", ip, fdVal, got)
+		}
+	}
+}
+
+func TestFdRemovalBalanceViolation(t *testing.T) {
+	tests := []struct {
+		name        string
+		counts      map[int32]int
+		wantBlocked bool
+	}{
+		{
+			name:        "empty (feature unused) is fine",
+			counts:      map[int32]int{},
+			wantBlocked: false,
+		},
+		{
+			name:        "balanced 2/2/3 stays within +/-1",
+			counts:      map[int32]int{0: 2, 1: 2, 2: 3},
+			wantBlocked: false,
+		},
+		{
+			name:        "1/2/3 exceeds +/-1 spread",
+			counts:      map[int32]int{0: 1, 1: 2, 2: 3},
+			wantBlocked: true,
+		},
+		{
+			name:        "single host in a domain violates the 2-per-domain floor even within +/-1",
+			counts:      map[int32]int{0: 1, 1: 2},
+			wantBlocked: true,
+		},
+		{
+			name: "a domain present with count zero violates the floor",
+			// Regression for the 2026-08-26 finding: A=2,B=2,C=1, C's only
+			// host removed. The caller must decrement C to 0 rather than
+			// drop it from the map entirely -- a dropped key would leave
+			// counts={A:2,B:2}, which both the +/-1 and floor checks below
+			// would wrongly accept.
+			counts:      map[int32]int{0: 2, 1: 2, 2: 0},
+			wantBlocked: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason := fdRemovalBalanceViolation(tt.counts)
+			if tt.wantBlocked && reason == "" {
+				t.Errorf("expected a violation reason, got none")
+			}
+			if !tt.wantBlocked && reason != "" {
+				t.Errorf("expected no violation, got %q", reason)
+			}
+		})
+	}
+}
+
 func TestClusterEnsureFinalizer(t *testing.T) {
 	cluster := &simplyblockv1alpha1.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-finalizer", Namespace: "default"},

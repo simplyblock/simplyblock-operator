@@ -500,6 +500,167 @@ func (r *StorageClusterReconciler) ensureFinalizer(
 	return true, r.Update(ctx, clusterCR)
 }
 
+// clusterFailureDomainHosts aggregates each host's (by management IP)
+// failure domain across every StorageNodeSet belonging to clusterName in
+// namespace. Hosts with no failure-domain assignment reported to status
+// yet are skipped, not treated as domain 0. Nodes already removed are
+// skipped too -- mirroring simplyblock_core's failure_domain_host_map
+// (Python side), which excludes StorageNode.STATUS_REMOVED for the same
+// reason: a removed node's stale domain assignment must not inflate that
+// domain's apparent host count for either the activation-readiness gate
+// below or the removal-balance gate in drainValidate
+// (storagenodeops_controller.go).
+//
+// reconcileActivate/reconcileExpand moved to StorageClusterOpsReconciler
+// (storageclusterops_controller.go) when cluster operations were decoupled
+// from this reconciler (#397); this pair of pure helpers has no dependency
+// on the old receiver and is kept here for the FD-activation-readiness gate
+// in the new reconcileActivate to call.
+func clusterFailureDomainHosts(
+	ctx context.Context, c client.Client, namespace, clusterName string,
+) (map[string]int32, error) {
+	var snList simplyblockv1alpha1.StorageNodeSetList
+	if err := c.List(ctx, &snList, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+	hostDomains := map[string]int32{}
+	for _, sn := range snList.Items {
+		if sn.Spec.ClusterName != clusterName {
+			continue
+		}
+		for _, ns := range sn.Status.Nodes {
+			if ns.FailureDomain == nil || ns.MgmtIp == "" || ns.Status == utils.NodeStatusRemoved {
+				continue
+			}
+			hostDomains[ns.MgmtIp] = *ns.FailureDomain
+		}
+	}
+	return hostDomains, nil
+}
+
+// hostHasSurvivingSibling reports whether any StorageNode OTHER than
+// excludeUUID is still reported at mgmtIP within clusterName -- multi-node
+// hosts (spec.socketsToUse / spec.nodesPerSocket > 1) run more than one
+// StorageNode per physical host, all sharing the same management IP in
+// clusterFailureDomainHosts' per-host map. Callers must not treat that
+// whole host as gone when only one of its nodes is being removed.
+//
+// Fails closed (returns false, "no confirmed sibling") on a List error, so
+// the caller's default behavior stays the pre-fix one: assume the host
+// itself disappears rather than silently skip a real single-node removal.
+func hostHasSurvivingSibling(ctx context.Context, c client.Client, namespace, clusterName, mgmtIP, excludeUUID string) bool {
+	var snList simplyblockv1alpha1.StorageNodeSetList
+	if err := c.List(ctx, &snList, client.InNamespace(namespace)); err != nil {
+		return false
+	}
+	for _, sn := range snList.Items {
+		if sn.Spec.ClusterName != clusterName {
+			continue
+		}
+		for _, ns := range sn.Status.Nodes {
+			if ns.MgmtIp == mgmtIP && ns.UUID != excludeUUID && ns.Status != utils.NodeStatusRemoved {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// fdRemovalBalanceViolation validates a set of post-removal per-domain host
+// counts against the same +/-1 balance rule and per-domain floor enforced
+// on the backend side (simplyblock_core's fd_balance_violation, called from
+// check_fd_admission_for_remove) -- mirrored here so the operator's drain
+// reconciler can refuse to even suspend a node whose removal is already
+// known to violate it, rather than discovering that only after suspending
+// the node and having the backend's own admission check reject the
+// DELETE call made much later in the drain (2026-08-13 incident: the node
+// sat suspended while the reconciler retried a permanently-doomed DELETE).
+//
+// counts must already reflect the removal (the affected domain's count
+// decremented by the caller) and, critically, must still carry an entry --
+// even a zero one -- for every domain that had at least one host BEFORE the
+// removal. A domain silently absent from the map is indistinguishable from
+// "never existed" and would let both the balance and floor checks below
+// miss a domain dropping out entirely (2026-08-26 finding: A=2,B=2,C=1 with
+// C's only host removed produced counts={A:2,B:2}, which passed both checks
+// even though the resulting 2-domain topology is exactly what
+// fdActivationDomainCountViolation calls unsupported).
+//
+// Returns a human-readable reason on violation, "" when the counts are
+// acceptable.
+func fdRemovalBalanceViolation(counts map[int32]int) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	const maxDelta = 1
+	const minHostsPerFD = 2
+	lo, hi := -1, -1
+	for _, c := range counts {
+		if lo == -1 || c < lo {
+			lo = c
+		}
+		if hi == -1 || c > hi {
+			hi = c
+		}
+	}
+	if hi-lo > maxDelta {
+		return fmt.Sprintf(
+			"failure domains would be unbalanced by %d hosts (allowed: %d); populations: %v",
+			hi-lo, maxDelta, counts)
+	}
+	for fd, c := range counts {
+		if c < minHostsPerFD {
+			return fmt.Sprintf(
+				"failure domain %d would drop to %d host(s); at least %d are required per domain",
+				fd, c, minHostsPerFD)
+		}
+	}
+	return ""
+}
+
+// fdActivationDomainCountViolation validates the number of distinct failure
+// domains and per-domain host balance for fresh activation, mirroring
+// simplyblock_core's fd_activation_domain_count_violation (Python side) so
+// the two stay in lockstep.
+//
+// A 2-FD layout can never absorb a second independent failure once one
+// domain is fully down, so fresh activation requires npcs+2 distinct
+// domains (3 for npcs=1, 4 for npcs=2) with an EQUAL host count in each --
+// below npcs+1 domains even the initial static role-placement rotation is
+// structurally wrong; at exactly npcs+1 it is correct but has zero spare
+// capacity for a later single add/remove. Returns a human-readable reason
+// when the cluster isn't ready yet, "" when it is.
+func fdActivationDomainCountViolation(npcs int, hostDomains map[string]int32) string {
+	if len(hostDomains) == 0 {
+		return "no storage nodes with a failure-domain assignment reported yet"
+	}
+	counts := map[int32]int{}
+	for _, fd := range hostDomains {
+		counts[fd]++
+	}
+	minDomains := npcs + 2
+	if len(counts) < minDomains {
+		return fmt.Sprintf(
+			"failure domains are enabled with npcs=%d, which requires at least "+
+				"%d distinct failure domains (2 domains is not supported at any "+
+				"npcs level); currently have %d",
+			npcs, minDomains, len(counts))
+	}
+	first := -1
+	for _, c := range counts {
+		if first == -1 {
+			first = c
+			continue
+		}
+		if c != first {
+			return fmt.Sprintf(
+				"failure domains must hold an equal number of hosts at "+
+					"activation; current split: %v", counts)
+		}
+	}
+	return ""
+}
+
 func (r *StorageClusterReconciler) upsertCSICredentialsSecret(
 	ctx context.Context,
 	namespace string,

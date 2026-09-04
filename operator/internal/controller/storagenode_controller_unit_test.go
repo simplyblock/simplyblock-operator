@@ -196,6 +196,60 @@ func TestEffectiveFailureDomain_ZeroWhenNotSet(t *testing.T) {
 	}
 }
 
+// ── TestEffectiveFailureDomainPtr ─────────────────────────────────────────────
+//
+// Regression for the 2026-08-27 incident: StorageNodeSetAddParams.FailureDomain
+// used to be a plain int with `omitempty`, so a node explicitly assigned
+// domain 0 had the field silently dropped from the JSON POSTed to the
+// backend -- the backend then saw no failure_domain at all, and that node's
+// add_node never completed (it sat with no status forever, blocking every
+// FDB worker queued behind it). effectiveFailureDomainPtr exists so the
+// caller can tell "domain 0" (a real, valid *int) apart from "not
+// configured" (nil, correctly omitted).
+
+func TestEffectiveFailureDomainPtr_NilWhenNotSet(t *testing.T) {
+	sns := &simplyblockv1alpha1.StorageNodeSet{}
+	sn := &simplyblockv1alpha1.StorageNode{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{WorkerNode: snTestWorker},
+	}
+	if got := effectiveFailureDomainPtr(sn, sns); got != nil {
+		t.Errorf("expected nil (not configured), got %v", *got)
+	}
+}
+
+func TestEffectiveFailureDomainPtr_NonNilForDomainZero(t *testing.T) {
+	sns := &simplyblockv1alpha1.StorageNodeSet{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			NodeFailureDomains: map[string]int32{snTestWorker: 0},
+		},
+	}
+	sn := &simplyblockv1alpha1.StorageNode{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{WorkerNode: snTestWorker},
+	}
+	got := effectiveFailureDomainPtr(sn, sns)
+	if got == nil {
+		t.Fatal("expected a non-nil pointer to 0 (explicitly configured), got nil")
+	}
+	if *got != 0 {
+		t.Errorf("expected *got == 0, got %d", *got)
+	}
+}
+
+func TestEffectiveFailureDomainPtr_NonNilForNonZeroDomain(t *testing.T) {
+	sns := &simplyblockv1alpha1.StorageNodeSet{
+		Spec: simplyblockv1alpha1.StorageNodeSetSpec{
+			NodeFailureDomains: map[string]int32{snTestWorker: 2},
+		},
+	}
+	sn := &simplyblockv1alpha1.StorageNode{
+		Spec: simplyblockv1alpha1.StorageNodeSpec{WorkerNode: snTestWorker},
+	}
+	got := effectiveFailureDomainPtr(sn, sns)
+	if got == nil || *got != 2 {
+		t.Errorf("expected pointer to 2, got %v", got)
+	}
+}
+
 // ── TestCheckFailureDomain ────────────────────────────────────────────────────
 
 func TestCheckFailureDomain_BlocksWhenEnabledAndNotSet(t *testing.T) {
@@ -307,6 +361,85 @@ func TestHandleDeletion_RemovesFinalizerWhenNeverProvisioned(t *testing.T) {
 	for _, f := range updated.Finalizers {
 		if f == storageNodeFinalizer {
 			t.Error("finalizer should have been removed for unprovisioned node")
+		}
+	}
+}
+
+// TestHandleDeletion_FailedRemoveOpsBlocksFinalizerRemoval guards the gap
+// found live 2026-08-13: a Failed remove ops clears ActiveOpsRef exactly
+// like a Succeeded one (releaseLock, storagenodeops_controller.go), but
+// Failed means the backend node was never actually removed -- blocked by a
+// precondition, or resumed instead of removed after a rejected DELETE.
+// Letting the finalizer come off here would delete this StorageNode CR
+// from Kubernetes while the backend node is still alive and online, with
+// nothing left to track it.
+func TestHandleDeletion_FailedRemoveOpsBlocksFinalizerRemoval(t *testing.T) {
+	sn := newStorageNode("sn-1", snTestNS, "sns", snTestWorker)
+	sn.Finalizers = []string{storageNodeFinalizer}
+	sn.Status.UUID = "node-uuid-1"
+	sn.Status.Status = utils.NodeStatusOnline
+	// ActiveOpsRef already cleared by releaseLock when the ops failed.
+	sn.Status.ActiveOpsRef = ""
+	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, nil)
+	ops := &simplyblockv1alpha1.StorageNodeOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-1-remove", Namespace: snTestNS},
+		Spec:       simplyblockv1alpha1.StorageNodeOpsSpec{StorageNodeRef: "sn-1", Action: utils.NodeActionRemove},
+		Status: simplyblockv1alpha1.StorageNodeOpsStatus{
+			Phase:   simplyblockv1alpha1.StorageNodeOpsPhaseFailed,
+			Message: "blocked: failure-domain balance: ...",
+		},
+	}
+	r := newSNReconciler(t, sn, sns, ops)
+
+	result, err := r.handleDeletion(context.Background(), sn, sns)
+	if err != nil {
+		t.Fatalf("handleDeletion returned error: %v", err)
+	}
+	if result.RequeueAfter == 0 {
+		t.Error("expected a requeue, not a one-shot pass-through")
+	}
+
+	var updated simplyblockv1alpha1.StorageNode
+	_ = r.Get(context.Background(), types.NamespacedName{Name: "sn-1", Namespace: snTestNS}, &updated)
+	found := false
+	for _, f := range updated.Finalizers {
+		if f == storageNodeFinalizer {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("finalizer must NOT be removed while the remove ops is Failed -- " +
+			"the backend node was never actually removed")
+	}
+}
+
+// TestHandleDeletion_SucceededRemoveOpsAllowsFinalizerRemoval is the
+// contrasting happy path: once the remove ops actually Succeeded, deletion
+// must proceed exactly as before this fix.
+func TestHandleDeletion_SucceededRemoveOpsAllowsFinalizerRemoval(t *testing.T) {
+	sn := newStorageNode("sn-1", snTestNS, "sns", snTestWorker)
+	sn.Finalizers = []string{storageNodeFinalizer}
+	sn.Status.UUID = "node-uuid-1"
+	sn.Status.Status = utils.NodeStatusOnline
+	sn.Status.ActiveOpsRef = ""
+	sns := newStorageNodeSet("sns", snTestNS, snTestCluster, nil)
+	ops := &simplyblockv1alpha1.StorageNodeOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn-1-remove", Namespace: snTestNS},
+		Spec:       simplyblockv1alpha1.StorageNodeOpsSpec{StorageNodeRef: "sn-1", Action: utils.NodeActionRemove},
+		Status:     simplyblockv1alpha1.StorageNodeOpsStatus{Phase: simplyblockv1alpha1.StorageNodeOpsPhaseSucceeded},
+	}
+	r := newSNReconciler(t, sn, sns, ops)
+
+	_, err := r.handleDeletion(context.Background(), sn, sns)
+	if err != nil {
+		t.Fatalf("handleDeletion returned error: %v", err)
+	}
+
+	var updated simplyblockv1alpha1.StorageNode
+	_ = r.Get(context.Background(), types.NamespacedName{Name: "sn-1", Namespace: snTestNS}, &updated)
+	for _, f := range updated.Finalizers {
+		if f == storageNodeFinalizer {
+			t.Error("finalizer should have been removed once the remove ops succeeded")
 		}
 	}
 }

@@ -387,7 +387,7 @@ func (r *StorageNodeReconciler) provisionNode(
 		CRPlural:         "storagenodesets",
 		Format4K:         ptr.BoolFromOrFalse(sns.Spec.ForceFormat4K),
 		SpdkSystemMemory: eff.SpdkSystemMemory,
-		FailureDomain:    effectiveFailureDomain(sn, sns),
+		FailureDomain:    effectiveFailureDomainPtr(sn, sns),
 		Expand:           ptr.BoolFromOrFalse(eff.Expand),
 	}
 
@@ -726,7 +726,11 @@ func effectiveFailureDomainSet(sn *simplyblockv1alpha1.StorageNode, sns *simplyb
 
 // effectiveFailureDomain returns the failure domain for the node:
 // StorageNode.spec.overrides.failureDomain takes precedence over
-// StorageNodeSet.spec.nodeFailureDomains[worker].
+// StorageNodeSet.spec.nodeFailureDomains[worker]. Only meaningful when
+// effectiveFailureDomainSet reports true -- the zero return here also covers
+// "unset", so callers that must distinguish the two (e.g. anything crossing
+// a JSON boundary, where 0 and absent are different wire values) should use
+// effectiveFailureDomainPtr instead.
 func effectiveFailureDomain(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1alpha1.StorageNodeSet) int {
 	if sn.Spec.Overrides != nil && sn.Spec.Overrides.FailureDomain != nil {
 		return int(*sn.Spec.Overrides.FailureDomain)
@@ -735,6 +739,19 @@ func effectiveFailureDomain(sn *simplyblockv1alpha1.StorageNode, sns *simplybloc
 		return int(v)
 	}
 	return 0
+}
+
+// effectiveFailureDomainPtr returns the same value as effectiveFailureDomain,
+// but as *int so "domain 0" and "not configured" stay distinguishable across
+// a JSON boundary (nil is omitted by `omitempty`; Ptr(0) serializes as 0).
+// Use this instead of effectiveFailureDomain wherever the result crosses
+// such a boundary, e.g. StorageNodeSetAddParams.FailureDomain.
+func effectiveFailureDomainPtr(sn *simplyblockv1alpha1.StorageNode, sns *simplyblockv1alpha1.StorageNodeSet) *int {
+	if !effectiveFailureDomainSet(sn, sns) {
+		return nil
+	}
+	v := effectiveFailureDomain(sn, sns)
+	return &v
 }
 
 // handleDeletion ensures a StorageNodeOps(action=remove) exists for this node
@@ -765,6 +782,31 @@ func (r *StorageNodeReconciler) handleDeletion(
 		log.Info("waiting for StorageNodeOps to complete before finalizer removal",
 			"ops", sn.Status.ActiveOpsRef)
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+
+	// A Failed remove ops clears ActiveOpsRef (releaseLock, in
+	// storagenodeops_controller.go) exactly like a Succeeded one -- but
+	// Failed means the backend node was never actually removed (blocked by
+	// a precondition, or a rejected DELETE that resumed the node instead of
+	// removing it). Removing the finalizer here would let Kubernetes delete
+	// this StorageNode CR anyway, orphaning a live, healthy backend node
+	// the operator no longer tracks at all. Block deletion and surface it
+	// instead: a human must either fix whatever blocked the removal and
+	// delete the failed ops to retry, or restore the worker to
+	// spec.workerNodes to keep it.
+	opsName := sn.Name + "-remove"
+	var removeOps simplyblockv1alpha1.StorageNodeOps
+	if err := r.Get(ctx, types.NamespacedName{Name: opsName, Namespace: sn.Namespace}, &removeOps); err == nil {
+		if removeOps.Status.Phase == simplyblockv1alpha1.StorageNodeOpsPhaseFailed {
+			r.Recorder.Eventf(sn, nil, "Warning", "RemoveOpsFailed", "RemoveOpsFailed",
+				"node removal failed (%s); the node was NOT removed and this StorageNode "+
+					"will not be deleted -- delete StorageNodeOps/%s to retry, or restore "+
+					"%s to spec.workerNodes to keep it",
+				removeOps.Status.Message, opsName, sn.Spec.WorkerNode)
+			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, err
 	}
 
 	controllerutil.RemoveFinalizer(sn, storageNodeFinalizer)
