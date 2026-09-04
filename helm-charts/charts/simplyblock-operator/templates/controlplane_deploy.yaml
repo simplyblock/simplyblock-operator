@@ -1197,6 +1197,20 @@ spec:
                   key: MONITORING_SECRET
             - name: GF_ALERTING_ENABLED
               value: "true"
+{{- $eventAlerts := .Values.controlplane.observability.grafana.eventAlerts | default dict }}
+{{- $plugin := $eventAlerts.plugin | default dict }}
+{{- $eventClusters := include "simplyblock.eventAlertClusters" . | fromJsonArray }}
+{{- if and $eventAlerts.enabled $eventClusters (not $plugin.preinstalled) }}
+            # The event-log alert rules query the control plane's REST API, which
+            # needs a REST data source, and the Grafana image this chart deploys
+            # is a plain upstream mirror carrying no plugins. /var/lib/grafana is
+            # an emptyDir, so this reinstalls on every pod start; bake the plugin
+            # into the image and set plugin.preinstalled to stop paying for that.
+            # The entrypoint reads the value as a URL, a semicolon, and the
+            # folder to install into.
+            - name: GF_INSTALL_PLUGINS
+              value: "{{ $plugin.url }};yesoreyeram-infinity-datasource"
+{{- end }}
             - name: GF_PATHS_PROVISIONING
               value: "/etc/grafana/provisioning"
             - name: GF_SERVER_ROOT_URL
