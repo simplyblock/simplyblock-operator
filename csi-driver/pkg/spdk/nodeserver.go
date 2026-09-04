@@ -735,8 +735,8 @@ func (ns *nodeServer) stageVolume(
 	//
 	// It is mounted as the recorded filesystem, not the requested one, because
 	// those disagree exactly when it matters — a volume formatted before its
-	// StorageClass changed — and mounting ext4 as xfs fails. The mount flags
-	// follow the same filesystem for the same reason: xfs needs nouuid, and
+	// StorageClass changed — and mounting ext4 as XFS fails. The mount flags
+	// follow the same filesystem for the same reason: XFS needs nouuid, and
 	// deriving the flags from the request would drop it.
 	//
 	// A mount that fails here is the correct outcome and must stay one. It means
@@ -746,7 +746,11 @@ func (ns *nodeServer) stageVolume(
 	mntFlags := stagingMountFlags(fsType, req.GetVolumeCapability())
 	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
 	if fs == "" {
-		if annotated := ns.annotatedFilesystem(ctx, req.GetVolumeId(), volumeContext); annotated != "" {
+		annotated, err := ns.annotatedFilesystem(ctx, req.GetVolumeId(), volumeContext)
+		if err != nil {
+			return err
+		}
+		if annotated != "" {
 			if annotated != fsType {
 				klog.Warningf(
 					"volume %s: claim records a %s filesystem but the volume asks for %s; mounting %s at %s as %s without reformatting", //nolint:lll // unwrappable string/log/signature
@@ -974,15 +978,20 @@ func (ns *nodeServer) persistentVolumeClaimForVolume(
 }
 
 // annotatedFilesystem returns the filesystem the volume's claim asks to have put
-// on disk, and the empty string when it asks for none, asks for one this driver
-// does not create, or cannot be read at all. It is advisory in every one of
-// those cases: staging goes on with the filesystem the volume capability names,
-// exactly as it did before the annotation existed.
+// on disk, and the empty string when the claim asks for none: that is the one
+// reading under which staging carries on with the filesystem the volume
+// capability names, exactly as it did before the annotation existed.
+//
+// It errors on the other two readings. A claim that cannot be read leaves the
+// blank probe that led here unexplained, and a claim asking for a filesystem
+// this driver does not create is an instruction that cannot be carried out;
+// under either one, whether the device holds data is still open, so staging
+// fails rather than formatting through the doubt.
 func (ns *nodeServer) annotatedFilesystem(
 	ctx context.Context,
 	volumeID string,
 	volumeContext map[string]string,
-) string {
+) (string, error) {
 	pvc, err := ns.persistentVolumeClaimForVolume(ctx, volumeID, volumeContext)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -990,21 +999,21 @@ func (ns *nodeServer) annotatedFilesystem(
 		} else {
 			klog.Warningf("volume %s: failed to read %s from its claim: %v", volumeID, annotationOnDiskFilesystem, err)
 		}
-		return ""
+		return "", err
 	}
 
 	fsType := strings.ToLower(strings.TrimSpace(pvc.Annotations[annotationOnDiskFilesystem]))
 	if fsType == "" {
-		return ""
+		return "", nil
 	}
 	if !supportedOnDiskFilesystems[fsType] {
 		klog.Warningf(
-			"claim %s/%s asks for on-disk filesystem %q, which this driver does not create; ignoring it",
+			"claim %s/%s asks for on-disk filesystem %q, which this driver does not create; refusing to stage it",
 			pvc.Namespace, pvc.Name, fsType,
 		)
-		return ""
+		return "", errors.New("unsupported filesystem type")
 	}
-	return fsType
+	return fsType, nil
 }
 
 // recordOnDiskFilesystem writes the filesystem a volume was staged with onto its
