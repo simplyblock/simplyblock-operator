@@ -27,6 +27,11 @@ const (
 	pvcTestPool    = "df34f16c-1a2b-3c4d-5e6f-7a8b9c0d1e2f"
 	pvcTestLvol    = "8e2dcb9d-1b2c-4f3a-9d4e-5f6a7b8c9d0e"
 	pvcTestHandle  = pvcTestCluster + ":" + pvcTestPool + ":" + pvcTestLvol
+
+	// The claim every test resolves to. Nothing in the lookup depends on the
+	// namespace or the name, so one identity serves all of them.
+	pvcTestNamespace = "apps"
+	pvcTestName      = "data"
 )
 
 // newPVCTestNodeServer builds a node server whose only wiring is a Kubernetes
@@ -53,11 +58,11 @@ func newPVCTestNodeServer(t *testing.T, objects ...runtime.Object) (*nodeServer,
 	return &nodeServer{kubeClient: client, manager: manager}, client
 }
 
-// annotatedPVC returns a claim carrying the on-disk-filesystem annotation, or a
-// bare claim when value is empty.
-func annotatedPVC(namespace, name, value string) *corev1.PersistentVolumeClaim {
+// annotatedPVC returns the test claim carrying the on-disk-filesystem
+// annotation, or a bare claim when value is empty.
+func annotatedPVC(value string) *corev1.PersistentVolumeClaim {
 	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+		ObjectMeta: metav1.ObjectMeta{Namespace: pvcTestNamespace, Name: pvcTestName},
 	}
 	if value != "" {
 		pvc.Annotations = map[string]string{annotationOnDiskFilesystem: value}
@@ -65,11 +70,11 @@ func annotatedPVC(namespace, name, value string) *corev1.PersistentVolumeClaim {
 	return pvc
 }
 
-// boundPV returns a PersistentVolume bound to the given claim and carrying the
+// boundPV returns a PersistentVolume bound to the test claim and carrying the
 // test volume handle, which is how the fallback route finds the claim.
-func boundPV(namespace, name string) *corev1.PersistentVolume {
+func boundPV() *corev1.PersistentVolume {
 	return &corev1.PersistentVolume{
-		ObjectMeta: metav1.ObjectMeta{Name: "pv-" + name},
+		ObjectMeta: metav1.ObjectMeta{Name: "pv-" + pvcTestName},
 		Spec: corev1.PersistentVolumeSpec{
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				CSI: &corev1.CSIPersistentVolumeSource{
@@ -77,28 +82,29 @@ func boundPV(namespace, name string) *corev1.PersistentVolume {
 					VolumeHandle: pvcTestHandle,
 				},
 			},
-			ClaimRef: &corev1.ObjectReference{Namespace: namespace, Name: name},
+			ClaimRef: &corev1.ObjectReference{Namespace: pvcTestNamespace, Name: pvcTestName},
 		},
 	}
 }
 
 func TestPersistentVolumeClaimForVolume_FromVolumeContext(t *testing.T) {
-	ns, _ := newPVCTestNodeServer(t, annotatedPVC("apps", "data", "xfs"))
+	ns, _ := newPVCTestNodeServer(t, annotatedPVC("xfs"))
 
 	pvc, err := ns.persistentVolumeClaimForVolume(context.Background(), pvcTestHandle, map[string]string{
-		CSIStorageNamespaceKey: "apps",
-		CSIStorageNameKey:      "data",
+		CSIStorageNamespaceKey: pvcTestNamespace,
+		CSIStorageNameKey:      pvcTestName,
 	})
 	if err != nil {
 		t.Fatalf("persistentVolumeClaimForVolume: unexpected error %v", err)
 	}
-	if pvc.Namespace != "apps" || pvc.Name != "data" {
-		t.Fatalf("persistentVolumeClaimForVolume = %s/%s, want apps/data", pvc.Namespace, pvc.Name)
+	if pvc.Namespace != pvcTestNamespace || pvc.Name != pvcTestName {
+		t.Fatalf("persistentVolumeClaimForVolume = %s/%s, want %s/%s",
+			pvc.Namespace, pvc.Name, pvcTestNamespace, pvcTestName)
 	}
 }
 
 func TestPersistentVolumeClaimForVolume_FromPersistentVolumeClaimRef(t *testing.T) {
-	ns, _ := newPVCTestNodeServer(t, annotatedPVC("apps", "data", "xfs"), boundPV("apps", "data"))
+	ns, _ := newPVCTestNodeServer(t, annotatedPVC("xfs"), boundPV())
 
 	// No claim identity in the volume context: the claim has to be found through
 	// the PersistentVolume that carries this volume handle.
@@ -106,8 +112,9 @@ func TestPersistentVolumeClaimForVolume_FromPersistentVolumeClaimRef(t *testing.
 	if err != nil {
 		t.Fatalf("persistentVolumeClaimForVolume: unexpected error %v", err)
 	}
-	if pvc.Namespace != "apps" || pvc.Name != "data" {
-		t.Fatalf("persistentVolumeClaimForVolume = %s/%s, want apps/data", pvc.Namespace, pvc.Name)
+	if pvc.Namespace != pvcTestNamespace || pvc.Name != pvcTestName {
+		t.Fatalf("persistentVolumeClaimForVolume = %s/%s, want %s/%s",
+			pvc.Namespace, pvc.Name, pvcTestNamespace, pvcTestName)
 	}
 }
 
@@ -115,8 +122,8 @@ func TestPersistentVolumeClaimForVolume_ClaimGone(t *testing.T) {
 	ns, _ := newPVCTestNodeServer(t)
 
 	_, err := ns.persistentVolumeClaimForVolume(context.Background(), pvcTestHandle, map[string]string{
-		CSIStorageNamespaceKey: "apps",
-		CSIStorageNameKey:      "data",
+		CSIStorageNamespaceKey: pvcTestNamespace,
+		CSIStorageNameKey:      pvcTestName,
 	})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("persistentVolumeClaimForVolume error = %v, want NotFound", err)
@@ -152,11 +159,11 @@ func TestAnnotatedFilesystem(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ns, _ := newPVCTestNodeServer(t, annotatedPVC("apps", "data", tc.annotation))
+			ns, _ := newPVCTestNodeServer(t, annotatedPVC(tc.annotation))
 
 			got, err := ns.annotatedFilesystem(context.Background(), pvcTestHandle, map[string]string{
-				CSIStorageNamespaceKey: "apps",
-				CSIStorageNameKey:      "data",
+				CSIStorageNamespaceKey: pvcTestNamespace,
+				CSIStorageNameKey:      pvcTestName,
 			})
 			if tc.wantError {
 				if err == nil {
@@ -267,11 +274,11 @@ func TestRecordOnDiskFilesystem(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ns, client := newPVCTestNodeServer(t, annotatedPVC("apps", "data", tc.annotation))
+			ns, client := newPVCTestNodeServer(t, annotatedPVC(tc.annotation))
 
 			ns.recordOnDiskFilesystem(context.Background(), pvcTestHandle, map[string]string{
-				CSIStorageNamespaceKey: "apps",
-				CSIStorageNameKey:      "data",
+				CSIStorageNamespaceKey: pvcTestNamespace,
+				CSIStorageNameKey:      pvcTestName,
 			}, tc.staged)
 
 			got := patchedFilesystems(t, client)
