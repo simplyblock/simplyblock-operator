@@ -11,11 +11,18 @@
 # after the upgrade annotates the whole fleet in a single pass instead of one
 # volume at a time.
 #
+# Only simplyblock volumes are touched, and a volume is identified as one by its
+# PersistentVolume naming this driver in spec.csi.driver. That is the per-volume
+# fact and it does not go stale: a StorageClass can be renamed, deleted, or have
+# its parameters edited after the volumes it provisioned were created, so reading
+# the class would both miss simplyblock volumes and risk recording a filesystem
+# that was never on disk. For the same reason the filesystem recorded is the
+# volume's own spec.csi.fsType, and the class parameter is consulted only when
+# the volume records none.
+#
 # A claim is annotated only when a running pod is using it, which is the
 # evidence that matters: a volume mounted into a running pod has been formatted,
-# whereas a claim that is merely bound may never have been staged at all. The
-# filesystem recorded is the one the claim's StorageClass asks for
-# (csi.storage.k8s.io/fstype), which is what the driver formatted it with.
+# whereas a claim that is merely bound may never have been staged at all.
 #
 # Dry run by default; pass --apply to write.
 #
@@ -25,7 +32,7 @@
 set -euo pipefail
 
 ANNOTATION="storage.simplyblock.io/on-disk-filesystem"
-PROVISIONER="csi.simplyblock.io"
+DRIVER="csi.simplyblock.io"
 
 # The filesystems the node plugin formats and mounts. A StorageClass asking for
 # anything else is left alone: the plugin ignores an annotation outside this set,
@@ -57,6 +64,24 @@ done
 
 command -v kubectl >/dev/null || { echo "kubectl is not on PATH" >&2; exit 1; }
 
+# Every claim bound to a simplyblock volume, as "namespace/name<TAB>fsType",
+# read from the PersistentVolumes because that is where the driver name and the
+# provisioned filesystem are recorded per volume.
+echo "reading volumes..." >&2
+simplyblock_claims=$(
+  kubectl get pv -o go-template='
+{{- range .items -}}
+  {{- if .spec.csi -}}
+    {{- if eq .spec.csi.driver "'"$DRIVER"'" -}}
+      {{- if .spec.claimRef -}}
+        {{- .spec.claimRef.namespace }}/{{ .spec.claimRef.name }}{{ "\t" }}
+        {{- with .spec.csi.fsType }}{{ . }}{{ end }}{{ "\n" -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}' 2>/dev/null
+)
+
 # Every claim a running pod mounts, as namespace/name. One pass over the pods
 # rather than a describe per claim: `describe` prints only the first consumer on
 # its "Used By:" line, and a cluster with a few thousand claims would otherwise
@@ -76,11 +101,11 @@ claims_in_use=$(
 {{- end -}}' 2>/dev/null | sort -u
 )
 
-# StorageClass -> filesystem, read once for the whole run.
+# StorageClass -> filesystem, the fallback for a volume recording none.
 class_filesystems=$(
   kubectl get storageclass -o go-template='
 {{- range .items -}}
-  {{- if eq .provisioner "'"$PROVISIONER"'" -}}
+  {{- if eq .provisioner "'"$DRIVER"'" -}}
     {{- .metadata.name }}{{ "\t" }}
     {{- with .parameters }}{{ with index . "csi.storage.k8s.io/fstype" }}{{ . }}{{ end }}{{ end }}{{ "\n" -}}
   {{- end -}}
@@ -107,12 +132,15 @@ while IFS=$'\t' read -r ns name class phase mode existing; do
     reason="skip: claim is ${phase:-unknown}"
   elif [ -n "${existing:-}" ]; then
     reason="skip: already records $existing"
-  elif ! printf '%s\n' "$class_filesystems" | grep -q "^${class}"$'\t'; then
-    reason="skip: not a simplyblock class (${class:-none})"
+  elif ! printf '%s\n' "$simplyblock_claims" | grep -q "^${ns}/${name}"$'\t'; then
+    reason="skip: not a simplyblock volume"
   elif ! printf '%s\n' "$claims_in_use" | grep -qxF "$ns/$name"; then
     reason="skip: no running pod mounts it"
   else
-    fstype=$(printf '%s\n' "$class_filesystems" | grep "^${class}"$'\t' | cut -f2)
+    fstype=$(printf '%s\n' "$simplyblock_claims" | grep "^${ns}/${name}"$'\t' | cut -f2)
+    if [ -z "$fstype" ] && [ -n "${class:-}" ]; then
+      fstype=$(printf '%s\n' "$class_filesystems" | grep "^${class}"$'\t' | cut -f2)
+    fi
     [ -n "$fstype" ] || fstype="$DEFAULT_FS"
     case " $SUPPORTED_FS " in
       *" $fstype "*) ;;
