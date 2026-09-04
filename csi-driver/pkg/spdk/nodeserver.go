@@ -18,6 +18,7 @@ package spdk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -40,7 +41,10 @@ import (
 	mount "k8s.io/mount-utils"
 	"k8s.io/utils/exec"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
 	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
@@ -53,6 +57,7 @@ type nodeServer struct {
 	mounter     mount.Interface
 	volumeLocks *util.VolumeLocks
 	kubeClient  kubernetes.Interface
+	manager     *sbkube.Manager
 	guardian    *util.Guardian
 }
 
@@ -73,6 +78,7 @@ func newNodeServer(d *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*no
 	// never syncs), so consumers need no fallback of their own.
 	manager := sbkube.NewManager(ns.kubeClient)
 	manager.Start(context.Background())
+	ns.manager = manager
 
 	nodeName := ns.Driver.GetNodeID()
 	gcfg := util.NewDefaultGuardianConfig(nodeName)
@@ -380,7 +386,7 @@ func (ns *nodeServer) NodeStageVolume(
 			initiator.Disconnect(ctx) //nolint:errcheck // ignore error
 		}
 	}()
-	if err = ns.stageVolume(devicePath, stagingTargetPath, req, vc); err != nil { // idempotent
+	if err = ns.stageVolume(ctx, devicePath, stagingTargetPath, req, vc); err != nil { // idempotent
 		klog.Errorf("failed to stage volume, volumeID: %s devicePath:%s err: %v", volumeID, devicePath, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -448,7 +454,7 @@ func (ns *nodeServer) NodePublishVolume(
 	// If the backing NVMe-oF device was lost (total path loss), repair it before
 	// bind-mounting into the pod — otherwise the pod inherits the dead mount/
 	// missing device. kubelet skips NodeStage when the volume is still referenced
-	// on this node (e.g. a same-node pod replacement), so NodePublish is the
+	// on this node (e.g., a same-node pod replacement), so NodePublish is the
 	// reliable place to heal.
 	if err := ns.healVolumeBeforePublish(ctx, req); err != nil {
 		klog.Errorf("failed to heal volume %s before publish: %v", volumeID, err)
@@ -623,7 +629,7 @@ func xfsStripeOptions(volumeContext map[string]string) []string {
 }
 
 // xfsFormatConfigPath is the mkfs.xfs config file that pins which on-disk features
-// new xfs volumes are created with. xfsprogs ships it; the container image only has
+// new XFS volumes are created with. xfsprogs ships it; the container image only has
 // to contain a matching xfsprogs. Kept in sync with the assertion in
 // deploy/image/Dockerfile_base.
 const xfsFormatConfigPath = "/usr/share/xfsprogs/mkfs/lts_5.15.conf"
@@ -641,7 +647,7 @@ const xfsFormatConfigPath = "/usr/share/xfsprogs/mkfs/lts_5.15.conf"
 //	XFS (nvme0n1): Filesystem cannot be safely mounted by this kernel.
 //	XFS (nvme0n1): SB validate failed with error -22.
 //
-// Unlike the ext4 equivalent there is no repair path: xfs features can only be added,
+// Unlike the ext4 equivalent there is no repair path: XFS features can only be added,
 // never removed, and such a filesystem cannot be mounted even read-only. Prevention
 // is the only option.
 //
@@ -690,6 +696,7 @@ func checkXFSFormatConfig() error {
 //
 //nolint:cyclop // many cases in switch increases complexity
 func (ns *nodeServer) stageVolume(
+	ctx context.Context,
 	devicePath, stagingPath string,
 	req *csi.NodeStageVolumeRequest,
 	volumeContext map[string]string,
@@ -710,9 +717,58 @@ func (ns *nodeServer) stageVolume(
 		return nil
 	}
 	fsType := fsTypeOrDefault(req.GetVolumeCapability())
-	mntFlags := stagingMountFlags(req.GetVolumeCapability())
-	formatOptions := []string{}
 
+	// Read the device before deciding anything about it. Staging stops here on
+	// any reading that is not a definite answer, rather than handing an
+	// uncertain device to mkfs.
+	fs, probeErr := getDiskFormat(devicePath)
+	fs, err = classifyDiskFormat(devicePath, fs, probeErr)
+	if err != nil {
+		return err
+	}
+
+	// blkid reporting nothing means either that the device carries no filesystem
+	// or that it could not be read, and the two are indistinguishable from its
+	// exit code alone. A claim that records a filesystem settles it: the volume
+	// was formatted once, so this reading is a failed probe rather than a blank
+	// device, and it is mounted as what the claim says is down there.
+	//
+	// It is mounted as the recorded filesystem, not the requested one, because
+	// those disagree exactly when it matters — a volume formatted before its
+	// StorageClass changed — and mounting ext4 as xfs fails. The mount flags
+	// follow the same filesystem for the same reason: xfs needs nouuid, and
+	// deriving the flags from the request would drop it.
+	//
+	// A mount that fails here is the correct outcome and must stay one. It means
+	// the claim's record disagrees with the device, or the device is genuinely
+	// dead, and neither is a reason to format: falling back to mkfs would
+	// reinstate the data loss this branch exists to prevent.
+	mntFlags := stagingMountFlags(fsType, req.GetVolumeCapability())
+	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
+	if fs == "" {
+		if annotated := ns.annotatedFilesystem(ctx, req.GetVolumeId(), volumeContext); annotated != "" {
+			if annotated != fsType {
+				klog.Warningf(
+					"volume %s: claim records a %s filesystem but the volume asks for %s; mounting %s at %s as %s without reformatting", //nolint:lll // unwrappable string/log/signature
+					req.GetVolumeId(), annotated, fsType, devicePath, stagingPath, annotated,
+				)
+			}
+			volumeContext[stagedFsTypeKey] = annotated
+			return mounter.Mount(
+				devicePath,
+				stagingPath,
+				annotated,
+				stagingMountFlags(annotated, req.GetVolumeCapability()),
+			)
+		}
+	}
+
+	// Record what was actually staged: a later restage remounts an existing
+	// filesystem, and the volume capability alone no longer answers which one it
+	// is once the annotation has overridden it.
+	volumeContext[stagedFsTypeKey] = fsType
+
+	formatOptions := []string{}
 	if fsType == "xfs" {
 		formatOptions = append(formatOptions, xfsFeatureOptions()...)
 		formatOptions = append(formatOptions, xfsStripeOptions(volumeContext)...)
@@ -720,7 +776,6 @@ func (ns *nodeServer) stageVolume(
 
 	klog.Infof("mount %s to %s, fstype: %s, flags: %v", devicePath, stagingPath, fsType, mntFlags)
 	klog.Infof("formatOptions %v", formatOptions)
-	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
 	err = mounter.FormatAndMountSensitiveWithFormatOptions(
 		devicePath,
 		stagingPath,
@@ -754,7 +809,257 @@ func (ns *nodeServer) stageVolume(
 		}
 	}
 
+	// The device now definitely carries fsType: either mkfs just put it there, or
+	// the probe found it there and the mount above would have failed on any other
+	// filesystem. Record that on the claim, so what a volume is formatted with is
+	// answerable without a node to run blkid on.
+	ns.recordOnDiskFilesystem(ctx, req.GetVolumeId(), volumeContext, fsType)
+
 	return nil
+}
+
+// unknownDiskFormat is what getDiskFormat reports for a device that carries a
+// partition table rather than a filesystem: something is on it, but not
+// something that can be mounted, and formatting it would destroy whatever it is.
+const unknownDiskFormat = "unknown data, probably partitions"
+
+// classifyDiskFormat turns a blkid probe of devicePath into the one thing
+// staging needs to know: the filesystem already on the device, empty when the
+// device is positively blank.
+//
+// It errors on every reading that is neither of those. Formatting is
+// irreversible, and both remaining readings — a probe that failed, and a
+// partition table where a filesystem was expected — leave it open whether the
+// device holds somebody's data. Staging fails there instead of formatting
+// through the doubt; the next attempt probes the device again.
+func classifyDiskFormat(devicePath, fs string, probeErr error) (string, error) {
+	if probeErr != nil {
+		return "", fmt.Errorf(
+			"cannot read the on-disk filesystem of %s, refusing to stage a device whose contents are unknown: %w",
+			devicePath, probeErr,
+		)
+	}
+	if fs == unknownDiskFormat {
+		return "", fmt.Errorf(
+			"device %s carries a partition table rather than a filesystem, refusing to stage it",
+			devicePath,
+		)
+	}
+	return fs, nil
+}
+
+func getDiskFormat(disk string) (string, error) {
+	args := []string{"-p", "-s", "TYPE", "-s", "PTTYPE", "-o", "export", disk}
+	klog.V(4).Infof("Attempting to determine if disk %q is formatted using blkid with args: (%v)", disk, args)
+	dataOut, err := osexec.Command("blkid", args...).CombinedOutput()
+	output := string(dataOut)
+	klog.V(4).Infof("Output: %q", output)
+
+	if err != nil {
+		var exit *osexec.ExitError
+		if errors.As(err, &exit) {
+			if exit.ExitCode() == 2 {
+				// Disk device is unformatted.
+				// For `blkid`, if the specified token (TYPE/PTTYPE, etc) was
+				// not found, or no (specified) devices could be identified, an
+				// exit code of 2 is returned.
+				return "", nil
+			}
+		}
+		klog.Errorf("Could not determine if disk %q is formatted (%v)", disk, err)
+		return "", err
+	}
+
+	var fstype, pttype string
+
+	lines := strings.Split(output, "\n")
+	for _, l := range lines {
+		if len(l) <= 0 {
+			// Ignore empty line.
+			continue
+		}
+		cs := strings.Split(l, "=")
+		if len(cs) != 2 {
+			return "", fmt.Errorf("blkid returns invalid output: %s", output)
+		}
+		// TYPE is filesystem type, and PTTYPE is partition table type, according
+		// to https://www.kernel.org/pub/linux/utils/util-linux/v2.21/libblkid-docs/.
+		switch cs[0] {
+		case "TYPE":
+			fstype = cs[1]
+		case "PTTYPE":
+			pttype = cs[1]
+		}
+	}
+
+	if len(pttype) > 0 {
+		klog.V(4).Infof("Disk %s detected partition table type: %s", disk, pttype)
+		// Returns a special non-empty string as filesystem type, then kubelet
+		// will not format it.
+		return unknownDiskFormat, nil
+	}
+
+	return fstype, nil
+}
+
+// stagedFsType returns the filesystem a volume was staged with: the one
+// recorded at stage time when it is there, and otherwise the one the volume
+// capability asks for, which is all a volume staged by an older driver has.
+func stagedFsType(volumeContext map[string]string, volCap *csi.VolumeCapability) string {
+	if fsType := strings.TrimSpace(volumeContext[stagedFsTypeKey]); fsType != "" {
+		return fsType
+	}
+	return fsTypeOrDefault(volCap)
+}
+
+const (
+	// annotationOnDiskFilesystem, set on a PersistentVolumeClaim, names the
+	// filesystem to put on that claim's volume. It overrides the filesystem the
+	// StorageClass asks for, which is what makes a single class usable by
+	// workloads that disagree about the filesystem they want.
+	annotationOnDiskFilesystem = "storage.simplyblock.io/on-disk-filesystem"
+
+	// stagedFsTypeKey is the volume-context key under which the filesystem a
+	// volume was staged with is recorded, alongside the other node-local keys
+	// stashed at the staging path.
+	stagedFsTypeKey = "stagedFsType"
+)
+
+// supportedOnDiskFilesystems are the filesystems this driver formats and mounts.
+// The annotation is writable by anyone who can edit the claim, so a value
+// outside this set is ignored rather than passed on to mkfs.
+var supportedOnDiskFilesystems = map[string]bool{
+	"ext4": true,
+	"xfs":  true,
+}
+
+// persistentVolumeClaimForVolume returns the PersistentVolumeClaim that owns the
+// given CSI volume.
+//
+// The claim's namespace and name usually travel in the volume context: the
+// external-provisioner runs with --extra-create-metadata, so CreateVolume was
+// told which claim it was provisioning for and copied that into the context
+// that became the PersistentVolume's volume attributes. A volume without them —
+// provisioned by an older driver, or by a hand-written PersistentVolume — is
+// resolved the long way instead: find the PersistentVolume carrying this volume
+// handle, and follow its claim reference.
+func (ns *nodeServer) persistentVolumeClaimForVolume(
+	ctx context.Context,
+	volumeID string,
+	volumeContext map[string]string,
+) (*corev1.PersistentVolumeClaim, error) {
+	namespace := strings.TrimSpace(volumeContext[CSIStorageNamespaceKey])
+	name := strings.TrimSpace(volumeContext[CSIStorageNameKey])
+
+	if namespace == "" || name == "" {
+		spdkVol, err := parseVolumeID(volumeID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve claim for volume %s: %w", volumeID, err)
+		}
+
+		pv, err := ns.manager.PersistentVolumeByLogicalVolumeID(ctx, spdkVol.lvolID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve claim for volume %s: %w", volumeID, err)
+		}
+		if pv.Spec.ClaimRef == nil {
+			return nil, fmt.Errorf(
+				"resolve claim for volume %s: persistent volume %s is not bound to a claim",
+				volumeID, pv.Name,
+			)
+		}
+		namespace, name = pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name
+	}
+
+	return ns.manager.PersistentVolumeClaimByNamespaceAndName(ctx, namespace, name)
+}
+
+// annotatedFilesystem returns the filesystem the volume's claim asks to have put
+// on disk, and the empty string when it asks for none, asks for one this driver
+// does not create, or cannot be read at all. It is advisory in every one of
+// those cases: staging goes on with the filesystem the volume capability names,
+// exactly as it did before the annotation existed.
+func (ns *nodeServer) annotatedFilesystem(
+	ctx context.Context,
+	volumeID string,
+	volumeContext map[string]string,
+) string {
+	pvc, err := ns.persistentVolumeClaimForVolume(ctx, volumeID, volumeContext)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			klog.V(4).Infof("volume %s: no claim to read %s from: %v", volumeID, annotationOnDiskFilesystem, err)
+		} else {
+			klog.Warningf("volume %s: failed to read %s from its claim: %v", volumeID, annotationOnDiskFilesystem, err)
+		}
+		return ""
+	}
+
+	fsType := strings.ToLower(strings.TrimSpace(pvc.Annotations[annotationOnDiskFilesystem]))
+	if fsType == "" {
+		return ""
+	}
+	if !supportedOnDiskFilesystems[fsType] {
+		klog.Warningf(
+			"claim %s/%s asks for on-disk filesystem %q, which this driver does not create; ignoring it",
+			pvc.Namespace, pvc.Name, fsType,
+		)
+		return ""
+	}
+	return fsType
+}
+
+// recordOnDiskFilesystem writes the filesystem a volume was staged with onto its
+// claim, under the same annotation that requests one. The annotation is a
+// request only while the device is blank; from the first successful stage on it
+// is the record of what is actually down there, which is why it is written back
+// rather than left as whatever was asked for.
+//
+// It writes only when the claim does not already say this, so a volume that is
+// staged on every pod start costs one write in total rather than one per start.
+// Nothing here can fail staging: the volume is formatted and mounted by the time
+// this runs, and a claim that cannot be read or written is a lost note, not a
+// broken mount.
+func (ns *nodeServer) recordOnDiskFilesystem(
+	ctx context.Context,
+	volumeID string,
+	volumeContext map[string]string,
+	fsType string,
+) {
+	if ns.kubeClient == nil || fsType == "" {
+		return
+	}
+
+	pvc, err := ns.persistentVolumeClaimForVolume(ctx, volumeID, volumeContext)
+	if err != nil {
+		klog.Warningf("volume %s: no claim to record the on-disk filesystem on: %v", volumeID, err)
+		return
+	}
+	if pvc.Annotations[annotationOnDiskFilesystem] == fsType {
+		return
+	}
+
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]string{annotationOnDiskFilesystem: fsType},
+		},
+	})
+	if err != nil {
+		klog.Warningf("volume %s: failed to build the %s patch: %v", volumeID, annotationOnDiskFilesystem, err)
+		return
+	}
+
+	// A merge patch of the one key, so a concurrent writer of any other
+	// annotation on this claim is left alone.
+	if _, err := ns.kubeClient.CoreV1().PersistentVolumeClaims(pvc.Namespace).Patch(
+		ctx, pvc.Name, types.MergePatchType, patch, metav1.PatchOptions{},
+	); err != nil {
+		klog.Warningf(
+			"volume %s: failed to record %s=%s on claim %s/%s: %v",
+			volumeID, annotationOnDiskFilesystem, fsType, pvc.Namespace, pvc.Name, err,
+		)
+		return
+	}
+	klog.Infof("volume %s: recorded %s=%s on claim %s/%s",
+		volumeID, annotationOnDiskFilesystem, fsType, pvc.Namespace, pvc.Name)
 }
 
 // fsTypeOrDefault returns the requested filesystem type, defaulting to ext4.
@@ -766,12 +1071,14 @@ func fsTypeOrDefault(volCap *csi.VolumeCapability) string {
 }
 
 // stagingMountFlags builds the mount flags used when mounting a volume at its
-// staging path, so the initial stage and a later restage stay consistent.
-func stagingMountFlags(volCap *csi.VolumeCapability) []string {
+// staging path, so the initial stage and a later restage stay consistent. It
+// takes the filesystem actually on disk rather than reading it off volCap,
+// because a claim annotation can have overridden what the capability asked for.
+func stagingMountFlags(fsType string, volCap *csi.VolumeCapability) []string {
 	flags := append([]string{}, volCap.GetMount().GetMountFlags()...)
 
-	if volCap.GetMount().GetFsType() == "xfs" {
-		// xfs refuses to mount two filesystems with the same uuid; nouuid lets a
+	if fsType == "xfs" {
+		// XFS refuses to mount two filesystems with the same UUID; nouuid lets a
 		// volume and its clone/restored snapshot mount on the same node.
 		flags = append(flags, "nouuid")
 	}
@@ -805,7 +1112,7 @@ func (ns *nodeServer) stagingMountDead(stagingPath string) bool {
 		return mount.IsCorruptedMnt(err)
 	}
 	// Some filesystems (notably ext4) do NOT shut down when their backing block
-	// device is removed on total NVMe-oF path loss — unlike xfs, which goes EIO
+	// device is removed on total NVMe-oF path loss — unlike XFS, which goes EIO
 	// and is caught above. IsMountPoint and stat then both succeed from cache, so
 	// the dead mount looks healthy and never gets restaged. Detect it by checking
 	// that the block device backing the mount still exists: the mountpoint's
@@ -949,7 +1256,8 @@ func (ns *nodeServer) restageVolume(
 	}
 	// Plain Mount, not FormatAndMount: the volume already holds a filesystem and
 	// reformatting would destroy data.
-	if err := ns.mounter.Mount(devicePath, stagingTargetPath, fsTypeOrDefault(volCap), stagingMountFlags(volCap)); err != nil { //nolint:lll // unwrappable string/log/signature
+	fsType := stagedFsType(volumeContext, volCap)
+	if err := ns.mounter.Mount(devicePath, stagingTargetPath, fsType, stagingMountFlags(fsType, volCap)); err != nil {
 		return fmt.Errorf("remount device %s at %s: %w", devicePath, stagingTargetPath, err)
 	}
 
