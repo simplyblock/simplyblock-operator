@@ -1,0 +1,39 @@
+overlay: 1.0.0
+info:
+  title: Response types the control-plane spec leaves undeclared
+  version: 0.0.0
+actions:
+  # GET .../volumes/{volume_id}/connect answers with a list of NvmeConnectEntry,
+  # but FastAPI declares no response model for it, so the spec says `{}` — which
+  # generates nothing and would leave the simulator's most important response
+  # hand-written and unchecked. atlas-lib's client works around the same gap on
+  # the read side (see internal/cpapi/validation.yaml, LvolConnectEntry).
+  #
+  # Declared here as the array it is. If the control plane ever changes that
+  # shape, regeneration is what has to notice.
+  - target: "$.paths['/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/connect'].get.responses['200'].content['application/json']"
+    update:
+      schema:
+        type: array
+        items:
+          $ref: '#/components/schemas/NvmeConnectEntry'
+
+  # The volume-scoped migrations-list GET declares only cluster_id as a path
+  # parameter while its URL has three, so oapi-codegen rejects the spec outright
+  # — even generating models only, because it builds operation definitions first.
+  # Same fixup as atlas-lib/internal/cpapi/overlay.yaml; belongs upstream in
+  # FastAPI.
+  - target: "$.paths['/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/'].get.parameters"
+    update:
+      - name: pool_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: volume_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
