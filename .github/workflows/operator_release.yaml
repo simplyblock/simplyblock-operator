@@ -20,7 +20,7 @@ env:
 
 jobs:
   release:
-    name: Build, Push, and Bundle
+    name: Bundle
     runs-on: ubuntu-latest
     permissions:
       contents: write   # needed to upload release assets if desired
@@ -45,29 +45,12 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Log in to Quay.io
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_USERNAME }}
-          password: ${{ secrets.QUAY_PASSWORD }}
-
-      - name: Build and push multi-arch image to quay.io
-        run: |
-          make docker-buildx \
-            VERSION=${{ steps.version.outputs.version }} \
-            IMG_TAG=${{ steps.version.outputs.tag }} \
-            PLATFORMS="linux/amd64,linux/arm64"
-
-      - name: Build and push simplyblock-rebalancer multi-arch image to quay.io
-        run: |
-          make docker-buildx-simplyblock-rebalancer \
-            IMG_TAG=${{ steps.version.outputs.tag }} \
-            PLATFORMS="linux/amd64,linux/arm64"
-
+      # The operator and rebalancer images are built and pushed to Quay by
+      # operator_build.yaml, which already builds the same two images multi-arch
+      # for DockerHub and ECR. This job used to rebuild both of them here purely
+      # to reach a third registry, doubling the multi-arch build cost of every
+      # release. It now only generates the bundle, which reads the digests of
+      # those already-pushed images.
       - name: Install operator-sdk
         run: |
           OPERATOR_SDK_VERSION="v1.42.2"
