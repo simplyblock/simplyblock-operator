@@ -12,7 +12,7 @@ import (
 // apply, exec and a few waits; client-go would be the right answer once it needs
 // watches or informers, and swapping it in is confined to this file.
 
-// Kubectl runs kubectl against this cluster and returns combined output.
+// Runs the Kubernetes CLI against this cluster and returns combined output.
 func (c *Cluster) Kubectl(ctx context.Context, args ...string) (string, error) {
 	return c.kubectl(ctx, 2*time.Minute, args...)
 }
