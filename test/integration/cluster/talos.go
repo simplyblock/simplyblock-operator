@@ -55,8 +55,10 @@ type Config struct {
 	TalosctlPath string
 
 	// Sudo elevates talosctl. Nil auto-detects: false when already root, true
-	// otherwise. Passwordless sudo is required either way — CI has it, and a
-	// developer will be prompted.
+	// otherwise.
+	//
+	// When enabled, sudo must be able to run non-interactively (or have cached
+	// credentials), since talosctl runs under `go test` where prompts are invisible.
 	Sudo *bool
 
 	// WorkDir holds the kubeconfig and talosconfig. Empty means a temp dir
