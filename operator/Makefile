@@ -227,8 +227,27 @@ endif
 
 MANIFEST_ACCEPT := application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json
 
+.PHONY: verify-config-yaml
+verify-config-yaml: yq ## Check that every manifest under config/ parses as YAML.
+	@set -e; \
+	bad=0; \
+	for f in $$(find config -name '*.yaml' | sort); do \
+	  if ! "$(YQ)" e 'true' "$$f" >/dev/null 2>&1; then \
+	    echo "ERROR: $$f is not valid YAML:"; \
+	    "$(YQ)" e 'true' "$$f" 2>&1 | sed 's/^/  /' || true; \
+	    bad=1; \
+	  fi; \
+	done; \
+	if [ "$$bad" != 0 ]; then \
+	  echo "operator-sdk reports a ClusterServiceVersion base it cannot parse as"; \
+	  echo "a missing manifest rather than a syntax error, so an invalid file"; \
+	  echo "here surfaces only when a release runs 'make bundle'."; \
+	  exit 1; \
+	fi; \
+	echo "config/: every manifest parses"
+
 .PHONY: bundle
-bundle: yq ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
+bundle: yq verify-config-yaml ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
 	@set -e; \
 	operator-sdk generate kustomize manifests -q; \
 	OPERATOR_DIGEST=$$(curl -sI \
