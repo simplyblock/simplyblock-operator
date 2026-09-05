@@ -255,14 +255,20 @@ func waitForHeadDevice(ctx context.Context, t *testing.T, sh *fabric.Shell, nqn 
 		`	[ "$(cat "$s"/subsysnqn)" = "$NQN" ] || continue`,
 		`	for n in "$s"/nvme*n*; do`,
 		`		[ -f "$n"/nsid ] || continue`,
+		// A subsystem directory holds the head namespace and also one entry per
+		// controller path, and both carry the namespace id. The per-path ones are
+		// named nvmeXcYnZ, so the c is what tells them apart, and taking them all
+		// would return several names for one namespace.
+		`		case "$(basename "$n")" in *c*n*) continue ;; esac`,
 		fmt.Sprintf(`		[ "$(cat "$n"/nsid)" = %d ] && basename "$n"`, nsid),
 		`	done`,
 		`done`,
 	}, "\n")
 
-	var device string
+	var device, last string
 	waitFor(ctx, t, time.Minute, func() (string, bool) {
 		out, err := sh.Run(ctx, script)
+		last = out
 		if err != nil {
 			return out, false
 		}
@@ -274,7 +280,8 @@ func waitForHeadDevice(ctx context.Context, t *testing.T, sh *fabric.Shell, nqn 
 		return out, true
 	})
 	if device == "" {
-		t.Fatalf("namespace %d of %s never produced a head device", nsid, nqn)
+		t.Fatalf("namespace %d of %s never produced a head device; the scan last saw %q",
+			nsid, nqn, strings.TrimSpace(last))
 	}
 	return device
 }
