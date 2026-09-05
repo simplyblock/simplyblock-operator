@@ -271,8 +271,8 @@ type FilesystemParams struct {
 // Params is what a later process needs to rebuild this layer. The filesystem
 // recorded is the one the volume asked for, and a teardown needs no more than
 // that: what is actually on the device is read from the device.
-func (f *Filesystem) Params() (any, error) {
-	return FilesystemParams{FsType: f.cfg.FsType}, nil
+func (f *Filesystem) Params() any {
+	return FilesystemParams{FsType: f.cfg.FsType}
 }
 
 // read takes the content reading of the device below.

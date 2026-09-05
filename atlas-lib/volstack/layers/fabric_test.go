@@ -321,10 +321,7 @@ func TestFabricParamsCarryNoSecret(t *testing.T) {
 		DHCHAPSecret: "s3cret-key-material",
 	})
 
-	params, err := f.Params()
-	if err != nil {
-		t.Fatalf("Params: %v", err)
-	}
+	params := f.Params()
 	p, ok := params.(FabricParams)
 	if !ok {
 		t.Fatalf("Params returned %T", params)

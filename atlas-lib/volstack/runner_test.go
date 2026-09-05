@@ -505,3 +505,23 @@ func TestDownObservesEachLayerOnce(t *testing.T) {
 		}
 	}
 }
+
+// A layer with nothing to record implements no Recorder, and its entry carries
+// no parameters rather than an empty object. The physical-volume layer is the
+// case: a pvcreate needs only the device below it.
+func TestALayerWithNoParamsRecordsNone(t *testing.T) {
+	store := NewStore(t.TempDir())
+	var log []string
+	plan := Plan{&fakeLayer{name: "lvmPV", log: &log, exposes: "dm-0"}}
+
+	if _, err := NewRunner(store).Up(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	rec, err := store.Load(testHandle)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(rec.Plan[0].Params) != 0 {
+		t.Errorf("params = %s, want none for a layer that declares none", rec.Plan[0].Params)
+	}
+}

@@ -174,13 +174,13 @@ type FabricParams struct {
 }
 
 // Params is what a later process needs to rebuild this layer.
-func (f *Fabric) Params() (any, error) {
+func (f *Fabric) Params() any {
 	return FabricParams{
 		NQN:       f.cfg.Connection.NQN,
 		NSID:      f.cfg.Connection.NSID,
 		HostNQN:   f.cfg.HostNQN,
 		SecretRef: f.cfg.SecretRef,
-	}, nil
+	}
 }
 
 // device resolves this volume's namespace, reporting whether it is attached at
