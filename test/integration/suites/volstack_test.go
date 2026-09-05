@@ -31,14 +31,25 @@ import (
 
 // stackShellImage has to carry every tool the layers shell out to: nvme-cli for
 // the fabric layer, lvm2 for the two LVM layers, and mkfs plus mount for the
-// filesystem layer. The driver's own base image is the faithful choice, since
-// running the stack against the binaries that ship is the point, and a missing
-// tool here is a missing tool in production too.
+// filesystem layer. The driver's own image is the faithful choice, since running
+// the stack against the binaries that ship is the point.
 //
-// Overridable because the published image and the Dockerfile in this repository
-// are built separately, and a run should be able to name an image that is known
-// to carry the set rather than wait on that being reconciled.
-const stackShellImage = "simplyblock/spdkcsi:base_image"
+// It does not carry the second of those. Both architectures of v26.2.6 and of
+// v26.3.0, and the base image both are built on, were read out of the registry
+// on 2026-09-05: nvme, blkid, blockdev, mkfs.ext4, mkfs.xfs, mount, umount, and
+// mountpoint are present in every one, and no LVM binary is, nor dmsetup, as a
+// file or a symlink or at all. Since lvm execs those directly in the container
+// rather than through nsenter, the LVM plans cannot run in this image, and
+// requireTools skips them by name rather than letting the first pvcreate fail as
+// though the layer under test were wrong.
+//
+// The tag here is ahead of the one the chart pins, because what the suite wants
+// is the newest published image rather than the currently deployed one, and the
+// two differ in nothing that matters here.
+//
+// SB_STACK_IMAGE names an image that does carry LVM. Whether the shipped image
+// should is a question for the image, not for this suite.
+const stackShellImage = "quay.io/simplyblock-io/spdkcsi:v26.3.0"
 
 // stackTools are the binaries the on-node suite cannot run without. They are
 // checked before anything is built or copied, so a missing one reads as a
