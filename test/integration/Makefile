@@ -58,14 +58,14 @@ preflight: ## Check the tools and privileges a run needs.
 	done; \
 	case "$$(uname -s)/$$(uname -m)" in \
 	  Darwin/arm64) \
-	    echo "warning: cluster creation has been seen to fail on macOS at the dhcpd step,"; \
-	    echo "  with: cannot bind to port 67: address already in use."; \
-	    echo "  The machines are created before that step, and macOS starts its own bootpd"; \
-	    echo "  on *:67 within seconds of one attaching to vmnet, so talosctl's dhcpd finds"; \
-	    echo "  the port taken. Observed on darwin/arm64 with talosctl 1.13.8 and QEMU 10.1.3,"; \
-	    echo "  on a host with no vmnet interface and port 67 free beforehand."; \
-	    echo "  Whether anything makes it win that race is not established. If a run here"; \
-	    echo "  fails this way, Linux with /dev/kvm is the path that is known to work."; \
+	    echo "warning: on macOS 26.6.2 this fails at the dhcpd step, with:"; \
+	    echo "  cannot bind to port 67: address already in use."; \
+	    echo "  The machines are created before that step, and macOS now answers DHCP for"; \
+	    echo "  the cluster subnet itself once one attaches to vmnet, so talosctl's own"; \
+	    echo "  dhcpd finds the port taken. /var/db/dhcpd_leases shows the leases."; \
+	    echo "  The same command, talosctl, and QEMU passed this suite on macOS 26.5,"; \
+	    echo "  which is the only thing that changed. No talosctl flag relocates dhcpd."; \
+	    echo "  Linux with /dev/kvm is the path that works, and is what CI uses."; \
 	    ;; \
 	  Darwin/*) echo "Talos' QEMU provisioner supports only arm on macOS"; fail=1 ;; \
 	  Linux/*) test -e /dev/kvm || { echo "missing: /dev/kvm (QEMU would fall back to emulation, far too slow)"; fail=1; } ;; \
