@@ -260,9 +260,15 @@ func waitForHeadDevice(ctx context.Context, t *testing.T, sh *fabric.Shell, nqn 
 		// named nvmeXcYnZ, so the c is what tells them apart, and taking them all
 		// would return several names for one namespace.
 		`		case "$(basename "$n")" in *c*n*) continue ;; esac`,
-		fmt.Sprintf(`		[ "$(cat "$n"/nsid)" = %d ] && basename "$n"`, nsid),
+		fmt.Sprintf(`		if [ "$(cat "$n"/nsid)" = %d ]; then basename "$n"; fi`, nsid),
 		`	done`,
 		`done`,
+		// Whatever the last namespace examined turned out to be, the scan itself
+		// succeeded. Without this the exit status is the last comparison's, so a
+		// subsystem whose final entry is a different namespace reports failure
+		// while having printed the right answer, and the transport folds its own
+		// complaint into the output.
+		`exit 0`,
 	}, "\n")
 
 	var device, last string
