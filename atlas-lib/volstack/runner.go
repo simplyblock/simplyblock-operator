@@ -49,10 +49,11 @@ func (r *Runner) Up(ctx context.Context, handle string, plan Plan) (Artifact, er
 			return Artifact{}, err
 		}
 
-		if _, _, err := layer.Observe(ctx, below); err != nil {
-			r.unwind(ctx, plan[:i])
-			return Artifact{}, fmt.Errorf("volstack: observe %s: %w", layer.Name(), err)
-		}
+		// No observation here. Ensure has to observe anyway in order to know
+		// what to converge, and a layer's observation is the expensive step: on
+		// a degraded device it is a read of the device itself. Observing here as
+		// well would read it twice per stage and take two answers to one
+		// question, so the layer is asked once and dispatches on what it found.
 		above, err := layer.Ensure(ctx, below)
 		if err != nil {
 			r.unwind(ctx, plan[:i])
@@ -69,12 +70,16 @@ func (r *Runner) Up(ctx context.Context, handle string, plan Plan) (Artifact, er
 // continues, because stopping would strand the layers beneath it and there is
 // nothing left to protect by halting: the caller is already failing.
 func (r *Runner) unwind(ctx context.Context, brought Plan) {
+	// Best effort: the bring-up is already failing, and a survey that cannot
+	// complete is no reason to leave the layers beneath it held. A layer
+	// resolves the object it owns from its own parameters, so what is lost when
+	// the survey fails is the input it sits on rather than its own identity.
+	inputs, _, err := r.survey(ctx, brought)
+	if err != nil {
+		inputs = make([]Artifact, len(brought))
+	}
 	for i := len(brought) - 1; i >= 0; i-- {
-		below, err := r.below(ctx, brought, i)
-		if err != nil {
-			continue
-		}
-		_ = brought[i].Release(ctx, below)
+		_ = brought[i].Release(ctx, inputs[i])
 	}
 }
 
@@ -87,22 +92,19 @@ func (r *Runner) unwind(ctx context.Context, brought Plan) {
 func (r *Runner) Down(ctx context.Context, handle string, plan Plan) error {
 	attempted := r.attempted(handle, len(plan))
 
+	inputs, states, err := r.survey(ctx, plan)
+	if err != nil {
+		return err
+	}
+
 	for i := len(plan) - 1; i >= 0; i-- {
 		if attempted != nil && !attempted[i] {
 			continue
 		}
-		below, err := r.below(ctx, plan, i)
-		if err != nil {
-			return err
-		}
-		state, _, err := plan[i].Observe(ctx, below)
-		if err != nil {
-			return fmt.Errorf("volstack: observe %s: %w", plan[i].Name(), err)
-		}
-		if state == StateAbsent {
+		if states[i] == StateAbsent {
 			continue
 		}
-		if err := plan[i].Release(ctx, below); err != nil {
+		if err := plan[i].Release(ctx, inputs[i]); err != nil {
 			return fmt.Errorf("volstack: release %s: %w", plan[i].Name(), err)
 		}
 	}
@@ -170,38 +172,50 @@ func (r *Runner) Grow(ctx context.Context, plan Plan) error {
 // Destroy removes the plan's durable objects, top to bottom, so a layer goes
 // before what it sits on. Only a deletion path calls it, never an unstage.
 func (r *Runner) Destroy(ctx context.Context, handle string, plan Plan) error {
+	inputs, _, err := r.survey(ctx, plan)
+	if err != nil {
+		return err
+	}
 	for i := len(plan) - 1; i >= 0; i-- {
-		below, err := r.below(ctx, plan, i)
-		if err != nil {
-			return err
-		}
-		if err := plan[i].Destroy(ctx, below); err != nil {
+		if err := plan[i].Destroy(ctx, inputs[i]); err != nil {
 			return fmt.Errorf("volstack: destroy %s: %w", plan[i].Name(), err)
 		}
 	}
 	return r.store.Remove(handle)
 }
 
-// below re-derives layer i's input by observing the layers beneath it, rather
-// than reading a device path out of the record. A path is not stable across a
-// reconnect, which is why the record holds parameters and never paths.
+// survey walks the stack bottom to top once, reporting what each layer is handed
+// and what state each one is in.
 //
-// It observes rather than ensures, and that is the whole point: this runs on the
-// teardown, heal, and grow paths, none of which may bring a layer up on the way
-// to the layer they are acting on. A teardown that ensured would reconnect a
-// fabric before detaching it, and would block doing so on the volume whose paths
-// are already gone.
-func (r *Runner) below(ctx context.Context, plan Plan, i int) (Artifact, error) {
+// It observes rather than ensures, which is the whole point: this runs on the
+// teardown and deletion paths, and neither may bring a layer up on the way to the
+// one it is acting on. A teardown that ensured would reconnect a fabric before
+// detaching it, and would block doing so on the volume whose paths are already
+// gone, which is when an unstage arrives.
+//
+// One pass rather than re-deriving each layer's input as it is reached. That is
+// n observations instead of n(n+1)/2, and each one is real work, but the reason
+// is consistency rather than cost: every re-observation is a fresh look at a
+// world that changes underneath it, so a stack walked that way can hand one layer
+// an artifact that disagrees with what the layer above it was given.
+//
+// Layer inputs, not layer outputs: inputs[i] is what layer i sits on, so
+// inputs[0] is the zero artifact and inputs[i+1] is what layer i exposes.
+func (r *Runner) survey(ctx context.Context, plan Plan) (inputs []Artifact, states []State, err error) {
+	inputs = make([]Artifact, len(plan))
+	states = make([]State, len(plan))
+
 	below := Artifact{}
-	for j := range i {
-		_, above, err := plan[j].Observe(ctx, below)
+	for i, layer := range plan {
+		inputs[i] = below
+		state, own, err := layer.Observe(ctx, below)
 		if err != nil {
-			return Artifact{}, fmt.Errorf("volstack: re-derive the input of %s from %s: %w",
-				plan[i].Name(), plan[j].Name(), err)
+			return nil, nil, fmt.Errorf("volstack: observe %s: %w", layer.Name(), err)
 		}
-		below = above
+		states[i] = state
+		below = own
 	}
-	return below, nil
+	return inputs, states, nil
 }
 
 // attempted reads the per-layer markers, or reports nil when there is no record

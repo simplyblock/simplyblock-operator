@@ -34,6 +34,7 @@ type fakeLayer struct {
 	healErr  error
 	grownTo  string
 	observed []string // the device names this layer was handed, per Observe
+	ensured  []string // the device names this layer was handed, per Ensure
 }
 
 func (f *fakeLayer) Name() string { return f.name }
@@ -67,6 +68,11 @@ func (f *fakeLayer) exposed(below Artifact) Artifact {
 
 func (f *fakeLayer) Ensure(_ context.Context, below Artifact) (Artifact, error) {
 	f.note("ensure")
+	if d, ok := below.Device(); ok {
+		f.ensured = append(f.ensured, d.Name)
+	} else {
+		f.ensured = append(f.ensured, "")
+	}
 	if f.ensureErr != nil {
 		return Artifact{}, f.ensureErr
 	}
@@ -119,7 +125,11 @@ func newRunner(t *testing.T) *Runner {
 	return NewRunner(NewStore(t.TempDir()))
 }
 
-// Up walks the plan bottom to top, observing each layer before ensuring it.
+// Up walks the plan bottom to top, and asks each layer once.
+//
+// It does not observe separately: Ensure has to observe in order to know what to
+// converge, and for a layer whose observation is a read of the device that would
+// be two reads per stage and two answers to one question.
 func TestUpWalksBottomToTop(t *testing.T) {
 	var log []string
 	plan := Plan{
@@ -132,7 +142,7 @@ func TestUpWalksBottomToTop(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 
-	want := "fabric:observe fabric:ensure filesystem:observe filesystem:ensure"
+	want := "fabric:ensure filesystem:ensure"
 	if got := strings.Join(log, " "); got != want {
 		t.Errorf("call order:\n got %s\nwant %s", got, want)
 	}
@@ -150,8 +160,8 @@ func TestUpPassesTheArtifactUpward(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 
-	if len(top.observed) != 1 || top.observed[0] != "nvme0n1" {
-		t.Fatalf("the top layer observed %v, want the device the bottom exposed", top.observed)
+	if len(top.ensured) != 1 || top.ensured[0] != "nvme0n1" {
+		t.Fatalf("the top layer was handed %v, want the device the bottom exposed", top.ensured)
 	}
 }
 
@@ -449,5 +459,49 @@ func TestHealAndGrowDoNotBringUpLayersTheyPassThrough(t *testing.T) {
 					tc.name, strings.Join(log, " "))
 			}
 		})
+	}
+}
+
+// A teardown observes each layer once.
+//
+// Re-deriving every layer's input from scratch on each step costs n(n+1)/2
+// observations, and each one is real work: a device scan for fabric, a pvs for a
+// physical volume. The consistency matters more than the cost. Every
+// re-observation is a fresh look at a world that changes underneath it, so a
+// stack walked that way can hand one layer an artifact that disagrees with what
+// the layer above it was given.
+func TestDownObservesEachLayerOnce(t *testing.T) {
+	for _, n := range []int{2, 4, 6} {
+		var log []string
+		plan := make(Plan, 0, n)
+		for i := range n {
+			plan = append(plan, &fakeLayer{
+				name:    string(rune('a' + i)),
+				log:     &log,
+				exposes: "dev" + string(rune('0'+i)),
+				state:   StateReady,
+			})
+		}
+
+		r := NewRunner(NewStore(t.TempDir()))
+		if _, err := r.Up(context.Background(), testHandle, plan); err != nil {
+			t.Fatalf("Up: %v", err)
+		}
+		log = nil
+
+		if err := r.Down(context.Background(), testHandle, plan); err != nil {
+			t.Fatalf("Down: %v", err)
+		}
+
+		observations := 0
+		for _, entry := range log {
+			if strings.HasSuffix(entry, ":observe") {
+				observations++
+			}
+		}
+		if observations != n {
+			t.Errorf("a %d-layer teardown made %d observations, want %d: the layers beneath are being re-observed per step",
+				n, observations, n)
+		}
 	}
 }
