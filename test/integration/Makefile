@@ -57,7 +57,14 @@ preflight: ## Check the tools and privileges a run needs.
 	  command -v $$t >/dev/null || { echo "missing: $$t"; fail=1; }; \
 	done; \
 	case "$$(uname -s)/$$(uname -m)" in \
-	  Darwin/arm64) ;; \
+	  Darwin/arm64) \
+	    echo "warning: cluster creation is expected to fail on macOS at the dhcpd step."; \
+	    echo "  The virtual machines boot, then the provisioner's darwin build takes a Linux"; \
+	    echo "  bridge path for DHCP while the machines are on vmnet, where macOS has already"; \
+	    echo "  bound port 67 for its own bootpd. Upstream:"; \
+	    echo "  https://github.com/siderolabs/talos/issues/12727"; \
+	    echo "  Run the suite on Linux with /dev/kvm until that lands."; \
+	    ;; \
 	  Darwin/*) echo "Talos' QEMU provisioner supports only arm on macOS"; fail=1 ;; \
 	  Linux/*) test -e /dev/kvm || { echo "missing: /dev/kvm (QEMU would fall back to emulation, far too slow)"; fail=1; } ;; \
 	  *) echo "unsupported host $$(uname -s)/$$(uname -m); on Windows use WSL2" ; fail=1 ;; \
