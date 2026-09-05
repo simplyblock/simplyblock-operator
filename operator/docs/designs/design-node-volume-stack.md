@@ -315,10 +315,16 @@ type Layer interface {
 	// version wrote.
 	Name() string
 
-	// Observe reports what of this layer is present on the host without changing
-	// anything. Ensure, Release, and Destroy all dispatch on what it found rather
-	// than re-deriving the same facts.
-	Observe(ctx context.Context, below Artifact) (State, error)
+	// Observe reports what of this layer is present on the host, and what it
+	// currently exposes, without changing anything. Ensure, Release, and Destroy
+	// all dispatch on what it found rather than re-deriving the same facts.
+	//
+	// The Artifact is the zero value when the state is StateAbsent, and is what
+	// the layer exposes in every other state, including StatePartial: a fabric
+	// device that is present and cannot serve is still the device a release has
+	// to detach. Returning it is what gives the runner a way to walk a stack
+	// without building one, which Down, Heal, and Grow all need (7.2).
+	Observe(ctx context.Context, below Artifact) (State, Artifact, error)
 
 	// Ensure converges the layer and returns what the layer above consumes.
 	Ensure(ctx context.Context, below Artifact) (Artifact, error)
@@ -333,6 +339,19 @@ type Layer interface {
 	Destroy(ctx context.Context, below Artifact) error
 }
 ```
+
+**`Observe` returns the artifact because a read-only walk needs one.** Three of
+the runner's five entry points pass through layers they are not acting on, and
+each of them needs to know what those layers expose in order to hand it to the
+layer above. Deriving that by calling `Ensure` is the obvious shortcut and it is
+wrong: `Ensure` converges, so a teardown taking that route reconnects a fabric
+before detaching it, and on a volume whose paths are already gone, which is
+precisely when an unstage arrives, the reconnect waits for a device that is not
+coming back. The alternative considered was requiring `Ensure` to be
+side-effect-free whenever `Observe` reports `StateReady`. That puts the burden on
+every layer to implement "if ready, do nothing" correctly and makes a teardown
+mutate the moment one of them gets it wrong, where this makes the read-only path
+the only one a read-only walk can take.
 
 **`Release` and `Destroy` are separate because conflating them destroys data.**
 `NodeUnstageVolume` fires whenever no pod on this node needs the volume mounted,
@@ -797,7 +816,7 @@ record.write(plan)                        // before any side effect
 below := Artifact{}
 for i, layer := range plan {
     record.mark(layer)                    // before this layer's side effect
-    state, err := layer.Observe(ctx, below)
+    state, _, err := layer.Observe(ctx, below)
     if err != nil { unwind(plan[:i], below); return err }
     above, err := layer.Ensure(ctx, below) // dispatches on state
     if err != nil { unwind(plan[:i], below); return err }
@@ -812,7 +831,7 @@ return below                              // what the RPC acts on
 for i := len(plan) - 1; i >= 0; i-- {
     layer := plan[i]
     if !record.marked(layer) { continue }
-    state, err := layer.Observe(ctx, below(i))
+    state, _, err := layer.Observe(ctx, below(i))
     if err != nil { return err }
     if state != StateAbsent {
         if err := layer.Release(ctx, below(i)); err != nil { return err }
@@ -822,8 +841,11 @@ for i := len(plan) - 1; i >= 0; i-- {
 record.remove()
 ```
 
-`below(i)` re-derives layer *i*'s input by observing the layers beneath it, rather
-than reading a device path out of the record (§6).
+`below(i)` re-derives layer *i*'s input by **observing** the layers beneath it and
+threading the artifacts they report, rather than reading a device path out of the
+record (§6) and rather than calling `Ensure`. It is a read: a walk that tears
+down, heals, or grows must not bring anything up on its way to the layer it is
+acting on.
 
 ### 7.3 A failed bring-up releases and never destroys
 

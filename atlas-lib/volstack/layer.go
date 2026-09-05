@@ -31,10 +31,21 @@ type Layer interface {
 	// version wrote.
 	Name() string
 
-	// Observe reports what of this layer is present on the host without changing
-	// anything. Ensure, Release, and Destroy all dispatch on what it found
-	// rather than re-deriving the same facts.
-	Observe(ctx context.Context, below Artifact) (State, error)
+	// Observe reports what of this layer is present on the host, and what it
+	// currently exposes, without changing anything. Ensure, Release, and Destroy
+	// all dispatch on what it found rather than re-deriving the same facts.
+	//
+	// The Artifact is the zero value at StateAbsent and is what the layer
+	// exposes in every other state, StatePartial included: a fabric device that
+	// is present and cannot serve is still the device a release has to detach.
+	//
+	// Returning it is what gives the runner a read-only way to walk a stack.
+	// Down, Heal, and Grow all pass through layers they are not acting on, and
+	// deriving those layers' output by calling Ensure would converge them: a
+	// teardown taking that route reconnects a fabric before detaching it, and on
+	// a volume whose paths are already gone, which is when an unstage arrives,
+	// the reconnect waits for a device that is not coming back.
+	Observe(ctx context.Context, below Artifact) (State, Artifact, error)
 
 	// Ensure converges the layer and returns what the layer above consumes.
 	Ensure(ctx context.Context, below Artifact) (Artifact, error)

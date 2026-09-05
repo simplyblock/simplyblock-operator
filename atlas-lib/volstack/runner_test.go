@@ -40,14 +40,29 @@ func (f *fakeLayer) Name() string { return f.name }
 
 func (f *fakeLayer) note(verb string) { *f.log = append(*f.log, f.name+":"+verb) }
 
-func (f *fakeLayer) Observe(_ context.Context, below Artifact) (State, error) {
+func (f *fakeLayer) Observe(_ context.Context, below Artifact) (State, Artifact, error) {
 	f.note("observe")
 	if d, ok := below.Device(); ok {
 		f.observed = append(f.observed, d.Name)
 	} else {
 		f.observed = append(f.observed, "")
 	}
-	return f.state, f.observeErr
+	if f.observeErr != nil {
+		return f.state, Artifact{}, f.observeErr
+	}
+	return f.state, f.exposed(below), f.observeErr
+}
+
+// exposed is what this layer reports it currently exposes, which is the same
+// artifact Ensure would produce. A layer at StateAbsent exposes nothing.
+func (f *fakeLayer) exposed(below Artifact) Artifact {
+	if f.state == StateAbsent {
+		return Artifact{}
+	}
+	if f.exposes == "" {
+		return below
+	}
+	return Artifact{Devices: []blockdev.Device{{Name: f.exposes, Path: "/dev/" + f.exposes, SizeBytes: 1 << 30}}}
 }
 
 func (f *fakeLayer) Ensure(_ context.Context, below Artifact) (Artifact, error) {
@@ -376,4 +391,63 @@ func indexOf(log []string, want string) int {
 		}
 	}
 	return -1
+}
+
+// Regression: 2026-09-05-teardown-reran-bring-up — Down derived each layer's
+// input by calling Ensure on the layers beneath it, so unstaging a volume
+// reconnected its fabric and then immediately detached it. On a volume whose
+// paths were already gone, which is exactly when an unstage arrives after total
+// path loss, that reconnect blocks waiting for a device that is not coming back
+// and the teardown fails instead of releasing.
+//
+// A teardown reads. It brings nothing up.
+func TestDownDoesNotBringUpTheLayersBeneath(t *testing.T) {
+	store := NewStore(t.TempDir())
+	r := NewRunner(store)
+
+	var log []string
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady},
+		&fakeLayer{name: "filesystem", log: &log, state: StateReady},
+	}
+	if _, err := r.Up(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	log = nil
+
+	if err := r.Down(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	for _, entry := range log {
+		if strings.HasSuffix(entry, ":ensure") {
+			t.Fatalf("Down brought a layer up while tearing down:\n%s", strings.Join(log, " "))
+		}
+	}
+}
+
+// The same rule for the other two read-shaped walks: a heal repairs what is
+// broken and a grow enlarges what is there, and neither may bring up a layer it
+// is only passing through.
+func TestHealAndGrowDoNotBringUpLayersTheyPassThrough(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*Runner, Plan) error
+	}{
+		{"heal", func(r *Runner, p Plan) error { return r.Heal(context.Background(), testHandle, p) }},
+		{"grow", func(r *Runner, p Plan) error { return r.Grow(context.Background(), p) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var log []string
+			passthrough := &fakeLayer{name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady}
+			plan := Plan{passthrough, &fakeLayer{name: "plain", log: &log, state: StateReady}}
+
+			if err := tc.run(newRunner(t), plan); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			if indexOf(log, "fabric:ensure") >= 0 {
+				t.Errorf("%s brought up a layer it was only passing through:\n%s",
+					tc.name, strings.Join(log, " "))
+			}
+		})
+	}
 }

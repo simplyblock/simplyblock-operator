@@ -106,7 +106,7 @@ func TestFilesystemFormatsOnlyABlankDevice(t *testing.T) {
 	fs := newFakeFS()
 	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentBlank}, nil)
 
-	state, err := l.Observe(context.Background(), belowArtifact())
+	state, _, err := l.Observe(context.Background(), belowArtifact())
 	if err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestFilesystemMountsWhatIsOnTheDeviceAndNeverFormats(t *testing.T) {
 	fs := newFakeFS()
 	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "xfs"}, nil)
 
-	state, err := l.Observe(context.Background(), belowArtifact())
+	state, _, err := l.Observe(context.Background(), belowArtifact())
 	if err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestFilesystemAlreadyMountedIsReady(t *testing.T) {
 	fs.mountPoints[stagingPath] = true
 	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "ext4"}, nil)
 
-	state, err := l.Observe(context.Background(), belowArtifact())
+	state, _, err := l.Observe(context.Background(), belowArtifact())
 	if err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestFilesystemRefusesEverythingItCannotAccountFor(t *testing.T) {
 			fs := newFakeFS()
 			l := newFS(t, fs, tc.reading, tc.readErr)
 
-			if _, err := l.Observe(context.Background(), belowArtifact()); err == nil {
+			if _, _, err := l.Observe(context.Background(), belowArtifact()); err == nil {
 				t.Error("Observe accepted a device it cannot account for")
 			}
 			if _, err := l.Ensure(context.Background(), belowArtifact()); err == nil {
