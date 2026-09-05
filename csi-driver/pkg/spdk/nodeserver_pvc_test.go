@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+	testingexec "k8s.io/utils/exec/testing"
 
 	sbkube "github.com/spdk/spdk-csi/pkg/kubernetes"
 )
@@ -201,35 +202,39 @@ func TestAnnotatedFilesystem_NoClaim(t *testing.T) {
 
 // Formatting is irreversible, so the only device staging may format is one it
 // positively read as blank. These cases cover the two readings that are not
-// that, and must therefore fail staging rather than fall through to mkfs.
-func TestClassifyDiskFormat(t *testing.T) {
+// that, and must therefore fail staging rather than fall through to mkfs. The
+// probe itself lives in atlas's blockdev package now; what this pins is the
+// driver's boundary — that every refusal the prober raises still fails staging.
+func TestProbeDiskFormat(t *testing.T) {
 	cases := []struct {
 		name      string
-		fs        string
-		probeErr  error
+		result    scriptedResult
 		want      string
 		wantError bool
 	}{
-		{name: "blank device", fs: "", want: ""},
-		{name: "already formatted", fs: "ext4", want: "ext4"},
-		{name: "unreadable device", probeErr: errors.New("blkid: broken pipe"), wantError: true},
-		{name: "partition table, no filesystem", fs: unknownDiskFormat, wantError: true},
+		{name: "blank device", result: scriptedResult{err: &testingexec.FakeExitError{Status: 2}}, want: ""},
+		{name: "already formatted", result: scriptedResult{out: "TYPE=ext4\n"}, want: "ext4"},
+		{name: "unreadable device", result: scriptedResult{err: errors.New("blkid: broken pipe")}, wantError: true},
+		{name: "partition table, no filesystem", result: scriptedResult{out: "PTTYPE=dos\n"}, wantError: true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := classifyDiskFormat("/dev/nvme9n1", tc.fs, tc.probeErr)
+			fe, _ := scriptedExec([]scriptedResult{tc.result})
+			ns := &nodeServer{execer: fe}
+
+			got, err := ns.probeDiskFormat(context.Background(), "/dev/nvme9n1")
 			if tc.wantError {
 				if err == nil {
-					t.Fatalf("classifyDiskFormat(%q, %v) = %q, nil, want an error", tc.fs, tc.probeErr, got)
+					t.Fatalf("probeDiskFormat(%s) = %q, nil, want an error", tc.name, got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("classifyDiskFormat(%q, %v): unexpected error %v", tc.fs, tc.probeErr, err)
+				t.Fatalf("probeDiskFormat(%s): unexpected error %v", tc.name, err)
 			}
 			if got != tc.want {
-				t.Fatalf("classifyDiskFormat(%q, %v) = %q, want %q", tc.fs, tc.probeErr, got, tc.want)
+				t.Fatalf("probeDiskFormat(%s) = %q, want %q", tc.name, got, tc.want)
 			}
 		})
 	}
