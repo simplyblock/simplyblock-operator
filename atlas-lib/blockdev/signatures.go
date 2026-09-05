@@ -208,7 +208,7 @@ func detectMBR(r regions) (find, bool) {
 	if !ok {
 		return find{}, false
 	}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if table[i*16+4] != 0 { // the partition type byte
 			return find{ContentForeign, "dos", 446,
 				"MBR partition table at 446, with at least one used entry"}, true
