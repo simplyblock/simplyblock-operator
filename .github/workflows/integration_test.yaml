@@ -11,7 +11,19 @@ on:
       - "test/integration/**"
       - ".github/workflows/integration_test.yaml"
   workflow_dispatch:
+    inputs:
+      csi_image:
+        description: "Driver image the on-node suite runs in (defaults to the one the suite names)"
+        required: false
+        type: string
   workflow_call:
+    inputs:
+      csi_image:
+        description: "Driver image the on-node suite runs in. The build workflow passes the
+          image it has just published, so the stack is exercised in the container that ships
+          rather than in whichever one was current when the suite was written."
+        required: false
+        type: string
 
 env:
   # Pinned so a cluster failure is never a version-skew mystery. Bump
@@ -79,6 +91,11 @@ jobs:
           # Without this the suite skips itself and the job reports green having
           # booted nothing.
           SB_INTEGRATION: "1"
+          # Empty unless a caller named one, and the volume stack suite falls back
+          # to the image it names itself. The build workflow passes what it has
+          # just published, which is what makes a package added to the driver
+          # image visible to the suite in the same run that adds it.
+          SB_STACK_IMAGE: ${{ inputs.csi_image }}
         # One package on purpose. `go test` buffers a package's output while other
         # packages are still running and prints it when the package finishes, so a
         # suite that wedges produces nothing at all — which is how a boot failure
