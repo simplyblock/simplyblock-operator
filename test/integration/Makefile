@@ -58,12 +58,14 @@ preflight: ## Check the tools and privileges a run needs.
 	done; \
 	case "$$(uname -s)/$$(uname -m)" in \
 	  Darwin/arm64) \
-	    echo "warning: cluster creation is expected to fail on macOS at the dhcpd step."; \
-	    echo "  The virtual machines boot, then the provisioner's darwin build takes a Linux"; \
-	    echo "  bridge path for DHCP while the machines are on vmnet, where macOS has already"; \
-	    echo "  bound port 67 for its own bootpd. Upstream:"; \
-	    echo "  https://github.com/siderolabs/talos/issues/12727"; \
-	    echo "  Run the suite on Linux with /dev/kvm until that lands."; \
+	    echo "warning: cluster creation has been seen to fail on macOS at the dhcpd step,"; \
+	    echo "  with: cannot bind to port 67: address already in use."; \
+	    echo "  The machines are created before that step, and macOS starts its own bootpd"; \
+	    echo "  on *:67 within seconds of one attaching to vmnet, so talosctl's dhcpd finds"; \
+	    echo "  the port taken. Observed on darwin/arm64 with talosctl 1.13.8 and QEMU 10.1.3,"; \
+	    echo "  on a host with no vmnet interface and port 67 free beforehand."; \
+	    echo "  Whether anything makes it win that race is not established. If a run here"; \
+	    echo "  fails this way, Linux with /dev/kvm is the path that is known to work."; \
 	    ;; \
 	  Darwin/*) echo "Talos' QEMU provisioner supports only arm on macOS"; fail=1 ;; \
 	  Linux/*) test -e /dev/kvm || { echo "missing: /dev/kvm (QEMU would fall back to emulation, far too slow)"; fail=1; } ;; \
