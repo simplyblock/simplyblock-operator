@@ -1,0 +1,15 @@
+{
+  "name": "gpt-4kn",
+  "tool": "sgdisk",
+  "tool_version": "GPT fdisk (sgdisk) version 1.0.10",
+  "command": "sgdisk -o -n 1:0:0 -t 1:8300",
+  "device_size": 67108864,
+  "logical_block_size": 4096,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:45:41Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "DEVNAME=/dev/loop9 PTUUID=acdf6d9f-1a25-48f8-87aa-d96c33c9b0ae PTTYPE=gpt",
+  "head_sha256": "80fdad8a5f040e13ba0ed05ae31f170cf6c4c57c231a4485cb306a6e94f39eda",
+  "tail_sha256": "85f800df222108cb100023284b489bae6970b08e92470e73288dbd2c3097d553",
+  "note": "4Kn: the GPT header is at offset 4096, not 512"
+}

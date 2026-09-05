@@ -1,0 +1,15 @@
+{
+  "name": "exfat",
+  "tool": "mkfs.exfat",
+  "tool_version": "failed to init locale/codeset",
+  "command": "mkfs.exfat",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:45:42Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "DEVNAME=/dev/loop14 UUID=6FDF-F6B6 VERSION=1.0 FSBLOCKSIZE=512 BLOCK_SIZE=512 FSSIZE=67108864 TYPE=exfat USAGE=filesystem",
+  "head_sha256": "e8d4bdef01c86cfd6a77c715fcb33f5359d68a58291ee8e3497a7d4d84696215",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "note": ""
+}

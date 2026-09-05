@@ -1,0 +1,15 @@
+{
+  "name": "lvm2",
+  "tool": "pvcreate",
+  "tool_version": "  LVM version:     2.03.16(2) (2022-05-18)",
+  "command": "pvcreate -q -f -y",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:53:44Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "DEVNAME=/dev/loop23 UUID=r6te2q-AHZH-Ybpq-zkxH-Dalm-bFwV-6lKCSG VERSION=LVM2\\ 001 TYPE=LVM2_member USAGE=raid",
+  "head_sha256": "3fadf03fe3c636b86127e485f8609b7c0ca0863ad7910a11a8c9182373af2bbb",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "note": "a physical-volume label, the one reading that is a stack layer rather than a filesystem"
+}

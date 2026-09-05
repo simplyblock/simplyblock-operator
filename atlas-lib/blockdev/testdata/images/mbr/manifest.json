@@ -1,0 +1,15 @@
+{
+  "name": "mbr",
+  "tool": "fdisk",
+  "tool_version": "fdisk from util-linux 2.39.3",
+  "command": "fdisk: o, n, p, 1, defaults, w",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:45:41Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "DEVNAME=/dev/loop10 PTUUID=c81b854d PTTYPE=dos",
+  "head_sha256": "4cddaf107684ec4a2ac31409fec4e9e67d3818b0ea4e38391fc8e4304233b467",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "note": ""
+}

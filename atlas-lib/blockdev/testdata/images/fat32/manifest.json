@@ -1,0 +1,15 @@
+{
+  "name": "fat32",
+  "tool": "mkfs.vfat",
+  "tool_version": "Usage: mkfs.vfat [OPTIONS] TARGET [BLOCKS]",
+  "command": "mkfs.vfat -F 32",
+  "device_size": 536870912,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:45:42Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "DEVNAME=/dev/loop13 UUID=6B66-A330 VERSION=FAT32 FSBLOCKSIZE=4096 BLOCK_SIZE=512 FSSIZE=536868864 TYPE=vfat USAGE=filesystem",
+  "head_sha256": "2f716985f5d0f895abd185159b4e8cbaf2253c36870c545f73615c78db3b1ae0",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "note": ""
+}
