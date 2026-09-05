@@ -92,6 +92,18 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// requireLVM skips a plan whose layers shell out to LVM when the image carries
+// none. The driver decides that, because it can read the image before this
+// binary is built, and it is worth distinguishing: the fabric and filesystem
+// layers are exercised either way, and skipping all four plans over a tool two
+// of them need would leave the suite proving nothing on the images that ship.
+func requireLVM(t *testing.T) {
+	t.Helper()
+	if os.Getenv("SB_NO_LVM") != "" {
+		t.Skip("the node's image carries no LVM tooling, so the layers that shell out to it cannot run")
+	}
+}
+
 // runner is the runner under test, recording to this run's own directory.
 func (h *harness) runner() *volstack.Runner { return volstack.NewRunner(volstack.NewStore(h.records)) }
 
@@ -209,6 +221,7 @@ func TestPlainStackSurvivesARestage(t *testing.T) {
 // risk of the volume layer is in getting that wrong: a volume group read as
 // absent is one a bring-up creates over.
 func TestLVMStackReactivatesRatherThanRecreating(t *testing.T) {
+	requireLVM(t)
 	h := newHarness(t)
 	ctx, cancel := context.WithTimeout(context.Background(), stackTimeout)
 	defer cancel()
@@ -240,6 +253,7 @@ func TestLVMStackReactivatesRatherThanRecreating(t *testing.T) {
 // order its members are assembled in is what the record has to preserve: a
 // stripe over the same members in another order is another device.
 func TestStripedStackAssemblesItsMembers(t *testing.T) {
+	requireLVM(t)
 	h := newHarness(t)
 	if len(h.targets) < 2 {
 		t.Skip("striping needs a second namespace, and SB_TARGET2_NQN is unset")
