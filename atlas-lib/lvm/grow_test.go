@@ -116,3 +116,55 @@ func TestManager_ExtendLogicalVolumeToSize_WrapsRunnerError(t *testing.T) {
 		t.Errorf("ExtendLogicalVolumeToSize() error = %v, want wrapping %v", err, wantErr)
 	}
 }
+
+// A grow that finds the volume already at its target has done what was asked.
+// kubelet reissues NodeExpandVolume after a successful one, and lvextend reports
+// a no-op as a failure, so a caller taking it at face value fails an expansion
+// that had already happened.
+func TestManager_ExpandLogicalVolume_AlreadyAtTarget(t *testing.T) {
+	key := joinKey([]string{"lvextend", "-l+100%FREE", "vg1/lv1"})
+	fake := &fakeRunner{
+		out: map[string]string{},
+		err: map[string]error{key: errors.New(
+			"New size (1535 extents) not larger than existing size (1535 extents)")},
+	}
+	mgr := NewManagerWithRunner(fake.run)
+
+	lv := LogicalVolume{VolumeGroup: VolumeGroup{Name: "vg1"}, Name: "lv1"}
+	if err := mgr.ExpandLogicalVolume(context.Background(), lv); err != nil {
+		t.Errorf("ExpandLogicalVolume on a volume already at its target = %v, want nil", err)
+	}
+}
+
+func TestManager_ExtendLogicalVolumeToSize_AlreadyAtTarget(t *testing.T) {
+	key := joinKey([]string{"lvextend", "-L4096B", "vg1/lv1"})
+	fake := &fakeRunner{
+		out: map[string]string{},
+		err: map[string]error{key: errors.New("New size given (1 extents) not larger than existing size (1 extents)")},
+	}
+	mgr := NewManagerWithRunner(fake.run)
+
+	lv := LogicalVolume{VolumeGroup: VolumeGroup{Name: "vg1"}, Name: "lv1"}
+	if err := mgr.ExtendLogicalVolumeToSize(context.Background(), lv, 4096); err != nil {
+		t.Errorf("ExtendLogicalVolumeToSize on a volume already at its target = %v, want nil", err)
+	}
+}
+
+// A grow that failed for any other reason still fails. Convergence covers the one
+// message that means there was nothing to do, and widening it would swallow a
+// volume group that ran out of space.
+func TestManager_ExpandLogicalVolume_OtherFailuresStillFail(t *testing.T) {
+	for _, msg := range []string{
+		"Insufficient free space: 256 extents needed, but only 0 available",
+		"Volume group vg1 not found",
+	} {
+		key := joinKey([]string{"lvextend", "-l+100%FREE", "vg1/lv1"})
+		fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: errors.New(msg)}}
+		mgr := NewManagerWithRunner(fake.run)
+
+		lv := LogicalVolume{VolumeGroup: VolumeGroup{Name: "vg1"}, Name: "lv1"}
+		if err := mgr.ExpandLogicalVolume(context.Background(), lv); err == nil {
+			t.Errorf("ExpandLogicalVolume swallowed %q", msg)
+		}
+	}
+}

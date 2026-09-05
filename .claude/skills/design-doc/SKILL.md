@@ -65,7 +65,7 @@ The canonical examples in the repo, in rough order of usefulness:
   document that specifies a target and confines every delta against the registered
   API to one migration section, rather than annotating each section with what ships.
   §10 is the observability reference.
-- `design-node-volume-stack.md` §14, on the `design/volume-stack` branch: the other
+- `design-node-volume-stack.md` §14: the other
   observability reference, and the clearer of the two on opening with the baseline.
 - `test-plan-storagecluster.md`: the ID'd scenario matrix, including planned blocks
   that are excluded from the coverage counts.

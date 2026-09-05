@@ -41,9 +41,17 @@ func NewInitiator(_ context.Context, sh *Shell) (*Initiator, error) {
 // Connect attaches one controller to one target endpoint. Connecting the same
 // NQN twice over different endpoints is how a subsystem ends up with two
 // controllers.
-func (i *Initiator) Connect(ctx context.Context, nqn, addr string, port int) error {
+//
+// extraOpts are appended verbatim to the fabrics options line — the knobs a
+// scenario turns that the defaults leave alone, such as "ctrl_loss_tmo=600" to
+// keep the device alive across a long outage, or "fast_io_fail_tmo=2" to turn
+// blocked reads on a pathless device into prompt failures.
+func (i *Initiator) Connect(ctx context.Context, nqn, addr string, port int, extraOpts ...string) error {
 	opts := fmt.Sprintf("transport=tcp,traddr=%s,trsvcid=%d,nqn=%s,hostnqn=%s,hostid=%s",
 		addr, port, nqn, i.hostNQN, i.hostID)
+	for _, o := range extraOpts {
+		opts += "," + o
+	}
 
 	// Opened read-write, as nvme-cli and atlas both do: the kernel replies on the
 	// same descriptor with the instance and cntlid it assigned. The reply is not

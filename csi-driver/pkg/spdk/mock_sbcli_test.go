@@ -3,6 +3,7 @@ package spdk
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -27,7 +28,7 @@ type mockVolume struct {
 	Status string // defaults to "online" when empty
 }
 
-// status returns the volume's reported status, defaulting to "online".
+// status returns the volume's reported status, defaulting to "online."
 func (v *mockVolume) status() string {
 	if v.Status == "" {
 		return "online"
@@ -57,7 +58,7 @@ type mockSBCLI struct {
 
 	// snapshotCreateStatus, when non-zero, makes every snapshot POST respond
 	// with this HTTP status without persisting. Used to model permanent
-	// control-plane errors (e.g. HTTP 400) during snapshot creation.
+	// control-plane errors (e.g., HTTP 400) during snapshot creation.
 	snapshotCreateStatus int
 
 	// snapshotCreatePersistThenFail, when true, makes the next snapshot POST
@@ -84,9 +85,16 @@ type mockSBCLI struct {
 	// failIf, when set, is consulted on every request before its handler runs;
 	// returning true makes the mock respond HTTP 500 without running the handler.
 	// It lets a test fail every API except a chosen one — a future-proof way to
-	// assert an RPC performs no ordering-sensitive call (e.g. that CreateSnapshot
+	// assert an RPC performs no ordering-sensitive call (e.g., that CreateSnapshot
 	// creates the snapshot only after every other API call has succeeded).
 	failIf func(r *http.Request) bool
+
+	// createVolumeBodies records the raw JSON body of every createVolume POST, in
+	// order. It lets a test assert what the driver actually put on the wire rather
+	// than only what the mock happens to decode — placement is the motivating case:
+	// host_id is not part of the mock's own bookkeeping, but whether it is sent is
+	// exactly the behavior under test.
+	createVolumeBodies [][]byte
 
 	// injectStatus, when set, is consulted before each handler; a non-zero return
 	// makes the mock respond with that HTTP status without running the handler.
@@ -271,7 +279,7 @@ func (m *mockSBCLI) handleCreateSnapshot(w http.ResponseWriter, r *http.Request)
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
-	// Simulate a permanent control-plane rejection (e.g. HTTP 400) without
+	// Simulate a permanent control-plane rejection (e.g., HTTP 400) without
 	// persisting anything.
 	if m.snapshotCreateStatus != 0 {
 		writeJSON(w, m.snapshotCreateStatus, map[string]string{"detail": "snapshot create rejected"})
@@ -364,12 +372,15 @@ func (m *mockSBCLI) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request)
 
 // createVolume handles POST .../volumes/ for both plain create and clone-from-snapshot.
 func (m *mockSBCLI) createVolume(w http.ResponseWriter, r *http.Request) {
+	raw, _ := io.ReadAll(r.Body)
+	m.createVolumeBodies = append(m.createVolumeBodies, raw)
+
 	var body struct {
 		Name       string `json:"name"`
 		Size       string `json:"size"`
 		SnapshotID string `json:"snapshot_id"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	_ = json.Unmarshal(raw, &body)
 
 	if !m.allowDuplicateNames {
 		for _, volume := range m.volumes {

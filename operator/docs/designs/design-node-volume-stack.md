@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-25  
+**Date:** 2026-08-25 (last updated 2026-09-04)  
 **Related Issues:**
 
 - [#277](https://github.com/simplyblock/simplyblock-operator/issues/277) — client-side compression and deduplication via VDO, whose node-side wiring this design absorbs
@@ -315,10 +315,16 @@ type Layer interface {
 	// version wrote.
 	Name() string
 
-	// Observe reports what of this layer is present on the host without changing
-	// anything. Ensure, Release, and Destroy all dispatch on what it found rather
-	// than re-deriving the same facts.
-	Observe(ctx context.Context, below Artifact) (State, error)
+	// Observe reports what of this layer is present on the host, and what it
+	// currently exposes, without changing anything. Ensure, Release, and Destroy
+	// all dispatch on what it found rather than re-deriving the same facts.
+	//
+	// The Artifact is the zero value when the state is StateAbsent, and is what
+	// the layer exposes in every other state, including StatePartial: a fabric
+	// device that is present and cannot serve is still the device a release has
+	// to detach. Returning it is what gives the runner a way to walk a stack
+	// without building one, which Down, Heal, and Grow all need (7.2).
+	Observe(ctx context.Context, below Artifact) (State, Artifact, error)
 
 	// Ensure converges the layer and returns what the layer above consumes.
 	Ensure(ctx context.Context, below Artifact) (Artifact, error)
@@ -333,6 +339,19 @@ type Layer interface {
 	Destroy(ctx context.Context, below Artifact) error
 }
 ```
+
+**`Observe` returns the artifact because a read-only walk needs one.** Three of
+the runner's five entry points pass through layers they are not acting on, and
+each of them needs to know what those layers expose in order to hand it to the
+layer above. Deriving that by calling `Ensure` is the obvious shortcut and it is
+wrong: `Ensure` converges, so a teardown taking that route reconnects a fabric
+before detaching it, and on a volume whose paths are already gone, which is
+precisely when an unstage arrives, the reconnect waits for a device that is not
+coming back. The alternative considered was requiring `Ensure` to be
+side-effect-free whenever `Observe` reports `StateReady`. That puts the burden on
+every layer to implement "if ready, do nothing" correctly and makes a teardown
+mutate the moment one of them gets it wrong, where this makes the read-only path
+the only one a read-only walk can take.
 
 **`Release` and `Destroy` are separate because conflating them destroys data.**
 `NodeUnstageVolume` fires whenever no pod on this node needs the volume mounted,
@@ -478,9 +497,24 @@ type NodeRequirements interface {
 }
 ```
 
+```go
+// Recorder is implemented by a layer that was constructed with parameters a
+// later process needs in order to rebuild it. It is how the plan's second half
+// reaches the record (§6.1), and the value is opaque to the runner: the layer
+// that declared it is the only thing that parses it, which is what lets a new
+// layer ship without the record format changing.
+//
+// It returns no error because a layer returning what it was built with cannot
+// fail at it. Encoding can, and that belongs to the runner, which owns the
+// record's format.
+type Recorder interface {
+	Params() any
+}
+```
+
 Optional rather than mandatory is deliberate. Three of the seven layers in §5 have
-nothing to heal and four have nothing to grow, and a mandatory interface would
-fill them with methods that return nil. The runner's assertion is also what keeps
+nothing to heal, four have nothing to grow, and `lvmPV` has nothing to record,
+and a mandatory interface would fill them with methods that return nil. The runner's assertion is also what keeps
 `NodeExpandVolume` honest: a plan whose layers implement no `Grower` at all is a
 plan that needs no node-side expansion, which is the correct answer for a pNFS
 client.
@@ -556,7 +590,12 @@ it without making the ordering of anything else implicit.
 `Ensure` on `StateAbsent` runs `pvcreate` against the device below. `Observe`
 reads the device's on-disk LVM signature to answer which volume group it currently
 belongs to, and reports `StateForeign` when that is a volume group belonging to
-another volume, which is what a byte-level clone produces. `Ensure` on
+another volume, which is what a byte-level clone produces.
+
+How `Observe` establishes `StateAbsent` here is specified by
+[`design-device-content-detection.md`](design-device-content-detection.md) §6. An
+absent LVM signature is not by itself evidence that the device is empty, and a
+`pvcreate` resting on it is the same defect §4.2 names one layer up. `Ensure` on
 `StateForeign` re-identifies the device with `vgimportclone` and `lvrename` before
 anything above it activates.
 
@@ -606,11 +645,16 @@ a VDO volume reports the zero value (§4.3).
 
 ### 5.5 `filesystem`
 
-`Ensure` formats the device below when `blkid` shows it is unformatted, then mounts
-it at the staging path. Formatting and mounting stay one layer because
-`mount-utils`' `SafeFormatAndMount` couples them deliberately and splitting them
-loses its protection against formatting a device that another process is about to
-mount.
+`Ensure` formats the device below when it is unformatted, then mounts it at the
+staging path. What "unformatted" means, and why `blkid` cannot establish it, are
+specified by
+[`design-device-content-detection.md`](design-device-content-detection.md) §4 and
+§6: the reading has to be a positive finding that the device holds nothing, and a
+tool reporting that it recognized nothing is not that. Formatting and mounting
+stay one layer because they are one decision, and a device found to carry a
+filesystem is mounted directly rather than through `mount-utils`'
+`SafeFormatAndMount`, whose own internal probe would otherwise re-decide the
+question on the evidence that design replaces.
 
 Format options come from the volume's parameters and from the `Artifact` below.
 `xfs` receives the feature options unconditionally, because on-disk feature
@@ -720,6 +764,10 @@ type Entry struct {
 	// Params is what the layer was constructed with, opaque to the runner: the
 	// layer that declared them is the only thing that parses them. A new layer
 	// therefore ships without this format changing.
+	//
+	// A layer contributes them through the optional Recorder interface (§4.4),
+	// and one whose identity is fully determined by the volume handle implements
+	// nothing and carries none. `lvmPV` below is that case.
 	Params json.RawMessage `json:"params,omitempty"`
 
 	// Members is the ordered sub-plan of a fan-in layer (§5.2) and is empty for
@@ -787,14 +835,20 @@ record.write(plan)                        // before any side effect
 below := Artifact{}
 for i, layer := range plan {
     record.mark(layer)                    // before this layer's side effect
-    state, err := layer.Observe(ctx, below)
-    if err != nil { unwind(plan[:i], below); return err }
-    above, err := layer.Ensure(ctx, below) // dispatches on state
+    above, err := layer.Ensure(ctx, below) // observes once, dispatches on what it found
     if err != nil { unwind(plan[:i], below); return err }
     below = above
 }
 return below                              // what the RPC acts on
 ```
+
+**`Up` does not observe separately.** `Ensure` has to observe in order to know
+what to converge, and for the `filesystem` layer that observation is a read of
+the device itself, which on a degraded device is the expensive step in the whole
+path. A second observation here would read it twice per stage and take two
+answers to one question. `Down` and `Destroy` do observe, because they act on
+layers they are not converging and have no other way to learn what those expose
+(§4.1).
 
 ### 7.2 `Down`
 
@@ -802,7 +856,7 @@ return below                              // what the RPC acts on
 for i := len(plan) - 1; i >= 0; i-- {
     layer := plan[i]
     if !record.marked(layer) { continue }
-    state, err := layer.Observe(ctx, below(i))
+    state, _, err := layer.Observe(ctx, below(i))
     if err != nil { return err }
     if state != StateAbsent {
         if err := layer.Release(ctx, below(i)); err != nil { return err }
@@ -812,8 +866,11 @@ for i := len(plan) - 1; i >= 0; i-- {
 record.remove()
 ```
 
-`below(i)` re-derives layer *i*'s input by observing the layers beneath it, rather
-than reading a device path out of the record (§6).
+`below(i)` re-derives layer *i*'s input by **observing** the layers beneath it and
+threading the artifacts they report, rather than reading a device path out of the
+record (§6) and rather than calling `Ensure`. It is a read: a walk that tears
+down, heals, or grows must not bring anything up on its way to the layer it is
+acting on.
 
 ### 7.3 A failed bring-up releases and never destroys
 
@@ -1117,9 +1174,15 @@ it outlives the pod.
 | `simplyblock_csi_node_stack_layer_duration_seconds` | `layer`, `verb`  | Histogram of `Observe`, `Ensure`, `Release`, `Destroy`, `Heal`, and `Grow` durations per layer kind |
 | `simplyblock_csi_node_stack_layer_errors_total`     | `layer`, `verb`  | Failed layer operations by kind                                                                     |
 | `simplyblock_csi_node_stack_force_release_total`    | `layer`          | Releases that fell back to a force path, which is the signal that stacks are being stranded         |
-| `simplyblock_csi_node_stack_observed_state_total`   | `layer`, `state` | `Observe` outcomes, so `StateForeign` and `StatePartial` are countable rather than anecdotal        |
+| `simplyblock_csi_node_stack_observed_state_total`   | `layer`, `state` | States a layer reported, so `StateForeign` and `StatePartial` are countable rather than anecdotal   |
 | `simplyblock_csi_node_stacks`                       | `plan`           | Stack records present on this host, by plan shape                                                   |
 | `simplyblock_csi_node_stack_records_orphaned`       | —                | Records whose volume no longer has a pod or a staging path on this node                             |
+
+`simplyblock_csi_node_stack_observed_state_total` is recorded by the layer that
+reached the state rather than by the runner, because the bring-up path has no
+runner-level observation to hang it on (§7.1): a layer observes once, inside
+`Ensure`, and reporting from there is what keeps the counter from costing a
+second read of the device.
 
 `simplyblock_csi_node_stacks` and `simplyblock_csi_node_stack_records_orphaned`
 are what make the host-local record (§6) usable operationally: an orphan count

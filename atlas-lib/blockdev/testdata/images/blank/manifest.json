@@ -1,0 +1,15 @@
+{
+  "name": "blank",
+  "tool": "none",
+  "tool_version": "-",
+  "command": "truncate -s 64M",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-05T08:45:33Z",
+  "captured_on": "Ubuntu 24.04.4 LTS, kernel 6.8.0-124-generic",
+  "blkid": "",
+  "head_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "note": "never written to, the only reading that permits a format"
+}

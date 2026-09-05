@@ -21,6 +21,8 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.ref }}
     steps:
     - name: Check out code
       uses: actions/checkout@v4
@@ -82,3 +84,25 @@ jobs:
         tags: ${{ steps.meta.outputs.tags }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+
+    # Which of the tags just pushed the integration suite should run in. The
+    # branch tag is the one that exists for every push, and metadata-action
+    # renders a ref into it by replacing the slashes a Docker tag cannot hold,
+    # so the same substitution is made here rather than assuming a flat name.
+    - name: Name the image the integration suite runs
+      id: image
+      run: |
+        tag="$(printf %s '${{ github.ref_name }}' | tr '/' '-')"
+        echo "ref=${QUAY_IMAGE_NAME}:${tag}" >> "$GITHUB_OUTPUT"
+
+  # Ordered after the build so the stack is exercised in the image this run
+  # produced. Without the ordering the suite runs against whatever tag it names
+  # itself, and a package added to the driver image stays invisible to it until
+  # somebody remembers to bump that name.
+  integration:
+    name: Integration
+    needs: build
+    uses: ./.github/workflows/integration_test.yaml
+    with:
+      csi_image: ${{ needs.build.outputs.image }}
+    secrets: inherit

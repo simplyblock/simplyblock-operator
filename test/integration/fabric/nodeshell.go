@@ -38,6 +38,24 @@ type Shell struct {
 	cluster Cluster
 	node    string
 	pod     string
+	image   string
+}
+
+// defaultShellImage is the image a Shell runs unless a test overrides it. It
+// installs nothing at test time, so the default toolbox is what BusyBox and
+// the kernel provide.
+const defaultShellImage = "alpine:3.20"
+
+// ShellOption adjusts how a Shell's pod is built.
+type ShellOption func(*Shell)
+
+// WithImage runs the shell pod on a different image. The reason to override is
+// a test whose subject is a userspace tool BusyBox does not carry — the blkid
+// probe suite needs util-linux's blkid, whose exit-code contract is the thing
+// under test, and BusyBox's applet is not that binary. The image must still
+// have a /bin/sh, and it must still install nothing at test time.
+func WithImage(image string) ShellOption {
+	return func(s *Shell) { s.image = image }
 }
 
 // Cluster is the part of *cluster.Cluster this package needs, as an interface so
@@ -80,7 +98,7 @@ spec:
     - operator: Exists
   containers:
     - name: shell
-      image: alpine:3.20
+      image: %[3]s
       command: ["/bin/sh", "-c", "exec sleep infinity"]
       securityContext:
         privileged: true
@@ -102,8 +120,17 @@ spec:
 `
 
 // NewShell starts a privileged pod on node and waits for it to be ready.
-func NewShell(ctx context.Context, c Cluster, node string) (*Shell, error) {
-	s := &Shell{cluster: c, node: node, pod: "sb-shell-" + sanitize(node)}
+func NewShell(ctx context.Context, c Cluster, node string, opts ...ShellOption) (*Shell, error) {
+	s := &Shell{cluster: c, node: node, pod: "sb-shell-" + sanitize(node), image: defaultShellImage}
+	for _, opt := range opts {
+		opt(s)
+	}
+	if s.image != defaultShellImage {
+		// Two shells on one node must not fight over one pod name when they run
+		// different images: the second Apply would try to mutate the immutable
+		// image field of the first one's pod.
+		s.pod = "sb-shell-" + sanitize(s.image) + "-" + sanitize(node)
+	}
 	if err := c.Apply(ctx, s.manifest()); err != nil {
 		return nil, fmt.Errorf("start shell on %s: %w", node, err)
 	}
@@ -114,7 +141,7 @@ func NewShell(ctx context.Context, c Cluster, node string) (*Shell, error) {
 }
 
 func (s *Shell) manifest() string {
-	return fmt.Sprintf(shellPodManifest, s.pod, s.node)
+	return fmt.Sprintf(shellPodManifest, s.pod, s.node, s.image)
 }
 
 // Close removes the pod, leaving the namespace since other shells may share it.
@@ -152,7 +179,14 @@ func (s *Shell) LoadedModules(ctx context.Context) (string, error) {
 // Node is the node this shell runs on.
 func (s *Shell) Node() string { return s.node }
 
-// sanitize turns a node name into something usable as a pod name.
+// Pod is the pod this shell runs as. A caller that has to address the pod
+// directly, rather than through Run, asks for it here: deriving the name from
+// the node a second time is a second copy of the sanitizing rule, and the two
+// stop agreeing the first time the rule changes.
+func (s *Shell) Pod() string { return s.pod }
+
+// sanitize turns a node name — or an image reference — into something usable
+// as a pod name.
 func sanitize(node string) string {
-	return strings.ToLower(strings.NewReplacer(".", "-", "_", "-", ":", "-").Replace(node))
+	return strings.ToLower(strings.NewReplacer(".", "-", "_", "-", ":", "-", "/", "-").Replace(node))
 }
