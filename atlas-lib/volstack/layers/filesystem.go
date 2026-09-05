@@ -82,30 +82,46 @@ func (f *Filesystem) Name() string { return "filesystem" }
 // means the plan is wrong, and content this driver did not write means the
 // device is somebody's: neither is a thing to converge, and formatting through
 // the doubt is what this layer exists to refuse.
-func (f *Filesystem) Observe(ctx context.Context, below volstack.Artifact) (volstack.State, error) {
+func (f *Filesystem) Observe(ctx context.Context, below volstack.Artifact) (volstack.State, volstack.Artifact, error) {
+	state, _, own, err := f.observe(ctx, below)
+	return state, own, err
+}
+
+// observe is Observe plus the reading it decided on, which Ensure needs in order
+// to mount a device as the filesystem that is actually on it. Keeping them in
+// one call is what makes a stage read the device once rather than twice, and on
+// a degraded device a probe is the expensive thing in the whole path.
+func (f *Filesystem) observe(
+	ctx context.Context, below volstack.Artifact,
+) (volstack.State, blockdev.Reading, volstack.Artifact, error) {
 	mounted, err := f.cfg.Ops.IsMountPoint(ctx, f.cfg.StagingPath)
 	if err != nil {
-		return volstack.StateAbsent, fmt.Errorf("filesystem: check %s: %w", f.cfg.StagingPath, err)
+		return volstack.StateAbsent, blockdev.Reading{}, volstack.Artifact{},
+			fmt.Errorf("filesystem: check %s: %w", f.cfg.StagingPath, err)
 	}
+	mountedArtifact := volstack.Artifact{Devices: below.Devices, Path: f.cfg.StagingPath}
 	if mounted {
-		return volstack.StateReady, nil
+		return volstack.StateReady, blockdev.Reading{}, mountedArtifact, nil
 	}
 
 	reading, err := f.read(ctx, below)
 	if err != nil {
-		return volstack.StateAbsent, err
+		return volstack.StateAbsent, blockdev.Reading{}, volstack.Artifact{}, err
 	}
 	switch reading.Content {
 	case blockdev.ContentBlank:
-		return volstack.StateAbsent, nil
+		// Nothing of this layer exists yet, so it exposes nothing.
+		return volstack.StateAbsent, reading, volstack.Artifact{}, nil
 	case blockdev.ContentFilesystem:
-		return volstack.StateInactive, nil
+		// The filesystem is there and is not mounted. It exposes no path until
+		// it is, which is what the layer above waits for.
+		return volstack.StateInactive, reading, volstack.Artifact{Devices: below.Devices}, nil
 	case blockdev.ContentStackLayer, blockdev.ContentForeign, blockdev.ContentUnknown:
-		return volstack.StateAbsent, fmt.Errorf(
+		return volstack.StateAbsent, reading, volstack.Artifact{}, fmt.Errorf(
 			"filesystem: refusing to stage %s, which carries %s: %s",
 			deviceOf(below), reading.Content, reading.Detail)
 	default:
-		return volstack.StateAbsent, fmt.Errorf(
+		return volstack.StateAbsent, reading, volstack.Artifact{}, fmt.Errorf(
 			"filesystem: refusing to stage %s on an unrecognized reading", deviceOf(below))
 	}
 }
@@ -119,17 +135,15 @@ func (f *Filesystem) Ensure(ctx context.Context, below volstack.Artifact) (volst
 			"filesystem: the layer below exposes no single device to put a filesystem on")
 	}
 
-	state, err := f.Observe(ctx, below)
+	// One observation, which carries the reading with it: the device is read
+	// once per Ensure rather than once to decide the state and again to learn
+	// what is on it.
+	state, reading, own, err := f.observe(ctx, below)
 	if err != nil {
 		return volstack.Artifact{}, err
 	}
 	if state == volstack.StateReady {
-		return volstack.Artifact{Devices: below.Devices, Path: f.cfg.StagingPath}, nil
-	}
-
-	reading, err := f.read(ctx, below)
-	if err != nil {
-		return volstack.Artifact{}, err
+		return own, nil
 	}
 
 	// The filesystem to mount is the one that is there. It and the one the

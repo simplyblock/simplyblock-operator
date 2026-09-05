@@ -49,7 +49,7 @@ func (r *Runner) Up(ctx context.Context, handle string, plan Plan) (Artifact, er
 			return Artifact{}, err
 		}
 
-		if _, err := layer.Observe(ctx, below); err != nil {
+		if _, _, err := layer.Observe(ctx, below); err != nil {
 			r.unwind(ctx, plan[:i])
 			return Artifact{}, fmt.Errorf("volstack: observe %s: %w", layer.Name(), err)
 		}
@@ -95,7 +95,7 @@ func (r *Runner) Down(ctx context.Context, handle string, plan Plan) error {
 		if err != nil {
 			return err
 		}
-		state, err := plan[i].Observe(ctx, below)
+		state, _, err := plan[i].Observe(ctx, below)
 		if err != nil {
 			return fmt.Errorf("volstack: observe %s: %w", plan[i].Name(), err)
 		}
@@ -116,9 +116,11 @@ func (r *Runner) Down(ctx context.Context, handle string, plan Plan) error {
 func (r *Runner) Heal(ctx context.Context, handle string, plan Plan) error {
 	below := Artifact{}
 	for _, layer := range plan {
-		own, err := layer.Ensure(ctx, below)
+		// A read, not a bring-up: a heal repairs what is broken and must not
+		// build the layers it passes through on the way there.
+		_, own, err := layer.Observe(ctx, below)
 		if err != nil {
-			return fmt.Errorf("volstack: resolve %s while healing: %w", layer.Name(), err)
+			return fmt.Errorf("volstack: observe %s while healing: %w", layer.Name(), err)
 		}
 
 		healer, ok := layer.(Healer)
@@ -148,9 +150,10 @@ func (r *Runner) Grow(ctx context.Context, plan Plan) error {
 	for _, layer := range plan {
 		grower, ok := layer.(Grower)
 		if !ok {
-			above, err := layer.Ensure(ctx, below)
+			// Passed through, so read what it exposes rather than converging it.
+			_, above, err := layer.Observe(ctx, below)
 			if err != nil {
-				return fmt.Errorf("volstack: resolve %s while growing: %w", layer.Name(), err)
+				return fmt.Errorf("volstack: observe %s while growing: %w", layer.Name(), err)
 			}
 			below = above
 			continue
@@ -179,13 +182,19 @@ func (r *Runner) Destroy(ctx context.Context, handle string, plan Plan) error {
 	return r.store.Remove(handle)
 }
 
-// below re-derives layer i's input by resolving the layers beneath it, rather
+// below re-derives layer i's input by observing the layers beneath it, rather
 // than reading a device path out of the record. A path is not stable across a
 // reconnect, which is why the record holds parameters and never paths.
+//
+// It observes rather than ensures, and that is the whole point: this runs on the
+// teardown, heal, and grow paths, none of which may bring a layer up on the way
+// to the layer they are acting on. A teardown that ensured would reconnect a
+// fabric before detaching it, and would block doing so on the volume whose paths
+// are already gone.
 func (r *Runner) below(ctx context.Context, plan Plan, i int) (Artifact, error) {
 	below := Artifact{}
 	for j := range i {
-		above, err := plan[j].Ensure(ctx, below)
+		_, above, err := plan[j].Observe(ctx, below)
 		if err != nil {
 			return Artifact{}, fmt.Errorf("volstack: re-derive the input of %s from %s: %w",
 				plan[i].Name(), plan[j].Name(), err)

@@ -67,23 +67,26 @@ func (f *Fabric) selector() nvme.DeviceSelector {
 // StateForeign and StateInactive do not arise here: a namespace carries no
 // host-local identity to be another volume's, and it cannot be
 // present-but-deactivated the way a volume group can.
-func (f *Fabric) Observe(ctx context.Context, _ volstack.Artifact) (volstack.State, error) {
+func (f *Fabric) Observe(ctx context.Context, _ volstack.Artifact) (volstack.State, volstack.Artifact, error) {
 	dev, found, err := f.device(ctx)
 	if err != nil {
-		return volstack.StateAbsent, err
+		return volstack.StateAbsent, volstack.Artifact{}, err
 	}
-	switch {
-	case !found:
-		return volstack.StateAbsent, nil
-	case !dev.Accessible():
+	if !found {
+		return volstack.StateAbsent, volstack.Artifact{}, nil
+	}
+
+	// The device travels with every state but Absent, StatePartial included: one
+	// that is present and cannot serve is still the device a release detaches.
+	own := volstack.Artifact{Devices: []blockdev.Device{dev.Namespace.BlockDevice()}}
+	if !dev.Accessible() {
 		// Present in sysfs and unable to take I/O: a subsystem awaiting
 		// reaping, or a volume whose paths have all gone into persistent loss.
 		// A layer above one of these would format or mount a device that
 		// answers nothing.
-		return volstack.StatePartial, nil
-	default:
-		return volstack.StateReady, nil
+		return volstack.StatePartial, own, nil
 	}
+	return volstack.StateReady, own, nil
 }
 
 // Ensure attaches every published endpoint in the control plane's order and

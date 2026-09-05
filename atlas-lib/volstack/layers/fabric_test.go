@@ -133,7 +133,7 @@ func newFabric(t *testing.T, conn *fakeConnector, devs *fakeDevices) *Fabric {
 func TestFabricObserveReady(t *testing.T) {
 	f := newFabric(t, &fakeConnector{}, &fakeDevices{devices: []nvme.Device{device("nvme0n1", true)}})
 
-	state, err := f.Observe(context.Background(), volstack.Artifact{})
+	state, _, err := f.Observe(context.Background(), volstack.Artifact{})
 	if err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestFabricObserveReady(t *testing.T) {
 func TestFabricObserveAbsent(t *testing.T) {
 	f := newFabric(t, &fakeConnector{}, &fakeDevices{})
 
-	state, err := f.Observe(context.Background(), volstack.Artifact{})
+	state, _, err := f.Observe(context.Background(), volstack.Artifact{})
 	if err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestFabricObserveAbsent(t *testing.T) {
 func TestFabricObservePresentButNotServingIsPartial(t *testing.T) {
 	f := newFabric(t, &fakeConnector{}, &fakeDevices{devices: []nvme.Device{device("nvme0n1", false)}})
 
-	state, err := f.Observe(context.Background(), volstack.Artifact{})
+	state, _, err := f.Observe(context.Background(), volstack.Artifact{})
 	if err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
