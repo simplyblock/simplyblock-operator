@@ -81,9 +81,16 @@ jobs:
       # Run separately from the suites, and first: these need no cluster, and a
       # failure in them is a failure of the harness rather than of what it
       # exercises.
+      #
+      # onnode is left out for a different reason than suites. It is not run here
+      # at all: it is compiled for a node, carried there by the suite, and run on
+      # the node. Running it on the runner skips every case for want of a fabric,
+      # and prints the same test names as skipped that the suite prints as passed
+      # a few minutes later, which reads as a suite that never runs. `go vet`
+      # above still compiles it.
       - name: Unit tests
         working-directory: test/integration
-        run: go test -v -count=1 -timeout 5m $(go list ./... | grep -v '/suites$')
+        run: go test -v -count=1 -timeout 5m $(go list ./... | grep -vE '/(suites|onnode)$')
 
       - name: Integration suites
         working-directory: test/integration
