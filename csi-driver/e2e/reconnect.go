@@ -18,8 +18,8 @@ import (
 	"github.com/spdk/spdk-csi/pkg/kubernetes/volumehandle"
 )
 
-// nvme list-subsys -o json output (subset of fields we need). The command
-// returns a top-level array, one entry per host.
+// The subsystem listing the suite parses, reduced to the fields it needs. The
+// listing is a top-level array, one entry per host.
 type nvmeSubsysHost struct {
 	Subsystems []nvmeSubsystem `json:"Subsystems"`
 }
@@ -31,8 +31,13 @@ type nvmeSubsystem struct {
 }
 
 type nvmePath struct {
-	Name     string `json:"Name"` // controller, e.g. "nvme0"
-	State    string `json:"State"`
+	Name  string `json:"Name"` // controller, e.g., "nvme0"
+	State string `json:"State"`
+	// Address is the transport endpoint as nvme-cli prints it, a comma-separated
+	// list of key=value pairs, such as traddr=192.168.10.112,trsvcid=4426.
+	// It is what a test needs to reach the endpoint behind a path, rather than
+	// just name the controller in front of it.
+	Address  string `json:"Address"`
 	ANAState string `json:"ANAState"`
 }
 
