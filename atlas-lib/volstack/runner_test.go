@@ -525,3 +525,53 @@ func TestALayerWithNoParamsRecordsNone(t *testing.T) {
 		t.Errorf("params = %s, want none for a layer that declares none", rec.Plan[0].Params)
 	}
 }
+
+// compositeLayer is a fan-in layer for the record test: it reports a sub-plan
+// the runner has to write down in order.
+type compositeLayer struct {
+	*fakeLayer
+	members Plan
+}
+
+func (c compositeLayer) Members() Plan { return c.members }
+
+// A fan-in layer's sub-plan is recorded, in order and as a field of its own.
+// The order cannot be recovered from a set, and a failover that reassembles the
+// members differently assembles a different device.
+func TestCompositeSubPlanIsRecordedInOrder(t *testing.T) {
+	store := NewStore(t.TempDir())
+	var log []string
+
+	members := Plan{
+		&fakeLayer{name: "fabric", log: &log, exposes: "nvme0n1"},
+		&fakeLayer{name: "fabric", log: &log, exposes: "nvme1n1"},
+	}
+	plan := Plan{
+		compositeLayer{fakeLayer: &fakeLayer{name: "members", log: &log, exposes: "nvme0n1"}, members: members},
+		&fakeLayer{name: "filesystem", log: &log},
+	}
+
+	if _, err := NewRunner(store).Up(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	rec, err := store.Load(testHandle)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(rec.Plan) != 2 || rec.Plan[0].Layer != "members" {
+		t.Fatalf("recorded plan is %+v", rec.Plan)
+	}
+	if len(rec.Plan[0].Members) != 2 {
+		t.Fatalf("the composite recorded %d members, want 2: the sub-plan is what a teardown replays",
+			len(rec.Plan[0].Members))
+	}
+	for _, m := range rec.Plan[0].Members {
+		if m.Layer != "fabric" {
+			t.Errorf("member recorded as %q", m.Layer)
+		}
+	}
+	if len(rec.Plan[1].Members) != 0 {
+		t.Errorf("a layer that is not a composite recorded members: %+v", rec.Plan[1].Members)
+	}
+}
