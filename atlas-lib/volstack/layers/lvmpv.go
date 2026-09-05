@@ -73,41 +73,87 @@ func (l *LVMPhysicalVolume) Name() string { return "lvmPV" }
 func (l *LVMPhysicalVolume) Observe(
 	ctx context.Context, below volstack.Artifact,
 ) (volstack.State, volstack.Artifact, error) {
-	state, _, own, err := l.observe(ctx, below)
-	return state, own, err
-}
-
-// observe is Observe plus the device it decided on, which Ensure needs in order
-// to act without reading the device a second time. On a degraded device the read
-// is the expensive thing in the whole path.
-func (l *LVMPhysicalVolume) observe(
-	ctx context.Context, below volstack.Artifact,
-) (volstack.State, lvm.PhysicalVolume, volstack.Artifact, error) {
-	dev, ok := below.Device()
-	if !ok {
-		return volstack.StateAbsent, lvm.PhysicalVolume{}, volstack.Artifact{}, errors.New(
-			"lvmPV: the layer below exposes no single device to label")
-	}
-	pv := lvm.PhysicalVolume{DevicePath: dev.Path}
-
-	reading, err := l.cfg.Content.Read(ctx, dev)
+	surveyed, err := l.survey(ctx, below)
 	if err != nil {
-		return volstack.StateAbsent, pv, volstack.Artifact{}, fmt.Errorf(
-			"lvmPV: cannot read what %s carries, so it is not a device this may label: %w", dev.Path, err)
+		return volstack.StateAbsent, volstack.Artifact{}, err
+	}
+
+	absent, ready, foreign := 0, 0, 0
+	for _, d := range surveyed {
+		switch d.state {
+		case volstack.StateAbsent:
+			absent++
+		case volstack.StateReady:
+			ready++
+		case volstack.StateForeign:
+			foreign++
+		case volstack.StatePartial, volstack.StateInactive:
+			// A label is written or it is not, so survey reports neither.
+		}
 	}
 
 	switch {
-	case reading.Content == blockdev.ContentBlank:
+	case foreign > 0:
+		// One member carrying another volume's identity makes the set that
+		// volume's until it is re-stamped, whatever the others say.
+		return volstack.StateForeign, volstack.Artifact{Devices: below.Devices}, nil
+	case absent == len(surveyed):
 		// Nothing of this layer exists yet, so it exposes nothing.
-		return volstack.StateAbsent, pv, volstack.Artifact{}, nil
-
-	case reading.Content == blockdev.ContentStackLayer && reading.Type == lvmMemberType:
-		return l.identify(ctx, pv, below)
-
+		return volstack.StateAbsent, volstack.Artifact{}, nil
+	case ready == len(surveyed):
+		return volstack.StateReady, volstack.Artifact{Devices: below.Devices}, nil
 	default:
-		return volstack.StateAbsent, pv, volstack.Artifact{}, fmt.Errorf(
-			"lvmPV: refusing to label %s, which carries %s: %s", dev.Path, reading.Content, reading.Detail)
+		// Some labeled and some not, which is what an interrupted bring-up over
+		// several members leaves. Ensure labels the rest rather than starting over.
+		return volstack.StatePartial, volstack.Artifact{Devices: below.Devices}, nil
 	}
+}
+
+// labeling is one device below and what may be done to it.
+type labeling struct {
+	pv    lvm.PhysicalVolume
+	state volstack.State
+}
+
+// survey reads every device below and decides each one's state, which is what
+// Ensure acts on without reading any of them a second time. On a degraded device
+// the read is the expensive thing in the whole path.
+//
+// Every device, because a striped volume's plan puts this layer over a fan-in
+// and the volume group above is created across all of them. Asking for a single
+// device instead is what failed such a plan before it labeled anything.
+func (l *LVMPhysicalVolume) survey(ctx context.Context, below volstack.Artifact) ([]labeling, error) {
+	if len(below.Devices) == 0 {
+		return nil, errors.New("lvmPV: the layer below exposes no device to label")
+	}
+
+	surveyed := make([]labeling, 0, len(below.Devices))
+	for _, dev := range below.Devices {
+		pv := lvm.PhysicalVolume{DevicePath: dev.Path}
+
+		reading, err := l.cfg.Content.Read(ctx, dev)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"lvmPV: cannot read what %s carries, so it is not a device this may label: %w", dev.Path, err)
+		}
+
+		switch {
+		case reading.Content == blockdev.ContentBlank:
+			surveyed = append(surveyed, labeling{pv: pv, state: volstack.StateAbsent})
+
+		case reading.Content == blockdev.ContentStackLayer && reading.Type == lvmMemberType:
+			state, err := l.identify(ctx, pv)
+			if err != nil {
+				return nil, err
+			}
+			surveyed = append(surveyed, labeling{pv: pv, state: state})
+
+		default:
+			return nil, fmt.Errorf(
+				"lvmPV: refusing to label %s, which carries %s: %s", dev.Path, reading.Content, reading.Detail)
+		}
+	}
+	return surveyed, nil
 }
 
 // identify asks a labeled device whose label it is.
@@ -115,18 +161,12 @@ func (l *LVMPhysicalVolume) observe(
 // The label is on the device, so the question left is one only LVM can answer,
 // and a probe that fails is an error rather than an identity: LVM reports a
 // device it could not lock the same way it reports one belonging to nobody.
-func (l *LVMPhysicalVolume) identify(
-	ctx context.Context, pv lvm.PhysicalVolume, below volstack.Artifact,
-) (volstack.State, lvm.PhysicalVolume, volstack.Artifact, error) {
+func (l *LVMPhysicalVolume) identify(ctx context.Context, pv lvm.PhysicalVolume) (volstack.State, error) {
 	group, err := l.cfg.Manager.VolumeGroup(ctx, pv)
 	if err != nil {
-		return volstack.StateAbsent, pv, volstack.Artifact{}, fmt.Errorf(
+		return volstack.StateAbsent, fmt.Errorf(
 			"lvmPV: %s carries a label and its volume group cannot be read: %w", pv.DevicePath, err)
 	}
-
-	// The artifact is the device the label sits on, in every state but absent. A
-	// foreign label is still something a teardown has to reach.
-	own := volstack.Artifact{Devices: below.Devices}
 
 	switch group.Name {
 	case "", l.cfg.VolumeGroup:
@@ -135,42 +175,48 @@ func (l *LVMPhysicalVolume) identify(
 		// belongs to the layer above. It is what an Ensure that succeeded and then
 		// crashed leaves behind, so reading it as anything else makes the bring-up
 		// non-convergent.
-		return volstack.StateReady, pv, own, nil
+		return volstack.StateReady, nil
 	default:
-		return volstack.StateForeign, pv, own, nil
+		return volstack.StateForeign, nil
 	}
 }
 
 // Ensure labels a blank device and re-identifies a clone, and does nothing at all
 // to a device already carrying this volume's label.
+// Each device is acted on for what it is rather than for what the set is, so a
+// bring-up resuming over a half-labeled set labels the rest and leaves the
+// already-labeled alone.
 func (l *LVMPhysicalVolume) Ensure(ctx context.Context, below volstack.Artifact) (volstack.Artifact, error) {
-	state, pv, own, err := l.observe(ctx, below)
+	surveyed, err := l.survey(ctx, below)
 	if err != nil {
 		return volstack.Artifact{}, err
 	}
 
-	switch state {
-	case volstack.StateReady:
-		return own, nil
+	for _, d := range surveyed {
+		switch d.state {
+		case volstack.StateReady:
+			continue
 
-	case volstack.StateAbsent:
-		if _, err := l.cfg.Manager.CreatePhysicalVolume(ctx, pv); err != nil {
-			return volstack.Artifact{}, fmt.Errorf("lvmPV: %w", err)
+		case volstack.StateAbsent:
+			if _, err := l.cfg.Manager.CreatePhysicalVolume(ctx, d.pv); err != nil {
+				return volstack.Artifact{}, fmt.Errorf("lvmPV: %w", err)
+			}
+
+		case volstack.StateForeign:
+			// The data is the clone's own, and the only thing wrong with it is
+			// whose name is on it, so this re-stamps the identity and touches
+			// nothing else.
+			if _, err := l.cfg.Manager.ResolveClonedVolumeGroup(ctx, d.pv,
+				lvm.VolumeGroup{Name: l.cfg.VolumeGroup}, l.cfg.LogicalVolume,
+				l.cfg.PreserveLogicalVolumes...); err != nil {
+				return volstack.Artifact{}, fmt.Errorf("lvmPV: %w", err)
+			}
+
+		case volstack.StatePartial, volstack.StateInactive:
+			// A label is written or it is not, so survey reports neither.
+			return volstack.Artifact{}, fmt.Errorf(
+				"lvmPV: %s reports %s, which a physical-volume label has no meaning for", d.pv.DevicePath, d.state)
 		}
-
-	case volstack.StateForeign:
-		// The data is the clone's own, and the only thing wrong with it is whose
-		// name is on it, so this re-stamps the identity and touches nothing else.
-		if _, err := l.cfg.Manager.ResolveClonedVolumeGroup(ctx, pv,
-			lvm.VolumeGroup{Name: l.cfg.VolumeGroup}, l.cfg.LogicalVolume,
-			l.cfg.PreserveLogicalVolumes...); err != nil {
-			return volstack.Artifact{}, fmt.Errorf("lvmPV: %w", err)
-		}
-
-	case volstack.StatePartial, volstack.StateInactive:
-		// A label is written or it is not, so neither state is reachable here.
-		return volstack.Artifact{}, fmt.Errorf(
-			"lvmPV: %s reports %s, which a physical-volume label has no meaning for", pv.DevicePath, state)
 	}
 
 	return volstack.Artifact{Devices: below.Devices}, nil
@@ -187,13 +233,16 @@ func (l *LVMPhysicalVolume) Release(context.Context, volstack.Artifact) error { 
 // anything that reads its content. Only a deletion path reaches it, and by then
 // the volume group above the label is gone. If it is not, pvremove refuses, and
 // that refusal is returned rather than overridden.
+// Every device, in the order they were handed over, because a bring-up labels
+// every one of them.
 func (l *LVMPhysicalVolume) Destroy(ctx context.Context, below volstack.Artifact) error {
-	dev, ok := below.Device()
-	if !ok {
-		return errors.New("lvmPV: the layer below exposes no single device to unlabel")
+	if len(below.Devices) == 0 {
+		return errors.New("lvmPV: the layer below exposes no device to unlabel")
 	}
-	if err := l.cfg.Manager.RemovePhysicalVolume(ctx, lvm.PhysicalVolume{DevicePath: dev.Path}); err != nil {
-		return fmt.Errorf("lvmPV: %w", err)
+	for _, dev := range below.Devices {
+		if err := l.cfg.Manager.RemovePhysicalVolume(ctx, lvm.PhysicalVolume{DevicePath: dev.Path}); err != nil {
+			return fmt.Errorf("lvmPV: %w", err)
+		}
 	}
 	return nil
 }

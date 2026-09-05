@@ -17,12 +17,15 @@ package onnode
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/volstack"
 )
@@ -106,6 +109,66 @@ func requireLVM(t *testing.T) {
 
 // runner is the runner under test, recording to this run's own directory.
 func (h *harness) runner() *volstack.Runner { return volstack.NewRunner(volstack.NewStore(h.records)) }
+
+// blank makes these namespaces read as empty volumes again.
+//
+// The cases share the fabric the driver published, and a case that formats one
+// leaves the filesystem behind for the next. That is not a fixture problem to
+// paper over: a plan whose bottom layer is absent is a newly provisioned volume,
+// and the layers are entitled to refuse anything else. So the device is actually
+// emptied rather than the refusal being relaxed.
+//
+// Both ends, because the signatures the reading looks for sit at both: the head
+// carries everything up to a Btrfs superblock, and the tail carries an md
+// metadata-1.0 one.
+func (h *harness) blank(ctx context.Context, targets ...Target) {
+	h.t.Helper()
+	for i, target := range targets {
+		plan := volstack.Plan{h.node.fabric(target)}
+		handle := fmt.Sprintf("%s-blank-%d", h.volume.UUID, i)
+
+		art, err := h.runner().Up(ctx, handle, plan)
+		if err != nil {
+			h.t.Fatalf("attach %s in order to blank it: %v", target.NQN, err)
+		}
+		for _, dev := range art.Devices {
+			zero(h.t, dev)
+		}
+		if err := h.runner().Down(ctx, handle, plan); err != nil {
+			h.t.Fatalf("detach %s after blanking it: %v", target.NQN, err)
+		}
+	}
+}
+
+// zeroWindow is written at each end of a device. Comfortably past the furthest
+// signature the reading looks for, and small enough that emptying a namespace is
+// not what a case spends its time on.
+const zeroWindow = 4 << 20
+
+func zero(t *testing.T, dev blockdev.Device) {
+	t.Helper()
+	f, err := os.OpenFile(dev.Path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open %s to blank it: %v", dev.Path, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	empty := make([]byte, zeroWindow)
+	if _, err := f.WriteAt(empty, 0); err != nil {
+		t.Fatalf("blank the head of %s: %v", dev.Path, err)
+	}
+	if dev.SizeBytes > zeroWindow && dev.SizeBytes <= math.MaxInt64 {
+		tail := int64(dev.SizeBytes) - zeroWindow
+		if _, err := f.WriteAt(empty, tail); err != nil {
+			t.Fatalf("blank the tail of %s: %v", dev.Path, err)
+		}
+	}
+	// The reading opens with O_DIRECT and drops the cache first, so what is still
+	// in the page cache is not what it would see.
+	if err := f.Sync(); err != nil {
+		t.Fatalf("flush the blanking of %s: %v", dev.Path, err)
+	}
+}
 
 // handle names this volume's stack in the record.
 func (h *harness) handle() string { return h.volume.UUID }
@@ -226,6 +289,10 @@ func TestLVMStackReactivatesRatherThanRecreating(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), stackTimeout)
 	defer cancel()
 
+	// An LVM plan starts from a volume nothing has been put on yet, and the
+	// filesystem cases above ran over this same namespace.
+	h.blank(ctx, h.targets[0])
+
 	plan := h.node.LVM(h.targets[0], h.volume, lvm.LogicalVolumeDefinition{}, "")
 	art := h.up(ctx, plan)
 
@@ -260,6 +327,8 @@ func TestStripedStackAssemblesItsMembers(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), stackTimeout)
 	defer cancel()
+
+	h.blank(ctx, h.targets...)
 
 	definition := lvm.LogicalVolumeDefinition{}
 	plan := h.node.Striped(h.targets, h.volume, definition)
