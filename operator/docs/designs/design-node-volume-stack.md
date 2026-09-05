@@ -816,14 +816,20 @@ record.write(plan)                        // before any side effect
 below := Artifact{}
 for i, layer := range plan {
     record.mark(layer)                    // before this layer's side effect
-    state, _, err := layer.Observe(ctx, below)
-    if err != nil { unwind(plan[:i], below); return err }
-    above, err := layer.Ensure(ctx, below) // dispatches on state
+    above, err := layer.Ensure(ctx, below) // observes once, dispatches on what it found
     if err != nil { unwind(plan[:i], below); return err }
     below = above
 }
 return below                              // what the RPC acts on
 ```
+
+**`Up` does not observe separately.** `Ensure` has to observe in order to know
+what to converge, and for the `filesystem` layer that observation is a read of
+the device itself, which on a degraded device is the expensive step in the whole
+path. A second observation here would read it twice per stage and take two
+answers to one question. `Down` and `Destroy` do observe, because they act on
+layers they are not converging and have no other way to learn what those expose
+(§4.1).
 
 ### 7.2 `Down`
 
@@ -1149,9 +1155,15 @@ it outlives the pod.
 | `simplyblock_csi_node_stack_layer_duration_seconds` | `layer`, `verb`  | Histogram of `Observe`, `Ensure`, `Release`, `Destroy`, `Heal`, and `Grow` durations per layer kind |
 | `simplyblock_csi_node_stack_layer_errors_total`     | `layer`, `verb`  | Failed layer operations by kind                                                                     |
 | `simplyblock_csi_node_stack_force_release_total`    | `layer`          | Releases that fell back to a force path, which is the signal that stacks are being stranded         |
-| `simplyblock_csi_node_stack_observed_state_total`   | `layer`, `state` | `Observe` outcomes, so `StateForeign` and `StatePartial` are countable rather than anecdotal        |
+| `simplyblock_csi_node_stack_observed_state_total`   | `layer`, `state` | States a layer reported, so `StateForeign` and `StatePartial` are countable rather than anecdotal   |
 | `simplyblock_csi_node_stacks`                       | `plan`           | Stack records present on this host, by plan shape                                                   |
 | `simplyblock_csi_node_stack_records_orphaned`       | —                | Records whose volume no longer has a pod or a staging path on this node                             |
+
+`simplyblock_csi_node_stack_observed_state_total` is recorded by the layer that
+reached the state rather than by the runner, because the bring-up path has no
+runner-level observation to hang it on (§7.1): a layer observes once, inside
+`Ensure`, and reporting from there is what keeps the counter from costing a
+second read of the device.
 
 `simplyblock_csi_node_stacks` and `simplyblock_csi_node_stack_records_orphaned`
 are what make the host-local record (§6) usable operationally: an orphan count
