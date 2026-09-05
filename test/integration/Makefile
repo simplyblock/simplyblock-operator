@@ -60,11 +60,13 @@ preflight: ## Check the tools and privileges a run needs.
 	  Darwin/arm64) \
 	    echo "warning: on macOS 26.6.2 this fails at the dhcpd step, with:"; \
 	    echo "  cannot bind to port 67: address already in use."; \
-	    echo "  The machines are created before that step, and macOS now answers DHCP for"; \
-	    echo "  the cluster subnet itself once one attaches to vmnet, so talosctl's own"; \
-	    echo "  dhcpd finds the port taken. /var/db/dhcpd_leases shows the leases."; \
-	    echo "  The same command, talosctl, and QEMU passed this suite on macOS 26.5,"; \
-	    echo "  which is the only thing that changed. No talosctl flag relocates dhcpd."; \
+	    echo "  launchd itself holds 0.0.0.0:67 for the socket-activated com.apple.bootpd,"; \
+	    echo "  which is why the port is taken while no bootpd process exists. talosctl"; \
+	    echo "  does try to stop it, with launchctl unload -w, and that verb is a silent"; \
+	    echo "  no-op on this release: InternetSharing re-enables the job within about"; \
+	    echo "  50ms of every vmnet network creation, and the unload changes nothing."; \
+	    echo "  A different --cidr cannot help, since the server binds the wildcard."; \
+	    echo "  The suite passed here on macOS 26.5 with this talosctl and this QEMU."; \
 	    echo "  Linux with /dev/kvm is the path that works, and is what CI uses."; \
 	    ;; \
 	  Darwin/*) echo "Talos' QEMU provisioner supports only arm on macOS"; fail=1 ;; \
