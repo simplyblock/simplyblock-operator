@@ -497,9 +497,24 @@ type NodeRequirements interface {
 }
 ```
 
+```go
+// Recorder is implemented by a layer that was constructed with parameters a
+// later process needs in order to rebuild it. It is how the plan's second half
+// reaches the record (§6.1), and the value is opaque to the runner: the layer
+// that declared it is the only thing that parses it, which is what lets a new
+// layer ship without the record format changing.
+//
+// It returns no error because a layer returning what it was built with cannot
+// fail at it. Encoding can, and that belongs to the runner, which owns the
+// record's format.
+type Recorder interface {
+	Params() any
+}
+```
+
 Optional rather than mandatory is deliberate. Three of the seven layers in §5 have
-nothing to heal and four have nothing to grow, and a mandatory interface would
-fill them with methods that return nil. The runner's assertion is also what keeps
+nothing to heal, four have nothing to grow, and `lvmPV` has nothing to record,
+and a mandatory interface would fill them with methods that return nil. The runner's assertion is also what keeps
 `NodeExpandVolume` honest: a plan whose layers implement no `Grower` at all is a
 plan that needs no node-side expansion, which is the correct answer for a pNFS
 client.
@@ -749,6 +764,10 @@ type Entry struct {
 	// Params is what the layer was constructed with, opaque to the runner: the
 	// layer that declared them is the only thing that parses them. A new layer
 	// therefore ships without this format changing.
+	//
+	// A layer contributes them through the optional Recorder interface (§4.4),
+	// and one whose identity is fully determined by the volume handle implements
+	// nothing and carries none. `lvmPV` below is that case.
 	Params json.RawMessage `json:"params,omitempty"`
 
 	// Members is the ordered sub-plan of a fan-in layer (§5.2) and is empty for

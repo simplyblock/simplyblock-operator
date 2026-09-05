@@ -196,9 +196,14 @@ type NodeRequirements interface {
 // lets a new layer ship without the record format changing.
 //
 // A layer whose identity is fully determined by the volume handle implements
-// nothing here, and its entry carries no parameters.
+// nothing here, and its entry carries no parameters: the physical-volume layer
+// is the worked example, since a pvcreate needs only the device below it.
+//
+// It returns no error because a layer returning what it was built with cannot
+// fail at it. Encoding can, and that belongs to the runner, which is the thing
+// that owns the record's format.
 type Recorder interface {
-	Params() (any, error)
+	Params() any
 }
 
 // Plan is a volume's stack, bottom layer first. Up walks it forward and Down

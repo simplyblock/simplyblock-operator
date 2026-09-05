@@ -243,11 +243,7 @@ func recordFor(handle string, plan Plan) (Record, error) {
 	for _, layer := range plan {
 		entry := Entry{Layer: layer.Name()}
 		if recorder, ok := layer.(Recorder); ok {
-			params, err := recorder.Params()
-			if err != nil {
-				return Record{}, fmt.Errorf("volstack: record the parameters of %s: %w", layer.Name(), err)
-			}
-			if params != nil {
+			if params := recorder.Params(); params != nil {
 				raw, err := json.Marshal(params)
 				if err != nil {
 					return Record{}, fmt.Errorf("volstack: encode the parameters of %s: %w", layer.Name(), err)
