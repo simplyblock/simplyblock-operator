@@ -1,12 +1,13 @@
 name: "Integration: Tests"
 
+# Reached through the driver build rather than on its own for a change, because
+# the suite has to be told which image to run the stack in and only the build
+# knows. Triggered here as well, it ran a second time against whatever image the
+# suite names in its own source, reported the LVM tooling missing from it, and
+# skipped the plans that had just been exercised in the run next to it.
 on:
   push:
     branches: [main]
-    paths:
-      - "test/integration/**"
-      - ".github/workflows/integration_test.yaml"
-  pull_request:
     paths:
       - "test/integration/**"
       - ".github/workflows/integration_test.yaml"
