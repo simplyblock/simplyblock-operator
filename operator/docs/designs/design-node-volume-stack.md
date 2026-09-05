@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-25  
+**Date:** 2026-08-25 (last updated 2026-09-04)  
 **Related Issues:**
 
 - [#277](https://github.com/simplyblock/simplyblock-operator/issues/277) — client-side compression and deduplication via VDO, whose node-side wiring this design absorbs
@@ -556,7 +556,12 @@ it without making the ordering of anything else implicit.
 `Ensure` on `StateAbsent` runs `pvcreate` against the device below. `Observe`
 reads the device's on-disk LVM signature to answer which volume group it currently
 belongs to, and reports `StateForeign` when that is a volume group belonging to
-another volume, which is what a byte-level clone produces. `Ensure` on
+another volume, which is what a byte-level clone produces.
+
+How `Observe` establishes `StateAbsent` here is specified by
+[`design-device-content-detection.md`](design-device-content-detection.md) §6. An
+absent LVM signature is not by itself evidence that the device is empty, and a
+`pvcreate` resting on it is the same defect §4.2 names one layer up. `Ensure` on
 `StateForeign` re-identifies the device with `vgimportclone` and `lvrename` before
 anything above it activates.
 
@@ -606,11 +611,16 @@ a VDO volume reports the zero value (§4.3).
 
 ### 5.5 `filesystem`
 
-`Ensure` formats the device below when `blkid` shows it is unformatted, then mounts
-it at the staging path. Formatting and mounting stay one layer because
-`mount-utils`' `SafeFormatAndMount` couples them deliberately and splitting them
-loses its protection against formatting a device that another process is about to
-mount.
+`Ensure` formats the device below when it is unformatted, then mounts it at the
+staging path. What "unformatted" means, and why `blkid` cannot establish it, are
+specified by
+[`design-device-content-detection.md`](design-device-content-detection.md) §4 and
+§6: the reading has to be a positive finding that the device holds nothing, and a
+tool reporting that it recognized nothing is not that. Formatting and mounting
+stay one layer because they are one decision, and a device found to carry a
+filesystem is mounted directly rather than through `mount-utils`'
+`SafeFormatAndMount`, whose own internal probe would otherwise re-decide the
+question on the evidence that design replaces.
 
 Format options come from the volume's parameters and from the `Artifact` below.
 `xfs` receives the feature options unconditionally, because on-disk feature
