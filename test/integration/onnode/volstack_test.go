@@ -105,6 +105,36 @@ func requireLVM(t *testing.T) {
 	if os.Getenv("SB_NO_LVM") != "" {
 		t.Skip("the node's image carries no LVM tooling, so the layers that shell out to it cannot run")
 	}
+	hideTheTargetBacking(t)
+}
+
+// hideTheTargetBacking keeps LVM from reading this volume twice.
+//
+// One node serves the fabric and consumes it, which no node does in production:
+// the namespace is backed by a loop device on the same host that connects to it.
+// A physical-volume label written over the fabric therefore lands in bytes LVM
+// can also reach directly, it finds one PV identity on two devices, and it
+// refuses the volume group outright, saying it cannot update one with duplicate
+// PV devices.
+//
+// Narrowing what LVM looks at is the fix rather than scoping the commands,
+// because the commands are right: a compute node cannot see a storage node's
+// backing store, and the duplicate exists only because this test collapses the
+// two onto one machine.
+func hideTheTargetBacking(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	const conf = `devices {
+	filter = [ "r|^/dev/loop|", "a|.*|" ]
+	global_filter = [ "r|^/dev/loop|", "a|.*|" ]
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "lvm.conf"), []byte(conf), 0o600); err != nil {
+		t.Fatalf("write the LVM configuration this case runs under: %v", err)
+	}
+	// Inherited by every LVM command the layers run, since they exec children of
+	// this process. Restored when the case ends.
+	t.Setenv("LVM_SYSTEM_DIR", dir)
 }
 
 // runner is the runner under test, recording to this run's own directory.
