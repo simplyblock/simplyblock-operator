@@ -3,6 +3,7 @@ package lvm
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // ExpandPhysicalVolume grows pv to its device's current full size (pvresize),
@@ -52,9 +53,28 @@ func (m *Manager) ExpandLogicalVolume(ctx context.Context, logicalVolume Logical
 	path := logicalVolume.VolumeGroup.Name + "/" + logicalVolume.Name
 	_, err := m.exec(ctx, nil, "lvextend", "-l+100%FREE", path)
 	if err != nil {
+		if isAlreadyAtSize(err) {
+			return nil
+		}
 		return fmt.Errorf("grow LV %s to consume free space: %w", path, err)
 	}
 	return nil
+}
+
+// isAlreadyAtSize reports whether err is lvextend saying there was nothing to
+// grow. It phrases that as a new size not larger than the existing one, with a
+// leading New size for a relative target and New size given for an absolute one.
+//
+// It is a success, not a failure. kubelet reissues NodeExpandVolume after one
+// that already succeeded, so a caller taking lvextend at its word fails an
+// expansion that had happened, which is the alarming error a redundant expand
+// logs today.
+//
+// Matched on the phrase both variants share, and on that phrase alone: a volume
+// group with no room left is a real failure, phrased differently, and a caller
+// that swallowed it would report an expansion it never performed.
+func isAlreadyAtSize(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "not larger than existing size")
 }
 
 // ExtendLogicalVolumeToSize grows logicalVolume to an absolute size in bytes
@@ -63,6 +83,9 @@ func (m *Manager) ExtendLogicalVolumeToSize(ctx context.Context, logicalVolume L
 	path := logicalVolume.VolumeGroup.Name + "/" + logicalVolume.Name
 	_, err := m.exec(ctx, nil, "lvextend", fmt.Sprintf("-L%dB", sizeBytes), path)
 	if err != nil {
+		if isAlreadyAtSize(err) {
+			return nil
+		}
 		return fmt.Errorf("grow LV %s to %d bytes: %w", path, sizeBytes, err)
 	}
 	return nil
