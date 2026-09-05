@@ -20,9 +20,10 @@ import (
 
 // fakeFS records what the layer did to the device and to the mount point.
 type fakeFS struct {
-	formatted []formatCall
-	mounted   []mountCall
-	unmounted []string
+	formatted      []formatCall
+	mounted        []mountCall
+	unmounted      []string
+	forceUnmounted []string
 
 	mountPoints map[string]bool
 
@@ -63,6 +64,12 @@ func (f *fakeFS) Unmount(_ context.Context, target string) error {
 	if f.unmountErr != nil {
 		return f.unmountErr
 	}
+	delete(f.mountPoints, target)
+	return nil
+}
+
+func (f *fakeFS) ForceUnmount(_ context.Context, target string) error {
+	f.forceUnmounted = append(f.forceUnmounted, target)
 	delete(f.mountPoints, target)
 	return nil
 }
@@ -354,5 +361,65 @@ func TestFilesystemExposesItsPath(t *testing.T) {
 	}
 	if art.Path != stagingPath {
 		t.Errorf("Path = %q, want the staging path", art.Path)
+	}
+}
+
+// Regression: 2026-09-05-heal-stacked-a-second-mount — Heal mounted over a mount
+// that was already at the staging path instead of clearing it first, which
+// leaves two mounts stacked on one path.
+//
+// That is the arming condition for a defect the node service already carries:
+// its teardown unmounts once and then removes the path recursively, so with two
+// mounts stacked the unmount peels one and the removal walks into the
+// filesystem still mounted underneath. The path to it is ordinary rather than
+// exotic: total path loss leaves a dead mount, Healthy reports it unhealthy, and
+// the runner calls Heal.
+func TestHealClearsTheMountBeforeRemounting(t *testing.T) {
+	fs := newFakeFS()
+	fs.mountPoints[stagingPath] = true
+	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "ext4"}, nil)
+
+	if err := l.Heal(context.Background(), belowArtifact(), volstack.Artifact{Path: stagingPath}); err != nil {
+		t.Fatalf("Heal: %v", err)
+	}
+	if len(fs.unmounted)+len(fs.forceUnmounted) == 0 {
+		t.Fatal("Heal mounted over the existing mount without clearing it, stacking two mounts on one path")
+	}
+	if len(fs.mounted) != 1 {
+		t.Fatalf("Heal mounted %d times, want once after clearing", len(fs.mounted))
+	}
+}
+
+// A dead mount does not come down the ordinary way: the backing device is gone
+// and a plain unmount refuses. The layer escalates rather than giving up, which
+// is what keeps a heal from stranding the stack.
+func TestHealForcesWhenAPlainUnmountRefuses(t *testing.T) {
+	fs := newFakeFS()
+	fs.mountPoints[stagingPath] = true
+	fs.unmountErr = errors.New("device is busy")
+	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "ext4"}, nil)
+
+	if err := l.Heal(context.Background(), belowArtifact(), volstack.Artifact{Path: stagingPath}); err != nil {
+		t.Fatalf("Heal: %v", err)
+	}
+	if len(fs.forceUnmounted) == 0 {
+		t.Fatal("a plain unmount refused and the heal did not fall back to its force path")
+	}
+}
+
+// Release owes the same escalation. Bring-down proceeds through layers whose
+// foundation may already be gone, which is the normal case after total path loss
+// rather than an edge case, and a layer with no force path strands the stack.
+func TestReleaseForcesWhenAPlainUnmountRefuses(t *testing.T) {
+	fs := newFakeFS()
+	fs.mountPoints[stagingPath] = true
+	fs.unmountErr = errors.New("transport endpoint is not connected")
+	l := newFS(t, fs, blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "ext4"}, nil)
+
+	if err := l.Release(context.Background(), belowArtifact()); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if len(fs.forceUnmounted) == 0 {
+		t.Fatal("a plain unmount refused and the release did not fall back to its force path")
 	}
 }

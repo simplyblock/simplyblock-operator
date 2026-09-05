@@ -33,6 +33,13 @@ type FilesystemOps interface {
 	// Unmount detaches it, and is a no-op when nothing is mounted there.
 	Unmount(ctx context.Context, target string) error
 
+	// ForceUnmount detaches a mount that will not come down the ordinary way,
+	// which is what total path loss leaves behind: the backing device is gone,
+	// the mount answers ENOTCONN or EIO, and a plain unmount hangs or refuses.
+	// It is the layer's force path, and a layer without one strands the stack it
+	// sits on.
+	ForceUnmount(ctx context.Context, target string) error
+
 	// IsMountPoint reports whether anything is mounted at path.
 	IsMountPoint(ctx context.Context, path string) (bool, error)
 }
@@ -168,15 +175,35 @@ func (f *Filesystem) Ensure(ctx context.Context, below volstack.Artifact) (volst
 // calls, and it is a no-op on a path that is not mounted, because a teardown may
 // resume against a stack that is already partly down.
 func (f *Filesystem) Release(ctx context.Context, _ volstack.Artifact) error {
+	return f.clear(ctx)
+}
+
+// clear detaches whatever is mounted at the staging path, and detaches it the
+// hard way when it will not come down the ordinary one.
+//
+// The hard way is not an exceptional path. Total path loss removes the device
+// while the mount above it is still there, the mount then answers ENOTCONN or
+// EIO, and a plain unmount refuses or hangs. A layer with no force path strands
+// the stack it sits on, which is why the design gives every layer one.
+//
+// A path that is not mounted is not an error: a teardown may resume against a
+// stack that is already partly down.
+func (f *Filesystem) clear(ctx context.Context) error {
 	mounted, err := f.cfg.Ops.IsMountPoint(ctx, f.cfg.StagingPath)
 	if err != nil {
-		return fmt.Errorf("filesystem: check %s: %w", f.cfg.StagingPath, err)
+		// A mount point that cannot be interrogated is how a dead mount
+		// presents, so this is a reason to detach it rather than to stop.
+		mounted = true
 	}
 	if !mounted {
 		return nil
 	}
-	if err := f.cfg.Ops.Unmount(ctx, f.cfg.StagingPath); err != nil {
-		return fmt.Errorf("filesystem: unmount %s: %w", f.cfg.StagingPath, err)
+
+	if err := f.cfg.Ops.Unmount(ctx, f.cfg.StagingPath); err == nil {
+		return nil
+	}
+	if err := f.cfg.Ops.ForceUnmount(ctx, f.cfg.StagingPath); err != nil {
+		return fmt.Errorf("filesystem: unmount %s, including its force path: %w", f.cfg.StagingPath, err)
 	}
 	return nil
 }
@@ -219,6 +246,16 @@ func (f *Filesystem) Heal(ctx context.Context, below, _ volstack.Artifact) error
 			"filesystem: refusing to remount %s, which carries %s rather than a filesystem: %s",
 			dev.Path, reading.Content, reading.Detail)
 	}
+
+	// Clear whatever is at the path before mounting onto it. A heal runs against
+	// a mount that Healthy just reported unserviceable, and the dead mount total
+	// path loss leaves behind is still a mount: mounting over it stacks a second
+	// one on the same path, and a teardown that unmounts once then removes the
+	// path recursively walks into the filesystem left underneath.
+	if err := f.clear(ctx); err != nil {
+		return err
+	}
+
 	if err := f.cfg.Ops.Mount(ctx, dev.Path, f.cfg.StagingPath, reading.Type,
 		mountFlags(reading.Type, f.cfg.MountFlags)); err != nil {
 		return fmt.Errorf("filesystem: remount %s at %s: %w", dev.Path, f.cfg.StagingPath, err)
